@@ -739,6 +739,9 @@
       "console": "Console",
       "templates": "Templates",
       "applicationTemplates": "Application Templates"
+    },
+    "validation": {
+      "validityDays": "Enter a whole number from 1 to 3650 days."
     }
   },
   "createTemplateDrawer": {
@@ -1693,6 +1696,11 @@
           "none": "None (no revocation)",
           "statusListComingSoon": "Status List 2021 (Coming Soon)",
           "helper": "Optional: Select a revocation mechanism for credentials issued from this template"
+        },
+        "validation": {
+          "daysRange": "Enter a whole number of days from 1 to {{max}}.",
+          "offsetRange": "Enter a whole number of seconds from {{min}} to {{max}}.",
+          "reviewSettings": "Review the highlighted validity settings before creating the template."
         }
       },
       "reviewStep": {

@@ -91,6 +91,84 @@ describe('ApplicationTemplateEditorPage', () => {
     vi.mocked(updateApplicationTemplate).mockReset().mockResolvedValue({ id: 'application-template-1' });
   })
 
+  it('keeps application validity empty while editing and saves the exact corrected integer', async () => {
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit'],
+    });
+    const validity = await screen.findByRole('spinbutton', { name: 'Valid for days' });
+    const save = screen.getByRole('button', { name: /save draft/i });
+    expect(validity).toHaveValue(30);
+    await user.clear(validity);
+    expect(validity).toHaveValue(null);
+    expect(validity).toHaveAttribute('aria-invalid', 'true');
+    expect(validity).toHaveAccessibleDescription('Enter a whole number from 1 to 3650 days.');
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(updateApplicationTemplate).not.toHaveBeenCalled();
+
+    await user.type(validity, '3650');
+    expect(validity).toHaveValue(3650);
+    expect(validity).toHaveAttribute('aria-invalid', 'false');
+    expect(validity).toHaveAttribute('min', '1');
+    expect(validity).toHaveAttribute('max', '3650');
+    expect(validity).toHaveAttribute('step', '1');
+    expect(save).toBeEnabled();
+    await user.click(save);
+    expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({ application_validity_days: 3650 }));
+    expect(await screen.findByRole('heading', { name: 'Saved template' })).toBeInTheDocument();
+  });
+
+  it.each(['0', '-1', '1.5', '3651'])('rejects invalid application validity %s without replacing the displayed value', async (value) => {
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit'],
+    });
+    const validity = await screen.findByRole('spinbutton', { name: 'Valid for days' });
+    await user.clear(validity);
+    await user.type(validity, value);
+    expect(validity).toHaveValue(Number(value));
+    expect(validity).toHaveAttribute('aria-invalid', 'true');
+    expect(validity).toHaveAccessibleDescription('Enter a whole number from 1 to 3650 days.');
+    const save = screen.getByRole('button', { name: /save draft/i });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(updateApplicationTemplate).not.toHaveBeenCalled();
+    expect(createApplicationTemplate).not.toHaveBeenCalled();
+  });
+
+  it.each([1, 3650])('creates an application template with the displayed boundary validity %s', async (days) => {
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/new'],
+    });
+    await user.type(screen.getByRole('textbox', { name: /^name/i }), 'New membership');
+    await user.click(screen.getByRole('combobox', { name: /credential template/i }));
+    await user.click(await screen.findByRole('option', { name: 'Membership Badge' }));
+    const validity = screen.getByRole('spinbutton', { name: 'Valid for days' });
+    await user.clear(validity);
+    await user.type(validity, String(days));
+    expect(validity).toHaveValue(days);
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+    expect(createApplicationTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({ application_validity_days: days, organization_id: 'org-1' }),
+      expect.objectContaining({ isCurrent: expect.any(Function) }),
+    );
+    expect(await screen.findByRole('heading', { name: 'Saved template' })).toBeInTheDocument();
+  });
+
+  it('shows an invalid loaded validity honestly and lets it be corrected', async () => {
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ ...draftTemplate(), application_validity_days: 0 });
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit'],
+    });
+    const validity = await screen.findByRole('spinbutton', { name: 'Valid for days' });
+    expect(validity).toHaveValue(0);
+    expect(validity).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByRole('button', { name: /save draft/i })).toBeDisabled();
+    await user.clear(validity);
+    await user.type(validity, '1');
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+    expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({ application_validity_days: 1 }));
+  });
+
   it('rejects an existing foreign template before showing editable values', async () => {
     vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ id: 'application-template-1', organization_id: 'org-2', name: 'Foreign draft', status: 'DRAFT' })
     renderWithRouter(<Routes><Route path="/applications/:templateId/edit" element={<ApplicationTemplateEditorPage />} /></Routes>,

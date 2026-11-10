@@ -480,6 +480,15 @@
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "1～{{max}}の整数で日数を入力してください。",
+					"offsetRange": "{{min}}～{{max}}の整数で秒数を入力してください。",
+					"reviewSettings": "テンプレートを作成する前に、強調表示された有効期間の設定を確認してください。"
+				}
+			}
+		},
 		"common": {
 			"optional": "任意"
 		},
@@ -580,5 +589,10 @@
 		"discoveryRequired": "自由参加または承認制の組織は、公開の組織検索で常に見つけることができます。",
 		"discoveryPublic": "この組織は公開の組織検索に表示される場合があります。",
 		"discoveryPrivate": "この組織は公開の組織検索に表示されません。"
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "1～3650の整数で日数を入力してください。"
+		}
 	}
 }

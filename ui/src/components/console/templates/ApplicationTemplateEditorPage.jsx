@@ -1,6 +1,7 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, Container, FormControl,
   FormControlLabel, IconButton, InputLabel, MenuItem, Paper, Select, Stack,
@@ -86,6 +87,7 @@ function actionInView(action, isCurrentView) {
 
 function ApplicationTemplateEditorContent({ organizationId, templateId, advanced, browserEntry }) {
   const navigate = useNavigate();
+  const { t } = useTranslation('console');
   const beginSave = useAsyncActionScope();
   const savingRef = useRef(false);
   const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
@@ -170,6 +172,13 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
     () => credentialTemplates.find((item) => item.id === data.credential_template_id),
     [credentialTemplates, data.credential_template_id],
   );
+  // Keep the editable draft unchanged; only save a validated native integer.
+  const validityDays = ['string', 'number'].includes(typeof data.application_validity_days)
+    ? Number(data.application_validity_days) : NaN;
+  const validityDaysError = Number.isInteger(validityDays) && validityDays >= 1 && validityDays <= 3650
+    ? '' : t('applicationTemplatesPage.validation.validityDays', {
+      defaultValue: 'Enter a whole number from 1 to 3650 days.',
+    });
 
   const selectCredential = (credentialTemplateId) => {
     const selected = credentialTemplates.find((item) => item.id === credentialTemplateId);
@@ -209,6 +218,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
       setError('Name, active Credential Template, and at least one form field are required.');
       return;
     }
+    if (validityDaysError) {
+      setError(validityDaysError);
+      return;
+    }
     if (invalidEvidence) {
       setError('Complete every required Evidence field before saving.');
       return;
@@ -232,7 +245,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         claim_collection_rules: claimRules,
         approval_strategy: data.approval_strategy,
         approval_policy_set_id: data.approval_strategy === 'RULES_BASED' ? data.approval_policy_set_id : null,
-        application_validity_days: data.application_validity_days,
+        application_validity_days: validityDays,
         notification_config: data.notification_config,
         ui_config: data.ui_config,
       };
@@ -339,8 +352,8 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
             <FormControl fullWidth><InputLabel id="application-approval-label">Approval</InputLabel><Select id="application-approval" labelId="application-approval-label" label="Approval" value={data.approval_strategy || 'MANUAL'} onChange={(event) => setData({ ...data, approval_strategy: event.target.value })}>
               <MenuItem value="MANUAL">Manual review</MenuItem><MenuItem value="AUTO">Automatic</MenuItem><MenuItem value="RULES_BASED">Rules based</MenuItem>
             </Select></FormControl>
-            <TextField fullWidth type="number" label="Valid for days" value={data.application_validity_days || 30} onChange={(event) => setData({ ...data, application_validity_days: Number(event.target.value) })} slotProps={{
-              htmlInput: { min: 1, max: 365 }
+            <TextField fullWidth type="number" label="Valid for days" value={data.application_validity_days ?? ''} onChange={(event) => setData({ ...data, application_validity_days: event.target.value })} error={Boolean(validityDaysError)} helperText={validityDaysError || undefined} slotProps={{
+              htmlInput: { min: 1, max: 3650, step: 1 }
             }} />
           </Stack>
 
@@ -444,7 +457,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         </Stack>
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end', mt: 2.5 }}>
           <Button onClick={leaveEditor}>Cancel</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
+          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || Boolean(validityDaysError) || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
         </Stack>
       </Box>
     </Container>

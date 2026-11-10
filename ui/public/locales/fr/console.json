@@ -480,6 +480,15 @@
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "Saisissez un nombre entier de jours compris entre 1 et {{max}}.",
+					"offsetRange": "Saisissez un nombre entier de secondes compris entre {{min}} et {{max}}.",
+					"reviewSettings": "Vérifiez les paramètres de validité mis en évidence avant de créer le modèle."
+				}
+			}
+		},
 		"common": {
 			"optional": "Optionnel"
 		},
@@ -580,5 +589,10 @@
 		"discoveryRequired": "Les organisations proposant une adhésion ouverte ou soumise à approbation sont toujours visibles dans la recherche publique d’organisations.",
 		"discoveryPublic": "Cette organisation peut apparaître dans la recherche publique d’organisations.",
 		"discoveryPrivate": "Cette organisation n’apparaît pas dans la recherche publique d’organisations."
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "Saisissez un nombre entier de jours compris entre 1 et 3650."
+		}
 	}
 }

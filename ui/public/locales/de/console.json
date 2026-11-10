@@ -480,6 +480,15 @@
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und {{max}} ein.",
+					"offsetRange": "Geben Sie eine ganze Anzahl von Sekunden zwischen {{min}} und {{max}} ein.",
+					"reviewSettings": "Prüfen Sie die hervorgehobenen Gültigkeitseinstellungen, bevor Sie die Vorlage erstellen."
+				}
+			}
+		},
 		"common": {
 			"optional": "Optional"
 		},
@@ -580,5 +589,10 @@
 		"discoveryRequired": "Organisationen mit offener oder genehmigungspflichtiger Mitgliedschaft sind immer über die öffentliche Organisationssuche auffindbar.",
 		"discoveryPublic": "Diese Organisation kann in der öffentlichen Organisationssuche erscheinen.",
 		"discoveryPrivate": "Diese Organisation erscheint nicht in der öffentlichen Organisationssuche."
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und 3650 ein."
+		}
 	}
 }

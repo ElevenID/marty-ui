@@ -185,6 +185,15 @@
     "loadFailed": "Lidmaatschapsaanvragen konden niet worden geladen."
   },
   "wizards": {
+    "credentialTemplate": {
+      "cryptoValidityStep": {
+        "validation": {
+          "daysRange": "Voer een geheel aantal dagen tussen 1 en {{max}} in.",
+          "offsetRange": "Voer een geheel aantal seconden tussen {{min}} en {{max}} in.",
+          "reviewSettings": "Controleer de gemarkeerde geldigheidsinstellingen voordat u de sjabloon maakt."
+        }
+      }
+    },
     "deploymentProfile": {
       "integrationStep": {
         "languages": {
@@ -353,6 +362,11 @@
         "unavailableDefaultsPreserved": "Een of meer opgeslagen standaardwaarden zijn niet beschikbaar. Ze blijven behouden wanneer u andere standaardwaarden wijzigt. Met bewerkingsrechten kunt u ze vervangen of de selectie wissen.",
         "catalogPermissionRequired": "Sommige resourcegegevens zijn verborgen omdat u geen rechten hebt om de bijbehorende catalogi te bekijken."
       }
+    }
+  },
+  "applicationTemplatesPage": {
+    "validation": {
+      "validityDays": "Voer een geheel aantal dagen tussen 1 en 3650 in."
     }
   }
 }
