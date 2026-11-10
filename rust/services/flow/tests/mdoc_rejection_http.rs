@@ -12,8 +12,9 @@ use axum::{
 use chrono::{Duration, Utc};
 use marty_flow::*;
 use marty_oid4vp_contract::{
-    BoundAuthenticationDiagnosticV1, CertificateTrustFailure, MdocAuthenticationDiagnosticV1,
-    MdocDiagnosticFormat,
+    digest_domain_json, BoundAuthenticationDiagnosticV1, CertificateTrustFailure,
+    FlowVerificationReceiptV1, MdocAuthenticationDiagnosticV1, MdocDiagnosticFormat,
+    FLOW_REQUEST_BINDING_DIGEST_DOMAIN, VERIFICATION_RECEIPT,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
@@ -53,6 +54,7 @@ impl TenantMembershipProvider for Members {
 }
 struct Policies {
     mode: AtomicUsize,
+    evaluation_timestamp: Mutex<Option<String>>,
     repository: PostgresFlowRepository,
     pool: PgPool,
     cancel: Mutex<Option<String>>,
@@ -147,6 +149,7 @@ impl PresentationPolicyProvider for Policies {
             revision.version += 1;
         }
         Ok(PresentationEvaluationResult {
+            evaluation_timestamp: self.evaluation_timestamp.lock().unwrap().clone(),
             policy_revision: revision,
             result: if accepted { "passed" } else { "failed" }.into(),
             decision: if accepted { "allow" } else { "deny" }.into(),
@@ -325,6 +328,7 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     let repository = PostgresFlowRepository::new(pool.clone());
     let policy = Arc::new(Policies {
         mode: AtomicUsize::new(0),
+        evaluation_timestamp: Mutex::new(None),
         repository: repository.clone(),
         pool: pool.clone(),
         cancel: Mutex::new(None),
@@ -493,6 +497,12 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     repository
         .save_instance(&dc_api_instance(dc_success))
         .await?;
+    let dc_original = repository.instance(dc_success).await?.unwrap();
+    let policy_time: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await?;
+    let policy_timestamp = policy_time.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    *policy.evaluation_timestamp.lock().unwrap() = Some(policy_timestamp.clone());
     policy.mode.store(1, Ordering::SeqCst);
     let (status, dc_response) = send_dc_api(&app, dc_success).await?;
     assert_eq!(status, 200, "{dc_response}");
@@ -502,7 +512,59 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
         dc_completed.context["dc_api_last_origin"],
         "https://verifier.example"
     );
+    // The HTTP result must come from the committed instance. A projection of
+    // the preparation would silently omit this repository-created receipt.
+    let receipt_value = dc_response[VERIFICATION_RECEIPT].clone();
+    let receipt: FlowVerificationReceiptV1 = serde_json::from_value(receipt_value.clone())?;
+    receipt.validate()?;
+    assert_eq!(receipt.flow_instance_id, dc_success);
+    assert_eq!(receipt.organization_id, "org-1");
+    assert_eq!(
+        receipt.request_binding_digest,
+        digest_domain_json(FLOW_REQUEST_BINDING_DIGEST_DOMAIN, &dc_original)?
+    );
+    assert_eq!(
+        receipt.policy_evaluated_at_epoch_micros,
+        policy_time.timestamp_micros()
+    );
+    assert_eq!(dc_response["evaluation_timestamp"], policy_timestamp);
+    assert_eq!(
+        dc_completed.result.as_ref().unwrap()[VERIFICATION_RECEIPT],
+        receipt_value
+    );
+    assert_eq!(
+        serde_json::to_value(dc_completed.verification_projection()?)?,
+        dc_response
+    );
+    let consumed_at: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT consumed_at FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1",
+    )
+    .bind(dc_success)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(
+        receipt.nonce_consumed_at_epoch_micros,
+        consumed_at.timestamp_micros()
+    );
     assert_eq!(authority_counts(&pool, dc_success).await?, (1, 0));
+    // A repeated response recovers the original durable result, even if a new
+    // Policy call would now fail or produce a different observation timestamp.
+    *policy.evaluation_timestamp.lock().unwrap() =
+        Some((policy_time + Duration::minutes(1)).to_rfc3339());
+    policy.mode.store(5, Ordering::SeqCst);
+    let (status, dc_replay) = send_dc_api(&app, dc_success).await?;
+    assert_eq!(status, 200, "{dc_replay}");
+    assert_eq!(dc_replay, dc_response);
+    assert_eq!(repository.instance(dc_success).await?, Some(dc_completed));
+    let replay_consumed_at: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT consumed_at FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1",
+    )
+    .bind(dc_success)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(replay_consumed_at, consumed_at);
+    assert_eq!(authority_counts(&pool, dc_success).await?, (1, 0));
+    *policy.evaluation_timestamp.lock().unwrap() = None;
     let dc_race = "90000000-0000-0000-0000-000000000928";
     repository.save_instance(&dc_api_instance(dc_race)).await?;
     let dc_before = repository.instance(dc_race).await?.unwrap();

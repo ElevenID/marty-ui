@@ -153,6 +153,7 @@ fn payload() -> CredentialVerifiedPayload {
         presentation_policy_id: "policy-1".into(),
         completed_at: "2026-08-20T12:00:00Z".into(),
         policy_revision: None,
+        verification_receipt: None,
         evidence_digest: "a".repeat(64),
         decision_digest: String::new(),
     };

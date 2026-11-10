@@ -6,7 +6,7 @@
 
 use serde_json::{json, Map, Value};
 
-use crate::Oid4vpContractError;
+use crate::{FlowVerificationReceiptV1, Oid4vpContractError, VERIFICATION_RECEIPT};
 
 /// Preserve the callback's canonical payload, including the policy reference
 /// before calculating its decision digest. Raw credential results are represented
@@ -39,6 +39,15 @@ pub fn build_verification_callback_payload<E>(
         "evidence_digest": payload_digest(&json!({"credential_results": credential_results}))
             .map_err(|_| Oid4vpContractError::Serialization)?
     });
+    if let Some(value) = result.get(VERIFICATION_RECEIPT) {
+        let receipt: FlowVerificationReceiptV1 = serde_json::from_value(value.clone())
+            .map_err(|_| Oid4vpContractError::Deserialization)?;
+        let mut result_basis = result.clone();
+        result_basis.remove(VERIFICATION_RECEIPT);
+        receipt.validate_result(&Value::Object(result_basis))?;
+        receipt.validate_callback(&payload)?;
+        payload[VERIFICATION_RECEIPT] = value.clone();
+    }
     let decision_digest =
         payload_digest(&payload).map_err(|_| Oid4vpContractError::Serialization)?;
     payload["decision_digest"] = json!(decision_digest);

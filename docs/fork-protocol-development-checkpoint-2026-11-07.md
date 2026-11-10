@@ -39,7 +39,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence and an opt-in managed issuer/type/status authority profile | Full canonical owner-channel/replay evidence and an issuance-owned continuation are still required |
+| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence, opt-in managed issuer/type/status authority and a separate Flow finalization receipt | Canonical evidence composition, authenticated owner-channel provenance and an issuance-owned continuation are still required |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary
@@ -113,6 +113,47 @@ channels remain a material boundary. The full canonical evidence producer must
 still represent policy observation and durable Flow nonce-commit times
 separately, and establish the required owner-channel provenance. No issuance
 continuation or prerequisite activation is introduced by this increment.
+
+### W05: durable Flow verification receipt continuation
+
+The receipt increment starts from protocol-audit PR 1851 at
+`2a678b47ac68f6140daa65eeff23bbfe1fa0c3de`, which includes the corrected PR 1845
+foundation `edc90e8271018ccb4a70e9462a1be6d2a48da895`. It preserves the audit's
+governed template/PolicySet, complete response-association and post-await
+authority checks. Its Core `a11313be1fdb6035c11c87b42b4120e395d63aba` and MMF
+`d8b8d8583203c31a1a5cd6b513a6068e6c416b6d` pins are unchanged by this slice.
+
+Flow now retains the actual Policy evaluation timestamp and writes a bounded
+receipt with the exact original request, submission, result and nonce
+consumption. Result, receipt and callback share the existing transaction. The
+database supplies the consumption timestamp after the instance lock; the
+sealed in-process result is exposed only after commit. Both finalization paths
+use the same lock order. Legacy finalization and every generic instance writer
+reject receipt injection, including internally consistent caller-supplied JSON.
+
+Readback and permitted identical retries preserve the original receipt even
+after nonce cleanup. The callback producer and independent Auth consumer carry
+the optional receipt under the existing decision digest/HMAC, retaining legacy
+omission and canonical-byte compatibility. No migration or key store is added.
+
+[Flow verification receipts](flow-verification-receipts.md) describes the
+contracts, clock ownership, rollout and negative gates. This receipt is a
+persistence fact, not policy validity at commit, full canonical OID4VP evidence
+or issuance authority. The canonical producer must still compose owner-channel
+provenance, policy/native observation validity and durable replay honestly.
+
+Local qualification on Rust 1.95.0 passed 190 unit/behavior/contract tests:
+41 shared OID4VP-contract tests and 149 selected Flow/Auth tests. Three
+compile-fail documentation tests passed. The existing disposable event-stream
+KMS case remains explicitly ignored in the local selection. Strict all-target
+Clippy passed for `marty-oid4vp-contract`, `marty-flow` and `marty-auth`; workspace
+formatting and whitespace checks passed. Both existing Flow PostgreSQL and
+HTTP rejection/recovery executables compiled locked/offline. Their new SQL
+assertions were not executed locally and require fresh hosted execution for
+this receipt increment; earlier foundation results cannot qualify it.
+Two independent read-only source audits completed with no unresolved blocking
+findings after fixing mixed-path lock order and receipt injection through
+legacy finalization or generic instance writes.
 
 ### W14: current verified-wallet integration
 

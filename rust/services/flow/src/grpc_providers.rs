@@ -632,6 +632,7 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
             ));
         }
         Ok(PresentationEvaluationResult {
+            evaluation_timestamp: nonempty(response.evaluation_timestamp),
             policy_revision: decode_policy_revision(
                 response.policy_revision.as_ref(),
                 &request.organization_id,

@@ -47,6 +47,10 @@ pub struct CredentialVerifiedPayload {
     /// When present it remains part of the signed canonical payload.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_revision: Option<marty_oid4vp_contract::FrozenPolicyIdentity>,
+    /// Optional for queued callbacks from before durable Flow receipts. When
+    /// present, the existing canonical callback digest and HMAC cover it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_receipt: Option<marty_oid4vp_contract::FlowVerificationReceiptV1>,
     #[serde(default)]
     pub completed_at: String,
     pub evidence_digest: String,
@@ -200,7 +204,8 @@ impl CredentialLoginStateStore {
             &self.policy.secret,
             now,
             self.policy.maximum_timestamp_skew_seconds,
-        )
+        )?;
+        self.validate_receipt_scope(payload)
     }
 
     #[must_use]
@@ -239,6 +244,10 @@ impl CredentialLoginStateStore {
         payload: &CredentialVerifiedPayload,
         now_ms: u64,
     ) -> Result<CallbackClaim, CredentialStateError> {
+        // Check before both a new lease and the completed-delivery shortcut.
+        // A valid signature or a digest-consistent receipt for another tenant
+        // cannot acquire this login's state.
+        self.validate_receipt_scope(payload)?;
         let pending_key = key(PENDING_PREFIX, nonce);
         let Some(raw) = self
             .cache
@@ -279,6 +288,24 @@ impl CredentialLoginStateStore {
             return Err(CredentialStateError::AlreadyClaimed);
         }
         Ok(CallbackClaim::Claimed(pending))
+    }
+
+    fn validate_receipt_scope(
+        &self,
+        payload: &CredentialVerifiedPayload,
+    ) -> Result<(), CredentialStateError> {
+        if let Some(receipt) = &payload.verification_receipt {
+            let value = serde_json::to_value(payload).map_err(serialization_error)?;
+            receipt
+                .validate_callback(&value)
+                .map_err(|_| invalid_callback())?;
+            if receipt.organization_id != self.policy.expected_organization_id
+                || receipt.policy.id != self.policy.expected_policy_id
+            {
+                return Err(CredentialStateError::Mismatch);
+            }
+        }
+        Ok(())
     }
 
     pub async fn complete(
@@ -387,6 +414,11 @@ pub fn verify_credential_callback(
         return Err(invalid_callback());
     }
     let mut basis = serde_json::to_value(payload).map_err(serialization_error)?;
+    if let Some(receipt) = &payload.verification_receipt {
+        receipt
+            .validate_callback(&basis)
+            .map_err(|_| invalid_callback())?;
+    }
     basis
         .as_object_mut()
         .ok_or_else(invalid_callback)?
