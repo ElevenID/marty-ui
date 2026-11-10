@@ -309,7 +309,7 @@ impl PresentationPolicy {
         {
             return Err(PolicyDomainError::MissingRankingWeights);
         }
-        Ok(())
+        crate::policy_contract::validate_policy(self)
     }
 
     pub fn activate(&mut self, now: DateTime<Utc>) -> Result<(), PolicyDomainError> {

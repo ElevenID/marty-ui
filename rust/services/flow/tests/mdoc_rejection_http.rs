@@ -108,7 +108,7 @@ impl PresentationPolicyProvider for Policies {
             presentation_snapshot::emit_query(
                 &mut current,
                 "dcql_query",
-                json!({"credentials": [{"id": "member"}]}),
+                json!({"credentials": [{"id": "member", "format": "mso_mdoc"}]}),
             );
             // Deliberately leave the timestamp unchanged: context equality
             // must protect the nonce/policy snapshot even at the same instant.
@@ -192,7 +192,7 @@ fn instance(id: &str) -> FlowInstanceRecord {
     presentation_snapshot::emit_query(
         &mut instance,
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "mso_mdoc"}]}),
     );
     instance
 }
@@ -406,7 +406,7 @@ async fn retryable_mdoc_rejection_survives_http_readback_recovery_and_terminal_r
     presentation_snapshot::emit_query(
         &mut reset,
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "mso_mdoc"}]}),
     );
     reset.updated_at = Utc::now().max(prior.updated_at + Duration::microseconds(1));
     assert!(

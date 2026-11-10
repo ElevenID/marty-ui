@@ -102,6 +102,7 @@ impl PresentationVerificationOrchestrator for VerifiedFacts {
             "credentials": [{
                 "credential_id": "credential-1",
                 "credential_template_ids": [template_id],
+                "credential_types": ["member"],
                 "credential_format": "sd-jwt",
                 "claims": {"email": "member@example.com"},
                 "issuer_id": "did:example:issuer",
@@ -297,6 +298,39 @@ fn create_body(organization_id: Uuid) -> Value {
             }]
         }]
     })
+}
+
+#[tokio::test]
+async fn creation_rejects_unresolved_compliance_and_unsupported_predicate_capabilities() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    for capability in ["compliance", "proof_only", "unknown_predicate"] {
+        let mut input = create_body(org);
+        if capability == "compliance" {
+            input["compliance_profile_id"] = json!(Uuid::new_v4());
+        } else {
+            input["fallback_policy"] = json!(if capability == "proof_only" {
+                "REQUIRE_PREDICATE"
+            } else {
+                "ACCEPT_RAW"
+            });
+            input["supported_circuits"] = json!(["email-equality-v1"]);
+            input["credential_requirements"][0]["requested_claims"][0]["predicate_spec"] = json!({
+                "predicate_type":if capability == "proof_only" { "EQUALITY" } else { "UNSUPPORTED" },
+                "params":{"target_value":"member@example.com"}
+            });
+        }
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/presentation-policies", input, true))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{capability}"
+        );
+    }
 }
 
 fn request(method: &str, uri: &str, body: Value, authenticated: bool) -> Request<Body> {

@@ -16,7 +16,7 @@ SOURCES = {
                       "6f86efc1579033e14ff2ad7d115ca0857e16a67f"),
     "isomdl-elevenid": ("1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f",),
     "marty-core": ("ffa24febcd0fb3fced15da7f28190af6d61ae0f9",),
-    "marty-microservices-framework": ("0d3b92b836591934c53875ecae337fb690271698",),
+    "marty-microservices-framework": ("67e6121f233d3edbb07a35b9b3be2ae7e1462821",),
     "sd-jwt-rust": ("26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d",),
 }
 
