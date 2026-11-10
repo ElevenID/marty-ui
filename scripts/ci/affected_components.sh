@@ -112,7 +112,7 @@ else
   fi
   for path in "${changed_files[@]}"; do
     case "$path" in
-      rust/services/issuance/src/*_tests.rs|rust/crates/oid4vp-contract/tests/contract_vectors.rs|rust/crates/oid4vp-contract/tests/flow_receipt.rs|rust/crates/oid4vp-contract/tests/transport_metadata.rs) ;;
+      rust/services/issuance/src/*_tests.rs|rust/crates/oid4vp-contract/tests/contract_vectors.rs|rust/crates/oid4vp-contract/tests/transport_metadata.rs) ;;
       *) leaf_candidate=false; break ;;
     esac
   done
