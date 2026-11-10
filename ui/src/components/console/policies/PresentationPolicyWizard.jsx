@@ -34,6 +34,8 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
 import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutomaticTemplateConfig } from './policyTemplateDefaults';
+import { isClaimsConfigurationComplete } from './policyClaimsValidation';
+import { clearPreviousTemplateBinding, projectTemplatePolicyClaims, TemplatePolicyClaimsError } from './projectTemplatePolicyClaims';
 import {
   TrustProfileStep,
   TemplateSelectionStep,
@@ -84,6 +86,20 @@ const PresentationPolicyWizard = () => {
   const [apiError, setApiError] = useState(null);
   const submissionPending = useRef(false);
 
+  const projectClaims = useCallback((data) => {
+    try {
+      return projectTemplatePolicyClaims(data);
+    } catch (error) {
+      if (error instanceof TemplatePolicyClaimsError) {
+        throw new Error(t(`wizards.presentationPolicy.claimsConfigurationStep.validation.${error.code}`, {
+          ...error.values,
+          defaultValue: error.message,
+        }), { cause: error });
+      }
+      throw error;
+    }
+  }, [t]);
+
   // Validation function for each step
   const validateStep = useCallback((stepIndex, stepData) => {
     switch (stepIndex) {
@@ -92,11 +108,13 @@ const PresentationPolicyWizard = () => {
       case 1: // Template Selection
         return stepData.selectedTemplate !== null;
       case 2: // Claims Configuration
-        return (
-          stepData.policyConfig.name.trim() !== '' &&
-          stepData.policyConfig.purpose.trim() !== '' &&
-          stepData.policyConfig.required_claims.length > 0
-        );
+        if (!isClaimsConfigurationComplete(stepData.policyConfig)) return false;
+        try {
+          projectTemplatePolicyClaims(stepData);
+          return true;
+        } catch {
+          return false;
+        }
       case 3: // Freshness & Binding (optional)
         return true;
       case 4: // Review
@@ -109,13 +127,11 @@ const PresentationPolicyWizard = () => {
   const handleSubmit = useCallback(async (data) => {
     const epoch = scopeEpoch.current;
     const isCurrent = () => epoch === scopeEpoch.current;
+    if (!isClaimsConfigurationComplete(data.policyConfig)) {
+      throw new Error(t('wizards.presentationPolicy.claimsConfigurationStep.validation.completeClaims'));
+    }
+    const credentialRequirements = projectClaims(data);
     await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
-    const credentialRequirements = Array.isArray(data.policyConfig.credential_requirements)
-      ? data.policyConfig.credential_requirements.map((requirement) => ({
-          ...requirement,
-          trust_profile_id: requirement.trust_profile_id || data.selectedTrustProfile?.id,
-        }))
-      : undefined;
     const payload = {
       ...data.policyConfig,
       ...(credentialRequirements ? { credential_requirements: credentialRequirements } : {}),
@@ -131,7 +147,7 @@ const PresentationPolicyWizard = () => {
       if (epoch === scopeEpoch.current && error.createdResource) setCreatedDraft(error.createdResource);
       throw error;
     }
-  }, [activeOrgId, creation]);
+  }, [activeOrgId, creation, projectClaims, t]);
 
   const submitReviewedData = useCallback(async (data) => {
     const epoch = scopeEpoch.current;
@@ -159,6 +175,15 @@ const PresentationPolicyWizard = () => {
   });
 
   const updateWizardData = wizard.updateData;
+  const claimProjectionError = useMemo(() => {
+    if (!isClaimsConfigurationComplete(wizard.data.policyConfig)) return null;
+    try {
+      projectClaims(wizard.data);
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  }, [wizard.data, projectClaims]);
   const updateFormData = useCallback((updates) => {
     if (!submissionPending.current) updateWizardData(updates);
   }, [updateWizardData]);
@@ -178,7 +203,10 @@ const PresentationPolicyWizard = () => {
 
   // Handle template selection - pre-populate config
   const handleTemplateSelect = (template) => {
-    const baseConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    let baseConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    if (wizard.data.selectedTemplate?.id !== template?.id) {
+      baseConfig = clearPreviousTemplateBinding(baseConfig, wizard.data.selectedTemplate);
+    }
     const updates = { selectedTemplate: template, policyConfig: baseConfig };
     
     if (template && template.config) {
@@ -238,6 +266,7 @@ const PresentationPolicyWizard = () => {
         return (
           <ClaimsConfigurationStep
             policyConfig={wizard.data.policyConfig}
+            validationError={claimProjectionError}
             onConfigChange={(config) => updateFormData({ policyConfig: config })}
           />
         );

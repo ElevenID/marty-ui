@@ -482,6 +482,24 @@
 	"wizards": {
 		"common": {
 			"optional": "Optional"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Geben Sie einen Claim-Namen ein.",
+					"credentialType": "Wählen Sie einen der akzeptierten Nachweistypen aus.",
+					"completeClaims": "Vervollständigen Sie den Richtliniennamen, den Zweck, die akzeptierten Nachweistypen und alle erforderlichen Claims, bevor Sie fortfahren.",
+					"templateRequirementsMismatch": "Diese Anforderungen passen nicht zur ausgewählten Nachweisvorlage. Wählen Sie die Vorlage erneut aus oder erstellen Sie eine neue benutzerdefinierte Richtlinie.",
+					"templateIncomplete": "Die ausgewählte Nachweisvorlage ist unvollständig. Wählen Sie die Vorlage erneut aus, bevor Sie fortfahren.",
+					"templateTypeMismatch": "Diese Richtlinie ist an die ausgewählte Nachweisvorlage gebunden. Verwenden Sie deren Nachweistyp oder erstellen Sie eine neue benutzerdefinierte Richtlinie, um andere Typen zu konfigurieren.",
+					"templateDuplicateClaim": "Fordern Sie „{{claimName}}“ in dieser Richtlinie nur einmal an.",
+					"templateUnknownClaim": "„{{claimName}}“ ist kein Claim der ausgewählten Nachweisvorlage. Wählen Sie einen Claim aus der Vorlage oder erstellen Sie eine neue benutzerdefinierte Richtlinie.",
+					"templateValueConflict": "Der erforderliche Wert für „{{claimName}}“ steht im Widerspruch zu einer Bedingung der ausgewählten Vorlage."
+				},
+				"labels": {
+					"removeClaim": "Claim {{index}} entfernen"
+				}
+			}
 		}
 	},
 	"org": {

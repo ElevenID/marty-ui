@@ -482,6 +482,24 @@
 	"wizards": {
 		"common": {
 			"optional": "任意"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "クレーム名を入力してください。",
+					"credentialType": "受け入れ可能な資格情報タイプを選択してください。",
+					"completeClaims": "続行する前に、ポリシー名、目的、受け入れ可能な資格情報タイプ、およびすべての必須クレームを入力してください。",
+					"templateRequirementsMismatch": "この要件は選択した資格情報テンプレートと一致しません。テンプレートを選び直すか、新しいカスタムポリシーを作成してください。",
+					"templateIncomplete": "選択した資格情報テンプレートは不完全です。続行する前にテンプレートを選び直してください。",
+					"templateTypeMismatch": "このポリシーは選択した資格情報テンプレートに紐づいています。そのテンプレートの資格情報タイプを使用するか、新しいカスタムポリシーを作成して別のタイプを設定してください。",
+					"templateDuplicateClaim": "このポリシーで「{{claimName}}」を要求できるのは1回だけです。",
+					"templateUnknownClaim": "「{{claimName}}」は選択した資格情報テンプレートのクレームではありません。テンプレート内のクレームを選択するか、新しいカスタムポリシーを作成してください。",
+					"templateValueConflict": "「{{claimName}}」に指定した値が、選択したテンプレートの制約と矛盾しています。"
+				},
+				"labels": {
+					"removeClaim": "クレーム{{index}}を削除"
+				}
+			}
 		}
 	},
 	"org": {

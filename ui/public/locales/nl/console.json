@@ -195,6 +195,24 @@
           "nl": "Nederlands"
         }
       }
+    },
+    "presentationPolicy": {
+      "claimsConfigurationStep": {
+        "validation": {
+          "claimName": "Voer een claimnaam in.",
+          "credentialType": "Selecteer een van de geaccepteerde credentialtypen.",
+          "completeClaims": "Vul de beleidsnaam, het doel, de geaccepteerde credentialtypen en alle vereiste claims in voordat u doorgaat.",
+          "templateRequirementsMismatch": "Deze vereisten komen niet overeen met het geselecteerde credentialsjabloon. Selecteer het sjabloon opnieuw of maak een nieuw aangepast beleid.",
+          "templateIncomplete": "Het geselecteerde credentialsjabloon is onvolledig. Selecteer het sjabloon opnieuw voordat u doorgaat.",
+          "templateTypeMismatch": "Dit beleid is gekoppeld aan het geselecteerde credentialsjabloon. Gebruik het bijbehorende credentialtype of maak een nieuw aangepast beleid om andere typen te configureren.",
+          "templateDuplicateClaim": "Vraag “{{claimName}}” slechts één keer op in dit beleid.",
+          "templateUnknownClaim": "“{{claimName}}” is geen claim in het geselecteerde credentialsjabloon. Selecteer een claim uit het sjabloon of maak een nieuw aangepast beleid.",
+          "templateValueConflict": "De vereiste waarde voor “{{claimName}}” is in strijd met een beperking van het geselecteerde sjabloon."
+        },
+        "labels": {
+          "removeClaim": "Claim {{index}} verwijderen"
+        }
+      }
     }
   },
   "flows": {

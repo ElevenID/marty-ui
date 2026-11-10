@@ -482,6 +482,24 @@
 	"wizards": {
 		"common": {
 			"optional": "Optionnel"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Saisissez un nom d’attribut.",
+					"credentialType": "Sélectionnez un des types d’attestation acceptés.",
+					"completeClaims": "Renseignez le nom de la politique, sa finalité, les types d’attestation acceptés et tous les attributs requis avant de continuer.",
+					"templateRequirementsMismatch": "Ces exigences ne correspondent pas au modèle d’attestation sélectionné. Sélectionnez à nouveau le modèle ou créez une nouvelle politique personnalisée.",
+					"templateIncomplete": "Le modèle d’attestation sélectionné est incomplet. Sélectionnez à nouveau le modèle avant de continuer.",
+					"templateTypeMismatch": "Cette politique est liée au modèle d’attestation sélectionné. Utilisez son type d’attestation ou créez une nouvelle politique personnalisée pour configurer d’autres types.",
+					"templateDuplicateClaim": "Ne demandez « {{claimName}} » qu’une seule fois dans cette politique.",
+					"templateUnknownClaim": "« {{claimName}} » n’est pas un attribut du modèle d’attestation sélectionné. Sélectionnez un attribut du modèle ou créez une nouvelle politique personnalisée.",
+					"templateValueConflict": "La valeur requise pour « {{claimName}} » est incompatible avec une contrainte du modèle sélectionné."
+				},
+				"labels": {
+					"removeClaim": "Supprimer l’attribut {{index}}"
+				}
+			}
 		}
 	},
 	"org": {

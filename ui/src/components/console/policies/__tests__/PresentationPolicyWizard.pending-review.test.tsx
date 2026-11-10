@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { webcrypto } from 'node:crypto';
 import { BrowserRouter } from 'react-router';
-import { act, fireEvent, waitFor } from '@testing-library/react';
+import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
 import { renderWithoutRouter, screen } from '@test/utils';
@@ -70,7 +70,7 @@ function installRequests(stage: HeldStage = 'create', organization = 'org-1') {
   } };
 }
 
-async function reachReview(user: ReturnType<typeof renderWithoutRouter>['user']) {
+async function reachClaims(user: ReturnType<typeof renderWithoutRouter>['user']) {
   await waitFor(() => expect(screen.getByRole('button', { name: 'Select Employee Trust trust profile' }))
     .toHaveAttribute('aria-pressed', 'true'));
   await user.click(screen.getByTestId('wizard.policy.next'));
@@ -79,6 +79,10 @@ async function reachReview(user: ReturnType<typeof renderWithoutRouter>['user'])
   await user.click(screen.getByTestId('wizard.policy.next'));
   const name = await screen.findByRole('textbox', { name: /Policy Name/i });
   await user.clear(name); await user.type(name, NAME);
+}
+
+async function reachReview(user: ReturnType<typeof renderWithoutRouter>['user']) {
+  await reachClaims(user);
   await user.click(screen.getByTestId('wizard.policy.next'));
   await user.click(screen.getByTestId('wizard.policy.next'));
   await waitFor(() => expect(screen.getByTestId('wizard.policy.submit')).toBeEnabled());
@@ -91,6 +95,48 @@ beforeEach(() => {
 });
 
 describe('presentation policy pending review intent', () => {
+  it('keeps blank and whitespace-only claim names at the claims step until corrected', async () => {
+    const requests = installRequests();
+    const { user } = renderWithoutRouter(<BrowserRouter><PresentationPolicyWizard /></BrowserRouter>);
+    await reachClaims(user);
+    const claimName = screen.getByRole('combobox', { name: /Claim Name/i });
+    await user.clear(claimName);
+    expect(screen.getByText('Enter a claim name.')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard.policy.next')).toBeDisabled();
+    await user.type(claimName, '   ');
+    expect(screen.getByTestId('wizard.policy.next')).toBeDisabled();
+    expect(requests.writes).toEqual([]);
+    await user.clear(claimName); await user.type(claimName, 'employee_id');
+    await user.tab();
+    expect(screen.queryByText('Enter a claim name.')).not.toBeInTheDocument();
+    expect(screen.getByTestId('wizard.policy.next')).toBeEnabled();
+    await user.click(screen.getByTestId('wizard.policy.next'));
+    expect(screen.getByRole('group', { name: 'Freshness & Binding' })).toBeInTheDocument();
+  });
+
+  it('requires each claim to use an accepted credential type and recovers after reselection', async () => {
+    const requests = installRequests();
+    const { user } = renderWithoutRouter(<BrowserRouter><PresentationPolicyWizard /></BrowserRouter>);
+    await reachClaims(user);
+    const type = screen.getByRole('combobox', { name: /From Credential Type/i });
+    await user.click(type);
+    await user.click(within(type.parentElement!).getByRole('button', { name: 'Clear' }));
+    expect(screen.getByText('Select one of the accepted credential types.')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard.policy.next')).toBeDisabled();
+    await user.type(type, 'urn:example:employee');
+    await user.click(await screen.findByRole('option', { name: 'urn:example:employee' }));
+    expect(screen.getByTestId('wizard.policy.next')).toBeEnabled();
+    const acceptedType = screen.getByRole('button', { name: 'urn:example:employee' });
+    await user.click(acceptedType); await user.keyboard('{Delete}');
+    expect(screen.getByText('Select one of the accepted credential types.')).toBeInTheDocument();
+    expect(screen.getByTestId('wizard.policy.next')).toBeDisabled();
+    const addType = screen.getByRole('combobox', { name: 'Add credential type' });
+    await user.type(addType, '  urn:example:employee  '); await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'urn:example:employee' })).toBeInTheDocument();
+    expect(screen.getByTestId('wizard.policy.next')).toBeEnabled();
+    expect(requests.writes).toEqual([]);
+  });
+
   it.each([false, true])('keeps displayed activation intent consistent with the real submitted chain (attempt pending edit: %s)', async (attemptEdit) => {
     // All steps, useWizard, the durable operation, API helpers and transport are
     // real. Only server responses and the selected session scope are fixtures.

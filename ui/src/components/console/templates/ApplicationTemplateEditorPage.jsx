@@ -1,6 +1,6 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, Container, FormControl,
   FormControlLabel, IconButton, InputLabel, MenuItem, Paper, Select, Stack,
@@ -12,6 +12,8 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { useAuth } from '../../../hooks/useAuth';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { listPolicySets } from '../../../services/policySetsApi';
@@ -21,11 +23,12 @@ import {
   updateApplicationTemplate,
 } from '../../../services/applicationTemplatesApi';
 import ApplicationEvidenceEditor from './ApplicationEvidenceEditor';
+import DraftListField from './DraftListField';
 import { formatFieldOptions, parseFieldOptions } from './applicationFieldOptions';
 
 const EMPTY = {
-  name: '', description: '', credential_template_id: '', form_fields: [],
-  evidence_requirements: [], required_checks: [], claim_collection_rules: [], approval_strategy: 'MANUAL',
+  name: '', description: '', credential_template_id: '',
+  evidence_requirements: [], required_checks: [], approval_strategy: 'MANUAL',
   approval_policy_set_id: null, application_validity_days: 30, notification_config: {},
   ui_config: {},
 };
@@ -59,39 +62,43 @@ function claimField(claim) {
   };
 }
 
-function FieldOptionsEditor({ options, onChange }) {
-  const formattedOptions = formatFieldOptions(options);
-  const [draft, setDraft] = useState(formattedOptions);
-  const dirty = useRef(false);
-
-  useEffect(() => setDraft(formattedOptions), [formattedOptions]);
-
-  const commit = () => {
-    if (!dirty.current) return;
-    const parsed = parseFieldOptions(draft);
-    setDraft(formatFieldOptions(parsed));
-    dirty.current = false;
-    onChange(parsed);
+function actionInView(action, isCurrentView) {
+  const isCurrent = () => action.isCurrent() && isCurrentView();
+  const requireCurrent = () => {
+    if (!isCurrent()) {
+      const error = new Error('The Application Template view or action changed.');
+      error.name = 'AbortError';
+      throw error;
+    }
   };
-
-  return (
-    <TextField
-      label="Options"
-      helperText="Comma-separated values or Label=VALUE"
-      value={draft}
-      onChange={(event) => {
-        dirty.current = true;
-        setDraft(event.target.value);
-      }}
-      onBlur={commit}
-      sx={{ flex: 1 }}
-    />
-  );
+  return {
+    isCurrent,
+    async run(operation, ...args) {
+      requireCurrent();
+      try {
+        return await action.run(operation, ...args);
+      } finally {
+        requireCurrent();
+      }
+    },
+  };
 }
 
-function ApplicationTemplateEditorContent({ organizationId, templateId, advanced }) {
+function ApplicationTemplateEditorContent({ organizationId, templateId, advanced, browserEntry }) {
   const navigate = useNavigate();
+  const beginSave = useAsyncActionScope();
+  const savingRef = useRef(false);
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
   const [data, setData] = useState(EMPTY);
+  const [fieldRows, setFieldRows] = useState([]);
+  const [claimRows, setClaimRows] = useState([]);
+  const nextRowId = useRef(0);
+  const formFields = fieldRows.map(({ field }) => field);
+  const claimRules = claimRows.map(({ rule }) => rule);
   const [credentialTemplates, setCredentialTemplates] = useState([]);
   const [approvalPolicySets, setApprovalPolicySets] = useState([]);
   const [policySetsError, setPolicySetsError] = useState('');
@@ -99,6 +106,14 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [resourceReady, setResourceReady] = useState(!templateId);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    // Back can restore the original URL before React replaces the departed editor.
+    const invalidateSave = () => { beginSave(); };
+    window.addEventListener('popstate', invalidateSave, true);
+    return () => window.removeEventListener('popstate', invalidateSave, true);
+  }, [beginSave]);
 
   useEffect(() => {
     let active = true;
@@ -124,7 +139,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         if (existing.id !== templateId || existing.organization_id !== organizationId) {
           throw new Error('This Application Template is not available in the selected organization.');
         }
-        setData({ ...EMPTY, ...existing });
+        const { form_fields, claim_collection_rules, ...details } = existing;
+        setData({ ...EMPTY, ...details });
+        setFieldRows((form_fields || []).map((field) => ({ rowId: nextRowId.current++, field })));
+        setClaimRows((claim_collection_rules || []).map((rule) => ({ rowId: nextRowId.current++, rule })));
         setResourceReady(true);
         if (String(existing.status || '').toUpperCase() !== 'DRAFT') {
           setError('Only draft Application Templates can be edited.');
@@ -159,36 +177,35 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
     setData((current) => ({
       ...current,
       credential_template_id: credentialTemplateId,
-      form_fields: current.form_fields.length > 0 ? current.form_fields : derivedFields,
     }));
+    if (fieldRows.length === 0) {
+      setFieldRows(derivedFields.map((field) => ({ rowId: nextRowId.current++, field })));
+    }
   };
 
-  const updateField = (index, changes) => setData((current) => ({
-    ...current,
-    form_fields: current.form_fields.map((field, fieldIndex) => fieldIndex === index ? { ...field, ...changes } : field),
-  }));
+  const updateField = (index, changes) => setFieldRows((current) => current.map((row, fieldIndex) => (
+    fieldIndex === index ? { ...row, field: { ...row.field, ...changes } } : row
+  )));
 
-  const updateClaimRule = (index, changes) => setData((current) => ({
-    ...current,
-    claim_collection_rules: current.claim_collection_rules.map((rule, ruleIndex) => (
-      ruleIndex === index ? { ...rule, ...changes } : rule
-    )),
-  }));
+  const updateClaimRule = (index, changes) => setClaimRows((current) => current.map((row, ruleIndex) => (
+    ruleIndex === index ? { ...row, rule: { ...row.rule, ...changes } } : row
+  )));
 
   const updateEvidenceSource = (index, key, value) => {
-    const sourceConfig = { ...data.claim_collection_rules[index].source_config };
+    const sourceConfig = { ...claimRules[index].source_config };
     if (value) sourceConfig[key] = value;
     else delete sourceConfig[key];
     updateClaimRule(index, { source_config: sourceConfig });
   };
 
   const save = async () => {
+    if (savingRef.current || !isCurrentBrowserEntry() || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT') return;
     const invalidEvidence = data.evidence_requirements.some((item) => (
       !item.evidence_id || !item.description || !item.evidence_type
       || (['EXTERNAL_FACT', 'EXTERNAL_API'].includes(item.evidence_type) && (!item.provider || !item.fact_type))
       || (item.evidence_type === 'EXTERNAL_API' && !item.api?.url)
     ));
-    if (!resourceReady || !organizationId || !data.name.trim() || !data.credential_template_id || data.form_fields.length === 0) {
+    if (!resourceReady || !organizationId || !data.name.trim() || !data.credential_template_id || formFields.length === 0) {
       setError('Name, active Credential Template, and at least one form field are required.');
       return;
     }
@@ -200,6 +217,8 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
       setError('Select an active approval Policy Set for rules-based approval.');
       return;
     }
+    const action = actionInView(beginSave(), isCurrentBrowserEntry);
+    savingRef.current = true;
     setSaving(true);
     setError('');
     try {
@@ -207,10 +226,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         name: data.name.trim(),
         description: data.description || null,
         credential_template_id: data.credential_template_id,
-        form_fields: data.form_fields,
+        form_fields: formFields,
         evidence_requirements: data.evidence_requirements,
         required_checks: data.required_checks,
-        claim_collection_rules: data.claim_collection_rules,
+        claim_collection_rules: claimRules,
         approval_strategy: data.approval_strategy,
         approval_policy_set_id: data.approval_strategy === 'RULES_BASED' ? data.approval_policy_set_id : null,
         application_validity_days: data.application_validity_days,
@@ -218,14 +237,30 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         ui_config: data.ui_config,
       };
       const saved = templateId
-        ? await updateApplicationTemplate(templateId, payload)
-        : await createApplicationTemplate({ ...payload, organization_id: organizationId });
-      navigate(`/console/org/templates/applications/${saved.id || templateId}`);
+        ? await action.run(updateApplicationTemplate, templateId, payload)
+        : await action.run(createApplicationTemplate, { ...payload, organization_id: organizationId }, { isCurrent: action.isCurrent });
+      if (action.isCurrent()) navigate(`/console/org/templates/applications/${encodeURIComponent(saved.id || templateId)}`);
     } catch (reason) {
-      setError(reason.message || String(reason));
+      if (action.isCurrent()) setError(reason.message || String(reason));
     } finally {
-      setSaving(false);
+      if (action.isCurrent()) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
+  };
+
+  const blockPendingEdit = (event) => {
+    if (!savingRef.current && isCurrentBrowserEntry()) return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const leaveEditor = () => {
+    if (!isCurrentBrowserEntry()) return;
+    // Invalidate completion immediately, even if the destination needs time to render.
+    beginSave();
+    navigate('/console/org/templates/applications');
   };
 
   if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
@@ -234,7 +269,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 3 }}>
-        <IconButton aria-label="Back" onClick={() => navigate('/console/org/templates/applications')}><ArrowBackIcon /></IconButton>
+        <IconButton aria-label="Back" onClick={leaveEditor}><ArrowBackIcon /></IconButton>
         <Box>
           <Typography variant="h4">{templateId ? 'Edit Application Template' : 'Create Application Template'}</Typography>
           <Typography color="text.secondary">Draft applicant form and approval contract</Typography>
@@ -242,7 +277,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
       </Stack>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       <Box>
-        <Stack spacing={2.5}>
+        <Stack component="fieldset" disabled={saving || !isCurrentBrowserEntry()} aria-label="Application Template settings"
+          onChangeCapture={blockPendingEdit} onClickCapture={blockPendingEdit} onKeyDownCapture={blockPendingEdit}
+          onMouseDownCapture={blockPendingEdit} onBlurCapture={blockPendingEdit}
+          spacing={2.5} sx={{ p: 0, m: 0, border: 0, minWidth: 0 }}>
           <TextField required label="Name" value={data.name} onChange={(event) => setData({ ...data, name: event.target.value })} />
           <TextField label="Description" multiline minRows={2} value={data.description || ''} onChange={(event) => setData({ ...data, description: event.target.value })} />
           <FormControl required>
@@ -261,11 +299,14 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
           <Box>
             <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography variant="h6">Form fields</Typography>
-              <Button startIcon={<AddIcon />} onClick={() => setData((current) => ({ ...current, form_fields: [...current.form_fields, { field_id: '', label: '', field_type: 'TEXT', required: false }] }))}>Add field</Button>
+              <Button startIcon={<AddIcon />} onClick={() => {
+                const row = { rowId: nextRowId.current++, field: { field_id: '', label: '', field_type: 'TEXT', required: false } };
+                setFieldRows((current) => [...current, row]);
+              }}>Add field</Button>
             </Stack>
             <Stack spacing={1.5}>
-              {data.form_fields.map((field, index) => (
-                <Paper key={`${field.field_id}-${index}`} variant="outlined" sx={{ p: 2 }}>
+              {fieldRows.map(({ rowId, field }, index) => (
+                <Paper key={rowId} variant="outlined" sx={{ p: 2 }}>
                   <Stack spacing={1.5}>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                       <TextField required label="Field ID" value={field.field_id || ''} onChange={(event) => updateField(index, { field_id: event.target.value })} sx={{ flex: 1 }} />
@@ -274,12 +315,12 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                         {['TEXT', 'DATE', 'DATETIME', 'INTEGER', 'NUMBER', 'BOOLEAN', 'SELECT', 'EMAIL', 'URL', 'FILE_UPLOAD'].map((type) => <MenuItem key={type} value={type}>{type}</MenuItem>)}
                       </Select></FormControl>
                       <FormControlLabel control={<Checkbox checked={Boolean(field.required)} onChange={(event) => updateField(index, { required: event.target.checked })} />} label="Required" />
-                      <IconButton aria-label={`Delete ${field.label || field.field_id || 'field'}`} onClick={() => setData((current) => ({ ...current, form_fields: current.form_fields.filter((_, fieldIndex) => fieldIndex !== index) }))}><DeleteIcon /></IconButton>
+                      <IconButton aria-label={`Delete ${field.label || field.field_id || 'field'}`} onClick={() => setFieldRows((current) => current.filter((row) => row.rowId !== rowId))}><DeleteIcon /></IconButton>
                     </Stack>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                       <TextField label="Claim mapping" value={field.claim_mapping || ''} onChange={(event) => updateField(index, { claim_mapping: event.target.value || null })} sx={{ flex: 1 }} />
                       <TextField label="Validation pattern" value={field.validation_pattern || ''} onChange={(event) => updateField(index, { validation_pattern: event.target.value || null })} sx={{ flex: 1 }} />
-                      {field.field_type === 'SELECT' && <FieldOptionsEditor options={field.options} onChange={(options) => updateField(index, { options })} />}
+                      {field.field_type === 'SELECT' && <DraftListField label="Options" helperText="Comma-separated values or Label=VALUE" value={field.options} format={formatFieldOptions} parse={parseFieldOptions} onChange={(options) => updateField(index, { options })} sx={{ flex: 1 }} />}
                       {['INTEGER', 'NUMBER'].includes(field.field_type) && <TextField type="number" label="Minimum" value={field.minimum ?? ''} onChange={(event) => updateField(index, { minimum: event.target.value === '' ? null : Number(event.target.value) })} sx={{ width: { sm: 120 } }} />}
                       {['INTEGER', 'NUMBER'].includes(field.field_type) && <TextField type="number" label="Maximum" value={field.maximum ?? ''} onChange={(event) => updateField(index, { maximum: event.target.value === '' ? null : Number(event.target.value) })} sx={{ width: { sm: 120 } }} />}
                     </Stack>
@@ -325,26 +366,23 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
 
           {advanced && (
             <>
-              <TextField label="Required checks" helperText="Comma-separated check types" value={(data.required_checks || []).map((item) => item.check_type).filter(Boolean).join(', ')} onChange={(event) => setData({ ...data, required_checks: event.target.value.split(',').map((value, index) => value.trim()).filter(Boolean).map((check_type, index) => ({ check_type, is_required: true, order: index + 1 })) })} />
+              <DraftListField label="Required checks" helperText="Comma-separated check types" value={(data.required_checks || []).map((item) => item.check_type).filter(Boolean)} onChange={(values) => setData((current) => ({ ...current, required_checks: values.map((check_type, index) => ({ check_type, is_required: true, order: index + 1 })) }))} />
               <Box>
                 <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="h6">Claim collection rules</Typography>
                   <Button
                     startIcon={<AddIcon />}
-                    onClick={() => setData((current) => ({
-                      ...current,
-                      claim_collection_rules: [
-                        ...current.claim_collection_rules,
-                        { claim_name: '', source: 'FORM_FIELD', source_config: {} },
-                      ],
-                    }))}
+                    onClick={() => {
+                      const row = { rowId: nextRowId.current++, rule: { claim_name: '', source: 'FORM_FIELD', source_config: {} } };
+                      setClaimRows((current) => [...current, row]);
+                    }}
                   >
                     Add rule
                   </Button>
                 </Stack>
                 <Stack spacing={1.5}>
-                  {data.claim_collection_rules.map((rule, index) => (
-                    <Paper key={`${rule.claim_name}-${index}`} variant="outlined" sx={{ p: 2 }}>
+                  {claimRows.map(({ rowId, rule }, index) => (
+                    <Paper key={rowId} variant="outlined" sx={{ p: 2 }}>
                       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                         <TextField required label="Claim name" value={rule.claim_name || ''} onChange={(event) => updateClaimRule(index, { claim_name: event.target.value })} sx={{ flex: 1 }} />
                         <FormControl sx={{ minWidth: { sm: 190 } }}>
@@ -357,7 +395,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                           <FormControl sx={{ minWidth: { sm: 190 } }}>
                             <InputLabel id={`application-claim-form-field-${index}-label`}>Form field</InputLabel>
                             <Select id={`application-claim-form-field-${index}`} labelId={`application-claim-form-field-${index}-label`} label="Form field" value={rule.source_config?.field_id || ''} onChange={(event) => updateClaimRule(index, { source_config: { field_id: event.target.value } })}>
-                              {data.form_fields.map((field) => <MenuItem key={field.field_id} value={field.field_id}>{field.label || field.field_id}</MenuItem>)}
+                              {fieldRows.map(({ rowId: fieldRowId, field }) => <MenuItem key={fieldRowId} value={field.field_id}>{field.label || field.field_id}</MenuItem>)}
                             </Select>
                           </FormControl>
                         )}
@@ -372,7 +410,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                         {rule.source === 'SYSTEM' && rule.source_config?.system_field === 'constant' && (
                           <TextField label="Constant value" value={rule.source_config?.value ?? ''} onChange={(event) => updateClaimRule(index, { source_config: { ...rule.source_config, value: event.target.value } })} sx={{ flex: 1 }} />
                         )}
-                        <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setData((current) => ({ ...current, claim_collection_rules: current.claim_collection_rules.filter((_, ruleIndex) => ruleIndex !== index) }))}><DeleteIcon /></IconButton>
+                        <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setClaimRows((current) => current.filter((row) => row.rowId !== rowId))}><DeleteIcon /></IconButton>
                       </Stack>
                       {rule.source === 'EVIDENCE_EXTRACTION' && (
                         <Stack spacing={1} sx={{ mt: 1.5 }}>
@@ -403,10 +441,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
             </>
           )}
 
-          <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end' }}>
-            <Button onClick={() => navigate('/console/org/templates/applications')}>Cancel</Button>
-            <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !selectedCredential || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
-          </Stack>
+        </Stack>
+        <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end', mt: 2.5 }}>
+          <Button onClick={leaveEditor}>Cancel</Button>
+          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
         </Stack>
       </Box>
     </Container>
@@ -415,6 +453,28 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
 
 export default function ApplicationTemplateEditorPage() {
   const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const location = useLocation();
+  const [returnedEntry, setReturnedEntry] = useState(0);
+  // Retain the committed entry through organization/auth changes while a newer
+  // BrowserRouter destination has changed history but is still suspended.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const entry = { href: window.location.href, key: window.history.state?.key };
+    const handlePopState = () => {
+      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
+        setReturnedEntry((value) => value + 1);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [location.key, location.pathname, location.search, location.hash]);
   const { templateId } = useParams();
   const [searchParams] = useSearchParams();
   const { can, isLoading } = usePermissions();
@@ -422,5 +482,9 @@ export default function ApplicationTemplateEditorPage() {
   if (isLoading) return <CircularProgress />;
   const action = templateId ? 'edit' : 'create';
   if (!can('application-template', action)) return <Alert severity="error">You do not have permission to {action} Application Templates.</Alert>;
-  return <ApplicationTemplateEditorContent key={`${activeOrgId}:${templateId || 'new'}`} organizationId={activeOrgId} templateId={templateId} advanced={searchParams.get('mode') === 'advanced'} />;
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  return <ApplicationTemplateEditorContent
+    key={JSON.stringify([activeOrgId, templateId, principalId, isAuthenticated, location.key, location.pathname, location.search, location.hash, browserEntry.generation])}
+    organizationId={activeOrgId} templateId={templateId} advanced={searchParams.get('mode') === 'advanced'} browserEntry={browserEntry}
+  />;
 }

@@ -482,6 +482,24 @@
 	"wizards": {
 		"common": {
 			"optional": "Opcional"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Introduce un nombre de atributo.",
+					"credentialType": "Selecciona uno de los tipos de credencial aceptados.",
+					"completeClaims": "Completa el nombre de la política, el propósito, los tipos de credencial aceptados y todos los atributos obligatorios antes de continuar.",
+					"templateRequirementsMismatch": "Estos requisitos no coinciden con la plantilla de credencial seleccionada. Selecciona de nuevo la plantilla o crea una nueva política personalizada.",
+					"templateIncomplete": "La plantilla de credencial seleccionada está incompleta. Selecciona de nuevo la plantilla antes de continuar.",
+					"templateTypeMismatch": "Esta política está vinculada a la plantilla de credencial seleccionada. Utiliza su tipo de credencial o crea una nueva política personalizada para configurar otros tipos.",
+					"templateDuplicateClaim": "Solicita «{{claimName}}» una sola vez en esta política.",
+					"templateUnknownClaim": "«{{claimName}}» no es un atributo de la plantilla de credencial seleccionada. Selecciona un atributo de la plantilla o crea una nueva política personalizada.",
+					"templateValueConflict": "El valor requerido para «{{claimName}}» entra en conflicto con una restricción de la plantilla seleccionada."
+				},
+				"labels": {
+					"removeClaim": "Eliminar atributo {{index}}"
+				}
+			}
 		}
 	},
 	"org": {
