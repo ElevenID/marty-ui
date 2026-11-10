@@ -260,6 +260,7 @@ function ApiKeysContent({ organizationId, browserEntry }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [callbackValidationError, setCallbackValidationError] = useState('');
   const [copiedMessage, setCopiedMessage] = useState('');
   const [createdResult, setCreatedResult] = useState(null);
   const [keyPendingRevoke, setKeyPendingRevoke] = useState(null);
@@ -365,6 +366,7 @@ function ApiKeysContent({ organizationId, browserEntry }) {
     setDialogOpen(false);
     setSaving(false);
     setFormError('');
+    setCallbackValidationError('');
     setCopiedMessage('');
     setCreatedResult(null);
     setFormState({
@@ -389,10 +391,13 @@ function ApiKeysContent({ organizationId, browserEntry }) {
   const updateForm = (updates) => {
     if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
     setFormState((previous) => ({ ...previous, ...updates }));
+    if (updates.createCallback === false) setCallbackValidationError('');
   };
 
   const handleCreate = async () => {
     if (createPending.current || saving || createdResult || !canCreateKey || !isCurrentBrowserEntry()) return;
+    setFormError('');
+    setCallbackValidationError('');
     const shouldCreateCallback = canCreateCallback && formState.createCallback;
     if (!organizationId) {
       setFormError('No active organization selected.');
@@ -410,17 +415,17 @@ function ApiKeysContent({ organizationId, browserEntry }) {
     }
 
     if (shouldCreateCallback && !formState.callbackUrl.trim()) {
-      setFormError('Enter a callback URL or turn off callback creation.');
+      setCallbackValidationError('Enter a callback URL or turn off callback creation.');
       return;
     }
 
     if (shouldCreateCallback && formState.callbackEvents.length === 0) {
-      setFormError('Select at least one callback event.');
+      setCallbackValidationError('Select at least one callback event.');
       return;
     }
 
     if (shouldCreateCallback && eventCatalogError) {
-      setFormError('Webhook event types are unavailable. Retry or turn off callback creation.');
+      setCallbackValidationError('Webhook event types are unavailable. Retry or turn off callback creation.');
       return;
     }
 
@@ -428,7 +433,7 @@ function ApiKeysContent({ organizationId, browserEntry }) {
       const supportedEvents = new Set(callbackEventOptions.map((event) => event.id));
       const unsupportedEvents = formState.callbackEvents.filter((event) => !supportedEvents.has(event));
       if (unsupportedEvents.length > 0) {
-        setFormError(`Unsupported callback events: ${unsupportedEvents.join(', ')}`);
+        setCallbackValidationError(`Unsupported callback events: ${unsupportedEvents.join(', ')}`);
         return;
       }
     }
@@ -438,7 +443,6 @@ function ApiKeysContent({ organizationId, browserEntry }) {
     const isCurrent = () => action.isCurrent() && dialogGeneration.current === generation && isCurrentBrowserEntry();
     createPending.current = true;
     setSaving(true);
-    setFormError('');
 
     let callbackError = null;
 
@@ -805,7 +809,7 @@ function ApiKeysContent({ organizationId, browserEntry }) {
             </Stack>
           ) : (
             <Stack component="fieldset" disabled={saving || !canCreateKey || !isCurrentBrowserEntry()} aria-label="API key settings" spacing={3} sx={{ p: 0, pt: 1, m: 0, border: 0, minWidth: 0 }}>
-              {formError && <Alert severity="error">{formError}</Alert>}
+              {(formError || callbackValidationError) && <Alert severity="error">{formError || callbackValidationError}</Alert>}
               {!canCreateKey && <Alert severity="info">{permissionsLoading ? 'Checking your permissions…' : 'You do not have permission to create API keys in this organization.'}</Alert>}
 
               <TextField

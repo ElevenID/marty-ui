@@ -474,7 +474,9 @@
 			"loadFailed": "Impossible de charger les préférences de notification",
 			"saveSuccess": "Préférences de notification mises à jour",
 			"saveFailed": "Impossible d'enregistrer les préférences de notification",
-			"emailDisabledNote": "Remarque : l'e-mail est actuellement désactivé dans la méthode sélectionnée ci-dessus."
+			"emailDisabledNote": "Remarque : l'e-mail est actuellement désactivé dans la méthode sélectionnée ci-dessus.",
+			"unsupported": "L’API de notification ne prend pas en charge les préférences de notification.",
+			"unsupportedDetails": "Cette installation ne permet pas de consulter ni de modifier les préférences de notification. Aucune modification des préférences n’a été enregistrée."
 		}
 	},
 	"wizards": {

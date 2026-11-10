@@ -474,7 +474,9 @@
 			"loadFailed": "No se pudieron cargar las preferencias de notificación",
 			"saveSuccess": "Preferencias de notificación actualizadas correctamente",
 			"saveFailed": "No se pudieron guardar las preferencias de notificación",
-			"emailDisabledNote": "Nota: el correo está deshabilitado en el método seleccionado arriba."
+			"emailDisabledNote": "Nota: el correo está deshabilitado en el método seleccionado arriba.",
+			"unsupported": "La API de notificaciones no admite preferencias de notificación.",
+			"unsupportedDetails": "Esta instalación no permite consultar ni actualizar las preferencias de notificación. No se ha guardado ningún cambio en las preferencias."
 		}
 	},
 	"wizards": {

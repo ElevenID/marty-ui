@@ -1,4 +1,10 @@
 {
+  "notificationPreferencesPage": {
+    "messages": {
+      "unsupported": "De API voor meldingen ondersteunt geen meldingsvoorkeuren.",
+      "unsupportedDetails": "In deze installatie kunt u meldingsvoorkeuren niet opvragen of wijzigen. Er zijn geen wijzigingen in de voorkeuren opgeslagen."
+    }
+  },
   "operate": {
     "applications": {
       "signIn": "Meld u aan om aanvragen te bekijken.",

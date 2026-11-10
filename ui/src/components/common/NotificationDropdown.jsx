@@ -26,6 +26,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { useTranslation } from 'react-i18next';
 
 import notificationsApi from '../../services/notificationsApi';
+import { publishNotificationChange, subscribeToNotificationChanges } from '../../services/notificationEvents';
 import EmptyState from './EmptyState';
 
 const isConsoleLink = (value) => typeof value === 'string' && /^\/console(?:\/|$)/.test(value)
@@ -60,6 +61,10 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
     return () => { session.current += 1; };
   }, [open]);
   useEffect(() => {
+    if (!open) return undefined;
+    return subscribeToNotificationChanges({ organizationId, recipientId }, () => setAttempt((value) => value + 1));
+  }, [open, organizationId, recipientId]);
+  useEffect(() => {
     let current = true;
     if (!open) return () => { current = false; };
     setLoading(true); setError(''); setNotifications([]);
@@ -78,7 +83,7 @@ function ScopedNotificationDropdown({ organizationId, recipientId, anchorEl, ope
     try {
       await operation();
       if (currentSession !== session.current) return;
-      setAttempt((value) => value + 1);
+      publishNotificationChange({ organizationId, recipientId });
       onCountChange?.();
     } catch (failure) {
       if (currentSession === session.current) setActionError(failure?.message || 'Notifications could not be updated. Please try again.');

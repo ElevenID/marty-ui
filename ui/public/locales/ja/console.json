@@ -474,7 +474,9 @@
 			"loadFailed": "通知設定の読み込みに失敗しました",
 			"saveSuccess": "通知設定を更新しました",
 			"saveFailed": "通知設定の保存に失敗しました",
-			"emailDisabledNote": "注意: 上で選択した通知方法ではメールが無効です。"
+			"emailDisabledNote": "注意: 上で選択した通知方法ではメールが無効です。",
+			"unsupported": "通知APIは通知設定に対応していません。",
+			"unsupportedDetails": "この環境では通知設定の取得や更新はできません。通知設定の変更は保存されていません。"
 		}
 	},
 	"wizards": {

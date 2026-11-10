@@ -4,6 +4,7 @@ import NotificationsIcon from '@mui/icons-material/Notifications';
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone';
 import { useTranslation } from 'react-i18next';
 import notificationsApi from '../../services/notificationsApi';
+import { subscribeToNotificationChanges } from '../../services/notificationEvents';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useAuth } from '../../hooks/useAuth';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -26,10 +27,11 @@ function ScopedNotificationBell({ organizationId, recipientId }) {
     }
   }, [organizationId, recipientId]);
   useEffect(() => {
+    const unsubscribe = subscribeToNotificationChanges({ organizationId, recipientId }, loadUnreadCount);
     mounted.current = true; loadUnreadCount();
     const interval = setInterval(loadUnreadCount, 30000);
-    return () => { mounted.current = false; clearInterval(interval); };
-  }, [loadUnreadCount]);
+    return () => { mounted.current = false; unsubscribe(); clearInterval(interval); };
+  }, [organizationId, recipientId, loadUnreadCount]);
   const handleClose = () => { setAnchorEl(null); loadUnreadCount(); };
   const open = Boolean(anchorEl);
   return <>
@@ -41,7 +43,7 @@ function ScopedNotificationBell({ organizationId, recipientId }) {
       </IconButton>
     </Tooltip>
     <NotificationDropdown organizationId={organizationId} recipientId={recipientId} anchorEl={anchorEl} open={open}
-      onClose={handleClose} onCountChange={loadUnreadCount} />
+      onClose={handleClose} />
   </>;
 }
 export default function NotificationBell() {

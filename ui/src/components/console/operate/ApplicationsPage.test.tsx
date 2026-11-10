@@ -71,6 +71,38 @@ describe('Applications list permissions, evidence and actions', () => {
     expect(within(row).queryByText('Uploaded')).not.toBeInTheDocument();
   });
 
+  it('preserves nested-route tab selection and keyboard navigation through the operate tabs', async () => {
+    const { user } = renderWithRouter(<ApplicationsPage />, {
+      initialEntries: ['/console/org/operate/applications/application-a'],
+    });
+    await screen.findByText('Visitor pass');
+    expect(within(screen.getByRole('tablist')).getAllByRole('tab').map(tab => tab.textContent)).toEqual([
+      'Flow Instances', 'Applications', 'Issued Credentials', 'Verification sessions',
+    ]);
+    const applications = screen.getByRole('tab', { name: 'Applications' });
+    const verify = screen.getByRole('tab', { name: 'Verification sessions' });
+    const issuance = screen.getByRole('tab', { name: 'Issued Credentials' });
+    const flows = screen.getByRole('tab', { name: 'Flow Instances' });
+    expect(applications).toHaveAttribute('aria-selected', 'true');
+    applications.focus();
+
+    await user.keyboard('{End}');
+    expect(verify).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(verify).toHaveAttribute('aria-selected', 'true');
+    expect(applications).toHaveAttribute('aria-selected', 'false');
+
+    await user.keyboard('{ArrowLeft}{Enter}');
+    expect(issuance).toHaveFocus();
+    expect(issuance).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{ArrowLeft}{Enter}');
+    expect(applications).toHaveFocus();
+    expect(applications).toHaveAttribute('aria-selected', 'true');
+    await user.keyboard('{Home}{Enter}');
+    expect(flows).toHaveFocus();
+    expect(flows).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('distinguishes explicit negative evidence from unreported signals', async () => {
     inventory = [{ ...application, documents_uploaded: false, verification_passed: false }];
     renderWithRouter(<ApplicationsPage />);
