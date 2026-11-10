@@ -14,8 +14,10 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bootstrap_kubernetes_openbao as bootstrap
 import stage_kubernetes_application_credentials as staging
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private transport contract")
@@ -251,6 +253,13 @@ def flow(tmp_path, monkeypatch):
     return item
 
 
+def test_application_stage_private_directories_clear_inherited_setgid(flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    staging.stage(flow.args)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
+
+
 def test_stages_candidate_only_with_native_proofs_private_captures_and_preserved_modes(flow, capsys):
     before = dict(flow.snapshot)
     mask = os.umask(0o077)
@@ -466,3 +475,100 @@ def test_flat_export_requires_a_complete_tar_terminator(trailer):
     payload = archive({"input": (b"PRIVATE_TRANSPORT_CANARY", 0o600)})[:1024] + trailer
     with pytest.raises(bootstrap.BootstrapError, match="terminator"):
         bootstrap.flat_archive(payload, {"input"}, maximum=65536, modes={0o600})
+
+
+def retained_activation(flow, *, complete=True):
+    """A private completed adapter proof for the next-staging continuity tests."""
+    state = staging.application_state
+    operation = flow.args.state_dir.parent / "prior-activation"
+    operation.mkdir(mode=0o700)
+    candidate = operation / "candidate"
+    candidate.mkdir(mode=0o700)
+    for name, (value, mode) in flow.candidate.items():
+        staging.write_preserved(candidate / name, value, mode)
+    with state.locked(flow.args.state_dir) as held:
+        current = held.current(flow.binding)
+        held.begin(flow.binding, operation, candidate, "a" * 32, expected=current)
+        if complete:
+            proof = {"schema": state.VERIFIED_SCHEMA, "binding": flow.binding,
+                "activationId": "a" * 32, "operationDirectory": str(operation),
+                "candidateDirectory": str(candidate), "previousDirectory": str(current.directory),
+                "runtime": flow.values["release"],
+                "secret": {"name": "marty-secrets", "uid": "secret-uid", "resourceVersion": "201"},
+                "deployments": [{"name": name, "uid": name + "-uid", "generation": 3,
+                    "revision": 2, "podUids": [name + "-pod-uid"]}
+                    for name in ["flow", "gateway", "issuance-native", "notification", "signing-keys"]],
+                "status": "secret-and-rollouts-verified", "credentialDeliveryVerified": True,
+                "credentialConsumptionVerified": False}
+            write(operation / state.VERIFIED, bootstrap.encoded(proof))
+            held.publish(flow.binding, operation, expected=current)
+            held.complete(flow.binding, operation)
+            held.finish(flow.binding, operation)
+    return candidate
+
+
+def test_next_stage_uses_verified_selected_generation_and_preserves_bootstrap_credentials(flow):
+    original = dict(flow.snapshot)
+    selected = retained_activation(flow)
+    selected_snapshot = staging.current_snapshot(selected)
+    flow.minted = {name: (("PRIVATE_SECOND_SCOPED_TOKEN_CANARY_" + name).encode(), 0o600)
+                   for name in flow.runtime}
+    flow.candidate = {**selected_snapshot, **flow.minted}
+    selector_path = flow.args.state_dir / staging.application_state.SELECTOR
+    selector = selector_path.read_bytes()
+    staging.stage(flow.args)
+    assert flow.imported[staging.REMOTE_CURRENT] == selected_snapshot
+    assert flow.generation_calls[0][1]["current"] == str(selected)
+    assert staging.current_snapshot(flow.args.operation_dir / "candidate") == flow.candidate
+    assert staging.current_snapshot(selected) == selected_snapshot
+    assert staging.current_snapshot(flow.args.state_dir / "credentials") == original
+    assert selector_path.read_bytes() == selector
+    assert flow.stage_calls == 1
+
+
+def test_pending_activation_refuses_staging_before_artifact_or_cluster_activity(flow):
+    retained_activation(flow, complete=False)
+    with pytest.raises(bootstrap.BootstrapError, match="activation is pending"):
+        staging.stage(flow.args)
+    assert flow.events == [] and flow.processes == []
+    assert flow.namespace_reads == flow.cluster_reads == flow.stage_calls == 0
+    assert not flow.args.operation_dir.exists()
+
+
+@pytest.mark.parametrize("target", ["selected", "original", "renewal-identity"])
+def test_new_stage_directory_cannot_be_created_inside_retained_generations(flow, target):
+    selected = retained_activation(flow)
+    if target == "renewal-identity":
+        protected = flow.args.state_dir / target
+        protected.mkdir(mode=0o700)
+        write(protected / "renewal-role-id", b"PUBLIC_RENEWAL_ROLE_CANARY")
+        write(protected / "renewal-secret-id", b"PRIVATE_RENEWAL_SECRET_CANARY")
+        write(protected / "renewal-leaf-policies.json", b"[]")
+    else:
+        protected = selected if target == "selected" else flow.args.state_dir / "credentials"
+    before = staging.current_snapshot(protected)
+    flow.args.operation_dir = protected / "unsafe-operation"
+    with pytest.raises(bootstrap.BootstrapError, match="overlaps retained credential inputs"):
+        staging.stage(flow.args)
+    assert not flow.args.operation_dir.exists()
+    assert staging.current_snapshot(protected) == before
+    assert flow.events == [] and flow.creates == []
+
+
+def test_observed_selection_inode_drift_refuses_before_issuing_replacements(flow, monkeypatch):
+    retained_activation(flow)
+    original_check = bootstrap.check_application_binding
+
+    def change_selection_at_issue_boundary(transport, binding):
+        original_check(transport, binding)
+        if flow.namespace_reads == 3:
+            selector = flow.args.state_dir / staging.application_state.SELECTOR
+            replacement = selector.with_suffix(".replacement")
+            write(replacement, selector.read_bytes())
+            os.replace(replacement, selector)
+
+    monkeypatch.setattr(bootstrap, "check_application_binding", change_selection_at_issue_boundary)
+    with pytest.raises(bootstrap.BootstrapError, match="selected application generation changed"):
+        staging.stage(flow.args)
+    assert flow.stage_calls == 0
+    assert not (flow.args.operation_dir / "application-stage-complete.json").exists()

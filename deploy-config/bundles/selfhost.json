@@ -123,6 +123,7 @@
     "scripts/bootstrap-selfhost-vault.sh",
     "scripts/bootstrap_kubernetes_openbao.py",
     "scripts/inspect_kubernetes_legacy_credentials.py",
+    "scripts/kubernetes_application_state.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
     "scripts/prepare_kubernetes_helm_values.py",
     "scripts/recover_kubernetes_legacy_credentials.py",

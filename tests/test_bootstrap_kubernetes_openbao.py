@@ -6,7 +6,9 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
+import subprocess
 import sys
 import tarfile
 from types import SimpleNamespace
@@ -19,6 +21,74 @@ import bootstrap_kubernetes_openbao as bootstrap
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux bootstrap file contract")
+REAL_RUN = subprocess.run
+
+
+def capture_private_directory_commands(monkeypatch, transport_class):
+    """Keep the commands emitted by a real adapter before its cluster double."""
+    commands = []
+    execute = transport_class.execute
+
+    def captured(self, pod, command, **kwargs):
+        if command[:2] == ["/bin/sh", "-ec"] and "mkdir " in command[2]:
+            assert kwargs.get("data") is None
+            commands.append(command)
+        return execute(self, pod, command, **kwargs)
+
+    monkeypatch.setattr(transport_class, "execute", captured)
+    return commands
+
+
+def assert_private_directory_command(command, tmp_path):
+    """Run the actual mkdir/chmod command on the fsGroup-style filesystem."""
+    volume = tmp_path / "setgid volume"
+    volume.mkdir(mode=0o700)
+    volume.chmod(0o2770)
+    inherited = volume / "inheritance-probe"
+    inherited.mkdir(mode=0o700)
+    assert stat.S_IMODE(inherited.stat().st_mode) == 0o2700
+    inherited.rmdir()
+
+    assert command[:2] == ["/bin/sh", "-ec"]
+    script = command[2]
+    if len(command) == 3:
+        # The pod's bounded sleep is unrelated to directory creation.
+        assert script.endswith("; exec sleep 1200")
+        script = script.removesuffix("; exec sleep 1200")
+        destinations = ["/tmp/workload-tls"]
+        script = script.replace(destinations[0], shlex.quote(str(volume / "workload-tls")))
+        arguments = []
+    else:
+        assert command[3] == "--"
+        destinations = command[4:]
+        arguments = ["--", *(str(volume / Path(path).relative_to("/tmp")) for path in destinations)]
+    result = REAL_RUN(["/bin/sh", "-ec", script, *arguments], capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr.decode()
+    for path in destinations:
+        directory = volume / Path(path).relative_to("/tmp")
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700, str(path)
+        assert directory.stat().st_uid == os.geteuid()
+        child = directory / "native-child"
+        child.mkdir(mode=0o700)
+        assert stat.S_IMODE(child.stat().st_mode) == 0o700
+        child.rmdir()
+        archive = REAL_RUN(["tar", "-cf", "-", "-C", str(directory), "."],
+                           capture_output=True, check=True, timeout=10).stdout
+        names = {"."} | {str(item.relative_to(directory)) for item in directory.rglob("*")}
+        assert bootstrap.private_archive(archive, {}, maximum=64 * 1024, modes={0o600},
+            directories=names, complete=True, allow_empty=True) == {}
+    assert stat.S_IMODE(volume.stat().st_mode) == 0o2770
+
+
+def test_real_directory_archive_still_rejects_setgid_custody(tmp_path):
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o2700)
+    archive = REAL_RUN(["tar", "-cf", "-", "-C", str(directory), "."],
+                       capture_output=True, check=True, timeout=10).stdout
+    with pytest.raises(bootstrap.BootstrapError, match="directory custody differs"):
+        bootstrap.private_archive(archive, {}, maximum=64 * 1024, modes={0o600},
+            directories={"."}, complete=True, allow_empty=True)
 
 
 def expected_publication_contract():
@@ -31,6 +101,51 @@ def expected_publication_contract():
 
 def expected_application_contract():
     return json.loads((bootstrap.ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+
+
+def expected_renewal_contract():
+    return {
+        "schema": "marty.kubernetes-renewal/v1",
+        "enrollmentOperation": "kubernetes-renewal-enroll",
+        "stagingOperation": "kubernetes-renewal-stage",
+        "bindingSchema": "marty.kubernetes-renewal-binding/v1",
+        "identityFiles": ["renewal-leaf-policies.json", "renewal-role-id", "renewal-secret-id"],
+        "minimumTtlSeconds": 3600, "operationBudgetSeconds": 900,
+        "renewableFiles": sorted(set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES),
+        "unchangedFiles": ["workload_identity_ca_cert"], "changedFiles": 39,
+        "scopedLeafTokens": 21, "tlsMetadataFile": "selfhost-tls-kms-roles.json",
+    }
+
+
+def renewal_archive(members, *, mode=0o600):
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as archive:
+        for name, value in members.items():
+            entry = tarfile.TarInfo("./" + name)
+            entry.mode, entry.size = mode, len(value)
+            archive.addfile(entry, io.BytesIO(value))
+    return raw.getvalue()
+
+
+def renewal_identity_members():
+    return {
+        "renewal-role-id": b"PUBLIC_RENEWAL_ROLE_ID_CANARY",
+        "renewal-secret-id": b"PRIVATE_RENEWAL_SECRET_ID_CANARY",
+        "renewal-leaf-policies.json": bootstrap.encoded([f"policy-{index:02d}" for index in range(21)]),
+    }
+
+
+def renewal_evidence_members(binding):
+    nonce = binding["workloadProject"].removeprefix("marty-selfhost-disposable-k8s-")
+    return {
+        "pending.json": bootstrap.encoded({"binding": binding}),
+        "binding.json": bootstrap.encoded({"schema": "marty.kubernetes-renewal-binding/v1",
+            "binding": binding, "producerNonce": nonce}),
+        "completed.json": bootstrap.encoded({"schema": "marty.kubernetes-renewal-enrollment/v1",
+            "binding": binding, "producerNonce": nonce,
+            "identityFiles": sorted(bootstrap.RENEWAL_IDENTITY_FILES),
+            "scopedLeafTokens": 21, "enrolled": True, "activated": False}),
+    }
 
 
 def application_identity_archive(binding, *, extra=None, missing=None, mode=0o600):
@@ -273,6 +388,12 @@ def bootstrap_flow(tmp_path, monkeypatch):
         contract_returncode=0, contract_exception=None,
         application_contract=expected_application_contract(), application_contract_bytes=None,
         application_contract_returncode=0, application_contract_exception=None,
+        renewal_contract=expected_renewal_contract(), renewal_contract_bytes=None,
+        renewal_contract_returncode=0, renewal_contract_exception=None,
+        renewal_calls=0, renewal_context=None, renewal_requested_at_call=None,
+        renewal_current_archive=None, renewal_identity_override=None, renewal_evidence_override=None,
+        renewal_response=bootstrap.encoded({"ready": True, "identity": "/tmp/renewal-identity",
+            "binding": "/tmp/renewal-enrollment/binding.json", "count": 3}),
         authority_calls=0, authority_context=None, authority_requested_at_call=None,
         authority_exports=0, authority_archive_override=None,
         authority_response=b'{"ready":true}',
@@ -282,8 +403,9 @@ def bootstrap_flow(tmp_path, monkeypatch):
             {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
             {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
             {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
+            {"metadata": {"name": args.namespace, "uid": NAMESPACE_UID}},
         ],
-        status_documents=[dict(ready), dict(ready), dict(ready)],
+        status_documents=[dict(ready), dict(ready), dict(ready), dict(ready)],
         token_commands={}, uploads={}, resources=[], workload_command=None,
         keycloak_context=None, requested_at_init=None,
     )
@@ -329,6 +451,15 @@ def bootstrap_flow(tmp_path, monkeypatch):
                 stdout=(bootstrap.encoded(flow.application_contract)
                         if flow.application_contract_bytes is None else flow.application_contract_bytes),
                 stderr=b"PRIVATE_APPLICATION_CONTRACT_DIAGNOSTIC_CANARY")
+        elif command == [str(args.state_dir / "marty-deploy"), "kubernetes-renewal-contract"]:
+            flow.events.append("renewal-contract")
+            assert kwargs["env"] == {} and kwargs["stdin"] == bootstrap.subprocess.DEVNULL
+            if flow.renewal_contract_exception:
+                raise flow.renewal_contract_exception
+            return SimpleNamespace(returncode=flow.renewal_contract_returncode,
+                stdout=(bootstrap.encoded(flow.renewal_contract)
+                        if flow.renewal_contract_bytes is None else flow.renewal_contract_bytes),
+                stderr=b"PRIVATE_RENEWAL_CONTRACT_DIAGNOSTIC_CANARY")
         elif command[:1] == ["/synthetic/kubectl"] and "config" in command:
             flow.events.append("kubeconfig")
             flow.publication_before_cluster = json.loads(
@@ -411,10 +542,24 @@ def bootstrap_flow(tmp_path, monkeypatch):
             if command[:2] == ["/bin/sh", "-ec"]:
                 if len(command) == 3 and command[2].startswith("for attempt in"):
                     return b'{"initialized":false,"type":"static"}'
-                if command[2] == 'umask 077; mkdir "$1" "$2"; chmod 700 "$1" "$2"':
+                if command[2] == 'umask 077; mkdir "$1" "$2"; chmod u=rwx,go=,a-s,a-t "$1" "$2"':
                     assert command[4:] == ["/tmp/application-current", "/tmp/application-identity"]
                     return b""
+                if command[2] == 'umask 077; mkdir "$1" "$2" "$3"; chmod u=rwx,go=,a-s,a-t "$1" "$2" "$3"':
+                    assert command[4:] == ["/tmp/renewal-current", "/tmp/renewal-identity",
+                                           "/tmp/renewal-enrollment"]
+                    return b""
                 if command[2] == bootstrap.REMOTE_ARCHIVE_COMMAND:
+                    if command[4] == "/tmp/renewal-identity":
+                        if flow.fail_at == "renewal-identity-export":
+                            raise bootstrap.BootstrapError("synthetic private renewal export failure")
+                        return (flow.renewal_identity_override if flow.renewal_identity_override is not None
+                                else renewal_archive(renewal_identity_members()))
+                    if command[4] == "/tmp/renewal-enrollment":
+                        if flow.fail_at == "renewal-evidence-export":
+                            raise bootstrap.BootstrapError("synthetic private renewal evidence failure")
+                        return (flow.renewal_evidence_override if flow.renewal_evidence_override is not None
+                                else renewal_archive(renewal_evidence_members(flow.renewal_context["binding"])))
                     assert command[4] == "/tmp/application-identity"
                     flow.authority_exports += 1
                     if flow.fail_at == "authority-export":
@@ -429,6 +574,9 @@ def bootstrap_flow(tmp_path, monkeypatch):
                     flow.token_commands[token] = native
                     return token + b"\n"
                 assert native[:2] == ["env", "DIDCOMM_KMS_PLUGIN_REQUIRED=true"]
+                return b""
+            if command == ["tar", "-xf", "-", "-C", "/tmp/renewal-current"]:
+                flow.renewal_current_archive = data
                 return b""
             if command == ["sha256sum", "/tmp/marty-deploy"]:
                 return hashlib.sha256(flow.uploads[(pod, "/tmp/marty-deploy")]).hexdigest().encode()
@@ -458,6 +606,20 @@ def bootstrap_flow(tmp_path, monkeypatch):
                     raise bootstrap.subprocess.TimeoutExpired(command, 600,
                         output=b"PRIVATE_UNCERTAIN_RESPONSE_CANARY")
                 return flow.authority_response
+            if command[:3] == ["/tmp/marty-deploy", "operator", "kubernetes-renewal-enroll"]:
+                assert command[3:] == ["https://openbao:8200", "/tmp/ca.crt", "/tmp/renewal-identity"]
+                assert kwargs["timeout"] == 930
+                flow.renewal_calls += 1
+                flow.renewal_context = json.loads(data)
+                flow.renewal_requested_at_call = json.loads(
+                    (self.state / "renewal-authority-requested.json").read_bytes())
+                assert flow.namespace_reads == flow.status_reads == 3
+                if flow.fail_at == "renewal-native":
+                    raise bootstrap.BootstrapError("PRIVATE_RENEWAL_RESPONSE_CANARY")
+                if flow.fail_at == "renewal-timeout":
+                    raise bootstrap.subprocess.TimeoutExpired(command, 930,
+                        output=b"PRIVATE_RENEWAL_UNCERTAIN_CANARY")
+                return flow.renewal_response
             raise AssertionError("unexpected remote process")
 
     def accept_tls(output, destination, root_token, *, expected_files, certificate_files):
@@ -549,13 +711,25 @@ def test_incompatible_compiled_publisher_refused_before_cluster_access(bootstrap
     assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
 
 
+@pytest.mark.parametrize("site", ["workload", "application", "renewal"])
+def test_bootstrap_private_directories_clear_inherited_setgid(bootstrap_flow, tmp_path, monkeypatch, site):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    bootstrap.bootstrap(bootstrap_flow.args)
+    pod = next(resource for resource in bootstrap_flow.resources if resource["kind"] == "Pod")
+    assert len(commands) == 2
+    selected = {"workload": pod["spec"]["containers"][0]["command"],
+                "application": commands[0], "renewal": commands[1]}
+    assert_private_directory_command(selected[site], tmp_path)
+
+
 def test_compiled_publication_preflight_retained_before_cluster_and_owns_notification(bootstrap_flow):
     flow = bootstrap_flow
     assert flow.args.runtime_source_sha != flow.args.chart_source_sha
     bootstrap.bootstrap(flow.args)
     contract = expected_publication_contract()
-    assert flow.events[:6] == [
-        "prepare", "authenticated", "build-identity", "publication-contract", "application-contract", "kubeconfig",
+    assert flow.events[:7] == [
+        "prepare", "authenticated", "build-identity", "publication-contract", "application-contract",
+        "renewal-contract", "kubeconfig",
     ]
     assert flow.events.count("publication-contract") == 1
     assert flow.publication_before_cluster == contract
@@ -589,7 +763,7 @@ def test_lifecycle_receipt_binds_actual_producers_and_ordinary_token_requests(bo
     lifecycle = complete["credentialLifecycle"]
 
     assert flow.init_calls == flow.cleanup_calls == flow.publication_calls == 1
-    assert flow.namespace_reads == flow.status_reads == 3
+    assert flow.namespace_reads == flow.status_reads == 4
     assert requested == flow.requested_at_init
     assert requested["bootstrapId"] == complete["bootstrapId"]
     project = "marty-selfhost-disposable-k8s-" + PRODUCER_NONCE
@@ -676,8 +850,8 @@ def test_wrong_initial_namespace_name_prevents_initialization(bootstrap_flow):
 ])
 def test_final_identity_drift_withholds_success_receipt(bootstrap_flow, identity, field, value):
     flow = bootstrap_flow
-    document = (flow.namespace_documents[2]["metadata"] if identity == "namespace"
-                else flow.status_documents[2])
+    document = (flow.namespace_documents[3]["metadata"] if identity == "namespace"
+                else flow.status_documents[3])
     document[field] = value
     with pytest.raises(bootstrap.BootstrapError):
         bootstrap.bootstrap(flow.args)
@@ -740,6 +914,201 @@ def test_unbound_producer_identity_is_rejected_before_mutation(tmp_path, nonce, 
             workload_project=project, files={}, pull_secrets=[],
             binding={"workloadProject": project},
         )
+
+
+@pytest.mark.parametrize("invalid", [
+    "unsupported", "timeout", "malformed", "duplicate", "ttl-type", "changed-count",
+    "extra-input", "missing-input", "authority-count", "budget", "extra-field",
+])
+def test_renewal_capability_refuses_before_kubernetes_context_selection(bootstrap_flow, invalid, capsys):
+    flow = bootstrap_flow
+    contract = flow.renewal_contract
+    if invalid == "unsupported":
+        flow.renewal_contract_returncode = 2
+    elif invalid == "timeout":
+        flow.renewal_contract_exception = bootstrap.subprocess.TimeoutExpired(
+            ["PRIVATE_RENEWAL_CONTRACT"], 10, output=b"PRIVATE_RENEWAL_OUTPUT")
+    elif invalid == "malformed":
+        flow.renewal_contract_bytes = b'{"PRIVATE_BAD_JSON"'
+    elif invalid == "duplicate":
+        flow.renewal_contract_bytes = b'{"schema":"PRIVATE_DUPLICATE",' + bootstrap.encoded(contract)[1:]
+    elif invalid == "ttl-type":
+        contract["minimumTtlSeconds"] = "3600"
+    elif invalid == "changed-count":
+        contract["changedFiles"] = 40
+    elif invalid == "extra-input":
+        contract["renewableFiles"].append("unreviewed-token")
+    elif invalid == "missing-input":
+        contract["renewableFiles"].pop()
+    elif invalid == "authority-count":
+        contract["scopedLeafTokens"] = 22
+    elif invalid == "budget":
+        contract["operationBudgetSeconds"] = 1200
+    else:
+        contract["private"] = "PRIVATE_EXTRA_FIELD"
+    with pytest.raises(bootstrap.BootstrapError) as failure:
+        bootstrap.bootstrap(flow.args)
+    assert flow.events == ["prepare", "authenticated", "build-identity", "publication-contract",
+                           "application-contract", "renewal-contract"]
+    assert flow.cluster_operations == [] and flow.init_calls == flow.renewal_calls == 0
+    assert not (flow.args.state_dir / "kubeconfig").exists()
+    captured = capsys.readouterr()
+    assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
+
+
+def test_fresh_bootstrap_enrolls_renewal_from_complete_generation_with_original_binding(bootstrap_flow):
+    flow = bootstrap_flow
+    bootstrap.bootstrap(flow.args)
+    state = flow.args.state_dir
+    complete = json.loads((state / "bootstrap-complete.json").read_bytes())
+    authority = complete["renewalAuthority"]
+    binding = complete["applicationAuthority"]["binding"]
+    assert authority == {"schema": "marty.kubernetes-renewal-authority/v1", "binding": binding,
+        "identityDirectory": "renewal-identity", "files": sorted(bootstrap.RENEWAL_IDENTITY_FILES),
+        "bindingFile": "renewal-binding.json"}
+    assert complete["renewalContract"] == expected_renewal_contract()
+    assert len(complete["renewalContract"]["renewableFiles"]) == 40
+    assert flow.renewal_calls == 1
+    assert flow.renewal_context == {"root_token": ROOT_TOKEN, "binding": binding,
+        "current": "/tmp/renewal-current", "output": "/tmp/renewal-enrollment"}
+    request = flow.renewal_requested_at_call
+    assert request == json.loads((state / "renewal-authority-requested.json").read_bytes())
+    assert request["binding"] == binding and request["transportDeadlineSeconds"] == 1200
+    source = state / "credentials"
+    members = bootstrap.flat_archive(flow.renewal_current_archive,
+        {entry.name for entry in source.iterdir()}, maximum=9 * 1024 * 1024, modes={0o600})
+    assert request["currentFiles"] == len(members) > 40
+    for name, (value, mode) in members.items():
+        assert value == (source / name).read_bytes() and mode == 0o600
+    identity = state / "renewal-identity"
+    assert {path.name for path in identity.iterdir()} == bootstrap.RENEWAL_IDENTITY_FILES
+    assert stat.S_IMODE(identity.stat().st_mode) == 0o700
+    for name, value in renewal_identity_members().items():
+        assert (identity / name).read_bytes() == value
+        assert stat.S_IMODE((identity / name).stat().st_mode) == 0o600
+    receipt = json.loads((state / "renewal-binding.json").read_bytes())
+    assert receipt["binding"] == binding and receipt["producerNonce"] == PRODUCER_NONCE
+    for name in ("renewal-authority-requested.json", "renewal-binding.json", "kubernetes-renewal.json",
+                 "bootstrap-complete.json"):
+        assert b"PRIVATE_" not in (state / name).read_bytes()
+    assert (state / "renewal-enrollment-evidence.tar").is_file()
+
+
+@pytest.mark.parametrize("identity", ["namespace", "cluster"])
+def test_renewal_enrollment_checks_binding_again_before_root_mutation(bootstrap_flow, identity):
+    flow = bootstrap_flow
+    if identity == "namespace":
+        flow.namespace_documents[2]["metadata"]["uid"] = "20c184dc-712f-41c4-968d-d87027eb4981"
+    else:
+        flow.status_documents[2]["cluster_id"] = "20c184dc-712f-41c4-968d-d87027eb4981"
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.bootstrap(flow.args)
+    assert flow.authority_calls == 1 and flow.renewal_calls == flow.publication_calls == 0
+    assert flow.cleanup_calls == 1
+    assert (flow.args.state_dir / "renewal-authority-requested.json").exists()
+    assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
+
+
+@pytest.mark.parametrize("failure", [
+    "renewal-native", "renewal-timeout", "renewal-identity-export", "renewal-evidence-export",
+])
+def test_renewal_uncertainty_preserves_original_bounded_pod_and_never_completes(bootstrap_flow, failure, capsys):
+    flow = bootstrap_flow
+    flow.fail_at = failure
+    with pytest.raises(bootstrap.RetainProducerError, match="do not replay") as error:
+        bootstrap.bootstrap(flow.args)
+    assert flow.renewal_calls == 1 and flow.cleanup_calls == flow.publication_calls == 0
+    state = flow.args.state_dir
+    assert not (state / "bootstrap-complete.json").exists()
+    assert (state / "renewal-authority-requested.json").exists()
+    pointer = json.loads((state / "transport-pod.json").read_bytes())
+    assert pointer["activeDeadlineSeconds"] == 1200 and pointer["durableRecovery"] is False
+    assert len([item for item in flow.resources if item["kind"] == "Pod"]) == 1
+    if failure in {"renewal-native", "renewal-timeout"}:
+        assert (state / "renewal-authority-recovery.tar").exists()
+        assert (state / "renewal-enrollment-recovery.tar").exists()
+    captured = capsys.readouterr()
+    assert "PRIVATE_" not in str(error.value) + captured.out + captured.err
+
+
+@pytest.mark.parametrize("value", [False, 1, "true", None])
+def test_renewal_success_requires_typed_native_readiness_and_retainable_evidence(bootstrap_flow, value):
+    flow = bootstrap_flow
+    response = json.loads(flow.renewal_response)
+    response["ready"] = value
+    flow.renewal_response = bootstrap.encoded(response)
+    with pytest.raises(bootstrap.BootstrapError, match="do not replay"):
+        bootstrap.bootstrap(flow.args)
+    assert flow.renewal_calls == flow.cleanup_calls == 1 and flow.publication_calls == 0
+    assert (flow.args.state_dir / "renewal-authority-recovery.tar").exists()
+    assert (flow.args.state_dir / "renewal-enrollment-recovery.tar").exists()
+    assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
+
+
+@pytest.mark.parametrize("invalid", ["missing", "root", "shared", "extra", "duplicate-policy", "ingress", "mode"])
+def test_renewal_identity_export_refuses_broadened_or_malformed_private_inventory(bootstrap_flow, invalid):
+    flow = bootstrap_flow
+    members = renewal_identity_members()
+    if invalid == "missing":
+        members.pop("renewal-secret-id")
+    elif invalid == "root":
+        members["renewal-secret-id"] = ROOT_TOKEN.encode()
+    elif invalid == "shared":
+        members["renewal-secret-id"] = members["renewal-role-id"]
+    elif invalid == "extra":
+        members["root.token"] = ROOT_TOKEN.encode()
+    elif invalid in {"duplicate-policy", "ingress"}:
+        policies = json.loads(members["renewal-leaf-policies.json"])
+        policies[-1] = policies[0] if invalid == "duplicate-policy" else "installer-ingress-" + "a" * 32
+        members["renewal-leaf-policies.json"] = bootstrap.encoded(sorted(policies))
+    flow.renewal_identity_override = renewal_archive(members, mode=0o644 if invalid == "mode" else 0o600)
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.bootstrap(flow.args)
+    assert flow.renewal_calls == 1 and flow.publication_calls == 0
+    assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
+
+
+@pytest.mark.parametrize("invalid", ["nonce", "cluster", "enrolled-type", "activated", "root"])
+def test_renewal_enrollment_evidence_must_bind_original_producers(bootstrap_flow, invalid):
+    flow = bootstrap_flow
+    binding = {"namespace": flow.args.namespace, "namespaceUid": NAMESPACE_UID,
+        "openbaoClusterId": CLUSTER_ID, "workloadProject": "marty-selfhost-disposable-k8s-" + PRODUCER_NONCE}
+    members = renewal_evidence_members(binding)
+    if invalid in {"nonce", "cluster"}:
+        receipt = json.loads(members["binding.json"])
+        if invalid == "nonce":
+            receipt["producerNonce"] = "ffffffffffff"
+        else:
+            receipt["binding"]["openbaoClusterId"] = "20c184dc-712f-41c4-968d-d87027eb4981"
+        members["binding.json"] = bootstrap.encoded(receipt)
+    elif invalid == "root":
+        members["pending.json"] = bootstrap.encoded({"secret": ROOT_TOKEN})
+    else:
+        receipt = json.loads(members["completed.json"])
+        receipt["enrolled" if invalid == "enrolled-type" else "activated"] = 1 if invalid == "enrolled-type" else True
+        members["completed.json"] = bootstrap.encoded(receipt)
+    flow.renewal_evidence_override = renewal_archive(members)
+    with pytest.raises(bootstrap.BootstrapError):
+        bootstrap.bootstrap(flow.args)
+    assert flow.renewal_calls == 1 and flow.publication_calls == 0
+    assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
+
+
+def test_renewal_binding_persistence_failure_never_publishes_or_completes(bootstrap_flow, monkeypatch):
+    flow = bootstrap_flow
+    original = bootstrap.write_new
+
+    def fail_binding(path, data, mode=0o600):
+        if path.name == "renewal-binding.json":
+            raise OSError("synthetic fsync failure")
+        return original(path, data, mode)
+
+    monkeypatch.setattr(bootstrap, "write_new", fail_binding)
+    with pytest.raises(bootstrap.BootstrapError, match="do not replay"):
+        bootstrap.bootstrap(flow.args)
+    assert flow.renewal_calls == flow.cleanup_calls == 1 and flow.publication_calls == 0
+    assert (flow.args.state_dir / "renewal-authority-recovery.tar").exists()
+    assert not (flow.args.state_dir / "bootstrap-complete.json").exists()
 
 
 @pytest.mark.parametrize("existing", ["file", "symlink"])

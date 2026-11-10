@@ -17,11 +17,22 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bootstrap_kubernetes_openbao as bootstrap
 import inspect_kubernetes_legacy_credentials as inspection
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux private transport")
+
+
+def test_inspection_private_directories_clear_inherited_setgid(flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    inspection.inspect(flow.args)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
+
+
 NAMESPACE_UID = "bd2fd39c-2947-474d-b508-66dc5d7e9088"
 CLUSTER = "9e38e97b-56dc-4ea0-be5f-688de619c891"
 POD_UID = "ccfd7b48-909a-4a75-bee8-f2490cf76dd6"

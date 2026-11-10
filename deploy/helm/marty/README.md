@@ -279,8 +279,12 @@ prepare ordinary-token replacement candidates in private operator state. A
 staged candidate does not update this chart's Secrets or restart workloads.
 Use the [Kubernetes lifecycle guide](../../../docs/kubernetes-first-milestone.md#stage-ordinary-application-credentials)
 for the fixed 11-input replacement scope, retained identity and recovery
-boundary. TLS and Keycloak renewal, coordinated activation and live upgrade
-qualification remain separate requirements.
+boundary. Fresh bootstrap also enrolls the existing Renewal AppRole for
+[private TLS and Keycloak candidate staging](../../../docs/kubernetes-renewal-staging.md).
+The [Renewal activation command](../../../docs/kubernetes-renewal-activation.md)
+uses conditional updates to the existing Secrets, Deployment controllers and
+private delivery checks. Authenticated workload acceptance, automatic renewal
+and live upgrade qualification remain separate requirements.
 
 Before claiming milestone acceptance, test a fresh isolated install, exact
 image IDs, HTTPS and OIDC readiness, existing issuance/verification/wallet demo
