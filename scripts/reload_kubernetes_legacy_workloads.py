@@ -424,6 +424,25 @@ def workload_template(template: dict, name: str, original: dict) -> None:
                               "workload has an unsupported Secret envFrom projection")
 
 
+def release_annotation_matches(key: str, expected: object, actual: object) -> bool:
+    if key not in ("buildRunId", "buildRunAttempt"):
+        return actual == str(expected)
+    # Preserve installer_release.positive's authenticated exact-integer bound.
+    if (type(expected) is not int or not 0 < expected < 2**53
+            or not isinstance(actual, str) or len(actual) > 21):
+        return False
+    digits = str(expected)
+    if actual == digits:
+        return True
+    if len(digits) < 7:
+        return False
+    # Helm toString renders these JSON numbers in canonical scientific form.
+    # Derive that spelling without parsing the observed text or rounding an ID.
+    significant = digits.rstrip("0")
+    coefficient = significant[0] + ("." + significant[1:] if len(significant) > 1 else "")
+    return actual == f"{coefficient}e+{len(digits) - 1:02d}"
+
+
 def deployment(value: dict, name: str, request: ReloadRequest, release_name: str | None = None) -> str:
     metadata = identity(value, "Deployment", request.binding["namespace"], name)
     labels, annotations, spec = metadata.get("labels", {}), metadata.get("annotations", {}), value.get("spec", {})
@@ -447,7 +466,8 @@ def deployment(value: dict, name: str, request: ReloadRequest, release_name: str
     bootstrap.require(all(template.get("metadata", {}).get("labels", {}).get(key) == item for key, item in selector.items()),
                       "Deployment template labels differ")
     for key, item in request.original["release"].items():
-        bootstrap.require(template.get("metadata", {}).get("annotations", {}).get("marty.11id.dev/" + key) == str(item),
+        bootstrap.require(release_annotation_matches(key, item,
+                          template.get("metadata", {}).get("annotations", {}).get("marty.11id.dev/" + key)),
                           "Deployment original release annotations differ")
     workload_template(template, name, request.original)
     return selected_release
