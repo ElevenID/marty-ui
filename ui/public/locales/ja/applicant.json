@@ -68,6 +68,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "発行済み資格情報",
+      "viewApplication": "申請の詳細を表示",
+      "applicationStatus": "申請状況",
+      "credentialId": "資格情報ID"
+    },
     "guidance": {
       "walletPresentation": "資格情報を提示するには、その資格情報を保存しているウォレットを使用してください。",
       "expired": "この資格情報は有効期限が切れています。更新については発行者にお問い合わせください。",

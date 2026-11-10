@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, act, waitFor } from '@test/utils'
+import { render, renderWithRouter, screen, act, waitFor, within } from '@test/utils'
 import { initiateLogout } from '../../services/authApi'
 
 import MyIdentityPage from '../console/applicant/MyIdentityPage'
@@ -48,6 +48,34 @@ function expectIdentityLayoutStyles() {
   )).toBeNull()
 }
 
+function applicationFixture(overrides = {}) {
+  return {
+    id: 'application-1', organization_id: 'org-1', applicant_id: 'applicant-1',
+    credential_template_id: 'template-1', credential_display_name: 'Membership application',
+    status: 'CREDENTIALED', claim_state: 'CLAIMED',
+    submitted_at: '2026-05-18T00:00:00.000Z', updated_at: '2026-05-18T00:05:00.000Z',
+    ...overrides,
+  };
+}
+
+function credentialFixture(overrides = {}) {
+  return {
+    id: 'credential-1', credential_id: 'credential-1', organization_id: 'org-1',
+    application_id: 'application-1', credential_template_id: 'template-1',
+    credential_type: 'MembershipCredential', subject_id: 'applicant-1',
+    issuer_did: 'did:web:issuer.example', flow_execution_id: 'transaction-1',
+    status: 'ACTIVE', issued_at: '2026-05-18T00:05:00.000Z',
+    updated_at: '2026-05-18T00:05:00.000Z', valid_until: '2027-05-18T00:05:00.000Z',
+    ...overrides,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => { resolve = yes; });
+  return { promise, resolve };
+}
+
 describe('MyIdentityPage', () => {
   it('aborts inventory requests before logout submission and stops focus refreshes', async () => {
     mockGetMyCredentials.mockImplementation(() => new Promise(() => {}))
@@ -91,6 +119,253 @@ describe('MyIdentityPage', () => {
       ],
     })
   })
+
+  it.each([
+    ['ACTIVE', 'Active', 'To present a credential, use the wallet where it is stored.'],
+    ['EXPIRED', 'Expired', 'This credential has expired. Contact the issuer about renewal.'],
+    ['REVOKED', 'Revoked', 'This credential has been revoked. Contact the issuer for help.'],
+    ['SUSPENDED', 'Suspended', null],
+  ])('keeps the linked credential’s %s status authoritative over a completed application', async (status, label, guidance) => {
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture({
+      integration_context: { issuer_did: 'did:web:application-context.example' },
+    })] });
+    mockGetMyCredentials.mockResolvedValue({ items: [credentialFixture({ status })] });
+    const { user } = render(<MyIdentityPage />);
+
+    const details = await screen.findByRole('button', { name: 'View MembershipCredential details' });
+    expect(screen.queryByText('Membership application')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Issued (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Action Required (${status === 'EXPIRED' ? 1 : 0})` })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Claim' })).not.toBeInTheDocument();
+    await user.click(details);
+
+    const credentialDialog = await screen.findByRole('dialog', { name: 'Credential Details' });
+    expect(within(credentialDialog).getByText(label!)).toBeInTheDocument();
+    expect(within(credentialDialog).getByText('credential-1')).toBeInTheDocument();
+    expect(within(credentialDialog).getByText('did:web:issuer.example')).toBeInTheDocument();
+    expect(within(credentialDialog).queryByText('did:web:application-context.example')).not.toBeInTheDocument();
+    if (guidance) expect(within(credentialDialog).getByText(guidance)).toBeInTheDocument();
+    if (status !== 'ACTIVE') expect(within(credentialDialog).queryByText('To present a credential, use the wallet where it is stored.')).not.toBeInTheDocument();
+    await user.click(within(credentialDialog).getByRole('button', { name: 'View application details' }));
+
+    const applicationDialog = await screen.findByRole('dialog', { name: 'Application Details' });
+    const linked = within(applicationDialog).getByRole('region', { name: 'Issued credentials' });
+    expect(within(linked).getByText(label!)).toBeInTheDocument();
+    expect(within(linked).getByText('Credential ID: credential-1')).toBeInTheDocument();
+    expect(within(applicationDialog).getByText('Application status')).toBeInTheDocument();
+  });
+
+  it.each([false, true])('preserves original and renewal credentials and opens every current status through an application link (mobile=%s)', async (mobile) => {
+    setMobileViewport(mobile);
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture({
+      integration_context: { canvas: { canvas_course_name: 'Membership course' } },
+    })] });
+    mockGetMyCredentials.mockResolvedValue({ items: [
+      credentialFixture({ status: 'EXPIRED', renewed_to_credential_id: 'credential-2' }),
+      credentialFixture({ id: 'credential-2', credential_id: 'credential-2', status: 'ACTIVE',
+        renewed_from_credential_id: 'credential-1', flow_execution_id: 'renewal-transaction' }),
+    ] });
+    const { user } = renderWithRouter(<MyIdentityPage />, {
+      initialEntries: ['/console/applicant/identity?id=application-1'],
+    });
+
+    const dialog = await screen.findByRole('dialog', { name: 'Application Details' });
+    const linked = within(dialog).getByRole('region', { name: 'Issued credentials' });
+    expect(within(linked).getByText('Expired')).toBeInTheDocument();
+    expect(within(linked).getByText('Active')).toBeInTheDocument();
+    expect(within(linked).getByText('Credential ID: credential-1')).toBeInTheDocument();
+    expect(within(linked).getByText('Credential ID: credential-2')).toBeInTheDocument();
+    expect(within(dialog).getByText('Membership course')).toBeInTheDocument();
+    const original = within(linked).getByText('Credential ID: credential-1').parentElement!;
+    await user.click(within(original).getByRole('button', { name: 'View MembershipCredential details' }));
+    expect(await screen.findByRole('dialog', { name: 'Credential Details' })).toHaveTextContent('credential-1');
+    expect(screen.getByText('This credential has expired. Contact the issuer about renewal.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: 'All (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Issued (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Action Required (1)' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'View MembershipCredential details' })).toHaveLength(2);
+    expect(screen.queryByText('Membership application')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Action Required (1)' }));
+    expect(screen.getAllByRole('button', { name: 'View MembershipCredential details' })).toHaveLength(1);
+    expect(screen.getByRole('img', { name: 'Status: Expired' })).toBeInTheDocument();
+  });
+
+  it('keeps separate same-template applications without attaching a credential to the newer one', async () => {
+    mockGetMyApplications.mockResolvedValue({ items: [
+      applicationFixture(),
+      applicationFixture({ id: 'application-rejected', credential_display_name: 'Rejected membership', status: 'REJECTED' }),
+      applicationFixture({ id: 'application-new', credential_display_name: 'New membership request', status: 'NEEDS_INFO',
+        updated_at: '2026-06-01T00:00:00.000Z' }),
+    ] });
+    mockGetMyCredentials.mockResolvedValue({ items: [credentialFixture({ status: 'REVOKED' })] });
+    const { user } = render(<MyIdentityPage />);
+
+    await screen.findByText('New membership request');
+    expect(screen.getByText('Rejected membership')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+    expect(screen.queryByText('Membership application')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (3)' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Details' })).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: 'Action Required (1)' }));
+    await user.click(screen.getByRole('button', { name: 'Details' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Application Details' });
+    expect(within(dialog).getByText('New membership request')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('region', { name: 'Issued credentials' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['missing application link', { application_id: null }],
+    ['empty application link', { application_id: '' }],
+    ['another application', { application_id: 'not-in-this-page' }],
+    ['another organization', { organization_id: 'org-2' }],
+    ['missing organization', { organization_id: null }],
+    ['empty organization', { organization_id: '' }],
+  ])('keeps an independent credential with %s despite sharing the same template', async (_reason, overrides) => {
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture()] });
+    mockGetMyCredentials.mockResolvedValue({ items: [credentialFixture(overrides)] });
+    const { user } = render(<MyIdentityPage />);
+
+    await screen.findByText('Membership application');
+    expect(screen.getByRole('button', { name: 'All (2)' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'View MembershipCredential details' }));
+    expect(await screen.findByRole('dialog', { name: 'Credential Details' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View application details' })).not.toBeInTheDocument();
+  });
+
+  it.each(['row', 'details'])('keeps a live reissue workflow and its older credential, including Claim from %s', async (source) => {
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture({
+      status: 'OFFERED', claim_state: 'OFFER_READY',
+      credential_offer_uri: 'openid-credential-offer://offer/reissue',
+      offer_expires_at: new Date(Date.now() + 60000).toISOString(),
+    })] });
+    mockGetMyCredentials.mockResolvedValue({ items: [credentialFixture({ status: 'EXPIRED' })] });
+    const { user } = render(<MyIdentityPage />);
+
+    await screen.findByText('Membership application');
+    expect(screen.getByRole('button', { name: 'All (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Action Required (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Status: Expired' })).toBeInTheDocument();
+    if (source === 'details') {
+      await user.click(screen.getByRole('button', { name: 'Details' }));
+      expect(within(screen.getByRole('region', { name: 'Issued credentials' })).getByText('Expired')).toBeInTheDocument();
+    }
+    await user.click(screen.getByRole('button', { name: 'Claim' }));
+    expect(await screen.findByTestId('claim-credential-dialog')).toHaveTextContent('application-1');
+  });
+
+  it('retains a credential and its open details when only the application refresh succeeds', async () => {
+    mockGetMyCredentials.mockResolvedValueOnce({ items: [credentialFixture({ status: 'REVOKED' })] })
+      .mockRejectedValue(new Error('Inventory unavailable'));
+    mockGetMyApplications.mockResolvedValueOnce({ items: [] })
+      .mockResolvedValue({ items: [applicationFixture()] });
+    const { user } = render(<MyIdentityPage />);
+    await user.click(await screen.findByRole('button', { name: 'View MembershipCredential details' }));
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    const dialog = screen.getByRole('dialog', { name: 'Credential Details' });
+    expect(within(dialog).getByText('Revoked')).toBeInTheDocument();
+    expect(within(dialog).getByText('This credential has been revoked. Contact the issuer for help.')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'View application details' }));
+    expect(await screen.findByRole('dialog', { name: 'Application Details' })).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Issued credentials' })).getByText('Revoked')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByText('Credential inventory could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (1)' })).toBeInTheDocument();
+  });
+
+  it.each(['credential', 'application'])('refreshes current %s details after revocation while retaining failed application inventory', async (selectedKind) => {
+    mockGetMyCredentials.mockResolvedValueOnce({ items: [credentialFixture()] })
+      .mockResolvedValue({ items: [credentialFixture({ status: 'REVOKED' })] });
+    mockGetMyApplications.mockResolvedValueOnce({ items: [applicationFixture({
+      integration_context: { canvas: { canvas_course_name: 'Retained course context' } },
+    })] }).mockRejectedValue(new Error('Applications unavailable'));
+    const { user } = render(<MyIdentityPage />);
+    await user.click(await screen.findByRole('button', { name: 'View MembershipCredential details' }));
+    if (selectedKind === 'application') await user.click(screen.getByRole('button', { name: 'View application details' }));
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    const dialog = screen.getByRole('dialog');
+    if (selectedKind === 'credential') {
+      expect(within(dialog).getByText('Revoked')).toBeInTheDocument();
+      expect(within(dialog).getByText('This credential has been revoked. Contact the issuer for help.')).toBeInTheDocument();
+      expect(within(dialog).queryByText('To present a credential, use the wallet where it is stored.')).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'View application details' })).toBeInTheDocument();
+    } else {
+      const linked = within(dialog).getByRole('region', { name: 'Issued credentials' });
+      expect(within(linked).getByText('Revoked')).toBeInTheDocument();
+      expect(within(linked).queryByText('Active')).not.toBeInTheDocument();
+      expect(within(dialog).getByText('Retained course context')).toBeInTheDocument();
+    }
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByText('Applications could not be loaded.')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (1)' })).toBeInTheDocument();
+  });
+
+  it('closes removed credential details after a successful empty refresh', async () => {
+    mockGetMyCredentials.mockResolvedValueOnce({ items: [credentialFixture()] }).mockResolvedValue({ items: [] });
+    mockGetMyApplications.mockResolvedValue({ items: [] });
+    const { user } = render(<MyIdentityPage />);
+    await user.click(await screen.findByRole('button', { name: 'View MembershipCredential details' }));
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByText('No credentials yet')).toBeInTheDocument();
+    expect(screen.queryByText('To present a credential, use the wallet where it is stored.')).not.toBeInTheDocument();
+  });
+
+  it('lets a newer focus refresh finish initial loading and rejects the older ACTIVE response', async () => {
+    const initial = deferred<{ items: ReturnType<typeof credentialFixture>[] }>();
+    mockGetMyCredentials.mockReturnValueOnce(initial.promise)
+      .mockResolvedValue({ items: [credentialFixture({ status: 'REVOKED' })] });
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture()] });
+    render(<MyIdentityPage />);
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+
+    await act(async () => { window.dispatchEvent(new Event('focus')); });
+    expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All (1)' })).toBeInTheDocument();
+    await act(async () => { initial.resolve({ items: [credentialFixture()] }); });
+
+    expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'Status: Active' })).not.toBeInTheDocument();
+    expect(mockGetMyCredentials).toHaveBeenCalledTimes(2);
+  });
+
+  it('coalesces scheduled polls during a slow latest request even after an older request settles', async () => {
+    vi.useFakeTimers();
+    const older = deferred<{ items: ReturnType<typeof credentialFixture>[] }>();
+    const latest = deferred<{ items: ReturnType<typeof credentialFixture>[] }>();
+    mockGetMyCredentials.mockReturnValueOnce(older.promise).mockReturnValueOnce(latest.promise)
+      .mockResolvedValue({ items: [credentialFixture({ status: 'REVOKED' })] });
+    mockGetMyApplications.mockResolvedValue({ items: [applicationFixture()] });
+    const view = render(<MyIdentityPage />);
+    try {
+      await act(async () => { window.dispatchEvent(new Event('focus')); });
+      expect(mockGetMyCredentials).toHaveBeenCalledTimes(2);
+      await act(async () => { older.resolve({ items: [credentialFixture()] }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(45000); });
+
+      expect(mockGetMyCredentials).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('progressbar')).toBeInTheDocument();
+      await act(async () => { latest.resolve({ items: [credentialFixture({ status: 'REVOKED' })] }); });
+      expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mockGetMyCredentials).toHaveBeenCalledTimes(3);
+      expect(screen.getByRole('img', { name: 'Status: Revoked' })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+      vi.useRealTimers();
+    }
+  });
 
   it('does not expose a claim action after the application is credentialed', async () => {
     render(<MyIdentityPage />)

@@ -68,6 +68,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "Ausgestellte Nachweise",
+      "viewApplication": "Antragsdetails anzeigen",
+      "applicationStatus": "Antragsstatus",
+      "credentialId": "Nachweis-ID"
+    },
     "guidance": {
       "walletPresentation": "Verwenden Sie zur Vorlage eines Nachweises die Wallet, in der er gespeichert ist.",
       "expired": "Dieser Nachweis ist abgelaufen. Wenden Sie sich zur Verlängerung an den Aussteller.",
