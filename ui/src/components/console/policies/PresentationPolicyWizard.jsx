@@ -203,6 +203,11 @@ const PresentationPolicyWizard = () => {
 
   // Handle template selection - pre-populate config
   const handleTemplateSelect = (template) => {
+    if (template && wizard.data.selectedTemplate?.id === template.id) {
+      // Adopt an explicit/current catalog selection without replaying its defaults.
+      updateFormData({ selectedTemplate: template });
+      return;
+    }
     let baseConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
     if (wizard.data.selectedTemplate?.id !== template?.id) {
       baseConfig = clearPreviousTemplateBinding(baseConfig, wizard.data.selectedTemplate);
@@ -341,7 +346,7 @@ const PresentationPolicyWizard = () => {
           <Button onClick={() => navigate(`/console/org/policies/presentation/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>
         </Alert>}
         {(wizard.error || apiError) && (
-          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
+          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { wizard.clearError(); setApiError(null); }}>
             {wizard.error || apiError}
           </Alert>
         )}

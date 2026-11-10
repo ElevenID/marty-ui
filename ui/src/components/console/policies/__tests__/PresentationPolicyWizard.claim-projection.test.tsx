@@ -52,6 +52,45 @@ async function configureClaims(explicitSelection = false) {
 }
 
 describe('template policy claim projection in the complete wizard', () => {
+  it.each([false, true])('preserves the authored draft when reselecting the same template (explicit selection: %s)', async (explicitSelection) => {
+    const { user } = await configureClaims(explicitSelection);
+    const name = screen.getByRole('textbox', { name: 'Policy Name' });
+    await user.clear(name); await user.type(name, 'Reviewed staff policy');
+    const description = screen.getByRole('textbox', { name: 'Description' });
+    await user.clear(description); await user.type(description, 'Only the reviewed staff claim');
+    const purpose = screen.getByRole('textbox', { name: 'Purpose Statement' });
+    await user.clear(purpose); await user.type(purpose, 'Confirm employee access');
+    await user.click(screen.getByRole('button', { name: 'Remove claim 1' }));
+    await user.type(screen.getByRole('textbox', { name: 'Required Value (Optional)' }), 'staff');
+
+    await user.click(screen.getByTestId('wizard.policy.back'));
+    await user.click(await screen.findByRole('button', { name: 'Select Employee Credential presentation policy template' }));
+    await user.click(screen.getByTestId('wizard.policy.next'));
+    expect(screen.getByRole('textbox', { name: 'Policy Name' })).toHaveValue('Reviewed staff policy');
+    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('Only the reviewed staff claim');
+    expect(screen.getByRole('textbox', { name: 'Purpose Statement' })).toHaveValue('Confirm employee access');
+    expect(screen.getAllByRole('combobox', { name: 'Claim Name' })).toHaveLength(1);
+    expect(screen.getByRole('textbox', { name: 'Required Value (Optional)' })).toHaveValue('staff');
+
+    await user.click(screen.getByTestId('wizard.policy.next'));
+    await user.click(screen.getByTestId('wizard.policy.next'));
+    expect(screen.getByText('Required value: "staff"')).toBeInTheDocument();
+    await user.click(screen.getByRole('switch', { name: /Activate immediately/i }));
+    await user.click(screen.getByTestId('wizard.policy.submit'));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toMatchObject({
+      name: 'Reviewed staff policy', description: 'Only the reviewed staff claim',
+      purpose: 'Confirm employee access', trust_profile_id: 'trust-a',
+      accepted_credential_types: ['urn:employee'],
+      required_claims: [{ claim_name: 'role', credential_type: 'urn:employee', value_constraint: 'staff' }],
+      credential_requirements: [{
+        credential_template_id: 'template-a',
+        requested_claims: [{ claim_name: 'role', constraints: [{ claim_name: 'role', constraint_type: 'equals', value: 'staff' }] }],
+      }],
+    });
+    expect(writes[0].credential_requirements[0].requested_claims).toHaveLength(1);
+  });
+
   it('posts the edited claim set and required value in the native request actually used for verification', async () => {
     const { user } = await configureClaims();
     await user.click(screen.getByRole('button', { name: 'Remove claim 1' }));
