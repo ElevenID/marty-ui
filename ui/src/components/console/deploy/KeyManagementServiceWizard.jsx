@@ -73,6 +73,22 @@ const CONNECTION_LABELS = {
   ca_cert_file: 'TLS CA certificate file',
 };
 
+// Labels and registration preferences do not change connection or key validation.
+const preflightConfiguration = (data) => ({
+  service_type: data.service_type,
+  endpoint: data.endpoint,
+  region: data.region,
+  mount: data.mount,
+  namespace: data.namespace,
+  ca_cert_file: data.ca_cert_file,
+  auth_mode: data.auth_mode,
+  auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+  key_reference: data.key_reference,
+  key_aliases: data.key_aliases,
+  algorithms: data.algorithms,
+  key_purposes: data.key_purposes,
+});
+
 function logKeyManagementWizardError(message, error) {
   if (import.meta.env?.DEV && import.meta.env?.MODE !== 'test') {
     console.error(message, error);
@@ -369,8 +385,12 @@ const KeyManagementServiceWizardContent = ({ browserEntry }) => {
   });
   const rawUpdateWizardData = wizard.updateData;
   const updateWizardData = useCallback((updates) => {
-    if (canEdit()) rawUpdateWizardData(updates);
-  }, [canEdit, rawUpdateWizardData]);
+    if (!canEdit()) return;
+    const previousConfiguration = JSON.stringify(preflightConfiguration(wizard.data));
+    const nextConfiguration = JSON.stringify(preflightConfiguration({ ...wizard.data, ...updates }));
+    if (previousConfiguration !== nextConfiguration) setPreflightChecks([]);
+    rawUpdateWizardData(updates);
+  }, [canEdit, rawUpdateWizardData, wizard.data]);
 
   useEffect(() => {
     if (configLoading || defaultSelectionSynced || !canEdit()) {
