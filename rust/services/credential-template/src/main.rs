@@ -108,6 +108,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         chrono::Utc::now(),
         &config.marty_organization_id.to_string(),
         config.public_api_origin.as_str(),
+        &config.marty_issuer_did,
     )
     .await?;
     info!(

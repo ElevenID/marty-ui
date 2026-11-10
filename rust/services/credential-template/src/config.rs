@@ -25,6 +25,7 @@ pub struct CredentialTemplateServiceConfig {
     pub trust_profile_service_url: String,
     pub public_api_origin: Url,
     pub marty_organization_id: Uuid,
+    pub marty_issuer_did: String,
     pub migration_profile: String,
     pub dependency_timeout: Duration,
     pub release_version: String,
@@ -104,6 +105,25 @@ impl CredentialTemplateServiceConfig {
             )?;
         }
         let public_api_origin = public_origin(&values, environment)?;
+        let authority = match public_api_origin.port() {
+            Some(port) => format!(
+                "{}:{port}",
+                public_api_origin.host_str().unwrap_or_default()
+            ),
+            None => public_api_origin.host_str().unwrap_or_default().to_owned(),
+        };
+        let authority =
+            config::configured_authority(value(&values, "PUBLIC_DOMAIN"), &[], &authority);
+        let slug =
+            config::canonical_slug(value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"), "marty");
+        let marty_issuer_did = config::configured_did_web(
+            value(&values, "MARTY_ISSUER_DID"),
+            &authority,
+            &["orgs", &slug],
+        );
+        if !marty_issuer_did.starts_with("did:") {
+            return Err(invalid("MARTY_ISSUER_DID"));
+        }
         let organization_grpc_target = target(&values, "ORG_GRPC_TARGET", "organization:9002")?;
         let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
         let revocation_grpc_target = target(&values, "RP_GRPC_TARGET", "revocation-profile:9013")?;
@@ -173,6 +193,7 @@ impl CredentialTemplateServiceConfig {
             )?,
             public_api_origin,
             marty_organization_id,
+            marty_issuer_did,
             migration_profile,
             dependency_timeout: Duration::from_secs(number(
                 &values,
@@ -538,6 +559,32 @@ mod tests {
             Err(CredentialTemplateConfigError::Invalid {
                 name: "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR"
             })
+        );
+    }
+
+    #[test]
+    fn seed_issuer_uses_configured_identity_without_legacy_slug_substitution() {
+        let mut input = values("development");
+        input.insert(
+            "PUBLIC_DOMAIN".into(),
+            "https://beta.example.test/path".into(),
+        );
+        input.insert("MARTY_ORG_SLUG".into(), "marty-identity-platform".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:beta.example.test:orgs:marty-identity-platform"
+        );
+        input.insert(
+            "MARTY_ISSUER_DID".into(),
+            "did:web:owned.example:orgs:reviewed".into(),
+        );
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input)
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:owned.example:orgs:reviewed"
         );
     }
 
