@@ -364,13 +364,65 @@ Each functional delta cleared two independent peer reviews. All 20 published
 file blobs and the complete source tree were verified against the reviewed local
 commit; the published tree is `8d12fc713a75c0a9f0eba5450a08384f450b5ad6`.
 
-**AWS deployment and browser replay of this new batch remain pending.** The
-browser connection became unavailable before the prepared CloudShell apply
-command could run. The 18-test AWS result above applies to the preceding policy
-summary revision, not this 98-test batch. The source replay is prepared with
-all-file preflight checks, private backups, and preservation of file metadata;
-it must be executed and verified after browser access returns. No authenticated
-click-through or deployed pass is claimed for these five new corrections.
+The next authorized continuation completed the **AWS deployment of all 20
+files**, with all-file preflight checks, private backups, before/after digest
+verification, and preserved file modes and ownership. The same **98 tests passed
+across nine suites on AWS in 135.22 seconds**. All 20 application deployments
+reported **1/1 ready**, the HTTPS readiness endpoint returned **HTTP 200**, and
+the bounded automatic-stop timer remained active. Both UI containers remained
+ready with zero restarts. The live development checkers reported no TypeScript
+errors and zero ESLint errors, with 138 existing warnings.
+
+**Authenticated browser replay remains pending.** An Escape keypress initially
+cleared the extension panel and allowed navigation to the registration form.
+The panel reopened during disposable test-account entry; Chrome then rejected
+both the Register interaction and a standalone Escape command. Registration
+could not be completed. The AWS result above qualifies the deployed source and
+regression tests, not a completed browser click-through of these five fixes.
+
+### My Identity credential validity and application history
+
+Further source review found that My Identity discarded credential records and
+older applications whenever another application shared their template. This
+could hide an expired or revoked credential behind a historical application
+that still reported successful issuance.
+
+The correction at `df37666b` retains the two inventories independently and
+associates them only through an explicit credential `application_id` and matching
+`organization_id`. Every credential remains available, including an original and
+its renewal. Unrelated applications sharing a template also remain distinct. An
+exactly linked completed application is represented through its credential rows;
+active and reissue workflows keep their application row and Claim action.
+
+Credential details link to their application history. Application details and
+application deep links show all linked credentials with their current status,
+separately from the historical application status. Open details resolve against
+current inventories, update after revocation, and close when a successful refresh
+removes the selected record. Partial failures preserve the last successful
+inventory rather than hiding its credentials.
+
+Request generations reject older results, and scheduled polls coalesce while
+the latest request is pending. Independent review caught and corrected a draft
+that could continually supersede slow requests. Deferred regressions now cover
+an older Active result arriving after Revoked, a background refresh completing
+initial loading, and a pending request spanning three polling intervals without
+being starved.
+
+The focused local suite passed **35 tests in 7.28 seconds**. The production
+TypeScript check, clean production ESLint, whitespace checks, and two independent
+reviews passed. Four detail labels were added in each of the six applicant
+locales. The eight published UI/locale/test blobs and their complete source tree
+match the reviewed local source; the published tree is
+`20b15333908c56ba47e92f82f36969660c6e1843`.
+
+The subsequent AWS replay verified all eight files against their expected
+before/after digests and preserved file modes and ownership. The same **35 tests
+passed on AWS in 16.32 seconds**. UI, auth, gateway, and Keycloak each remained
+**1/1 ready**, verified HTTPS readiness returned **HTTP 200**, and the automatic
+stop remained active. These results are separate from the 98-test navigation and
+template run. No populated authenticated browser result is claimed while the
+extension panel blocks registration, and no real credential was issued or
+revoked for these regression fixtures.
 
 ### Installed backend and remaining flows
 
@@ -399,7 +451,7 @@ The earlier Keycloak changes in #1847 were already merged. This audit did not
 exercise an actual Bitwarden extension/vault, so theme-level tests are not
 reported as an extension autofill pass. Full wallet verification, credential
 issuance, and creation/activation of all prerequisite resources remain outside
-this bounded walkthrough. The latest authorized pass created two disposable
+this bounded walkthrough. The earlier authenticated pass created two disposable
 accounts and one private test organization. No outbound email or invitation was
 sent, no API key, webhook endpoint, or verification session was created, and no
 credential was issued during the live browser checks.
