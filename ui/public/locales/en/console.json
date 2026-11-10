@@ -1351,7 +1351,9 @@
       "loadFailed": "Failed to load notification preferences",
       "saveSuccess": "Notification preferences updated successfully",
       "saveFailed": "Failed to save notification preferences",
-      "emailDisabledNote": "Note: Email is currently disabled in your notification method above."
+      "emailDisabledNote": "Note: Email is currently disabled in your notification method above.",
+      "unsupported": "Notification preferences are not supported by the notification API.",
+      "unsupportedDetails": "This deployment has no notification preference read or update operation. No preference changes have been saved."
     }
   },
   "wizards": {

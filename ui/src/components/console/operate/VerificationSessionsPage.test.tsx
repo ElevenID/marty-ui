@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { screen, renderWithRouter } from '@test/utils';
+import { screen, renderWithRouter, within } from '@test/utils';
 
 import VerificationSessionsPage from './VerificationSessionsPage';
 
@@ -26,7 +26,11 @@ describe('VerificationSessionsPage', () => {
     });
 
     expect(screen.getByTestId('oid4vp-session-manager')).toHaveTextContent('org-1');
-    expect(screen.getByText('Verify')).toBeInTheDocument();
+    const tabs = within(screen.getAllByRole('tablist')[0]).getAllByRole('tab');
+    expect(tabs.map(tab => tab.textContent)).toEqual([
+      'Flow Instances', 'Applications', 'Issued Credentials', 'Verification sessions',
+    ]);
+    expect(tabs[3]).toHaveAttribute('aria-selected', 'true');
 
     await user.click(screen.getByRole('tab', { name: /canvas provenance/i }));
 

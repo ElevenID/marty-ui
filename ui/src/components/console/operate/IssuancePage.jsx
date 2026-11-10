@@ -52,13 +52,7 @@ import {
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { pickOfficialReference } from '../../../utils/officialReferences';
 import { ResourcePage, StatusChip } from '../../common';
-
-const getOperateTabs = (t) => [
-  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
-  { label: t('operate.tabs.issuance'), path: '/console/org/operate/issuance' },
-  { label: t('operate.tabs.applications'), path: '/console/org/operate/applications' },
-  { label: t('operate.tabs.verify'), path: '/console/org/operate/verify' },
-];
+import { getOperateTabs } from '../../../config/operateTabs';
 
 const getBreadcrumbs = (t) => [
   { label: t('operate.breadcrumbs.console'), path: '/console' },

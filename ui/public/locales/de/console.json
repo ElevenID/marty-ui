@@ -474,7 +474,9 @@
 			"loadFailed": "Benachrichtigungseinstellungen konnten nicht geladen werden",
 			"saveSuccess": "Benachrichtigungseinstellungen wurden gespeichert",
 			"saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden",
-			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert."
+			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert.",
+			"unsupported": "Die Benachrichtigungs-API unterstützt keine Benachrichtigungseinstellungen.",
+			"unsupportedDetails": "Diese Installation bietet keine Möglichkeit, Benachrichtigungseinstellungen abzurufen oder zu ändern. Es wurden keine Änderungen an den Einstellungen gespeichert."
 		}
 	},
 	"wizards": {

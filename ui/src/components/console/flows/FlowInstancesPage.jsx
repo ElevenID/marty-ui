@@ -1,6 +1,7 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -46,6 +47,7 @@ import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common'
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { getOperateTabs } from '../../../config/operateTabs';
 import { advanceFlowInstance, cancelFlowExecution, getFlowInstance, listFlowInstances, listFlows } from '../../../services/flowsApi';
 
 function requireInstanceScope(instance, organizationId, instanceId) {
@@ -107,13 +109,6 @@ function ExecutionActions({ instance, organizationId, loading, reload }) {
     </Dialog>
   </Box>;
 }
-
-const OPERATE_TABS = [
-  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
-  { label: 'Applications', path: '/console/org/operate/applications' },
-  { label: 'Issued Credentials', path: '/console/org/operate/issuance' },
-  { label: 'Verification Sessions', path: '/console/org/operate/verify' },
-];
 
 function readContext(instance) {
   return instance?.context_data && typeof instance.context_data === 'object' ? instance.context_data : {};
@@ -221,14 +216,14 @@ function InstanceTimeline({ instance }) {
   );
 }
 
-function InstanceDetail({ instance, organizationId, loading, error, reload }) {
+function InstanceDetail({ instance, organizationId, loading, error, reload, tabs }) {
   const jobId = instance?.physicalJob?.id || instance?.physicalJob?.job_id || null;
   const jobStatus = instance?.physicalJob?.status || null;
   return (
     <ResourcePage
       title={instance ? `Flow Instance ${instance.id}` : 'Flow Instance'}
       description="Runtime state, protocol progress, and related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },
@@ -283,6 +278,8 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
 }
 
 function ScopedFlowInstancesPage({ instanceId, organizationId }) {
+  const { t } = useTranslation('console');
+  const tabs = getOperateTabs(t);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -316,13 +313,13 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
     });
   }, [instances, searchQuery, statusFilter]);
 
-  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} />;
+  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} tabs={tabs} />;
 
   return (
     <ResourcePage
       title="Flow Instances"
       description="The operational record of every MIP flow execution and its related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },

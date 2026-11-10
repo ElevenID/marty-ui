@@ -359,6 +359,36 @@ describe('ApiKeysPage', () => {
     })
   })
 
+  it('clears obsolete callback validation when disabled without clearing a key-creation failure', async () => {
+    mockCreateApiKey.mockRejectedValueOnce(new Error('API key service unavailable'))
+    const { user } = renderWithRouter(<ApiKeysPage />)
+    await user.click(await screen.findByRole('button', { name: createAction }))
+    const dialog = within(screen.getByRole('dialog'))
+    const submit = dialog.getByRole('button', { name: 'Create integration key' })
+    const callbackToggle = dialog.getByLabelText('Provision associated callback')
+
+    await user.click(submit)
+    expect(dialog.getByRole('alert')).toHaveTextContent('Enter a name for the API key.')
+    await user.type(dialog.getByLabelText('Key name'), 'Key-only integration')
+    await user.click(submit)
+    expect(dialog.getByRole('alert')).toHaveTextContent('Enter a callback URL or turn off callback creation.')
+    expect(mockCreateApiKey).not.toHaveBeenCalled()
+
+    await user.click(callbackToggle)
+    expect(dialog.queryByLabelText('Callback URL')).not.toBeInTheDocument()
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument()
+    expect(dialog.getByLabelText('Key name')).toHaveValue('Key-only integration')
+    expect(mockCreateApiKey).not.toHaveBeenCalled()
+
+    await user.click(submit)
+    expect(await dialog.findByRole('alert')).toHaveTextContent('API key service unavailable')
+    await user.click(callbackToggle)
+    await user.click(callbackToggle)
+    expect(dialog.getByRole('alert')).toHaveTextContent('API key service unavailable')
+    expect(mockCreateApiKey).toHaveBeenCalledOnce()
+    expect(mockCreateWebhook).not.toHaveBeenCalled()
+  })
+
   it('opens and confirms revoke confirmation dialog', async () => {
     mockListApiKeys.mockResolvedValueOnce([
       {

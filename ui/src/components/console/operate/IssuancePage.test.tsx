@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { renderWithoutRouter } from '../../../test/utils';
 import IssuancePage from './IssuancePage';
 import { formatOfficialReference } from '../../../utils/officialReferences';
@@ -111,6 +111,11 @@ describe('IssuancePage', () => {
     // to establish that both inventory and template labels have rendered.
     const credentialRow = await screen.findByRole('row', { name: /open badge login template/i });
 
+    const tabs = within(screen.getByRole('tablist')).getAllByRole('tab');
+    expect(tabs.map(tab => tab.textContent)).toEqual([
+      'Flow Instances', 'Applications', 'Issued Credentials', 'Verification sessions',
+    ]);
+    expect(tabs[2]).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('heading', { name: 'Issued Credentials' })).toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: 'Search issued credentials' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Issued credentials' })).toBeInTheDocument();
