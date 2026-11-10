@@ -116,7 +116,7 @@ fn instance(callback: bool) -> FlowInstanceRecord {
     presentation_snapshot::emit_query(
         &mut instance,
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
     );
     instance
 }
@@ -218,11 +218,7 @@ fn options(secret: Option<&str>) -> VerificationSubmissionOptions {
 fn input(token: &str) -> VerificationSubmissionInput {
     VerificationSubmissionInput {
         vp_token: token.into(),
-        presentation_submission: Some(json!({
-            "id": "submission-1",
-            "definition_id": "definition-1",
-            "descriptor_map": []
-        })),
+        presentation_submission: None,
         state: Some("state-1".into()),
         audience_override: None,
     }
@@ -378,13 +374,12 @@ async fn callback_decision_digest_binds_the_validated_policy_revision() {
 
 #[tokio::test]
 async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict() {
-    let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member"}]});
+    let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member", "format": {"dc+sd-jwt": {}}}]});
     let instance = with_emitted_query(instance(false), "presentation_definition", query.clone());
     let mut wallet = input("header.payload.signature");
     let submission = json!({
         "id": "submission-1", "definition_id": "definition-1",
-        "descriptor_map": [{"id": "member", "format": "jwt_vp", "path": "$"}],
-        "legacy_extension": true
+        "descriptor_map": [{"id": "member", "format": "dc+sd-jwt", "path": "$"}]
     });
     wallet.presentation_submission = Some(submission.clone());
     let (providers, seen) = providers(Ok(allowed()));
@@ -407,7 +402,7 @@ async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict
     );
     assert_eq!(transport.query_document, query);
     assert_eq!(transport.presentation_submission, Some(submission));
-    assert!(transport.compatible_presentation_submission().is_err());
+    assert!(transport.compatible_presentation_submission().is_ok());
     assert_eq!(transport.vp_token_raw, "header.payload.signature");
     assert_eq!(transport.verifier_client_id, "did:web:verifier.example");
     assert_eq!(
@@ -428,7 +423,7 @@ async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict
 
 #[tokio::test]
 async fn dcql_query_transport_does_not_require_presentation_submission() {
-    let query = json!({"credentials": [{"id": "member"}]});
+    let query = json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]});
     let instance = with_emitted_query(instance(false), "dcql_query", query.clone());
     let raw_tokens = json!({"member": ["header.payload.signature"]}).to_string();
     let mut wallet = input(&raw_tokens);
@@ -448,11 +443,55 @@ async fn dcql_query_transport_does_not_require_presentation_submission() {
 }
 
 #[tokio::test]
+async fn complete_response_is_forwarded_and_unknown_queries_fail_before_evaluation() {
+    let raw = json!({"member":["first.payload.signature","second.payload.signature"]}).to_string();
+    let mut denied = allowed();
+    denied.result = "failed".into();
+    denied.decision = "deny".into();
+    let (ports, seen) = providers(Ok(denied));
+    assert!(matches!(
+        prepare_verification_submission(
+            &ports,
+            instance(false),
+            input(&raw),
+            &options(None),
+            now()
+        )
+        .await,
+        Ok(PreparedVerificationSubmission::Final(_))
+    ));
+    {
+        let requests = seen.lock().unwrap();
+        assert_eq!(requests[0].presentation, raw);
+        assert_eq!(
+            requests[0].oid4vp_transport.as_ref().unwrap().vp_token_raw,
+            raw
+        );
+    }
+    let unknown =
+        json!({"member":["first.payload.signature"],"unrequested":["second.payload.signature"]})
+            .to_string();
+    let result = prepare_verification_submission(
+        &ports,
+        instance(false),
+        input(&unknown),
+        &options(None),
+        now(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(FlowVerificationSubmissionError::InvalidPresentationSubmission)
+    ));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn dc_api_preserves_legacy_empty_audience_while_carrying_emitted_client_id() {
     let mut instance = with_emitted_query(
         instance(false),
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
     );
     instance
         .context
@@ -488,7 +527,7 @@ async fn oversized_submission_cannot_drop_frozen_query_binding() {
     let instance = with_emitted_query(
         instance(false),
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
     );
     let mut wallet = input("header.payload.signature");
     wallet.presentation_submission = Some(json!({
@@ -528,7 +567,7 @@ async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
     let mut ambiguous = with_emitted_query(
         instance(false),
         "dcql_query",
-        json!({"credentials": [{"id": "member"}]}),
+        json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
     );
     ambiguous.context["mip_messages"]["presentation_request"]["payload"]
         ["presentation_definition"] = json!({"id": "definition-1", "input_descriptors": []});
@@ -565,7 +604,7 @@ async fn language_neutral_allow_contract_scrubs_evidence_and_builds_atomic_outpu
     );
 
     let (providers, seen) = providers(Ok(allowed()));
-    let raw = json!({"member_query": ["header.payload.signature"]}).to_string();
+    let raw = json!({"member": ["header.payload.signature"]}).to_string();
     let PreparedVerificationSubmission::Final(finalization) = prepare_verification_submission(
         &providers,
         instance(true),

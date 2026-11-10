@@ -4,6 +4,7 @@
   "http_routes": [
     "GET /api/onboarding/status",
     "GET /internal/v1/organizations/{org_id}/lifecycle",
+    "GET /internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}",
     "PATCH /internal/v1/organizations/{org_id}/settings",
     "GET /v1/me/preferences",
     "PUT /v1/me/preferences",

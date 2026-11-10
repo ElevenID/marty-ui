@@ -272,6 +272,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "Issued credentials",
+      "viewApplication": "View application details",
+      "applicationStatus": "Application status",
+      "credentialId": "Credential ID"
+    },
     "guidance": {
       "walletPresentation": "To present a credential, use the wallet where it is stored.",
       "expired": "This credential has expired. Contact the issuer about renewal.",

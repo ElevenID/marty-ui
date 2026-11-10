@@ -309,7 +309,7 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
                 id: Uuid::new_v4(),
                 organization_id: Uuid::new_v4(),
                 document: json!({
-                    "status":"active","trust_sources":[{"issuer_did":DID,"organization_id":"org-1",
+                    "status":"active","allowed_algorithms":["EdDSA"],"trust_sources":[{"issuer_did":DID,"organization_id":"org-1",
                         "verification_method_ids":[if case=="wrong-pin" {"did:web:issuer.example#other"} else {KID}],
                         "did_resolution":{"allow_public_fallback":true,"cache_ttl_seconds":0}}]
                 }),

@@ -72,14 +72,14 @@ CANVAS_SCOPED_JOBS = BuildProfile(
 
 D12_PASSPORT_CURRENT = BuildProfile(
     "d12-passport-current-three-role",
-    "6117cea9290f57406cf109eae56f64f7986e3783",
+    "449ab93ca80d147622ae61283f7d8084f7c62884",
     (("flow", "marty-flow"), ("gateway", "marty-gateway"),
      ("issuance-native", "marty-issuance-service")),
     ("marty-flow", "marty-gateway", "marty-issuance-service"),
-    "marty-d12-current-",
+    "marty-d12-current-main-",
     "d12-passport-current-native",
-    "ffa24febcd0fb3fced15da7f28190af6d61ae0f9",
-    volumes=("ui-canvas-cargo", "marty-d12-current-native-target"),
+    "11655e38c2dbf69bfa5bc3c873f80c5fad628723",
+    volumes=("ui-canvas-cargo", "marty-d12-current-main-native-target"),
 )
 
 

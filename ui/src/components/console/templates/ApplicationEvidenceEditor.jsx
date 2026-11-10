@@ -1,9 +1,11 @@
+import { useRef } from 'react';
 import {
   Box, Button, Checkbox, FormControl, FormControlLabel, IconButton, InputLabel,
   MenuItem, Paper, Select, Stack, TextField, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
+import DraftListField from './DraftListField';
 
 const EVIDENCE_TYPES = [
   'DOCUMENT_SCAN',
@@ -33,10 +35,24 @@ function updateNested(requirement, key, field, value) {
 }
 
 export default function ApplicationEvidenceEditor({ requirements = [], onChange }) {
-  const update = (index, next) => onChange(requirements.map((item, itemIndex) => (
-    itemIndex === index ? next : item
-  )));
+  // Track editor identity separately from editable IDs and the API requirement objects.
+  const rowIds = useRef(new WeakMap());
+  const nextRowId = useRef(0);
+  const rowId = (requirement) => {
+    if (!rowIds.current.has(requirement)) rowIds.current.set(requirement, nextRowId.current++);
+    return rowIds.current.get(requirement);
+  };
+  const update = (index, next) => {
+    rowIds.current.set(next, rowId(requirements[index]));
+    onChange(requirements.map((item, itemIndex) => (itemIndex === index ? next : item)));
+  };
   const remove = (index) => onChange(requirements.filter((_, itemIndex) => itemIndex !== index));
+  const add = () => {
+    const existingIds = new Set(requirements.map((item) => item.evidence_id));
+    let ordinal = 1;
+    while (existingIds.has(`evidence_${ordinal}`)) ordinal += 1;
+    onChange([...requirements, newEvidenceRequirement(ordinal)]);
+  };
 
   return (
     <Box>
@@ -44,7 +60,7 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
         <Typography variant="h6">Evidence</Typography>
         <Button
           startIcon={<AddIcon />}
-          onClick={() => onChange([...requirements, newEvidenceRequirement(requirements.length + 1)])}
+          onClick={add}
         >
           Add evidence
         </Button>
@@ -54,7 +70,7 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
         {requirements.map((requirement, index) => {
           const external = ['EXTERNAL_FACT', 'EXTERNAL_API'].includes(requirement.evidence_type);
           return (
-            <Paper key={`${requirement.evidence_id}-${index}`} variant="outlined" sx={{ p: 2 }}>
+            <Paper key={rowId(requirement)} variant="outlined" sx={{ p: 2 }}>
               <Stack spacing={1.5}>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                   <TextField
@@ -98,10 +114,10 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
 
                 {requirement.evidence_type === 'DOCUMENT_SCAN' && (
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                    <TextField
+                    <DraftListField
                       label="Accepted formats"
-                      value={(requirement.accepted_formats || []).join(', ')}
-                      onChange={(event) => update(index, { ...requirement, accepted_formats: csv(event.target.value) })}
+                      value={requirement.accepted_formats || []}
+                      onChange={(accepted_formats) => update(index, { ...requirement, accepted_formats })}
                       sx={{ flex: 1 }}
                     />
                     <TextField
@@ -148,10 +164,11 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
                       <TextField type="number" label="Timeout seconds" value={requirement.api?.timeout_seconds ?? 10} onChange={(event) => update(index, updateNested(requirement, 'api', 'timeout_seconds', Number(event.target.value)))} sx={{ width: { sm: 160 } }} />
                     </Stack>
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-                      <TextField
+                      <DraftListField
                         label="Accepted status codes"
-                        value={(requirement.expected_response?.status_codes || [200]).join(', ')}
-                        onChange={(event) => update(index, updateNested(requirement, 'expected_response', 'status_codes', csv(event.target.value).map(Number).filter(Number.isInteger)))}
+                        value={requirement.expected_response?.status_codes || [200]}
+                        parse={(text) => csv(text).map(Number).filter(Number.isInteger)}
+                        onChange={(values) => update(index, updateNested(requirement, 'expected_response', 'status_codes', values))}
                         sx={{ flex: 1 }}
                       />
                       <TextField
@@ -160,10 +177,10 @@ export default function ApplicationEvidenceEditor({ requirements = [], onChange 
                         onChange={(event) => update(index, updateNested(requirement, 'response_mapping', 'verification_status_path', event.target.value))}
                         sx={{ flex: 1 }}
                       />
-                      <TextField
+                      <DraftListField
                         label="Verified values"
-                        value={(requirement.response_mapping?.verification_verified_values || []).join(', ')}
-                        onChange={(event) => update(index, updateNested(requirement, 'response_mapping', 'verification_verified_values', csv(event.target.value)))}
+                        value={requirement.response_mapping?.verification_verified_values || []}
+                        onChange={(values) => update(index, updateNested(requirement, 'response_mapping', 'verification_verified_values', values))}
                         sx={{ flex: 1 }}
                       />
                     </Stack>

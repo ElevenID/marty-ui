@@ -739,6 +739,9 @@
       "console": "Console",
       "templates": "Templates",
       "applicationTemplates": "Application Templates"
+    },
+    "validation": {
+      "validityDays": "Enter a whole number from 1 to 3650 days."
     }
   },
   "createTemplateDrawer": {
@@ -1174,7 +1177,9 @@
         "pendingReview": "Pending Review",
         "documentsPending": "Documents Pending",
         "approved": "Approved",
-        "rejected": "Rejected"
+        "rejected": "Rejected",
+        "underReview": "Under Review",
+        "pendingInformation": "Awaiting Information"
       },
       "tableHeaders": {
         "applicationId": "Application ID",
@@ -1184,7 +1189,8 @@
         "documents": "Documents",
         "verification": "Verification",
         "status": "Status",
-        "actions": "Actions"
+        "actions": "Actions",
+        "applicationReference": "Application Reference"
       },
       "documents": {
         "uploaded": "Uploaded",
@@ -1198,10 +1204,20 @@
       "actions": {
         "viewDetails": "View Details",
         "approve": "Approve",
-        "reject": "Reject"
+        "reject": "Reject",
+        "issue": "Generate wallet invite",
+        "reissue": "Resend wallet invite"
       },
       "noMatchingApplications": "No applications match your filters. Try adjusting your search.",
-      "errorLoading": "Failed to load applications"
+      "errorLoading": "Failed to load applications",
+      "signIn": "Sign in to view applications.",
+      "selectOrganization": "Select an organization to view applications.",
+      "permissionsLoading": "Checking application permissions",
+      "readDenied": "You do not have permission to view applications for this organization.",
+      "reissueSucceeded": "New wallet invite generated — the applicant can now re-claim their credential.",
+      "actionFailed": "Unable to update the application. Please try again.",
+      "clearFilters": "Clear filters",
+      "notReported": "Not reported"
     },
     "tabs": {
       "issuance": "Issued Credentials",
@@ -1338,7 +1354,9 @@
       "loadFailed": "Failed to load notification preferences",
       "saveSuccess": "Notification preferences updated successfully",
       "saveFailed": "Failed to save notification preferences",
-      "emailDisabledNote": "Note: Email is currently disabled in your notification method above."
+      "emailDisabledNote": "Note: Email is currently disabled in your notification method above.",
+      "unsupported": "Notification preferences are not supported by the notification API.",
+      "unsupportedDetails": "This deployment has no notification preference read or update operation. No preference changes have been saved."
     }
   },
   "wizards": {
@@ -1678,6 +1696,11 @@
           "none": "None (no revocation)",
           "statusListComingSoon": "Status List 2021 (Coming Soon)",
           "helper": "Optional: Select a revocation mechanism for credentials issued from this template"
+        },
+        "validation": {
+          "daysRange": "Enter a whole number of days from 1 to {{max}}.",
+          "offsetRange": "Enter a whole number of seconds from {{min}} to {{max}}.",
+          "reviewSettings": "Review the highlighted validity settings before creating the template."
         }
       },
       "reviewStep": {
@@ -1845,11 +1868,23 @@
           "claim": "Claim {{index}}",
           "acceptPredicateProof": "Accept Predicate Proof",
           "preferPredicateProofs": "Prefer Predicate Proofs (Privacy-First)",
-          "singlePresentation": "Require Single Presentation"
+          "singlePresentation": "Require Single Presentation",
+          "removeClaim": "Remove claim {{index}}"
         },
         "captions": {
           "preferPredicates": "When enabled, predicates are preferred over raw values whenever possible",
           "singlePresentation": "All claims must come from a single credential (more restrictive)"
+        },
+        "validation": {
+          "claimName": "Enter a claim name.",
+          "credentialType": "Select one of the accepted credential types.",
+          "completeClaims": "Complete the policy name, purpose, accepted credential types, and every required claim before continuing.",
+          "templateRequirementsMismatch": "These requirements do not match the selected credential template. Reselect the template or start a new Custom Policy.",
+          "templateIncomplete": "The selected credential template is incomplete. Reselect the template before continuing.",
+          "templateTypeMismatch": "This policy is bound to the selected credential template. Use its credential type, or start a new Custom Policy to configure different types.",
+          "templateDuplicateClaim": "Request “{{claimName}}” only once in this policy.",
+          "templateUnknownClaim": "“{{claimName}}” is not a claim in the selected credential template. Select a template claim or start a new Custom Policy.",
+          "templateValueConflict": "The required value for “{{claimName}}” conflicts with a constraint from the selected template."
         }
       },
       "freshnessBindingStep": {
@@ -1923,6 +1958,7 @@
           "purposeStatement": "Purpose Statement",
           "acceptedCredentialTypes": "Accepted Credential Types",
           "requiredClaims": "Required Claims ({{count}})",
+          "requiredValue": "Required value",
           "holderBinding": "Holder Binding",
           "revocationCheck": "Revocation Check",
           "maxCredentialAge": "Max Credential Age",

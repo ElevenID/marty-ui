@@ -20,7 +20,7 @@ import scoped_native_build as build
 import scoped_native_cargo_cache as cargo_cache
 import run_local_official_native_build as native_runner
 from scoped_native_profiles import D12_PASSPORT_CURRENT
-from scoped_native_runtime import read_ref, ref, require, sha
+from scoped_native_runtime import ref, require, sha
 
 PROFILE = D12_PASSPORT_CURRENT.name
 SOURCE = D12_PASSPORT_CURRENT.ui_revision
@@ -199,9 +199,21 @@ def journal_input(value: dict, *, run_id: str, engine_id: str) -> None:
             "D12_DESKTOP_JOURNAL_REQUIRED")
 
 
+def local_object_custody(packet: dict, local_objects: dict) -> None:
+    """Permit only the existing Cargo Git DB and accepted Core Git objects."""
+    cargo_git_db = (Path.home() / ".cargo/git/db").resolve(strict=True)
+    core_git = (Path(packet["sources"]["core"]["repository"]) / ".git").resolve(strict=True)
+    require(all(Path(row["gitDirectory"]) ==
+                (core_git if key == "marty-core@" + CORE else
+                 cargo_git_db / row["cargoDbName"])
+                for key, row in local_objects.items()),
+            "D12_LOCAL_OBJECT_CUSTODY_CHANGED")
+
+
 def prepare_cache(packet_path: Path, packet_sha: str, journal_path: Path,
                   journal_sha: str, run_id: str, engine_id: str,
-                  builder_image: str) -> dict:
+                  builder_image: str, local_path: Path | None = None,
+                  local_sha: str | None = None) -> dict:
     packet = source_packet(packet_path, packet_sha)
     require(RUN.fullmatch(run_id) and builder_image == native_runner.IMAGE
             and isinstance(engine_id, str) and bool(engine_id),
@@ -215,9 +227,22 @@ def prepare_cache(packet_path: Path, packet_sha: str, journal_path: Path,
     lock_bytes = lock.read_bytes()
     sources = cargo_cache.git_sources(lock_bytes)
     require("marty-core@" + CORE in sources, "D12_CACHE_FROZEN_CORE_LOCK_CHANGED")
+    local_input = None
+    local_objects = None
+    if local_path is not None or local_sha is not None:
+        require(local_path is not None and local_sha is not None
+                and local_path.resolve().is_relative_to(PRIVATE),
+                "D12_LOCAL_OBJECT_INPUT_REQUIRED")
+        local_input = exact_file(local_path, local_sha)
+        require(local_input.get("schema") == "marty.d12-local-git-objects/v1"
+                and local_input.get("originalLockSha256") == hashlib.sha256(lock_bytes).hexdigest(),
+                "D12_LOCAL_OBJECT_LOCK_CHANGED")
+        local_objects = cargo_cache.verified_local_objects(lock_bytes, local_input["sources"])
+        local_object_custody(packet, local_objects)
     script = root / ("cargo-cache-fetch-" + run_id + ".sh")
     with script.open("xb") as stream:
-        stream.write(cargo_cache.render_fetch_script(hashlib.sha256(lock_bytes).hexdigest(), sources))
+        stream.write(cargo_cache.render_fetch_script(hashlib.sha256(lock_bytes).hexdigest(), sources,
+                                                    local_objects))
     plan = {"sourceExportReceipt": ref(packet_path), "buildProfile": PROFILE,
             "sources": packet["sources"], "cacheRunId": run_id,
             "cacheOutputDirectory": str(output), "cacheScript": ref(script),
@@ -226,6 +251,11 @@ def prepare_cache(packet_path: Path, packet_sha: str, journal_path: Path,
             "gitSources": sources, "builderImage": builder_image,
             "engineId": engine_id, "journalBackend": journal,
             "imagesBuilt": False, "releaseQualified": False, "recordingQualified": False}
+    if local_input is not None:
+        plan.update({"cacheMode": "LOCAL_OFFLINE_OBJECTS",
+                     "localObjectInputRef": ref(local_path),
+                     "localObjectSources": local_input["sources"],
+                     "localObjects": local_objects})
     path = root / ("prepared-cache-" + run_id + ".json")
     with path.open("x", encoding="utf-8") as stream:
         json.dump(plan, stream, indent=2)
@@ -246,6 +276,18 @@ def hydrate_cache(packet_path: Path, packet_sha: str,
             and plan["gitSources"] == cargo_cache.git_sources(
                 (Path(plan["sources"]["ui"]["directory"]) / "rust/Cargo.lock").read_bytes()),
             "D12_CACHE_PREPARED_SOURCE_CHANGED")
+    if plan.get("localObjects") is not None:
+        input_ref = plan.get("localObjectInputRef", {})
+        local_path = Path(input_ref.get("path", "")).resolve()
+        require(local_path.is_relative_to(PRIVATE)
+                and exact_file(local_path, input_ref.get("sha256", ""))["sources"]
+                    == plan["localObjectSources"]
+                and plan.get("cacheMode") == "LOCAL_OFFLINE_OBJECTS"
+                and cargo_cache.verified_local_objects(
+                    (Path(plan["sources"]["ui"]["directory"]) / "rust/Cargo.lock").read_bytes(),
+                    plan["localObjectSources"]) == plan["localObjects"],
+                "D12_CACHE_LOCAL_OBJECT_PROOF_CHANGED")
+        local_object_custody(packet, plan["localObjects"])
     for name in ("ui", "core"):
         source = plan["sources"][name]
         build.verify_export(source["repository"], source["revision"],
@@ -342,6 +384,8 @@ def main() -> None:
     parser.add_argument("--cargo-cache-sha256")
     parser.add_argument("--cache-plan", type=Path)
     parser.add_argument("--cache-plan-sha256")
+    parser.add_argument("--local-object-input", type=Path)
+    parser.add_argument("--local-object-sha256")
     parser.add_argument("--run-id")
     parser.add_argument("--engine-id")
     parser.add_argument("--builder-image")
@@ -363,7 +407,7 @@ def main() -> None:
                 "D12_CACHE_PREPARE_INPUTS_REQUIRED")
         print(json.dumps(prepare_cache(args.source_export, args.source_export_sha256,
               args.journal_backend, args.journal_sha256, args.run_id, args.engine_id,
-              args.builder_image)))
+              args.builder_image, args.local_object_input, args.local_object_sha256)))
     elif args.mode == "hydrate-cache":
         require(all((args.source_export, args.source_export_sha256,
                      args.cache_plan, args.cache_plan_sha256)),

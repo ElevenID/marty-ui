@@ -1,3 +1,4 @@
+use crate::policy_contract::service_policy;
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -597,6 +598,8 @@ pub fn evaluate_verified_material_for_policy(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
+    crate::policy_contract::validate_policy(policy)
+        .map_err(|error| bad_request(&error.to_string()))?;
     let VerifiedPolicyMaterial {
         mut policy_facts,
         authenticated_outer_jti,
@@ -988,17 +991,14 @@ fn convert_alternatives(
 fn synthetic_requirement(
     name: &str,
     description: Option<String>,
-    accepted_types: &[String],
+    _accepted_types: &[String],
     trust_profile_id: Option<&str>,
     freshness: Option<&FreshnessPolicy>,
     claims: &[RequestedClaim],
 ) -> Result<CredentialRequirement, PresentationPolicyHttpError> {
     Ok(CredentialRequirement {
         id: Uuid::new_v4(),
-        credential_template_id: accepted_types
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "protocol-inline".into()),
+        credential_template_id: "protocol-inline".into(),
         display_name: name.to_owned(),
         description,
         required: true,
@@ -1107,74 +1107,44 @@ fn holder_response(binding: &HolderBinding) -> Value {
     }
 }
 
-fn service_policy(policy: &PresentationPolicy) -> Value {
-    let freshness = policy.holder_binding.proof_freshness.clone();
-    json!({
-        "id": policy.id.to_string(),
-        "name": policy.name,
-        "organization_id": policy.organization_id.to_string(),
-        "credential_requirements": policy.credential_requirements.iter().map(service_requirement).collect::<Vec<_>>(),
-        "alternative_requirements": policy.alternative_requirements.iter().map(|alternative| json!({
-            "id": alternative.id.to_string(),
-            "name": alternative.name,
-            "credential_requirements": alternative.credential_requirements.iter().map(service_requirement).collect::<Vec<_>>(),
-            "min_satisfied": alternative.min_satisfied
-        })).collect::<Vec<_>>(),
-        "trust_profile_id": policy.trust_profile_id.map(|id| id.to_string()),
-        "presentation_proof_required": policy.presentation_proof_required,
-        "holder_binding": {
-            "required": policy.holder_binding.required,
-            "binding_methods": policy.holder_binding.binding_methods,
-            "proof_profiles": policy.holder_binding.proof_profiles,
-            "challenge_required": freshness.get("challenge_required").copied().unwrap_or(false),
-            "audience_binding_required": freshness.get("audience_binding_required").copied().unwrap_or(false),
-            "replay_detection_required": freshness.get("replay_detection_required").copied().unwrap_or(false),
-            "max_proof_age_seconds": Value::Null
-        },
-        "freshness": policy.freshness,
-        "issuer_constraints": policy.issuer_constraints,
-        "allowed_issuers": [],
-        "single_presentation": true
-    })
-}
-
-fn service_requirement(requirement: &CredentialRequirement) -> Value {
-    json!({
-        "id": requirement.id.to_string(),
-        "credential_template_id": requirement.credential_template_id,
-        "required": requirement.required,
-        "credential_payload_format": requirement.credential_payload_format,
-        "requested_claims": requirement.requested_claims.iter().map(|claim| json!({
-            "claim_name": claim.claim_name,
-            "required": claim.required,
-            "selective_disclosure": claim.selective_disclosure,
-            "accept_derived": claim.accept_derived,
-            "predicate_spec": claim.predicate_spec,
-            "constraints": claim.constraints.iter().map(|constraint| json!({
-                "claim_name": constraint.claim_name,
-                "constraint_type": constraint.constraint_type,
-                "value": constraint.value
-            })).collect::<Vec<_>>()
-        })).collect::<Vec<_>>(),
-        "trust_profile_id": requirement.trust_profile_id.map(|id| id.to_string()),
-        "max_age_seconds": requirement.max_age_seconds,
-        "require_fresh_issuance": requirement.require_fresh_issuance
-    })
-}
-
 /// Match evaluated requirements to exactly one trusted internal evidence row.
 /// An absent or ambiguous match cannot establish any verification check.
 fn credential_evidence<'a>(verified: &'a Value, result: &Value) -> Option<&'a Value> {
     let template_id = result["credential_template_id"].as_str()?;
     let issuer_id = result["issuer_id"].as_str()?;
+    let credential_id = result["credential_id"].as_str()?;
+    let policy = &verified["policy"];
+    let requirement = policy["credential_requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            policy["alternative_requirements"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|alternative| {
+                    alternative["credential_requirements"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                }),
+        )
+        .find(|requirement| requirement["id"] == result["requirement_id"])?;
+    let profile = requirement["trust_profile_id"]
+        .as_str()
+        .or_else(|| policy["trust_profile_id"].as_str());
     let mut matches = verified["credentials"]
         .as_array()?
         .iter()
         .filter(|credential| {
             credential["issuer_id"].as_str() == Some(issuer_id)
-                && credential["credential_template_ids"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
+                && credential["credential_id"].as_str() == Some(credential_id)
+                && credential["trust_profile_id"].as_str() == profile
+                && (template_id.is_empty()
+                    || credential["credential_template_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id))))
         });
     let credential = matches.next()?;
     matches.next().is_none().then_some(credential)
@@ -1637,10 +1607,12 @@ mod error_code_projection_tests {
         let request: EvaluatePresentationRequest =
             serde_json::from_value(json!({"vp_token": {}})).unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
         let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
             "credential_template_ids": ["template-1"], "issuer_id": "issuer-1",
             "signature_verified": true, "trust_profile_verified": true,
             "revocation_checked_at_epoch_seconds": null, "not_revoked": null
@@ -1658,7 +1630,7 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": [evidence]}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": [evidence]}),
                 None,
                 None,
                 None,
@@ -1680,7 +1652,7 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
                 None,
                 None,
                 None,
@@ -1721,10 +1693,12 @@ mod error_code_projection_tests {
         }))
         .unwrap();
         let native = json!({"decision":"allow", "credential_results":[{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id":"template-1", "issuer_id":issuer.issuer_id,
             "satisfied":true, "errors":[]
         }]});
         let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
             "credential_template_ids":["template-1"], "issuer_id":issuer.issuer_id,
             "signature_verified":true,
         });
@@ -1733,7 +1707,7 @@ mod error_code_projection_tests {
                 project_evaluation(
                     native.clone(),
                     &request,
-                    &json!({"credentials":credentials}),
+                    &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials":credentials}),
                     None,
                     None,
                     authenticated,
@@ -1786,6 +1760,7 @@ mod error_code_projection_tests {
             serde_json::from_value(json!({"vp_token": {}, "context": {"credential_id": "forged"}}))
                 .unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
@@ -1797,7 +1772,7 @@ mod error_code_projection_tests {
             project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
                 None,
                 authenticated,
                 None,

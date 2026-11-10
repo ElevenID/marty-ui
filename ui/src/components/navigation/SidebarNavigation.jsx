@@ -52,7 +52,7 @@ const HEADER_HEIGHT = 64;
  * Renders a single nav item with optional children
  * Supports visual hierarchy: primary items, badges, and section-specific styling
  */
-function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
+function NavItem({ item, isActive, isChildActive, expanded, onToggle, onNavigate, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -69,15 +69,17 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
   const handleClick = useCallback(() => {
     if (hasChildren) {
       if (collapsed && item.path) {
+        onNavigate();
         navigate(item.path);
         return;
       }
 
       onToggle(item.id);
     } else {
+      onNavigate();
       navigate(item.path);
     }
-  }, [collapsed, hasChildren, item.id, item.path, navigate, onToggle]);
+  }, [collapsed, hasChildren, item.id, item.path, navigate, onNavigate, onToggle]);
 
   const isItemActive = isActive || isChildActive;
 
@@ -207,6 +209,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                   <ListItemButton
                     component={Link}
                     to={child.path}
+                    onClick={onNavigate}
                     aria-current={childActive ? 'page' : undefined}
                     data-testid={`sidebar.nav.${child.id}`}
                     sx={{
@@ -255,18 +258,24 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
 
   // Collapsed state for desktop — persisted so mode switches don't reset it
-  const [collapsed, setCollapsed] = useState(() => {
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => {
     try { return localStorage.getItem('sidebar-collapsed') === 'true'; } catch { return false; }
   });
+  const collapsed = !isMobile && desktopCollapsed;
 
   // Track which parent items are expanded
   const [expandedItems, setExpandedItems] = useState({});
 
   const { can } = usePermissions();
 
+  const handleDestinationSelection = useCallback(() => {
+    if (isMobile) onMobileClose();
+  }, [isMobile, onMobileClose]);
+
   // Console mode switching
   const handleModeChange = useCallback(async (event, newMode) => {
     if (newMode && newMode !== mode) {
+      handleDestinationSelection();
       const action = beginAction();
       try {
         await action.run(setMode, newMode);
@@ -275,7 +284,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         console.error('[SidebarNavigation] Failed to switch console:', error);
       }
     }
-  }, [beginAction, mode, setMode]);
+  }, [beginAction, handleDestinationSelection, mode, setMode]);
 
   // Get nav items based on console mode, filtered by permissions
   const navItems = useMemo(() => {
@@ -321,7 +330,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   }, []);
 
   const handleCollapseToggle = useCallback(() => {
-    setCollapsed((prev) => {
+    setDesktopCollapsed((prev) => {
       const next = !prev;
       try {
         localStorage.setItem('sidebar-collapsed', String(next));
@@ -443,6 +452,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             isChildActive={activeItem.parent?.id === item.id && !!activeItem.child}
             expanded={expandedItems[item.id] || false}
             onToggle={handleToggle}
+            onNavigate={handleDestinationSelection}
             collapsed={collapsed}
             parentId={null}
           />
@@ -473,7 +483,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             {SHOW_PUBLIC_DOCUMENTATION_NAV && (
               <Typography variant="caption" color="text.secondary">
                 Need help?{' '}
-                <Link to="/docs" style={{ color: theme.palette.primary.main }}>
+                <Link to="/docs" onClick={handleDestinationSelection} style={{ color: theme.palette.primary.main }}>
                   View API Docs
                 </Link>
               </Typography>

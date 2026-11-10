@@ -62,9 +62,10 @@ verification with both expected nonce and audience. Only that call can produce
 The prepared request and authenticated record bind the organization, complete
 saved policy identity, template, query ID/digest, exact selected response-token
 digest, nonce, audience, VCT, selected claim names and observation time. They
-also retain the normalized effective trust-profile ID privately. The existing
-request override remains supported, but a cached native result or public
-projection under a different selected profile is rejected. For the managed
+also retain the effective trust-profile ID privately. The saved requirement's
+profile overrides the saved policy default; caller context cannot replace it.
+A cached native result or public projection under a different profile is
+rejected. For the managed
 profile described below, the saved policy selects one explicit trust profile,
 its owner revision is frozen, and a different request override is rejected.
 Returned issuer
@@ -196,8 +197,10 @@ The native SD-JWT verifier retains the authenticated credential ID and issuer
 JWS digest privately. Both owner requests are derived from those fields and
 the exact tenant/policy/template/query/token/nonce/audience/subject/holder/key
 binding. Public kernel status IDs and caller JSON are not authority inputs.
-After all owner awaits, the orchestrator rechecks the native credential and
-holder proof and both complete owner responses against the final clock.
+After all owner, catalog and policy awaits, the orchestrator rechecks the native
+credential, holder proof and both complete owner responses against the final
+clock. The exact catalog template match remains independent of the query and
+owner authorization; neither one confers membership in the requested template.
 
 Only that path constructs `VerifiedManagedCredentialAuthority`, serialized as
 `marty.managed-sd-jwt-authority/v1` on the unique matching credential result. It

@@ -270,6 +270,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "Uitgegeven referenties",
+      "viewApplication": "Aanvraagdetails bekijken",
+      "applicationStatus": "Aanvraagstatus",
+      "credentialId": "Referentie-ID"
+    },
     "guidance": {
       "walletPresentation": "Gebruik de wallet waarin een referentie is opgeslagen om deze te presenteren.",
       "expired": "Deze referentie is verlopen. Neem contact op met de uitgever over verlenging.",

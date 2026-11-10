@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Melden Sie sich an, um Anträge anzuzeigen.",
+      "selectOrganization": "Wählen Sie eine Organisation aus, um Anträge anzuzeigen.",
+      "permissionsLoading": "Antragsberechtigungen werden geprüft",
+      "readDenied": "Sie haben keine Berechtigung, Anträge für diese Organisation anzuzeigen.",
+      "reissueSucceeded": "Eine neue Wallet-Einladung wurde erstellt. Die antragstellende Person kann ihren Nachweis erneut abrufen.",
+      "actionFailed": "Der Antrag konnte nicht aktualisiert werden. Bitte versuchen Sie es erneut.",
+      "clearFilters": "Filter löschen",
+      "notReported": "Nicht gemeldet",
+      "actions": {
+        "issue": "Wallet-Einladung erstellen",
+        "reissue": "Wallet-Einladung erneut senden"
+      },
+      "filters": {
+        "underReview": "In Prüfung",
+        "pendingInformation": "Informationen ausstehend"
+      },
+      "tableHeaders": {
+        "applicationReference": "Antragsreferenz"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Wählen Sie eine Organisation aus, um ein Vertrauensprofil zu erstellen.",
@@ -451,12 +474,46 @@
 			"loadFailed": "Benachrichtigungseinstellungen konnten nicht geladen werden",
 			"saveSuccess": "Benachrichtigungseinstellungen wurden gespeichert",
 			"saveFailed": "Benachrichtigungseinstellungen konnten nicht gespeichert werden",
-			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert."
+			"emailDisabledNote": "Hinweis: E-Mail ist in der oben gewählten Methode derzeit deaktiviert.",
+			"unsupported": "Die Benachrichtigungs-API unterstützt keine Benachrichtigungseinstellungen.",
+			"unsupportedDetails": "Diese Installation bietet keine Möglichkeit, Benachrichtigungseinstellungen abzurufen oder zu ändern. Es wurden keine Änderungen an den Einstellungen gespeichert."
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und {{max}} ein.",
+					"offsetRange": "Geben Sie eine ganze Anzahl von Sekunden zwischen {{min}} und {{max}} ein.",
+					"reviewSettings": "Prüfen Sie die hervorgehobenen Gültigkeitseinstellungen, bevor Sie die Vorlage erstellen."
+				}
+			}
+		},
 		"common": {
 			"optional": "Optional"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Geben Sie einen Claim-Namen ein.",
+					"credentialType": "Wählen Sie einen der akzeptierten Nachweistypen aus.",
+					"completeClaims": "Vervollständigen Sie den Richtliniennamen, den Zweck, die akzeptierten Nachweistypen und alle erforderlichen Claims, bevor Sie fortfahren.",
+					"templateRequirementsMismatch": "Diese Anforderungen passen nicht zur ausgewählten Nachweisvorlage. Wählen Sie die Vorlage erneut aus oder erstellen Sie eine neue benutzerdefinierte Richtlinie.",
+					"templateIncomplete": "Die ausgewählte Nachweisvorlage ist unvollständig. Wählen Sie die Vorlage erneut aus, bevor Sie fortfahren.",
+					"templateTypeMismatch": "Diese Richtlinie ist an die ausgewählte Nachweisvorlage gebunden. Verwenden Sie deren Nachweistyp oder erstellen Sie eine neue benutzerdefinierte Richtlinie, um andere Typen zu konfigurieren.",
+					"templateDuplicateClaim": "Fordern Sie „{{claimName}}“ in dieser Richtlinie nur einmal an.",
+					"templateUnknownClaim": "„{{claimName}}“ ist kein Claim der ausgewählten Nachweisvorlage. Wählen Sie einen Claim aus der Vorlage oder erstellen Sie eine neue benutzerdefinierte Richtlinie.",
+					"templateValueConflict": "Der erforderliche Wert für „{{claimName}}“ steht im Widerspruch zu einer Bedingung der ausgewählten Vorlage."
+				},
+				"labels": {
+					"removeClaim": "Claim {{index}} entfernen"
+				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "Erforderlicher Wert"
+				}
+			}
 		}
 	},
 	"org": {
@@ -532,5 +589,10 @@
 		"discoveryRequired": "Organisationen mit offener oder genehmigungspflichtiger Mitgliedschaft sind immer über die öffentliche Organisationssuche auffindbar.",
 		"discoveryPublic": "Diese Organisation kann in der öffentlichen Organisationssuche erscheinen.",
 		"discoveryPrivate": "Diese Organisation erscheint nicht in der öffentlichen Organisationssuche."
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und 3650 ein."
+		}
 	}
 }

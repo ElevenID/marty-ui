@@ -75,7 +75,7 @@ const ClaimsStep = ({ data, onChange }) => {
     const preset = CLAIM_PRESETS[presetKey];
     if (!preset) return;
 
-    onChange({ claims: [...preset] });
+    onChange({ claims: preset.map((claim) => ({ ...claim })) });
   };
 
   const handleAddClaim = () => {
@@ -107,8 +107,8 @@ const ClaimsStep = ({ data, onChange }) => {
   };
 
   const handleToggleRequired = (index) => {
-    const claims = [...(data.claims || [])];
-    claims[index].required = !claims[index].required;
+    const claims = (data.claims || []).map((claim, claimIndex) => claimIndex === index
+      ? { ...claim, required: !claim.required } : claim);
     onChange({ claims });
   };
 

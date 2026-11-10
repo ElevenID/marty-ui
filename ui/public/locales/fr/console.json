@@ -1,4 +1,27 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Connectez-vous pour consulter les demandes.",
+      "selectOrganization": "Sélectionnez une organisation pour consulter les demandes.",
+      "permissionsLoading": "Vérification des autorisations des demandes",
+      "readDenied": "Vous n’avez pas l’autorisation de consulter les demandes de cette organisation.",
+      "reissueSucceeded": "Une nouvelle invitation au portefeuille a été générée. Le demandeur peut à nouveau récupérer son justificatif.",
+      "actionFailed": "Impossible de mettre à jour la demande. Veuillez réessayer.",
+      "clearFilters": "Effacer les filtres",
+      "notReported": "Non communiqué",
+      "actions": {
+        "issue": "Générer une invitation au portefeuille",
+        "reissue": "Renvoyer l’invitation au portefeuille"
+      },
+      "filters": {
+        "underReview": "En cours d’examen",
+        "pendingInformation": "En attente d’informations"
+      },
+      "tableHeaders": {
+        "applicationReference": "Référence de la demande"
+      }
+    }
+  },
   "trust": {
     "trustProfileWizard": {
       "selectOrganization": "Sélectionnez une organisation pour créer un profil de confiance.",
@@ -451,12 +474,46 @@
 			"loadFailed": "Impossible de charger les préférences de notification",
 			"saveSuccess": "Préférences de notification mises à jour",
 			"saveFailed": "Impossible d'enregistrer les préférences de notification",
-			"emailDisabledNote": "Remarque : l'e-mail est actuellement désactivé dans la méthode sélectionnée ci-dessus."
+			"emailDisabledNote": "Remarque : l'e-mail est actuellement désactivé dans la méthode sélectionnée ci-dessus.",
+			"unsupported": "L’API de notification ne prend pas en charge les préférences de notification.",
+			"unsupportedDetails": "Cette installation ne permet pas de consulter ni de modifier les préférences de notification. Aucune modification des préférences n’a été enregistrée."
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "Saisissez un nombre entier de jours compris entre 1 et {{max}}.",
+					"offsetRange": "Saisissez un nombre entier de secondes compris entre {{min}} et {{max}}.",
+					"reviewSettings": "Vérifiez les paramètres de validité mis en évidence avant de créer le modèle."
+				}
+			}
+		},
 		"common": {
 			"optional": "Optionnel"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Saisissez un nom d’attribut.",
+					"credentialType": "Sélectionnez un des types d’attestation acceptés.",
+					"completeClaims": "Renseignez le nom de la politique, sa finalité, les types d’attestation acceptés et tous les attributs requis avant de continuer.",
+					"templateRequirementsMismatch": "Ces exigences ne correspondent pas au modèle d’attestation sélectionné. Sélectionnez à nouveau le modèle ou créez une nouvelle politique personnalisée.",
+					"templateIncomplete": "Le modèle d’attestation sélectionné est incomplet. Sélectionnez à nouveau le modèle avant de continuer.",
+					"templateTypeMismatch": "Cette politique est liée au modèle d’attestation sélectionné. Utilisez son type d’attestation ou créez une nouvelle politique personnalisée pour configurer d’autres types.",
+					"templateDuplicateClaim": "Ne demandez « {{claimName}} » qu’une seule fois dans cette politique.",
+					"templateUnknownClaim": "« {{claimName}} » n’est pas un attribut du modèle d’attestation sélectionné. Sélectionnez un attribut du modèle ou créez une nouvelle politique personnalisée.",
+					"templateValueConflict": "La valeur requise pour « {{claimName}} » est incompatible avec une contrainte du modèle sélectionné."
+				},
+				"labels": {
+					"removeClaim": "Supprimer l’attribut {{index}}"
+				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "Valeur requise"
+				}
+			}
 		}
 	},
 	"org": {
@@ -532,5 +589,10 @@
 		"discoveryRequired": "Les organisations proposant une adhésion ouverte ou soumise à approbation sont toujours visibles dans la recherche publique d’organisations.",
 		"discoveryPublic": "Cette organisation peut apparaître dans la recherche publique d’organisations.",
 		"discoveryPrivate": "Cette organisation n’apparaît pas dans la recherche publique d’organisations."
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "Saisissez un nombre entier de jours compris entre 1 et 3650."
+		}
 	}
 }

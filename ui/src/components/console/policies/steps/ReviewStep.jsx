@@ -25,7 +25,7 @@ import { ReviewSectionCard, ReviewActivationCard, ReviewField } from '../../../c
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
   const { t } = useTranslation('console');
-  const { policyConfig, trustProfile, selectedTemplate, activateImmediately } = data;
+  const { policyConfig, selectedTrustProfile: trustProfile, selectedTemplate, activateImmediately } = data;
 
   // Helper to format seconds to human-readable
   const formatDuration = (seconds) => {
@@ -111,12 +111,12 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <Typography variant="body1" gutterBottom>
                 {trustProfile.name}
               </Typography>
-              <Chip
+              {trustProfile.trust_framework_type && <Chip
                 label={trustProfile.trust_framework_type?.toUpperCase()}
                 size="small"
                 color="primary"
                 sx={{ mr: 1 }}
-              />
+              />}
               {trustProfile.is_default && (
                 <Chip label={t('wizards.presentationPolicy.trustProfileStep.defaultChip')} size="small" variant="outlined" />
               )}
@@ -173,25 +173,40 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             {t('wizards.presentationPolicy.reviewStep.fields.requiredClaims', { count: policyConfig.required_claims.length })}
           </Typography>
           <List dense>
-            {policyConfig.required_claims.map((claim, index) => (
-              <ListItem key={index}>
-                <ListItemText
-                  primary={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body2" component="span">
-                        {claim.claim_name}
-                      </Typography>
-                      {claim.accept_predicate && (
-                        <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
-                      )}
-                    </Box>
-                  }
-                  secondary={t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
-                    type: claim.credential_type,
-                  })}
-                />
-              </ListItem>
-            ))}
+            {policyConfig.required_claims.map((claim, index) => {
+              // Match the value selected by native normalization and template projection.
+              const requiredValue = claim.value_constraint ?? claim.required_value;
+              const hasRequiredValue = requiredValue !== '' && requiredValue != null;
+              return (
+                <ListItem key={index}>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="body2" component="span">
+                          {claim.claim_name}
+                        </Typography>
+                        {claim.accept_predicate && (
+                          <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
+                        )}
+                      </Box>
+                    }
+                    secondary={
+                      <>
+                        {t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
+                          type: claim.credential_type,
+                        })}
+                        {hasRequiredValue && (
+                          <Box component="span" sx={{ display: 'block', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                            {t('wizards.presentationPolicy.reviewStep.fields.requiredValue')}{': '}
+                            {JSON.stringify(requiredValue)}
+                          </Box>
+                        )}
+                      </>
+                    }
+                  />
+                </ListItem>
+              );
+            })}
           </List>
 
           {policyConfig.required_claims.length === 0 && (

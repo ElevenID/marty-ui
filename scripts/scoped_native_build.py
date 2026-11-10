@@ -363,7 +363,10 @@ def build_arguments(plan, profile=None):
     selected_sources(plan, profile)
     scope = build_scope(profile)
     require(re.fullmatch(re.escape(scope["prefix"]) + r"[a-f0-9-]{36}", plan.get("containerName", "")) and plan["containerName"] == scope["prefix"] + plan["runId"], "RUN_BOUND_CONTAINER_NAME_REQUIRED")
-    memory = current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES else "2g"
+    # The current local D12 three-role attempt has a harder resident cap while
+    # retaining the existing 4 GiB combined memory+swap ceiling and j1 recipe.
+    memory = (current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES
+              else "1g" if profile == "d12-passport-current-three-role" else "2g")
     args = ["docker", "--context", "desktop-linux", "run", "--detach", "--pull", "never", "--network", "none", "--name", plan["containerName"],
         "--cpus", "1", "--memory", memory, "--memory-swap", memory if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
         "--label", "elevenid.owner=" + scope["owner"],
@@ -851,7 +854,7 @@ def finish(prepared_ref, helper, git, profile=None):
                 and row["Config"]["Entrypoint"] == ["/bin/sh"]
                 and row["Config"]["Cmd"] == ["/build.sh"]
                 and row["HostConfig"]["NetworkMode"] == "none"
-                and row["HostConfig"]["Memory"] == 2 * 1024 ** 3
+                and row["HostConfig"]["Memory"] == 1024 ** 3
                 and row["HostConfig"]["MemorySwap"] == 4 * 1024 ** 3,
                 "D12_COMPILER_MOUNTS_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}

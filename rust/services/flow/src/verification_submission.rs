@@ -227,7 +227,16 @@ pub async fn prepare_verification_submission(
         presentation_submission.as_ref(),
         &raw_vp_token,
     )?;
-    let vp_token = select_vp_token(&raw_vp_token);
+    let associated = oid4vp_transport
+        .associate_response()
+        .map_err(|_| FlowVerificationSubmissionError::InvalidPresentationSubmission)?;
+    // Keep the full response for the verifier. A scalar is used only when the
+    // complete association proves there is exactly one actual response item.
+    let vp_token = if associated.presentation_count == 1 {
+        associated.tokens[0].token.clone()
+    } else {
+        raw_vp_token.clone()
+    };
     let mut evaluation_context = BTreeMap::new();
     if context
         .get("oid4vp_verifier_context")
@@ -635,42 +644,6 @@ fn evaluation_transport(
             _ => FlowVerificationSubmissionError::InvalidContext("presentation_request_query"),
         })?;
     Ok(transport)
-}
-
-fn select_vp_token(raw: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return raw.into();
-    };
-    if let Some(object) = value.as_object() {
-        if object.len() == 1 {
-            if let Some(values) = object.values().next().and_then(Value::as_array) {
-                if values.len() == 1 {
-                    if let Some(token) = values[0].as_str().filter(|value| !value.trim().is_empty())
-                    {
-                        return token.into();
-                    }
-                }
-            }
-        }
-    }
-    find_token(&value).unwrap_or(raw).into()
-}
-
-fn find_token(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(value)
-            if value.contains('~')
-                || value.matches('.').count() >= 2
-                || value.starts_with("mso_mdoc:")
-                || value.starts_with("mdoc:")
-                || value.starts_with("oob:") =>
-        {
-            Some(value)
-        }
-        Value::Array(values) => values.iter().find_map(find_token),
-        Value::Object(values) => values.values().find_map(find_token),
-        _ => None,
-    }
 }
 
 fn prepare_retryable_authentication_rejection(

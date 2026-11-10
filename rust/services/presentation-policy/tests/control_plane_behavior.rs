@@ -16,6 +16,103 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
+#[tokio::test]
+async fn verification_sources_require_service_auth_and_exact_active_tenant_metadata() {
+    let organization_id = Uuid::from_u128(1);
+    let app = Router::new()
+        .route("/internal/v1/organizations/{org}/credential-templates/{id}/verification-type", get(
+            move |Path((org, id)): Path<(Uuid, String)>, headers: HeaderMap| async move {
+                assert_eq!(org, organization_id);
+                assert_eq!(headers.get("x-service-token").unwrap(), "verification-service-token");
+                Json(serde_json::json!({"id":id,"organization_id":if id == "foreign" { Uuid::from_u128(99) } else { org },
+                    "credential_type":"EmployeeCredential","vct":"https://issuer.example/employee","doctype":null,"status":"ACTIVE"}))
+            }
+        ))
+        .route("/internal/v1/organizations/{org}/policy-sets/{id}", get(
+            move |Path((org, id)): Path<(Uuid, Uuid)>, headers: HeaderMap| async move {
+                assert_eq!(org, organization_id);
+                assert_eq!(headers.get("x-service-token").unwrap(), "verification-service-token");
+                let mut document = serde_json::json!({"id":id,"organization_id":org,"status":"ACTIVE","policy_type":"CREDENTIAL_VERIFICATION","cedar_schema_version":"MIP/1.0", "cedar_policies":[
+                    {"policy_id":"allowed","enabled":true,"cedar_text":"permit(principal, action, resource);"},
+                    {"policy_id":"disabled","enabled":false,"cedar_text":"forbid(principal, action, resource);"}
+                ]});
+                match id.as_u128() {
+                    3 => document["organization_id"] = serde_json::json!(Uuid::from_u128(99)),
+                    4 => document["status"] = "ARCHIVED".into(),
+                    5 => document["policy_type"] = "CUSTOM".into(),
+                    6 => document["cedar_schema_version"] = "MIP/99".into(),
+                    7 => document["id"] = serde_json::json!(Uuid::from_u128(99)),
+                    8 => document["cedar_policies"] = serde_json::json!([]),
+                    9 => document["cedar_policies"][1]["policy_id"] = "allowed".into(),
+                    10 => document["cedar_policies"][0]["enabled"] = Value::Null,
+                    _ => {},
+                }
+                Json(document)
+            }
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let control = |token| {
+        NativePresentationControlPlane::connect_lazy(
+            "http://127.0.0.1:9",
+            &base,
+            &format!("{base}/status/{{credential_id}}"),
+            token,
+            None,
+            Duration::from_secs(2),
+        )
+        .unwrap()
+        .with_verification_sources(&base, &base)
+        .unwrap()
+    };
+    let unauthenticated = control(None);
+    assert!(unauthenticated
+        .load_credential_template("employee", organization_id)
+        .await
+        .is_err());
+    assert!(unauthenticated
+        .load_verification_policy(Uuid::from_u128(2), organization_id)
+        .await
+        .is_err());
+    let control = control(Some("verification-service-token"));
+    let template = control
+        .load_credential_template("employee", organization_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        template.vct.as_deref(),
+        Some("https://issuer.example/employee")
+    );
+    assert!(control
+        .load_credential_template("foreign", organization_id)
+        .await
+        .is_err());
+    assert!(control
+        .load_credential_template("..", organization_id)
+        .await
+        .is_err());
+    let policy = control
+        .load_verification_policy(Uuid::from_u128(2), organization_id)
+        .await
+        .unwrap();
+    assert_eq!(
+        policy.cedar_policies,
+        "permit(principal, action, resource);"
+    );
+    assert!(policy.revision.starts_with("sha256:"));
+    for id in 3..=10 {
+        assert!(
+            control
+                .load_verification_policy(Uuid::from_u128(id), organization_id)
+                .await
+                .is_err(),
+            "source case {id}"
+        );
+    }
+    server.abort();
+}
+
 #[derive(Clone)]
 struct Fixture {
     profile: Value,

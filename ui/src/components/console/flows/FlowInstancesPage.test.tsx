@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { renderWithRouter, screen, waitFor } from '@test/utils'
+import { renderWithRouter, screen, waitFor, within } from '@test/utils'
 import userEvent from '@testing-library/user-event'
 import FlowInstancesPage from './FlowInstancesPage'
 
@@ -9,16 +9,6 @@ const { mockGetFlowInstance, mockListFlows, mockListFlowInstances, mockAdvance, 
   mockListFlowInstances: vi.fn(),
   mockAdvance: vi.fn(), mockCancel: vi.fn(), scope: { org: 'org-1', advance: true, cancel: true },
 }))
-
-vi.mock('react-i18next', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-i18next')>()
-  return {
-    ...actual,
-    useTranslation: () => ({
-      t: (key: string) => key,
-    }),
-  }
-})
 
 vi.mock('../../../services/flowsApi', () => ({
   listFlows: (...args: unknown[]) => mockListFlows(...args),
@@ -39,6 +29,13 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
 vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({
   isLoading: false, can: (_resource: string, action: string) => action === 'advance' ? scope.advance : scope.cancel,
 }) }))
+
+const expectedOperateTabs = [
+  ['Flow Instances', '/console/org/operate/flow-instances'],
+  ['Applications', '/console/org/operate/applications'],
+  ['Issued Credentials', '/console/org/operate/issuance'],
+  ['Verification sessions', '/console/org/operate/verify'],
+]
 
 describe('FlowInstancesPage', () => {
   beforeEach(() => {
@@ -70,6 +67,9 @@ describe('FlowInstancesPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Issuance Flow')).toBeInTheDocument()
     })
+    const tabs = within(screen.getByRole('tablist')).getAllByRole('tab')
+    expect(tabs.map(tab => [tab.textContent, tab.getAttribute('href')])).toEqual(expectedOperateTabs)
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
 
     await user.click(screen.getByRole('button', { name: 'Refresh' }))
 
@@ -101,6 +101,9 @@ describe('FlowInstancesPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Runtime timeline')).toBeInTheDocument()
     })
+    const tabs = within(screen.getByRole('tablist')).getAllByRole('tab')
+    expect(tabs.map(tab => [tab.textContent, tab.getAttribute('href')])).toEqual(expectedOperateTabs)
+    expect(tabs[0]).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('link', { name: 'application-1' })).toHaveAttribute('href', '/console/org/operate/applications/application-1')
     expect(screen.getByText(/job-1/)).toBeInTheDocument()
   })

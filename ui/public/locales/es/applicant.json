@@ -68,6 +68,12 @@
     }
   },
   "identity": {
+    "details": {
+      "linkedCredentials": "Credenciales emitidas",
+      "viewApplication": "Ver detalles de la solicitud",
+      "applicationStatus": "Estado de la solicitud",
+      "credentialId": "ID de la credencial"
+    },
     "guidance": {
       "walletPresentation": "Para presentar una credencial, utiliza la cartera donde está guardada.",
       "expired": "Esta credencial ha caducado. Contacta con el emisor para renovarla.",

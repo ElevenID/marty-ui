@@ -105,6 +105,10 @@ pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router 
             get(template_owner),
         )
         .route(
+            "/internal/v1/organizations/{organization_id}/credential-templates/{template_id}/verification-type",
+            get(template_verification_type),
+        )
+        .route(
             "/internal/credential-configurations",
             get(get_internal_credential_configurations),
         )
@@ -587,6 +591,38 @@ async fn get_template(
         .await
         .map_err(application_error)?;
     Ok(Json(template_response(&template)?))
+}
+
+async fn template_verification_type(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path((organization_id, template_id)): Path<(String, String)>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    if !state.service_authenticator.is_configured() {
+        return Err(unauthorized(
+            "CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED",
+        ));
+    }
+    state
+        .service_authenticator
+        .authenticate(header(&headers, "x-service-token"))
+        .map_err(|_| unauthorized("CREDENTIAL_TEMPLATE.SERVICE_AUTHENTICATION_REQUIRED"))?;
+    let template = state
+        .application
+        .get_template_for_internal_service(&template_id)
+        .await
+        .map_err(application_error)?;
+    if template.organization_id != organization_id {
+        return Err(not_found("CREDENTIAL_TEMPLATE.NOT_FOUND"));
+    }
+    Ok(Json(json!({
+        "id": template.id,
+        "organization_id": template.organization_id,
+        "credential_type": template.credential_type,
+        "vct": if template.vct.is_empty() { Value::Null } else { json!(template.vct) },
+        "doctype": template.doctype,
+        "status": template.status.as_str().to_ascii_uppercase(),
+    })))
 }
 
 async fn update_template(

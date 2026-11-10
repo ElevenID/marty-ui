@@ -7,7 +7,8 @@ use marty_presentation_policy::{
     CredentialVerificationKernel, DisplayMetadata, FreshnessPolicy, HolderBinding,
     IssuerTrustEvidence, PolicyStatus, PresentationPolicy, PresentationTrustResolver,
     PresentationVerificationError, PresentationVerificationOrchestrator, RequestPurpose,
-    RequestedClaim, ResolvedTrustProfile, RustCredentialKernel, VerifiedFactsOrchestrator,
+    RequestedClaim, ResolvedCredentialTemplate, ResolvedTrustProfile, ResolvedVerificationPolicy,
+    RustCredentialKernel, VerifiedFactsOrchestrator,
 };
 use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Value};
@@ -35,6 +36,7 @@ impl CredentialVerificationKernel for Kernel {
 }
 
 struct Trust {
+    template_vct: Option<&'static str>,
     evidence: IssuerTrustEvidence,
     fail_load: bool,
     profile_organization_id: Option<Uuid>,
@@ -44,6 +46,33 @@ struct Trust {
 
 #[async_trait]
 impl PresentationTrustResolver for Trust {
+    async fn load_credential_template(
+        &self,
+        template_id: &str,
+        organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+        assert_eq!(template_id, "template-email");
+        Ok(ResolvedCredentialTemplate {
+            id: template_id.into(),
+            organization_id,
+            credential_type: "EmailCredential".into(),
+            vct: Some(self.template_vct.unwrap_or("EmailCredential").into()),
+            doctype: Some("EmailCredential".into()),
+            status: "ACTIVE".into(),
+        })
+    }
+
+    async fn load_verification_policy(
+        &self,
+        id: Uuid,
+        organization_id: Uuid,
+    ) -> Result<ResolvedVerificationPolicy, PresentationVerificationError> {
+        Ok(ResolvedVerificationPolicy { id, organization_id, revision: "explicit-test-policy".into(), cedar_policies: r#"
+            permit(principal, action == MIP::Action::"credentials:verify", resource);
+            forbid(principal, action == MIP::Action::"credentials:verify", resource) when { context.algorithm == "RS256" };
+        "#.into() })
+    }
+
     async fn load_profile(
         &self,
         profile_id: Uuid,
@@ -62,7 +91,7 @@ impl PresentationTrustResolver for Trust {
             document: self
                 .profile_document
                 .clone()
-                .unwrap_or_else(|| json!({"public_verification_material": true})),
+                .unwrap_or_else(|| json!({"public_verification_material": true, "allowed_algorithms":["ES256","EdDSA"]})),
         })
     }
 
@@ -191,6 +220,7 @@ async fn retired_ob2_never_produces_verified_policy_material() {
     assertion.as_object_mut().unwrap().remove("signature");
     assertion.as_object_mut().unwrap().remove("verification");
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: IssuerTrustEvidence {
             verified: true,
             trust_level: Some(90),
@@ -263,6 +293,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         calls: Mutex::new(Vec::new()),
     });
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
         fail_load: false,
         profile_organization_id: None,
@@ -282,7 +313,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
     .unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: vector["vp_token"].clone(),
-        trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
+        trust_profile_id: Some(POLICY_PROFILE_ID.to_string()),
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
@@ -304,12 +335,12 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         assert_eq!(calls[0].audience.as_deref(), Some("verifier-1"));
         assert_eq!(
             calls[0].trust_profile.as_ref().unwrap().id,
-            REQUEST_PROFILE_ID
+            POLICY_PROFILE_ID
         );
     }
     assert_eq!(
         trust.loads.lock().unwrap().as_slice(),
-        &[(REQUEST_PROFILE_ID, ORGANIZATION_ID)]
+        &[(POLICY_PROFILE_ID, ORGANIZATION_ID)]
     );
     assert_eq!(status.calls.lock().unwrap().len(), 1);
     kernel.evidence.lock().unwrap().credential_id = None;
@@ -328,6 +359,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
 async fn malformed_presentations_are_denied_without_invoking_any_format_kernel() {
     let kernel = Arc::new(Kernel::default());
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: IssuerTrustEvidence::default(),
         fail_load: false,
         profile_organization_id: None,
@@ -371,6 +403,7 @@ async fn unavailable_trust_backend_fails_closed_before_cryptographic_verificatio
     let fixture = fixture();
     let kernel = Arc::new(Kernel::default());
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: IssuerTrustEvidence::default(),
         fail_load: true,
         profile_organization_id: None,
@@ -402,6 +435,7 @@ async fn cross_tenant_trust_profile_evidence_is_rejected_before_kernel_use() {
     let fixture = fixture();
     let kernel = Arc::new(Kernel::default());
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: IssuerTrustEvidence::default(),
         fail_load: false,
         profile_organization_id: Some(Uuid::from_u128(999)),
@@ -443,7 +477,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
         .map(str::to_owned);
     evidence.replay_check_verified = false;
 
-    let verify = |trusted_internal_context| {
+    let verify = |trusted_internal_context: bool| {
         let kernel = Arc::new(Kernel {
             evidence: Mutex::new(evidence.clone()),
             calls: Mutex::new(Vec::new()),
@@ -451,6 +485,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
         let orchestrator = VerifiedFactsOrchestrator::with_clock(
             kernel,
             Arc::new(Trust {
+                template_vct: None,
                 evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
                 fail_load: false,
                 profile_organization_id: None,
@@ -470,7 +505,17 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
             nonce: Some("nonce-1".into()),
             audience: Some("verifier-1".into()),
             context: context_vector["context"].as_object().unwrap().clone(),
-            oid4vp_transport: None,
+            oid4vp_transport: trusted_internal_context.then(|| {
+                let query = json!({"credentials":[{"id":"email","format":"ldp_vc","meta":{"type_values":[["VerifiableCredential","EmailCredential"]]},"claims":[{"id":"email","path":["credentialSubject","email"]}]}]});
+                marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+                    credential_authority: None,
+                    query_kind: marty_oid4vp_contract::QueryKind::Dcql,
+                    query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(), query_document: query,
+                    presentation_submission: None,
+                    vp_token_raw: serde_json::to_string(&vector["vp_token"].to_string()).unwrap(),
+                    verifier_client_id: "verifier-1".into(), request_nonce: "nonce-1".into(),
+                }
+            }),
             trusted_internal_context,
         };
         (orchestrator, request)
@@ -491,7 +536,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
         context_vector["expected_replay_check_verified"]
     );
 
-    // Transport structure is not proof: it must not alter the current facts.
+    // A different or incomplete query cannot be ignored in favor of selected-token facts.
     let (orchestrator, mut request) = verify(true);
     let query = serde_json::json!({"credentials": [{"id": "member"}]});
     request.oid4vp_transport = Some(marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
@@ -504,10 +549,10 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
         verifier_client_id: "did:web:verifier.example".into(),
         request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
     });
-    assert_eq!(
-        orchestrator.verify(&policy(), &request).await.unwrap(),
-        trusted
-    );
+    assert!(orchestrator.verify(&policy(), &request).await.is_err());
+    let (orchestrator, mut request) = verify(true);
+    request.oid4vp_transport = None;
+    assert!(orchestrator.verify(&policy(), &request).await.is_err());
 
     let (orchestrator, request) = verify(false);
     let untrusted = orchestrator.verify(&policy(), &request).await.unwrap();
@@ -522,7 +567,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
 }
 
 #[tokio::test]
-async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_weak_algorithms() {
+async fn linked_cedar_policy_uses_complete_evidence_and_its_configured_algorithm_rule() {
     let fixture = fixture();
     let vector = &fixture["valid_data_integrity"];
     for (algorithm, expected_evaluated, expected_allowed) in [
@@ -544,10 +589,11 @@ async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_wea
                 calls: Mutex::new(Vec::new()),
             }),
             Arc::new(Trust {
+                template_vct: None,
                 evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
                 fail_load: false,
                 profile_organization_id: None,
-                profile_document: None,
+                profile_document: Some(json!({"verification_policy_set_id": Uuid::from_u128(41)})),
                 loads: Mutex::new(Vec::new()),
             }),
             Arc::new(Status {
@@ -569,20 +615,24 @@ async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_wea
 
         let facts = orchestrator.verify(&policy(), &request).await.unwrap();
         assert_eq!(
-            facts["external_authorization"]["evaluated"],
+            facts["credentials"][0]["external_authorization"]["evaluated"],
             expected_evaluated
         );
-        assert_eq!(facts["external_authorization"]["allowed"], expected_allowed);
+        assert_eq!(
+            facts["credentials"][0]["external_authorization"]["allowed"],
+            expected_allowed
+        );
         if algorithm.is_none() {
             assert_eq!(
-                facts["external_authorization"]["errors"][0],
+                facts["credentials"][0]["external_authorization"]["errors"][0],
                 fixture["cedar_evidence"]["missing_algorithm_error"]
             );
         } else {
-            assert_eq!(
-                facts["external_authorization"]["reasons"][0],
-                "deny-weak-algorithms"
-            );
+            assert!(facts["credentials"][0]["external_authorization"]["reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|reason| reason == "policy1"));
         }
     }
 }
@@ -596,6 +646,7 @@ async fn presentation_only_verification_bypasses_credential_trust_status_and_ced
         calls: Mutex::new(Vec::new()),
     });
     let trust = Arc::new(Trust {
+        template_vct: None,
         evidence: IssuerTrustEvidence::default(),
         fail_load: true,
         profile_organization_id: None,
@@ -617,7 +668,7 @@ async fn presentation_only_verification_bypasses_credential_trust_status_and_ced
     presentation_policy.credential_requirements.clear();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: vector["vp_token"].clone(),
-        trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
+        trust_profile_id: None,
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
@@ -647,6 +698,7 @@ async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
     relationship["issuer_id"] = Value::String(issuer_id.clone());
     let profile = json!({
         "status": "active",
+        "verification_policy_set_id": Uuid::from_u128(41),
         "trust_sources": [{
             "source_type": "PINNED_ISSUER",
             "enabled": true,
@@ -657,6 +709,7 @@ async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
     let kernel = Arc::new(Kernel {
         evidence: Mutex::new(CredentialVerificationEvidence {
             verified: true,
+            credential_types: vec!["EmailCredential".into()],
             claims: serde_json::from_value(json!({"email": "holder@example.com"})).unwrap(),
             issuer_id: Some(issuer_id),
             issued_at_epoch_seconds: Some(1_787_240_270),
@@ -681,6 +734,7 @@ async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
     let orchestrator = VerifiedFactsOrchestrator::with_clock(
         kernel,
         Arc::new(Trust {
+            template_vct: None,
             evidence: IssuerTrustEvidence {
                 verified: true,
                 trust_level: Some(87),
@@ -722,11 +776,16 @@ async fn mdoc_issuer_relationship_does_not_prove_credential_non_revocation() {
             .unwrap()
     );
     assert!(facts["credentials"][0]["revocation_checked_at_epoch_seconds"].is_null());
-    assert_eq!(facts["external_authorization"]["allowed"], false);
-    assert!(facts["external_authorization"]["errors"][0]
-        .as_str()
-        .unwrap()
-        .contains("non-revocation"));
+    assert_eq!(
+        facts["credentials"][0]["external_authorization"]["allowed"],
+        false
+    );
+    assert!(
+        facts["credentials"][0]["external_authorization"]["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("non-revocation")
+    );
     assert!(status.calls.lock().unwrap().is_empty());
 }
 
@@ -756,6 +815,20 @@ struct NativeForeignTrust {
 }
 #[async_trait]
 impl PresentationTrustResolver for NativeForeignTrust {
+    async fn load_credential_template(
+        &self,
+        template_id: &str,
+        organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+        Ok(ResolvedCredentialTemplate {
+            id: template_id.into(),
+            organization_id,
+            credential_type: "OpenBadgeCredential".into(),
+            vct: None,
+            doctype: None,
+            status: "ACTIVE".into(),
+        })
+    }
     async fn load_profile(
         &self,
         profile_id: Uuid,
@@ -1240,6 +1313,7 @@ mod bounded_sd_jwt_query_evidence {
             let orchestrator = VerifiedFactsOrchestrator::with_clock(
                 kernel,
                 Arc::new(Trust {
+                    template_vct: Some(VCT),
                     evidence: IssuerTrustEvidence {
                         verified: true,
                         trust_level: Some(90),
@@ -1249,6 +1323,7 @@ mod bounded_sd_jwt_query_evidence {
                     profile_organization_id: None,
                     profile_document: Some(json!({
                         "status": "ACTIVE",
+                        "allowed_algorithms": ["EdDSA", "ES256"],
                         "issuer_relationships": [{
                             "issuer_id": ISSUER,
                             "relationship_status": "TRUSTED",
@@ -1795,7 +1870,7 @@ mod bounded_sd_jwt_query_evidence {
         assert!(matches!(
             result,
             Err(PresentationVerificationError::Failed(ref reason))
-                if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH"
+                if reason.contains("cannot replace")
         ));
     }
 
@@ -2094,6 +2169,7 @@ mod bounded_sd_jwt_query_evidence {
             managed_status::*, trust_authority::*, EvidenceCheckOutcome, EvidenceProfileReference,
         };
         use marty_presentation_policy::PrerequisiteEvidenceProfile;
+        use std::sync::atomic::AtomicU64;
 
         #[derive(Clone, Copy)]
         enum Mode {
@@ -2103,18 +2179,48 @@ mod bounded_sd_jwt_query_evidence {
             Denied,
             Revoked,
             Changed,
+            WrongTemplate,
+            StaleAfterTemplate,
         }
 
         struct Owners {
             snapshot: CredentialAuthoritySnapshotV1,
             now: i64,
             mode: Mode,
+            clock: Arc<AtomicU64>,
             trust_calls: Mutex<Vec<CredentialTrustEvaluationRequestV1>>,
             status_calls: Mutex<Vec<ManagedCredentialStatusRequestV1>>,
         }
 
         #[async_trait]
         impl PresentationTrustResolver for Owners {
+            async fn load_credential_template(
+                &self,
+                template_id: &str,
+                organization_id: Uuid,
+            ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+                assert_eq!(template_id, "template-email");
+                assert_eq!(organization_id, ORGANIZATION_ID);
+                if matches!(self.mode, Mode::StaleAfterTemplate) {
+                    self.clock.store(self.now as u64 + 60, Ordering::SeqCst);
+                }
+                Ok(ResolvedCredentialTemplate {
+                    id: template_id.into(),
+                    organization_id,
+                    credential_type: "EmailCredential".into(),
+                    vct: Some(
+                        if matches!(self.mode, Mode::WrongTemplate) {
+                            "urn:example:another-email-template"
+                        } else {
+                            VCT
+                        }
+                        .into(),
+                    ),
+                    doctype: None,
+                    status: "ACTIVE".into(),
+                })
+            }
+
             async fn freeze_credential_authority(
                 &self,
                 organization_id: Uuid,
@@ -2314,10 +2420,12 @@ mod bounded_sd_jwt_query_evidence {
                 .request
                 .context
                 .insert("replay_check_verified".into(), json!(true));
+            let clock = Arc::new(AtomicU64::new(fixture.now));
             let owners = Arc::new(Owners {
                 snapshot,
                 now: fixture.now as i64,
                 mode,
+                clock: clock.clone(),
                 trust_calls: Mutex::new(Vec::new()),
                 status_calls: Mutex::new(Vec::new()),
             });
@@ -2331,7 +2439,7 @@ mod bounded_sd_jwt_query_evidence {
                     if first.swap(false, Ordering::SeqCst) {
                         now
                     } else {
-                        now + advance
+                        clock.load(Ordering::SeqCst) + advance
                     }
                 }),
             )
@@ -2396,6 +2504,39 @@ mod bounded_sd_jwt_query_evidence {
                 trust[0].request_binding_digest,
                 status[0].request_binding_digest
             );
+        }
+
+        #[tokio::test]
+        async fn managed_authority_does_not_confer_catalog_template_membership() {
+            let (fixture, owners) = fixture(Mode::WrongTemplate, 0);
+            let material = fixture.verify(&fixture.request).await;
+            assert!(material.managed_credential_authority().is_some());
+            assert_eq!(
+                material.policy_facts()["credentials"][0]["credential_template_ids"],
+                json!([])
+            );
+            let output =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            assert_eq!(output["decision"], "deny", "{output}");
+            assert!(output["credential_results"][0]
+                .get("managed_sd_jwt_authority")
+                .is_none());
+            assert_eq!(owners.trust_calls.lock().unwrap().len(), 1);
+            assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
+        }
+
+        #[tokio::test]
+        async fn managed_observations_must_remain_live_after_catalog_resolution() {
+            let (fixture, owners) = fixture(Mode::StaleAfterTemplate, 0);
+            assert!(fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &fixture.request)
+                .await
+                .is_err());
+            assert_eq!(owners.trust_calls.lock().unwrap().len(), 1);
+            assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
+            assert_eq!(owners.clock.load(Ordering::SeqCst), fixture.now + 60);
         }
 
         #[tokio::test]

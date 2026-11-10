@@ -199,6 +199,55 @@ describe('Policy Set scoped consumer journeys', () => {
     expect(writes).toEqual([{ method: 'POST', path: '/v1/policy-sets', org: 'org-1', body: { name: template.name, description: template.description, policy_type: template.policy_type, cedar_policies: policies } }])
   })
 
+  it('keeps focus and the caret while typing a Policy ID and submits only policy data', async () => {
+    const validations: unknown[] = []
+    server.use(http.post('*/v1/policy-sets/validate', async ({ request }) => {
+      validations.push(await request.json())
+      return HttpResponse.json({ valid: true, errors: [] })
+    }))
+    const { user } = renderPage('/new')
+    await user.click(await screen.findByRole('button', { name: /Read-only access/ }))
+    await user.click(screen.getByLabelText('Advanced Cedar editor'))
+    const policyId = screen.getByRole('textbox', { name: 'Policy ID' })
+    await user.click(policyId)
+    await user.keyboard('{End}-audit{ArrowLeft}{ArrowLeft}X')
+    expect(policyId).toHaveFocus()
+    expect(policyId).toHaveValue('read-audXit')
+
+    await user.click(screen.getByRole('button', { name: 'Create draft' }))
+    await screen.findByRole('heading', { name: 'Read-only access' })
+    const editedPolicies = [{ ...policies[0], policy_id: 'read-audXit' }]
+    expect(validations).toEqual([{ cedar_policies: editedPolicies }])
+    expect(writes).toEqual([{ method: 'POST', path: '/v1/policy-sets', org: 'org-1', body: {
+      name: template.name, description: template.description, policy_type: template.policy_type, cedar_policies: editedPolicies,
+    } }])
+  })
+
+  it('preserves the remaining policy editor when an earlier row is deleted', async () => {
+    const secondPolicy = { ...policies[0], policy_id: 'write', description: 'Writer updates' }
+    server.use(http.get('*/v1/policy-sets/templates', () => HttpResponse.json([
+      { ...template, cedar_policies: [...policies, secondPolicy] },
+    ])))
+    const { user } = renderPage('/new')
+    await user.click(await screen.findByRole('button', { name: /Read-only access/ }))
+    await user.click(screen.getByLabelText('Advanced Cedar editor'))
+    const remainingId = screen.getAllByRole('textbox', { name: 'Policy ID' })[1]
+    const remainingCedar = screen.getAllByRole('textbox', { name: 'Cedar policy' })[1]
+    await user.type(remainingId, '-audit')
+    await user.click(screen.getByRole('button', { name: 'Delete read', exact: true }))
+    expect(screen.getByRole('textbox', { name: 'Policy ID' })).toBe(remainingId)
+    expect(screen.getByRole('textbox', { name: 'Cedar policy' })).toBe(remainingCedar)
+    expect(remainingId).toHaveValue('write-audit')
+    await user.click(remainingId)
+    await user.keyboard('{End}-kept')
+    expect(remainingId).toHaveFocus()
+    expect(remainingId).toHaveValue('write-audit-kept')
+
+    await user.click(screen.getByRole('button', { name: 'Create draft' }))
+    await screen.findByRole('heading', { name: 'Read-only access' })
+    expect(writes[0].body.cedar_policies).toEqual([{ ...secondPolicy, policy_id: 'write-audit-kept' }])
+  })
+
   it('resets a draft and never creates after late validation from a former organization', async () => {
     let resolveValidation!: () => void
     server.use(http.post('*/v1/policy-sets/validate', async () => {

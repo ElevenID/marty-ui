@@ -11,6 +11,7 @@ mod digest;
 pub mod haip_key;
 pub mod managed_status;
 mod rejection;
+mod response;
 pub mod trust_authority;
 mod types;
 mod validation;
@@ -21,3 +22,4 @@ pub use types::*;
 pub use validation::Oid4vpContractError;
 
 pub use rejection::*;
+pub use response::*;
