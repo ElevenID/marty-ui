@@ -48,7 +48,7 @@ mod tests {
 
     #[test]
     fn revision_binds_tenant_semantics_and_lifecycle() {
-        let original = built_in_presentation_policies().remove(0);
+        let original = built_in_presentation_policies(uuid::Uuid::from_u128(1)).remove(0);
         let expected = policy_revision(&original).unwrap();
         for changed in [
             {
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn revision_preserves_stored_precision_and_survives_policy_record_round_trip() {
-        let mut policy = built_in_presentation_policies().remove(0);
+        let mut policy = built_in_presentation_policies(uuid::Uuid::from_u128(1)).remove(0);
         policy.created_at = Utc.timestamp_opt(1_700_000_000, 123_456_789).unwrap();
         policy.updated_at = Utc.timestamp_opt(1_700_000_001, 987_654_321).unwrap();
         let expected = policy_revision(&policy).unwrap();

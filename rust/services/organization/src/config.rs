@@ -39,6 +39,8 @@ pub struct OrganizationServiceConfig {
     pub event_stream_timeout_seconds: u64,
     pub organization_creation_enabled: bool,
     pub marty_organization_id: Uuid,
+    pub marty_organization_name: String,
+    pub marty_organization_slug: String,
     pub marty_admin_email: Option<String>,
     pub marty_reviewer_email: Option<String>,
     pub outbox: OutboxDispatcherConfig,
@@ -161,6 +163,13 @@ impl OrganizationServiceConfig {
             event_stream_timeout_seconds: number(&values, "ES_GRPC_TIMEOUT_SECONDS", 5)?,
             organization_creation_enabled: boolean(&values, "ORGANIZATION_CREATION_ENABLED", true)?,
             marty_organization_id,
+            marty_organization_name: value(&values, "MARTY_ORG_NAME")
+                .unwrap_or("Marty")
+                .to_owned(),
+            marty_organization_slug: config::canonical_slug(
+                value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"),
+                "marty",
+            ),
             marty_admin_email: email(&values, "MARTY_ORG_ADMIN_EMAIL")?,
             marty_reviewer_email: email(&values, "MARTY_ORG_REVIEWER_EMAIL")?,
             outbox,
@@ -340,6 +349,35 @@ mod tests {
         assert_eq!(config.redis_url, "redis://localhost:6379/2");
         assert!(config.database_url.starts_with("postgresql://"));
         assert!(config.organization_creation_enabled);
+        assert_eq!(config.marty_organization_name, "Marty");
+        assert_eq!(config.marty_organization_slug, "marty");
+    }
+
+    #[test]
+    fn customer_organization_configuration_preserves_identity_and_branding() {
+        let mut values = base();
+        values.extend([
+            (
+                "MARTY_ORG_ID".into(),
+                "750e8400-e29b-41d4-a716-446655440001".into(),
+            ),
+            ("MARTY_ORG_NAME".into(), " Canyon Skills Academy ".into()),
+            ("MARTY_ORG_SLUG".into(), " Canyon-Skills ".into()),
+        ]);
+        let config = OrganizationServiceConfig::from_values(values.clone()).unwrap();
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "750e8400-e29b-41d4-a716-446655440001"
+        );
+        assert_eq!(config.marty_organization_name, "Canyon Skills Academy");
+        assert_eq!(config.marty_organization_slug, "canyon-skills");
+        values.insert("MARTY_ORG_SLUG".into(), "canyon--skills-".into());
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values)
+                .unwrap()
+                .marty_organization_slug,
+            "canyon--skills-",
+        );
     }
 
     #[test]

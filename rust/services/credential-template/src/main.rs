@@ -87,6 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &pool,
         &CredentialTemplateDataReconciliationConfig {
             marty_organization_id: config.marty_organization_id.to_string(),
+            marty_issuer_did: config.marty_issuer_did.clone(),
             public_api_origin: config.public_api_origin.to_string(),
             public_hostname,
             selfhost_production: config.migration_profile == "selfhost-production",

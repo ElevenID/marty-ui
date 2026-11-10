@@ -5,6 +5,11 @@ on the existing isolated AWS/K3s node. The signed Linux/Compose installer has a
 separate [hosting file](installer-hosting.md) and typed
 [application settings file](installer-application-settings.md).
 
+For a complete customer example, use the
+[Canyon Skills Academy scenario](customer-deployment-scenario.md). It supplies
+separate customer, optional email and synthetic credential-claim inputs, plus
+checks for a customer UUID and issuer identity rather than the default tenant.
+
 ## Keep one source for each setting
 
 | Setting | Source | Check before installation |
@@ -80,6 +85,23 @@ Preserve `organization.did` and the retained organization identity when changing
 an existing development endpoint. An EC2 public-IP change is not permission to
 silently replace the issuer DID or reinitialize accounts.
 
+Select the initial tenant through `organization.id` and `organization.slug`.
+Use the lowercase canonical UUID spelling; the chart refuses uppercase UUIDs
+because some service records use exact string keys. Inspect retained tenant
+records before correcting an existing installation rather than silently
+changing its identity.
+Conflicting `config.MARTY_ORG_ID` or `config.MARTY_ORG_SLUG` aliases are rejected
+because callbacks and the default issuer DID are derived from the canonical
+values. Set its display name with `config.MARTY_ORG_NAME`. The runtime must
+contain the customer bootstrap corrections described in the scenario guide;
+changing Helm values does not rename or transfer an existing organization.
+
+The packaged login realm is `11id`. The chart rejects a different
+`KEYCLOAK_REALM` because its imported realm and readiness checks use that name.
+Login policy flags reject invalid spellings rather than falling back to a
+different policy. Quote values such as `'false'` in the string-valued `config`
+mapping. The existing setup-script boolean spellings remain supported.
+
 ## Enable Keycloak mail explicitly
 
 Default installation does not require an SMTP service. Password reset defaults
@@ -107,9 +129,24 @@ Merge those keys into the existing `config` mapping; do not duplicate the YAML
 key. Store the provider password under `SMTP_PASSWORD` in the existing
 `marty-secrets` Secret, or its `existingSecrets.marty-secrets` override, using the
 installation's private credential-management procedure. Preserve all unrelated
-keys. The configurator receives this key through an optional `secretKeyRef`.
+keys. When both an SMTP host and username are configured, the configurator
+requires that key through its `secretKeyRef`; a missing key prevents the Job
+from starting. The reference remains optional for a mail-free installation or
+an upgrade preserving stored realm SMTP. A configured host without a username
+selects an unauthenticated relay; the Job supplies an empty password so a
+retained provider Secret cannot silently enable authentication on that relay.
 Never place `SMTP_PASSWORD` or `KEYCLOAK_SMTP_PASSWORD` in Helm `config`; the chart
 rejects both without echoing their values.
+
+A fresh installation with an enabled configurator must supply an SMTP host
+before enabling verification or reset. Configured mail requires a valid port
+and sender; SSL and STARTTLS cannot both be enabled, and authenticated mail
+requires one encrypted transport. A Helm upgrade may preserve an SMTP provider
+already stored in the realm by leaving its host unset. Preview that upgrade
+with `helm template --is-upgrade` or `helm upgrade --dry-run=server`, so the
+preview uses the same installation-versus-upgrade behavior as the real command.
+These checks establish configuration requirements; only a real delivery test
+can establish provider authentication and working verification/reset links.
 
 This configures Keycloak account-verification and password-reset email. It does
 not enable application notification email; that adapter remains unavailable.

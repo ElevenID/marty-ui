@@ -1,0 +1,14 @@
+# Optional login-email policy overlay; use after customer-education.yaml.
+# Replace this fictional endpoint, sender and account in a private deployment
+# values layer. Provision SMTP_PASSWORD in the existing marty-secrets Secret.
+# Successful rendering does not prove SMTP authentication or email delivery.
+config:
+  KEYCLOAK_SMTP_HOST: smtp.canyon-skills.example
+  KEYCLOAK_SMTP_PORT: '587'
+  KEYCLOAK_SMTP_FROM: identity@canyon-skills.example
+  KEYCLOAK_SMTP_FROM_DISPLAY_NAME: Canyon Skills Academy
+  KEYCLOAK_SMTP_USERNAME: canyon-identity-mailer
+  KEYCLOAK_SMTP_STARTTLS: 'true'
+  KEYCLOAK_SMTP_SSL: 'false'
+  KEYCLOAK_VERIFY_EMAIL: 'true'
+  KEYCLOAK_RESET_PASSWORD_ENABLED: 'true'

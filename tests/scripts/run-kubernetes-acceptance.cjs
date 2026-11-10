@@ -10,6 +10,11 @@ const { createRequire } = require('node:module');
 
 const MAXIMUM_STATE_FILE_BYTES = 1024 * 1024;
 const MAXIMUM_DIAGNOSTIC_BYTES = 64 * 1024;
+const MAXIMUM_SCENARIO_FILE_BYTES = 8192;
+const SCENARIO_FIELDS = {
+  given_name: 128, family_name: 128, organization_name: 256,
+  achievement_name: 256, achievement_description: 1024,
+};
 const emit = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 let stage = 'arguments';
 let state;
@@ -27,7 +32,7 @@ function options(argv) {
     origin: '', 'password-file': '', 'state-dir': '', email: 'operator@localhost',
     'organization-id': '00000000-0000-0000-0000-000000000001',
     'credential-template-id': '50000000-0000-0000-0000-000000000040',
-    'issuer-did': '',
+    'issuer-did': '', 'scenario-claims-file': '',
   };
   for (let i = 0; i < argv.length; i += 2) {
     check(argv[i]?.startsWith('--') && Object.hasOwn(result, argv[i].slice(2))
@@ -47,7 +52,41 @@ function options(argv) {
     check(path.isAbsolute(result[name]) && path.resolve(result[name]) === result[name],
       'absolute_paths_required');
   }
+  if (result['scenario-claims-file']) check(path.isAbsolute(result['scenario-claims-file'])
+    && path.resolve(result['scenario-claims-file']) === result['scenario-claims-file'],
+  'absolute_scenario_path_required');
   return result;
+}
+
+function scenarioClaims(file) {
+  if (!file) return null;
+  // This is a nonsecret, bounded fixture; normal repository file permissions
+  // are allowed. Identity, account and time claims remain owned by the driver.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let raw;
+  try {
+    const info = fs.fstatSync(fd);
+    check(info.isFile() && info.size > 0 && info.size <= MAXIMUM_SCENARIO_FILE_BYTES,
+      'scenario_file_invalid');
+    raw = fs.readFileSync(fd);
+    check(raw.length === info.size, 'scenario_file_changed');
+  } finally { fs.closeSync(fd); }
+  let values;
+  try { values = JSON.parse(raw.toString('utf8')); }
+  catch { check(false, 'scenario_claims_invalid'); }
+  check(values && typeof values === 'object' && !Array.isArray(values)
+    && Object.keys(values).length > 0
+    && Object.keys(values).every(name => Object.hasOwn(SCENARIO_FIELDS, name)),
+  'scenario_claims_invalid');
+  const canonical = {};
+  for (const [name, maximum] of Object.entries(SCENARIO_FIELDS)) {
+    if (!Object.hasOwn(values, name)) continue;
+    check(typeof values[name] === 'string' && values[name].trim()
+      && values[name].length <= maximum && !/[\u0000-\u001f\u007f]/.test(values[name]),
+    'scenario_claims_invalid');
+    canonical[name] = values[name];
+  }
+  return canonical;
 }
 
 function privateWrite(name, value) {
@@ -78,11 +117,19 @@ async function main(argv) {
       + '  --password-file ABSOLUTE_PATH --state-dir ABSOLUTE_PATH\n'
       + '  [--phase accept|resume] [--repo ABSOLUTE_CHECKOUT] [--email EMAIL]\n'
       + '  [--organization-id UUID] [--credential-template-id SOURCE_UUID]\n'
+      + '  [--scenario-claims-file ABSOLUTE_NONSECRET_JSON]\n'
       + '\naccept creates private state and issues one synthetic credential.\n'
       + 'resume requires a successful accept receipt and only verifies retained state.\n');
     return;
   }
   const cfg = options(argv);
+  let descriptiveClaims = null;
+  if (cfg['scenario-claims-file']) {
+    stage = 'scenario-claims';
+    descriptiveClaims = scenarioClaims(cfg['scenario-claims-file']);
+    stage = 'state-scope';
+  }
+  const scenarioHash = descriptiveClaims ? sha256(JSON.stringify(descriptiveClaims)) : null;
   state = cfg['state-dir'];
   if (cfg.phase === 'accept') fs.mkdirSync(state, { mode: 0o700 });
   const stateInfo = fs.lstatSync(state);
@@ -94,6 +141,13 @@ async function main(argv) {
     && original.organizationId === cfg['organization-id']
     && original.issuerDid === cfg['issuer-did']
     && original.sourceCredentialTemplateId === cfg['credential-template-id'], 'readback_scope_changed');
+  if (original && (descriptiveClaims || Object.hasOwn(original, 'scenarioClaims')
+    || Object.hasOwn(original, 'scenarioClaimsSha256'))) {
+    stage = 'state-scope';
+    check((original.scenarioClaimsSha256 ?? null) === scenarioHash
+      && JSON.stringify(original.scenarioClaims ?? null) === JSON.stringify(descriptiveClaims),
+    'readback_scenario_changed');
+  }
 
   stage = 'load-existing-helpers';
   const fromTests = createRequire(path.join(cfg.repo, 'tests/package.json'));
@@ -225,6 +279,7 @@ async function main(argv) {
           organization_id: cfg['organization-id'], organization_name: 'Marty', role: 'applicant',
           achievement_name: 'Kubernetes milestone acceptance',
           achievement_description: 'Synthetic operator credential for deployment acceptance',
+          ...(descriptiveClaims || {}),
           issued_at: new Date().toISOString(),
         } };
       privateWrite('issuance-requested.json', { requestId, request });
@@ -247,6 +302,10 @@ async function main(argv) {
         credentialSha256: sha256(received.credential), issuerDid: received.payload.iss,
         vct: identity.vct, signatureVerified: true, holderBindingVerified: true,
         loginVerified: true, at: new Date().toISOString() };
+      if (descriptiveClaims) {
+        receipt.scenarioClaims = descriptiveClaims;
+        receipt.scenarioClaimsSha256 = scenarioHash;
+      }
     } else {
       stage = 'stored-credential-signature';
       const received = JSON.parse(privateRead(path.join(state, 'credential-private.json'), MAXIMUM_STATE_FILE_BYTES));

@@ -60,8 +60,71 @@ def test_configured_keycloak_smtp_uses_existing_secret_and_explicit_login_policy
     smtp = configurator_environment(documents)["SMTP_PASSWORD"]
     assert "value" not in smtp
     assert smtp["valueFrom"]["secretKeyRef"] == {
-        "name": secret_name, "key": "SMTP_PASSWORD", "optional": True,
+        "name": secret_name, "key": "SMTP_PASSWORD", "optional": False,
     }
+
+
+@pytest.mark.parametrize("overrides,required", [
+    ({}, False),
+    ({"KEYCLOAK_SMTP_USERNAME": "identity-mailer"}, False),
+    ({"SMTP_USERNAME": "identity-mailer"}, False),
+    ({"KEYCLOAK_SMTP_HOST": "relay.example.test", "KEYCLOAK_SMTP_FROM": "identity@example.test"}, False),
+    ({"SMTP_HOST": "relay.example.test", "SMTP_FROM": "identity@example.test"}, False),
+    ({"KEYCLOAK_SMTP_HOST": "smtp.example.test", "KEYCLOAK_SMTP_FROM": "identity@example.test",
+      "KEYCLOAK_SMTP_USERNAME": "identity-mailer", "KEYCLOAK_SMTP_STARTTLS": "true"}, True),
+    ({"SMTP_HOST": "smtp.example.test", "SMTP_FROM": "identity@example.test",
+      "SMTP_USERNAME": "identity-mailer", "SMTP_STARTTLS": "true"}, True),
+    ({"SMTP_HOST": "smtp.example.test", "SMTP_FROM": "identity@example.test",
+      "SMTP_USERNAME": "identity-mailer", "SMTP_STARTTLS": "true",
+      "KEYCLOAK_SMTP_HOST": "", "KEYCLOAK_SMTP_USERNAME": ""}, True),
+    ({"KEYCLOAK_SMTP_HOST": "smtp.example.test", "SMTP_FROM": "identity@example.test",
+      "SMTP_USERNAME": "identity-mailer", "SMTP_STARTTLS": "true"}, True),
+])
+def test_smtp_password_is_required_only_when_setup_will_configure_authentication(
+    tmp_path: Path, overrides: dict[str, str], required: bool,
+) -> None:
+    values = installation_values()
+    values["config"] = overrides
+    documents = render(tmp_path, values)
+    smtp = configurator_environment(documents)["SMTP_PASSWORD"]
+    host = overrides.get("KEYCLOAK_SMTP_HOST") or overrides.get("SMTP_HOST")
+    if host and not required:
+        assert smtp == {"name": "SMTP_PASSWORD", "value": ""}
+    else:
+        assert smtp["valueFrom"]["secretKeyRef"] == {
+            "name": "marty-secrets", "key": "SMTP_PASSWORD", "optional": not required,
+        }
+        assert "value" not in smtp
+    assert not resources(documents, "Secret")
+
+
+def test_selected_unauthenticated_relay_does_not_receive_a_retained_password(tmp_path: Path) -> None:
+    from tests.test_keycloak_login_configuration import run_setup
+
+    values = installation_values()
+    settings = {
+        "KEYCLOAK_SMTP_HOST": "relay.example.test",
+        "KEYCLOAK_SMTP_PORT": "25",
+        "KEYCLOAK_SMTP_FROM": "identity@example.test",
+        "KEYCLOAK_SMTP_USERNAME": "",
+        "KEYCLOAK_SMTP_SSL": "false",
+        "KEYCLOAK_SMTP_STARTTLS": "false",
+    }
+    values["config"] = settings
+    smtp = configurator_environment(render(tmp_path, values))["SMTP_PASSWORD"]
+    # Model Kubernetes env delivery even when the selected Secret retains a key
+    # from an earlier authenticated provider.
+    retained_secret = {"SMTP_PASSWORD": "retained-provider-password-not-for-relay"}
+    delivered = smtp["value"] if "value" in smtp else retained_secret[smtp["valueFrom"]["secretKeyRef"]["key"]]
+    result, calls = run_setup(
+        tmp_path, "configure_realm_smtp_settings", SMTP_PASSWORD=delivered, **settings,
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(calls) == 1
+    mail = calls[0]["payload"]["smtpServer"]
+    assert mail["auth"] == "false"
+    assert not mail.get("password") and not mail.get("user")
+    assert retained_secret["SMTP_PASSWORD"] not in result.stdout + result.stderr
 
 
 def test_disabled_configurator_does_not_create_a_mail_setup_job(tmp_path: Path) -> None:

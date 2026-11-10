@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 
     let store = Arc::new(PostgresPolicyStore::new(pool));
-    reconcile_builtin_policies(store.as_ref()).await?;
+    reconcile_builtin_policies(store.as_ref(), config.marty_organization_id).await?;
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));

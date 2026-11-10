@@ -1,3 +1,7 @@
+{{- $config := include "marty.configData" . | fromYaml -}}
+{{- $smtpPasswordRequired := eq (include "marty.keycloakSmtpPasswordRequired" $config) "true" -}}
+{{- $smtpHost := coalesce (get $config "KEYCLOAK_SMTP_HOST") (get $config "SMTP_HOST") "" -}}
+{{- $unauthenticatedSmtp := and (not (empty $smtpHost)) (not $smtpPasswordRequired) -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -262,13 +266,20 @@ spec:
                   key: password
             {{- range $name := list "KEYCLOAK_ADMIN" "KEYCLOAK_ADMIN_PASSWORD" "MARTY_API_CLIENT_SECRET" "GOOGLE_CLIENT_ID" "GOOGLE_CLIENT_SECRET" "SMTP_PASSWORD" }}
             - name: {{ $name }}
+              {{- if and (eq $name "SMTP_PASSWORD") $unauthenticatedSmtp }}
+              # A retained mail password must not authenticate a selected relay.
+              value: ""
+              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "marty.secretName" (dict "root" $ "name" "marty-secrets") }}
                   key: {{ $name }}
-                  {{- if or (hasPrefix "GOOGLE_" $name) (eq $name "SMTP_PASSWORD") }}
+                  {{- if hasPrefix "GOOGLE_" $name }}
                   optional: true
+                  {{- else if eq $name "SMTP_PASSWORD" }}
+                  optional: {{ not $smtpPasswordRequired }}
                   {{- end }}
+              {{- end }}
             {{- end }}
           resources:
             {{- toYaml .Values.migrations.resources | nindent 12 }}

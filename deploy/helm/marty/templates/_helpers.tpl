@@ -76,6 +76,71 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- end -}}
 {{- end -}}
 
+{{- define "marty.keycloakBoolean" -}}
+{{- $value := lower (.value | default .default | toString) -}}
+{{- if has $value (list "true" "1" "yes" "y" "on") -}}
+true
+{{- else if has $value (list "false" "0" "no" "n" "off") -}}
+false
+{{- else -}}
+{{- fail (printf "config.%s must be a supported boolean (true/false, 1/0, yes/no, y/n, on/off)" .name) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "marty.keycloakSmtpPasswordRequired" -}}
+{{- $host := coalesce (get . "KEYCLOAK_SMTP_HOST") (get . "SMTP_HOST") "" -}}
+{{- $username := coalesce (get . "KEYCLOAK_SMTP_USERNAME") (get . "SMTP_USERNAME") "" -}}
+{{- and (not (empty $host)) (not (empty $username)) -}}
+{{- end -}}
+
+{{- define "marty.validateCustomerConfiguration" -}}
+{{- $root := .root -}}
+{{- $cfg := .config -}}
+{{- if ne $root.Values.organization.id (lower $root.Values.organization.id) -}}
+{{- fail "organization.id must use the lowercase canonical UUID spelling so all services select the same tenant; inspect retained tenant records before changing an existing installation" -}}
+{{- end -}}
+{{- if ne $cfg.MARTY_ORG_ID $root.Values.organization.id -}}
+{{- fail "config.MARTY_ORG_ID must match organization.id; select the organization through organization.id so generated callbacks use the same identity" -}}
+{{- end -}}
+{{- if ne $cfg.MARTY_ORG_SLUG $root.Values.organization.slug -}}
+{{- fail "config.MARTY_ORG_SLUG must match organization.slug; select the organization through organization.slug so its default issuer DID uses the same identity" -}}
+{{- end -}}
+{{- if ne $cfg.KEYCLOAK_REALM "11id" -}}
+{{- fail "config.KEYCLOAK_REALM must be 11id; this chart imports and probes the 11id realm" -}}
+{{- end -}}
+{{- if $root.Values.keycloak.configurator.enabled -}}
+{{- $login := dict -}}
+{{- range $name, $default := dict "KEYCLOAK_USER_REGISTRATION_ENABLED" "true" "KEYCLOAK_VERIFY_EMAIL" "false" "KEYCLOAK_RESET_PASSWORD_ENABLED" "true" "KEYCLOAK_SOCIAL_LOGIN_ENABLED" "true" "KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED" "false" -}}
+{{- $_ := set $login $name (include "marty.keycloakBoolean" (dict "name" $name "value" (get $cfg $name) "default" $default)) -}}
+{{- end -}}
+{{- $smtpHost := coalesce (get $cfg "KEYCLOAK_SMTP_HOST") (get $cfg "SMTP_HOST") "" -}}
+{{- /* An upgrade may preserve customer SMTP already stored in the realm. */ -}}
+{{- if and $root.Release.IsInstall (empty $smtpHost) (or (eq $login.KEYCLOAK_VERIFY_EMAIL "true") (eq $login.KEYCLOAK_RESET_PASSWORD_ENABLED "true")) -}}
+{{- fail "new installations enabling email verification or password reset require config.KEYCLOAK_SMTP_HOST or config.SMTP_HOST; upgrades can preserve SMTP already configured in the realm" -}}
+{{- end -}}
+{{- if not (empty $smtpHost) -}}
+{{- $smtpPort := coalesce (get $cfg "KEYCLOAK_SMTP_PORT") (get $cfg "SMTP_PORT") "1025" | toString -}}
+{{- if or (not (regexMatch "^[0-9]{1,5}$" $smtpPort)) (lt (atoi $smtpPort) 1) (gt (atoi $smtpPort) 65535) -}}
+{{- fail "SMTP port must be between 1 and 65535; set config.KEYCLOAK_SMTP_PORT or config.SMTP_PORT" -}}
+{{- end -}}
+{{- $smtpFrom := coalesce (get $cfg "KEYCLOAK_SMTP_FROM") (get $cfg "SMTP_FROM") "" -}}
+{{- if or (empty $smtpFrom) (not (regexMatch "^[^[:space:]@]+@[^[:space:]@]+$" $smtpFrom)) -}}
+{{- fail "SMTP requires an explicit sender email in config.KEYCLOAK_SMTP_FROM or config.SMTP_FROM" -}}
+{{- end -}}
+{{- $sslKey := ternary "KEYCLOAK_SMTP_SSL" "SMTP_SSL" (not (empty (get $cfg "KEYCLOAK_SMTP_SSL"))) -}}
+{{- $starttlsKey := ternary "KEYCLOAK_SMTP_STARTTLS" "SMTP_STARTTLS" (not (empty (get $cfg "KEYCLOAK_SMTP_STARTTLS"))) -}}
+{{- $ssl := include "marty.keycloakBoolean" (dict "name" $sslKey "value" (get $cfg $sslKey) "default" "false") -}}
+{{- $starttls := include "marty.keycloakBoolean" (dict "name" $starttlsKey "value" (get $cfg $starttlsKey) "default" "false") -}}
+{{- if and (eq $ssl "true") (eq $starttls "true") -}}
+{{- fail "SMTP cannot enable SSL and STARTTLS together; select the transport required by the mail provider" -}}
+{{- end -}}
+{{- if and (eq (include "marty.keycloakSmtpPasswordRequired" $cfg) "true") (eq $ssl "false") (eq $starttls "false") -}}
+{{- fail "authenticated SMTP requires SSL or STARTTLS; configure the encrypted transport required by the mail provider" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "marty.configData" -}}
 {{- $host := include "marty.publicHost" . -}}
 {{- $email := required "organization.adminEmail must identify the installation operator" .Values.organization.adminEmail -}}
@@ -116,6 +181,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | quote }}
 {{- $_ := set $cfg "OIDC_POST_LOGOUT_REDIRECT_URI" $origin -}}
 {{- $_ := set $cfg "FLOW_CALLBACK_DESTINATIONS" (printf "%s|http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__" .Values.organization.id) -}}
 {{- $cfg = mergeOverwrite $cfg .Values.config -}}
+{{- include "marty.validateCustomerConfiguration" (dict "root" . "config" $cfg) -}}
 {{- range $key, $value := $cfg }}
 {{ $key }}: {{ $value | toString | quote }}
 {{- end -}}
