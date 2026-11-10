@@ -326,10 +326,51 @@ value against the actual submitted request. Focused component cases cover native
 value precedence, falsy values, missing values, structured values, and escaped
 markup. **18 tests passed across two suites**; targeted production ESLint and
 `git diff --check` passed. Two independent source reviews found no blockers.
-These results qualify the source change. The connected browser reached the live
-registration form, but Chrome blocked further automation while another
-extension interface was open. Authenticated replay and deployment of this
-follow-up remain pending; no new account was submitted during that attempt.
+The follow-up was subsequently applied to the resumed AWS development instance.
+All nine UI/locale/test files passed before/after digest checks and retained
+their file modes and ownership. The same **18 tests passed across two suites on
+AWS in 33.86 seconds**. The existing installation completed its serving-origin
+rollout; HTTPS certificate validation succeeded, and the UI client's callback,
+web-origin, and logout settings were verified with PKCE S256 preserved. Existing
+accounts, backend images, and the issuer DID were retained.
+
+The connected browser reached the new origin's normal sign-in page. Chrome then
+blocked the Register interaction because another extension interface was open.
+Authenticated browser replay remains pending; no new account was submitted.
+
+### Mobile navigation and template editing follow-up
+
+Source review while the live browser was blocked identified five further UX
+defects. These corrections are published in PR #1876 at `3a2cc814`.
+
+| Area | Defect | Correction and regression coverage |
+| --- | --- | --- |
+| Mobile menu content | A saved collapsed desktop preference hid mobile labels, child links, and Sign out, without a mobile expand control | Mobile always renders the expanded menu while retaining the desktop preference. Tests cover the desktop-to-phone-to-desktop transition |
+| Mobile navigation | Selecting a destination left the drawer covering the new page | Destination selections close the drawer, including nested and current-route links and console switching. Expanding a section keeps it open; tests check actual drawer visibility and destination content |
+| Application Template validity | Clearing the field or entering zero displayed 30 while retaining an invalid value for submission; the input's maximum was also too small | The field retains the editable draft, validates the native whole-number range of 1–3650 days, and submits the exact validated number. Tests cover create/update boundaries, empty correction, invalid values, and a loaded zero |
+| Credential claim presets | Changing Required mutated the shared preset, so selecting it again retained the previous edit | Applying a preset clones its claims and toggling Required updates the selected claim immutably. Tests cover preset switching, a new wizard instance, and frozen parent data |
+| Credential Template validity | The editing step, Review, and submitted request could show or use different durations | One resolver supplies editable drafts, validation, Review, and numeric native day/offset fields. Invalid values block Next, Skip, and final submission. Review also shows the signed offset; a complete-wizard test compares displayed values with the actual create request |
+
+The credential validity correction retains native alias precedence, whole-day
+rounding, signed `i32` offsets, and the existing independence of default and
+maximum validity. It does not add an ordering restriction absent from the native
+contract. Four validation messages were added in each of the six console locales;
+semantic comparison confirmed no unrelated message changes.
+
+The combined local run passed **98 tests across nine suites in 36.47 seconds**.
+The production TypeScript check passed, targeted production ESLint reported
+**zero errors and seven pre-existing warnings**, and whitespace checks passed.
+Each functional delta cleared two independent peer reviews. All 20 published
+file blobs and the complete source tree were verified against the reviewed local
+commit; the published tree is `8d12fc713a75c0a9f0eba5450a08384f450b5ad6`.
+
+**AWS deployment and browser replay of this new batch remain pending.** The
+browser connection became unavailable before the prepared CloudShell apply
+command could run. The 18-test AWS result above applies to the preceding policy
+summary revision, not this 98-test batch. The source replay is prepared with
+all-file preflight checks, private backups, and preservation of file metadata;
+it must be executed and verified after browser access returns. No authenticated
+click-through or deployed pass is claimed for these five new corrections.
 
 ### Installed backend and remaining flows
 
