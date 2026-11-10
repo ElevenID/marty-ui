@@ -3106,7 +3106,8 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(second);
-        contract.registry["services"][0]["credential_formats"] = json!(["ICAO_EMRTD"]);
+        // Service capabilities use the canonical wire format; profiles use the native enum.
+        contract.registry["services"][0]["credential_formats"] = json!(["icao_emrtd"]);
         contract.registry["services"][0]["key_purposes"] = json!(["x509_doc_signer"]);
         contract.registry["key_reference_purposes"]["service-1"] =
             json!({"issuer-key": ["x509_doc_signer"], "other-key": ["x509_doc_signer"]});

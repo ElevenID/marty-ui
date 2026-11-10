@@ -140,6 +140,9 @@ pub struct PresentationEvaluationRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationEvaluationResult {
     pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
+    /// Actual Policy-owned observation time, never a Flow completion clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_timestamp: Option<String>,
     pub result: String,
     pub decision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

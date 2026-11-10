@@ -135,7 +135,9 @@ async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_re
     let authority = presentation_snapshot::authority("org-1");
     let mut managed = instance(false);
     managed.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"] = json!(authority);
-    let (ports, seen) = providers(Ok(allowed()));
+    let mut evaluation = allowed();
+    evaluation.evaluation_timestamp = Some(now().to_rfc3339());
+    let (ports, seen) = providers(Ok(evaluation));
     let mut wallet = input("header.payload.signature");
     wallet.presentation_submission = None;
     prepare_verification_submission(
@@ -164,6 +166,7 @@ async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_re
 
 fn allowed() -> PresentationEvaluationResult {
     PresentationEvaluationResult {
+        evaluation_timestamp: None,
         policy_revision: presentation_snapshot::revision("policy-1"),
         authentication_diagnostic: None,
         result: "passed".into(),
@@ -222,6 +225,594 @@ fn input(token: &str) -> VerificationSubmissionInput {
         state: Some("state-1".into()),
         audience_override: None,
     }
+}
+
+async fn receipt_preparation(allow: bool) -> marty_flow::PreparedVerificationFinalization {
+    let mut evaluation = allowed();
+    evaluation.evaluation_timestamp = Some((now() + Duration::seconds(2)).to_rfc3339());
+    if !allow {
+        evaluation.result = "failed".into();
+        evaluation.decision = "deny".into();
+        evaluation.decision_reason = Some("requirements not satisfied".into());
+    }
+    let (ports, _) = providers(Ok(evaluation));
+    match prepare_verification_submission(
+        &ports,
+        instance(true),
+        input("header.payload.signature"),
+        &options(Some("0123456789abcdef0123456789abcdef")),
+        now(),
+    )
+    .await
+    .unwrap()
+    {
+        PreparedVerificationSubmission::Final(prepared) => *prepared,
+        other => panic!("expected terminal preparation: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn receipt_records_separate_owner_and_consumption_clocks_only_after_commit() {
+    use marty_oid4vp_contract::{
+        digest_domain_json, FLOW_REQUEST_BINDING_DIGEST_DOMAIN, VERIFICATION_RECEIPT,
+    };
+    let prepared = receipt_preparation(true).await;
+    assert!(prepared
+        .instance
+        .result
+        .as_ref()
+        .unwrap()
+        .get(VERIFICATION_RECEIPT)
+        .is_none());
+    assert!(prepared
+        .callback
+        .as_ref()
+        .unwrap()
+        .payload
+        .get(VERIFICATION_RECEIPT)
+        .is_none());
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    repository
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let consumed_at = now() + Duration::seconds(8);
+    let committed = repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from(consumed_at.timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let receipt = committed.receipt();
+    assert_eq!(
+        receipt.policy_evaluated_at_epoch_micros,
+        (now() + Duration::seconds(2)).timestamp_micros()
+    );
+    assert_eq!(
+        receipt.nonce_consumed_at_epoch_micros,
+        consumed_at.timestamp_micros()
+    );
+    assert_eq!(
+        receipt.request_binding_digest,
+        digest_domain_json(
+            FLOW_REQUEST_BINDING_DIGEST_DOMAIN,
+            &prepared.expected_instance
+        )
+        .unwrap()
+    );
+    assert_ne!(
+        receipt.request_binding_digest,
+        digest_domain_json(FLOW_REQUEST_BINDING_DIGEST_DOMAIN, &prepared.instance).unwrap()
+    );
+    let serialized = serde_json::to_value(receipt).unwrap();
+    assert_eq!(
+        committed.instance().result.as_ref().unwrap()[VERIFICATION_RECEIPT],
+        serialized
+    );
+    let callback = repository.callback(&prepared.instance.id).unwrap().unwrap();
+    assert_eq!(callback.payload[VERIFICATION_RECEIPT], serialized);
+    receipt.validate_callback(&callback.payload).unwrap();
+    let projected = committed.instance().verification_projection().unwrap();
+    assert_eq!(projected.verification_receipt.as_ref(), Some(receipt));
+    assert_eq!(
+        projected.evaluation_timestamp.as_deref(),
+        Some("2026-08-20T12:00:02.000000Z")
+    );
+    let wire = serde_json::to_string(receipt).unwrap();
+    for secret in [
+        "header.payload.signature",
+        "nonce-with-at-least-32-bytes",
+        "Avery",
+        "user-1",
+        "must-be-removed",
+    ] {
+        assert!(!wire.contains(secret), "receipt leaked {secret}");
+    }
+}
+
+#[tokio::test]
+async fn receipt_recovery_preserves_the_original_record_after_retention_expiry() {
+    let prepared = receipt_preparation(true).await;
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    repository
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let committed = repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    let receipt = committed.receipt().clone();
+    assert!(repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::hours(1)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .is_none());
+    let (ports, seen) = providers(Err(FlowProviderError::PolicyRevisionMismatch));
+    let recovered = prepare_verification_submission(
+        &ports,
+        committed.instance().clone(),
+        input("header.payload.signature"),
+        &options(None),
+        now() + Duration::hours(1),
+    )
+    .await
+    .unwrap();
+    let PreparedVerificationSubmission::SameTerminal(recovered) = recovered else {
+        panic!("expected persisted recovery")
+    };
+    assert_eq!(recovered.verification_receipt, Some(receipt));
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(matches!(
+        prepare_verification_submission(
+            &ports,
+            committed.instance().clone(),
+            input("different.signed.token"),
+            &options(None),
+            now() + Duration::hours(1),
+        )
+        .await
+        .unwrap(),
+        PreparedVerificationSubmission::ReplayConflict
+    ));
+}
+
+#[tokio::test]
+async fn receipt_race_commits_one_result_and_a_denial_receipt_cannot_change_its_decision() {
+    let allowed = receipt_preparation(true).await;
+    let denied = receipt_preparation(false).await;
+    let repository = Arc::new(marty_flow::InMemoryFlowRepository::default());
+    repository
+        .save_instance(allowed.expected_instance.kernel().unwrap())
+        .unwrap();
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let handles = [allowed, denied].map(|prepared| {
+        let repository = Arc::clone(&repository);
+        let barrier = Arc::clone(&barrier);
+        std::thread::spawn(move || {
+            barrier.wait();
+            repository
+                .finalize_verification_with_receipt(
+                    &prepared,
+                    u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+                )
+                .unwrap()
+        })
+    });
+    barrier.wait();
+    let outcomes = handles.map(|handle| handle.join().unwrap());
+    assert_eq!(
+        outcomes.iter().filter(|outcome| outcome.is_some()).count(),
+        1
+    );
+    let committed = outcomes.into_iter().flatten().next().unwrap();
+    let callback = repository
+        .callback(&committed.instance().id)
+        .unwrap()
+        .unwrap();
+    committed
+        .receipt()
+        .validate_callback(&callback.payload)
+        .unwrap();
+    assert_eq!(
+        callback.payload["decision"],
+        committed.instance().result.as_ref().unwrap()["decision"]
+    );
+    assert_eq!(
+        repository
+            .instance(&committed.instance().id)
+            .unwrap()
+            .unwrap()
+            .result,
+        committed.instance().result
+    );
+
+    let denial = receipt_preparation(false).await;
+    let denial_repository = marty_flow::InMemoryFlowRepository::default();
+    denial_repository
+        .save_instance(denial.expected_instance.kernel().unwrap())
+        .unwrap();
+    let committed = denial_repository
+        .finalize_verification_with_receipt(
+            &denial,
+            u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(committed.instance().status, FlowInstanceStatus::Failed);
+    assert_eq!(
+        committed.instance().result.as_ref().unwrap()["decision"],
+        "deny"
+    );
+}
+
+#[tokio::test]
+async fn prepared_receipt_rejects_every_mutated_binding_before_any_write() {
+    let prepared = receipt_preparation(true).await;
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    repository
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let consumed_ms = u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap();
+    for mutation in 0..11 {
+        let mut changed = prepared.clone();
+        match mutation {
+            0 => {
+                changed.expected_instance.context["verification_audience"] =
+                    json!("different-audience")
+            }
+            1 => changed.expected_instance.updated_at += Duration::microseconds(1),
+            2 => changed.instance.result.as_mut().unwrap()["decision"] = json!("deny"),
+            3 => changed.instance.organization_id = "other-org".into(),
+            4 => changed.nonce_digest = "b".repeat(64),
+            5 => changed.submission_digest = "c".repeat(64),
+            6 => changed.replay_expires_at_ms += 1_000,
+            7 => {
+                changed.callback.as_mut().unwrap().payload["verified_claims"] =
+                    json!({"given_name":"replacement"})
+            }
+            8 => {
+                changed.callback.as_mut().unwrap().reply_to =
+                    Some("https://other.example/callback".into())
+            }
+            9 => {
+                changed.instance.result.as_mut().unwrap()["evaluation_timestamp"] =
+                    json!("2026-08-20T12:00:03.000000Z")
+            }
+            _ => {
+                changed.expected_instance.context[presentation_snapshot::SNAPSHOT_KEY]
+                    ["dcql_query"]["credentials"][0]["id"] = json!("other-query")
+            }
+        }
+        assert!(
+            repository
+                .finalize_verification_with_receipt(&changed, consumed_ms)
+                .is_err(),
+            "mutation {mutation}"
+        );
+        assert!(repository
+            .callback(&prepared.instance.id)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            repository.instance(&prepared.instance.id).unwrap(),
+            Some(prepared.expected_instance.kernel().unwrap())
+        );
+    }
+    assert!(repository
+        .finalize_verification_with_receipt(&prepared, consumed_ms)
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn changed_row_or_expired_session_does_not_consume_receipt_authority() {
+    let prepared = receipt_preparation(true).await;
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    let expected = prepared.expected_instance.kernel().unwrap();
+    let mut changed = expected.clone();
+    changed.context["extra_request_state"] = json!("changed");
+    repository.save_instance(changed.clone()).unwrap();
+    assert!(repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .callback(&prepared.instance.id)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        repository.instance(&prepared.instance.id).unwrap(),
+        Some(changed)
+    );
+    repository.save_instance(expected.clone()).unwrap();
+    assert!(repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::minutes(15)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .callback(&prepared.instance.id)
+        .unwrap()
+        .is_none());
+    // A rejected clock observation is not persisted as a receipt or nonce.
+    assert!(repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::seconds(1)).timestamp_millis()).unwrap(),
+        )
+        .is_err());
+    assert!(repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn receipt_readback_rejects_digest_consistent_scope_and_result_substitution() {
+    use marty_oid4vp_contract::{FlowVerificationReceiptV1, VERIFICATION_RECEIPT};
+    let prepared = receipt_preparation(true).await;
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    repository
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let committed = repository
+        .finalize_verification_with_receipt(
+            &prepared,
+            u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    for mutation in 0..5 {
+        let mut changed = committed.instance().clone();
+        if mutation < 2 {
+            let mut receipt: FlowVerificationReceiptV1 = serde_json::from_value(
+                changed.result.as_ref().unwrap()[VERIFICATION_RECEIPT].clone(),
+            )
+            .unwrap();
+            if mutation == 0 {
+                receipt.organization_id = "other-org".into();
+            } else {
+                receipt.flow_instance_id = "other-instance".into();
+            }
+            receipt.receipt_digest = receipt.recompute_digest().unwrap();
+            changed.result.as_mut().unwrap()[VERIFICATION_RECEIPT] = json!(receipt);
+        } else if mutation == 2 {
+            changed.result.as_mut().unwrap()["decision"] = json!("deny");
+        } else if mutation == 3 {
+            changed.context["nonce"] = json!("other-nonce");
+        } else {
+            changed.result.as_mut().unwrap()["evaluation_timestamp"] =
+                json!("2026-08-20T12:00:08.000000Z");
+        }
+        assert!(
+            changed.verification_projection().is_err(),
+            "mutation {mutation}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn managed_receipt_requires_real_owner_time_and_legacy_results_keep_omission() {
+    let (ports, _) = providers(Ok(allowed()));
+    let mut managed = instance(false);
+    managed.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"] =
+        json!(presentation_snapshot::authority("org-1"));
+    assert!(matches!(
+        prepare_verification_submission(
+            &ports,
+            managed,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "policy_evaluation_timestamp"
+        ))
+    ));
+    let legacy = prepare_verification_submission(
+        &ports,
+        instance(false),
+        input("header.payload.signature"),
+        &options(None),
+        now(),
+    )
+    .await
+    .unwrap();
+    let PreparedVerificationSubmission::Final(legacy) = legacy else {
+        panic!("expected legacy preparation")
+    };
+    assert!(legacy
+        .instance
+        .verification_projection()
+        .unwrap()
+        .verification_receipt
+        .is_none());
+    for timestamp in [
+        "",
+        "not-a-time",
+        "1970-01-01T00:00:00Z",
+        "2026-08-20T12:00:02.000000001Z",
+    ] {
+        let mut evaluation = allowed();
+        evaluation.evaluation_timestamp = Some(timestamp.into());
+        let (ports, _) = providers(Ok(evaluation));
+        assert!(
+            matches!(
+                prepare_verification_submission(
+                    &ports,
+                    instance(false),
+                    input("header.payload.signature"),
+                    &options(None),
+                    now(),
+                )
+                .await,
+                Err(FlowVerificationSubmissionError::InvalidClock)
+            ),
+            "timestamp {timestamp}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_finalization_cannot_sign_or_store_a_caller_supplied_receipt() {
+    use marty_oid4vp_contract::VERIFICATION_RECEIPT;
+    let prepared = receipt_preparation(true).await;
+    let source = marty_flow::InMemoryFlowRepository::default();
+    source
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let now_ms = u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap();
+    let committed = source
+        .finalize_verification_with_receipt(&prepared, now_ms)
+        .unwrap()
+        .unwrap();
+    for attach_to_callback in [false, true] {
+        let repository = marty_flow::InMemoryFlowRepository::default();
+        let expected = prepared.expected_instance.kernel().unwrap();
+        repository.save_instance(expected.clone()).unwrap();
+        let mut terminal = prepared.instance.kernel().unwrap();
+        let mut callback = prepared.callback.clone().unwrap();
+        if attach_to_callback {
+            callback.payload[VERIFICATION_RECEIPT] = json!(committed.receipt());
+        } else {
+            terminal.result.as_mut().unwrap()[VERIFICATION_RECEIPT] = json!(committed.receipt());
+        }
+        assert!(matches!(
+            repository.finalize_verification(
+                terminal,
+                &prepared.nonce_digest,
+                prepared.replay_expires_at_ms,
+                &expected,
+                Some(callback),
+                now_ms,
+            ),
+            Err(marty_flow::RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert_eq!(repository.instance(&expected.id).unwrap(), Some(expected));
+        assert!(repository
+            .callback(&prepared.instance.id)
+            .unwrap()
+            .is_none());
+        assert!(repository
+            .finalize_verification_with_receipt(&prepared, now_ms)
+            .unwrap()
+            .is_some());
+    }
+}
+
+#[tokio::test]
+async fn generic_writers_cannot_store_even_a_digest_consistent_receipt() {
+    use marty_flow::{
+        ApplicationEventReceipt, InMemoryFlowRepository, PlannedApplicationFlow,
+        PlannedApplicationFlowRecord, PostgresFlowRepository, RepositoryError,
+    };
+    use marty_oid4vp_contract::VERIFICATION_RECEIPT;
+
+    let prepared = receipt_preparation(true).await;
+    let source = InMemoryFlowRepository::default();
+    source
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let now_ms = u64::try_from((now() + Duration::seconds(8)).timestamp_millis()).unwrap();
+    let committed = source
+        .finalize_verification_with_receipt(&prepared, now_ms)
+        .unwrap()
+        .unwrap();
+    let receipt = serde_json::to_value(committed.receipt()).unwrap();
+    let event = ApplicationEventReceipt {
+        event_id_sha256: "a".repeat(64),
+        payload_sha256: "b".repeat(64),
+        organization_id: "org-1".into(),
+        application_id: "application-1".into(),
+        flow_plan: vec![],
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+    };
+    // A lazy disconnected pool proves these writes reject caller receipts
+    // before issuing SQL, even when the supplied receipt is internally valid.
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://localhost:1/flow_test")
+        .unwrap();
+    let postgres = PostgresFlowRepository::new(pool);
+    for attach_to_context in [false, true] {
+        let mut candidate = committed.instance().clone();
+        if attach_to_context {
+            candidate.result = None;
+            candidate.context[VERIFICATION_RECEIPT] = receipt.clone();
+        }
+        let kernel = candidate.kernel().unwrap();
+        let memory = InMemoryFlowRepository::default();
+        assert!(matches!(
+            memory.save_instance(kernel.clone()),
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert!(matches!(
+            memory.reserve_application_event_plan(
+                event.clone(),
+                vec![PlannedApplicationFlow {
+                    instance: kernel,
+                    plan_entry: Default::default(),
+                }],
+            ),
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert!(memory.instance(&candidate.id).unwrap().is_none());
+        assert!(matches!(
+            postgres.save_instance(&candidate).await,
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert!(matches!(
+            postgres.save_started_instance(&candidate, None).await,
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert!(matches!(
+            postgres
+                .compare_and_swap_instance(
+                    &candidate,
+                    prepared.expected_instance.status,
+                    prepared.expected_instance.updated_at,
+                )
+                .await,
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+        assert!(matches!(
+            postgres
+                .reserve_application_event_plan(
+                    event.clone(),
+                    &[PlannedApplicationFlowRecord {
+                        instance: candidate,
+                        plan_entry: Default::default(),
+                    }],
+                )
+                .await,
+            Err(RepositoryError::InvalidVerificationReceipt)
+        ));
+    }
+    // The original owner-created record remains recoverable without any
+    // generic write or a second nonce consumption.
+    assert_eq!(
+        committed
+            .instance()
+            .verification_projection()
+            .unwrap()
+            .verification_receipt
+            .as_ref(),
+        Some(committed.receipt())
+    );
 }
 
 #[tokio::test]

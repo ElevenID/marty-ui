@@ -976,7 +976,11 @@ fn proto_result(record: &FlowInstanceRecord) -> Result<FlowResultResponse, Statu
             .unwrap_or_default()
             .into(),
         verified_claims,
-        evaluation_timestamp: timestamp(record.completed_at),
+        evaluation_timestamp: object
+            .and_then(|value| value.get("evaluation_timestamp"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| timestamp(record.completed_at)),
     })
 }
 

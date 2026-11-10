@@ -199,6 +199,7 @@ pub fn prepare_siop_submission(
     Ok(PreparedSiopSubmission::Final(Box::new(
         PreparedSiopFinalization {
             finalization: PreparedVerificationFinalization {
+                receipt_input: None,
                 instance,
                 expected_instance,
                 nonce_digest: sha256_hex(expected_nonce.as_bytes()),
