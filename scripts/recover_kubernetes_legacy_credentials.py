@@ -452,7 +452,7 @@ def recover_locked(args: argparse.Namespace) -> None:
 
         phase()
         transport.execute(pod, ["/bin/sh", "-ec",
-            'umask 077; for path in "$@"; do mkdir "$path"; chmod 700 "$path"; done', "--",
+            'umask 077; for path in "$@"; do mkdir "$path"; chmod u=rwx,go=,a-s,a-t "$path"; done', "--",
             inspection.REMOTE_PUBLIC, inspection.REMOTE_CURRENT, inspection.REMOTE_IDENTITY,
             inspection.REMOTE_OPERATION, REMOTE_STAGE, REMOTE_QUALIFICATION])
         remote_ready = True

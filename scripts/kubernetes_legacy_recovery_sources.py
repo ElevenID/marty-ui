@@ -43,6 +43,7 @@ SOURCE_FILES = (
     "scripts/installer_startup_continuation.py",
     "scripts/installer_startup_observation.py",
     "scripts/installer_startup_process.py",
+    "scripts/kubernetes_application_state.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
     "scripts/passport_remote_tls.py",
     "scripts/prepare_kubernetes_helm_values.py",

@@ -23,6 +23,7 @@ from test_inspect_kubernetes_legacy_credentials import (
     flow, archive, ROOT_TOKEN, RECOVERY_KEY, KUBECONFIG_KEY, POD_UID,
 )
 import bootstrap_kubernetes_openbao as bootstrap
+from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
 import inspect_kubernetes_legacy_credentials as inspection
 import recover_kubernetes_legacy_credentials as recovery
 
@@ -277,6 +278,13 @@ def state_snapshot(item):
 
 def activate(item):
     item.args.stage_only, item.args.activate_existing_secrets = False, True
+
+
+def test_recovery_private_directories_clear_inherited_setgid(recovery_flow, tmp_path, monkeypatch):
+    commands = capture_private_directory_commands(monkeypatch, bootstrap.Transport)
+    recovery.recover(recovery_flow.args)
+    assert len(commands) == 1
+    assert_private_directory_command(commands[0], tmp_path)
 
 
 def test_stage_only_authenticates_qualifies_exports_and_never_patches(recovery_flow, capsys):

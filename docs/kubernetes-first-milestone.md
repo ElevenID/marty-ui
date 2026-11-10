@@ -19,6 +19,8 @@ qualification or admit a release to the consumer installation channel.
 | Workload signing keys, certificates and scoped tokens | Existing native Marty producers and the OpenBao CLI |
 | Application credential publication | Existing native Secret publisher and ordinary `kubectl apply` |
 | Ordinary token replacement authority and candidate staging | Existing native AppRole, OpenBao token roles and credential-generation commands |
+| Workload TLS and Keycloak renewal candidate staging | Existing Renewal AppRole, signed native producers and immutable generation verifier |
+| Credential activation and workload replacement | Conditional Kubernetes Secret updates, Deployment controllers and private delivery checks |
 | Release verification | Existing inventory validation, pinned `gh` and `cosign` verifiers |
 | Trial shutdown | A systemd timer with an absolute UTC deadline |
 
@@ -166,7 +168,8 @@ the two pinned verifiers, Helm, and the pinned chart archive. The bootstrap
 performs the full shared verification again before writing to the cluster.
 
 The authenticated `marty-deploy` must support the read-only
-`kubernetes-secrets-contract` and `kubernetes-application-token-contract`
+`kubernetes-secrets-contract`, `kubernetes-application-token-contract` and
+`kubernetes-renewal-contract`
 commands. Before selecting the Kubernetes context or creating any resource,
 bootstrap compares their compiled contracts with this checkout's
 `deploy-config/catalog/kubernetes-secrets.json` and
@@ -178,6 +181,7 @@ no credential values and requires no repository, kubeconfig or credentials:
 ```sh
 /absolute/path/to/authenticated/marty-deploy kubernetes-secrets-contract
 /absolute/path/to/authenticated/marty-deploy kubernetes-application-token-contract
+/absolute/path/to/authenticated/marty-deploy kubernetes-renewal-contract
 ```
 
 An unsupported command, malformed contract or different mapping stops bootstrap
@@ -268,6 +272,10 @@ Keep the original signed artifact closure and pinned verifiers available.
 The adapter reauthenticates them and requires the same runtime and chart
 identities as the original bootstrap. It takes the namespace, kubeconfig,
 current credentials and application identity from that retained state.
+Staging holds the same private state-directory lock as activation and resolves
+the verified current-generation selector. Until the first activation, that
+selection is the original bootstrap credentials. A pending activation blocks
+fresh staging until the same attempt is reconciled.
 The current runtime tokens must still pass OpenBao lookup; stage before their
 expiry. Recovery after expiry is not implemented by this command.
 
@@ -314,12 +322,20 @@ adapter does not extend that deadline or treat retained pod memory as durable
 storage. Recover available evidence promptly and never replay uncertain
 enrollment or issuance.
 
-Live activation remains a separate step requiring Kubernetes resource-version
-preconditions, ordinary Secret updates and bounded rollout status checks.
-Workload TLS and Keycloak renewal must also be connected before claiming
-operation beyond the original development credential lifetime. The ordinary
-token candidate alone does not extend those certificates or KMS tokens, install
-a renewal schedule, or qualify a production upgrade.
+After application installation and successful migrations, use the explicit
+[application activation command](kubernetes-application-activation.md). It uses
+fresh native candidate proof, one UID/resourceVersion-conditioned ordinary
+Secret update, native Deployment rollouts and private credential-delivery checks
+before selecting the generation for the next staging cycle.
+Fresh bootstrap also enrolls the existing scoped Renewal AppRole. Use the
+[TLS and Keycloak renewal staging command](kubernetes-renewal-staging.md) to
+prepare a private candidate for those 39 replacements while preserving the full
+selected generation. The [Renewal activation command](kubernetes-renewal-activation.md)
+uses conditional updates to the 33 existing destinations and verifies the selected
+Deployment rollouts and credential delivery. Authenticated workload acceptance
+remains a separate gate.
+The ordinary token candidate alone does not extend those certificates or KMS
+tokens, install a renewal schedule, or qualify a production upgrade.
 
 If bootstrap stops, retain its namespace and private state and diagnose the
 reported step. Do not rerun initialization with a new output path against the
@@ -485,11 +501,21 @@ actual isolated installation with all of the following evidence:
 The current native development workload identities last **eight hours**. The
 migration-only bootstrap token lasts **two hours**. This milestone does not
 install unattended application identity renewal; cert-manager renews the public
-ingress certificate separately. The scoped tokens are **nonrenewable**. Keeping
-the application running requires a future replacement-credential workflow using
-the existing native producers, with activation qualified separately. This
-startup change adds no renewal workflow. Do not extend credentials or disable
-their checks to hide expiration.
+ingress certificate separately. Ordinary application replacement tokens are
+**nonrenewable**. The existing TLS and Keycloak Renewal producers may issue
+renewable scoped orphan tokens, still bounded by their absolute eight-hour cap.
+Keeping the application running requires replacement credentials before expiration.
+The explicit ordinary-token staging and
+[activation commands](kubernetes-application-activation.md) reuse the existing
+native producer and Kubernetes APIs. They do not renew workload TLS or Keycloak
+credentials, recover expired identities, or install unattended scheduling. Their
+complete live application flow still requires the acceptance evidence above.
+The separate [TLS and Keycloak staging command](kubernetes-renewal-staging.md)
+prepares a private candidate; the [Renewal activation command](kubernetes-renewal-activation.md)
+installs it through the existing Secret owners and Deployment controllers. Both
+credential families preserve one shared current generation and separate activation
+markers. Authenticated runtime consumption and live AWS acceptance remain required.
+Do not extend credentials or disable their checks to hide expiration.
 
 Reboot testing here establishes recovery on the same single node. It does not
 establish high availability, node replacement, backup restoration, multi-node
