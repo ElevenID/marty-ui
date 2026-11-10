@@ -35,7 +35,12 @@ vi.mock('react-router', async () => ({
 }));
 vi.mock('@mui/material', async () => ({
   ...await vi.importActual<typeof import('@mui/material')>('@mui/material'),
-  useMediaQuery: () => state.mobile,
+  useMediaQuery: (query: string) => {
+    // Header lifecycle callers use the inline switcher on wider mobile screens.
+    const viewportWidth = state.mobile ? 768 : 1280;
+    const maximum = query.match(/max-width:\s*([\d.]+)px/)?.[1];
+    return maximum !== undefined && viewportWidth <= Number(maximum);
+  },
 }));
 
 function deferred<T>() {
