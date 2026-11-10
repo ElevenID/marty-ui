@@ -45,7 +45,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
       - name: Require valid eligible nightly source before admission
@@ -81,7 +81,7 @@ jobs:
             echo "tag=$tag"
             echo "version=$(jq -er .claim.version "$root/plan.json")"
           } >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: nightly-admitted-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-claim/
@@ -113,7 +113,7 @@ jobs:
         run: |
           python3 ".github/scripts/private-forks.py" check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -161,7 +161,7 @@ jobs:
           subject-name: ${{ matrix.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Sign and record exact image identity
         env:
           ROLE: ${{ matrix.role }}
@@ -178,13 +178,13 @@ jobs:
             --arg source_sha "$GITHUB_SHA" --arg version "$VERSION" --arg run_id "$GITHUB_RUN_ID" \
             '{role:$role,uri:$uri,digest:$digest,source_sha:$source_sha,version:$version,run_id:$run_id}' \
             > "$RUNNER_TEMP/image-evidence/image.json"
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
           format: cyclonedx-json
           output-file: ${{ runner.temp }}/image-evidence/${{ matrix.role }}.sbom.cdx.json
           upload-artifact: false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: nightly-image-${{ matrix.role }}-${{ github.run_id }}
           path: ${{ runner.temp }}/image-evidence/
@@ -212,10 +212,10 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           python3 ".github/scripts/private-forks.py" check
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           targets: x86_64-unknown-linux-musl
@@ -264,7 +264,7 @@ jobs:
             --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
             --output "$RUNNER_TEMP/nightly-native.zip")"
           printf 'sha256=%s\n' "$sha256" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         id: native_artifact
         with:
           name: nightly-native-${{ github.run_id }}-${{ github.run_attempt }}
@@ -287,15 +287,15 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: nightly-admitted-${{ github.run_id }}
           path: ${{ runner.temp }}/admitted
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: nightly-image-*-${{ github.run_id }}
           path: ${{ runner.temp }}/images
@@ -319,7 +319,7 @@ jobs:
               --deny-self-hosted-runners
           done
       - name: Download exact same-attempt native artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           artifact-ids: ${{ needs.prepare-native.outputs.artifact_id }}
           merge-multiple: true
@@ -403,7 +403,7 @@ jobs:
           python scripts/check_selfhost_locked_image_platform.py \
             --image-lock "$RUNNER_TEMP/prepared/prepared-selfhost-images.json" \
             --output "$RUNNER_TEMP/nightly-image-platforms.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: nightly-installation-candidate-${{ github.run_id }}
           path: |
@@ -427,13 +427,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: '24'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: nightly-installation-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/assets
@@ -470,7 +470,7 @@ jobs:
           python scripts/run_nightly_runtime_smoke.py --harness "$RUNNER_TEMP/harness"
           --assets "$RUNNER_TEMP/assets" --source "$GITHUB_WORKSPACE"
           --report "$RUNNER_TEMP/nightly-runtime.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: nightly-runtime-happy-path-${{ github.run_id }}
           path: ${{ runner.temp }}/nightly-runtime.json
@@ -491,18 +491,18 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: nightly-installation-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/publish
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: nightly-runtime-happy-path-${{ github.run_id }}
           path: ${{ runner.temp }}/publish
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Verify and sign the installation-test prerelease assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -545,7 +545,7 @@ jobs:
             --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID" \
             --provenance-bundle "$PROVENANCE_BUNDLE" \
             --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: nightly-publication-assets-${{ github.run_id }}
           path: ${{ runner.temp }}/publish/
@@ -565,14 +565,14 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: nightly-publication-assets-${{ github.run_id }}
           path: ${{ runner.temp }}/publish
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Prepare the installer-pinned provenance verifier
         shell: bash
         run: |
@@ -633,7 +633,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
       - name: Read the exact optional image recipe
@@ -655,7 +655,7 @@ jobs:
               output.write('workflow=' + build_workflow(os.environ['TAG']) + '\n')
           PY_ADDON
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -674,8 +674,8 @@ jobs:
           subject-name: ${{ steps.addon.outputs.image }}
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ steps.addon.outputs.image }}@${{ steps.image.outputs.digest }}
           format: cyclonedx-json
