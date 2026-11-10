@@ -182,7 +182,9 @@ const FlowDefinitionWizardContent = ({ browserEntry }) => {
       key="type"
       capabilities={capabilities}
       selectedType={wizard.data.flowType}
-      onSelectType={(flowType) => updateData({ ...INITIAL_DATA, ...(flowType === wizard.data.flowType ? { credentialTemplateId: wizard.data.credentialTemplateId, trustProfileId: wizard.data.trustProfileId } : {}), flowType })}
+      onSelectType={(flowType) => {
+        if (flowType !== wizard.data.flowType) updateData({ ...INITIAL_DATA, flowType });
+      }}
       onOpenCustomBuilder={() => { if (isCurrentBrowserEntry()) navigate(`/console/org/flows/definitions/new/custom${requestedTemplateId ? `?templateId=${encodeURIComponent(requestedTemplateId)}` : ''}`); }}
     />,
     <FlowStepsConfigStep
