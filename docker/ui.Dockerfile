@@ -44,6 +44,7 @@ RUN apk add --no-cache chromium nss freetype harfbuzz ca-certificates ttf-freefo
 
 COPY ui/package.json ui/bun.lock ./
 COPY ui/scripts/patch-prerenderer-ts-deepmerge.cjs ./scripts/patch-prerenderer-ts-deepmerge.cjs
+COPY ui/scripts/checker-worker-cleanup.mjs ui/scripts/patch-checker-worker-cleanup.mjs ./scripts/
 RUN test -n "$MARTY_API_CORE_VERSION" \
     && test -n "$MARTY_BLOG_VERSION" \
     && test -n "$MARTY_API_CORE_URI" \

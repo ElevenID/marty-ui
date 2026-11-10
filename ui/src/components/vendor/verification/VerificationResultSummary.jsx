@@ -13,6 +13,7 @@ import ErrorIcon from '@mui/icons-material/Error';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlined';
 import LinkIcon from '@mui/icons-material/Link';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
+import { hasAsciiControlCharacters } from '../../../utils/hasAsciiControlCharacters.js';
 
 // Current-attempt diagnostics are not credential identity or verified claims.
 export const verificationSessionId = (value) => value?.instance_id || value?.flow_instance_id || value?.id || value?.session_id;
@@ -33,7 +34,7 @@ export function extractPresentationRejection(observation = {}, expectedSession =
     || !['nonce_sha256', 'submission_digest', 'vp_token_sha256'].every((key) => hash(attempt[key]))
     || typeof attempt.observed_at !== 'string' || attempt.observed_at.length > 64 || !Number.isFinite(Date.parse(attempt.observed_at))
     || auth?.format !== 'mso_mdoc' || auth.document_count !== 1
-    || typeof auth.document_type !== 'string' || !auth.document_type || auth.document_type.length > 256 || /[\x00-\x1f\x7f]/.test(auth.document_type)
+    || typeof auth.document_type !== 'string' || !auth.document_type || auth.document_type.length > 256 || hasAsciiControlCharacters(auth.document_type)
     || !['issuer_signature_valid', 'certificate_trust_passed', 'device_authentication_valid'].every((key) => typeof auth[key] === 'boolean')
     || !Array.isArray(auth.certificate_trust_failures) || auth.certificate_trust_failures.length > 3
     || new Set(auth.certificate_trust_failures).size !== auth.certificate_trust_failures.length
@@ -305,7 +306,7 @@ function CheckLine({ label, value, uncheckedLabel }) {
   const ok = Boolean(value);
   const unchecked = known && !ok && Boolean(uncheckedLabel);
   return (
-    <Stack direction="row" spacing={1} alignItems="center">
+    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
       {known && !unchecked ? (
         ok ? <CheckCircleIcon color="success" fontSize="small" /> : <ErrorIcon color="error" fontSize="small" />
       ) : (
@@ -385,7 +386,7 @@ function VerificationResultSummary({ session }) {
       data-verification-decision={summary.verificationDecision}
     >
       <Stack spacing={2}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ alignItems: { xs: 'flex-start', sm: 'center' } }}>
           <Avatar
             src={typeof summary.image === 'string' ? summary.image : undefined}
             alt={summary.badgeName}
@@ -395,7 +396,7 @@ function VerificationResultSummary({ session }) {
             <WorkspacePremiumIcon />
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
               <Typography variant="h6" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>
                 {summary.badgeName}
               </Typography>
@@ -473,7 +474,7 @@ function VerificationResultSummary({ session }) {
           <>
             <Divider />
             <Box data-testid="verification-canvas-mirror-result">
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                 <LinkIcon color="primary" fontSize="small" />
                 <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
                   Canvas Credentials mirror

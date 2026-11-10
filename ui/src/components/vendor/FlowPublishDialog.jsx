@@ -174,7 +174,7 @@ function FlowPublishDialog({ open, onClose, flow, onPublished }) {
 
             <Box sx={{ textAlign: 'center' }}>
               <QrCodeIcon sx={{ fontSize: 120, color: 'primary.main', mb: 1 }} />
-              <Typography variant="caption" display="block" color="text.secondary">
+              <Typography variant="caption" sx={{ display: 'block' }} color="text.secondary">
                 {t('flowPublishDialog.qrCodeComingSoon')}
               </Typography>
             </Box>

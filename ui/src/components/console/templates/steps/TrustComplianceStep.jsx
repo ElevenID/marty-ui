@@ -1,5 +1,5 @@
 /** Select active profiles and a DID compatible with the API-derived template context. */
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Typography, FormControl, InputLabel, Select, MenuItem, FormHelperText, Alert, CircularProgress, Button, Stack, TextField } from '@mui/material';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,8 @@ import issuerIdentitiesApi from '../../../../services/issuerIdentitiesApi';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { templateIssuerRequest } from '../templateIssuerSelection';
 import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
+import { useOrganizationDefaults } from '../../../../hooks/useOrganizationDefaults';
+import { findOrganizationDefault, trustSupportsFormat } from '../../organizationDefaultSelection';
 
 const active = (profile) => String(profile?.status || '').toLowerCase() === 'active';
 const EMPTY = [];
@@ -22,11 +24,15 @@ const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { activeOrgId } = useConsole();
+  const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
+  const trustInitialized = useRef(false);
   const [catalog, setCatalog] = useState(null);
   const [options, setOptions] = useState(null);
   const [refreshCatalog, setRefreshCatalog] = useState(0);
   const [refreshOptions, setRefreshOptions] = useState(0);
   const requestKey = JSON.stringify(templateIssuerRequest(data, activeOrgId));
+
+  useLayoutEffect(() => { trustInitialized.current = false; }, [activeOrgId]);
 
   useEffect(() => {
     let current = true;
@@ -49,16 +55,43 @@ const TrustComplianceStep = ({ data, onChange }) => {
     return () => { current = false; controller.abort(); };
   }, [activeOrgId, refreshCatalog]);
 
-  const trustProfiles = catalog?.organizationId === activeOrgId ? catalog.trust || EMPTY : EMPTY;
-  const complianceProfiles = catalog?.organizationId === activeOrgId ? catalog.compliance || EMPTY : EMPTY;
-  const catalogsReady = catalog?.organizationId === activeOrgId && !catalog.error;
-  const trustValid = catalogsReady && trustProfiles.some((profile) => profile.id === data.trust_profile_id);
+  const trustProfiles = activeOrgId && catalog?.organizationId === activeOrgId ? catalog.trust || EMPTY : EMPTY;
+  const complianceProfiles = activeOrgId && catalog?.organizationId === activeOrgId ? catalog.compliance || EMPTY : EMPTY;
+  const catalogsReady = Boolean(activeOrgId && catalog?.organizationId === activeOrgId && !catalog.error);
+  const selectedTrust = trustProfiles.find((profile) => profile.id === data.trust_profile_id);
+  const selectedCompliance = complianceProfiles.find((profile) => profile.id === data.compliance_profile_id);
+  const automaticTrust = Boolean(data._organization_default_trust
+    && data._organization_default_trust.organizationId === activeOrgId
+    && data._organization_default_trust.id === data.trust_profile_id);
+  const trustValid = catalogsReady && Boolean(selectedTrust)
+    && (!automaticTrust || trustSupportsFormat(selectedTrust, data.credential_payload_format || selectedCompliance?.credential_format));
   const complianceValid = catalogsReady && complianceProfiles.some((profile) => profile.id === data.compliance_profile_id);
 
   useEffect(() => {
     if (!catalogsReady) return;
+    if (data.trust_profile_id) trustInitialized.current = true;
     const patch = {};
-    if (!trustValid) patch.trust_profile_id = trustProfiles.length === 1 ? trustProfiles[0].id : null;
+    if (!trustValid && data.trust_profile_id) {
+      patch.trust_profile_id = null;
+      patch._issuer_selection = null;
+      patch._organization_default_trust = null;
+    }
+    if (!trustValid && !trustInitialized.current && !defaultsLoading) {
+      const compliance = complianceProfiles.find((profile) => profile.id === data.compliance_profile_id)
+        || (complianceProfiles.length === 1 ? complianceProfiles[0] : null);
+      const format = data.credential_payload_format
+        || compliance?.credential_format;
+      // A compliance choice determines the credential format. Wait for that
+      // context before applying an organization trust default.
+      if (format || !defaults?.default_trust_profile_id) {
+        const preferredTrust = findOrganizationDefault(trustProfiles, defaults?.default_trust_profile_id, activeOrgId,
+          (profile) => trustSupportsFormat(profile, format));
+        patch.trust_profile_id = preferredTrust?.id
+          || (!defaults?.default_trust_profile_id && trustProfiles.length === 1 ? trustProfiles[0].id : null);
+        if (preferredTrust) patch._organization_default_trust = { organizationId: activeOrgId, id: preferredTrust.id };
+        trustInitialized.current = true;
+      }
+    }
     if (!complianceValid) {
       patch.compliance_profile_id = complianceProfiles.length === 1 ? complianceProfiles[0].id : null;
       patch.issuer_did = null;
@@ -68,7 +101,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
       patch._issuer_selection = null;
     }
     if (Object.keys(patch).some((key) => patch[key] !== data[key])) onChange(patch);
-  }, [catalogsReady, trustValid, complianceValid, catalog, data, onChange, trustProfiles, complianceProfiles]);
+  }, [activeOrgId, catalogsReady, trustValid, complianceValid, catalog, data, defaults, defaultsLoading, onChange, trustProfiles, complianceProfiles]);
 
   useEffect(() => {
     let current = true;
@@ -97,7 +130,8 @@ const TrustComplianceStep = ({ data, onChange }) => {
       supported_formats: currentOptions.supported_formats,
       issuance_protocol: currentOptions.issuance_protocol,
       ...(currentOptions.requirements.revocation_profile === false && data.revocation_profile_id ? { revocation_profile_id: null } : {}),
-      _issuer_selection: selectedIdentity && trustValid ? {
+      _issuer_selection: selectedIdentity && trustValid
+        && (!automaticTrust || trustSupportsFormat(selectedTrust, currentOptions.credential_payload_format)) ? {
         organization_id: activeOrgId, compliance_profile_id: currentOptions.compliance_profile_id,
         trust_profile_id: data.trust_profile_id, issuer_did: selectedIdentity.issuer_did,
         credential_payload_format: currentOptions.credential_payload_format,
@@ -107,7 +141,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
       ...(!selectedIdentity && data.issuer_did ? { issuer_did: null } : {}),
     };
     if (Object.keys(patch).some((key) => JSON.stringify(patch[key]) !== JSON.stringify(data[key]))) onChange(patch);
-  }, [currentOptions, selectedIdentity, trustValid, activeOrgId, data, onChange]);
+  }, [currentOptions, selectedIdentity, trustValid, automaticTrust, selectedTrust, activeOrgId, data, onChange]);
 
   return (
     <Box>
@@ -121,7 +155,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
       <FormControl fullWidth required sx={{ my: 2 }}>
         <InputLabel id="template-trust-label">Trust Profile</InputLabel>
         <Select labelId="template-trust-label" label="Trust Profile" value={trustValid ? data.trust_profile_id : ''}
-          onChange={(event) => onChange({ trust_profile_id: event.target.value, _issuer_selection: null })}
+          onChange={(event) => {
+            trustInitialized.current = true;
+            onChange({ trust_profile_id: event.target.value, _issuer_selection: null, _organization_default_trust: null });
+          }}
           disabled={!catalogsReady} SelectDisplayProps={{ 'data-testid': 'template-trust-profile-select' }}>
           {trustProfiles.map((profile) => <MenuItem key={profile.id} value={profile.id}>{profile.name}</MenuItem>)}
         </Select>

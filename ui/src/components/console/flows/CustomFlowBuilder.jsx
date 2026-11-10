@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Container,
   FormControl,
   IconButton,
@@ -21,7 +22,9 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { createFlow, getFlowCapabilities } from '../../../services/flowsApi';
+import { operationStatusUnknownMessage } from '../../../services/idempotency';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 
 const NEW_STEP = { action: '', description: '', step_id: '' };
@@ -34,9 +37,21 @@ function buildTransitions(steps) {
   }));
 }
 
-const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
+const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId, browserEntry }) => {
   const navigate = useNavigate();
-  const mounted = useRef(true);
+  const pending = useRef(false);
+  const startAction = useAsyncActionScope();
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const invalidateAction = () => { startAction(); };
+    window.addEventListener('popstate', invalidateAction, true);
+    return () => window.removeEventListener('popstate', invalidateAction, true);
+  }, [startAction]);
   const [capabilities, setCapabilities] = useState(null);
   const [capabilityError, setCapabilityError] = useState('');
   const [capabilityAttempt, setCapabilityAttempt] = useState(0);
@@ -58,11 +73,6 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
       { action: 'complete', description: '', step_id: 'complete' },
     ],
   });
-
-  useEffect(() => {
-    mounted.current = true;
-    return () => { mounted.current = false; };
-  }, []);
 
   useEffect(() => {
     let current = true;
@@ -134,11 +144,14 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
   };
 
   const save = async () => {
-    if (!valid) return;
+    if (!valid || pending.current || !isCurrentBrowserEntry()) return;
+    const action = startAction();
+    const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+    pending.current = true;
     setSaving(true);
     setError('');
     try {
-      const flow = await createFlow({
+      const flow = await action.run(createFlow, {
         organization_id: organizationId,
         name: form.name.trim(),
         description: form.description.trim() || null,
@@ -164,18 +177,24 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
           transitions: buildTransitions(effectiveSteps),
           config: {},
         },
-      });
-      if (mounted.current) navigate(`/console/org/flows/definitions/${flow.id}`);
+      }, { isCurrent });
+      if (isCurrent()) navigate(`/console/org/flows/definitions/${flow.id}`);
     } catch (cause) {
-      if (mounted.current) setError(cause.message || 'Custom flow could not be created.');
+      if (isCurrent()) setError(cause?.operationStatusUnknown
+        ? operationStatusUnknownMessage(cause)
+        : cause.message || 'Custom flow could not be created.');
     } finally {
-      if (mounted.current) setSaving(false);
+      if (isCurrent()) { pending.current = false; setSaving(false); }
     }
   };
 
+  if (!isCurrentBrowserEntry()) {
+    return <Container maxWidth="md" sx={{ py: 4 }}><CircularProgress /></Container>;
+  }
+
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
-      <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/console/org/flows/definitions/new')} sx={{ mb: 2 }}>
+      <Button startIcon={<ArrowBackIcon />} onClick={() => { if (isCurrentBrowserEntry()) navigate('/console/org/flows/definitions/new'); }} sx={{ mb: 2 }}>
         Standard flows
       </Button>
       <Typography variant="h4" gutterBottom>Custom flow extension</Typography>
@@ -202,7 +221,8 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
           <TextField multiline minRows={2} label="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />
           <FormControl fullWidth>
             <InputLabel id="custom-flow-base-label">Extends standard flow</InputLabel>
-            <Select labelId="custom-flow-base-label" value={form.baseType} label="Extends standard flow" disabled={applicationApproved || saving} onChange={(event) => setForm({ ...form, baseType: event.target.value })}>
+            <Select labelId="custom-flow-base-label" value={capabilities?.standard_flow_types?.includes(form.baseType) ? form.baseType : ''}
+              label="Extends standard flow" disabled={!capabilities || applicationApproved || saving} onChange={(event) => setForm({ ...form, baseType: event.target.value })}>
               {(capabilities?.standard_flow_types || []).map((flowType) => <MenuItem key={flowType} value={flowType}>{flowType}</MenuItem>)}
             </Select>
           </FormControl>
@@ -223,13 +243,13 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId }) => {
             {!templates.loading && !templates.error && templates.items.length === 0 && <Alert severity="warning" sx={{ mt: 2 }}>No active pre-authorized credential template with a trust profile is available in this organization.</Alert>}
             <Typography sx={{ mt: 2 }}>Step: Issue credential</Typography>
           </Box> : <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
+            <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 1.5 }}>
               <Typography variant="subtitle1">Steps</Typography>
               <Button size="small" startIcon={<AddIcon />} onClick={() => setForm({ ...form, steps: [...form.steps, { ...NEW_STEP }] })}>Add step</Button>
             </Stack>
             <Stack spacing={1.5}>
               {form.steps.map((step, index) => (
-                <Stack key={index} direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems="center">
+                <Stack key={index} direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: "center" }}>
                   <TextField required fullWidth label="Step ID" value={step.step_id} onChange={(event) => updateStep(index, { step_id: event.target.value })} />
                   <TextField required fullWidth label="Action" value={step.action} onChange={(event) => updateStep(index, { action: event.target.value })} />
                   <TextField fullWidth label="Description" value={step.description} onChange={(event) => updateStep(index, { description: event.target.value })} />
@@ -260,5 +280,26 @@ export default function CustomFlowBuilder() {
   const { activeOrgId: organizationId } = useConsole();
   const [search] = useSearchParams();
   const requestedTemplateId = search.get('templateId');
-  return <CustomFlowBuilderForm key={`${organizationId || 'no-organization'}:${requestedTemplateId || ''}`} organizationId={organizationId} requestedTemplateId={requestedTemplateId} />;
+  const location = useLocation();
+  const [returnedEntry, setReturnedEntry] = useState(0);
+  // Retain the committed route across organization/template child replacement.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handlePopState = () => {
+      if ((window.history.state?.key || 'default') === location.key) {
+        setReturnedEntry((value) => value + 1);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [location]);
+  return <CustomFlowBuilderForm key={JSON.stringify([organizationId, requestedTemplateId,
+    location.key, location.pathname, location.search, location.hash, browserEntry.generation])}
+    organizationId={organizationId} requestedTemplateId={requestedTemplateId} browserEntry={browserEntry} />;
 }

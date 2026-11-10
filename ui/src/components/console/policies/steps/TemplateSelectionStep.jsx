@@ -6,7 +6,7 @@ import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
  * Users can select a pre-built template or choose "Custom" for manual configuration.
  */
 
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -24,6 +24,11 @@ import { POLICY_TEMPLATES, getTemplatesByFramework } from '../../../../data/poli
 import { useAsyncData } from '../../../../hooks/useAsyncData';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { listCredentialTemplates } from '../../../../services/presentationPolicyApi';
+import { useOrganizationDefaults } from '../../../../hooks/useOrganizationDefaults';
+import { findOrganizationDefault, matchesTrust, trustSupportsFormat } from '../../organizationDefaultSelection';
+import { automaticTemplateMatchesTrust } from '../policyTemplateDefaults';
+
+const EMPTY_TEMPLATES = [];
 
 const credentialTypeForTemplate = (template) => (
   template?.vct
@@ -94,14 +99,19 @@ const policyOptionForCredentialTemplate = (template) => {
 const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplate }) => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
+  const initialized = useRef(false);
 
-  const { data: credentialTemplateData = [] } = useAsyncData(async () => {
+  useLayoutEffect(() => { initialized.current = false; }, [activeOrgId]);
+
+  const { data: catalog } = useAsyncData(async () => {
     if (!activeOrgId) {
-      return [];
+      return null;
     }
     const response = await loadScopedCatalog(listCredentialTemplates, activeOrgId);
-    return Array.isArray(response?.data) ? response.data : (Array.isArray(response) ? response : []);
+    return { organizationId: activeOrgId, templates: response };
   }, [activeOrgId]);
+  const credentialTemplateData = activeOrgId && catalog?.organizationId === activeOrgId ? catalog.templates : EMPTY_TEMPLATES;
 
   const credentialTemplateOptions = useMemo(
     () => (Array.isArray(credentialTemplateData) ? credentialTemplateData : [])
@@ -136,7 +146,31 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
   const allTemplates = [...availableTemplates, customTemplate];
   const allSelectableTemplates = [...credentialTemplateOptions, ...allTemplates];
 
+  useEffect(() => {
+    if (!activeOrgId || catalog?.organizationId !== activeOrgId) return;
+    if (selectedTemplate?._organizationDefault
+      && !automaticTemplateMatchesTrust(selectedTemplate, trustProfile, activeOrgId,
+        credentialTemplateData.find((template) => template.id === selectedTemplate.credentialTemplate?.id) || null)) {
+      initialized.current = false;
+      onSelectTemplate(null);
+      return;
+    }
+    if (selectedTemplate) initialized.current = true;
+    if (initialized.current || defaultsLoading) return;
+    const currentTrust = findOrganizationDefault([trustProfile].filter(Boolean), trustProfile?.id, activeOrgId);
+    if (!currentTrust) return;
+    const preferredTemplate = findOrganizationDefault(credentialTemplateData, defaults?.default_template_id, activeOrgId,
+      (template) => matchesTrust(template, currentTrust.id)
+        && trustSupportsFormat(currentTrust, template.credential_payload_format || template.format));
+    if (preferredTemplate) {
+      initialized.current = true;
+      onSelectTemplate({ ...policyOptionForCredentialTemplate(preferredTemplate),
+        _organizationDefault: { organizationId: activeOrgId } });
+    }
+  }, [activeOrgId, catalog, credentialTemplateData, defaults, defaultsLoading, onSelectTemplate, selectedTemplate, trustProfile]);
+
   const handleSelectTemplate = (template) => {
+    initialized.current = true;
     onSelectTemplate(template);
   };
 
@@ -154,7 +188,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
         {t('wizards.presentationPolicy.templateSelectionStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.templateSelectionStep.description')}
       </Typography>
 
@@ -174,7 +208,7 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
 
       <Grid container spacing={2}>
         {allSelectableTemplates.map((template) => (
-          <Grid item xs={12} sm={6} md={4} key={template.id}>
+          <Grid key={template.id} size={{ xs: 12, sm: 6, md: 4 }}>
             <Card
               sx={{
                 height: '100%',
@@ -208,8 +242,8 @@ const TemplateSelectionStep = ({ trustProfile, selectedTemplate, onSelectTemplat
                   <Typography
                     variant="body2"
                     color="text.secondary"
-                    paragraph
-                    sx={{ flex: 1, minHeight: 60 }}
+                    component="p"
+                    sx={{ mb: "16px", flex: 1, minHeight: 60 }}
                   >
                     {template.description}
                   </Typography>

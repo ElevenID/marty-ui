@@ -7,13 +7,58 @@ const CORE='4320b5fa1c6f41231ee0aa2bc57d8008549f67ac';
 const SOURCE='852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34';
 const D12_SOURCE='6117cea9290f57406cf109eae56f64f7986e3783';
 const D12_CORE='ffa24febcd0fb3fced15da7f28190af6d61ae0f9';
+const D12_CURRENT_SOURCE='449ab93ca80d147622ae61283f7d8084f7c62884';
+const D12_CURRENT_CORE='11655e38c2dbf69bfa5bc3c873f80c5fad628723';
 const D12_PROFILE='d12-passport-current-functional';
-function closedScope(profile,approvedBefore,approvedEngine){
+function currentDatabaseBaseline(refs,approvedBefore,approvedEngine){
+ assert(refs&&Object.keys(refs).sort().join(',')==='catalog,job,proof','D12_CURRENT_BASELINE_REFS_REQUIRED');
+ const proof=runtime.boundJson(refs.proof),job=runtime.boundJson(refs.job),catalog=runtime.boundJson(refs.catalog);
+ assert.equal(job.schema,'marty.windows-job-result/v1');
+ assert.equal(job.state,'COMPLETE');assert.equal(job.exitCode,0);assert.equal(job.jobClosed,true);
+ assert.equal(job.terminalActiveProcesses,0);assert.equal(job.forcedTermination,false);
+ assert.equal(job.hostMarginBreached,false);assert.equal(job.timedOut,false);
+ assert.equal(job.jobMemoryBytes,1024**3);assert.equal(job.hostMarginBytes,1024**3);
+ assert.equal(job.assignedBeforeResume,true);assert.equal(job.processCreatedSuspended,true);
+ assert.equal(proof.schema,'marty.d12-current-database-preimage-proof/v1');
+ assert.equal(proof.state,'READ_ONLY_IDENTITY_OBSERVED');
+ assert.deepEqual(proof.catalogObservation,refs.catalog);assert.equal(proof.databaseBefore.sha256,approvedBefore);
+ assert.equal(proof.engineId,approvedEngine);assert.equal(proof.sqlRead,true);assert.equal(proof.runtimeWrites,false);
+ assert.equal(proof.dispatchAuthorized,false);
+ const source=runtime.boundJson(proof.source);
+ assert.equal(source.schema,'marty.d12-db-preview-source-closure/v2');
+ assert(/^[a-f0-9]{40}$/.test(source.operatorRevision),'D12_BASELINE_OPERATOR_GIT_REVISION_REQUIRED');
+ assert.equal(source.buildSourceRevision,D12_CURRENT_SOURCE);assert.equal(source.buildCoreRevision,D12_CURRENT_CORE);
+ assert.equal(source.state,'SOURCE_ONLY_OPERATOR_EXPORTED_NO_RUNTIME_READ');
+ assert.equal(source.applyAuthorized,false);assert.equal(source.runtimeDeployed,false);
+ const before=runtime.boundJson(proof.databaseBefore).databaseIdentity;
+ assert.equal(catalog.schema,'marty.native-maintenance-catalog-observation/v1');
+ assert(typeof catalog.runId==='string'&&/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(catalog.runId),'D12_BASELINE_CATALOG_RUN_REQUIRED');
+ assert.deepEqual(catalog.databaseIdentity,before);assert.deepEqual(catalog.source,proof.catalogSql);
+ assert.equal(catalog.source.sha256,CATALOG_SQL_SHA);runtime.boundBytes(catalog.source);
+ assert.equal(catalog.projection.schema,'marty.native-maintenance-catalog/v1');
+ const control=catalog.projection.control;
+ assert.equal(control.database,'marty');assert.equal(typeof control.systemIdentifier,'string');
+ assert.equal(typeof control.databaseOid,'string');
+ assert(/^[1-9][0-9]{0,19}$/.test(control.systemIdentifier));
+ assert(/^[1-9][0-9]{0,9}$/.test(control.databaseOid));
+ return {database:'marty',systemIdentifier:control.systemIdentifier,databaseOid:control.databaseOid};
+}
+function sourceScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision){
  if(profile===D12_PROFILE){assert(/^[a-f0-9]{64}$/.test(approvedBefore),'D12_APPROVED_DATABASE_PREIMAGE_REQUIRED');
   assert(/^[a-f0-9-]{36}$/.test(approvedEngine),'D12_APPROVED_ENGINE_REQUIRED');
-  return {source:D12_SOURCE,core:D12_CORE,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,stateSchema:'marty.native-d12-current-operation-state/v1'};}
+  const source=sourceRevision===undefined?D12_SOURCE:sourceRevision;
+  const core=coreRevision===undefined?D12_CORE:coreRevision;
+  assert((source===D12_SOURCE&&core===D12_CORE)||(source===D12_CURRENT_SOURCE&&core===D12_CURRENT_CORE),'UNREVIEWED_D12_SOURCE_LINEAGE');
+  return {source,core,databaseBeforeSha256:approvedBefore,engineId:approvedEngine,stateSchema:'marty.native-d12-current-operation-state/v1'};}
  assert(profile==null||profile==='native-devtest-passport-four-role','UNREVIEWED_DATABASE_PROFILE');
  return {source:SOURCE,core:CORE,databaseBeforeSha256:PG_BASE_SHA,engineId:'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341',stateSchema:'marty.native-four-role-operation-state/v1'};
+}
+function closedScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision,baseline){
+ const source=sourceScope(profile,approvedBefore,approvedEngine,sourceRevision,coreRevision);
+ if(profile===D12_PROFILE&&source.source===D12_CURRENT_SOURCE)
+  return {...source,target:currentDatabaseBaseline(baseline,approvedBefore,approvedEngine)};
+ assert(baseline===undefined,profile===D12_PROFILE?'HISTORICAL_D12_BASELINE_CHANGED':'HISTORICAL_FOUR_ROLE_BASELINE_CHANGED');
+ return {...source,target:{database:'marty',systemIdentifier:'7698090346923700258',databaseOid:'16387'}};
 }
 const same=(a,b,code)=>assert(util.isDeepStrictEqual(a,b),code);
 const MIGRATIONS=Object.freeze([
@@ -24,7 +69,11 @@ const CATALOG_SQL_SHA='e7972f5d018100c5288dbe4eca0df2dbaa61ce21f8a34991789a3a173
 const PG_BASE_SHA='7edeffa3c4cbc10d02010dd0bfbd2e84e2cf4cf149e1c8d5bf7e834a5aedf075';
 function observeCatalog(inputs,{readDocker}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_READER_REQUIRED');
- const scope=closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId);
+ // A first read-only observation establishes the target; fenced execution
+ // separately requires the reviewed baseline through closedScope.
+ const scope=inputs.baseline===undefined?
+  sourceScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision):
+  closedScope(inputs.rolloutProfile,inputs.approvedDatabaseBeforeSha256,inputs.approvedEngineId,inputs.sourceRevision,inputs.coreRevision,inputs.baseline);
  assert.equal(inputs.databaseBefore.sha256,scope.databaseBeforeSha256);const prior=runtime.boundJson(inputs.databaseBefore).databaseIdentity;
  assert.equal(inputs.sql.sha256,CATALOG_SQL_SHA);const sql=runtime.boundBytes(inputs.sql);
  function identity(){
@@ -48,9 +97,9 @@ function migrationDigest(refs){
   const size=Buffer.alloc(8);size.writeBigUInt64BE(BigInt(bytes.length));hash.update(name);hash.update(Buffer.from([0]));hash.update(size);hash.update(bytes);}
  return hash.digest('hex');
 }
-function catalog(value,phase){
+function catalog(value,phase,scope=closedScope()){
  assert.equal(value.schema,'marty.native-maintenance-catalog/v1');
- const c=value.control;assert.equal(c.database,'marty');assert.equal(String(c.databaseOid),'16387');assert.equal(c.systemIdentifier,'7698090346923700258');
+ const c=value.control;assert.equal(c.database,scope.target.database);assert.equal(String(c.databaseOid),scope.target.databaseOid);assert.equal(c.systemIdentifier,scope.target.systemIdentifier);
  assert(['BEFORE_SCHEMA','BEFORE_START'].includes(phase),'CLOSED_CATALOG_PHASE');
  assert.equal(c.fenceTable,'passport_cutover.state');assert.equal(c.activeMartyConnections,0);assert.equal(c.activeMigratorConnections,0);
  assert.equal(c.roles.length,3);assert.equal(new Set(c.roles.map(x=>x.name)).size,3);
@@ -189,17 +238,17 @@ function orderedOperations(state,proof,commands,{runId,selectionSha256,identity,
 }
 function validateProof(proof,commands,context){
  const {runId,selectionSha256,executorSource}=context;
- const scope=closedScope(context.rolloutProfile,context.approvedDatabaseBeforeSha256,context.approvedEngineId);
+ const scope=closedScope(context.rolloutProfile,context.approvedDatabaseBeforeSha256,context.approvedEngineId,context.sourceRevision,context.coreRevision,context.baseline);
  assert.equal(proof.schema,'marty.native-maintenance-metadata-proof/v1');assert.equal(proof.databaseBefore.sha256,scope.databaseBeforeSha256);
  const identity=runtime.boundJson(proof.databaseBefore).databaseIdentity;
  const state=runtime.boundJson(proof.operationState),rows=orderedOperations(state,proof,commands,{runId,selectionSha256,identity,executorSource,scope});
  const before=rows.CATALOG_BEFORE_SCHEMA,after=rows.CATALOG_BEFORE_START;
  for(const row of [before,after]){assert.equal(row.schema,'marty.native-maintenance-catalog-observation/v1');assert.equal(row.source.sha256,CATALOG_SQL_SHA);runtime.boundBytes(row.source);}
- catalog(before.projection,'BEFORE_SCHEMA');catalog(after.projection,'BEFORE_START');
+ catalog(before.projection,'BEFORE_SCHEMA',scope);catalog(after.projection,'BEFORE_START',scope);
  same(Object.keys(proof.sqlSources).sort(),Object.keys(SQL_SOURCES).sort(),'EXACT_OPERATIONAL_SQL_SOURCES');
  same(Object.keys(proof.sqlReceipts).sort(),DATABASE_ORDER.filter(x=>x[1]==='sql').map(x=>x[2]).sort(),'EXACT_METADATA_SQL_RECEIPTS');
  const digest=migrationDigest(proof.migrationSources);
- const target={'marty.passport_beta_verified_project':'elevenid-beta','marty.passport_beta_expected_system_identifier':'7698090346923700258','marty.passport_beta_expected_database_oid':'16387'};
+ const target={'marty.passport_beta_verified_project':'elevenid-beta','marty.passport_beta_expected_system_identifier':scope.target.systemIdentifier,'marty.passport_beta_expected_database_oid':scope.target.databaseOid};
  const fence=sqlOutput(runtime.boundBytes(rows.FENCE_VERIFY.stdout),'marty.passport-beta-fence-verification/v1'),epoch=fenceReceipt(fence);
  const expected={...target,'marty.passport_beta_expected_fence_epoch':String(epoch),'marty.passport_beta_expected_source_commit':scope.source,'marty.passport_beta_expected_native_migration_sha256':digest};
  const transition=sqlOutput(runtime.boundBytes(rows.RUST_OWNER_TRANSITION.stdout),'marty.passport-beta-rust-owner-transition/v1');
@@ -212,4 +261,4 @@ function validateProof(proof,commands,context){
  attestation(sqlOutput(runtime.boundBytes(rows.NATIVE_ATTESTATION.stdout),'marty.passport-beta-native-migration-attestation/v1'),epoch,digest,scope.source);
  return {databaseIdentity:identity,fenceEpoch:epoch,sourceCommit:scope.source,operationState:state};
 }
-module.exports={generateStandaloneVerifier,CORE,DATABASE_ORDER,SQL_SOURCES,operationalSql,sessionOptions,orderedOperations,parseSqlOutput,validateProof,observeCatalog,CATALOG_SQL_SHA,PG_BASE_SHA,SOURCE,MIGRATIONS,migrationDigest,catalog,sqlOutput,verifiedSql,fenceReceipt,ownerReceipt,attestation,closedScope,D12_SOURCE,D12_CORE,D12_PROFILE};
+module.exports={generateStandaloneVerifier,CORE,DATABASE_ORDER,SQL_SOURCES,operationalSql,sessionOptions,orderedOperations,parseSqlOutput,validateProof,observeCatalog,currentDatabaseBaseline,CATALOG_SQL_SHA,PG_BASE_SHA,SOURCE,MIGRATIONS,migrationDigest,catalog,sqlOutput,verifiedSql,fenceReceipt,ownerReceipt,attestation,closedScope,D12_SOURCE,D12_CORE,D12_CURRENT_SOURCE,D12_CURRENT_CORE,D12_PROFILE};

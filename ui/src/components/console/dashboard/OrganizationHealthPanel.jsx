@@ -45,7 +45,7 @@ function StatCard({ icon: Icon, label, count, color = 'primary' }) {
             {label}
           </Typography>
         </Box>
-        <Typography variant="h4" fontWeight={600}>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
           {count}
         </Typography>
       </CardContent>
@@ -108,7 +108,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={VerifiedUserIcon}
             label={t('dashboard.organizationHealth.activeTrustProfiles')}
@@ -116,7 +116,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeTrustProfiles > 0 ? 'success' : 'error'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={DescriptionIcon}
             label={t('dashboard.organizationHealth.activeTemplates')}
@@ -124,7 +124,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeTemplates > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={PolicyIcon}
             label={t('dashboard.organizationHealth.activePolicies')}
@@ -132,7 +132,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activePolicies > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={CloudUploadIcon}
             label={t('dashboard.organizationHealth.activeDeployments')}
@@ -140,7 +140,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeDeployments > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={AccountTreeIcon}
             label={t('dashboard.organizationHealth.activeFlows')}

@@ -5,7 +5,7 @@
  * Supports console mode switching and nested navigation items.
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router';
 import {
   Drawer,
@@ -37,9 +37,9 @@ import BusinessIcon from '@mui/icons-material/Business';
 import LogoutIcon from '@mui/icons-material/Logout';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
-import { getApplicantStats } from '../../services/dashboardApi';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 
@@ -244,34 +244,15 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
  * Sidebar Navigation Component
  */
 function SidebarNavigation({ mobileOpen, onMobileClose }) {
+  const beginAction = useAsyncActionScope();
   const theme = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { isAdministrator, isVendor, isApplicant, organizationId, logout } = useAuth();
-  const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
+  const { isAdministrator, isVendor, isApplicant, logout } = useAuth();
+  const { mode, setMode, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
   const isJoinOnlyMode = memberships.length === 0;
   const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
-
-  // System/sentinel org IDs that backend policy blocks member-level operations on.
-  const SYSTEM_ORG_IDS = new Set(['00000000-0000-0000-0000-000000000001']);
-
-  // Badge counts fetched from API
-  const [badgeCounts, setBadgeCounts] = useState({});
-  useEffect(() => {
-    const fallbackOrgId = SYSTEM_ORG_IDS.has(organizationId) ? null : organizationId;
-    const effectiveOrgId = activeOrgId || fallbackOrgId;
-    if (mode !== 'applicant' || !effectiveOrgId) {
-      setBadgeCounts({});
-      return;
-    }
-
-    let mounted = true;
-    getApplicantStats(effectiveOrgId).then((stats) => {
-      if (mounted) setBadgeCounts({ applications: stats.pending || 0 });
-    });
-    return () => { mounted = false; };
-  }, [activeOrgId, mode, organizationId]);
 
   // Collapsed state for desktop — persisted so mode switches don't reset it
   const [collapsed, setCollapsed] = useState(() => {
@@ -284,11 +265,17 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const { can } = usePermissions();
 
   // Console mode switching
-  const handleModeChange = useCallback((event, newMode) => {
+  const handleModeChange = useCallback(async (event, newMode) => {
     if (newMode && newMode !== mode) {
-      setMode(newMode);
+      const action = beginAction();
+      try {
+        await action.run(setMode, newMode);
+      } catch (error) {
+        if (!action.isCurrent() || error?.name === 'AbortError') return;
+        console.error('[SidebarNavigation] Failed to switch console:', error);
+      }
     }
-  }, [mode, setMode]);
+  }, [beginAction, mode, setMode]);
 
   // Get nav items based on console mode, filtered by permissions
   const navItems = useMemo(() => {
@@ -390,7 +377,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
           <Tooltip title="Applicant Console" placement="right">
             <IconButton
               size="small"
-              onClick={() => setMode('applicant')}
+              onClick={(event) => handleModeChange(event, 'applicant')}
               disabled={!isApplicantConsoleAvailable}
               sx={{
                 bgcolor: mode === 'applicant' ? 'action.selected' : 'transparent',
@@ -404,7 +391,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             <Tooltip title="Organization Console" placement="right">
               <IconButton
                 size="small"
-                onClick={() => setMode('org')}
+                onClick={(event) => handleModeChange(event, 'org')}
                 sx={{
                   bgcolor: mode === 'org' ? 'action.selected' : 'transparent',
                   '&:hover': { bgcolor: 'action.hover' },
@@ -422,7 +409,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
       {/* Collapse toggle for desktop */}
       {!isMobile && !collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 2, py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Collapse navigation" aria-expanded={true}>
             <ChevronLeftIcon />
           </IconButton>
         </Box>
@@ -430,7 +417,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
 
       {!isMobile && collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Expand navigation" aria-expanded={false}>
             <MenuIcon />
           </IconButton>
         </Box>
@@ -458,7 +445,6 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             onToggle={handleToggle}
             collapsed={collapsed}
             parentId={null}
-            badgeCounts={badgeCounts}
           />
         ))}
       </List>

@@ -177,7 +177,7 @@ export async function acceptOrganizationInvitation(token) {
  */
 export async function updateOrganization(organizationId, updates) {
   const orgId = requireOrganizationId(organizationId, 'updating organization');
-  const body = { organization_id: orgId };
+  const body = {};
   if (updates.name !== undefined) body.name = updates.name;
   if (updates.displayName !== undefined) body.display_name = updates.displayName;
   if (updates.description !== undefined) body.description = updates.description;

@@ -183,7 +183,7 @@ export function PreviewDialog({ open, onClose, configId, configData }) {
 
         <Grid container spacing={2}>
           {allFields.map((field) => (
-            <Grid item xs={12} sm={6} key={field}>
+            <Grid size={{ xs: 12, sm: 6 }} key={field}>
               <TextField
                 fullWidth
                 label={field.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())}
@@ -262,7 +262,7 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
       <DialogTitle>{t('templateActions.versionHistoryDialog.title')}</DialogTitle>
       <DialogContent>
         {loading ? (
-          <Box display="flex" justifyContent="center" py={4}>
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
             <CircularProgress />
           </Box>
         ) : versions.length === 0 ? (
@@ -274,7 +274,7 @@ export function VersionHistoryDialog({ open, onClose, configId }) {
                 <ListItem>
                   <ListItemText
                     primary={
-                      <Box display="flex" alignItems="center" gap={1}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <Chip
                           label={`v${version.version_number}`}
                           size="small"
@@ -330,7 +330,7 @@ export function TemplateActions({ configId, configData, onStatusChange }) {
   const isPublished = configData?.is_published;
 
   return (
-    <Box display="flex" gap={1} flexWrap="wrap">
+    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
       <Button
         variant={isPublished ? 'outlined' : 'contained'}
         color={isPublished ? 'warning' : 'primary'}

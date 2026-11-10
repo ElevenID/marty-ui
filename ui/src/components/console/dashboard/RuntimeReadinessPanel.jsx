@@ -1,13 +1,14 @@
 /**
  * Runtime Readiness Panel
  * 
- * Shows runtime operational status (not just configuration):
- * - Can issue credentials? (keys valid, issuer active)
- * - Can verify credentials? (policy reachable, deployment active)
+ * Shows credential operation readiness reported by the gateway:
+ * - Can issue credentials? (issuer configuration, deployment, issuance flow)
+ * - Can verify credentials? (presentation policy, deployment)
+ * - Is an issuer DID referenced by an active credential template?
  * - Last successful issuance timestamp
  * - Last successful verification timestamp
  * 
- * Purpose: answers "Is it actually working?" vs "Is it configured?"
+ * These readiness flags do not establish live signing-key validity.
  */
 
 import {
@@ -94,11 +95,11 @@ function StatusCard({
   };
 
   return (
-    <Card sx={{ height: '100%' }}>
+    <Card component="section" aria-label={label} sx={{ height: '100%' }}>
       <CardContent>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
           <Icon color={getStatusColor()} />
-          <Typography variant="subtitle2" fontWeight={600}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
             {label}
           </Typography>
         </Box>
@@ -129,7 +130,7 @@ function StatusCard({
         {/* Why explanation - shown when not ready */}
         {reason && status !== 'ready' && (
           <Box sx={{ mt: 2, p: 1.5, bgcolor: 'background.default', borderRadius: 1 }}>
-            <Typography variant="caption" fontWeight={600} color="text.primary" display="block" gutterBottom>
+            <Typography variant="caption" color="text.primary" sx={{ display: 'block', fontWeight: 600, mb: 0.5 }}>
               {t('dashboard.runtimeReadiness.whyThisMatters')}
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -164,6 +165,10 @@ function StatusCard({
  */
 export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) {
   const { t } = useTranslation('console');
+
+  const hasRuntimeStatus = runtimeStatus && [
+    'canIssue', 'canVerify', 'issuerKeysValid', 'issuerActive', 'deploymentActive', 'policyReachable',
+  ].every((field) => typeof runtimeStatus[field] === 'boolean');
   
   // Extract runtime status data
   const {
@@ -178,57 +183,70 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
   } = runtimeStatus || {};
 
   // Compute issuance status
-  const issuanceStatus = canIssue && issuerKeysValid && issuerActive ? 'ready' : 
+  const issuanceStatus = canIssue && issuerKeysValid && issuerActive && deploymentActive ? 'ready' :
                          (issuerKeysValid || issuerActive) ? 'degraded' : 'error';
   
-  const issuanceStatusText = canIssue ? t('dashboard.runtimeReadiness.ready') : 
-                            (issuerKeysValid || issuerActive) ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
+  const issuanceStatusText = issuanceStatus === 'ready' ? t('dashboard.runtimeReadiness.ready') :
+                            issuanceStatus === 'degraded' ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
   
-  const issuanceDetails = !issuerKeysValid ? t('dashboard.runtimeReadiness.issuance.keysInvalid') :
-                         !issuerActive ? t('dashboard.runtimeReadiness.issuance.issuerInactive') :
+  const issuerNeedsReview = !issuerKeysValid || !issuerActive;
+  const issuanceDetails = issuerNeedsReview ? t('dashboard.runtimeReadiness.issuance.issuerConfigurationRequired') :
+                         !deploymentActive ? t('dashboard.runtimeReadiness.issuance.noDeployments') :
+                         !canIssue ? t('dashboard.runtimeReadiness.issuance.notReady') :
                          t('dashboard.runtimeReadiness.issuance.operational');
 
-  const issuanceReason = !issuerKeysValid 
-    ? t('dashboard.runtimeReadiness.issuance.keysReason')
-    : !issuerActive
-    ? t('dashboard.runtimeReadiness.issuance.issuerReason')
+  const issuanceReason = issuerNeedsReview
+    ? t('dashboard.runtimeReadiness.issuance.issuerConfigurationReason')
+    : !deploymentActive
+    ? t('dashboard.runtimeReadiness.issuance.deploymentsReason')
+    : !canIssue
+    ? t('dashboard.runtimeReadiness.issuance.readinessReason')
     : null;
 
-  const issuanceAction = !issuerKeysValid 
-    ? { label: t('dashboard.runtimeReadiness.issuance.fixSigningKeys'), link: '/console/org/deploy/issuer-identity' }
-    : !issuerActive
-    ? { label: t('dashboard.runtimeReadiness.issuance.activateIssuer'), link: '/console/org/settings' }
+  const issuanceAction = issuerNeedsReview
+    ? { label: t('dashboard.runtimeReadiness.issuerConfiguration.manage'), link: '/console/org/deploy/issuer-identity' }
+    : !deploymentActive
+    ? { label: t('dashboard.runtimeReadiness.issuance.configureDeployment'), link: '/console/org/deploy/profiles' }
+    : !canIssue
+    ? { label: t('dashboard.runtimeReadiness.issuance.reviewFlows'), link: '/console/org/flows/definitions' }
     : null;
 
   // Compute verification status
   const verificationStatus = canVerify && deploymentActive && policyReachable ? 'ready' :
                             (deploymentActive || policyReachable) ? 'degraded' : 'error';
   
-  const verificationStatusText = canVerify ? t('dashboard.runtimeReadiness.ready') : 
-                                (deploymentActive || policyReachable) ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
+  const verificationStatusText = verificationStatus === 'ready' ? t('dashboard.runtimeReadiness.ready') :
+                                verificationStatus === 'degraded' ? t('dashboard.runtimeReadiness.degraded') : t('dashboard.runtimeReadiness.notReady');
   
   const verificationDetails = !deploymentActive ? t('dashboard.runtimeReadiness.verification.noDeployments') :
                              !policyReachable ? t('dashboard.runtimeReadiness.verification.policyUnreachable') :
+                             !canVerify ? t('dashboard.runtimeReadiness.verification.notReady') :
                              t('dashboard.runtimeReadiness.verification.operational');
 
   const verificationReason = !deploymentActive
     ? t('dashboard.runtimeReadiness.verification.deploymentsReason')
     : !policyReachable
     ? t('dashboard.runtimeReadiness.verification.policyReason')
+    : !canVerify
+    ? t('dashboard.runtimeReadiness.verification.readinessReason')
     : null;
 
   const verificationAction = !deploymentActive
     ? { label: t('dashboard.runtimeReadiness.verification.configureDeployment'), link: '/console/org/deploy/profiles' }
     : !policyReachable
     ? { label: t('dashboard.runtimeReadiness.verification.fixPolicies'), link: '/console/org/policies/presentation' }
+    : !canVerify
+    ? { label: t('dashboard.runtimeReadiness.verification.reviewSetup'), link: '/console/org/deploy/profiles' }
     : null;
 
-  const signingKeysReason = !issuerKeysValid
-    ? t('dashboard.runtimeReadiness.keys.reason')
+  // The gateway's issuer flag describes an active template's DID reference;
+  // it is not a live cryptographic health check of the signing key.
+  const issuerConfigurationReason = !issuerActive
+    ? t('dashboard.runtimeReadiness.issuerConfiguration.reason')
     : null;
 
-  const signingKeysAction = !issuerKeysValid
-    ? { label: t('dashboard.runtimeReadiness.keys.manageKeys'), link: '/console/org/deploy/issuer-identity' }
+  const issuerConfigurationAction = !issuerActive
+    ? { label: t('dashboard.runtimeReadiness.issuerConfiguration.manage'), link: '/console/org/deploy/issuer-identity' }
     : null;
 
   return (
@@ -236,11 +254,11 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
       <Typography variant="h6" gutterBottom>
         {t('dashboard.runtimeReadiness.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
         {t('dashboard.runtimeReadiness.description')}
       </Typography>
 
-      {error ? (
+      {error || !hasRuntimeStatus ? (
         <DashboardErrorAlert
           title="Runtime readiness unavailable"
           error={error}
@@ -249,7 +267,7 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
         />
       ) : (
       <Grid container spacing={2}>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatusCard
             icon={BadgeIcon}
             label={t('dashboard.runtimeReadiness.credentialIssuance')}
@@ -262,7 +280,7 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
             actionLink={issuanceAction?.link}
           />
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatusCard
             icon={VerifiedUserIcon}
             label={t('dashboard.runtimeReadiness.credentialVerification')}
@@ -275,16 +293,20 @@ export function RuntimeReadinessPanel({ runtimeStatus, error = null, onRetry }) 
             actionLink={verificationAction?.link}
           />
         </Grid>
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <StatusCard
             icon={VpnKeyIcon}
-            label={t('dashboard.runtimeReadiness.signingKeys')}
-            status={issuerKeysValid ? 'ready' : 'error'}
-            statusText={issuerKeysValid ? t('dashboard.runtimeReadiness.valid') : t('dashboard.runtimeReadiness.invalid')}
-            details={issuerKeysValid ? t('dashboard.runtimeReadiness.keys.valid') : t('dashboard.runtimeReadiness.keys.needsAttention')}
-            reason={signingKeysReason}
-            actionLabel={signingKeysAction?.label}
-            actionLink={signingKeysAction?.link}
+            label={t('dashboard.runtimeReadiness.issuerConfiguration.title')}
+            status={issuerActive ? 'ready' : 'error'}
+            statusText={t(issuerActive
+              ? 'dashboard.runtimeReadiness.issuerConfiguration.configured'
+              : 'dashboard.runtimeReadiness.issuerConfiguration.notConfigured')}
+            details={t(issuerActive
+              ? 'dashboard.runtimeReadiness.issuerConfiguration.configuredDetail'
+              : 'dashboard.runtimeReadiness.issuerConfiguration.notConfiguredDetail')}
+            reason={issuerConfigurationReason}
+            actionLabel={issuerConfigurationAction?.label}
+            actionLink={issuerConfigurationAction?.link}
           />
         </Grid>
       </Grid>

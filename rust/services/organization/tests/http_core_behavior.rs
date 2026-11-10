@@ -20,6 +20,97 @@ use uuid::Uuid;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
+#[tokio::test]
+async fn membership_approval_requires_trusted_tenant_scoped_manage_permission() {
+    let organization_id = Uuid::from_u128(1);
+    let path = format!(
+        "/v1/organizations/{organization_id}/members/{}/approve",
+        Uuid::from_u128(2)
+    );
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("x-user-id", "forged-reviewer")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    for (principal_org, permission) in [
+        (Uuid::from_u128(3), "team:manage"),
+        (organization_id, "team:invite"),
+        (organization_id, "team:view"),
+    ] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("x-service-token", TOKEN)
+                    .header("x-user-id", "api_key:reviewer-key")
+                    .header("x-api-key-id", "reviewer-key")
+                    .header("x-organization-id", principal_org.to_string())
+                    .header("x-required-permission", permission)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("x-service-token", TOKEN)
+                .header("x-user-id", "api_key:reviewer-key")
+                .header("x-api-key-id", "reviewer-key")
+                .header("x-organization-id", organization_id.to_string())
+                .header("x-required-permission", "team:manage")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"role_ids":["owner"],"status":"active"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "approval cannot accept role/status assignment payloads"
+    );
+}
+
+#[tokio::test]
+async fn member_status_query_is_typed_and_does_not_change_the_view_permission() {
+    let organization_id = Uuid::from_u128(1);
+    for (query, expected) in [
+        ("status=unknown", StatusCode::BAD_REQUEST),
+        ("status=pending&limit=1&offset=2", StatusCode::FORBIDDEN),
+    ] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/organizations/{organization_id}/members?{query}"
+                    ))
+                    .header("x-service-token", TOKEN)
+                    .header("x-user-id", "api_key:reviewer-key")
+                    .header("x-api-key-id", "reviewer-key")
+                    .header("x-organization-id", organization_id.to_string())
+                    .header("x-required-permission", "team:manage")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
 fn router() -> axum::Router {
     router_with_auth(true)
 }
@@ -186,6 +277,52 @@ async fn untrusted_requests_and_malformed_bodies_fail_before_database_access() {
         .await
         .unwrap();
     assert_eq!(rbac_without_trust.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn defaults_reject_untrusted_forwarding_and_wrong_tenant_or_grant_before_storage() {
+    let organization_id = Uuid::from_u128(1);
+    let path = format!("/v1/organizations/{organization_id}/defaults");
+    for method in ["GET", "PATCH"] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "api-key:key-1")
+                    .header("x-api-key-id", "key-1")
+                    .header("x-organization-id", organization_id.to_string())
+                    .header("x-required-permission", "organization:edit")
+                    .body(Body::from(r#"{"default_policy_id":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    for (principal_org, permission) in [
+        (Uuid::from_u128(2), "organization:edit"),
+        (organization_id, "organization:view"),
+    ] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .header("x-service-token", TOKEN)
+                    .header("x-user-id", "api-key:key-1")
+                    .header("x-api-key-id", "key-1")
+                    .header("x-organization-id", principal_org.to_string())
+                    .header("x-required-permission", permission)
+                    .body(Body::from(r#"{"default_policy_id":null}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
 }
 
 #[tokio::test]
@@ -363,6 +500,84 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
     assert_eq!(joined.0, StatusCode::CREATED);
     assert_eq!(joined.1["membership"]["status"], "active");
     let joined_member_id = joined.1["membership"]["id"].as_str().unwrap().to_owned();
+
+    // The privileged native call represents a gateway write whose resource
+    // references were already validated by the gateway composition boundary.
+    let defaults_path = format!("/v1/organizations/{organization_id}/defaults");
+    let empty_defaults = serde_json::json!({
+        "default_trust_profile_id": null,
+        "default_policy_id": null,
+        "default_template_id": null
+    });
+    let initial_defaults =
+        request_json(&router, "GET", &defaults_path, Some(&joined_user), None).await;
+    assert_eq!(initial_defaults, (StatusCode::OK, empty_defaults));
+    let denied_defaults = request_json(
+        &router,
+        "PATCH",
+        &defaults_path,
+        Some(&joined_user),
+        Some(serde_json::json!({"default_policy_id":null})),
+    )
+    .await;
+    assert_eq!(denied_defaults.0, StatusCode::FORBIDDEN);
+    let outsider_defaults =
+        request_json(&router, "GET", &defaults_path, Some("nonmember"), None).await;
+    assert_eq!(outsider_defaults.0, StatusCode::FORBIDDEN);
+
+    let trust_id = Uuid::new_v4().to_string();
+    let template_id = Uuid::new_v4().to_string();
+    let saved_defaults = request_json(
+        &router,
+        "PATCH",
+        &defaults_path,
+        Some(&user_id),
+        Some(serde_json::json!({
+            "default_trust_profile_id":trust_id,
+            "default_policy_id":Uuid::new_v4().to_string(),
+            "default_template_id":template_id
+        })),
+    )
+    .await;
+    assert_eq!(saved_defaults.0, StatusCode::OK);
+    let cleared_defaults = request_json(
+        &router,
+        "PATCH",
+        &defaults_path,
+        Some(&user_id),
+        Some(serde_json::json!({"default_policy_id":null})),
+    )
+    .await;
+    assert_eq!(cleared_defaults.0, StatusCode::OK);
+    assert_eq!(
+        cleared_defaults.1,
+        serde_json::json!({
+            "default_trust_profile_id":trust_id,
+            "default_policy_id":null,
+            "default_template_id":template_id
+        })
+    );
+    let loaded_defaults =
+        request_json(&router, "GET", &defaults_path, Some(&joined_user), None).await;
+    assert_eq!(loaded_defaults, cleared_defaults);
+    assert_eq!(
+        application
+            .get_organization(organization_id.parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap()
+            .settings["default_template_id"],
+        template_id
+    );
+    let private_defaults = request_json(
+        &router,
+        "PATCH",
+        &defaults_path,
+        Some(&user_id),
+        Some(serde_json::json!({"default_policy_id":null,"settings":{"environment":"production"}})),
+    )
+    .await;
+    assert_eq!(private_defaults.0, StatusCode::BAD_REQUEST);
 
     let team = request_json(
         &router,

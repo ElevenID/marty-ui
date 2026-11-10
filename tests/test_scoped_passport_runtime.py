@@ -63,14 +63,14 @@ def runtime_rows():
 class ScopeTests(unittest.TestCase):
     def test_current_d12_profile_is_closed_and_old_lineage_stays_distinct(self):
         current = profiles.D12_PASSPORT_CURRENT
-        self.assertEqual(current.ui_revision, "6117cea9290f57406cf109eae56f64f7986e3783")
-        self.assertEqual(current.core_revision, "ffa24febcd0fb3fced15da7f28190af6d61ae0f9")
+        self.assertEqual(current.ui_revision, "449ab93ca80d147622ae61283f7d8084f7c62884")
+        self.assertEqual(current.core_revision, "11655e38c2dbf69bfa5bc3c873f80c5fad628723")
         self.assertEqual(dict(current.roles), shared.ROLE_BINARIES)
         self.assertNotEqual(current.ui_revision, profiles.OFFICIAL_ALL_SERVICES.ui_revision)
         scope = build.build_scope(current.name)
         self.assertEqual(scope["coreRevision"], current.core_revision)
         self.assertEqual(scope["roles"], dict(current.roles))
-        self.assertEqual(scope["volumes"][1], "marty-d12-current-native-target")
+        self.assertEqual(scope["volumes"][1], "marty-d12-current-main-native-target")
         args = build.cargo_arguments(current.name)
         self.assertEqual({args[index + 1] for index, item in enumerate(args[:-1]) if item == "--bin"},
                          set(shared.ROLE_BINARIES.values()))
@@ -91,6 +91,10 @@ class ScopeTests(unittest.TestCase):
 
     def test_current_d12_runtime_requires_exact_selected_source_and_core(self):
         before, after, binaries = runtime_rows()
+        # The current D12 cohort uses event-stream; the historical default
+        # runtime_rows fixture intentionally retains canvas-sandbox.
+        for snapshot in (before, after):
+            next(row for row in snapshot["roles"] if row["role"] == "canvas-sandbox")["role"] = "event-stream"
         current = profiles.D12_PASSPORT_CURRENT
         for row in after["roles"]:
             if row["role"] in binaries:

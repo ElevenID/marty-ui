@@ -1,11 +1,11 @@
 /**
  * Console Dashboard
  * 
- * Main dashboard for Admin/Vendor users.
+ * Dashboard sections available to the current organization member.
  * Shows status, alerts, and next step guidance.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   AlertTitle,
@@ -32,6 +32,7 @@ import { useDashboardData } from '../../hooks/useDashboardData';
 import { useSSE } from '../../hooks/useSSE';
 import { DASHBOARD_QUICK_ACTIONS } from '../../config/navigation';
 import { computeSetupReadiness, computeBlockers, computeQuickActionVisibility } from '../../config/dashboardRules';
+import { getDashboardAccess } from '../../config/dashboardAccess';
 import { SystemStatusBar } from './dashboard/SystemStatusBar';
 import { SetupReadinessPanel } from './dashboard/SetupReadinessPanel';
 import { BlockingIssuesPanel } from './dashboard/BlockingIssuesPanel';
@@ -47,6 +48,18 @@ import GuidedSetupBanner from './dashboard/GuidedSetupBanner';
 import DashboardErrorAlert from './dashboard/DashboardErrorAlert';
 import { runHostedPilotPurge, updateOrganizationEnvironment } from '../../services/dashboardApi';
 import IssuanceDashboardWidget from './dashboard/IssuanceDashboardWidget';
+import { EVENT_TYPES } from '../../services/sseService';
+
+const ACTIVITY_EVENT_TYPES = [
+  EVENT_TYPES.CREDENTIAL_ISSUED,
+  EVENT_TYPES.CREDENTIAL_REVOKED,
+  EVENT_TYPES.APPLICATION_SUBMITTED,
+  EVENT_TYPES.APPLICATION_APPROVED,
+  EVENT_TYPES.APPLICATION_REJECTED,
+  EVENT_TYPES.FLOW_EXECUTION_COMPLETED,
+  EVENT_TYPES.FLOW_EXECUTION_FAILED,
+  EVENT_TYPES.VERIFICATION_COMPLETED,
+];
 
 const EMPTY_RETENTION_COUNTS = {
   issuanceTransactions: 0,
@@ -101,7 +114,7 @@ function formatTimestamp(timestamp) {
   return parsed.toLocaleString();
 }
 
-function HostedPilotRetentionBanner({ lifecycle, purging, purgeFeedback, onPurge }) {
+function HostedPilotRetentionBanner({ lifecycle, purging, purgeFeedback, onPurge, canPurge = false }) {
   const pilotRetention = lifecycle?.pilotRetention;
   if (!pilotRetention?.enabled) {
     return null;
@@ -116,7 +129,7 @@ function HostedPilotRetentionBanner({ lifecycle, purging, purgeFeedback, onPurge
     <Box sx={{ mt: 2 }}>
       <Alert
         severity={hasEligibleRecords ? 'warning' : 'info'}
-        action={hasEligibleRecords ? (
+        action={hasEligibleRecords && canPurge ? (
           <Button
             color="inherit"
             size="small"
@@ -221,16 +234,14 @@ function QuickActionCard({ action, disabled, tooltip, onClick }) {
   return cardContent;
 }
 
-function ConsoleDashboard() {
+function ConsoleDashboardContent() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
-  const { can, isLoading: permissionsLoading } = usePermissions();
+  const { can, roles = [], isLoading: permissionsLoading } = usePermissions();
   const {
     user,
     organizationName: authOrganizationName,
-    organizationId: authOrganizationId,
     isAdministrator,
-    isVendor,
   } = useAuth();
   const { activeOrgId, memberships } = useConsole();
   const organizationId = activeOrgId;
@@ -241,9 +252,16 @@ function ConsoleDashboard() {
       || authOrganizationName
       || t('dashboard.organizationFallbackName', { defaultValue: 'Organization' });
   }, [authOrganizationName, memberships, organizationId, t]);
-  const { data, loading, error, refetch } = useDashboardData();
-  useSSE(organizationId);
-  const [environment, setEnvironment] = useState(data.environment || null);
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  const access = useMemo(() => getDashboardAccess(can, permissionsLoading), [can, permissionsLoading]);
+  const { data, loading, error, refetch } = useDashboardData(access, permissionsLoading);
+  const canEditOrganization = !permissionsLoading && can('organization', 'edit');
+  const environmentScope = useMemo(() => ({ organizationId }), [organizationId]);
+  const currentEnvironmentScope = useRef(environmentScope);
+  currentEnvironmentScope.current = environmentScope;
+  const environmentRequest = useRef(0);
+  const [environmentChange, setEnvironmentChange] = useState(null);
+  const currentEnvironmentChange = environmentChange?.scope === environmentScope ? environmentChange : null;
   const [purgingPilotData, setPurgingPilotData] = useState(false);
   const [purgeFeedback, setPurgeFeedback] = useState(null);
   const [setupIntent, setSetupIntent] = useState(null);
@@ -256,40 +274,50 @@ function ConsoleDashboard() {
   const blockers = useMemo(() => computeBlockers(readiness), [readiness]);
   const quickActionVisibility = useMemo(() => computeQuickActionVisibility(readiness), [readiness]);
   const dashboardErrors = data.dashboardErrors || {};
+  const healthError = ['trustProfiles', 'templates', 'policies', 'deployments', 'flows']
+    .map((key) => data.resourceErrors?.[key]).find(Boolean);
   const environmentUnavailable = Boolean(dashboardErrors.environment);
-  const displayEnvironment = environmentUnavailable || !environment ? 'unknown' : environment;
-  const canSwitchEnvironment = Boolean(environment && !environmentUnavailable);
+  const displayEnvironment = environmentUnavailable ? 'unknown' : (data.environment ?? 'unset');
+  const canSwitchEnvironment = Boolean(organizationId && access.environment && !environmentUnavailable
+    && canEditOrganization && !currentEnvironmentChange?.pending);
 
-  useEffect(() => {
-    if (data.environment) {
-      setEnvironment(data.environment);
-    }
-  }, [data.environment]);
+  useEffect(() => () => { environmentRequest.current += 1; }, [environmentScope]);
 
   // Filter visible quick actions
   const visibleQuickActions = useMemo(() => {
     return DASHBOARD_QUICK_ACTIONS.adminVendor.filter(
-      (action) => quickActionVisibility[action.id]?.visible === true
-        && (!action.requiredPermission || (!permissionsLoading && can(action.requiredPermission.resource, action.requiredPermission.action)))
+      (action) => access.setupOverview && quickActionVisibility[action.id]?.visible === true
+        && access.actions[action.id] === true
     );
-  }, [quickActionVisibility, can, permissionsLoading]);
+  }, [quickActionVisibility, access]);
 
   // Handle environment change
   const handleEnvironmentChange = async (newEnv) => {
-    if (!organizationId) {
+    if (!canSwitchEnvironment) {
       return;
     }
 
+    const request = ++environmentRequest.current;
+    const applies = () => currentEnvironmentScope.current === environmentScope
+      && environmentRequest.current === request;
+    setEnvironmentChange({ scope: environmentScope, environment: newEnv, pending: true, error: null });
     try {
       await updateOrganizationEnvironment(organizationId, newEnv);
-      setEnvironment(newEnv);
+      if (applies()) {
+        setEnvironmentChange(null);
+        refetch();
+      }
     } catch (error) {
-      logDashboardError('Failed to update environment:', error);
+      if (applies()) {
+        setEnvironmentChange({ scope: environmentScope, environment: newEnv, pending: false, error });
+        logDashboardError('Failed to update environment:', error);
+      }
     }
   };
 
   // Handle quick action clicks
   const handleQuickAction = (actionId) => {
+    if (!visibleQuickActions.some((action) => action.id === actionId)) return;
     switch (actionId) {
       case 'register-signing-service':
         navigate('/console/org/operator/key-management/services/new');
@@ -318,6 +346,7 @@ function ConsoleDashboard() {
   };
 
   const handleHostedPilotPurge = async () => {
+    if (!canEditOrganization || purgingPilotData) return;
     if (!organizationId) {
       setPurgeFeedback({
         severity: 'error',
@@ -351,12 +380,18 @@ function ConsoleDashboard() {
 
   // Check if org is operational (setup complete + runtime ready)
   const isOperational = useMemo(() => {
-    return readiness.flow?.state === 'ready' && 
+    return access.setupOverview && access.runtimeStatus && readiness.flow?.state === 'ready' &&
            data.runtimeStatus?.canIssue && 
            data.runtimeStatus?.canVerify;
-  }, [readiness, data.runtimeStatus]);
+  }, [access.setupOverview, access.runtimeStatus, readiness, data.runtimeStatus]);
 
-  if (loading) {
+  const subscriptions = useMemo(() => access.criticalEvents
+    ? ACTIVITY_EVENT_TYPES
+    : access.issuanceMetrics && isOperational ? [EVENT_TYPES.CREDENTIAL_ISSUED] : [],
+  [access.criticalEvents, access.issuanceMetrics, isOperational]);
+  useSSE(access.notifications && subscriptions.length > 0 ? organizationId : null, principalId, subscriptions);
+
+  if (loading || permissionsLoading) {
     return (
       <Box sx={{ py: 4 }}>
         <LinearProgress />
@@ -372,8 +407,12 @@ function ConsoleDashboard() {
     );
   }
 
-  // Determine user role for display
-  const userRole = isAdministrator ? t('common:userTypes.administrator') : isVendor ? t('common:userTypes.vendor') : t('common:userTypes.user');
+  const userRole = isAdministrator ? t('common:userTypes.administrator') : roles
+    .map((role) => typeof role === 'string' ? role : role.display_name || role.name)
+    .filter(Boolean).join(', ');
+  const welcomeName = user?.name?.trim()
+    || [user?.given_name, user?.family_name].filter(Boolean).join(' ');
+  const limitedAccess = !access.setupOverview || !access.applicantStats || !access.criticalEvents || !access.teamData;
 
   return (
     <Box data-testid="console.dashboard.page">
@@ -384,16 +423,22 @@ function ConsoleDashboard() {
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="body1" color="text.secondary">
-            {user?.name ? t('dashboard.welcomeWithName', { name: user.name }) : t('dashboard.welcome')}
+            {welcomeName ? t('dashboard.welcomeWithName', { name: welcomeName }) : t('dashboard.welcome')}
           </Typography>
           <Chip
-            label={t('dashboard.roleLabel', { role: userRole })}
+            label={userRole ? t('dashboard.roleLabel', { role: userRole }) : 'Organization Console'}
             size="small"
             color="primary"
             variant="outlined"
           />
         </Box>
       </Box>
+
+      {limitedAccess && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          This dashboard shows the sections available to your role. Additional access is required to view the other sections.
+        </Alert>
+      )}
 
       {/* Environment Context & Warning */}
       {dashboardErrors.environment ? (
@@ -406,7 +451,19 @@ function ConsoleDashboard() {
           />
         </Box>
       ) : null}
+      {currentEnvironmentChange?.error ? (
+        <Box sx={{ mb: 2 }}>
+          <DashboardErrorAlert
+            title="Environment change failed"
+            error={currentEnvironmentChange.error}
+            onRetry={canSwitchEnvironment ? () => handleEnvironmentChange(currentEnvironmentChange.environment) : undefined}
+            fallback="The organization's environment could not be updated."
+          />
+        </Box>
+      ) : null}
+      {access.environment && <>
       <EnvironmentContext
+        key={organizationId}
         organizationName={organizationName}
         environment={displayEnvironment}
         organizationId={organizationId}
@@ -416,67 +473,71 @@ function ConsoleDashboard() {
       <Box sx={{ mt: 2 }}>
         <EnvironmentWarningBanner environment={displayEnvironment} />
       </Box>
-      <HostedPilotRetentionBanner
+      </>}
+      {access.lifecycle && <HostedPilotRetentionBanner
         lifecycle={data.lifecycle}
         purging={purgingPilotData}
         purgeFeedback={purgeFeedback}
         onPurge={handleHostedPilotPurge}
-      />
+        canPurge={canEditOrganization}
+      />}
 
       {/* Guided Setup Banner */}
-      <GuidedSetupBanner readiness={readiness} />
+      {access.setupOverview && <GuidedSetupBanner readiness={readiness} />}
 
       {/* Organization Health Overview */}
-      <OrganizationHealthPanel 
+      {access.healthOverview && (healthError ? (
+        <DashboardErrorAlert title="Organization overview unavailable" error={healthError} onRetry={refetch} />
+      ) : <OrganizationHealthPanel
         data={data}
         organizationName={organizationName}
         isActive={true}
-      />
+      />)}
 
       {/* Applicant Lifecycle Stats */}
-      <ApplicantStatsCard />
+      {access.applicantStats && <ApplicantStatsCard />}
 
       {/* System Status Bar */}
-      <SystemStatusBar systemHealth={data.systemHealth} />
+      <SystemStatusBar systemHealth={data.systemHealth} canViewAudit={access.criticalEvents} />
 
       {/* Critical Events */}
-      <CriticalEventsPanel
+      {access.criticalEvents && <CriticalEventsPanel
         events={data.criticalEvents}
         loading={loading}
         error={dashboardErrors.criticalEvents}
         onRetry={refetch}
-      />
+      />}
 
       {/* Runtime Readiness */}
-      <RuntimeReadinessPanel
+      {access.runtimeStatus && <RuntimeReadinessPanel
         runtimeStatus={data.runtimeStatus}
         error={dashboardErrors.runtimeStatus}
         onRetry={refetch}
-      />
+      />}
 
       {/* Credential Issuance Widget */}
-      {isOperational && (
+      {isOperational && access.issuanceMetrics && (
         <Box sx={{ mb: 4 }}>
           <IssuanceDashboardWidget compact={false} />
         </Box>
       )}
 
       {/* Team Snapshot */}
-      <TeamSnapshotPanel
+      {access.teamData && <TeamSnapshotPanel
         teamData={data.teamData}
         error={dashboardErrors.teamData}
         onRetry={refetch}
-      />
+      />}
 
       {/* Blocking Issues */}
-      <BlockingIssuesPanel blockers={blockers} />
+      {access.setupOverview && <BlockingIssuesPanel blockers={blockers} />}
 
       {/* Setup Readiness */}
-      <SetupReadinessPanel
+      {access.setupOverview && <SetupReadinessPanel
         readiness={readiness}
         loading={loading}
         onIntentChange={setSetupIntent}
-      />
+      />}
 
       {/* Setup Complete / Operational Message */}
       {isOperational && (
@@ -484,7 +545,7 @@ function ConsoleDashboard() {
           <Typography variant="h6" gutterBottom>
             {t('dashboard.operationalTitle')}
           </Typography>
-          <Typography variant="body2" paragraph>
+          <Typography variant="body2" sx={{ mb: 2 }}>
             {t('dashboard.operationalDescription')}
           </Typography>
           <Box sx={{ display: 'flex', gap: 2 }}>
@@ -497,14 +558,14 @@ function ConsoleDashboard() {
             >
               {t('dashboard.goToOperate')}
             </Button>
-            <Button
+            {access.criticalEvents && <Button
               variant="outlined"
               component={Link}
               to="/console/org/audit"
               sx={{ borderColor: 'success.dark', color: 'success.dark' }}
             >
               {t('dashboard.viewAudit')}
-            </Button>
+            </Button>}
           </Box>
         </Paper>
       )}
@@ -519,7 +580,7 @@ function ConsoleDashboard() {
             {visibleQuickActions.map((action) => {
               const actionVisibility = quickActionVisibility[action.id] || {};
               return (
-                <Grid item xs={12} sm={6} md={4} lg={2.4} key={action.id}>
+                <Grid size={{ xs: 12, sm: 6, md: 4, lg: 2.4 }} key={action.id}>
                   <QuickActionCard
                     action={action}
                     disabled={actionVisibility.disabled}
@@ -534,12 +595,19 @@ function ConsoleDashboard() {
       )}
 
       {/* Recent Activity */}
-      <RecentActivityPanel />
+      {access.criticalEvents && <RecentActivityPanel />}
 
       {/* Developer Quick Start */}
-      <DeveloperQuickStartPanel />
+      {access.integrationInfo && <DeveloperQuickStartPanel canViewApiKeys={access.apiKeys} />}
     </Box>
   );
+}
+
+function ConsoleDashboard() {
+  const { user } = useAuth();
+  const { activeOrgId } = useConsole();
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  return <ConsoleDashboardContent key={JSON.stringify([principalId, activeOrgId])} />;
 }
 
 export default ConsoleDashboard;

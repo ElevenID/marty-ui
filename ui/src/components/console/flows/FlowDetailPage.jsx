@@ -7,11 +7,13 @@
  * Enforces the mental model: Applicants apply to Flows, not Templates.
  */
 
-import { useState } from 'react';
-import { useParams, useNavigate, Link as RouterLink } from 'react-router';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { useLocation, useParams, useNavigate, Link as RouterLink } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { getFlow, publishFlow, testFlow, validateFlow } from '../../../services/flowsApi';
+import { publicEntryHref } from '../../../application/routing/publicEntry';
 import {
   Box,
   Paper,
@@ -39,7 +41,6 @@ import {
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import QrCode2Icon from '@mui/icons-material/QrCode2';
-import MoreVertIcon from '@mui/icons-material/MoreVert';
 import PreviewIcon from '@mui/icons-material/Preview';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
@@ -48,7 +49,6 @@ import SmartphoneIcon from '@mui/icons-material/Smartphone';
 import DescriptionIcon from '@mui/icons-material/Description';
 import PolicyIcon from '@mui/icons-material/Policy';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
-import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import RuleIcon from '@mui/icons-material/Rule';
@@ -73,7 +73,7 @@ function ApplicantJourney({ flow }) {
   return (
     <Card elevation={0} sx={{ bgcolor: 'primary.50', border: 1, borderColor: 'primary.100' }}>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           Resolved flow sequence
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom>
@@ -107,12 +107,12 @@ function ApplicantJourney({ flow }) {
  * Live Entry Points - Share Block
  * Reinforces that THIS is what gets shared
  */
-function EntryPoints({ flow, publicUrl, onCopy }) {
+function EntryPoints({ publicUrl, onCopy, copying }) {
   const { t } = useTranslation('console');
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.entryPoints.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
@@ -125,7 +125,7 @@ function EntryPoints({ flow, publicUrl, onCopy }) {
         </Typography>
         <TextField
           fullWidth
-          value={publicUrl || t('flows.flowDetail.entryPoints.notPublished')}
+          value={publicUrl || t('flows.flowDetail.entryPoints.linkUnavailable')}
           disabled={!publicUrl}
           size="small"
           sx={{ mb: 3 }}
@@ -135,12 +135,12 @@ function EntryPoints({ flow, publicUrl, onCopy }) {
               endAdornment: publicUrl && (
                 <InputAdornment position="end">
                   <Tooltip title={t('flows.flowDetail.entryPoints.copyUrlTooltip')}>
-                    <IconButton onClick={onCopy} edge="end" size="small">
+                    <IconButton onClick={onCopy} disabled={copying} edge="end" size="small">
                       <ContentCopyIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
                   <Tooltip title={t('flows.flowDetail.entryPoints.openInNewTabTooltip')}>
-                    <IconButton onClick={() => window.open(publicUrl, '_blank')} edge="end" size="small">
+                    <IconButton onClick={() => window.open(publicUrl, '_blank', 'noopener,noreferrer')} edge="end" size="small">
                       <OpenInNewIcon fontSize="small" />
                     </IconButton>
                   </Tooltip>
@@ -181,7 +181,7 @@ function EntryPoints({ flow, publicUrl, onCopy }) {
           </Box>
         ) : (
           <Alert severity="info" sx={{ mt: 1 }}>
-            {t('flows.flowDetail.entryPoints.qrCodeAlert')}
+            {t('flows.flowDetail.entryPoints.qrUnavailable')}
           </Alert>
         )}
       </CardContent>
@@ -238,7 +238,7 @@ function ConfigurationSummary({ flow }) {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.configuration.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 2 }}>
@@ -308,7 +308,7 @@ function RuntimeOverview({ flow }) {
   return (
     <Card>
       <CardContent>
-        <Typography variant="h6" gutterBottom fontWeight={600}>
+        <Typography variant="h6" gutterBottom sx={{ fontWeight: 600 }}>
           {t('flows.flowDetail.runtime.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
@@ -317,9 +317,9 @@ function RuntimeOverview({ flow }) {
 
         <Grid container spacing={3}>
           {stats.map((stat) => (
-            <Grid item xs={12} sm={6} md={3} key={stat.label}>
+            <Grid key={stat.label} size={{ xs: 12, sm: 6, md: 3 }}>
               <Box sx={{ textAlign: 'center' }}>
-                <Typography variant="h3" fontWeight={700} color={`${stat.color}.main`}>
+                <Typography variant="h3" color={`${stat.color}.main`} sx={{ fontWeight: 700 }}>
                   {stat.value}
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
@@ -355,30 +355,44 @@ function RuntimeOverview({ flow }) {
   );
 }
 
-function LifecycleActions({ flow, onActivated }) {
+function LifecycleActions({ flow, onActivated, canManage }) {
+  const { t } = useTranslation('console');
+  const beginAction = useAsyncActionScope();
+  const busyRef = useRef(false);
   const [busy, setBusy] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
 
-  const run = async (action, operation) => {
-    setBusy(action);
+  const run = async (label, operation, onSuccess) => {
+    if (!canManage || busyRef.current) return;
+    const action = beginAction();
+    busyRef.current = true;
+    setBusy(label);
     setError('');
+    setResult(null);
     try {
-      const value = await operation();
-      setResult({ action, value });
-      return value;
+      const value = await action.run(operation);
+      if (action.isCurrent()) {
+        setResult({ action: label, value });
+        onSuccess?.(value);
+      }
     } catch (cause) {
-      setError(cause.message || `${action} failed.`);
-      return null;
+      if (action.isCurrent()) setError(cause?.message || `${label} failed.`);
     } finally {
-      setBusy('');
+      if (action.isCurrent()) {
+        busyRef.current = false;
+        setBusy('');
+      }
     }
   };
 
-  const activate = async () => {
-    const activated = await run('Activation', () => publishFlow(flow.id));
-    if (activated) onActivated(activated);
-  };
+  const activate = () => run('Activation', async () => {
+    const activated = await publishFlow(flow.id);
+    if (activated?.id !== flow.id || activated.organization_id !== flow.organization_id || activated.status !== 'ACTIVE') {
+      throw new Error(t('flows.flowDetail.errors.invalidActivation'));
+    }
+    return activated;
+  }, onActivated);
 
   if (flow.status === 'ACTIVE') {
     return <Alert severity="success" icon={<CheckCircleIcon />}>This flow is active and can start new instances.</Alert>;
@@ -386,11 +400,11 @@ function LifecycleActions({ flow, onActivated }) {
 
   return (
     <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
-      <Typography variant="subtitle1" fontWeight={600} gutterBottom>Draft lifecycle</Typography>
+      <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>{t('flows.flowDetail.lifecycleTitle')}</Typography>
       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
-        <Button startIcon={<RuleIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Validation', () => validateFlow(flow.id))}>Validate</Button>
-        <Button startIcon={<ScienceIcon />} variant="outlined" disabled={Boolean(busy)} onClick={() => run('Dry run', () => testFlow(flow.id))}>Test</Button>
-        <Button startIcon={<PlayArrowIcon />} variant="contained" disabled={Boolean(busy)} onClick={activate}>Activate</Button>
+        <Button startIcon={<RuleIcon />} variant="outlined" disabled={!canManage || Boolean(busy)} onClick={() => run('Validation', () => validateFlow(flow.id))}>Validate</Button>
+        <Button startIcon={<ScienceIcon />} variant="outlined" disabled={!canManage || Boolean(busy)} onClick={() => run('Dry run', () => testFlow(flow.id))}>Test</Button>
+        <Button startIcon={<PlayArrowIcon />} variant="contained" disabled={!canManage || Boolean(busy)} onClick={activate}>Activate</Button>
       </Stack>
       {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       {result && (
@@ -406,8 +420,17 @@ function LifecycleActions({ flow, onActivated }) {
 /**
  * Main Flow Detail Page Component
  */
-function FlowDetailPage() {
-  const { flowId } = useParams();
+function applicationLink(flow) {
+  if (flow?.status !== 'ACTIVE' || typeof flow.public_url !== 'string' || !flow.public_url.trim()) return null;
+  try {
+    const url = new URL(flow.public_url);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? flow.public_url.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function FlowDetailSession({ flowId }) {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
   const { data: flow, loading, error } = useAsyncData(
@@ -415,19 +438,51 @@ function FlowDetailPage() {
     [flowId]
   );
   const [copySuccess, setCopySuccess] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState('');
+  const copyBusy = useRef(false);
+  const copyTimer = useRef(null);
+  const beginCopy = useAsyncActionScope();
   const [activatedFlow, setActivatedFlow] = useState(null);
+  const displayedFlow = activatedFlow || flow;
+  const previewPath = typeof displayedFlow?.id === 'string' && displayedFlow.id.trim()
+    && displayedFlow.id === flowId
+    && typeof displayedFlow.organization_id === 'string' && displayedFlow.organization_id.trim()
+    ? `/applicant/preview/flows/${encodeURIComponent(displayedFlow.id)}?organization_id=${encodeURIComponent(displayedFlow.organization_id)}`
+    : null;
+  const publicUrl = previewPath ? applicationLink(displayedFlow) : null;
 
-  const handleCopyUrl = () => {
-    if (flow?.public_url) {
-      navigator.clipboard.writeText(flow.public_url);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
+  useLayoutEffect(() => () => window.clearTimeout(copyTimer.current), []);
+
+  const handleCopyUrl = async () => {
+    if (!publicUrl || copyBusy.current) return;
+    const action = beginCopy();
+    copyBusy.current = true;
+    window.clearTimeout(copyTimer.current);
+    setCopying(true);
+    setCopySuccess(false);
+    setCopyError('');
+    try {
+      await action.run(() => navigator.clipboard.writeText(publicUrl));
+      if (action.isCurrent()) {
+        setCopySuccess(true);
+        copyTimer.current = window.setTimeout(() => {
+          if (action.isCurrent()) setCopySuccess(false);
+        }, 2000);
+      }
+    } catch {
+      if (action.isCurrent()) setCopyError(t('flows.flowDetail.errors.copyFailed'));
+    } finally {
+      if (action.isCurrent()) {
+        copyBusy.current = false;
+        setCopying(false);
+      }
     }
   };
 
   const handlePreview = () => {
-    if (flow?.public_url) {
-      window.open(flow.public_url, '_blank');
+    if (previewPath) {
+      window.open(publicEntryHref(previewPath), '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -454,8 +509,9 @@ function FlowDetailPage() {
     );
   }
 
-  const displayedFlow = activatedFlow || flow;
   const isPublished = displayedFlow.status === 'ACTIVE';
+  const statusKey = ['DRAFT', 'ACTIVE', 'PAUSED', 'ARCHIVED'].includes(displayedFlow.status)
+    ? displayedFlow.status.toLowerCase() : 'unknown';
 
   return (
     <ResourcePage
@@ -474,14 +530,14 @@ function FlowDetailPage() {
               >
                 <ArrowBackIcon />
               </IconButton>
-              <Typography variant="h4" fontWeight={700}>
+              <Typography variant="h4" sx={{ fontWeight: 700 }}>
                 {displayedFlow.name}
               </Typography>
             </Box>
             <Stack direction="row" spacing={1} sx={{ ml: 5 }}>
               <Chip
-                label={isPublished ? 'Active' : t('flows.flowDetail.statusChips.draft')}
-                color={isPublished ? 'success' : 'default'}
+                label={t(`flows.flowDetail.statusChips.${statusKey}`)}
+                color={isPublished ? 'success' : displayedFlow.status === 'PAUSED' ? 'warning' : 'default'}
                 size="small"
                 icon={isPublished ? <CheckCircleIcon /> : <PendingIcon />}
               />
@@ -501,6 +557,7 @@ function FlowDetailPage() {
                   variant="contained"
                   startIcon={copySuccess ? <CheckCircleIcon /> : <ContentCopyIcon />}
                   onClick={handleCopyUrl}
+                  disabled={!publicUrl || copying}
                   color={copySuccess ? 'success' : 'primary'}
                 >
                   {copySuccess ? t('flows.flowDetail.actions.copied') : t('flows.flowDetail.actions.copyApplicationLink')}
@@ -515,17 +572,15 @@ function FlowDetailPage() {
                 </Button>
               </>
             )}
-            <IconButton>
-              <MoreVertIcon />
-            </IconButton>
           </Stack>
         </Box>
 
-        {!isPublished && (
+        {displayedFlow.status === 'DRAFT' && (
           <Alert severity="info" sx={{ mt: 2 }}>
             {t('flows.flowDetail.alerts.draftStatus')}
           </Alert>
         )}
+        {copyError && <Alert severity="error" sx={{ mt: 2 }}>{copyError}</Alert>}
       </Paper>
 
       {/* Applicant Journey Timeline - THE CRITICAL SECTION */}
@@ -533,39 +588,38 @@ function FlowDetailPage() {
         <ApplicantJourney flow={displayedFlow} />
       </Box>
 
-      <LifecycleActions flow={displayedFlow} onActivated={setActivatedFlow} />
+      <LifecycleActions flow={displayedFlow} onActivated={setActivatedFlow} canManage={Boolean(previewPath)} />
 
       {/* Preview Button */}
-      {isPublished && (
-        <Box sx={{ mb: 3 }}>
-          <Button
-            variant="outlined"
-            size="large"
-            fullWidth
-            startIcon={<PreviewIcon />}
-            onClick={handlePreview}
-            sx={{ py: 1.5 }}
-          >
-            {t('flows.flowDetail.actions.previewButton')}
-          </Button>
-        </Box>
-      )}
+      <Box sx={{ mb: 3 }}>
+        <Button
+          variant="outlined"
+          size="large"
+          fullWidth
+          startIcon={<PreviewIcon />}
+          onClick={handlePreview}
+          disabled={!previewPath}
+          sx={{ py: 1.5 }}
+        >
+          {t('flows.flowDetail.actions.previewButton')}
+        </Button>
+      </Box>
 
       {/* Main Content Grid */}
       <Grid container spacing={3}>
         {/* Left Column */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Stack spacing={3}>
             <EntryPoints
-              flow={displayedFlow}
-              publicUrl={isPublished ? displayedFlow.public_url : null}
+              publicUrl={publicUrl}
               onCopy={handleCopyUrl}
+              copying={copying}
             />
           </Stack>
         </Grid>
 
         {/* Right Column */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Stack spacing={3}>
             <ConfigurationSummary flow={displayedFlow} />
             <RuntimeOverview flow={displayedFlow} />
@@ -576,13 +630,21 @@ function FlowDetailPage() {
       {/* Audit Footer */}
       <Paper sx={{ p: 2, mt: 3, bgcolor: 'grey.50' }}>
         <Typography variant="caption" color="text.secondary">
-          <strong>{t('flows.flowDetail.audit.createdLabel')}:</strong> {new Date(flow.created_at).toLocaleString()} •{' '}
-          <strong>{t('flows.flowDetail.audit.publishedByLabel')}:</strong> {flow.published_by} •{' '}
-          <strong>{t('flows.flowDetail.audit.lastModifiedLabel')}:</strong> {new Date(flow.updated_at).toLocaleString()}
+          <strong>{t('flows.flowDetail.audit.createdLabel')}:</strong> {new Date(displayedFlow.created_at).toLocaleString()} •{' '}
+          <strong>{t('flows.flowDetail.audit.publishedByLabel')}:</strong> {displayedFlow.published_by} •{' '}
+          <strong>{t('flows.flowDetail.audit.lastModifiedLabel')}:</strong> {new Date(displayedFlow.updated_at).toLocaleString()}
         </Typography>
       </Paper>
     </ResourcePage>
   );
+}
+
+function FlowDetailPage() {
+  const { flowId } = useParams();
+  const location = useLocation();
+  // ConsoleSessionProvider separately remounts the console on account changes.
+  const entryKey = JSON.stringify([flowId, location.key, location.pathname, location.search]);
+  return <FlowDetailSession key={entryKey} flowId={flowId} />;
 }
 
 export default FlowDetailPage;

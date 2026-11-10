@@ -45,11 +45,11 @@ pub use api_keys::{
 pub use application::{
     evaluate_join_code, plan_direct_member_roles, plan_organization_creation,
     plan_organization_update, AcceptInvitationCommand, AddMemberDirectCommand, ApplicationWarning,
-    ApplicationWarningCode, CreateOrganizationCommand, CreateScimMemberCommand,
-    InviteMemberCommand, JoinByCodeCommand, JoinCodeEvaluation, JoinCodeState, JoinCodeValidation,
-    JoinOrganizationCommand, MembershipPolicy, MutationResult, OrganizationApplication,
-    OrganizationApplicationError, OrganizationCreationPlan, RemoveMemberCommand,
-    SetMemberRolesCommand, UpdateOrganizationCommand, UpdateOrganizationPatch,
+    ApplicationWarningCode, ApproveMemberCommand, CreateOrganizationCommand,
+    CreateScimMemberCommand, InviteMemberCommand, JoinByCodeCommand, JoinCodeEvaluation,
+    JoinCodeState, JoinCodeValidation, JoinOrganizationCommand, MembershipPolicy, MutationResult,
+    OrganizationApplication, OrganizationApplicationError, OrganizationCreationPlan,
+    RemoveMemberCommand, SetMemberRolesCommand, UpdateOrganizationCommand, UpdateOrganizationPatch,
     UpdateScimMemberCommand,
 };
 pub use audit::{

@@ -101,6 +101,8 @@ describe('SidebarNavigation', () => {
     expect(screen.getByText('Dashboard Page')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Org' }))
+    expect(screen.queryByRole('link', { name: 'Role Requests' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Roles' })).toBeInTheDocument()
     await user.click(screen.getByRole('link', { name: 'My Organizations' }))
 
     await waitFor(() => {

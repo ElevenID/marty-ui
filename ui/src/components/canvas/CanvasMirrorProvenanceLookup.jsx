@@ -173,7 +173,7 @@ function CanvasMirrorProvenanceLookup({
   return (
     <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: { xs: 2, md: 2.5 } }}>
       <Stack spacing={2.5}>
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ sm: 'center' }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ alignItems: { sm: 'center' } }}>
           <VerifiedUserIcon color="primary" />
           <Box>
             <Typography variant="h6" sx={{ fontWeight: 800 }}>
@@ -272,8 +272,8 @@ function CanvasMirrorProvenanceLookup({
                 p: 2,
               }}
             >
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'center' }} justifyContent="space-between">
-                <Stack direction="row" spacing={1.5} alignItems="center">
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ alignItems: { md: 'center' }, justifyContent: 'space-between' }}>
+                <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
                   <CheckCircleIcon color={trusted ? 'success' : 'warning'} />
                   <Box>
                     <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
@@ -284,7 +284,7 @@ function CanvasMirrorProvenanceLookup({
                     </Typography>
                   </Box>
                 </Stack>
-                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                   <Chip size="small" label={credential.credential_status || 'UNKNOWN'} color={statusColor(credential.credential_status)} />
                   <Chip size="small" label={mirror.delivery_status || 'delivery unknown'} color={statusColor(mirror.delivery_status)} variant="outlined" />
                   <Chip size="small" label={trust.distribution_channel || 'canvas_credentials'} variant="outlined" />

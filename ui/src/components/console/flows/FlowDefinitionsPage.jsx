@@ -11,7 +11,7 @@ import { ResourcePage } from '../../common';
 
 const getFlowsTabs = (t) => [
   { label: t('flows.flowDefinitions'), path: '/console/org/flows/definitions' },
-  { label: t('flows.flowInstances'), path: '/console/org/flows/instances' },
+  { label: t('flows.flowInstances'), path: '/console/org/operate/flow-instances' },
 ];
 
 const getBreadcrumbs = (t) => [

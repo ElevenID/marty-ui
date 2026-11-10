@@ -9,38 +9,57 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { act, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { render } from '@test/utils'
 import { server } from '@test/mocks/server'
 import ConsoleDashboard from '../ConsoleDashboard'
+import * as dashboardApi from '../../../services/dashboardApi'
 
 const mockNavigate = vi.fn()
+const mockUseSSE = vi.fn()
+let mockActiveOrgId = 'org_123'
+let mockCanEditOrganization = true
+let mockGrants: Set<string> | null = null
+let mockPermissionsLoading = false
+let mockPrincipalId = 'account-a'
+let mockIsAdministrator = true
+let mockRoles: Array<{ name: string, display_name: string }> = []
 
-vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({ can: () => true, isLoading: false }) }));
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    can: (resource: string, action: string) => (resource !== 'organization' || action !== 'edit' || mockCanEditOrganization)
+      && (mockGrants === null || mockGrants.has(`${resource}:${action}`)),
+    roles: mockRoles,
+    isLoading: mockPermissionsLoading,
+  }),
+}));
 
 // Mock auth hook
 vi.mock('@hooks/useAuth', () => ({
   useAuth: () => ({
-    user: { id: 1, name: 'Admin User', capabilities: { 'admin:platform': true } },
+    user: { user_id: mockPrincipalId, id: 1, name: 'Admin User', capabilities: { 'admin:platform': mockIsAdministrator } },
     organizationName: 'Test Organization',
     organizationId: 'org_123',
-    isAdministrator: true,
-    isVendor: false,
+    isAdministrator: mockIsAdministrator,
+    isVendor: !mockIsAdministrator,
   }),
 }))
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({
-    activeOrgId: 'org_123',
-    memberships: [{ id: 'org_123', display_name: 'Test Organization' }],
+    activeOrgId: mockActiveOrgId,
+    memberships: [
+      { id: 'org_123', display_name: 'Test Organization' },
+      { id: 'org_other', display_name: 'Other Organization' },
+    ],
   }),
 }))
 
 // Mock SSE (not needed for rendering tests)
 vi.mock('@hooks/useSSE', () => ({
-  useSSE: () => ({ isConnected: false }),
+  useSSE: (...args: unknown[]) => { mockUseSSE(...args); return { isConnected: false } },
 }))
 
 vi.mock('react-router', async () => {
@@ -198,6 +217,13 @@ describe('ConsoleDashboard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockNavigate.mockReset()
+    mockActiveOrgId = 'org_123'
+    mockCanEditOrganization = true
+    mockGrants = null
+    mockPermissionsLoading = false
+    mockPrincipalId = 'account-a'
+    mockIsAdministrator = true
+    mockRoles = []
     mockDashboardReturn = { data: fullDashboardData, loading: false, error: null, refetch: vi.fn() }
     server.use(
       http.get('http://localhost:8000/v1/organizations/:orgId/dashboard/applicant-stats', () => HttpResponse.json({
@@ -230,6 +256,94 @@ describe('ConsoleDashboard', () => {
         },
       })),
     )
+  })
+
+  describe('Dashboard permissions', () => {
+    it('waits for current permissions before mounting data panels or opening a stream', () => {
+      mockPermissionsLoading = true
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByRole('progressbar')).toBeInTheDocument()
+      expect(screen.queryByText('Applicant Lifecycle')).not.toBeInTheDocument()
+      expect(screen.queryByText('Recent Activity')).not.toBeInTheDocument()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('shows only authorized sections and the actual membership role for a limited reader', async () => {
+      mockGrants = new Set(['organization:view'])
+      mockIsAdministrator = false
+      mockRoles = [{ name: 'custom_reader', display_name: 'Organization Reader' }]
+      const blockedRequests = vi.fn(() => HttpResponse.json({
+        error: 'forbidden', error_description: 'Missing required permission',
+      }, { status: 403 }))
+      server.use(
+        http.get('*/v1/organizations/:orgId/dashboard/applicant-stats', blockedRequests),
+        http.get('*/v1/organizations/:orgId/audit-events', blockedRequests),
+        http.get('*/v1/organizations/:orgId/integration-info', () => HttpResponse.json({
+          org_id: 'org_123', base_url: 'https://api.example.com', example_request: 'GET /v1/organizations/org_123',
+        })),
+      )
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Role: Organization Reader')).toBeVisible()
+      expect(screen.queryByText('Role: Vendor')).not.toBeInTheDocument()
+      expect(screen.getByText(/This dashboard shows the sections available to your role/)).toBeVisible()
+      for (const title of ['Applicant Lifecycle', 'Team', 'Recent Activity', 'Runtime Operational Status', 'Critical Signals (24h)']) {
+        expect(screen.queryByText(title)).not.toBeInTheDocument()
+      }
+      expect(screen.queryByText(/Setup Readiness/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/Organization is Operational/)).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.queryByText('Loading integration metadata...')).not.toBeInTheDocument())
+      expect(screen.queryByRole('link', { name: 'Manage API Keys' })).not.toBeInTheDocument()
+      expect(blockedRequests).not.toHaveBeenCalled()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('does not describe an unauthorized environment as unconfigured', () => {
+      mockGrants = new Set(['team:view'])
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Team')).toBeVisible()
+      expect(screen.queryByText('Not configured')).not.toBeInTheDocument()
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+    })
+
+    it('retains applicant-review statistics independently of setup and audit access', async () => {
+      mockGrants = new Set(['organization:view', 'application:review'])
+      render(<ConsoleDashboard />)
+
+      expect(await screen.findByText('Applicant Lifecycle')).toBeVisible()
+      expect(screen.queryByText('Recent Activity')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Setup Readiness/)).not.toBeInTheDocument()
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', [])
+    })
+
+    it('requires the native notification grant and current principal for dashboard streaming', () => {
+      mockGrants = new Set(['organization:view', 'audit:view'])
+      const { rerender } = render(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith(null, 'account-a', expect.any(Array))
+
+      mockGrants = new Set([...mockGrants, 'notification:view'])
+      rerender(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith('org_123', 'account-a', expect.arrayContaining(['credential.issued']))
+
+      mockPrincipalId = 'account-b'
+      rerender(<ConsoleDashboard />)
+      expect(mockUseSSE).toHaveBeenLastCalledWith('org_123', 'account-b', expect.any(Array))
+    })
+
+    it('does not offer Hosted Pilot purge without organization edit permission', () => {
+      mockCanEditOrganization = false
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, lifecycle: {
+        ...hostedPilotLifecycle,
+        pilotRetention: { ...hostedPilotLifecycle.pilotRetention, eligibleForPurge: { total: 4 } },
+      } } }
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('Hosted Pilot retention')).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Purge now' })).not.toBeInTheDocument()
+    })
   })
 
   describe('Empty Organization State', () => {
@@ -369,6 +483,122 @@ describe('ConsoleDashboard', () => {
   })
 
   describe('Environment Management', () => {
+    it('treats an explicitly unset environment as unconfigured and offers only supported values', async () => {
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      const user = userEvent.setup()
+      render(<ConsoleDashboard />)
+
+      const badge = screen.getByText('Not configured')
+      expect(screen.queryByText('Unknown')).not.toBeInTheDocument()
+      expect(screen.queryByText('Environment unavailable')).not.toBeInTheDocument()
+      await user.hover(badge)
+      expect(await screen.findByRole('tooltip')).toHaveTextContent('No environment has been configured for this organization.')
+      expect(screen.getByRole('tooltip')).not.toHaveTextContent('could not be loaded')
+
+      await user.click(badge)
+      const menu = screen.getByRole('menu')
+      expect(within(menu).getAllByRole('menuitem')).toHaveLength(3)
+      expect(within(menu).getByRole('menuitem', { name: /^Development/ })).toBeInTheDocument()
+      expect(within(menu).getByRole('menuitem', { name: /^Staging/ })).toBeInTheDocument()
+      expect(within(menu).getByRole('menuitem', { name: /^Production/ })).toBeInTheDocument()
+    })
+
+    it('configures an unset environment for the selected organization then reloads authoritative data', async () => {
+      const requested: Array<{ organizationId: string; environment: string }> = []
+      mockActiveOrgId = 'org_other'
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      server.use(http.patch('*/v1/organizations/:orgId/environment', async ({ params, request }) => {
+        const body = await request.json() as { environment: string }
+        requested.push({ organizationId: params.orgId as string, environment: body.environment })
+        return HttpResponse.json({ organization_id: params.orgId, environment: body.environment })
+      }))
+      const user = userEvent.setup()
+      const { rerender } = render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Not configured'))
+      await user.click(screen.getByRole('menuitem', { name: /^Staging/ }))
+      await waitFor(() => expect(mockDashboardReturn.refetch).toHaveBeenCalledOnce())
+      expect(requested).toEqual([{ organizationId: 'org_other', environment: 'staging' }])
+      expect(screen.getByText('Not configured')).toBeInTheDocument()
+
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: 'staging' } }
+      rerender(<ConsoleDashboard />)
+      expect(screen.getByText('Staging')).toBeInTheDocument()
+    })
+
+    it('keeps unconfigured environment read-only without organization edit permission', async () => {
+      mockCanEditOrganization = false
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      const user = userEvent.setup()
+      render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Not configured'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    })
+
+    it('clears a previously configured environment when switching to an unset organization', () => {
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: 'production' } }
+      const { rerender } = render(<ConsoleDashboard />)
+      expect(screen.getByText('Prod')).toBeInTheDocument()
+
+      mockActiveOrgId = 'org_other'
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      rerender(<ConsoleDashboard />)
+      expect(screen.getByRole('heading', { name: 'Other Organization' })).toBeInTheDocument()
+      expect(screen.getByText('Not configured')).toBeInTheDocument()
+      expect(screen.queryByText('Prod')).not.toBeInTheDocument()
+      expect(screen.queryByText('Production Environment')).not.toBeInTheDocument()
+    })
+
+    it('shows a failed environment change and retries it without changing the displayed value', async () => {
+      const requested: string[] = []
+      server.use(http.patch('*/v1/organizations/:orgId/environment', async ({ params, request }) => {
+        const body = await request.json() as { environment: string }
+        requested.push(body.environment)
+        return requested.length === 1
+          ? HttpResponse.json({ error: 'invalid_request', error_description: 'Environment update unavailable', message_id: 'msg-env-save' }, { status: 422 })
+          : HttpResponse.json({ organization_id: params.orgId, environment: body.environment })
+      }))
+      const user = userEvent.setup()
+      render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Dev'))
+      await user.click(screen.getByRole('menuitem', { name: /^Staging/ }))
+      expect(await screen.findByText('Environment change failed')).toBeInTheDocument()
+      expect(screen.getByText('Environment update unavailable')).toBeInTheDocument()
+      expect(screen.getByText('Message ID: msg-env-save')).toBeInTheDocument()
+      expect(screen.getByText('Dev')).toBeInTheDocument()
+      expect(mockDashboardReturn.refetch).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: 'Retry' }))
+      await waitFor(() => expect(mockDashboardReturn.refetch).toHaveBeenCalledOnce())
+      expect(requested).toEqual(['staging', 'staging'])
+      expect(screen.queryByText('Environment change failed')).not.toBeInTheDocument()
+    })
+
+    it.each(['resolve', 'reject'])('ignores a late environment mutation %s from a previous organization', async (outcome) => {
+      let resolveChange!: (value: unknown) => void
+      let rejectChange!: (error: Error) => void
+      const change = new Promise((resolve, reject) => { resolveChange = resolve; rejectChange = reject })
+      const update = vi.spyOn(dashboardApi, 'updateOrganizationEnvironment').mockImplementationOnce(() => change)
+      const user = userEvent.setup()
+      const { rerender } = render(<ConsoleDashboard />)
+      await user.click(screen.getByText('Dev'))
+      await user.click(screen.getByRole('menuitem', { name: /^Production/ }))
+      expect(update).toHaveBeenCalledWith('org_123', 'production')
+
+      mockActiveOrgId = 'org_other'
+      mockDashboardReturn = { ...mockDashboardReturn, data: { ...fullDashboardData, environment: null } }
+      rerender(<ConsoleDashboard />)
+      await act(async () => {
+        if (outcome === 'resolve') resolveChange({ organization_id: 'org_123', environment: 'production' })
+        else rejectChange(new Error('Previous organization failed'))
+        await change.catch(() => {})
+      })
+      expect(screen.getByText('Not configured')).toBeInTheDocument()
+      expect(screen.queryByText('Prod')).not.toBeInTheDocument()
+      expect(screen.queryByText('Environment change failed')).not.toBeInTheDocument()
+      expect(mockDashboardReturn.refetch).not.toHaveBeenCalled()
+      update.mockRestore()
+    })
+
     it('should display current environment', () => {
       render(<ConsoleDashboard />)
       // Environment badge shows short label "Dev"
@@ -387,7 +617,7 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText('Dev')).toBeInTheDocument()
     })
 
-    it('should show unknown environment when environment loading fails', () => {
+    it('should show unknown environment and offer retry when environment loading fails', async () => {
       mockDashboardReturn = {
         data: {
           ...fullDashboardData,
@@ -408,6 +638,11 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText(/Environment unavailable/i)).toBeInTheDocument()
       expect(screen.getByText('Unknown')).toBeInTheDocument()
       expect(screen.queryByText('Dev')).not.toBeInTheDocument()
+      const user = userEvent.setup()
+      await user.click(screen.getByText('Unknown'))
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(mockDashboardReturn.refetch).toHaveBeenCalledOnce()
     })
 
     it('should render structured dashboard error envelopes without crashing', () => {

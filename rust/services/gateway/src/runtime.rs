@@ -7,11 +7,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::Infallible,
+    future::Future,
     net::SocketAddr,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -39,6 +40,8 @@ use marty_signing_grant::{
 };
 #[cfg(test)]
 use marty_signing_grant::{GrantBinding, GrantError, SigningOrigin};
+#[path = "runtime_organization_defaults.rs"]
+mod organization_defaults;
 #[path = "runtime_signing_ceremony.rs"]
 mod signing_ceremony;
 #[path = "runtime_signing_compatibility.rs"]
@@ -97,6 +100,7 @@ use crate::{
 };
 
 const DEFAULT_MAXIMUM_BODY_BYTES: usize = 10 * 1024 * 1024;
+const SSE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub struct GatewayRuntimeState {
     pub routes: Arc<RouteTable>,
@@ -1207,6 +1211,9 @@ async fn proxy_handler(
     {
         return flow_definition_write_handler(state, request).await;
     }
+    if organization_defaults::organization_id(request.uri().path()).is_some() {
+        return organization_defaults::handler(state, request).await;
+    }
     if organization_composition_route(request.uri().path()).is_some() {
         return organization_composition_handler(state, request).await;
     }
@@ -2176,10 +2183,7 @@ async fn sse_events_handler(state: Arc<GatewayRuntimeState>, request: Request) -
             }
         }
     });
-    let body = Body::from_stream(DisconnectStream {
-        inner: ReceiverStream::new(receiver),
-        cancellation: cancel_sender,
-    });
+    let body = Body::from_stream(DisconnectStream::new(receiver, cancel_sender));
     let mut response = Response::new(body);
     insert_header(
         &mut response,
@@ -2219,13 +2223,42 @@ fn sse_event_frame(event: &GatewayDomainEvent) -> Option<String> {
 struct DisconnectStream {
     inner: ReceiverStream<Result<String, Infallible>>,
     cancellation: watch::Sender<bool>,
+    heartbeat: Pin<Box<tokio::time::Sleep>>,
+}
+
+impl DisconnectStream {
+    fn new(
+        receiver: mpsc::Receiver<Result<String, Infallible>>,
+        cancellation: watch::Sender<bool>,
+    ) -> Self {
+        Self {
+            inner: ReceiverStream::new(receiver),
+            cancellation,
+            heartbeat: Box::pin(tokio::time::sleep(SSE_HEARTBEAT_INTERVAL)),
+        }
+    }
 }
 
 impl Stream for DisconnectStream {
     type Item = Result<String, Infallible>;
 
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(context)
+        // Real frames and EOF take precedence. The response owns this timer,
+        // so an unread body cannot accumulate comments in the producer queue.
+        let result = match Pin::new(&mut self.inner).poll_next(context) {
+            Poll::Ready(None) => return Poll::Ready(None),
+            Poll::Ready(Some(frame)) => Poll::Ready(Some(frame)),
+            Poll::Pending => {
+                if self.heartbeat.as_mut().poll(context).is_pending() {
+                    return Poll::Pending;
+                }
+                Poll::Ready(Some(Ok(": keep-alive\n\n".into())))
+            }
+        };
+        self.heartbeat
+            .as_mut()
+            .reset(tokio::time::Instant::now() + SSE_HEARTBEAT_INTERVAL);
+        result
     }
 }
 
@@ -4173,6 +4206,7 @@ mod tests {
         );
     }
     include!("../tests/support/template_issuer_options_behavior.rs");
+    include!("../tests/support/organization_defaults_behavior.rs");
     use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
@@ -9584,14 +9618,108 @@ mod tests {
     async fn dropping_sse_body_signals_backend_stream_cancellation() {
         let (sender, receiver) = mpsc::channel(1);
         let (cancel, mut cancelled) = watch::channel(false);
-        let stream = DisconnectStream {
-            inner: ReceiverStream::new(receiver),
-            cancellation: cancel,
-        };
+        let stream = DisconnectStream::new(receiver, cancel);
         drop(stream);
         cancelled.changed().await.expect("cancellation signal");
         assert!(*cancelled.borrow());
         drop(sender);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_sse_sends_comments_and_still_cancels_the_backend_subscription() {
+        use std::time::Duration;
+
+        let subscribed = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicBool::new(false));
+        let state = runtime_state_with_events(Arc::new(TrackingEventProvider {
+            subscribed,
+            dropped: Arc::clone(&dropped),
+        }));
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/notifications/events/push?organization_id=org-1")
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        assert_eq!(
+            body.next().await.unwrap().unwrap().as_ref(),
+            b"data: {\"type\": \"connected\"}\n\n"
+        );
+
+        let started = tokio::time::Instant::now();
+        for _ in 0..5 {
+            let frame = tokio::time::timeout(Duration::from_secs(20), body.next())
+                .await
+                .expect("idle SSE must send a comment before the proxy read timeout")
+                .expect("stream remains open")
+                .expect("heartbeat frame");
+            assert_eq!(frame.as_ref(), b": keep-alive\n\n");
+        }
+        assert_eq!(started.elapsed(), Duration::from_secs(75));
+        assert!(!dropped.load(Ordering::SeqCst));
+        drop(body);
+        for _ in 0..20 {
+            if dropped.load(Ordering::SeqCst) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sse_frames_reset_idle_time_without_queuing_comments_or_delaying_eof() {
+        use std::time::Duration;
+
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-sse-behavior.json"
+        ))
+        .expect("SSE contract");
+        let connected = contract["expected_frames"][0].as_str().unwrap();
+        let event = contract["expected_frames"][1].as_str().unwrap();
+        let error = contract["expected_error_frames"][1].as_str().unwrap();
+        let (sender, receiver) = mpsc::channel(1);
+        let (cancel, mut cancelled) = watch::channel(false);
+        let mut stream = DisconnectStream::new(receiver, cancel);
+        sender.send(Ok(connected.into())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), connected);
+        tokio::time::advance(Duration::from_secs(14)).await;
+        sender.send(Ok(event.into())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), event);
+        assert!(tokio::time::timeout(Duration::from_secs(14), stream.next())
+            .await
+            .is_err());
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), stream.next())
+                .await
+                .expect("idle deadline restarts after a real event")
+                .unwrap()
+                .unwrap(),
+            ": keep-alive\n\n"
+        );
+
+        // A client that stops reading must not accumulate heartbeat frames.
+        tokio::time::advance(Duration::from_secs(300)).await;
+        sender.send(Ok(error.into())).await.unwrap();
+        assert_eq!(stream.next().await.unwrap().unwrap(), error);
+        assert!(tokio::time::timeout(Duration::from_secs(14), stream.next())
+            .await
+            .is_err());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        drop(sender);
+        assert!(
+            stream.next().await.is_none(),
+            "EOF wins over a ready heartbeat"
+        );
+        drop(stream);
+        cancelled.changed().await.expect("cancellation signal");
+        assert!(*cancelled.borrow());
     }
 
     struct PendingEventStream {

@@ -15,6 +15,8 @@
 	},
 	"navigation": {
 		"home": "Inicio",
+		"console": "Consola",
+		"apiDocumentation": "Documentación de la API",
 		"product": "Producto",
 		"howItWorks": "Cómo funciona",
 		"whyVerifiableIdentity": "Por qué identidad verificable",

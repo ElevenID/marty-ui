@@ -54,5 +54,6 @@ bytes.workspace = true
 http.workspace = true
 http-body-util.workspace = true
 ring = "0.17"
+rcgen.workspace = true
 tokio-rustls.workspace = true
 marty-selfhost-bundle = { path = "../selfhost-bundle" }

@@ -6,7 +6,8 @@
  * asynchronous completions and notifications.
  */
 
-import { useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Alert,
@@ -49,6 +50,9 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
+import { useAuth } from '../../../hooks/useAuth';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
 import {
@@ -196,7 +200,7 @@ function normalizeWebhook(webhook) {
         ? webhook.events
         : [],
     enabled: webhook?.enabled ?? webhook?.status === 'active',
-    secret: webhook?.secret || '',
+    secret: webhook?.signing_secret || webhook?.secret || '',
   };
 }
 
@@ -227,18 +231,36 @@ async function copyToClipboard(text) {
   textArea.style.left = '-9999px';
   document.body.appendChild(textArea);
   textArea.select();
-  const copied = document.execCommand('copy');
-  document.body.removeChild(textArea);
-  return copied;
+  try {
+    return document.execCommand('copy');
+  } finally {
+    textArea.remove();
+  }
 }
 
-function ApiKeysPage() {
+function ApiKeysContent({ organizationId, browserEntry }) {
   const { t } = useTranslation('console');
-  const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canCreateKey = !permissionsLoading && can('api-key', 'create');
+  const canRevokeKey = !permissionsLoading && can('api-key', 'revoke');
+  const canViewCallbacks = !permissionsLoading && can('webhook', 'view');
+  const canCreateWebhook = !permissionsLoading && can('webhook', 'create');
+  const canCreateCallback = canViewCallbacks && canCreateWebhook;
+  const currentPermissions = useRef({ canCreateKey, canCreateCallback });
+  currentPermissions.current = { canCreateKey, canCreateCallback };
+  const active = useRef(false);
+  const dialogGeneration = useRef(0);
+  const createPending = useRef(false);
+  const startAction = useAsyncActionScope();
+  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
+    typeof window !== 'undefined' && window.location.href === browserEntry.href
+      && window.history.state?.key === browserEntry.key
+      && (browserEntry.key || 'default') === browserEntry.routeKey
+  ), [browserEntry]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
+  const [callbackValidationError, setCallbackValidationError] = useState('');
   const [copiedMessage, setCopiedMessage] = useState('');
   const [createdResult, setCreatedResult] = useState(null);
   const [keyPendingRevoke, setKeyPendingRevoke] = useState(null);
@@ -252,12 +274,30 @@ function ApiKeysPage() {
     callbackEvents: [...ASYNC_GATEWAY_EVENT_PRESET],
   });
 
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    // Invalidate pending work before Back can make the original URL current.
+    const invalidateAction = () => { startAction(); };
+    window.addEventListener('popstate', invalidateAction, true);
+    return () => window.removeEventListener('popstate', invalidateAction, true);
+  }, [startAction]);
+
+  useLayoutEffect(() => {
+    if (!canRevokeKey) setKeyPendingRevoke(null);
+  }, [canRevokeKey]);
+
   const { data, loading, error, reload } = useAsyncData(
     async () => {
+      if (!organizationId) return { keys: [], webhooks: [], callbackEventOptions: [] };
       const [keysResult, webhooksResult, eventCatalogResult] = await Promise.allSettled([
         listApiKeys(organizationId),
-        listWebhooks(organizationId),
-        getAvailableEventTypes(),
+        canViewCallbacks ? listWebhooks(organizationId) : Promise.resolve([]),
+        canViewCallbacks ? getAvailableEventTypes(organizationId) : Promise.resolve(null),
       ]);
 
       if (keysResult.status === 'rejected') {
@@ -280,25 +320,28 @@ function ApiKeysPage() {
           : null,
       };
     },
-    [organizationId],
+    [organizationId, canViewCallbacks],
   );
 
   const apiKeys = data?.keys || [];
-  const webhookLoadError = data?.webhookError || null;
-  const callbackEventOptions = data?.callbackEventOptions || [];
-  const eventCatalogError = data?.eventCatalogError || null;
+  const webhookLoadError = canViewCallbacks ? data?.webhookError || null : null;
+  const callbackEventOptions = canViewCallbacks ? data?.callbackEventOptions || [] : [];
+  const eventCatalogError = canViewCallbacks ? data?.eventCatalogError || null : null;
+  const summaryPending = !organizationId || loading;
+  const summaryUnavailable = Boolean(error);
   const callbackMap = useMemo(() => {
     const map = new Map();
-    (data?.webhooks || []).forEach((webhook) => {
+    (canViewCallbacks ? data?.webhooks || [] : []).forEach((webhook) => {
       const keyId = extractAssociatedKeyId(webhook.description);
       if (keyId) {
         map.set(keyId, webhook);
       }
     });
     return map;
-  }, [data?.webhooks]);
+  }, [data?.webhooks, canViewCallbacks]);
 
   const handleScopeToggle = (scopeId) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
     setFormState((prev) => ({
       ...prev,
       scopes: prev.scopes.includes(scopeId)
@@ -308,6 +351,7 @@ function ApiKeysPage() {
   };
 
   const handleCallbackEventToggle = (eventId) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
     setFormState((prev) => ({
       ...prev,
       callbackEvents: prev.callbackEvents.includes(eventId)
@@ -317,9 +361,13 @@ function ApiKeysPage() {
   };
 
   const resetDialog = () => {
+    if (createPending.current || saving || !isCurrentBrowserEntry()) return;
+    dialogGeneration.current += 1;
     setDialogOpen(false);
     setSaving(false);
     setFormError('');
+    setCallbackValidationError('');
+    setCopiedMessage('');
     setCreatedResult(null);
     setFormState({
       name: '',
@@ -332,7 +380,25 @@ function ApiKeysPage() {
     });
   };
 
+  const openCreateDialog = () => {
+    if (!canCreateKey || createPending.current || !isCurrentBrowserEntry()) return;
+    dialogGeneration.current += 1;
+    setCopiedMessage('');
+    setFormState((prev) => ({ ...prev, createCallback: canCreateCallback }));
+    setDialogOpen(true);
+  };
+
+  const updateForm = (updates) => {
+    if (createPending.current || saving || !canCreateKey || !isCurrentBrowserEntry()) return;
+    setFormState((previous) => ({ ...previous, ...updates }));
+    if (updates.createCallback === false) setCallbackValidationError('');
+  };
+
   const handleCreate = async () => {
+    if (createPending.current || saving || createdResult || !canCreateKey || !isCurrentBrowserEntry()) return;
+    setFormError('');
+    setCallbackValidationError('');
+    const shouldCreateCallback = canCreateCallback && formState.createCallback;
     if (!organizationId) {
       setFormError('No active organization selected.');
       return;
@@ -348,32 +414,35 @@ function ApiKeysPage() {
       return;
     }
 
-    if (formState.createCallback && !formState.callbackUrl.trim()) {
-      setFormError('Enter a callback URL or turn off callback creation.');
+    if (shouldCreateCallback && !formState.callbackUrl.trim()) {
+      setCallbackValidationError('Enter a callback URL or turn off callback creation.');
       return;
     }
 
-    if (formState.createCallback && formState.callbackEvents.length === 0) {
-      setFormError('Select at least one callback event.');
+    if (shouldCreateCallback && formState.callbackEvents.length === 0) {
+      setCallbackValidationError('Select at least one callback event.');
       return;
     }
 
-    if (formState.createCallback && eventCatalogError) {
-      setFormError('Webhook event types are unavailable. Retry or turn off callback creation.');
+    if (shouldCreateCallback && eventCatalogError) {
+      setCallbackValidationError('Webhook event types are unavailable. Retry or turn off callback creation.');
       return;
     }
 
-    if (formState.createCallback) {
+    if (shouldCreateCallback) {
       const supportedEvents = new Set(callbackEventOptions.map((event) => event.id));
       const unsupportedEvents = formState.callbackEvents.filter((event) => !supportedEvents.has(event));
       if (unsupportedEvents.length > 0) {
-        setFormError(`Unsupported callback events: ${unsupportedEvents.join(', ')}`);
+        setCallbackValidationError(`Unsupported callback events: ${unsupportedEvents.join(', ')}`);
         return;
       }
     }
 
+    const action = startAction();
+    const generation = dialogGeneration.current;
+    const isCurrent = () => action.isCurrent() && dialogGeneration.current === generation && isCurrentBrowserEntry();
+    createPending.current = true;
     setSaving(true);
-    setFormError('');
 
     let callbackError = null;
 
@@ -382,12 +451,15 @@ function ApiKeysPage() {
         name: formState.name.trim(),
         scopes: formState.scopes,
         expiresAt: formState.expiresAt ? new Date(formState.expiresAt).toISOString() : null,
-      });
+      }, { isCurrent });
+      if (!isCurrent()) return;
 
       const createdKey = normalizeApiKey(keyResponse);
       let createdWebhook = null;
 
-      if (formState.createCallback) {
+      if (shouldCreateCallback && (!currentPermissions.current.canCreateKey || !currentPermissions.current.canCreateCallback)) {
+        callbackError = 'Callback creation was skipped because your creation permissions are no longer available. You can add a callback later from Webhooks.';
+      } else if (shouldCreateCallback) {
         try {
           const webhookResponse = await createWebhook(organizationId, {
             url: formState.callbackUrl.trim(),
@@ -397,7 +469,8 @@ function ApiKeysPage() {
               formState.callbackDescription,
             ),
             eventTypes: formState.callbackEvents,
-          });
+          }, { isCurrent: () => isCurrent()
+            && currentPermissions.current.canCreateKey && currentPermissions.current.canCreateCallback });
           createdWebhook = normalizeWebhook(webhookResponse);
         } catch (errorCreatingWebhook) {
           callbackError = errorCreatingWebhook instanceof Error
@@ -406,34 +479,48 @@ function ApiKeysPage() {
         }
       }
 
+      if (!isCurrent()) return;
       setCreatedResult({
         apiKey: createdKey,
         webhook: createdWebhook,
-        callbackRequested: formState.createCallback,
+        callbackRequested: shouldCreateCallback,
         callbackError,
       });
 
       await reload();
     } catch (createError) {
-      setFormError(createError instanceof Error ? createError.message : String(createError));
+      if (isCurrent()) setFormError(createError instanceof Error ? createError.message : String(createError));
     } finally {
-      setSaving(false);
+      if (isCurrent()) {
+        createPending.current = false;
+        setSaving(false);
+      }
     }
   };
 
   const handleRevoke = async () => {
-    if (!organizationId || !keyPendingRevoke) {
+    if (!organizationId || !keyPendingRevoke || !canRevokeKey || !isCurrentBrowserEntry()) {
       return;
     }
 
     await revokeApiKey(organizationId, keyPendingRevoke.id);
+    if (!active.current || !isCurrentBrowserEntry()) return;
     setKeyPendingRevoke(null);
     await reload();
   };
 
   const handleCopy = async (text, label) => {
-    const copied = await copyToClipboard(text);
-    setCopiedMessage(copied ? `${label} copied to clipboard.` : `Unable to copy ${label.toLowerCase()}.`);
+    if (!isCurrentBrowserEntry()) return;
+    const generation = dialogGeneration.current;
+    let copied = false;
+    try {
+      copied = await copyToClipboard(text);
+    } catch {
+      // Browser clipboard permissions can reject even on an HTTPS origin.
+    }
+    if (active.current && dialogGeneration.current === generation && isCurrentBrowserEntry()) {
+      setCopiedMessage(copied ? `${label} copied to clipboard.` : `Unable to copy ${label.toLowerCase()}.`);
+    }
   };
 
   return (
@@ -447,62 +534,63 @@ function ApiKeysPage() {
         tabs={getOrgTabs(t)}
         breadcrumbs={getBreadcrumbs(t)}
         actions={
-          <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
+          <Button variant="contained" startIcon={<AddIcon />} disabled={!organizationId || loading || Boolean(error) || !canCreateKey || !isCurrentBrowserEntry()} onClick={openCreateDialog}>
             {t('deploy.apiKeysPage.generateKey', 'Create API Key')}
           </Button>
         }
       >
         <Stack spacing={3}>
+          {!organizationId && <Alert severity="info">Select an organization to manage API keys.</Alert>}
           <Alert severity="info">
             Use API keys for synchronous gateway calls. Pair each key with a callback endpoint to receive
             asynchronous completions, verification outcomes, and delivery notifications. Forward audit events through
             Webhooks when external SIEM or compliance systems need a real-time feed.
           </Alert>
 
-          {copiedMessage && (
+          {copiedMessage && !dialogOpen && (
             <Alert severity={copiedMessage.startsWith('Unable') ? 'warning' : 'success'} onClose={() => setCopiedMessage('')}>
               {copiedMessage}
             </Alert>
           )}
 
           <Grid container spacing={2}>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <VpnKeyIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Active gateway keys</Typography>
                   </Stack>
-                  <Typography variant="h4">{apiKeys.filter((key) => key.enabled).length}</Typography>
+                  <Typography variant="h4">{summaryPending ? '—' : summaryUnavailable ? 'Unavailable' : apiKeys.filter((key) => key.enabled).length}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Keys currently usable by partner systems and services.
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <NotificationsActiveIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Associated callbacks</Typography>
                   </Stack>
-                  <Typography variant="h4">{webhookLoadError ? 'Unavailable' : callbackMap.size}</Typography>
+                  <Typography variant="h4">{summaryPending ? '—' : summaryUnavailable || webhookLoadError || !canViewCallbacks ? 'Unavailable' : callbackMap.size}</Typography>
                   <Typography variant="body2" color="text.secondary">
                     Webhook endpoints linked to API-key provisioning flows.
                   </Typography>
                 </CardContent>
               </Card>
             </Grid>
-            <Grid item xs={12} md={4}>
-              <Card variant="outlined">
+            <Grid size={{ xs: 12, md: 4 }}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
                 <CardContent>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                     <LinkIcon color="primary" fontSize="small" />
                     <Typography variant="subtitle2">Audit-capable callbacks</Typography>
                   </Stack>
                   <Typography variant="h4">
-                    {webhookLoadError
+                    {summaryPending ? '—' : summaryUnavailable || webhookLoadError || !canViewCallbacks
                       ? 'Unavailable'
                       : Array.from(callbackMap.values()).filter((webhook) => webhook.eventTypes.some((eventType) => eventType.startsWith('audit.'))).length}
                   </Typography>
@@ -515,8 +603,14 @@ function ApiKeysPage() {
           </Grid>
 
           {error && (
-            <Alert severity="error">
+            <Alert severity="error" action={<Button color="inherit" onClick={reload}>Retry</Button>}>
               {error?.message || String(error)}
+            </Alert>
+          )}
+
+          {!permissionsLoading && !canViewCallbacks && (
+            <Alert severity="info">
+              Webhook viewing permission is required to view callback status and event types.
             </Alert>
           )}
 
@@ -528,7 +622,7 @@ function ApiKeysPage() {
 
           {loading ? (
             <LinearProgress />
-          ) : (
+          ) : !error && organizationId ? (
             <TableContainer component={Paper}>
               <Table>
                 <TableHead>
@@ -562,19 +656,19 @@ function ApiKeysPage() {
                       return (
                         <TableRow key={apiKey.id} hover>
                           <TableCell>
-                            <Typography variant="body2" fontWeight={600}>{apiKey.name}</Typography>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }}>{apiKey.name}</Typography>
                             {apiKey.description && (
                               <Typography variant="caption" color="text.secondary">{apiKey.description}</Typography>
                             )}
                           </TableCell>
                           <TableCell>
-                            <Stack direction="row" spacing={1} alignItems="center">
+                            <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                               <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                                 {apiKey.maskedKey || apiKey.keyPrefix || 'Unavailable'}
                               </Typography>
                               {!!apiKey.fullKey && (
                                 <Tooltip title="Copy full key">
-                                  <IconButton size="small" onClick={() => handleCopy(apiKey.fullKey, 'API key')}>
+                                  <IconButton size="small" aria-label="Copy API key" onClick={() => handleCopy(apiKey.fullKey, 'API key')}>
                                     <ContentCopyIcon fontSize="small" />
                                   </IconButton>
                                 </Tooltip>
@@ -596,7 +690,9 @@ function ApiKeysPage() {
                             </Box>
                           </TableCell>
                           <TableCell>
-                            {callback ? (
+                            {webhookLoadError || !canViewCallbacks ? (
+                              <Typography variant="body2" color="text.secondary">Unavailable</Typography>
+                            ) : callback ? (
                               <Stack spacing={0.5}>
                                 <Typography variant="body2">{callback.url}</Typography>
                                 <Typography variant="caption" color="text.secondary">
@@ -622,8 +718,8 @@ function ApiKeysPage() {
                                   size="small"
                                   color="error"
                                   aria-label="Revoke key"
-                                  disabled={!apiKey.enabled}
-                                  onClick={() => setKeyPendingRevoke(apiKey)}
+                                  disabled={!apiKey.enabled || !canRevokeKey}
+                                  onClick={() => { if (canRevokeKey) setKeyPendingRevoke(apiKey); }}
                                 >
                                   <DeleteIcon fontSize="small" />
                                 </IconButton>
@@ -637,7 +733,7 @@ function ApiKeysPage() {
                 </TableBody>
               </Table>
             </TableContainer>
-          )}
+          ) : null}
         </Stack>
       </ResourcePage>
       <Dialog open={dialogOpen} onClose={saving ? undefined : resetDialog} maxWidth="md" fullWidth>
@@ -645,6 +741,11 @@ function ApiKeysPage() {
         <DialogContent dividers>
           {createdResult ? (
             <Stack spacing={2}>
+              {copiedMessage && (
+                <Alert severity={copiedMessage.startsWith('Unable') ? 'warning' : 'success'} onClose={() => setCopiedMessage('')}>
+                  {copiedMessage}
+                </Alert>
+              )}
               <Alert severity={createdResult.callbackError ? 'warning' : 'success'}>
                 API key created successfully.
                 {createdResult.callbackError
@@ -665,7 +766,7 @@ function ApiKeysPage() {
                   input: {
                     readOnly: true,
                     endAdornment: (
-                      <IconButton onClick={() => handleCopy(createdResult.apiKey.fullKey, 'API key')}>
+                      <IconButton aria-label="Copy API key" disabled={!createdResult.apiKey.fullKey} onClick={() => handleCopy(createdResult.apiKey.fullKey, 'API key')}>
                         <ContentCopyIcon />
                       </IconButton>
                     ),
@@ -694,7 +795,7 @@ function ApiKeysPage() {
                         input: {
                           readOnly: true,
                           endAdornment: (
-                            <IconButton onClick={() => handleCopy(createdResult.webhook.secret, 'Webhook secret')}>
+                            <IconButton aria-label="Copy webhook secret" onClick={() => handleCopy(createdResult.webhook.secret, 'Webhook secret')}>
                               <ContentCopyIcon />
                             </IconButton>
                           ),
@@ -707,15 +808,16 @@ function ApiKeysPage() {
               )}
             </Stack>
           ) : (
-            <Stack spacing={3} sx={{ pt: 1 }}>
-              {formError && <Alert severity="error">{formError}</Alert>}
+            <Stack component="fieldset" disabled={saving || !canCreateKey || !isCurrentBrowserEntry()} aria-label="API key settings" spacing={3} sx={{ p: 0, pt: 1, m: 0, border: 0, minWidth: 0 }}>
+              {(formError || callbackValidationError) && <Alert severity="error">{formError || callbackValidationError}</Alert>}
+              {!canCreateKey && <Alert severity="info">{permissionsLoading ? 'Checking your permissions…' : 'You do not have permission to create API keys in this organization.'}</Alert>}
 
               <TextField
                 autoFocus
                 label="Key name"
                 placeholder="Production issuer integration"
                 value={formState.name}
-                onChange={(event) => setFormState((prev) => ({ ...prev, name: event.target.value }))}
+                onChange={(event) => updateForm({ name: event.target.value })}
                 fullWidth
               />
 
@@ -723,7 +825,7 @@ function ApiKeysPage() {
                 label="Expiration"
                 type="datetime-local"
                 value={formState.expiresAt}
-                onChange={(event) => setFormState((prev) => ({ ...prev, expiresAt: event.target.value }))}
+                onChange={(event) => updateForm({ expiresAt: event.target.value })}
                 fullWidth
                 helperText="Optional expiry for partner credentials or temporary environments."
                 slotProps={{
@@ -762,31 +864,36 @@ function ApiKeysPage() {
                 <FormControlLabel
                   control={
                     <Switch
-                      checked={formState.createCallback}
-                      onChange={(event) => setFormState((prev) => ({ ...prev, createCallback: event.target.checked }))}
+                      checked={canCreateCallback && formState.createCallback}
+                      disabled={!canCreateCallback}
+                      onChange={(event) => updateForm({ createCallback: event.target.checked })}
                     />
                   }
                   label="Provision associated callback"
                 />
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                  Recommended for external systems that need asynchronous status updates, completion notices, or audit forwarding.
+                  {canCreateCallback
+                    ? 'Recommended for external systems that need asynchronous status updates, completion notices, or audit forwarding.'
+                    : !canCreateWebhook
+                      ? 'Creating an associated callback requires webhook creation permission.'
+                      : 'Creating an associated callback requires webhook viewing permission to load event types.'}
                 </Typography>
               </Box>
 
-              {formState.createCallback && (
+              {canCreateCallback && formState.createCallback && (
                 <Stack spacing={2}>
                   <TextField
                     label="Callback URL"
                     placeholder="https://partner.example.com/marty/callbacks"
                     value={formState.callbackUrl}
-                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackUrl: event.target.value }))}
+                    onChange={(event) => updateForm({ callbackUrl: event.target.value })}
                     fullWidth
                   />
                   <TextField
                     label="Callback description"
                     placeholder="Operations callback for partner orchestration"
                     value={formState.callbackDescription}
-                    onChange={(event) => setFormState((prev) => ({ ...prev, callbackDescription: event.target.value }))}
+                    onChange={(event) => updateForm({ callbackDescription: event.target.value })}
                     fullWidth
                   />
                   <Box>
@@ -820,11 +927,11 @@ function ApiKeysPage() {
         </DialogContent>
         <DialogActions>
           {createdResult ? (
-            <Button onClick={resetDialog}>Done</Button>
+            <Button onClick={resetDialog} disabled={saving}>Done</Button>
           ) : (
             <>
               <Button onClick={resetDialog} disabled={saving}>Cancel</Button>
-              <Button variant="contained" onClick={handleCreate} disabled={saving}>
+              <Button variant="contained" onClick={handleCreate} disabled={saving || !canCreateKey || !isCurrentBrowserEntry()}>
                 {saving ? 'Creating…' : 'Create integration key'}
               </Button>
             </>
@@ -832,7 +939,7 @@ function ApiKeysPage() {
         </DialogActions>
       </Dialog>
       <ConfirmDeleteDialog
-        open={Boolean(keyPendingRevoke)}
+        open={Boolean(keyPendingRevoke) && canRevokeKey}
         onClose={() => setKeyPendingRevoke(null)}
         onConfirm={handleRevoke}
         title="Revoke API Key"
@@ -848,4 +955,32 @@ function ApiKeysPage() {
   );
 }
 
-export default ApiKeysPage;
+export default function ApiKeysPage() {
+  const { activeOrgId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const location = useLocation();
+  const [returnedEntry, setReturnedEntry] = useState(0);
+  // Organization/session replacements retain the committed browser entry even
+  // while a suspended destination has already changed the address bar.
+  const browserEntry = useMemo(() => ({
+    href: typeof window === 'undefined' ? null : window.location.href,
+    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
+    routeKey: location.key,
+    generation: returnedEntry,
+  }), [location, returnedEntry]);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const entry = { href: window.location.href, key: window.history.state?.key };
+    const handlePopState = () => {
+      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
+        setReturnedEntry((value) => value + 1);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [location.key, location.pathname, location.search, location.hash]);
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  return <ApiKeysContent key={JSON.stringify([activeOrgId, principalId, location.key,
+    location.pathname, location.search, location.hash, browserEntry.generation])}
+    organizationId={activeOrgId} browserEntry={browserEntry} />;
+}

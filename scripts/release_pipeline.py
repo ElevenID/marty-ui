@@ -47,6 +47,9 @@ DISPATCH = {
                           "application_run_attempt", "expected_source_sha"}, {"compose"}),
 }
 ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
+CHILD_VISIBILITY_SECONDS = 60.0
+CHILD_VISIBILITY_INTERVAL = 5.0
+CHILD_VISIBILITY_OBSERVATIONS = 13
 IMAGE = re.compile(r"[a-z0-9]+(?:[.-][a-z0-9]+)*(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}\Z")
 STOP_MESSAGES = {
     "invalid_image_pins": "Stable release requires bounded external image pins",
@@ -68,6 +71,7 @@ STOP_MESSAGES = {
     "required_job_failed": "Required release job failed or was skipped",
     "child_workflow_failed": "Original child workflow did not succeed",
     "child_state_unknown": "Child workflow has an unknown state",
+    "child_visibility_unavailable": "Acknowledged child remained unavailable within its initial visibility bound; no dispatch was retried",
     "dispatch_already_consumed": "Release stage has already consumed this dispatch",
     "dispatch_inputs_mismatch": "Release dispatch inputs differ from their fixed stage",
     "dispatch_unconfirmed": "Workflow dispatch was not confirmed by the current API; do not retry",
@@ -80,7 +84,7 @@ STOP_MESSAGES = {
     "web_not_requested": "Production web was not requested",
     "checkout_mismatch": "Pipeline checkout differs from its exact source",
     "pipeline_not_running": "Original release pipeline is not running",
-    "github_read_failed": "GitHub read failed; no request was retried",
+    "github_read_failed": "GitHub read failed; no dispatch was retried",
     "invalid_json": "Evidence was not bounded valid JSON",
     "protected_main_unverified": "Protected main could not be authenticated",
     "transport_rejected": "GitHub transport or evidence failed validation",
@@ -95,6 +99,8 @@ OPERATIONS = {
     "read_child_jobs", "validate_child_jobs", "validate_child_title", "wait_child", "prepare_dispatch",
     "record_dispatch_intent", "dispatch_workflow", "record_dispatch_response",
     "validate_dispatch_response", "record_dispatch_acknowledgment", "record_child_success",
+    "check_child_visibility_deadline", "validate_child_visibility", "record_child_visibility",
+    "wait_child_visibility",
     "find_stable_publisher", "record_stable_publisher", "finalize_stage",
 }
 
@@ -270,19 +276,79 @@ class Pipeline:
         require(transport.positive(run_id), "invalid_child_run_id")
         self.child_run_id = run_id
         value = self.github.json(f"repos/{transport.REPOSITORY}/actions/runs/{run_id}")
+        return self._validate_run(value, run_id, workflow, event=event, title=title)
+
+    def _validate_run(self, value: object, run_id: int, workflow: str, *,
+                      event: str = "workflow_dispatch", title: str | None = None) -> dict:
         self.operation = "validate_child_run"
         require(isinstance(value, dict) and type(value.get("id")) is int and value["id"] == run_id
                 and value.get("path") == workflow and value.get("event") == event
                 and value.get("head_branch") == "main" and value.get("head_sha") == self.source
                 and type(value.get("run_attempt")) is int and value["run_attempt"] == 1
-                and value.get("repository", {}).get("id") == transport.REPOSITORY_ID
-                and value.get("repository", {}).get("full_name") == transport.REPOSITORY,
+                and isinstance(value.get("repository"), dict)
+                and value["repository"].get("id") == transport.REPOSITORY_ID
+                and value["repository"].get("full_name") == transport.REPOSITORY,
                 "child_identity_mismatch")
         require(self.created <= transport.timestamp(value["created_at"]) <= self.deadline,
                 "child_outside_stage_window")
         require(title is None or value.get("display_title") == title,
                 "child_title_mismatch")
         return value
+
+    def _wait_dispatched_visibility(self, step: dict) -> dict:
+        """Bound only the first visibility of this durably acknowledged write."""
+        require(any(saved is step for saved in self.record["steps"])
+                and step.get("outcome") == "dispatch_confirmed"
+                and step.get("run_id") == self.child_run_id
+                and transport.positive(step.get("run_id"))
+                and "initial_visibility" not in step, "dispatch_already_consumed")
+        prior_deadline = self.github.deadline
+        deadline = min(self.deadline, self.now() + timedelta(seconds=CHILD_VISIBILITY_SECONDS))
+        if prior_deadline is not None:
+            deadline = min(deadline, prior_deadline)
+        visibility = {"not_after": deadline.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "status": "waiting", "http_statuses": []}
+        step["initial_visibility"] = visibility
+        # The real transport inherits this bound for every request, including
+        # protected-main reads. Neither a 404 nor a slow read resets the clock.
+        self.github.deadline = deadline
+        try:
+            self.operation = "record_child_visibility"
+            self.persist()
+            for observation in range(CHILD_VISIBILITY_OBSERVATIONS):
+                self.operation = "check_child_visibility_deadline"
+                require(self.now() < deadline, "child_visibility_unavailable")
+                self.current()
+                self.operation = "check_child_visibility_deadline"
+                require(self.now() < deadline, "child_visibility_unavailable")
+                self.operation = "read_child_run"
+                status, raw = self.github.response(
+                    f"repos/{transport.REPOSITORY}/actions/runs/{step['run_id']}")
+                self.operation = "check_child_visibility_deadline"
+                require(self.now() < deadline, "child_visibility_unavailable")
+                self.operation = "validate_child_visibility"
+                if status == 404:
+                    value = transport.decode(raw)
+                    transport.require(isinstance(value, dict) and value.get("message") == "Not Found",
+                                      "GitHub absence response is malformed")
+                else:
+                    transport.require(status == 200, f"GitHub read failed with HTTP {status}")
+                    # HTTP 200 null is invalid metadata, not an absence signal.
+                    # Titles and required jobs retain their ordinary wait checks.
+                    run = self._validate_run(transport.decode(raw), step["run_id"], step["workflow"])
+                    visibility["status"] = "visible"
+                visibility["http_statuses"].append(status)
+                self.operation = "record_child_visibility"
+                self.persist()
+                if visibility["status"] == "visible":
+                    return run
+                self.operation = "wait_child_visibility"
+                delay = min(CHILD_VISIBILITY_INTERVAL, (deadline - self.now()).total_seconds())
+                require(observation + 1 < CHILD_VISIBILITY_OBSERVATIONS and delay > 0,
+                        "child_visibility_unavailable")
+                self.sleep(delay)
+        finally:
+            self.github.deadline = prior_deadline
 
     def jobs_succeeded(self, run_id: int, required: set[str]) -> bool:
         self.operation = "read_child_jobs"
@@ -306,10 +372,18 @@ class Pipeline:
 
     def wait(self, run_id: int, workflow: str, jobs: set[str], *, event: str = "workflow_dispatch",
              title: str | None = None) -> dict:
+        return self._wait(run_id, workflow, jobs, event=event, title=title)
+
+    def _wait(self, run_id: int, workflow: str, jobs: set[str], *, event: str = "workflow_dispatch",
+              title: str | None = None, first_run: dict | None = None) -> dict:
         self.child_run_id = run_id if transport.positive(run_id) else None
         while True:
             self.current()
-            run = self.run(run_id, workflow, event=event)
+            # Dispatch passes its first visible payload through these same
+            # checks before any subsequent GET can replace that observation.
+            run = (self.run(run_id, workflow, event=event) if first_run is None
+                   else self._validate_run(first_run, run_id, workflow, event=event))
+            first_run = None
             self.operation = "validate_child_title"
             # Newly acknowledged runs may expose their default title before the
             # input-derived run-name. Follow only this exact child while active;
@@ -366,7 +440,8 @@ class Pipeline:
         print(transport.encoded({"event": "child_dispatch_confirmed", "stage": self.phase,
                                  "step": name, "workflow": workflow, "run_id": run_id,
                                  "run_attempt": 1}).decode(), end="", flush=True)
-        self.wait(run_id, workflow, jobs, title=title)
+        first_run = self._wait_dispatched_visibility(step)
+        self._wait(run_id, workflow, jobs, title=title, first_run=first_run)
         step["outcome"] = "success"
         self.operation = "record_child_success"
         self.persist()

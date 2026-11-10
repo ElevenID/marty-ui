@@ -1,10 +1,17 @@
 {{- define "marty.nginx" -}}
+{{- $development := .Values.ui.development | default dict -}}
 # ClusterIP Service names are stable; nginx uses ordinary pod DNS at start.
 # The external Ingress terminates HTTPS and retains the original Host port.
 map $http_x_forwarded_port $marty_forwarded_port {
     default $http_x_forwarded_port;
     "" 443;
 }
+{{- if $development.enabled }}
+map $http_upgrade $marty_dev_connection {
+    default upgrade;
+    "" close;
+}
+{{- end }}
 server {
     listen 80;
     server_name _;
@@ -35,6 +42,13 @@ server {
         return 200 "ok\n";
     }
     location = /.well-known/ai-plugin.json { try_files $uri =404; }
+    # The current gateway sends no idle heartbeats. Allow one quiet hour;
+    # indefinite idle streams require heartbeat frames from the gateway.
+    location = /v1/notifications/events/push {
+        proxy_pass http://gateway:8000;
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
+    }
     location ~ ^/(api|auth|v1|\.well-known|credentials)/ {
         proxy_pass http://gateway:8000;
     }
@@ -84,10 +98,22 @@ server {
         add_header Content-Security-Policy "frame-ancestors {{ .Values.ui.canvasFrameAncestors }}" always;
     }
     location = /canvas/lti/experience {
+        {{- if $development.enabled }}
+        {{- include "marty.uiDevelopmentProxy" . | nindent 8 }}
+        {{- else }}
         try_files /index.html =404;
+        {{- end }}
         add_header X-Content-Type-Options "nosniff" always;
         add_header Content-Security-Policy "frame-ancestors {{ .Values.ui.canvasFrameAncestors }}" always;
     }
+    {{- if $development.enabled }}
+    # Retain the deployment's public runtime flags from the installed UI image.
+    location = /runtime-config.js { try_files $uri =404; }
+    location / {
+        {{- include "marty.uiDevelopmentProxy" . | nindent 8 }}
+    }
+    {{- else }}
     location / { try_files $uri $uri/ /index.html; }
+    {{- end }}
 }
 {{- end -}}
