@@ -212,6 +212,11 @@
         "labels": {
           "removeClaim": "Claim {{index}} verwijderen"
         }
+      },
+      "reviewStep": {
+        "fields": {
+          "requiredValue": "Vereiste waarde"
+        }
       }
     }
   },

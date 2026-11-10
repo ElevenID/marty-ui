@@ -58,10 +58,14 @@ describe('template policy claim projection in the complete wizard', () => {
     await user.type(screen.getByRole('textbox', { name: 'Required Value (Optional)' }), 'staff');
     await user.click(screen.getByTestId('wizard.policy.next'));
     await user.click(screen.getByTestId('wizard.policy.next'));
+    expect(screen.getByText('Employee Trust')).toBeInTheDocument();
+    expect(screen.queryByText('No trust profile selected')).not.toBeInTheDocument();
+    expect(screen.getByText('Required value: "staff"')).toBeInTheDocument();
     await user.click(screen.getByRole('switch', { name: /Activate immediately/i }));
     await user.click(screen.getByTestId('wizard.policy.submit'));
     await screen.findByText('"Employee Credential Verification Policy" is saved as draft.');
     expect(writes).toHaveLength(1);
+    expect(writes[0].trust_profile_id).toBe(trust.id);
     expect(writes[0].required_claims).toEqual([{
       claim_name: 'role', credential_type: 'urn:employee', value_constraint: 'staff', predicate_spec: null,
     }]);

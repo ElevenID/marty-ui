@@ -1950,6 +1950,7 @@
           "purposeStatement": "Purpose Statement",
           "acceptedCredentialTypes": "Accepted Credential Types",
           "requiredClaims": "Required Claims ({{count}})",
+          "requiredValue": "Required value",
           "holderBinding": "Holder Binding",
           "revocationCheck": "Revocation Check",
           "maxCredentialAge": "Max Credential Age",

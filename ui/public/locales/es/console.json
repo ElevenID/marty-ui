@@ -499,6 +499,11 @@
 				"labels": {
 					"removeClaim": "Eliminar atributo {{index}}"
 				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "Valor requerido"
+				}
 			}
 		}
 	},

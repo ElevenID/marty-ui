@@ -499,6 +499,11 @@
 				"labels": {
 					"removeClaim": "クレーム{{index}}を削除"
 				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "必須値"
+				}
 			}
 		}
 	},

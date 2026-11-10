@@ -310,6 +310,29 @@ watch settings are unchanged. The focused suite is included in CI.
 
 ## Verification limits
 
+### Policy review summary follow-up
+
+Source inspection during the next AWS walkthrough found that the final
+Presentation Policy review read `trustProfile` while the wizard stored and
+submitted `selectedTrustProfile`. The review now shows the actual selection and
+omits an empty framework chip when the selected profile has no framework type.
+Required claim values also appear in the summary, using the same precedence and
+empty-value handling as the native request normalization and template projection.
+Zero, false, and structured JSON values remain visible; markup is rendered as
+text. The new label is available in all six console locales.
+
+The complete-wizard regression verifies the displayed trust profile and required
+value against the actual submitted request. Focused component cases cover native
+value precedence, falsy values, missing values, structured values, and escaped
+markup. **18 tests passed across two suites**; targeted production ESLint and
+`git diff --check` passed. Two independent source reviews found no blockers.
+These results qualify the source change. The connected browser reached the live
+registration form, but Chrome blocked further automation while another
+extension interface was open. Authenticated replay and deployment of this
+follow-up remain pending; no new account was submitted during that attempt.
+
+### Installed backend and remaining flows
+
 The installed signed backend remains `v1.1.274`. It predates the native
 organization defaults endpoints merged in #1848, and the installed defaults
 request still returns **404**. Defaults loading/saving therefore remains
