@@ -21,6 +21,7 @@ fn fresh_install_login_badge_preserves_the_final_released_behavior() {
         now,
         "00000000-0000-0000-0000-000000000001",
         "https://issuer.example/",
+        "did:web:issuer.example:orgs:marty",
     );
     assert_eq!(badge.id, "50000000-0000-0000-0000-000000000040");
     assert_eq!(badge.status.as_str(), "active");
@@ -47,6 +48,26 @@ fn fresh_install_login_badge_preserves_the_final_released_behavior() {
     assert_eq!(
         badge.issuer_did.as_deref(),
         Some("did:web:issuer.example:orgs:marty")
+    );
+}
+
+#[test]
+fn login_badge_keeps_primary_format_claims_and_explicit_governed_identity() {
+    let badge = marty_login_badge(
+        Utc::now(),
+        "00000000-0000-0000-0000-000000000001",
+        "https://beta.example.test",
+        "did:web:beta.example.test:orgs:marty-identity-platform",
+    );
+    assert_eq!(
+        badge.issuer_did.as_deref(),
+        Some("did:web:beta.example.test:orgs:marty-identity-platform")
+    );
+    assert_eq!(badge.supported_formats[0].canonical(), "VC_JWT");
+    assert_eq!(badge.claims.len(), 11);
+    assert_eq!(
+        badge.trust_profile_id.as_deref(),
+        Some("60000000-0000-0000-0000-000000000001")
     );
 }
 

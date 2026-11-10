@@ -150,6 +150,7 @@ mod tests {
             Utc::now(),
             "00000000-0000-0000-0000-000000000001",
             "https://beta.example.test",
+            "did:web:beta.example.test:orgs:marty",
         );
         let profile = system_profiles()
             .into_iter()

@@ -106,11 +106,15 @@ impl TrustProfileServiceConfig {
             .unwrap_or("00000000-0000-0000-0000-000000000001")
             .parse()
             .map_err(|_| invalid("MARTY_ORG_ID"))?;
-        let organization_slug = value(&values, "MARTY_ORG_SLUG").unwrap_or("marty");
-        let public_domain = value(&values, "PUBLIC_DOMAIN").unwrap_or("localhost");
-        let marty_issuer_did = value(&values, "MARTY_ISSUER_DID")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("did:web:{public_domain}:orgs:{organization_slug}"));
+        let organization_slug =
+            config::canonical_slug(value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"), "marty");
+        let public_domain =
+            config::configured_authority(value(&values, "PUBLIC_DOMAIN"), &[], "localhost");
+        let marty_issuer_did = config::configured_did_web(
+            value(&values, "MARTY_ISSUER_DID"),
+            &public_domain,
+            &["orgs", &organization_slug],
+        );
         if !marty_issuer_did.starts_with("did:") {
             return Err(invalid("MARTY_ISSUER_DID"));
         }
@@ -373,6 +377,40 @@ mod tests {
                 "https://issuer.example/".into(),
             ),
         ])
+    }
+
+    #[test]
+    fn seed_issuer_normalizes_authority_and_preserves_explicit_identity_and_fallback() {
+        let mut input = values("development");
+        input.remove("PUBLIC_DOMAIN");
+        input.remove("MARTY_ISSUER_DID");
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:localhost:orgs:marty"
+        );
+        input.insert(
+            "PUBLIC_DOMAIN".into(),
+            "https://beta.example.test:29876/path".into(),
+        );
+        input.insert("MARTY_ORG_SLUG".into(), " Marty-Identity-Platform ".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:beta.example.test%3A29876:orgs:marty-identity-platform"
+        );
+        input.insert(
+            "MARTY_ISSUER_DID".into(),
+            "did:web:owned.example:orgs:reviewed".into(),
+        );
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input)
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:owned.example:orgs:reviewed"
+        );
     }
 
     #[test]

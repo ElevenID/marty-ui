@@ -197,6 +197,14 @@ existing owner operations through optional remote-KMS HTTPS listeners. These
 listeners are constructed and bound before readiness, retain the existing
 request credentials and tenant checks, and participate in service shutdown.
 
+[PR 1881](https://github.com/ElevenID/marty-ui/pull/1881) publishes this continuation.
+During publication, [PR 1873](https://github.com/ElevenID/marty-ui/pull/1873) advanced
+main to `2d529bc49192daac367a69f0f99b8adb9dcadf24`. That main update is integrated,
+including Core `ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca`, signed VC-JWT presentation
+verification and preservation of existing bootstrap issuer/trust selections.
+The owner-channel additions remain intact. The publishing PR records validation
+of the combined source and dependency graph, including fresh keyless executions.
+
 [Authenticated managed owner channels](authenticated-managed-owner-channels.md)
 describes the exact configuration, native type boundary, deployment requirements,
 and live keyless validation contract. Canonical evidence composition, durable
