@@ -844,6 +844,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         grpc_platform,
         config.internal_service_token.as_deref(),
     );
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_issuance_service::http::managed_status_owner_router(
+                    credential_management_http.clone(),
+                ),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_http_listener_healthy()?;
     let grpc_enabled = config.grpc_enabled;
@@ -919,6 +931,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let grpc_server = IssuanceServiceServer::new(grpc_service);
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
     let mut http_shutdown = listener_shutdown_rx.clone();
+    let authority = marty_service_runtime::https::serve_optional(
+        authority_server,
+        listener_shutdown_rx.clone(),
+    );
     let mut grpc_shutdown = listener_shutdown_rx;
     let http = axum::serve(
         http_listener,
@@ -991,6 +1007,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let servers = async {
         tokio::try_join!(
+            async {
+                authority
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
             async {
                 http.await
                     .map_err(|error| Box::new(error) as Box<dyn Error>)

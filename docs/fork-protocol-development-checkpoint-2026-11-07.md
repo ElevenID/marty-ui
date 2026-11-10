@@ -39,7 +39,7 @@ registered; it should not be recreated as unfinished W01 work.
 
 | Work package | Current development | Completion boundary |
 | --- | --- | --- |
-| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence, opt-in managed issuer/type/status authority and a separate Flow finalization receipt | Canonical evidence composition, authenticated owner-channel provenance and an issuance-owned continuation are still required |
+| W05 — verified prerequisites before issuance | Atomic signing authority revalidation, frozen Flow requests, native SD-JWT/DCQL query/subject/key evidence, opt-in managed issuer/type/status authority, a separate Flow finalization receipt, and authenticated owner acquisition over keyless HTTPS | Canonical evidence composition and an issuance-owned continuation are still required |
 | W14 — verified wallets | Reconcile existing [Authenticator PR 57](https://github.com/ElevenID/marty-authenticator/pull/57) with the merged fork foundation, current APIs and verified receipt/presentation contracts | Source integration and tests; external wallet activation and release qualification remain open |
 
 ### W05: current signing authorization boundary
@@ -180,6 +180,28 @@ semantics, consent for always-shared signed claims, a governed relationship
 between issuance service/configuration and credential issuer, real KMS/device
 acceptance, browser migration and regenerated public artifacts. A passing audit
 of existing checked-in WASM artifacts does not qualify a new-fork build.
+
+### W05: authenticated managed owner acquisition continuation
+
+The receipt work landed through [PR 1858](https://github.com/ElevenID/marty-ui/pull/1858)
+at `44e57da70b376c0d0437e45e9328037c2fde1a34`. Its final merge-queue CI
+[42872304327](https://github.com/ElevenID/marty-ui/actions/runs/42872304327) passed,
+including the real Flow PostgreSQL receipt assertions. Earlier pending-run
+statements above are historical and do not describe the landed state.
+
+The next increment starts from main `ed84cb2aeec49201a5d342cb8238473417719fbb`.
+It closes the managed owner acquisition boundary with dedicated HTTPS origins,
+operator-CA-only hostname verification, no proxy or redirect, bounded strict
+responses, and opaque native provenance. Trust Profile and Issuance expose the
+existing owner operations through optional remote-KMS HTTPS listeners. These
+listeners are constructed and bound before readiness, retain the existing
+request credentials and tenant checks, and participate in service shutdown.
+
+[Authenticated managed owner channels](authenticated-managed-owner-channels.md)
+describes the exact configuration, native type boundary, deployment requirements,
+and live keyless validation contract. Canonical evidence composition, durable
+observation/commit clock semantics and the Issuance-owned continuation remain
+open. This increment does not activate the prerequisite-to-issuance workflow.
 
 ## Next implementation order
 

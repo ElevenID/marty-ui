@@ -49,6 +49,26 @@ pub struct TrustProfileHttpState {
     pub registry_synchronizer: Arc<dyn TrustRegistrySynchronizer>,
 }
 
+/// Only the managed owner operations are exposed on the direct HTTPS listener.
+pub fn trust_credential_authority_router(state: TrustProfileHttpState) -> Router {
+    credential_authority_routes().with_state(state)
+}
+
+fn credential_authority_routes() -> Router<TrustProfileHttpState> {
+    Router::new()
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+            post(credential_authority_snapshot),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+            post(credential_trust_evaluation),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        ))
+}
+
 pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
     Router::new()
         .route(
@@ -95,14 +115,7 @@ pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
             "/internal/v1/trust-profiles/{profile_id}",
             get(internal_profile),
         )
-        .route(
-            "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
-            post(credential_authority_snapshot),
-        )
-        .route(
-            "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
-            post(credential_trust_evaluation),
-        )
+        .merge(credential_authority_routes())
         .route(
             "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
             get(wallet_issuer_keys),

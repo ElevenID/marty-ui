@@ -39,6 +39,7 @@ const MAX_CREDENTIAL_STATUS_BYTES: usize = 64 * 1024;
 pub struct NativePresentationControlPlane {
     organizations: OrganizationServiceClient<Channel>,
     http: Arc<dyn OutboundHttpClient>,
+    owner_channels: Option<crate::owner_channel::ManagedOwnerChannels>,
     service_token: Option<AsciiMetadataValue>,
     service_token_header: Option<Arc<str>>,
     trust_profile_url: Arc<str>,
@@ -66,50 +67,16 @@ impl std::fmt::Debug for NativePresentationControlPlane {
 }
 
 impl NativePresentationControlPlane {
-    async fn authority_post<T: serde::Serialize, R: serde::de::DeserializeOwned>(
-        &self,
-        url: String,
-        mut headers: BTreeMap<String, String>,
-        body: &T,
-        maximum_response_bytes: usize,
-    ) -> Result<R, PresentationVerificationError> {
-        headers.insert("accept".into(), "application/json".into());
-        headers.insert("content-type".into(), "application/json".into());
-        let response = self
-            .http
-            .execute(OutboundHttpRequest {
-                method: OutboundHttpMethod::Post,
-                url,
-                headers,
-                body: Some(
-                    serde_json::to_vec(body)
-                        .map_err(|_| PresentationVerificationError::Unavailable)?,
-                ),
-                maximum_response_bytes,
-            })
-            .await
-            .map_err(|_| PresentationVerificationError::Unavailable)?;
-        if response.status == 409 {
-            return Err(PresentationVerificationError::CredentialAuthorityChanged);
-        }
-        if !(200..300).contains(&response.status) {
-            return Err(PresentationVerificationError::Unavailable);
-        }
-        let value = response
-            .json_object("credential authority")
-            .map_err(|_| PresentationVerificationError::Unavailable)?;
-        serde_json::from_value(value).map_err(|_| PresentationVerificationError::Unavailable)
-    }
-
-    fn authority_headers(&self) -> Result<BTreeMap<String, String>, PresentationVerificationError> {
-        let token = self
-            .service_token_header
-            .as_ref()
-            .ok_or(PresentationVerificationError::Unavailable)?;
-        Ok(BTreeMap::from([(
-            SERVICE_TOKEN_HEADER.into(),
-            token.to_string(),
-        )]))
+    /// Managed owner evidence requires dedicated, authenticated HTTPS channels.
+    /// Missing configuration never falls back to ordinary control-plane HTTP.
+    pub fn with_managed_owner_channels(
+        mut self,
+        config: Option<&crate::ManagedOwnerChannelConfig>,
+    ) -> Result<Self, PresentationVerificationError> {
+        self.owner_channels = config
+            .map(|config| crate::owner_channel::ManagedOwnerChannels::new(config, self.timeout))
+            .transpose()?;
+        Ok(self)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -196,6 +163,7 @@ impl NativePresentationControlPlane {
         Ok(Self {
             organizations,
             http: Arc::new(http),
+            owner_channels: None,
             service_token: service_token_metadata,
             service_token_header: service_token.map(Arc::<str>::from),
             trust_profile_url: Arc::from(trust_profile_url),
@@ -420,64 +388,43 @@ impl PresentationTrustResolver for NativePresentationControlPlane {
         organization_id: Uuid,
         profile_id: Uuid,
     ) -> Result<
-        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        >,
         PresentationVerificationError,
     > {
-        use marty_oid4vp_contract::trust_authority::{
-            CredentialAuthoritySnapshotRequestV1, CredentialAuthoritySnapshotV1,
-        };
-        let response: CredentialAuthoritySnapshotV1 = self
-            .authority_post(
-                format!(
-                    "{}/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
-                    self.trust_profile_url
-                ),
-                self.authority_headers()?,
-                &CredentialAuthoritySnapshotRequestV1 {
-                    organization_id: organization_id.to_string(),
-                },
-                marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        self.owner_channels
+            .as_ref()
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .freeze(
+                organization_id,
+                profile_id,
+                self.service_token_header
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
             )
-            .await?;
-        response
-            .validate()
-            .map_err(|_| PresentationVerificationError::Unavailable)?;
-        if response.organization_id != organization_id.to_string()
-            || response.profile.id != profile_id.to_string()
-        {
-            return Err(failed("credential authority identity mismatch"));
-        }
-        Ok(response)
+            .await
     }
 
     async fn evaluate_credential_authority(
         &self,
         request: &marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1,
     ) -> Result<
-        marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        >,
         PresentationVerificationError,
     > {
-        use marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1;
-        request
-            .validate()
-            .map_err(|_| failed("invalid credential authority selection"))?;
-        let profile_id = Uuid::parse_str(&request.expected_profile.id)
-            .map_err(|_| failed("invalid credential authority profile"))?;
-        let response: CredentialTrustEvaluationResponseV1 = self
-            .authority_post(
-                format!(
-                    "{}/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
-                    self.trust_profile_url
-                ),
-                self.authority_headers()?,
+        self.owner_channels
+            .as_ref()
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .evaluate(
                 request,
-                MAX_CREDENTIAL_STATUS_BYTES,
+                self.service_token_header
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
             )
-            .await?;
-        response
-            .validate_for_request(request, Utc::now().timestamp())
-            .map_err(|_| failed("credential authority response mismatch"))?;
-        Ok(response)
+            .await
     }
 
     async fn load_profile(
@@ -549,39 +496,21 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
         &self,
         request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
     ) -> Result<
-        marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        >,
         PresentationVerificationError,
     > {
-        use marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1;
-        request
-            .validate()
-            .map_err(|_| failed("invalid managed status selection"))?;
-        let base = self
-            .status_url_template
-            .strip_suffix("/v1/issuance/credentials/{credential_id}/status")
-            .ok_or_else(|| {
-                failed("configured status endpoint is not the managed issuance owner")
-            })?;
-        let api_key = self
-            .issuance_api_key
+        self.owner_channels
             .as_ref()
-            .ok_or(PresentationVerificationError::Unavailable)?;
-        let headers = BTreeMap::from([
-            ("x-api-key".into(), api_key.to_string()),
-            ("x-organization-id".into(), request.organization_id.clone()),
-        ]);
-        let response: ManagedCredentialStatusObservationV1 = self
-            .authority_post(
-                format!("{base}/internal/issuance/sd-jwt-status/observe"),
-                headers,
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .observe(
                 request,
-                MAX_CREDENTIAL_STATUS_BYTES,
+                self.issuance_api_key
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
             )
-            .await?;
-        response
-            .validate_for_request(request, Utc::now().timestamp())
-            .map_err(|_| failed("managed status response mismatch"))?;
-        Ok(response)
+            .await
     }
 
     async fn resolve(

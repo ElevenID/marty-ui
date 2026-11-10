@@ -27,6 +27,7 @@ impl RuntimeEnvironment {
 pub struct TrustProfileServiceConfig {
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub organization_grpc_target: String,
@@ -191,7 +192,18 @@ impl TrustProfileServiceConfig {
         } else {
             Vec::new()
         };
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr || service_token.is_none() {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+        }
         Ok(Self {
+            managed_authority_https,
             environment,
             http_addr,
             database_url,

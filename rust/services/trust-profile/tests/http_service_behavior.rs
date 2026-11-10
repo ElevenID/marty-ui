@@ -1375,12 +1375,16 @@ mod credential_authority_tests {
     }
 
     fn authenticated_service(repository: Arc<MemoryTrustProfileRepository>) -> axum::Router {
+        trust_profile_router(authenticated_state(repository))
+    }
+
+    fn authenticated_state(repository: Arc<MemoryTrustProfileRepository>) -> TrustProfileHttpState {
         let repository: Arc<dyn TrustProfileRepository> = repository;
         let application = Arc::new(TrustProfileApplication::new(
             repository.clone(),
             Arc::new(AllowControlPlane),
         ));
-        trust_profile_router(TrustProfileHttpState {
+        TrustProfileHttpState {
             application,
             repository,
             service_authenticator: Arc::new(
@@ -1388,7 +1392,7 @@ mod credential_authority_tests {
             ),
             internal_api_key: None,
             registry_synchronizer: Arc::new(EchoSynchronizer),
-        })
+        }
     }
 
     async fn post(
@@ -1439,9 +1443,36 @@ mod credential_authority_tests {
 
     #[tokio::test]
     async fn owner_routes_require_service_auth_and_bind_exact_tenant_revision_and_selection() {
+        for narrow in [false, true] {
+            assert_owner_routes(narrow).await;
+        }
+    }
+
+    async fn assert_owner_routes(narrow: bool) {
         let repository = Arc::new(MemoryTrustProfileRepository::default());
         let (selected, issuer, mut relationship) = fixture(&repository).await;
-        let app = authenticated_service(repository.clone());
+        let app = if narrow {
+            marty_trust_profile::trust_credential_authority_router(authenticated_state(
+                repository.clone(),
+            ))
+        } else {
+            authenticated_service(repository.clone())
+        };
+        if narrow {
+            for uri in [
+                "/v1/trust-profiles",
+                "/healthz",
+                "/internal/v1/trust-registry",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), 404, "{uri}");
+            }
+        }
+
         let freeze_uri = format!(
             "/internal/v1/trust-profiles/{}/credential-authority-snapshot",
             selected.id

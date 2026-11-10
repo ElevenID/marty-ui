@@ -113,6 +113,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         registry_synchronizer: registry_synchronizer.clone(),
     };
 
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_trust_profile::trust_credential_authority_router(state.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_healthy(TrustProfileDependency::HttpListener)?;
     let app = runtime
@@ -120,6 +130,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .merge(trust_profile_router(state))
         .layer(TraceLayer::new_for_http());
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let authority =
+        marty_service_runtime::https::serve_optional(authority_server, shutdown_rx.clone());
     let scheduler = TrustRegistryScheduler::new(
         scheduler_repository,
         registry_synchronizer,
@@ -136,15 +148,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         build_revision = %config.build_revision,
         "native Rust Trust Profile service active"
     );
-    tokio::select! {
-        result = server => result?,
+    let servers = async { tokio::try_join!(server, authority).map(|_| ()) };
+    tokio::pin!(servers);
+    let result = tokio::select! {
+        result = &mut servers => result,
         () = shutdown_signal() => {
             runtime.drain()?;
             let _ = shutdown_tx.send(true);
+            servers.await
         }
-    }
+    };
     let _ = shutdown_tx.send(true);
     let _ = scheduler_task.await;
     runtime.stop()?;
+    result?;
     Ok(())
 }

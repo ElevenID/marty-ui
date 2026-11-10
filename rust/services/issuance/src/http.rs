@@ -2817,16 +2817,45 @@ async fn get_credential_status(
         .map(Json)
 }
 
+/// Direct HTTPS owner surface; ordinary issuance and management routes are absent.
+pub fn managed_status_owner_router(service: CredentialManagementHttpService) -> Router {
+    Router::new()
+        .route(
+            "/internal/issuance/sd-jwt-status/observe",
+            post(
+                |State(service): State<CredentialManagementHttpService>,
+                 headers: HeaderMap,
+                 Json(request): Json<
+                    marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+                >| async move {
+                    observe_sd_jwt_status_with_service(&service, &headers, &request).await
+                },
+            ),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        ))
+        .with_state(service)
+}
+
 async fn observe_sd_jwt_status(
     State(state): State<IssuanceState>,
     headers: HeaderMap,
     Json(request): Json<marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1>,
 ) -> Result<Response, CredentialManagementHttpError> {
-    let observation = credential_management(&state)?
+    observe_sd_jwt_status_with_service(credential_management(&state)?, &headers, &request).await
+}
+
+async fn observe_sd_jwt_status_with_service(
+    service: &CredentialManagementHttpService,
+    headers: &HeaderMap,
+    request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+) -> Result<Response, CredentialManagementHttpError> {
+    let observation = service
         .observe_sd_jwt_status(
-            &request,
-            header(&headers, "X-API-Key"),
-            header(&headers, "X-Organization-ID"),
+            request,
+            header(headers, "X-API-Key"),
+            header(headers, "X-Organization-ID"),
         )
         .await?;
     Ok(([("Cache-Control", "no-store")], Json(observation)).into_response())

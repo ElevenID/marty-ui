@@ -154,7 +154,8 @@ early return without that database is not an executed database pass.
 
 Exact test receipts, both independent source-audit dispositions and hosted CI
 status are recorded in the publishing PR. The next canonical producer still
-needs authenticated owner-channel provenance and explicit composition of
+must preserve the [authenticated owner acquisitions](authenticated-managed-owner-channels.md)
+and explicitly compose
 Policy observation, native validity and this durable replay outcome. The
 canonical validator's current single-time semantics are not relaxed here.
 An Issuance-owned, expiring, single-use continuation remains subsequent work.

@@ -225,7 +225,9 @@ pub trait PresentationTrustResolver: Send + Sync {
         _organization_id: Uuid,
         _profile_id: Uuid,
     ) -> Result<
-        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        >,
         PresentationVerificationError,
     > {
         Err(PresentationVerificationError::Unavailable)
@@ -235,7 +237,9 @@ pub trait PresentationTrustResolver: Send + Sync {
         &self,
         _request: &marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1,
     ) -> Result<
-        marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        >,
         PresentationVerificationError,
     > {
         Err(PresentationVerificationError::Unavailable)
@@ -281,7 +285,9 @@ pub trait CredentialStatusResolver: Send + Sync {
         &self,
         _request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
     ) -> Result<
-        marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        >,
         PresentationVerificationError,
     > {
         Err(PresentationVerificationError::Unavailable)
@@ -610,11 +616,14 @@ impl VerifiedFactsOrchestrator {
                     )
                 })?;
                 let (trust_request, status_request) = query.authority_requests()?;
-                let assessment = self
+                let authenticated_assessment = self
                     .trust
                     .evaluate_credential_authority(&trust_request)
                     .await?;
-                let observation = self.status.observe_managed_status(&status_request).await?;
+                let authenticated_observation =
+                    self.status.observe_managed_status(&status_request).await?;
+                let assessment = authenticated_assessment.response();
+                let observation = authenticated_observation.response();
                 let trusted =
                     assessment.outcome == marty_oid4vp_contract::EvidenceCheckOutcome::Passed;
                 let trust = IssuerTrustEvidence {
@@ -639,7 +648,7 @@ impl VerifiedFactsOrchestrator {
                     ),
                     warnings: Vec::new(),
                 };
-                owner_observations = Some((assessment, observation));
+                owner_observations = Some((authenticated_assessment, authenticated_observation));
                 trust
             }
             (Some(profile), true, issuer) if issuer != "unknown" => {
@@ -1080,6 +1089,10 @@ impl PresentationVerificationOrchestrator for VerifiedFactsOrchestrator {
             .trust
             .freeze_credential_authority(policy.organization_id, profile_id)
             .await?;
+        if !authority.is_owner(crate::owner_channel::Owner::TrustProfile) {
+            return Err(PresentationVerificationError::Unavailable);
+        }
+        let authority = authority.into_response();
         authority
             .validate()
             .map_err(|_| PresentationVerificationError::Unavailable)?;

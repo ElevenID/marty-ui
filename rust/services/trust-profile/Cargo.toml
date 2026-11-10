@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
-marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["https"] }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
 marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
 async-trait.workspace = true
