@@ -33,7 +33,7 @@ const INITIAL_FORM = { name: '', description: '' };
 function DeliveryDestinations({ organizationId, canCreate }) {
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const { data, loading, error: loadError, reload, clearError } = useAsyncData(async () => {
+  const { data, loading, error: loadError, reload } = useAsyncData(async () => {
     const result = await listDeliveryDestinations({ organizationId, activeOnly: false });
     if (!Array.isArray(result) || !result.every((destination) => typeof destination?.id === 'string'
       && (destination.is_system === true ? destination.organization_id == null : destination.organization_id === organizationId))) {
@@ -43,23 +43,18 @@ function DeliveryDestinations({ organizationId, canCreate }) {
   }, [organizationId]);
   const destinations = data || [];
   const [actionError, setActionError] = useState('');
-  const error = actionError || (loadError ? loadError.message || 'Delivery destinations could not be loaded.' : '');
-  const setError = (value) => {
-    clearError();
-    setActionError(value);
-  };
+  const error = loadError ? loadError.message || 'Delivery destinations could not be loaded.' : '';
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState(INITIAL_FORM);
   const [saving, setSaving] = useState(false);
   const load = useCallback(async () => {
-    setActionError('');
     await reload();
   }, [reload]);
 
   const createPhysicalDestination = async () => {
     if (!canCreate) return;
     setSaving(true);
-    setError('');
+    setActionError('');
     try {
       await createDeliveryDestination({
         organization_id: organizationId,
@@ -79,7 +74,7 @@ function DeliveryDestinations({ organizationId, canCreate }) {
       setForm(INITIAL_FORM);
       await load();
     } catch (cause) {
-      if (mounted.current) setError(cause.message || 'The production destination could not be created.');
+      if (mounted.current) setActionError(cause.message || 'The production destination could not be created.');
     } finally {
       if (mounted.current) setSaving(false);
     }
@@ -95,7 +90,7 @@ function DeliveryDestinations({ organizationId, canCreate }) {
         { label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations' },
       ]}
       actions={canCreate && (
-        <Button variant="contained" startIcon={<AddIcon />} onClick={() => setDialogOpen(true)}>
+        <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setActionError(''); setDialogOpen(true); }}>
           Add Production Destination
         </Button>
       )}
@@ -134,6 +129,7 @@ function DeliveryDestinations({ organizationId, canCreate }) {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Alert severity="info">This destination identifies an approved personalization bureau. Connection secrets remain in deployment configuration.</Alert>
+            {actionError && <Alert severity="error">{actionError}</Alert>}
             <TextField required autoFocus label="Destination name" value={form.name} onChange={(event) => setForm((value) => ({ ...value, name: event.target.value }))} />
             <TextField label="Description" multiline minRows={3} value={form.description} onChange={(event) => setForm((value) => ({ ...value, description: event.target.value }))} />
           </Stack>
