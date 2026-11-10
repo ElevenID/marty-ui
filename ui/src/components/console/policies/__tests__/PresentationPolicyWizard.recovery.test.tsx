@@ -17,7 +17,7 @@ vi.mock('../../../../services/presentationPolicyApi', () => ({
 vi.mock('../steps', () => ({
   TrustProfileStep: ({ onSelectTrustProfile }) => <button onClick={() => onSelectTrustProfile({ id: 'trust' })}>Select trust</button>,
   TemplateSelectionStep: ({ onSelectTemplate }) => <button onClick={() => onSelectTemplate({ id: 'custom' })}>Select custom</button>,
-  ClaimsConfigurationStep: ({ onConfigChange }) => <button onClick={() => onConfigChange({ name: 'Policy', purpose: 'Test', required_claims: [{ claim_name: 'name' }] })}>Set claims</button>,
+  ClaimsConfigurationStep: ({ onConfigChange }) => <button onClick={() => onConfigChange({ name: 'Policy', purpose: 'Test', accepted_credential_types: ['urn:example:member'], required_claims: [{ claim_name: 'name', credential_type: 'urn:example:member' }] })}>Set claims</button>,
   FreshnessBindingStep: () => <div>Binding</div>, ReviewStep: () => <div>Review settings</div>,
 }));
 const draft = { id: 'policy-a', organization_id: 'org-a', status: 'draft' };

@@ -21,10 +21,11 @@ import SecurityIcon from '@mui/icons-material/Security';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
+import { credentialTemplateValidity } from '../credentialTemplateValidity';
 
 const ReviewStep = ({ data, onChange, onEdit }) => {
   const { t } = useTranslation('console');
-  const secondsToDays = (seconds) => Math.floor(seconds / 86400);
+  const { values } = credentialTemplateValidity(data.validity_rules);
 
   return (
     <Box>
@@ -168,14 +169,21 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.defaultValidity')}
-                value={`${secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
+                value={`${values.default_validity_days} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
               />
             </Grid>
 
             <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.maximumValidity')}
-                value={`${secondsToDays(data.validity_rules?.max_validity_seconds || 63072000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
+                value={`${values.max_validity_days} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
+              />
+            </Grid>
+
+            <Grid size={{ xs: 12, md: 6 }}>
+              <ReviewField
+                label={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffset')}
+                value={String(values.not_before_offset_seconds)}
               />
             </Grid>
 

@@ -129,10 +129,11 @@ describe('SidebarNavigation applicant organizations link', () => {
 
   it('renders a single settings entry in the mobile drawer', async () => {
     mockUseMediaQuery.mockReturnValue(true);
+    const onMobileClose = vi.fn();
 
     const { user } = renderWithoutRouter(
       <MemoryRouter initialEntries={['/console/applicant/catalog']}>
-        <SidebarNavigation mobileOpen onMobileClose={vi.fn()} />
+        <SidebarNavigation mobileOpen onMobileClose={onMobileClose} />
         <LocationProbe />
         <Routes>
           <Route path="/console/applicant/catalog" element={<div>Applicant Catalog</div>} />
@@ -149,5 +150,23 @@ describe('SidebarNavigation applicant organizations link', () => {
       expect(screen.getByTestId('location')).toHaveTextContent('/console/applicant/settings');
       expect(screen.getByText('Applicant Settings')).toBeInTheDocument();
     });
+    expect(onMobileClose).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(onMobileClose).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('location')).toHaveTextContent('/console/applicant/settings');
+  });
+
+  it('closes the mobile menu when switching consoles without changing the desktop preference', async () => {
+    mockUseMediaQuery.mockReturnValue(true);
+    window.localStorage.setItem('sidebar-collapsed', 'true');
+    const onMobileClose = vi.fn();
+    const { user } = renderWithoutRouter(<MemoryRouter initialEntries={['/console/applicant/catalog']}>
+      <SidebarNavigation mobileOpen onMobileClose={onMobileClose} />
+    </MemoryRouter>);
+    await user.click(screen.getByRole('button', { name: 'Org', exact: true }));
+    expect(mockSetMode).toHaveBeenCalledWith('org');
+    expect(onMobileClose).toHaveBeenCalledTimes(1);
+    expect(window.localStorage.getItem('sidebar-collapsed')).toBe('true');
   });
 });

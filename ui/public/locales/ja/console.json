@@ -480,8 +480,40 @@
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "1～{{max}}の整数で日数を入力してください。",
+					"offsetRange": "{{min}}～{{max}}の整数で秒数を入力してください。",
+					"reviewSettings": "テンプレートを作成する前に、強調表示された有効期間の設定を確認してください。"
+				}
+			}
+		},
 		"common": {
 			"optional": "任意"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "クレーム名を入力してください。",
+					"credentialType": "受け入れ可能な資格情報タイプを選択してください。",
+					"completeClaims": "続行する前に、ポリシー名、目的、受け入れ可能な資格情報タイプ、およびすべての必須クレームを入力してください。",
+					"templateRequirementsMismatch": "この要件は選択した資格情報テンプレートと一致しません。テンプレートを選び直すか、新しいカスタムポリシーを作成してください。",
+					"templateIncomplete": "選択した資格情報テンプレートは不完全です。続行する前にテンプレートを選び直してください。",
+					"templateTypeMismatch": "このポリシーは選択した資格情報テンプレートに紐づいています。そのテンプレートの資格情報タイプを使用するか、新しいカスタムポリシーを作成して別のタイプを設定してください。",
+					"templateDuplicateClaim": "このポリシーで「{{claimName}}」を要求できるのは1回だけです。",
+					"templateUnknownClaim": "「{{claimName}}」は選択した資格情報テンプレートのクレームではありません。テンプレート内のクレームを選択するか、新しいカスタムポリシーを作成してください。",
+					"templateValueConflict": "「{{claimName}}」に指定した値が、選択したテンプレートの制約と矛盾しています。"
+				},
+				"labels": {
+					"removeClaim": "クレーム{{index}}を削除"
+				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "必須値"
+				}
+			}
 		}
 	},
 	"org": {
@@ -557,5 +589,10 @@
 		"discoveryRequired": "自由参加または承認制の組織は、公開の組織検索で常に見つけることができます。",
 		"discoveryPublic": "この組織は公開の組織検索に表示される場合があります。",
 		"discoveryPrivate": "この組織は公開の組織検索に表示されません。"
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "1～3650の整数で日数を入力してください。"
+		}
 	}
 }

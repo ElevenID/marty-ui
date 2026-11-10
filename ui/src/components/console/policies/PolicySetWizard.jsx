@@ -37,7 +37,9 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [policyType, setPolicyType] = useState('CUSTOM');
-  const [policies, setPolicies] = useState([]);
+  const [policyRows, setPolicyRows] = useState([]);
+  const nextPolicyRowId = useRef(0);
+  const policies = policyRows.map(({ policy }) => policy);
   const [validation, setValidation] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -67,12 +69,16 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
     setPolicyType(template.policy_type);
     setName(template.name);
     setDescription(template.description);
-    setPolicies(template.cedar_policies.map((policy) => ({ ...policy })));
+    setPolicyRows(template.cedar_policies.map((policy) => ({
+      rowId: nextPolicyRowId.current++,
+      policy: { ...policy },
+    })));
     setValidation(null);
   };
 
   const updatePolicy = (index, updates) => {
-    setPolicies((current) => current.map((policy, policyIndex) => policyIndex === index ? { ...policy, ...updates } : policy));
+    setPolicyRows((current) => current.map((row, policyIndex) => policyIndex === index
+      ? { ...row, policy: { ...row.policy, ...updates } } : row));
     setValidation(null);
   };
 
@@ -154,12 +160,12 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
             <Alert severity="info">Select a template to continue.</Alert>
           ) : advanced ? (
             <Stack spacing={2}>
-              {policies.map((policy, index) => (
-                <Box key={`${policy.policy_id}-${index}`} sx={{ borderTop: index ? 1 : 0, borderColor: 'divider', pt: index ? 2 : 0 }}>
+              {policyRows.map(({ rowId, policy }, index) => (
+                <Box key={rowId} sx={{ borderTop: index ? 1 : 0, borderColor: 'divider', pt: index ? 2 : 0 }}>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 1.5 }}>
                     <TextField fullWidth label="Policy ID" value={policy.policy_id} onChange={(event) => updatePolicy(index, { policy_id: event.target.value })} />
                     <TextField fullWidth label="Effect" value={policy.effect} disabled />
-                    <IconButton aria-label={`Delete ${policy.policy_id}`} disabled={policies.length === 1} onClick={() => { setPolicies(policies.filter((_, policyIndex) => policyIndex !== index)); setValidation(null); }}><DeleteIcon /></IconButton>
+                    <IconButton aria-label={`Delete ${policy.policy_id}`} disabled={policies.length === 1} onClick={() => { setPolicyRows((current) => current.filter((_, policyIndex) => policyIndex !== index)); setValidation(null); }}><DeleteIcon /></IconButton>
                   </Stack>
                   <TextField
                     fullWidth
@@ -177,8 +183,8 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
             </Stack>
           ) : (
             <Stack spacing={1}>
-              {policies.map((policy) => (
-                <Stack key={policy.policy_id} direction="row" sx={{ alignItems: "center", gap: 1.5 }}>
+              {policyRows.map(({ rowId, policy }) => (
+                <Stack key={rowId} direction="row" sx={{ alignItems: "center", gap: 1.5 }}>
                   <CheckIcon color="success" fontSize="small" />
                   <Box sx={{ minWidth: 0, flex: 1 }}>
                     <Typography variant="body2" sx={{ fontWeight: 600 }}>{policy.description || policy.policy_id}</Typography>

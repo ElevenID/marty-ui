@@ -164,6 +164,8 @@ function normaliseCredential(doc) {
   return {
     id: doc.id,
     kind: 'credential',
+    organizationId: doc.organization_id || null,
+    applicationId: doc.application_id || null,
     type: doc.credential_display_name || doc.name || doc.document_type || doc.credential_type || 'Credential',
     credentialConfigId: doc.credential_template_id || doc.credential_type,
     issuer: doc.issuing_authority || doc.issuer || 'Issuer',
@@ -213,6 +215,17 @@ function normaliseApplication(app) {
     deliveryMode: integrationContext.delivery_mode || integrationContext.delivery?.mode || null,
     imageUrl,
   };
+}
+
+function identityKey(row) {
+  return JSON.stringify([row.kind, row.organizationId, row.id]);
+}
+
+function credentialMatchesApplication(credential, application) {
+  return typeof credential.applicationId === 'string' && credential.applicationId.trim() !== ''
+    && typeof credential.organizationId === 'string' && credential.organizationId.trim() !== ''
+    && credential.applicationId === application.id
+    && credential.organizationId === application.organizationId;
 }
 
 function firstPresent(...values) {
@@ -673,17 +686,22 @@ function MyIdentityPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState(FILTER_ALL);
-  const [selectedApp, setSelectedApp] = useState(null);
+  const [selectedIdentity, setSelectedIdentity] = useState(null);
   const [claimApp, setClaimApp] = useState(null);
   const [retryCount, setRetryCount] = useState(0);
 
   // --- Data loading ---
   useEffect(() => {
     let cancelled = false;
+    let requestGeneration = 0;
+    let pendingGeneration = null;
     const controller = new AbortController();
 
     const load = async (showLoading = true) => {
       if (cancelled) return;
+      const generation = ++requestGeneration;
+      pendingGeneration = generation;
+      const isCurrent = () => !cancelled && generation === requestGeneration;
       try {
         if (showLoading) {
           setLoading(true);
@@ -695,7 +713,7 @@ function MyIdentityPage() {
           getMyApplications({ limit: 100 }, { signal: controller.signal }),
         ]);
 
-        if (cancelled) return;
+        if (!isCurrent()) return;
 
         const failures = [];
         if (credentialResult.status === 'rejected') {
@@ -712,50 +730,30 @@ function MyIdentityPage() {
           ? applicationResult.value.items.map(normaliseApplication)
           : null;
 
-        // Deduplicate: keep only the most-advanced row per credential config.
-        // If an application reaches credentialed/issued, discard any matching
-        // credential document row (the app row has richer progress context).
-        // Also deduplicate multiple applications for the same credential config
-        // by keeping only the most recent one.
-        let dedupedApps = null;
-        if (apps) {
-          const appsByConfig = new Map();
-          for (const app of apps) {
-            const key = app.credentialConfigId || app.id;
-            const existing = appsByConfig.get(key);
-            if (!existing || new Date(app.updatedAt || 0) > new Date(existing.updatedAt || 0)) {
-              appsByConfig.set(key, app);
-            }
-          }
-          dedupedApps = Array.from(appsByConfig.values());
-          setApplications(dedupedApps);
-        }
-
-        if (creds) {
-          const appConfigIds = new Set(
-            (dedupedApps || []).map((app) => app.credentialConfigId).filter(Boolean),
-          );
-          setCredentials(creds.filter((credential) => !appConfigIds.has(credential.credentialConfigId)));
-        } else if (dedupedApps) {
-          const appConfigIds = new Set(dedupedApps.map((app) => app.credentialConfigId).filter(Boolean));
-          setCredentials((current) => current.filter(
-            (credential) => !appConfigIds.has(credential.credentialConfigId),
-          ));
-        }
+        // Preserve each inventory independently, including its last successful
+        // result when the other endpoint succeeds during a partial failure.
+        if (creds) setCredentials(creds);
+        if (apps) setApplications(apps);
         setError(failures.length > 0 ? failures.join(' ') : null);
       } catch (err) {
-        if (!cancelled) {
+        if (isCurrent()) {
           console.error('Error loading identity data:', err);
           setError(err?.message || String(err));
         }
       } finally {
-        if (!cancelled && showLoading) setLoading(false);
+        // A focus refresh may supersede the initial load while it is pending.
+        if (isCurrent()) {
+          pendingGeneration = null;
+          setLoading(false);
+        }
       }
     };
 
     load(true);
 
-    const interval = setInterval(() => load(false), 15000);
+    const interval = setInterval(() => {
+      if (pendingGeneration === null) load(false);
+    }, 15000);
     const onFocus = () => load(false);
     window.addEventListener('focus', onFocus);
     const stop = () => {
@@ -772,19 +770,42 @@ function MyIdentityPage() {
     };
   }, [retryCount]);
 
+  const selectedApp = useMemo(() => (
+    [...credentials, ...applications].find((row) => identityKey(row) === selectedIdentity) || null
+  ), [credentials, applications, selectedIdentity]);
+  useEffect(() => {
+    if (selectedIdentity && !selectedApp) setSelectedIdentity(null);
+  }, [selectedIdentity, selectedApp]);
+  const linkedApplication = selectedApp?.kind === 'credential'
+    ? applications.find((application) => credentialMatchesApplication(selectedApp, application))
+    : null;
+  const linkedCredentials = selectedApp?.kind === 'application'
+    ? credentials.filter((credential) => credentialMatchesApplication(credential, selectedApp))
+    : [];
+  const showDetails = (row) => setSelectedIdentity(identityKey(row));
+
   // Auto-open detail dialog when arriving via ?id=
   useEffect(() => {
     if (highlightId && applications.length > 0 && !highlightHandled.current) {
       const match = applications.find((a) => a.id === highlightId);
       if (match) {
         highlightHandled.current = true;
-        setSelectedApp(match);
+        setSelectedIdentity(identityKey(match));
       }
     }
   }, [highlightId, applications]);
 
   // --- Merge + filter ---
-  const allRows = useMemo(() => [...credentials, ...applications], [credentials, applications]);
+  // A completed application is represented by its explicitly linked credentials.
+  // Reissues keep their active application row, and renewals keep every credential.
+  const allRows = useMemo(() => [
+    ...credentials,
+    ...applications.filter((application) => (
+      !['credentialed', 'issued'].includes(application.status)
+      || hasLiveOffer(application)
+      || !credentials.some((credential) => credentialMatchesApplication(credential, application))
+    )),
+  ], [credentials, applications]);
 
   const rows = useMemo(() => {
     const filtered = allRows.filter((row) => matchesFilter(row, filter));
@@ -837,7 +858,7 @@ function MyIdentityPage() {
 
   const renderMobileCard = (row, highlight = false) => (
     <Card
-      key={`${row.kind}-${row.id}`}
+      key={identityKey(row)}
       variant="outlined"
       sx={{
         borderColor: highlight ? 'warning.main' : undefined,
@@ -895,7 +916,7 @@ function MyIdentityPage() {
           {row.kind === 'credential' && (
             <>
               <Tooltip title={t('credentials.actions.viewDetails')}>
-                <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => setSelectedApp(row)}>
+                <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => showDetails(row)}>
                   <VisibilityIcon fontSize="small" />
                 </IconButton>
               </Tooltip>
@@ -912,7 +933,7 @@ function MyIdentityPage() {
                   {getActionLabel(row)}
                 </Button>
               )}
-              <Button size="small" variant="text" onClick={() => setSelectedApp(row)}>
+              <Button size="small" variant="text" onClick={() => showDetails(row)}>
                 Details
               </Button>
             </>
@@ -924,7 +945,7 @@ function MyIdentityPage() {
 
   const renderDesktopRow = (row, highlight = false) => (
     <Stack
-      key={`${row.kind}-${row.id}`}
+      key={identityKey(row)}
       direction="row"
       spacing={2}
       sx={{
@@ -986,7 +1007,7 @@ function MyIdentityPage() {
         {row.kind === 'credential' && (
           <>
             <Tooltip title={t('credentials.actions.viewDetails')}>
-              <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => setSelectedApp(row)}>
+              <IconButton size="small" aria-label={`View ${row.type} details`} onClick={() => showDetails(row)}>
                 <VisibilityIcon fontSize="small" />
               </IconButton>
             </Tooltip>
@@ -1003,7 +1024,7 @@ function MyIdentityPage() {
                 {getActionLabel(row)}
               </Button>
             )}
-            <Button size="small" variant="text" onClick={() => setSelectedApp(row)}>
+            <Button size="small" variant="text" onClick={() => showDetails(row)}>
               Details
             </Button>
           </Stack>
@@ -1200,7 +1221,7 @@ function MyIdentityPage() {
         organizationId={claimApp?.organizationId}
       />
       {/* Application Details Dialog */}
-      <Dialog open={!!selectedApp} onClose={() => setSelectedApp(null)} maxWidth="sm" fullWidth fullScreen={isMobile}>
+      <Dialog open={!!selectedApp} onClose={() => setSelectedIdentity(null)} maxWidth="sm" fullWidth fullScreen={isMobile}>
         <DialogTitle>{selectedApp?.kind === 'credential' ? 'Credential Details' : 'Application Details'}</DialogTitle>
         <DialogContent>
           {selectedApp && (
@@ -1219,6 +1240,15 @@ function MyIdentityPage() {
                   <Typography variant="h6" sx={{ overflowWrap: 'anywhere' }}>{selectedApp.type}</Typography>
                 </Box>
               </Stack>
+
+              {selectedApp.kind === 'credential' && (
+                <>
+                  <Typography variant="subtitle2" color="text.secondary">
+                    {t('identity.details.credentialId', 'Credential ID')}
+                  </Typography>
+                  <Typography sx={{ mb: 2, fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{selectedApp.id}</Typography>
+                </>
+              )}
 
               {selectedApp.issuerDid && (
                 <>
@@ -1244,7 +1274,34 @@ function MyIdentityPage() {
                 ({timeAgo(selectedApp.updatedAt || selectedApp.date)})
               </Typography>
 
-              <Typography variant="subtitle2" color="text.secondary">Status</Typography>
+              {linkedCredentials.length > 0 && (
+                <Paper component="section" variant="outlined" sx={{ p: 2, mb: 2 }}
+                  aria-label={t('identity.details.linkedCredentials', 'Issued credentials')}>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    {t('identity.details.linkedCredentials', 'Issued credentials')}
+                  </Typography>
+                  <Stack spacing={1.5}>
+                    {linkedCredentials.map((credential) => (
+                      <Box key={identityKey(credential)}>
+                        <Typography>{credential.type}</Typography>
+                        <Typography variant="caption" sx={{ display: 'block', overflowWrap: 'anywhere' }}>
+                          {t('identity.details.credentialId', 'Credential ID')}: {credential.id}
+                        </Typography>
+                        <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                          <Chip label={getStatusLabel(credential)} color={getStatusColor(credential)} size="small" />
+                          <IconButton size="small" aria-label={`View ${credential.type} details`} onClick={() => showDetails(credential)}>
+                            <VisibilityIcon fontSize="small" />
+                          </IconButton>
+                        </Stack>
+                      </Box>
+                    ))}
+                  </Stack>
+                </Paper>
+              )}
+
+              <Typography variant="subtitle2" color="text.secondary">
+                {selectedApp.kind === 'application' ? t('identity.details.applicationStatus', 'Application status') : 'Status'}
+              </Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
                 <Chip label={getStatusLabel(selectedApp)} color={getStatusColor(selectedApp)} size="small" />
                 <Chip label={`Claim: ${claimStatusForRow(selectedApp)}`} size="small" variant="outlined" />
@@ -1255,6 +1312,12 @@ function MyIdentityPage() {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                 {getStatusMessage(selectedApp)}
               </Typography>
+
+              {linkedApplication && (
+                <Button sx={{ mb: 2 }} onClick={() => showDetails(linkedApplication)}>
+                  {t('identity.details.viewApplication', 'View application details')}
+                </Button>
+              )}
 
               {selectedApp.kind === 'credential' && selectedApp.status === 'active' && (
                 <Alert severity="info" sx={{ mb: 2 }}>
@@ -1352,7 +1415,7 @@ function MyIdentityPage() {
                     variant="contained"
                     fullWidth
                     onClick={() => {
-                      setSelectedApp(null);
+                      setSelectedIdentity(null);
                       handlePrimaryAction(selectedApp);
                     }}
                   >
@@ -1364,7 +1427,7 @@ function MyIdentityPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelectedApp(null)}>Close</Button>
+          <Button onClick={() => setSelectedIdentity(null)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>

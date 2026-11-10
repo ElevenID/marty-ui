@@ -185,6 +185,15 @@
     "loadFailed": "Lidmaatschapsaanvragen konden niet worden geladen."
   },
   "wizards": {
+    "credentialTemplate": {
+      "cryptoValidityStep": {
+        "validation": {
+          "daysRange": "Voer een geheel aantal dagen tussen 1 en {{max}} in.",
+          "offsetRange": "Voer een geheel aantal seconden tussen {{min}} en {{max}} in.",
+          "reviewSettings": "Controleer de gemarkeerde geldigheidsinstellingen voordat u de sjabloon maakt."
+        }
+      }
+    },
     "deploymentProfile": {
       "integrationStep": {
         "languages": {
@@ -193,6 +202,29 @@
           "fr": "Français",
           "de": "Deutsch",
           "nl": "Nederlands"
+        }
+      }
+    },
+    "presentationPolicy": {
+      "claimsConfigurationStep": {
+        "validation": {
+          "claimName": "Voer een claimnaam in.",
+          "credentialType": "Selecteer een van de geaccepteerde credentialtypen.",
+          "completeClaims": "Vul de beleidsnaam, het doel, de geaccepteerde credentialtypen en alle vereiste claims in voordat u doorgaat.",
+          "templateRequirementsMismatch": "Deze vereisten komen niet overeen met het geselecteerde credentialsjabloon. Selecteer het sjabloon opnieuw of maak een nieuw aangepast beleid.",
+          "templateIncomplete": "Het geselecteerde credentialsjabloon is onvolledig. Selecteer het sjabloon opnieuw voordat u doorgaat.",
+          "templateTypeMismatch": "Dit beleid is gekoppeld aan het geselecteerde credentialsjabloon. Gebruik het bijbehorende credentialtype of maak een nieuw aangepast beleid om andere typen te configureren.",
+          "templateDuplicateClaim": "Vraag “{{claimName}}” slechts één keer op in dit beleid.",
+          "templateUnknownClaim": "“{{claimName}}” is geen claim in het geselecteerde credentialsjabloon. Selecteer een claim uit het sjabloon of maak een nieuw aangepast beleid.",
+          "templateValueConflict": "De vereiste waarde voor “{{claimName}}” is in strijd met een beperking van het geselecteerde sjabloon."
+        },
+        "labels": {
+          "removeClaim": "Claim {{index}} verwijderen"
+        }
+      },
+      "reviewStep": {
+        "fields": {
+          "requiredValue": "Vereiste waarde"
         }
       }
     }
@@ -330,6 +362,11 @@
         "unavailableDefaultsPreserved": "Een of meer opgeslagen standaardwaarden zijn niet beschikbaar. Ze blijven behouden wanneer u andere standaardwaarden wijzigt. Met bewerkingsrechten kunt u ze vervangen of de selectie wissen.",
         "catalogPermissionRequired": "Sommige resourcegegevens zijn verborgen omdat u geen rechten hebt om de bijbehorende catalogi te bekijken."
       }
+    }
+  },
+  "applicationTemplatesPage": {
+    "validation": {
+      "validityDays": "Voer een geheel aantal dagen tussen 1 en 3650 in."
     }
   }
 }
