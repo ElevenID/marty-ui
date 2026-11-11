@@ -19,6 +19,9 @@ pub mod installer_bundle;
 pub mod installer_candidate_command;
 pub mod installer_candidate_nonce;
 pub mod installer_candidate_prepare;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub mod installer_census_helper;
 pub mod installer_command;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_complete_purge_plan;

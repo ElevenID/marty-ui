@@ -254,6 +254,18 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-internal-root-census")
+    {
+        if args.len() != 1 {
+            return Err("internal census refused".into());
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_census_helper::run();
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal census refused".into());
+    }
     if args.first().is_some_and(|arg| {
         matches!(
             arg.as_str(),
@@ -504,6 +516,10 @@ fn run() -> Result<(), String> {
                 directory,
                 &runner,
             )?;
+            let creation_evidence = marty_deployment_catalog::installer_doctor::creation_evidence(
+                &inspection,
+                directory,
+            );
             inspection.require_unchanged()?;
             println!(
                 "{}",
@@ -513,6 +529,7 @@ fn run() -> Result<(), String> {
                     "services_observed": services["services_observed"], "installation_ready": false,
                     "service_inspection": services,
                     "cleanup": cleanup,
+                    "local_creation_evidence": creation_evidence,
                 })
             );
             return Ok(());

@@ -1,0 +1,58 @@
+name: Installer reader foreign-owner launcher tests
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/installer-reader-foreign-owner-qualification.yml
+      - scripts/installer_reader_foreign_owner_root_qualification.py
+      - scripts/installer_reader_foreign_owner_root_qualification_v2.py
+      - tests/test_installer_reader_foreign_owner_root_qualification.py
+      - tests/test_installer_reader_foreign_owner_root_qualification_v2.py
+
+permissions:
+  contents: read
+
+jobs:
+  unprivileged-linux-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Exercise only the unprivileged launcher contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -ne 0
+          python3 - <<'PY'
+          import os
+          import platform
+          import unittest
+
+          assert os.geteuid() != 0 and platform.system() == "Linux"
+          suite = unittest.defaultTestLoader.discover(
+              "tests", pattern="test_installer_reader_foreign_owner_root_qualification*.py"
+          )
+
+          def cases(group):
+              for item in group:
+                  if isinstance(item, unittest.TestSuite):
+                      yield from cases(item)
+                  else:
+                      yield item
+
+          ids = {case.id() for case in cases(suite)}
+          ancestor = "test_traverse_only_ancestor_refuses_read_open_then_0755_allows"
+          local_elf = "test_exact_engineering_elf_if_present"
+          assert len(ids) == 14
+          assert sum(ident.endswith(ancestor) for ident in ids) == 1
+          assert sum(ident.endswith(local_elf) for ident in ids) == 1
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          assert result.wasSuccessful()
+          skipped = {case.id() for case, _reason in result.skipped}
+          assert len(skipped) == 1 and next(iter(skipped)).endswith(local_elf), skipped
+          assert not any(ident.endswith(ancestor) for ident in skipped)
+          PY
