@@ -229,7 +229,7 @@ def reload_flow(recovery_flow, monkeypatch, capsys):
             raise AssertionError("unexpected reload API operation")
 
     def process(command, **kwargs):
-        assert command[5:7] == ["patch", "deployment"] and command[-4:] == ["--type=json", "--patch-file=-", "-o", "json"]
+        assert command[5:7] == ["patch", "deployment"] and command[-4:] == ["--type=json", "--patch-file=/dev/stdin", "-o", "json"]
         name = command[7]
         assert name in reload.WORKLOADS and "PRIVATE_" not in repr(command)
         index = len(item.reload_patches)
