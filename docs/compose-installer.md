@@ -59,6 +59,14 @@ owner, link, and retained-directory checks still apply. Narrow bind mounts remai
 where credential custody or component storage requires them. Compatible new data
 uses installation-scoped named volumes; this change does not migrate old data.
 
+The shared Redis service retains signing identities, configuration and one-use
+grant replay markers alongside cache data. Its memory policy is `noeviction`:
+when the configured memory ceiling is reached, writes that need more memory
+fail instead of deleting retained keys. The existing memory limit and AOF
+persistence remain in place. Operators must investigate memory-pressure write
+failures and size a production deployment for its workload; deleting Redis data
+or switching to an eviction policy is not a safe capacity remedy.
+
 ## Trust boundary
 
 The shell authenticates the downloaded operator before executing it. The native

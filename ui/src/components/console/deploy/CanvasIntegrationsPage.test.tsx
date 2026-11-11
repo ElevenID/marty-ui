@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, within } from '@testing-library/react';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import CanvasIntegrationsPage, {
@@ -29,7 +30,10 @@ const {
   mockActivateCanvasProgramBinding,
   mockDeactivateCanvasProgramBinding,
   mockUpdateCanvasProgramBinding,
+  mockCreateCanvasPlatform,
   mockUpdateCanvasPlatform,
+  mockDeleteCanvasPlatform,
+  mockDeleteCanvasProgramBinding,
   mockGetCanvasMirrorHealth,
   mockProcessPendingCanvasMirrorDeliveries,
   mockProcessCanvasMirrorStatusSyncFailures,
@@ -43,6 +47,7 @@ const {
   mockUpdateDeliveryDestination,
   mockCanCanvas,
   mockPermissionsState,
+  mockConsoleState,
 } = vi.hoisted(() => ({
   mockListCanvasPlatforms: vi.fn(),
   mockListCanvasProgramBindings: vi.fn(),
@@ -65,7 +70,10 @@ const {
   mockActivateCanvasProgramBinding: vi.fn(),
   mockDeactivateCanvasProgramBinding: vi.fn(),
   mockUpdateCanvasProgramBinding: vi.fn(),
+  mockCreateCanvasPlatform: vi.fn(),
   mockUpdateCanvasPlatform: vi.fn(),
+  mockDeleteCanvasPlatform: vi.fn(),
+  mockDeleteCanvasProgramBinding: vi.fn(),
   mockGetCanvasMirrorHealth: vi.fn(),
   mockProcessPendingCanvasMirrorDeliveries: vi.fn(),
   mockProcessCanvasMirrorStatusSyncFailures: vi.fn(),
@@ -78,7 +86,8 @@ const {
   mockCreateDeliveryDestination: vi.fn(),
   mockUpdateDeliveryDestination: vi.fn(),
   mockCanCanvas: vi.fn(),
-  mockPermissionsState: { isLoading: false },
+  mockPermissionsState: { isLoading: false, canDelete: true, canEdit: true },
+  mockConsoleState: { activeOrgId: 'org-1' },
 }));
 
 vi.mock('../../../hooks/useAuth', () => ({
@@ -93,7 +102,7 @@ vi.mock('../../../hooks/usePermissions', () => ({
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
-  useConsole: () => ({ activeOrgId: 'org-1' }),
+  useConsole: () => mockConsoleState,
 }));
 
 vi.mock('../../../services/applicationTemplatesApi', () => ({
@@ -134,10 +143,10 @@ vi.mock('../../../services/canvasIntegrationsApi', () => ({
   processCanvasMirrorStatusSyncFailures: (...args: unknown[]) => mockProcessCanvasMirrorStatusSyncFailures(...args),
   runCanvasMirrorAutomationCycle: (...args: unknown[]) => mockRunCanvasMirrorAutomationCycle(...args),
   validateCanvasCredentialsProvider: (...args: unknown[]) => mockValidateCanvasCredentialsProvider(...args),
-  createCanvasPlatform: vi.fn(),
+  createCanvasPlatform: (...args: unknown[]) => mockCreateCanvasPlatform(...args),
   createCanvasProgramBinding: vi.fn(),
-  deleteCanvasPlatform: vi.fn(),
-  deleteCanvasProgramBinding: vi.fn(),
+  deleteCanvasPlatform: (...args: unknown[]) => mockDeleteCanvasPlatform(...args),
+  deleteCanvasProgramBinding: (...args: unknown[]) => mockDeleteCanvasProgramBinding(...args),
   updateCanvasPlatform: (...args: unknown[]) => mockUpdateCanvasPlatform(...args),
   updateCanvasProgramBinding: (...args: unknown[]) => mockUpdateCanvasProgramBinding(...args),
 }));
@@ -189,6 +198,22 @@ const binding = {
   auto_approve_on_evidence: true,
   enabled: true,
 };
+
+const archiveTargets = [
+  { kind: 'platform', name: 'Canvas Main', id: 'platform-1', remove: mockDeleteCanvasPlatform, list: mockListCanvasPlatforms },
+  { kind: 'binding', name: 'Safety Course', id: 'binding-1', remove: mockDeleteCanvasProgramBinding, list: mockListCanvasProgramBindings },
+];
+
+async function openCanvasDraft(user: ReturnType<typeof renderWithRouter>['user'], platformName = 'Canvas Main') {
+  await screen.findAllByText(platformName);
+  await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+  const dialog = await screen.findByRole('dialog', { name: 'Add Canvas platform' });
+  await user.type(within(dialog).getByRole('textbox', { name: 'Display name' }), 'Campus Canvas');
+  await user.type(within(dialog).getByRole('textbox', { name: /Canvas HTTPS base URL/ }), 'https://campus.example.edu');
+  await user.type(within(dialog).getByRole('textbox', { name: 'LTI client ID' }), 'client-new');
+  await user.type(within(dialog).getByRole('textbox', { name: 'LTI deployment ID' }), 'deployment-new');
+  return dialog;
+}
 
 describe('CanvasIntegrationsPage', () => {
   it('emits only the canonical activity identifier for the current typed rule', () => {
@@ -242,9 +267,14 @@ describe('CanvasIntegrationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPermissionsState.isLoading = false;
+    mockPermissionsState.canDelete = true;
+    mockPermissionsState.canEdit = true;
+    mockConsoleState.activeOrgId = 'org-1';
     mockCanCanvas.mockImplementation((resource, action) => (
       resource === 'integration-connector'
       && ['view', 'create', 'edit', 'delete'].includes(action)
+      && (action !== 'delete' || mockPermissionsState.canDelete)
+      && (action !== 'edit' || mockPermissionsState.canEdit)
     ));
     mockListCanvasPlatforms.mockResolvedValue([platform]);
     mockGetCanvasLtiRegistrationConfig.mockResolvedValue({
@@ -253,7 +283,7 @@ describe('CanvasIntegrationsPage', () => {
     });
     mockStartCanvasOAuthConnection.mockResolvedValue({ authorization_url: 'https://canvas.example.edu/login/oauth2/auth' });
     mockDisconnectCanvasOAuthConnection.mockResolvedValue({ status: 'disconnected' });
-    mockFinalizeCanvasLtiInstallation.mockResolvedValue({ platform_id: 'platform-1' });
+    mockFinalizeCanvasLtiInstallation.mockReset().mockResolvedValue({ platform_id: 'platform-1' });
     mockGetCanvasPlatformReadiness.mockResolvedValue({
       platform_id: 'platform-1',
       ready: false,
@@ -295,7 +325,10 @@ describe('CanvasIntegrationsPage', () => {
     mockActivateCanvasProgramBinding.mockResolvedValue({ enabled: true });
     mockDeactivateCanvasProgramBinding.mockResolvedValue({ enabled: false });
     mockUpdateCanvasProgramBinding.mockResolvedValue(binding);
+    mockCreateCanvasPlatform.mockReset().mockImplementation(async (payload) => ({ id: 'platform-new', organization_id: 'org-1', ...payload }));
     mockUpdateCanvasPlatform.mockResolvedValue(platform);
+    mockDeleteCanvasPlatform.mockResolvedValue(undefined);
+    mockDeleteCanvasProgramBinding.mockResolvedValue(undefined);
     mockListCanvasProgramBindings.mockResolvedValue([binding]);
     mockListCanvasIntegrationSecrets.mockResolvedValue([
       {
@@ -613,6 +646,113 @@ describe('CanvasIntegrationsPage', () => {
     await waitFor(() => expect(mockDeactivateCanvasProgramBinding).toHaveBeenCalledWith('binding-1'));
   });
 
+  it.each(archiveTargets)('shows a failed $kind archive without losing inventory and allows explicit recovery', async ({ kind, name, id, remove, list }) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    remove.mockRejectedValueOnce(new Error(`The ${kind} is still in use.`));
+    try {
+      const { user } = renderWithRouter(<CanvasIntegrationsPage />, {
+        initialEntries: ['/console/org/deploy/canvas'],
+      });
+      const archive = await screen.findByRole('button', { name: `Archive ${name}` });
+      await user.click(archive);
+
+      const error = await screen.findByText(`The ${kind} is still in use.`);
+      expect(error).toBeVisible();
+      expect(screen.getByRole('row', { name: /Canvas Main/ })).toBeVisible();
+      expect(screen.getByRole('row', { name: /Safety Course/ })).toBeVisible();
+      expect(remove).toHaveBeenCalledExactlyOnceWith(id);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(`Archive ${name}? Existing launches, evidence, and credentials will be retained.`);
+
+      confirm.mockReturnValueOnce(false);
+      await user.click(archive);
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(error).toBeVisible();
+      expect(list).toHaveBeenCalledTimes(1);
+
+      await user.click(within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Close' }));
+      expect(screen.queryByText(`The ${kind} is still in use.`)).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(1);
+      list.mockResolvedValueOnce([]);
+      await user.click(archive);
+
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+      expect(remove).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenLastCalledWith(id);
+      expect(screen.queryByText(`The ${kind} is still in use.`)).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('row', { name: new RegExp(name) })).not.toBeInTheDocument());
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it.each([
+    ...archiveTargets.flatMap((target) => ['organization', 'permission'].map((scope) => ({ ...target, scope }))),
+    { ...archiveTargets[1], scope: 'platform selection' },
+  ].flatMap((target) => ['resolve', 'reject'].map((completion) => ({ ...target, completion }))))('keeps $kind archive feedback and refreshes within the $scope lifetime after late $completion', async ({ name, id, remove, scope, completion }) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let resolveArchive!: () => void;
+    let rejectArchive!: (error: Error) => void;
+    const pendingArchive = new Promise<void>((resolve, reject) => { resolveArchive = resolve; rejectArchive = reject; });
+    remove.mockReturnValueOnce(pendingArchive);
+    const otherPlatform = { ...platform, id: 'platform-2', display_name: 'Canvas Secondary' };
+    const otherBinding = { ...binding, id: 'binding-2', platform_id: 'platform-2', display_name: 'Advanced Course' };
+    mockListCanvasPlatforms.mockImplementation(async (organizationId) => (
+      scope === 'platform selection' ? [platform, otherPlatform]
+        : organizationId === 'org-2' ? [{ ...otherPlatform, organization_id: 'org-2' }] : [platform]
+    ));
+    mockListCanvasProgramBindings.mockImplementation(async ({ organizationId }) => (
+      scope === 'platform selection' ? [binding, otherBinding]
+        : organizationId === 'org-2' ? [otherBinding] : [binding]
+    ));
+
+    try {
+      const { user, rerender } = renderWithRouter(<CanvasIntegrationsPage />, {
+        initialEntries: ['/console/org/deploy/canvas'],
+      });
+      const changeScope = async (changed: boolean) => {
+        if (scope === 'platform selection') {
+          await user.click(screen.getByRole('row', { name: changed ? /Canvas Secondary/ : /Canvas Main/ }));
+        } else {
+          if (scope === 'organization') mockConsoleState.activeOrgId = changed ? 'org-2' : 'org-1';
+          else mockPermissionsState.canDelete = !changed;
+          rerender(<CanvasIntegrationsPage />);
+        }
+        if (changed && scope !== 'permission') await screen.findByRole('row', { name: /Advanced Course/ });
+        if (!changed) await screen.findByRole('button', { name: `Archive ${name}` });
+      };
+
+      await user.click(await screen.findByRole('button', { name: `Archive ${name}` }));
+      expect(remove).toHaveBeenCalledExactlyOnceWith(id);
+      await changeScope(true);
+      const platformReads = mockListCanvasPlatforms.mock.calls.length;
+      const bindingReads = mockListCanvasProgramBindings.mock.calls.length;
+      await act(async () => {
+        if (completion === 'resolve') resolveArchive();
+        else rejectArchive(new Error('Previous archive rejected.'));
+      });
+      expect(screen.queryByText('Previous archive rejected.')).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(mockListCanvasPlatforms).toHaveBeenCalledTimes(platformReads);
+      expect(mockListCanvasProgramBindings).toHaveBeenCalledTimes(bindingReads);
+      if (scope !== 'permission') expect(screen.getByRole('row', { name: /Advanced Course/ })).toBeVisible();
+
+      await changeScope(false);
+      expect(screen.queryByText('Previous archive rejected.')).not.toBeInTheDocument();
+      remove.mockRejectedValueOnce(new Error('Current archive rejected.'));
+      await user.click(screen.getByRole('button', { name: `Archive ${name}` }));
+      expect(await screen.findByText('Current archive rejected.')).toBeVisible();
+      await changeScope(true);
+      expect(screen.queryByText('Current archive rejected.')).not.toBeInTheDocument();
+      await changeScope(false);
+      expect(screen.queryByText('Current archive rejected.')).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenLastCalledWith(id);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
   it('finalizes entered client and deployment IDs through the LTI installation endpoint', async () => {
     const { user } = renderWithRouter(<CanvasIntegrationsPage />, {
       initialEntries: ['/console/org/deploy/canvas'],
@@ -635,6 +775,303 @@ describe('CanvasIntegrationsPage', () => {
         lti_client_id: 'client-1',
         lti_deployment_id: 'deployment-1',
       });
+    });
+  });
+
+  it('retries failed LTI installation on the acknowledged draft without creating a second platform', async () => {
+    mockFinalizeCanvasLtiInstallation.mockRejectedValueOnce(Object.assign(new Error('LTI installation unavailable.'), { operationStatusUnknown: true }));
+    mockUpdateCanvasPlatform.mockImplementation(async (id, payload) => ({ id, organization_id: 'org-1', ...payload }));
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />, {
+      initialEntries: ['/console/org/deploy/canvas'],
+    });
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('switch', { name: /Enabled intent/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('LTI installation unavailable.')).toBeVisible();
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledExactlyOnceWith({
+      display_name: 'Campus Canvas', canvas_base_url: 'https://campus.example.edu',
+      lti_client_id: 'client-new', lti_deployment_id: 'deployment-new', enabled: false,
+    }, { organizationId: 'org-1', isCurrent: expect.any(Function) });
+    expect(within(dialog).getByRole('textbox', { name: 'Display name' })).toHaveValue('Campus Canvas');
+    expect(within(dialog).getByRole('textbox', { name: 'LTI deployment ID' })).toHaveValue('deployment-new');
+    await user.type(within(dialog).getByRole('textbox', { name: 'Display name' }), ' revised');
+    await user.clear(within(dialog).getByRole('textbox', { name: 'LTI client ID' }));
+    await user.type(within(dialog).getByRole('textbox', { name: 'LTI client ID' }), 'client-retry');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(2));
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    expect(mockUpdateCanvasPlatform).toHaveBeenCalledExactlyOnceWith('platform-new', {
+      display_name: 'Campus Canvas revised', canvas_base_url: 'https://campus.example.edu',
+      lti_client_id: 'client-retry', lti_deployment_id: 'deployment-new', enabled: false,
+    });
+    expect(mockFinalizeCanvasLtiInstallation).toHaveBeenLastCalledWith('platform-new', {
+      lti_client_id: 'client-retry', lti_deployment_id: 'deployment-new',
+    });
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps a definitively rejected platform creation as a new draft for an explicit retry', async () => {
+    mockCreateCanvasPlatform.mockRejectedValueOnce(new Error('Platform name is already in use.'));
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('Platform name is already in use.')).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Add Canvas platform' })).toBeVisible();
+    expect(mockFinalizeCanvasLtiInstallation).not.toHaveBeenCalled();
+    expect(mockUpdateCanvasPlatform).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole('textbox', { name: 'Display name' })).toHaveValue('Campus Canvas');
+    await user.type(within(dialog).getByRole('textbox', { name: 'Display name' }), ' revised');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(1));
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(2);
+    expect(mockUpdateCanvasPlatform).not.toHaveBeenCalled();
+  });
+
+  it('shows a saved disabled draft to a create-only user without finalizing or granting edit access', async () => {
+    mockPermissionsState.canEdit = false;
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockListCanvasPlatforms).toHaveBeenCalledTimes(2));
+    expect(mockFinalizeCanvasLtiInstallation).not.toHaveBeenCalled();
+    expect(mockUpdateCanvasPlatform).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog', { name: 'Canvas platform draft saved' })).toBeVisible();
+    expect(within(dialog).getByText(/Edit permission is required to finish LTI installation/)).toBeVisible();
+    expect(within(dialog).getByRole('textbox', { name: 'Display name' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps an acknowledged platform in inventory for Cancel and Edit after LTI failure', async () => {
+    const inventory: Array<Record<string, unknown>> = [platform];
+    mockListCanvasPlatforms.mockImplementation(async () => [...inventory]);
+    mockCreateCanvasPlatform.mockImplementation(async (payload) => {
+      const saved = { id: 'platform-new', organization_id: 'org-1', ...payload };
+      inventory.push(saved);
+      return saved;
+    });
+    mockUpdateCanvasPlatform.mockImplementation(async (id, payload) => ({ id, organization_id: 'org-1', ...payload }));
+    mockFinalizeCanvasLtiInstallation.mockRejectedValueOnce(new Error('LTI installation unavailable.'));
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText('LTI installation unavailable.')).toBeVisible();
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeEnabled());
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const row = await screen.findByRole('row', { name: /Campus Canvas/ });
+    await user.click(within(row).getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('textbox', { name: 'LTI client ID' })).toHaveValue('client-new');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(2));
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    expect(mockUpdateCanvasPlatform).toHaveBeenCalledWith('platform-new', expect.objectContaining({ enabled: false }));
+  });
+
+  it('locks a pending platform save including its newly available OAuth controls', async () => {
+    let resolveInstallation!: () => void;
+    mockFinalizeCanvasLtiInstallation.mockReturnValueOnce(new Promise<void>((resolve) => { resolveInstallation = resolve; }));
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(1));
+    expect(within(dialog).getByRole('textbox', { name: 'Display name' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Prepare Canvas authorization' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Disconnect OAuth' })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(dialog).toBeVisible();
+    await act(async () => resolveInstallation());
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    expect(mockStartCanvasOAuthConnection).not.toHaveBeenCalled();
+  });
+
+  it.each(['network uncertainty', 'missing receipt ID'])('does not offer a fresh create retry after %s', async (failure) => {
+    if (failure === 'network uncertainty') {
+      mockCreateCanvasPlatform.mockRejectedValueOnce(Object.assign(new Error('Failed to fetch'), {
+        operationStatusUnknown: true, idempotencyKey: 'canvas-create-reference',
+      }));
+    } else mockCreateCanvasPlatform.mockResolvedValueOnce({ display_name: 'Campus Canvas' });
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    expect(await within(dialog).findByText(/Refresh.*before creating/i)).toBeVisible();
+    if (failure === 'network uncertainty') expect(within(dialog).getByText(/canvas-create-reference/)).toBeVisible();
+    expect(within(dialog).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(dialog).getByRole('textbox', { name: 'Display name' })).toHaveValue('Campus Canvas');
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeCanvasLtiInstallation).not.toHaveBeenCalled();
+    expect(mockUpdateCanvasPlatform).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    const reopened = screen.getByRole('dialog', { name: 'Add Canvas platform' });
+    expect(within(reopened).getByText(/Starting a separate draft may create a duplicate/)).toBeVisible();
+    if (failure === 'network uncertainty') expect(within(reopened).getByText(/canvas-create-reference/)).toBeVisible();
+    expect(within(reopened).getByRole('textbox', { name: 'Display name' })).toHaveValue('Campus Canvas');
+    expect(within(reopened).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    await user.click(within(reopened).getByRole('button', { name: 'Start a separate draft' }));
+    expect(within(reopened).queryByText(/Starting a separate draft may create a duplicate/)).not.toBeInTheDocument();
+    expect(within(reopened).getByRole('textbox', { name: 'Display name' })).toHaveValue('');
+    expect(within(reopened).getByRole('textbox', { name: /Canvas HTTPS base URL/ })).toHaveValue('');
+    expect(within(reopened).getByRole('textbox', { name: 'LTI client ID' })).toHaveValue('');
+    expect(within(reopened).getByRole('textbox', { name: 'LTI deployment ID' })).toHaveValue('');
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+    await user.type(within(reopened).getByRole('textbox', { name: 'Display name' }), 'Separate Canvas');
+    await user.type(within(reopened).getByRole('textbox', { name: /Canvas HTTPS base URL/ }), 'https://separate.example.edu');
+    await user.click(within(reopened).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(2));
+    expect(mockCreateCanvasPlatform).toHaveBeenLastCalledWith({
+      display_name: 'Separate Canvas', canvas_base_url: 'https://separate.example.edu',
+      lti_client_id: null, lti_deployment_id: null, enabled: false,
+    }, { organizationId: 'org-1', isCurrent: expect.any(Function) });
+    expect(mockFinalizeCanvasLtiInstallation).not.toHaveBeenCalled();
+  });
+
+  it('retains each organization creation uncertainty across refreshes, grant changes and explicit resolution in another organization', async () => {
+    mockCreateCanvasPlatform
+      .mockRejectedValueOnce(Object.assign(new Error('Failed to fetch'), { operationStatusUnknown: true, idempotencyKey: 'org-one-reference' }))
+      .mockRejectedValueOnce(Object.assign(new Error('Failed to fetch'), { operationStatusUnknown: true, idempotencyKey: 'org-two-reference' }));
+    mockListCanvasPlatforms.mockImplementation(async (organizationId) => organizationId === 'org-2'
+      ? [{ ...platform, id: 'platform-2', organization_id: 'org-2', display_name: 'Canvas Secondary' }] : [platform]);
+    const { user, rerender } = renderWithRouter(<CanvasIntegrationsPage />);
+    const first = await openCanvasDraft(user);
+    await user.click(within(first).getByRole('button', { name: 'Save' }));
+    expect(await within(first).findByText(/org-one-reference/)).toBeVisible();
+    await user.click(within(first).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await user.click(within(screen.getByLabelText('Refresh')).getByRole('button'));
+    await waitFor(() => expect(mockListCanvasPlatforms).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByText(/org-one-reference/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    mockPermissionsState.canEdit = false;
+    rerender(<CanvasIntegrationsPage />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    mockPermissionsState.canEdit = true;
+    rerender(<CanvasIntegrationsPage />);
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByText(/org-one-reference/)).toBeVisible();
+    mockConsoleState.activeOrgId = 'org-2';
+    rerender(<CanvasIntegrationsPage />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    const second = await openCanvasDraft(user, 'Canvas Secondary');
+    expect(within(second).queryByText(/org-one-reference/)).not.toBeInTheDocument();
+    await user.click(within(second).getByRole('button', { name: 'Save' }));
+    expect(await within(second).findByText(/org-two-reference/)).toBeVisible();
+    mockConsoleState.activeOrgId = 'org-1';
+    rerender(<CanvasIntegrationsPage />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await screen.findAllByText('Canvas Main');
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByText(/org-one-reference/)).toBeVisible();
+    expect(screen.queryByText(/org-two-reference/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Start a separate draft' }));
+    expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('');
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(2);
+    mockConsoleState.activeOrgId = 'org-2';
+    rerender(<CanvasIntegrationsPage />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await screen.findAllByText('Canvas Secondary');
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByText(/org-two-reference/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows a known platform edit without clearing an uncertain creation', async () => {
+    mockCreateCanvasPlatform.mockRejectedValueOnce(Object.assign(new Error('Failed to fetch'), {
+      operationStatusUnknown: true, idempotencyKey: 'creation-reference',
+    }));
+    const { user } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await within(dialog).findByText(/creation-reference/);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await user.click(within(screen.getByRole('row', { name: /Canvas Main/ })).getByRole('button', { name: 'Edit' }));
+    expect(screen.queryByText(/creation-reference/)).not.toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Display name' }), ' revised');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockUpdateCanvasPlatform).toHaveBeenCalledWith('platform-1', expect.objectContaining({ display_name: 'Canvas Main revised' }));
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByText(/creation-reference/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['create', 'finalize'].flatMap((stage) => ['organization', 'permission'].flatMap((scope) => ['resolve', 'reject'].map((completion) => ({ stage, scope, completion })))))('discards obsolete $stage $completion after $scope changes', async ({ stage, scope, completion }) => {
+    let resolveRequest!: (value: unknown) => void;
+    let rejectRequest!: (error: Error) => void;
+    const request = new Promise((resolve, reject) => { resolveRequest = resolve; rejectRequest = reject; });
+    const pending = stage === 'create' ? mockCreateCanvasPlatform : mockFinalizeCanvasLtiInstallation;
+    pending.mockReturnValueOnce(request);
+    mockListCanvasPlatforms.mockImplementation(async (organizationId) => organizationId === 'org-2'
+      ? [{ ...platform, id: 'platform-2', organization_id: 'org-2', display_name: 'Canvas Secondary' }] : [platform]);
+    const { user, rerender } = renderWithRouter(<CanvasIntegrationsPage />);
+    const dialog = await openCanvasDraft(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+    if (scope === 'organization') mockConsoleState.activeOrgId = 'org-2';
+    else mockPermissionsState.canEdit = false;
+    rerender(<CanvasIntegrationsPage />);
+    if (scope === 'organization') await waitFor(() => expect(mockListCanvasPlatforms).toHaveBeenLastCalledWith('org-2'));
+    const reads = mockListCanvasPlatforms.mock.calls.length;
+    await act(async () => {
+      if (completion === 'reject') rejectRequest(new Error('Previous platform save failed.'));
+      else resolveRequest({ id: 'platform-new', organization_id: 'org-1', enabled: false });
+    });
+    expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(stage === 'create' ? 0 : 1);
+    expect(mockListCanvasPlatforms).toHaveBeenCalledTimes(reads);
+    expect(screen.queryByText('Previous platform save failed.')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    mockConsoleState.activeOrgId = 'org-1';
+    mockPermissionsState.canEdit = true;
+    rerender(<CanvasIntegrationsPage />);
+    await screen.findAllByText('Canvas Main');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Platform$/ }));
+    expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('');
+    expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['create', 'finalize'])('keeps a replacement dialog busy when the previous %s settles', async (stage) => {
+    let resolvePrevious!: (value: unknown) => void;
+    const previous = new Promise((resolve) => { resolvePrevious = resolve; });
+    const pending = stage === 'create' ? mockCreateCanvasPlatform : mockFinalizeCanvasLtiInstallation;
+    pending.mockReturnValueOnce(previous);
+    const { user, rerender } = renderWithRouter(<CanvasIntegrationsPage />);
+    const original = await openCanvasDraft(user);
+    await user.click(within(original).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(pending).toHaveBeenCalledTimes(1));
+    mockPermissionsState.canEdit = false;
+    rerender(<CanvasIntegrationsPage />);
+    if (screen.queryByRole('dialog')) await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    mockPermissionsState.canEdit = true;
+    rerender(<CanvasIntegrationsPage />);
+    let resolveReplacement!: (value: unknown) => void;
+    mockCreateCanvasPlatform.mockReturnValueOnce(new Promise((resolve) => { resolveReplacement = resolve; }));
+    const replacement = await openCanvasDraft(user);
+    await user.type(within(replacement).getByRole('textbox', { name: 'Display name' }), ' replacement');
+    await user.click(within(replacement).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(mockCreateCanvasPlatform).toHaveBeenCalledTimes(2));
+    await act(async () => resolvePrevious({ id: 'platform-old', enabled: false }));
+    expect(replacement).toBeVisible();
+    expect(within(replacement).getByRole('textbox', { name: 'Display name' })).toHaveValue('Campus Canvas replacement');
+    expect(within(replacement).getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect(within(replacement).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(mockFinalizeCanvasLtiInstallation).toHaveBeenCalledTimes(stage === 'create' ? 0 : 1);
+    await act(async () => resolveReplacement({ id: 'platform-replacement', enabled: false }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(mockFinalizeCanvasLtiInstallation).toHaveBeenLastCalledWith('platform-replacement', {
+      lti_client_id: 'client-new', lti_deployment_id: 'deployment-new',
     });
   });
 

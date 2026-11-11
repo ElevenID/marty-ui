@@ -81,11 +81,15 @@ export default function DidIdentitiesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retiring, setRetiring] = useState(null);
+  const [retireError, setRetireError] = useState('');
   const [rebinding, setRebinding] = useState(null);
+  const [rebindError, setRebindError] = useState('');
   const [certifying, setCertifying] = useState(null);
   const [certificate, setCertificate] = useState({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+  const [certificateError, setCertificateError] = useState('');
   const [csrSubject, setCsrSubject] = useState({ country: '', organization: '', common_name: '' });
   const [csrPem, setCsrPem] = useState('');
+  const [csrError, setCsrError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [issueSubmitting, setIssueSubmitting] = useState(false);
   const [issuing, setIssuing] = useState(null);
@@ -98,21 +102,76 @@ export default function DidIdentitiesPage() {
   const [issuePendingRetry, setIssuePendingRetry] = useState(false);
   const issueEpochRef = useRef(0);
   const loadRequestRef = useRef(0);
+  const actionDialogRef = useRef(null);
+  const resetActionDialog = useCallback(() => {
+    actionDialogRef.current = null;
+    setRetiring(null);
+    setRetireError('');
+    setRebinding(null);
+    setRebindError('');
+    setCertifying(null);
+    setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+    setCertificateError('');
+    setCsrSubject({ country: '', organization: '', common_name: '' });
+    setCsrPem('');
+    setCsrError('');
+    setSubmitting(false);
+  }, []);
   useLayoutEffect(() => {
     issueEpochRef.current += 1;
     setIdentities([]);
-    setRetiring(null);
-    setRebinding(null);
-    setCertifying(null);
-    setCsrPem('');
-    setSubmitting(false);
+    resetActionDialog();
     setIssuing(null);
     setIssuedCertificate(null);
     setIssueError('');
     setIssueSubmitting(false);
     setIssuePendingRetry(false);
-    return () => { issueEpochRef.current += 1; loadRequestRef.current += 1; };
-  }, [activeOrgId]);
+    return () => {
+      issueEpochRef.current += 1;
+      loadRequestRef.current += 1;
+      actionDialogRef.current = null;
+    };
+  }, [activeOrgId, resetActionDialog]);
+  useLayoutEffect(() => {
+    const owner = actionDialogRef.current;
+    if (owner && !(owner.kind === 'retire' ? canRetire : canManage)) resetActionDialog();
+  }, [canManage, canRetire, resetActionDialog]);
+
+  const openActionDialog = (kind, identity) => {
+    if (!activeOrgId || identity.organization_id !== activeOrgId
+      || !(kind === 'retire' ? canRetire : canManage) || actionDialogRef.current?.pending) return;
+    resetActionDialog();
+    actionDialogRef.current = { kind, identity, pending: false };
+    if (kind === 'retire') setRetiring(identity);
+    else if (kind === 'rebind') setRebinding(identity);
+    else setCertifying(identity);
+  };
+  const dismissActionDialog = () => {
+    if (!actionDialogRef.current?.pending) resetActionDialog();
+  };
+  const beginAction = (kind, identity) => {
+    const owner = actionDialogRef.current;
+    if (!owner || owner.kind !== kind || owner.identity !== identity || owner.pending) return null;
+    owner.pending = true;
+    setSubmitting(true);
+    return owner;
+  };
+  const finishAction = (owner) => {
+    if (owner !== actionDialogRef.current) return;
+    owner.pending = false;
+    setSubmitting(false);
+  };
+  const updateCertificate = (field, value) => {
+    if (actionDialogRef.current?.pending) return;
+    setCertificate((current) => ({ ...current, [field]: value }));
+    setCertificateError('');
+  };
+  const updateCsrSubject = (field, value) => {
+    if (actionDialogRef.current?.pending) return;
+    setCsrSubject((current) => ({ ...current, [field]: value }));
+    setCsrPem('');
+    setCsrError('');
+  };
   const csrSupported = certifying && CSR_ALGORITHMS.has(certifying.algorithm);
   const issueValidityDays = Number(issueForm.validity_days);
   const issueFormValid = Boolean(issuing)
@@ -260,9 +319,9 @@ export default function DidIdentitiesPage() {
 
   const retireIdentity = async () => {
     if (!retiring || !activeOrgId || retiring.organization_id !== activeOrgId || !canRetire) return;
-    const actionEpoch = issueEpochRef.current;
-    setSubmitting(true);
-    setError('');
+    const owner = beginAction('retire', retiring);
+    if (!owner) return;
+    setRetireError('');
     try {
       await issuerIdentitiesApi.deleteIssuerIdentity({
         organization_id: activeOrgId,
@@ -271,28 +330,28 @@ export default function DidIdentitiesPage() {
         credential_format: retiring.credential_format,
         algorithm: retiring.algorithm,
       });
-      if (actionEpoch !== issueEpochRef.current) return;
+      if (owner !== actionDialogRef.current) return;
       showNotification?.('Issuer identity retired.', 'success');
-      setRetiring(null);
+      resetActionDialog();
       await load();
     } catch (requestError) {
-      if (actionEpoch !== issueEpochRef.current) return;
-      setError(
+      if (owner !== actionDialogRef.current) return;
+      setRetireError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
         || requestError?.message
         || 'Issuer identity could not be retired.',
       );
     } finally {
-      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
+      finishAction(owner);
     }
   };
 
   const rebindIdentity = async () => {
     if (!rebinding || !activeOrgId || rebinding.organization_id !== activeOrgId || !canManage) return;
-    const actionEpoch = issueEpochRef.current;
-    setSubmitting(true);
-    setError('');
+    const owner = beginAction('rebind', rebinding);
+    if (!owner) return;
+    setRebindError('');
     try {
       const result = await issuerIdentitiesApi.rebindIssuerIdentity({
         organization_id: activeOrgId,
@@ -301,34 +360,34 @@ export default function DidIdentitiesPage() {
         credential_format: rebinding.credential_format,
         algorithm: rebinding.algorithm,
       });
-      if (actionEpoch !== issueEpochRef.current) return;
+      if (owner !== actionDialogRef.current) return;
       showNotification?.(
         result?.changed
           ? 'Issuer identity moved to the default signing service.'
           : 'Issuer identity already uses the default signing service.',
         'success',
       );
-      setRebinding(null);
+      resetActionDialog();
       await load();
     } catch (requestError) {
-      if (actionEpoch !== issueEpochRef.current) return;
-      setError(
+      if (owner !== actionDialogRef.current) return;
+      setRebindError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
         || requestError?.message
         || 'Issuer identity could not be moved to the default signing service.',
       );
     } finally {
-      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
+      finishAction(owner);
     }
   };
 
   const attachCertificate = async () => {
     if (!certifying || !activeOrgId || certifying.organization_id !== activeOrgId || !canManage || !certificate.cert_pem.trim()
       || (certifying.key_purpose === 'csca' && !certificate.certificate_id.trim())) return;
-    const actionEpoch = issueEpochRef.current;
-    setSubmitting(true);
-    setError('');
+    const owner = beginAction('certificate', certifying);
+    if (!owner) return;
+    setCertificateError('');
     try {
       const publicCertificate = {
         organization_id: activeOrgId,
@@ -343,21 +402,20 @@ export default function DidIdentitiesPage() {
           ...publicCertificate,
           certificate_id: certificate.certificate_id.trim(),
         });
-        if (actionEpoch !== issueEpochRef.current) return;
+        if (owner !== actionDialogRef.current) return;
         showNotification?.('Public CSCA trust anchor enrolled.', 'success');
       } else {
         await issuerIdentitiesApi.storeIssuerIdentityCertificate({
           ...publicCertificate,
           key_purpose: certifying.key_purpose,
         });
-        if (actionEpoch !== issueEpochRef.current) return;
+        if (owner !== actionDialogRef.current) return;
         showNotification?.('Document signer certificate attached to issuer identity.', 'success');
       }
-      setCertifying(null);
-      setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
+      resetActionDialog();
     } catch (requestError) {
-      if (actionEpoch !== issueEpochRef.current) return;
-      setError(
+      if (owner !== actionDialogRef.current) return;
+      setCertificateError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
         || requestError?.message
@@ -366,16 +424,17 @@ export default function DidIdentitiesPage() {
           : 'Document signer certificate could not be attached.'),
       );
     } finally {
-      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
+      finishAction(owner);
     }
   };
 
   const generateCsr = async () => {
     if (!csrSupported || !canManage || certifying?.organization_id !== activeOrgId || !activeOrgId || !csrSubject.country.trim()
       || !csrSubject.organization.trim() || !csrSubject.common_name.trim()) return;
-    const actionEpoch = issueEpochRef.current;
-    setSubmitting(true);
-    setError('');
+    const owner = beginAction('certificate', certifying);
+    if (!owner) return;
+    setCsrError('');
+    setCsrPem('');
     try {
       const result = await issuerIdentitiesApi.generateIssuerIdentityCsr({
         organization_id: activeOrgId,
@@ -387,19 +446,19 @@ export default function DidIdentitiesPage() {
         organization: csrSubject.organization.trim(),
         common_name: csrSubject.common_name.trim(),
       });
-      if (actionEpoch !== issueEpochRef.current) return;
+      if (owner !== actionDialogRef.current) return;
       setCsrPem(result?.csr_pem || '');
       showNotification?.('KMS-backed certificate request generated.', 'success');
     } catch (requestError) {
-      if (actionEpoch !== issueEpochRef.current) return;
-      setError(
+      if (owner !== actionDialogRef.current) return;
+      setCsrError(
         requestError?.response?.error?.message
         || requestError?.response?.detail
         || requestError?.message
         || 'Certificate request could not be generated.',
       );
     } finally {
-      if (actionEpoch === issueEpochRef.current) setSubmitting(false);
+      finishAction(owner);
     }
   };
 
@@ -492,12 +551,7 @@ export default function DidIdentitiesPage() {
                   {canManage && identity.credential_format === 'ICAO_EMRTD' && identity.key_purpose === 'x509_doc_signer' && (
                     <Tooltip title="Attach document signer certificate">
                       <IconButton
-                        onClick={() => {
-                          setCertifying(identity);
-                          setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
-                          setCsrSubject({ country: '', organization: '', common_name: '' });
-                          setCsrPem('');
-                        }}
+                        onClick={() => openActionDialog('certificate', identity)}
                         aria-label="Attach document signer certificate"
                       >
                         <UploadFileOutlinedIcon />
@@ -507,12 +561,7 @@ export default function DidIdentitiesPage() {
                   {canManage && identity.key_purpose === 'csca' && (
                     <Tooltip title="Enroll public CSCA trust anchor">
                       <IconButton
-                        onClick={() => {
-                          setCertifying(identity);
-                          setCertificate({ certificate_id: '', cert_pem: '', cert_chain_pem: '' });
-                          setCsrSubject({ country: '', organization: '', common_name: '' });
-                          setCsrPem('');
-                        }}
+                        onClick={() => openActionDialog('certificate', identity)}
                         aria-label="Enroll public CSCA trust anchor"
                       >
                         <UploadFileOutlinedIcon />
@@ -520,12 +569,12 @@ export default function DidIdentitiesPage() {
                     </Tooltip>
                   )}
                   {canManage && <Tooltip title="Move to default signing service">
-                    <IconButton onClick={() => setRebinding(identity)} aria-label="Move identity to default signing service">
+                    <IconButton onClick={() => openActionDialog('rebind', identity)} aria-label="Move identity to default signing service">
                       <SwapHorizIcon />
                     </IconButton>
                   </Tooltip>}
                   {canRetire && <Tooltip title="Retire identity">
-                    <IconButton color="error" onClick={() => setRetiring(identity)} aria-label="Retire identity">
+                    <IconButton color="error" onClick={() => openActionDialog('retire', identity)} aria-label="Retire identity">
                       <DeleteOutlineIcon />
                     </IconButton>
                   </Tooltip>}
@@ -602,7 +651,7 @@ export default function DidIdentitiesPage() {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(certifying)} onClose={() => !submitting && setCertifying(null)} maxWidth="md" fullWidth>
+      <Dialog open={Boolean(certifying) && certifying.organization_id === activeOrgId && canManage} onClose={dismissActionDialog} maxWidth="md" fullWidth>
         <DialogTitle>{certifying?.key_purpose === 'csca' ? 'Enroll public CSCA trust anchor' : 'Attach document signer certificate'}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ mt: 1 }}>
@@ -615,6 +664,7 @@ export default function DidIdentitiesPage() {
               <Typography sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{certifying.issuer_did}</Typography>
             )}
             <Typography variant="subtitle2">Generate a KMS-backed certificate request</Typography>
+            {csrError && <Alert severity="error">{csrError}</Alert>}
             {certifying && !csrSupported && (
               <Alert severity="info">
                 KMS-backed certificate requests support ES256, ES384, and ES512 identities. You can still attach a signed public certificate for this identity.
@@ -624,23 +674,26 @@ export default function DidIdentitiesPage() {
               <TextField
                 label="Country code (C)"
                 value={csrSubject.country}
-                onChange={(event) => setCsrSubject((current) => ({ ...current, country: event.target.value }))}
+                disabled={submitting}
+                onChange={(event) => updateCsrSubject('country', event.target.value)}
                 slotProps={{ htmlInput: { maxLength: 2 } }}
               />
               <TextField
                 label="Organization (O)"
                 value={csrSubject.organization}
-                onChange={(event) => setCsrSubject((current) => ({ ...current, organization: event.target.value }))}
+                disabled={submitting}
+                onChange={(event) => updateCsrSubject('organization', event.target.value)}
                 fullWidth
               />
               <TextField
                 label="Common name (CN)"
                 value={csrSubject.common_name}
-                onChange={(event) => setCsrSubject((current) => ({ ...current, common_name: event.target.value }))}
+                disabled={submitting}
+                onChange={(event) => updateCsrSubject('common_name', event.target.value)}
                 fullWidth
               />
             </Stack>
-            <Button variant="outlined" onClick={generateCsr} disabled={!csrSupported || submitting || !csrSubject.country.trim() || !csrSubject.organization.trim() || !csrSubject.common_name.trim()}>
+            <Button variant="outlined" onClick={generateCsr} disabled={!csrSupported || !canManage || submitting || !csrSubject.country.trim() || !csrSubject.organization.trim() || !csrSubject.common_name.trim()}>
               Generate KMS-backed CSR
             </Button>
             {csrPem && (
@@ -653,13 +706,15 @@ export default function DidIdentitiesPage() {
                 slotProps={{ input: { readOnly: true, sx: { fontFamily: 'monospace' } } }}
               />
             )}
+            {certificateError && <Alert severity="error">{certificateError}</Alert>}
             {certifying?.key_purpose === 'csca' && (
               <TextField
                 label="CSCA certificate ID"
                 required
                 fullWidth
                 value={certificate.certificate_id}
-                onChange={(event) => setCertificate((current) => ({ ...current, certificate_id: event.target.value }))}
+                disabled={submitting}
+                onChange={(event) => updateCertificate('certificate_id', event.target.value)}
               />
             )}
             <TextField
@@ -669,7 +724,8 @@ export default function DidIdentitiesPage() {
               fullWidth
               required
               value={certificate.cert_pem}
-              onChange={(event) => setCertificate((current) => ({ ...current, cert_pem: event.target.value }))}
+              disabled={submitting}
+              onChange={(event) => updateCertificate('cert_pem', event.target.value)}
             />
             <TextField
               label="Certificate chain PEM (optional)"
@@ -677,21 +733,23 @@ export default function DidIdentitiesPage() {
               minRows={3}
               fullWidth
               value={certificate.cert_chain_pem}
-              onChange={(event) => setCertificate((current) => ({ ...current, cert_chain_pem: event.target.value }))}
+              disabled={submitting}
+              onChange={(event) => updateCertificate('cert_chain_pem', event.target.value)}
             />
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setCertifying(null)} disabled={submitting}>Cancel</Button>
-          <Button variant="contained" onClick={attachCertificate} disabled={submitting || !certificate.cert_pem.trim() || (certifying?.key_purpose === 'csca' && !certificate.certificate_id.trim())}>
+          <Button onClick={dismissActionDialog} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" onClick={attachCertificate} disabled={!canManage || submitting || !certificate.cert_pem.trim() || (certifying?.key_purpose === 'csca' && !certificate.certificate_id.trim())}>
             {submitting ? <CircularProgress size={20} /> : (certifying?.key_purpose === 'csca' ? 'Enroll trust anchor' : 'Attach certificate')}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(retiring)} onClose={() => !submitting && setRetiring(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(retiring) && retiring.organization_id === activeOrgId && canRetire} onClose={dismissActionDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Retire issuer identity?</DialogTitle>
         <DialogContent>
+          {retireError && <Alert severity="error" sx={{ mb: 2 }}>{retireError}</Alert>}
           <Typography>
             New signing operations for this DID, purpose, format, and algorithm will stop immediately. Existing credentials remain verifiable.
           </Typography>
@@ -700,16 +758,17 @@ export default function DidIdentitiesPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRetiring(null)} disabled={submitting}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={retireIdentity} disabled={submitting}>
+          <Button onClick={dismissActionDialog} disabled={submitting}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={retireIdentity} disabled={!canRetire || submitting}>
             {submitting ? <CircularProgress size={20} /> : 'Retire identity'}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(rebinding)} onClose={() => !submitting && setRebinding(null)} maxWidth="sm" fullWidth>
+      <Dialog open={Boolean(rebinding) && rebinding.organization_id === activeOrgId && canManage} onClose={dismissActionDialog} maxWidth="sm" fullWidth>
         <DialogTitle>Move issuer identity to the default signer?</DialogTitle>
         <DialogContent>
+          {rebindError && <Alert severity="error" sx={{ mb: 2 }}>{rebindError}</Alert>}
           <Typography>
             Marty will validate the compatible default signing service and publish its public key to this DID before changing active custody. Existing verification methods remain published so credentials already issued by this DID stay verifiable.
           </Typography>
@@ -718,8 +777,8 @@ export default function DidIdentitiesPage() {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRebinding(null)} disabled={submitting}>Cancel</Button>
-          <Button variant="contained" onClick={rebindIdentity} disabled={submitting}>
+          <Button onClick={dismissActionDialog} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" onClick={rebindIdentity} disabled={!canManage || submitting}>
             {submitting ? <CircularProgress size={20} /> : 'Move identity'}
           </Button>
         </DialogActions>

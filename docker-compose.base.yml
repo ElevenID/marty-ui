@@ -58,7 +58,8 @@ services:
     image: redis:7-alpine
     ports:
       - "127.0.0.1:6379:6379"
-    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    # The shared store owns persistent identities and one-use replay markers.
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction
     volumes:
       - redis_data:/data
     healthcheck:

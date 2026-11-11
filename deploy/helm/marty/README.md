@@ -150,13 +150,35 @@ can observe the schema-validating applications and migration completion
 without a post-install-hook deadlock. Kubernetes may restart application
 containers while their prerequisites initialize.
 
-For an IP endpoint, set `publicHost` to the raw IP and `publicOrigin` to, for
+`publicHost` accepts a DNS hostname or a raw IPv4 address, without a scheme,
+port or path. `publicOrigin` defaults to `https://<publicHost>` and must use
+that same host. Rendering fails before installation for a mismatched host,
+invalid address or unusable port. Host comparison ignores DNS casing, while
+the selected origin and its port spelling are preserved so an update does not
+change the default issuer DID. That same origin supplies the default application
+URLs, Keycloak callbacks, CORS and the development UI. An
+explicit `organization.did` is preserved; retain it when changing the origin
+of an existing installation. IPv6 public endpoints are not supported by this
+chart and are rejected instead of producing an invalid default URL.
+
+For an IPv4 endpoint, set `publicHost` to the raw IP and `publicOrigin` to, for
 example, `https://192.0.2.20:8443`. The chart omits the Ingress rule host and TLS
 hosts, because Kubernetes does not allow IP literals there. The certificate
 must contain that IP SAN. For clients which omit TLS SNI, configure the
 Ingress controller's default certificate separately (Traefik uses a
 `TLSStore`); a portable Ingress cannot select that default. Normal DNS names
 produce a host-specific rule and TLS host.
+
+An explicit `ingress.host` may select a different DNS name or wildcard DNS rule
+when an external reverse proxy rewrites the Host header. It does not change the
+public application origin. IP literals, ports and malformed DNS rules are
+rejected in this field.
+
+SMTP credentials remain in the existing `marty-secrets` Secret, using its
+`SMTP_PASSWORD` key; `existingSecrets.marty-secrets` may rename that Secret.
+Do not put `SMTP_PASSWORD` or `KEYCLOAK_SMTP_PASSWORD` in `config`: these keys
+are rejected so a credential cannot be written into the ConfigMap or
+Helm values history.
 
 The generated ConfigMap also sets the Canvas worker's `ISSUER_BASE_URL` to the
 installation origin and `CANVAS_OAUTH_COMPLETION_REDIRECT_URL` to that origin
@@ -228,6 +250,14 @@ JSON store always uses one replica with a `Recreate` strategy and a writable
 directory PVC. PostgreSQL and Redis use persistent StatefulSets; Redis has
 append-only persistence. StatefulSet PVCs survive Helm uninstall, and the
 applicant PVC has Helm's `keep` policy. Delete data only as an explicit reset.
+
+Redis uses `noeviction` because it stores signing identities, published DID
+documents and one-use signing-grant markers as well as cache entries. At its
+configured memory limit it refuses new writes while retaining existing keys;
+evicting either permanent records or unexpired replay markers is unsafe. Watch
+Redis memory and rejected commands during capacity testing. The existing
+memory cap and pod limits remain bounded; a full Redis instance needs operator
+attention and can make application writes unavailable.
 
 Single-replica application Deployments use `Recreate`. This keeps the
 development node within its existing no-surge budget and makes Helm wait for

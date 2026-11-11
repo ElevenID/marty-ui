@@ -1871,6 +1871,7 @@ async fn reset_schema(pool: &PgPool) -> TestResult {
          CREATE SCHEMA deployment_profile_service;
          CREATE TABLE deployment_profile_service.deployment_profiles (
              id text PRIMARY KEY,
+             organization_id text NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
              enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb
          );
          INSERT INTO deployment_profile_service.deployment_profiles(id)

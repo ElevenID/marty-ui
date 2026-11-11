@@ -19,6 +19,10 @@ limitation.
 
 ## 🚀 Quick Start
 
+Choose the [installation path and configuration owner](docs/installation-paths.md)
+before starting. The signed Linux candidate, AWS/K3s development chart, manual
+Compose operations and retained Windows recovery have different prerequisites.
+
 ### Linux installer testing
 
 Start with the [Linux installer tester quickstart](docs/linux-installer-tester.md).

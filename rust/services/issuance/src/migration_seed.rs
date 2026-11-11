@@ -4,11 +4,11 @@ use serde_json::{json, Map, Value};
 use sqlx::{PgConnection, Row};
 use uuid::Uuid;
 
-const MARTY_ORG_ID: &str = "00000000-0000-0000-0000-000000000001";
 const TEMPLATE_NAMESPACE: &str = "c7ad7bbb-3cc8-46bc-a648-f0f66be0473a";
 
 pub(super) async fn seed_marty_application_templates(
     connection: &mut PgConnection,
+    organization_id: Uuid,
 ) -> Result<(), sqlx::Error> {
     let has_templates: bool = sqlx::query_scalar(
         "SELECT to_regclass('credential_template_service.credential_templates') IS NOT NULL",
@@ -21,17 +21,15 @@ pub(super) async fn seed_marty_application_templates(
         ));
     }
 
-    let marty_org_id =
-        Uuid::parse_str(MARTY_ORG_ID).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-
     let organization_name: Option<String> = sqlx::query_scalar(
         "SELECT COALESCE(NULLIF(name, ''), slug, '')
          FROM organization_service.organizations WHERE id = $1::uuid",
     )
-    .bind(marty_org_id)
+    .bind(organization_id)
     .fetch_optional(&mut *connection)
     .await?;
     let organization_name = organization_name.unwrap_or_default();
+    let organization_id = organization_id.to_string();
     let rows = sqlx::query(
         "SELECT id, name, description, claims, issuer_requirements
          FROM credential_template_service.credential_templates
@@ -39,7 +37,7 @@ pub(super) async fn seed_marty_application_templates(
            AND lower(coalesce(status, 'active')) = 'active'
          ORDER BY created_at, id",
     )
-    .bind(MARTY_ORG_ID)
+    .bind(&organization_id)
     .fetch_all(&mut *connection)
     .await?;
     let namespace = Uuid::parse_str(TEMPLATE_NAMESPACE)
@@ -62,7 +60,7 @@ pub(super) async fn seed_marty_application_templates(
             .unwrap_or(Value::Null);
         let template_id = Uuid::new_v5(
             &namespace,
-            format!("{MARTY_ORG_ID}:{credential_template_id}").as_bytes(),
+            format!("{organization_id}:{credential_template_id}").as_bytes(),
         )
         .to_string();
         let (fields, rules, ui_config, valid) =
@@ -84,7 +82,7 @@ pub(super) async fn seed_marty_application_templates(
              ) ON CONFLICT (id) DO NOTHING",
         )
         .bind(template_id)
-        .bind(MARTY_ORG_ID)
+        .bind(&organization_id)
         .bind(format!("{display_name} Application"))
         .bind(description)
         .bind(credential_template_id)
@@ -250,5 +248,46 @@ fn truthy(value: Option<&Value>) -> bool {
         Some(Value::Array(value)) => !value.is_empty(),
         Some(Value::Object(value)) => !value.is_empty(),
         Some(Value::Bool(true)) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migration_tenant_configuration_preserves_default_and_validates_customer_uuid() {
+        assert_eq!(
+            crate::migration::seed_organization_id(None)
+                .unwrap()
+                .to_string(),
+            "00000000-0000-0000-0000-000000000001",
+        );
+        assert_eq!(
+            crate::migration::seed_organization_id(Some(" 750e8400-e29b-41d4-a716-446655440001 "))
+                .unwrap()
+                .to_string(),
+            "750e8400-e29b-41d4-a716-446655440001",
+        );
+        assert!(crate::migration::seed_organization_id(Some("not-a-uuid")).is_err());
+    }
+
+    #[test]
+    fn customer_application_claims_use_customer_name_as_a_system_value() {
+        let (fields, rules, _, valid) = final_template_projection(
+            &json!([
+                {"name":"organization_name","claim_type":"string"},
+                {"name":"learner_name","claim_type":"string"},
+            ]),
+            "Course Completion Badge",
+            "Canyon Skills Academy",
+        );
+        assert!(valid);
+        assert_eq!(fields.as_array().unwrap().len(), 1);
+        assert_eq!(fields[0]["field_id"], "learner_name");
+        assert!(rules.as_array().unwrap().contains(&json!({
+            "claim_name":"organization_name", "source":"SYSTEM",
+            "source_config":{"system_field":"constant","value":"Canyon Skills Academy"},
+        })));
     }
 }

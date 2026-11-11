@@ -287,8 +287,16 @@ def run(item):
     return reload.reload_workloads(item.request, item.transport, item.freshness, item.guard)
 
 
-def test_closed_reload_preserves_configuration_and_proves_new_projected_bytes(reload_flow, capsys):
+@pytest.mark.parametrize("build_run_id, annotation", [
+    pytest.param(123, "123", id="decimal"),
+    pytest.param(42418639332, "4.2418639332e+10", id="legacy-helm-scientific"),
+])
+def test_closed_reload_preserves_configuration_and_proves_new_projected_bytes(reload_flow, capsys, build_run_id, annotation):
     item = reload_flow
+    item.request.original["release"]["buildRunId"] = build_run_id
+    for deployments in (item.deployments, item.original_deployments):
+        for value in deployments.values():
+            value["spec"]["template"]["metadata"]["annotations"]["marty.11id.dev/buildRunId"] = annotation
     result = run(item)
     assert item.reload_patches == list(reload.WORKLOADS) and len(item.execs) == 16
     assert result["reloadCount"] == 16 and result["fullEnvironmentHealthAssessed"] is False
@@ -330,6 +338,74 @@ def test_closed_reload_preserves_configuration_and_proves_new_projected_bytes(re
     proof.write_bytes(proof.read_bytes() + b"\n")
     with pytest.raises(bootstrap.BootstrapError):
         reload.verify_completed_evidence(item.request.output, result, item.request.binding, item.request.qualified_plan_sha256)
+
+
+@pytest.mark.parametrize("key", ["buildRunId", "buildRunAttempt"])
+def test_numeric_release_annotations_require_exact_producer_integer_and_helm_spelling(reload_flow, key):
+    item = reload_flow
+    observed = deepcopy(item.deployments["auth"])
+    annotations = observed["spec"]["template"]["metadata"]["annotations"]
+    accepted = [
+        (1, "1"), (999999, "999999"), (1000000, "1000000"), (1000000, "1e+06"),
+        (1000001, "1.000001e+06"), (123450000, "1.2345e+08"),
+        (42000000000, "4.2e+10"), (42418639332, "42418639332"),
+        (42418639332, "4.2418639332e+10"),
+        (2**53 - 1, "9007199254740991"), (2**53 - 1, "9.007199254740991e+15"),
+    ]
+    rejected = [(42418639332, value) for value in (
+        "42418639333", "4.2418639333e+10", "4.241863933e+10", "4.24186393321e+10",
+        "4.2418639332e+09", "42.418639332e+9", "4.24186393320e+10", "4.2418639332E+10",
+        "4.2418639332e10", "4.2418639332e+010", "+4.2418639332e+10", " 4.2418639332e+10",
+        "4.2418639332e+10\n", "042418639332", "42418639332.0", "424186393320e-1",
+        "NaN", "Infinity", "-Inf", "", "4." + "0" * 1000 + "e+10", None, 42418639332, 42418639332.0, True,
+    )]
+    rejected.extend([
+        (999999, "9.99999e+05"), (1, "1e+00"), (0, "0"), (-1, "-1"),
+        (True, "True"), (False, "False"), (42418639332.0, "42418639332.0"),
+        ("42418639332", "42418639332"), (2**53, "9007199254740992"),
+        (2**53 + 1, "9.007199254740992e+15"), (10**1000, "1e+1000"),
+    ])
+    for expected, actual in accepted:
+        item.request.original["release"][key] = expected
+        annotations["marty.11id.dev/" + key] = actual
+        assert reload.deployment(observed, "auth", item.request) == "marty-retained", (key, expected, actual)
+    for expected, actual in rejected:
+        item.request.original["release"][key] = expected
+        annotations["marty.11id.dev/" + key] = actual
+        with pytest.raises(bootstrap.BootstrapError, match="Deployment original release annotations differ"):
+            reload.deployment(observed, "auth", item.request)
+    assert not item.reload_patches and not item.execs
+
+
+@pytest.mark.parametrize("annotation", ["4.2418639333e+10", "4.241863933e+10", "4.24186393320e+10"])
+def test_late_workload_numeric_release_mismatch_precedes_every_restart(reload_flow, annotation):
+    item = reload_flow
+    item.request.original["release"]["buildRunId"] = 42418639332
+    for value in item.deployments.values():
+        value["spec"]["template"]["metadata"]["annotations"]["marty.11id.dev/buildRunId"] = "4.2418639332e+10"
+    last = reload.WORKLOADS[-1]
+    item.deployments[last]["spec"]["template"]["metadata"]["annotations"]["marty.11id.dev/buildRunId"] = annotation
+    with pytest.raises(bootstrap.BootstrapError, match="Deployment original release annotations differ"):
+        run(item)
+    assert any(command[:3] == ("get", "deployment", last) for command, _, _ in item.io)
+    assert not item.reload_patches and not item.execs
+
+
+def test_other_release_annotations_remain_exact(reload_flow):
+    item = reload_flow
+    observed = deepcopy(item.deployments["auth"])
+    annotations = observed["spec"]["template"]["metadata"]["annotations"]
+    for key in ("runtimeSourceSha", "chartSourceSha", "tag", "inventorySha256", "imageLockSha256", "operatorSha256"):
+        original = item.request.original["release"][key]
+        annotations["marty.11id.dev/" + key] = original + " "
+        with pytest.raises(bootstrap.BootstrapError, match="Deployment original release annotations differ"):
+            reload.deployment(observed, "auth", item.request)
+        annotations["marty.11id.dev/" + key] = original
+    item.request.original["release"]["otherNumericMetadata"] = 42418639332
+    annotations["marty.11id.dev/otherNumericMetadata"] = "4.2418639332e+10"
+    with pytest.raises(bootstrap.BootstrapError, match="Deployment original release annotations differ"):
+        reload.deployment(observed, "auth", item.request)
+    assert not item.reload_patches and not item.execs
 
 
 @pytest.mark.parametrize("tamper", [

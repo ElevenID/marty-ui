@@ -191,7 +191,10 @@ def test_catalog_names_only_governed_production_entrypoints() -> None:
         in deployment_guide
     )
     assert (
-        "Kubernetes deployment script: scripts/deploy-kubernetes.sh" in deployment_guide
+        "Current Kubernetes development chart: deploy/helm/marty" in deployment_guide
+    )
+    assert (
+        "Legacy Kubernetes manifest script: scripts/deploy-kubernetes.sh" in deployment_guide
     )
     assert (
         "Do not layer the development-oriented `docker-compose.base.yml`"

@@ -335,3 +335,7 @@ path = "tests/passport_postgres_contract.rs"
 [[test]]
 name = "mdoc_status_postgres_contract"
 path = "tests/mdoc_status_postgres_contract.rs"
+
+[[test]]
+name = "customer_bootstrap_postgres"
+path = "tests/customer_bootstrap_postgres.rs"

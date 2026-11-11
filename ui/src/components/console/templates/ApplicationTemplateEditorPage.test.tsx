@@ -62,6 +62,17 @@ function draftTemplate(id = 'application-template-1', organizationId = 'org-1') 
   };
 }
 
+function configuredChecks() {
+  return [
+    { check_type: 'identity_verification', is_required: false, order: 1,
+      config: { document_types: ['passport'] }, external_provider: 'identity-primary' },
+    { check_type: 'employment_verification', is_required: false, order: 2,
+      config: { minimum_years: 2 }, external_provider: 'employment-provider' },
+    { check_type: 'identity_verification', is_required: true, order: 3,
+      config: { document_types: ['drivers_license'] }, external_provider: 'identity-secondary' },
+  ];
+}
+
 function deferred() {
   let resolve!: (value: unknown) => void;
   let reject!: (reason: Error) => void;
@@ -430,7 +441,7 @@ describe('ApplicationTemplateEditorPage', () => {
     })));
   });
 
-  it('commits typed required-check and evidence lists when saving the draft', async () => {
+  it('adds checks explicitly and commits typed evidence formats when saving the draft', async () => {
     vi.mocked(getApplicationTemplate).mockResolvedValueOnce({
       id: 'application-template-1', organization_id: 'org-1', name: 'Membership', status: 'DRAFT',
       credential_template_id: 'credential-1', form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL' }],
@@ -445,9 +456,16 @@ describe('ApplicationTemplateEditorPage', () => {
     const formats = await screen.findByRole('textbox', { name: 'Accepted formats' });
     await user.type(formats, 'image/png,image/jpeg');
     expect(formats).toHaveValue('image/png,image/jpeg');
-    const checks = screen.getByRole('textbox', { name: 'Required checks' });
-    await user.type(checks, 'identity_verification,employment_verification');
-    expect(checks).toHaveValue('identity_verification,employment_verification');
+    const newCheck = screen.getByRole('textbox', { name: 'New check type' });
+    await user.type(newCheck, 'identity_verification');
+    const save = screen.getByRole('button', { name: /save draft/i });
+    expect(save).toBeDisabled();
+    fireEvent.click(save);
+    expect(updateApplicationTemplate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Add check' }));
+    expect(newCheck).toHaveValue('');
+    await user.type(newCheck, 'employment_verification');
+    await user.click(screen.getByRole('button', { name: 'Add check' }));
     await user.click(screen.getByRole('button', { name: /save draft/i }));
 
     await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({
@@ -456,6 +474,99 @@ describe('ApplicationTemplateEditorPage', () => {
         { check_type: 'identity_verification', is_required: true, order: 1 },
         { check_type: 'employment_verification', is_required: true, order: 2 },
       ],
+    })));
+  });
+
+  it.each([
+    ['saving the original rows', 'none', [0, 1, 2]],
+    ['removing the first duplicate check', 'remove-first', [1, 2]],
+    ['removing the last duplicate check', 'remove-last', [0, 1]],
+    ['moving the second duplicate check up', 'move-last-up', [0, 2, 1]],
+    ['moving the first duplicate check down', 'move-first-down', [1, 0, 2]],
+  ] as const)('preserves configured check occurrences after %s', async (_scenario, action, retainedOrder) => {
+    const configured = configuredChecks();
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ ...draftTemplate(), required_checks: configured });
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit?mode=advanced'],
+    });
+    const secondIdentity = await screen.findByRole('group', { name: 'Check 3: Identity Verification' });
+    expect(secondIdentity).toHaveTextContent('Provider: identity-secondary');
+    expect(secondIdentity).toHaveTextContent('Custom settings configured');
+    expect(screen.queryByRole('textbox', { name: 'Required checks' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move check 1: Identity Verification up' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Move check 3: Identity Verification down' })).toBeDisabled();
+    if (action === 'remove-first') {
+      await user.click(screen.getByRole('button', { name: 'Remove check 1: Identity Verification' }));
+      expect(screen.getByRole('group', { name: 'Check 2: Identity Verification' })).toBe(secondIdentity);
+    } else if (action === 'remove-last') {
+      await user.click(screen.getByRole('button', { name: 'Remove check 3: Identity Verification' }));
+    } else if (action === 'move-last-up') {
+      await user.click(screen.getByRole('button', { name: 'Move check 3: Identity Verification up' }));
+      expect(screen.getByRole('group', { name: 'Check 2: Identity Verification' })).toBe(secondIdentity);
+    } else if (action === 'move-first-down') {
+      await user.click(screen.getByRole('button', { name: 'Move check 1: Identity Verification down' }));
+    }
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+
+    const required_checks = retainedOrder.map((original, index) => ({
+      ...configured[original], order: index + 1,
+    }));
+    await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({ required_checks })));
+    expect(await screen.findByRole('heading', { name: 'Saved template' })).toBeInTheDocument();
+  });
+
+  it('adds a duplicate as a new row without borrowing the existing check settings', async () => {
+    const configured = configuredChecks().slice(0, 2);
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ ...draftTemplate(), required_checks: configured });
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit?mode=advanced'],
+    });
+    const existingIdentity = await screen.findByRole('group', { name: 'Check 1: Identity Verification' });
+    await user.type(screen.getByRole('textbox', { name: 'New check type' }), ' identity_verification ');
+    await user.click(screen.getByRole('button', { name: 'Add check' }));
+    expect(screen.getByRole('group', { name: 'Check 1: Identity Verification' })).toBe(existingIdentity);
+    const newIdentity = screen.getByRole('group', { name: 'Check 3: Identity Verification' });
+    expect(newIdentity).toHaveTextContent('Required');
+    expect(newIdentity).not.toHaveTextContent('Provider:');
+    expect(newIdentity).not.toHaveTextContent('Custom settings configured');
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+
+    await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({
+      required_checks: [...configured, { check_type: 'identity_verification', is_required: true, order: 3 }],
+    })));
+  });
+
+  it.each(['', '?mode=advanced'])('preserves stored check order on a name-only edit (%s)', async (mode) => {
+    const [primary, employment, secondary] = configuredChecks();
+    const configured = [{ ...secondary, order: 30 }, { ...primary, order: 10 }, { ...employment, order: 20 }];
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ ...draftTemplate(), required_checks: configured });
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: [`/console/org/templates/applications/application-template-1/edit${mode}`],
+    });
+    await user.type(await screen.findByRole('textbox', { name: 'Name' }), ' updated');
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+
+    await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({ required_checks: configured })));
+  });
+
+  it('displays stored execution order and normalizes only an explicit check move', async () => {
+    const [primary, employment, secondary] = configuredChecks();
+    const configured = [{ ...secondary, order: 30 }, { ...primary, order: 10 }, { ...employment, order: 20 }];
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({ ...draftTemplate(), required_checks: configured });
+    const { user } = renderWithRouter(<EditorRoutes />, {
+      initialEntries: ['/console/org/templates/applications/application-template-1/edit?mode=advanced'],
+    });
+    const first = await screen.findByRole('group', { name: 'Check 1: Identity Verification' });
+    expect(first).toHaveTextContent('Provider: identity-primary');
+    expect(screen.getByRole('group', { name: 'Check 2: Employment Verification' })).toHaveTextContent('Provider: employment-provider');
+    const last = screen.getByRole('group', { name: 'Check 3: Identity Verification' });
+    expect(last).toHaveTextContent('Provider: identity-secondary');
+    await user.click(screen.getByRole('button', { name: 'Move check 3: Identity Verification up' }));
+    expect(screen.getByRole('group', { name: 'Check 2: Identity Verification' })).toBe(last);
+    await user.click(screen.getByRole('button', { name: /save draft/i }));
+
+    await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith('application-template-1', expect.objectContaining({
+      required_checks: [{ ...primary, order: 1 }, { ...secondary, order: 2 }, { ...employment, order: 3 }],
     })));
   });
 

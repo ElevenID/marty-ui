@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act } from '@testing-library/react';
+import { act, within } from '@testing-library/react';
 import { useLocation } from 'react-router';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
@@ -48,7 +48,7 @@ vi.mock('../../../hooks/usePermissions', () => ({
 
 describe('DidIdentitiesPage', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     window.sessionStorage.clear();
     permissionState.isLoading = false;
     orgState.activeOrgId = 'org-test-1';
@@ -440,5 +440,224 @@ describe('DidIdentitiesPage', () => {
     await act(async () => finish({ csr_pem: 'previous-org-public-csr' }));
     expect(screen.queryByDisplayValue('previous-org-public-csr')).not.toBeInTheDocument();
     expect(showNotification).not.toHaveBeenCalledWith('KMS-backed certificate request generated.', 'success');
+  });
+
+  describe('dialog recovery', () => {
+    const publicIdentity = {
+      issuer_did: 'did:web:issuer.example:orgs:recovery',
+      key_purpose: 'vc_jwt_issuer', credential_format: 'SD_JWT_VC', algorithm: 'ES256', status: 'active',
+    };
+    const cscaIdentity = { ...publicIdentity, key_purpose: 'csca', credential_format: 'ICAO_EMRTD' };
+    const subjectFields: [string, string][] = [
+      ['Country code (C)', 'US'], ['Organization (O)', 'Audit Issuer'], ['Common name (CN)', 'Subject A'],
+    ];
+    const operations = [
+      { name: 'retirement', identity: publicIdentity, open: 'Retire identity', submit: 'Retire identity', api: deleteIssuerIdentity, fields: [] },
+      { name: 'rebinding', identity: publicIdentity, open: 'Move identity to default signing service', submit: 'Move identity', api: rebindIssuerIdentity, fields: [] },
+      {
+        name: 'certificate attachment', identity: { ...cscaIdentity, key_purpose: 'x509_doc_signer' },
+        open: 'Attach document signer certificate', submit: 'Attach certificate', api: storeIssuerIdentityCertificate,
+        fields: [['Document signer certificate PEM', 'public-certificate'], ['Certificate chain PEM (optional)', 'public-chain']],
+      },
+      {
+        name: 'CSCA enrollment', identity: cscaIdentity, open: 'Enroll public CSCA trust anchor', submit: 'Enroll trust anchor', api: enrollCscaCertificate,
+        fields: [['CSCA certificate ID', 'audit-csca'], ['CSCA certificate PEM', 'public-certificate'], ['Certificate chain PEM (optional)', 'public-chain']],
+      },
+      { name: 'CSR generation', identity: cscaIdentity, open: 'Enroll public CSCA trust anchor', submit: 'Generate KMS-backed CSR', api: generateIssuerIdentityCsr, fields: subjectFields },
+    ];
+    const fillFields = async (user: ReturnType<typeof renderWithRouter>['user'], fields: string[][]) => {
+      for (const [label, value] of fields) await user.type(screen.getByRole('textbox', { name: label }), value);
+    };
+    const deferred = () => {
+      let resolve!: (value: unknown) => void;
+      let reject!: (reason: Error) => void;
+      const promise = new Promise((resolvePromise, rejectPromise) => { resolve = resolvePromise; reject = rejectPromise; });
+      return { promise, resolve, reject };
+    };
+    const openCertificateDialog = async () => {
+      listPublicIssuerIdentities.mockResolvedValue({ identities: [cscaIdentity] });
+      const view = renderWithRouter(<DidIdentitiesPage />);
+      await screen.findByText(cscaIdentity.issuer_did);
+      await view.user.click(screen.getByRole('button', { name: 'Enroll public CSCA trust anchor' }));
+      return { ...view, dialog: screen.getByRole('dialog') };
+    };
+
+    it.each(operations)('shows $name failures inside the open dialog and retries the preserved request', async (operation) => {
+      const message = `${operation.name} was rejected`;
+      operation.api.mockRejectedValueOnce(new Error(message));
+      listPublicIssuerIdentities.mockResolvedValue({ identities: [operation.identity] });
+      const { user } = renderWithRouter(<DidIdentitiesPage />);
+      await screen.findByText(operation.identity.issuer_did);
+      await user.click(screen.getByRole('button', { name: operation.open }));
+      const dialog = screen.getByRole('dialog');
+      await fillFields(user, operation.fields);
+      await user.click(within(dialog).getByRole('button', { name: operation.submit }));
+
+      const feedback = await within(dialog).findByText(message);
+      expect(feedback.closest('[role="alert"]')).toBeVisible();
+      expect(operation.api).toHaveBeenCalledTimes(1);
+      expect(listPublicIssuerIdentities).toHaveBeenCalledTimes(1);
+      for (const [label, value] of operation.fields) expect(within(dialog).getByRole('textbox', { name: label })).toHaveValue(value);
+      const firstRequest = operation.api.mock.calls[0][0];
+
+      await user.click(within(dialog).getByRole('button', { name: operation.submit }));
+      await waitFor(() => expect(operation.api).toHaveBeenCalledTimes(2));
+      expect(operation.api.mock.calls[1][0]).toEqual(firstRequest);
+      expect(screen.queryByText(message)).not.toBeInTheDocument();
+      if (operation.name === 'CSR generation') {
+        expect((within(dialog).getByRole('textbox', { name: 'Certificate Signing Request (PEM)' }) as HTMLTextAreaElement).value).toContain('BEGIN CERTIFICATE REQUEST');
+      } else {
+        await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      }
+    });
+
+    it('keeps certificate and CSR errors with their own draft and clears canceled feedback before a new intent', async () => {
+      enrollCscaCertificate.mockRejectedValueOnce(new Error('Certificate does not match the identity'));
+      generateIssuerIdentityCsr.mockRejectedValueOnce(new Error('CSR subject is not accepted'));
+      const { user, dialog } = await openCertificateDialog();
+      await fillFields(user, [['CSCA certificate ID', 'audit-csca'], ['CSCA certificate PEM', 'certificate-A'], ...subjectFields]);
+      await user.click(within(dialog).getByRole('button', { name: 'Enroll trust anchor' }));
+      await within(dialog).findByText('Certificate does not match the identity');
+      await user.click(within(dialog).getByRole('button', { name: 'Generate KMS-backed CSR' }));
+      await within(dialog).findByText('CSR subject is not accepted');
+
+      await user.type(within(dialog).getByRole('textbox', { name: 'Common name (CN)' }), ' corrected');
+      expect(within(dialog).queryByText('CSR subject is not accepted')).not.toBeInTheDocument();
+      expect(within(dialog).getByText('Certificate does not match the identity')).toBeVisible();
+      await user.type(within(dialog).getByRole('textbox', { name: 'CSCA certificate PEM' }), '-corrected');
+      expect(within(dialog).queryByText('Certificate does not match the identity')).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('textbox', { name: 'CSCA certificate ID' })).toHaveValue('audit-csca');
+
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByText(cscaIdentity.issuer_did)).toBeVisible();
+      expect(listPublicIssuerIdentities).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText('CSR subject is not accepted')).not.toBeInTheDocument();
+      expect(screen.queryByText('Certificate does not match the identity')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Move identity to default signing service' }));
+      expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('does not leave canceled retirement feedback in the inventory or a reopened dialog', async () => {
+      deleteIssuerIdentity.mockRejectedValueOnce(new Error('Retirement refused'));
+      const { user } = renderWithRouter(<DidIdentitiesPage />);
+      await screen.findByText('did:web:issuer.example:orgs:test');
+      await user.click(screen.getByRole('button', { name: 'Retire identity' }));
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Retire identity' }));
+      await within(screen.getByRole('dialog')).findByText('Retirement refused');
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.queryByText('Retirement refused')).not.toBeInTheDocument();
+      expect(screen.getByText('did:web:issuer.example:orgs:test')).toBeVisible();
+      expect(listPublicIssuerIdentities).toHaveBeenCalledTimes(1);
+      await user.click(screen.getByRole('button', { name: 'Retire identity' }));
+      expect(within(screen.getByRole('dialog')).queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it.each(subjectFields)('invalidates an existing CSR when %s changes and does not restore it after a failed new request', async (label) => {
+      const { user, dialog } = await openCertificateDialog();
+      await fillFields(user, subjectFields);
+      await user.click(within(dialog).getByRole('button', { name: 'Generate KMS-backed CSR' }));
+      await within(dialog).findByRole('textbox', { name: 'Certificate Signing Request (PEM)' });
+      const field = within(dialog).getByRole('textbox', { name: label });
+      await user.clear(field);
+      await user.type(field, label === 'Country code (C)' ? 'CA' : 'Subject B');
+      expect(within(dialog).queryByRole('textbox', { name: 'Certificate Signing Request (PEM)' })).not.toBeInTheDocument();
+
+      generateIssuerIdentityCsr.mockRejectedValueOnce(new Error('New CSR unavailable'));
+      await user.click(within(dialog).getByRole('button', { name: 'Generate KMS-backed CSR' }));
+      await within(dialog).findByText('New CSR unavailable');
+      expect(within(dialog).queryByRole('textbox', { name: 'Certificate Signing Request (PEM)' })).not.toBeInTheDocument();
+      expect(field).toHaveValue(label === 'Country code (C)' ? 'CA' : 'Subject B');
+    });
+
+    it('clears the previous CSR before a fresh request and freezes the subject until that request settles', async () => {
+      const { user, dialog } = await openCertificateDialog();
+      await fillFields(user, subjectFields);
+      await user.click(within(dialog).getByRole('button', { name: 'Generate KMS-backed CSR' }));
+      await within(dialog).findByRole('textbox', { name: 'Certificate Signing Request (PEM)' });
+      const pending = deferred();
+      generateIssuerIdentityCsr.mockImplementationOnce(() => pending.promise);
+      await user.click(within(dialog).getByRole('button', { name: 'Generate KMS-backed CSR' }));
+      await waitFor(() => expect(generateIssuerIdentityCsr).toHaveBeenCalledTimes(2));
+      expect(within(dialog).queryByRole('textbox', { name: 'Certificate Signing Request (PEM)' })).not.toBeInTheDocument();
+      for (const [label, value] of subjectFields) {
+        const field = within(dialog).getByRole('textbox', { name: label });
+        expect(field).toBeDisabled();
+        await user.type(field, 'changed');
+        expect(field).toHaveValue(value);
+      }
+      expect(within(dialog).getByRole('textbox', { name: 'CSCA certificate PEM' })).toBeDisabled();
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+      expect(generateIssuerIdentityCsr.mock.calls[1][0]).toEqual(generateIssuerIdentityCsr.mock.calls[0][0]);
+      await act(async () => pending.resolve({ csr_pem: 'fresh-subject-A-csr' }));
+      expect(within(dialog).getByRole('textbox', { name: 'Certificate Signing Request (PEM)' })).toHaveValue('fresh-subject-A-csr');
+      expect(within(dialog).getByRole('textbox', { name: 'Common name (CN)' })).toBeEnabled();
+    });
+
+    it.each(operations)('ignores an old organization $name failure while a replacement dialog is pending', async (operation) => {
+      const oldRequest = deferred();
+      const newRequest = deferred();
+      operation.api.mockImplementationOnce(() => oldRequest.promise).mockImplementationOnce(() => newRequest.promise);
+      listPublicIssuerIdentities.mockImplementation(async ({ organization_id: organizationId }) => ({
+        identities: [{ ...operation.identity, issuer_did: `did:web:issuer.example:${organizationId}` }],
+      }));
+      const { user, rerender } = renderWithRouter(<DidIdentitiesPage />);
+      await screen.findByText('did:web:issuer.example:org-test-1');
+      await user.click(screen.getByRole('button', { name: operation.open }));
+      await fillFields(user, operation.fields);
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: operation.submit }));
+      await waitFor(() => expect(operation.api).toHaveBeenCalledTimes(1));
+      orgState.activeOrgId = 'org-test-2';
+      rerender(<DidIdentitiesPage />);
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      await screen.findByText('did:web:issuer.example:org-test-2');
+      await user.click(screen.getByRole('button', { name: operation.open }));
+      const replacement = screen.getByRole('dialog');
+      await fillFields(user, operation.fields);
+      await user.click(within(replacement).getByRole('button', { name: operation.submit }));
+      await waitFor(() => expect(operation.api).toHaveBeenCalledTimes(2));
+
+      await act(async () => oldRequest.reject(new Error('Old organization failure')));
+      expect(screen.queryByText('Old organization failure')).not.toBeInTheDocument();
+      expect(within(replacement).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+      expect(listPublicIssuerIdentities).toHaveBeenCalledTimes(2);
+      expect(showNotification).not.toHaveBeenCalled();
+      await act(async () => newRequest.resolve({ changed: true, csr_pem: 'new-organization-csr' }));
+      expect(operation.api.mock.calls[1][0].organization_id).toBe('org-test-2');
+    });
+
+    it.each([operations[0], operations[1], operations[4]].flatMap((operation) =>
+      ['failure', 'success'].map((settlement) => ({ ...operation, settlement })),
+    ))('abandons a late $name $settlement after grant loss without affecting a reopened dialog', async (operation) => {
+      const pending = deferred();
+      operation.api.mockImplementationOnce(() => pending.promise);
+      listPublicIssuerIdentities.mockResolvedValue({ identities: [operation.identity] });
+      const { user, rerender } = renderWithRouter(<DidIdentitiesPage />);
+      await screen.findByText(operation.identity.issuer_did);
+      await user.click(screen.getByRole('button', { name: operation.open }));
+      await fillFields(user, operation.fields);
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: operation.submit }));
+      await waitFor(() => expect(operation.api).toHaveBeenCalledTimes(1));
+      can.mockImplementation((resource: string, action: string) => resource === 'signing-key' && action !== (operation.name === 'retirement' ? 'delete' : 'create'));
+      rerender(<DidIdentitiesPage />);
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      can.mockImplementation((resource: string) => resource === 'signing-key');
+      rerender(<DidIdentitiesPage />);
+      await user.click(screen.getByRole('button', { name: operation.open }));
+      const replacement = screen.getByRole('dialog');
+      await act(async () => {
+        if (operation.settlement === 'failure') pending.reject(new Error('Obsolete permission failure'));
+        else pending.resolve({ changed: true, csr_pem: 'obsolete-permission-csr' });
+      });
+      expect(screen.getByRole('dialog')).toBe(replacement);
+      expect(replacement).toBeVisible();
+      expect(screen.queryByText('Obsolete permission failure')).not.toBeInTheDocument();
+      expect(screen.queryByDisplayValue('obsolete-permission-csr')).not.toBeInTheDocument();
+      expect(within(replacement).getByRole('button', { name: 'Cancel' })).toBeEnabled();
+      expect(operation.api).toHaveBeenCalledTimes(1);
+      expect(listPublicIssuerIdentities).toHaveBeenCalledTimes(1);
+      expect(showNotification).not.toHaveBeenCalled();
+    });
   });
 });

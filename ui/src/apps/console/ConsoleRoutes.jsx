@@ -33,6 +33,7 @@ import {
   TemplatesPage,
   CredentialTemplatesPage,
   CredentialTemplateDetailPage,
+  CredentialTemplateEditorPage,
   ApplicationTemplatesPage,
   ApplicationTemplateEditorPage,
   ApplicationTemplateDetailPage,
@@ -188,6 +189,7 @@ function ConsoleRoutes() {
         <Route path="templates/credentials" element={<CredentialTemplatesPage />} />
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
         <Route path="templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
+        <Route path="templates/credentials/:templateId/edit" element={<CredentialTemplateEditorPage />} />
         <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
         <Route path="templates/applications/new" element={<ApplicationTemplateEditorPage />} />
         <Route path="templates/applications/:templateId" element={<ApplicationTemplateDetailPage />} />

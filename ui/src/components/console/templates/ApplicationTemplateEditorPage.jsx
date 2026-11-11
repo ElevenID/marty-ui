@@ -9,6 +9,8 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 
@@ -26,6 +28,7 @@ import {
 import ApplicationEvidenceEditor from './ApplicationEvidenceEditor';
 import DraftListField from './DraftListField';
 import { formatFieldOptions, parseFieldOptions } from './applicationFieldOptions';
+import { CHECK_TYPE_LABELS } from '../../../config/checkConstants';
 
 const EMPTY = {
   name: '', description: '', credential_template_id: '',
@@ -98,9 +101,15 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   const [data, setData] = useState(EMPTY);
   const [fieldRows, setFieldRows] = useState([]);
   const [claimRows, setClaimRows] = useState([]);
+  const [checkDraft, setCheckDraft] = useState({ rows: [], edited: false });
+  const checkRows = checkDraft.rows;
+  const [newCheckType, setNewCheckType] = useState('');
   const nextRowId = useRef(0);
   const formFields = fieldRows.map(({ field }) => field);
   const claimRules = claimRows.map(({ rule }) => rule);
+  const requiredChecks = checkDraft.edited
+    ? checkRows.map(({ check }, index) => ({ ...check, order: index + 1 }))
+    : data.required_checks;
   const [credentialTemplates, setCredentialTemplates] = useState([]);
   const [approvalPolicySets, setApprovalPolicySets] = useState([]);
   const [policySetsError, setPolicySetsError] = useState('');
@@ -145,6 +154,11 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         setData({ ...EMPTY, ...details });
         setFieldRows((form_fields || []).map((field) => ({ rowId: nextRowId.current++, field })));
         setClaimRows((claim_collection_rules || []).map((rule) => ({ rowId: nextRowId.current++, rule })));
+        setCheckDraft({
+          rows: [...(existing.required_checks || [])].sort((left, right) => left.order - right.order)
+            .map((check) => ({ rowId: nextRowId.current++, check })),
+          edited: false,
+        });
         setResourceReady(true);
         if (String(existing.status || '').toUpperCase() !== 'DRAFT') {
           setError('Only draft Application Templates can be edited.');
@@ -200,6 +214,28 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
     ruleIndex === index ? { ...row, rule: { ...row.rule, ...changes } } : row
   )));
 
+  const addCheck = () => {
+    const check_type = newCheckType.trim();
+    if (!check_type) return;
+    const row = { rowId: nextRowId.current++, check: { check_type, is_required: true } };
+    setCheckDraft((current) => ({ rows: [...current.rows, row], edited: true }));
+    setNewCheckType('');
+  };
+
+  const moveCheck = (rowId, direction) => setCheckDraft((current) => {
+    const index = current.rows.findIndex((row) => row.rowId === rowId);
+    const destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= current.rows.length) return current;
+    const moved = [...current.rows];
+    [moved[index], moved[destination]] = [moved[destination], moved[index]];
+    return { rows: moved, edited: true };
+  });
+
+  const removeCheck = (rowId) => setCheckDraft((current) => {
+    const rows = current.rows.filter((row) => row.rowId !== rowId);
+    return rows.length === current.rows.length ? current : { rows, edited: true };
+  });
+
   const updateEvidenceSource = (index, key, value) => {
     const sourceConfig = { ...claimRules[index].source_config };
     if (value) sourceConfig[key] = value;
@@ -222,6 +258,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
       setError(validityDaysError);
       return;
     }
+    if (newCheckType.trim()) {
+      setError('Add the entered check type or clear it before saving.');
+      return;
+    }
     if (invalidEvidence) {
       setError('Complete every required Evidence field before saving.');
       return;
@@ -241,7 +281,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         credential_template_id: data.credential_template_id,
         form_fields: formFields,
         evidence_requirements: data.evidence_requirements,
-        required_checks: data.required_checks,
+        required_checks: requiredChecks,
         claim_collection_rules: claimRules,
         approval_strategy: data.approval_strategy,
         approval_policy_set_id: data.approval_strategy === 'RULES_BASED' ? data.approval_policy_set_id : null,
@@ -379,7 +419,38 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
 
           {advanced && (
             <>
-              <DraftListField label="Required checks" helperText="Comma-separated check types" value={(data.required_checks || []).map((item) => item.check_type).filter(Boolean)} onChange={(values) => setData((current) => ({ ...current, required_checks: values.map((check_type, index) => ({ check_type, is_required: true, order: index + 1 })) }))} />
+              <Box>
+                <Typography variant="h6" sx={{ mb: 1 }}>Required checks</Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                  Move or remove each check separately. Its existing settings stay with it, even when check types repeat.
+                </Typography>
+                <Stack spacing={1}>
+                  {checkRows.map(({ rowId, check }, index) => {
+                    const label = CHECK_TYPE_LABELS[check.check_type] || check.check_type;
+                    return <Paper key={rowId} role="group" aria-label={`Check ${index + 1}: ${label}`} variant="outlined" sx={{ p: 1.5 }}>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+                        <Box sx={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>
+                          <Typography>{index + 1}. {label}</Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {check.is_required === false ? 'Optional' : 'Required'}
+                            {check.external_provider ? ` · Provider: ${check.external_provider}` : ''}
+                            {Object.keys(check.config || {}).length > 0 ? ' · Custom settings configured' : ''}
+                          </Typography>
+                        </Box>
+                        <IconButton aria-label={`Move check ${index + 1}: ${label} up`} disabled={index === 0} onClick={() => moveCheck(rowId, -1)}><ArrowUpwardIcon /></IconButton>
+                        <IconButton aria-label={`Move check ${index + 1}: ${label} down`} disabled={index === checkRows.length - 1} onClick={() => moveCheck(rowId, 1)}><ArrowDownwardIcon /></IconButton>
+                        <IconButton aria-label={`Remove check ${index + 1}: ${label}`} onClick={() => removeCheck(rowId)}><DeleteIcon /></IconButton>
+                      </Stack>
+                    </Paper>;
+                  })}
+                </Stack>
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1.5, alignItems: { sm: 'flex-start' } }}>
+                  <TextField label="New check type" value={newCheckType} onChange={(event) => setNewCheckType(event.target.value)}
+                    helperText={newCheckType.trim() ? 'Select Add check or clear this entry before saving.' : 'Enter one check type, then select Add check.'}
+                    placeholder="identity_verification" sx={{ flex: 1 }} />
+                  <Button startIcon={<AddIcon />} onClick={addCheck} disabled={!newCheckType.trim()}>Add check</Button>
+                </Stack>
+              </Box>
               <Box>
                 <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="h6">Claim collection rules</Typography>
@@ -457,7 +528,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         </Stack>
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end', mt: 2.5 }}>
           <Button onClick={leaveEditor}>Cancel</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || Boolean(validityDaysError) || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
+          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || Boolean(validityDaysError) || Boolean(newCheckType.trim()) || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
         </Stack>
       </Box>
     </Container>
