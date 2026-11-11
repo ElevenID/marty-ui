@@ -7,7 +7,8 @@ import ConsoleRoutes from './ConsoleRoutes';
 import { TeamSnapshotPanel } from '../../components/console/dashboard/TeamSnapshotPanel';
 import { SetupReadinessPanel } from '../../components/console/dashboard/SetupReadinessPanel';
 
-const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions } = vi.hoisted(() => ({
+const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions, mockCredentialTemplates } = vi.hoisted(() => ({
+  mockCredentialTemplates: vi.fn().mockResolvedValue([]),
   mockUsePermissions: vi.fn(),
   mockLogin: vi.fn(),
   mockUseAuth: vi.fn(),
@@ -32,7 +33,7 @@ vi.mock('../../services/api', () => ({
 vi.mock('../../services/presentationPolicyApi', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../services/presentationPolicyApi')>(),
   listPresentationPolicies: vi.fn().mockResolvedValue([]),
-  listCredentialTemplates: vi.fn().mockResolvedValue([]),
+  listCredentialTemplates: (...args: unknown[]) => mockCredentialTemplates(...args),
   listTrustProfiles: vi.fn().mockResolvedValue([]),
 }));
 
@@ -97,7 +98,8 @@ vi.mock('../../components/console', async () => ({
   TrustProfileDetailPage: () => <div data-testid="trust-profile-detail-page" />,
   TrustProfileEditPage: () => <div data-testid="trust-profile-edit-page" />,
   TemplatesPage: () => <div data-testid="templates-page" />,
-  CredentialTemplatesPage: () => <div data-testid="credential-templates-page" />,
+  CredentialTemplatesPage: (await import('../../components/console/templates/CredentialTemplatesPage')).default,
+  CredentialTemplateEditorPage: () => <div data-testid="credential-template-editor-page" />,
   CredentialTemplateDetailPage: () => <div data-testid="credential-template-detail-page" />,
   ApplicationTemplatesPage: () => <div data-testid="application-templates-page" />,
   ApplicationTemplateEditorPage: () => <div data-testid="application-template-editor-page" />,
@@ -172,9 +174,20 @@ function renderConsoleRoutes(path: string, navigation?: ReactNode) {
 describe('resource navigation through the console route table', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCredentialTemplates.mockResolvedValue([]);
     mockUseAuth.mockReturnValue({ isAuthenticated: true, isLoading: false });
     mockUseConsole.mockReturnValue({ mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }], isLoading: false });
     mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
+  });
+
+  it.each(['draft', 'active', 'deprecated', 'archived'])('opens the registered editor from the %s credential-template row action', async (status) => {
+    mockCredentialTemplates.mockResolvedValue([{ id: 'template-1', organization_id: 'org-1', name: 'Audit template', status, claims: [] }]);
+    const { user } = renderConsoleRoutes('/console/org/templates/credentials');
+    await screen.findByText('Audit template');
+    await user.click(screen.getByRole('link', { name: status === 'draft' ? 'Edit settings for Audit template' : 'Create a draft version of Audit template' }));
+    expect(await screen.findByTestId('credential-template-editor-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/templates/credentials/template-1/edit');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
   });
 
   it('keeps the retired Role Requests deep link useful without requiring Team access', async () => {
