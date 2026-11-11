@@ -2921,7 +2921,7 @@ jobs:
       needs.changes.outputs.verification == 'true' ||
       needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
