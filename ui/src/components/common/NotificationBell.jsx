@@ -47,8 +47,15 @@ function ScopedNotificationBell({ organizationId, recipientId }) {
   </>;
 }
 export default function NotificationBell() {
-  const { activeOrgId } = useConsole(); const { user } = useAuth(); const { can, isLoading } = usePermissions();
+  const { t } = useTranslation('common');
+  const { activeOrgId } = useConsole(); const { user } = useAuth(); const { can, isLoading, error, refresh } = usePermissions();
   const recipientId = user?.sub || user?.id || user?.user_id;
-  if (!activeOrgId || !recipientId || isLoading || !can('notification', 'view')) return null;
+  if (!activeOrgId || !recipientId || isLoading) return null;
+  if (error) return <Tooltip title={t('notifications.loadError')} describeChild>
+    <IconButton onClick={refresh} size="small" sx={{ color: 'white' }} aria-label={t('notifications.retry')}>
+      <Badge badgeContent="!" color="error"><NotificationsNoneIcon /></Badge>
+    </IconButton>
+  </Tooltip>;
+  if (!can('notification', 'view')) return null;
   return <ScopedNotificationBell key={`${activeOrgId}:${recipientId}`} organizationId={activeOrgId} recipientId={recipientId} />;
 }

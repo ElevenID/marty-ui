@@ -183,6 +183,8 @@
   },
   "notifications": {
     "title": "Notifications",
+    "loadError": "Notifications could not be loaded.",
+    "retry": "Retry notifications",
     "unreadCount": "{{count}} unread notifications",
     "unreadCount_one": "{{count}} unread notification",
     "markAllRead": "Mark all read",
