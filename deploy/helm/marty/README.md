@@ -180,6 +180,24 @@ Do not put `SMTP_PASSWORD` or `KEYCLOAK_SMTP_PASSWORD` in `config`: these keys
 are rejected so a credential cannot be written into the ConfigMap or
 Helm values history.
 
+The same boundary applies to the other private catalog values, including
+database passwords and credential-bearing database URLs, API keys, webhook
+secrets, OpenBao tokens and the initial administrator password. Rendering
+refuses their scalar environment names and runtime aliases in `config`,
+including aliases for catalog entries that accept only file inputs. This also
+covers the OIDC client secret and the private verification governance registry.
+The guard applies even when the Keycloak configurator is disabled and does not
+print the supplied value. Provide private values through the existing
+Kubernetes Secrets contract.
+`config` is distributed as a nonsecret ConfigMap; use it for customer policy,
+public endpoints, SMTP usernames, KMS key names/versions and mounted file paths.
+The packaged private-key list is checked against the source secret catalogs.
+
+Set `canvasWorker.enabled: false` as a YAML boolean to omit the Canvas sync
+worker when the installation does not use that integration. The chart rejects
+quoted strings such as `'false'` instead of treating them as enabled. This
+switch does not disable the application APIs or other installation workloads.
+
 The generated ConfigMap also sets the Canvas worker's `ISSUER_BASE_URL` to the
 installation origin and `CANVAS_OAUTH_COMPLETION_REDIRECT_URL` to that origin
 plus `/console/org/deploy/canvas`, preserving a configured HTTPS port. Explicit

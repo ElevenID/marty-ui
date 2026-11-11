@@ -169,6 +169,39 @@ def test_customer_valid_ga_identifier_is_safe_javascript(tmp_path):
     assert runtime_config(target)["googleAnalyticsMeasurementId"] == "G-TEST123"
 
 
+@pytest.mark.parametrize("audience", ["selfhost", "production"])
+@pytest.mark.parametrize("source_kind", ["environment", "file"])
+def test_multiline_site_verification_is_refused_before_replacing_assets(
+    tmp_path, audience, source_kind,
+):
+    target, source = tmp_path / "target", tmp_path / "source"
+    target.mkdir()
+    source.mkdir()
+    retained = '<html><head></head><body>Retained customer page</body></html>'
+    (target / "index.html").write_text(retained)
+    (source / "index.html").write_text('<html><!-- SELFHOST_GOOGLE_SITE_VERIFICATION --></html>')
+    script_name = "ui-selfhost-start.sh" if audience == "selfhost" else "ui-production-start.sh"
+    script = (ROOT / "scripts" / script_name).read_text()
+    script = script.replace('TARGET_DIR="/usr/share/nginx/html"', "TARGET_DIR=" + shlex.quote(str(target)))
+    script = script.replace('SOURCE_DIR="/opt/marty-ui-static"', "SOURCE_DIR=" + shlex.quote(str(source)))
+    script = script.replace(". /scripts/load-secrets-env.sh", ". " + shlex.quote(str(ROOT / "scripts/load-secrets-env.sh")))
+    value = "first-public-proof-line\nsecond-public-proof-line"
+    env = {"PATH": os.environ["PATH"]}
+    if source_kind == "file":
+        selected_file = tmp_path / "verification"
+        selected_file.write_text(value + "\r\n")
+        env["GOOGLE_SITE_VERIFICATION_FILE"] = str(selected_file)
+    else:
+        env["GOOGLE_SITE_VERIFICATION"] = value
+
+    result = subprocess.run(["/bin/sh"], input=script, env=env, text=True,
+                            capture_output=True, check=False, timeout=5)
+    assert result.returncode != 0
+    assert result.stderr == "GOOGLE_SITE_VERIFICATION must be a single-line value\n"
+    assert (target / "index.html").read_text() == retained
+    assert not (target / "runtime-config.js").exists()
+
+
 def test_production_runtime_config_is_not_immutable_and_basic_google_endpoints_are_allowed():
     config = (ROOT / "ui/nginx.prod.conf").read_text()
     runtime = config.split("location = /runtime-config.js {", 1)[1].split("}", 1)[0]

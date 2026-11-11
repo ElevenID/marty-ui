@@ -36,7 +36,13 @@ load_secret_var() {
             exit 1
         fi
 
-        value="$(tr -d '\r' < "${file_path}")"
+        # Callers also source this script in an && list, where shell errexit
+        # does not stop a failed read. Never launch with a partial/empty value
+        # after the selected file reader fails, and keep its output private.
+        if ! value="$(tr -d '\r' 2>/dev/null < "${file_path}")"; then
+            echo "Secret file for ${var_name} could not be read before startup." >&2
+            exit 1
+        fi
         export "${var_name}=${value}"
         unset "${file_var_name}"
     fi

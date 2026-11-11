@@ -22,6 +22,12 @@ fresh-database setup and databases that already ran the historical Alembic
 revisions, and removes the last schema/seed dependency on the removed Python
 service.
 
+The default profile belongs to the configured `MARTY_ORG_ID`. If its stable ID
+already belongs to another organization, startup and migration-only execution
+fail and roll back that migration transaction. A changed deployment setting is
+not a tenant transfer. For the same owner, retained profile settings, public
+status-list URLs and timestamps remain unchanged by the default-profile seed.
+
 Allocation rows intentionally outlive profile deletion. They are immutable
 scope tombstones that prevent a stable credential ID from being rebound to a
 different organization, profile, or status-list format.

@@ -145,9 +145,14 @@ false
 {{- $host := include "marty.publicHost" . -}}
 {{- $email := required "organization.adminEmail must identify the installation operator" .Values.organization.adminEmail -}}
 {{- $origin := include "marty.publicOrigin" . -}}
-{{- range $key := list "SMTP_PASSWORD" "KEYCLOAK_SMTP_PASSWORD" -}}
+{{- $privateKeys := required "chart private configuration key contract is missing" (.Files.Get "files/private-config-keys.yaml") | fromYamlArray -}}
+{{- range $key := $privateKeys -}}
 {{- if hasKey $.Values.config $key -}}
+{{- if has $key (list "SMTP_PASSWORD" "KEYCLOAK_SMTP_PASSWORD") -}}
 {{- fail (printf "config.%s is a credential: put SMTP_PASSWORD in the existing marty-secrets Secret (name selected by existingSecrets.marty-secrets), not in Helm values" $key) -}}
+{{- else -}}
+{{- fail (printf "config.%s is private installation data: use the catalog's existing Kubernetes Secrets selected by existingSecrets, not Helm values" $key) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- $did := .Values.organization.did | default (printf "did:web:%s:orgs:%s" (replace ":" "%3A" (trimSuffix "/" (trimPrefix "https://" $origin))) .Values.organization.slug) -}}
