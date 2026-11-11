@@ -106,6 +106,7 @@ fn options(args: &[String]) -> Result<Options> {
         docker_host: host.clone(),
         engine_id: engine.clone(),
         openbao_port: 18200,
+        profile: crate::installer_state::RuntimeProfile::Rootful,
     }
     .validate()?;
     Ok(Options {
@@ -271,6 +272,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             .local_addr()
             .map_err(|_| "cannot inspect local port")?
             .port(),
+        profile: crate::installer_state::RuntimeProfile::Rootful,
     };
     let docker = o.docker.as_path();
     let observed = crate::installer_runtime::DockerRunner::new(
@@ -307,6 +309,9 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     eprintln!("Marty installation state: {}", directory.display());
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
+    if testing.is_none() {
+        state.persist_initial_creation_receipt(&directory)?;
+    }
     if let Some((bytes, _)) = &admitted {
         persist_signed(&mut state, &o.admission, "installer-admission.json", bytes)?;
     } else if let Some((bytes, _)) = &testing {
@@ -419,6 +424,7 @@ pub(crate) fn provision_runtime(
     .map_err(|_| "packaged Keycloak realm invalid")?;
     state.advance(Phase::Provisioning)?;
     state.generate_local_credentials(&realm)?;
+    state.persist_credential_creation_receipt(installation)?;
     drop(port_reservation);
     let plugin = inventory
         .images

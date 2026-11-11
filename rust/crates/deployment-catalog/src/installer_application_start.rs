@@ -315,6 +315,7 @@ pub fn start(
     prepared: PreparedApplication,
 ) -> Result<ApplicationStartReceipt> {
     state.require_live_phase(Phase::Provisioning)?;
+    let applicant_gid = state.validate_applicant_storage()?;
     let PreparedApplication {
         plan,
         origin: _,
@@ -326,7 +327,10 @@ pub fn start(
     require(
         plan.model["name"] == project
             && plan.expected_network_id == bao.network_id
-            && !plan.installation_ready,
+            && !plan.installation_ready
+            && plan.model["services"]["applicant"].get("user").is_none()
+            && plan.model["services"]["applicant"]["group_add"]
+                == json!([applicant_gid.to_string()]),
     )?;
     let roles = graph::startup_order(&plan.model, &plan.selected_services)?;
     let volume = text(&plan.model["volumes"]["redis-socket"]["name"])?.to_owned();

@@ -926,7 +926,8 @@ services:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
         target: /app/data
-    user: "0:0"
+    group_add:
+      - "${APPLICANT_STATE_GID:?APPLICANT_STATE_GID must match the provisioned state group}"
     depends_on:
       db-migrate:
         condition: service_completed_successfully

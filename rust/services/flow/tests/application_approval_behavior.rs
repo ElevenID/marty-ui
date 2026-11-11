@@ -326,3 +326,35 @@ fn changed_claims_change_semantics_without_changing_v1_logical_identity() {
         second.planned_flows[0].plan_entry["offer_semantics_hash"]
     );
 }
+
+#[test]
+fn signed_manual_offer_lifetime_is_trusted_and_changes_retry_semantics() {
+    let definitions = vec![definition("flow-1", "template-1")];
+    let mut manual = event();
+    manual.data.insert(
+        "triggered_by_event".into(),
+        json!("application.manual_issue"),
+    );
+    manual.data.insert(
+        "issuance_attempt_id".into(),
+        json!("11111111-1111-4111-8111-111111111111"),
+    );
+    let before = prepare_application_event_plan(&manual, &evidence(), &definitions, now()).unwrap();
+    manual.data.insert("offer_ttl_seconds".into(), json!(60));
+    let short = prepare_application_event_plan(&manual, &evidence(), &definitions, now()).unwrap();
+    assert_eq!(
+        short.planned_flows[0].instance.context["_marty_offer_ttl_seconds"],
+        json!(60)
+    );
+    assert_ne!(
+        before.planned_flows[0].plan_entry["offer_semantics_hash"],
+        short.planned_flows[0].plan_entry["offer_semantics_hash"]
+    );
+    for invalid in [json!(null), json!(-1), json!(1.5), json!("60")] {
+        manual.data.insert("offer_ttl_seconds".into(), invalid);
+        assert!(prepare_application_event_plan(&manual, &evidence(), &definitions, now()).is_err());
+    }
+    manual.data.insert("offer_ttl_seconds".into(), json!(60));
+    manual.data.remove("triggered_by_event");
+    assert!(prepare_application_event_plan(&manual, &evidence(), &definitions, now()).is_err());
+}

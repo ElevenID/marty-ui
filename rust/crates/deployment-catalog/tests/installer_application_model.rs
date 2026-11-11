@@ -106,6 +106,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         .collect::<String>();
     let parameters = ApplicationParameters {
         installation: installation.clone(),
+        applicant_state_gid: 10001,
         version: "v1.2.3".into(),
         origin: "https://localhost:18443".into(),
         gateway_port: 18000,
@@ -141,6 +142,7 @@ fn actual_source_compose_matches_installer_application_contract() {
         &images,
         &ApplicationModelParameters {
             installation: installation.clone(),
+            applicant_state_gid: 10001,
             bundle: bundle.clone(),
             compose_project: project.clone(),
             openbao_network_name: format!("{project}-bao_default"),

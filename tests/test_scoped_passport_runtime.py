@@ -46,13 +46,14 @@ def runtime_rows():
         name = shared.ROLE_BINARIES.get(role, "marty-source-only")
         before["roles"].append({"role": role, "binary": name, "containerId": f"{index+1:064x}", "imageId": "sha256:" + "a" * 64,
             "hostPid": index + 100, "startedAt": "2026-10-27T15:00:00Z", "health": "healthy", "effectiveUid": 1000, "configuredRuntimeUid": 1000,
-            "source": "SOURCE_ONLY_OLD", "sha256": "a" * 64, "processExecutableSha256": "a" * 64,
+            "source": "SOURCE_ONLY_OLD", "coreSource": "SOURCE_ONLY_OLD_CORE", "sha256": "a" * 64, "processExecutableSha256": "a" * 64,
             "executablePath": "/usr/local/bin/" + name, "project": "elevenid-beta", "kind": "native",
             "binaryMounts": [{"type": "bind", "source": "/old/" + name, "destination": "/usr/local/bin/" + name, "writable": False}]})
     after = copy.deepcopy(before)
     for index, row in enumerate(after["roles"]):
         if row["role"] in binaries:
-            row.update(containerId=f"{index+101:064x}", source=shared.UI_REVISION, sha256="b" * 64,
+            row.update(containerId=f"{index+101:064x}", source=shared.UI_REVISION, coreSource=shared.CORE_REVISION,
+                       kind="SCOPED_NATIVE_FUNCTIONAL_OVERLAY", sha256="b" * 64,
                        processExecutableSha256="b" * 64, startedAt="2026-10-27T16:00:00Z", hostPid=index+500)
             row["binaryMounts"][0]["source"] = binaries[row["role"]]["path"]
     return before, after, binaries
@@ -269,9 +270,10 @@ class OverlayTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "EXACT_22_ROLE_SET_REQUIRED"):
                 overlay.validate_runtime_after(before, after, binaries, [])
 
-    def test_foreign_selected_image_uid_source_or_inode_never_becomes_overlay(self):
+    def test_foreign_selected_image_uid_lineage_or_inode_never_becomes_overlay(self):
         before, after, binaries = runtime_rows()
         for field, value in [("imageId", "sha256:"+"c"*64), ("effectiveUid", 0), ("source", "wrong"),
+                             ("coreSource", "44040270000f93b7e7499cbec31b3bb3dd7e3df1"), ("kind", "native"),
                              ("processExecutableSha256", "c"*64), ("startedAt", "not-a-time"), ("project", "foreign"),
                              ("requiredObservation", {"legacy": True})]:
             changed = copy.deepcopy(after)

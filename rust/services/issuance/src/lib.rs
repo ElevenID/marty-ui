@@ -116,6 +116,7 @@ pub mod integration_secret;
 pub mod integration_secret_kms;
 pub mod internal_application_approval;
 mod internal_application_diagnostics;
+pub mod offer_lifetime;
 #[cfg(feature = "feature-regression-observer")]
 pub use internal_application_diagnostics::observe_internal_application_diagnostics;
 pub mod internal_application_domain;

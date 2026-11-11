@@ -165,6 +165,9 @@ impl From<ServiceError> for ApiError {
             | ServiceError::InactiveEvidence
             | ServiceError::NoActiveFlow
             | ServiceError::Domain(ApplicantError::Locked(_)) => StatusCode::CONFLICT,
+            ServiceError::Provider(crate::service::ProviderError::InvalidOfferLifetime) => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             ServiceError::Provider(_) => StatusCode::SERVICE_UNAVAILABLE,
             ServiceError::Domain(ApplicantError::EvidenceSize { .. }) => {
                 StatusCode::PAYLOAD_TOO_LARGE
@@ -1159,10 +1162,17 @@ async fn complete_check(
     )))
 }
 
+#[derive(serde::Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct IssueRequest {
+    offer_ttl_seconds: Option<u64>,
+}
+
 async fn issue(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path((organization_id, application_id)): Path<(String, String)>,
+    body: Option<Json<IssueRequest>>,
 ) -> Result<Json<Value>, ApiError> {
     organization_identity(&headers, &organization_id, "issuance:initiate")?;
     state
@@ -1170,7 +1180,14 @@ async fn issue(
         .organization_application(&organization_id, &application_id)
         .await?;
     Ok(Json(application_json(
-        &state.service.issue(&application_id, Utc::now()).await?,
+        &state
+            .service
+            .issue_with_lifetime(
+                &application_id,
+                Utc::now(),
+                body.and_then(|Json(value)| value.offer_ttl_seconds),
+            )
+            .await?,
     )))
 }
 

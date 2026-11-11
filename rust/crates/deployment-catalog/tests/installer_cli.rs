@@ -255,6 +255,7 @@ fn doctor_observes_bound_engine_without_source_or_inherited_context() {
             docker_host: "unix:///var/run/docker.sock".into(),
             engine_id: "test-engine".into(),
             openbao_port: 18200,
+            profile: marty_deployment_catalog::installer_state::RuntimeProfile::Rootful,
         },
     )
     .unwrap();

@@ -23,6 +23,7 @@ pub const OPTIONAL_EMPTY_SECRETS: [&str; 6] = [
 
 pub struct ApplicationParameters {
     pub installation: PathBuf,
+    pub applicant_state_gid: u32,
     pub version: String,
     pub origin: String,
     pub gateway_port: u16,
@@ -167,6 +168,11 @@ pub fn render(
     ] {
         values.insert(key.into(), safe_path(&p.installation.join(relative))?);
     }
+    require(p.applicant_state_gid != 0)?;
+    values.insert(
+        "APPLICANT_STATE_GID".into(),
+        p.applicant_state_gid.to_string(),
+    );
     for (key, value) in [
         ("SELFHOST_IMAGE_PREFIX", "ghcr.io/elevenid/marty-ui-oss"),
         ("BAO_ADDR", "https://openbao:8200"),
@@ -342,6 +348,7 @@ mod tests {
     fn parameters() -> ApplicationParameters {
         ApplicationParameters {
             installation: PathBuf::from("/private/marty $literal #path"),
+            applicant_state_gid: 10001,
             version: "v1.2.3".into(),
             origin: "https://localhost:18443".into(),
             gateway_port: 18000,

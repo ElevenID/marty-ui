@@ -30,6 +30,9 @@ pub const DEFAULT_INITIATION_OFFER_TTL_MINUTES: i64 = 10_080;
 #[serde(deny_unknown_fields)]
 pub struct InitiationRequest {
     pub organization_id: String,
+    /// Optional per-offer shortening; omission preserves the configured default.
+    #[serde(default)]
+    pub offer_ttl_seconds: Option<u64>,
     pub issuer_did: String,
     #[serde(default)]
     pub credential_template_id: Option<String>,
@@ -92,7 +95,7 @@ impl InitiationRequest {
 
     pub fn semantic_payload(&self) -> Result<Value, InitiationError> {
         self.validate()?;
-        Ok(serde_json::json!({
+        let mut payload = serde_json::json!({
             "organization_id": self.organization_id,
             "credential_template_id": optional_string(&self.credential_template_id),
             "application_id": optional_string(&self.application_id),
@@ -105,7 +108,12 @@ impl InitiationRequest {
             "claims": self.claims.clone().unwrap_or_default(),
             "credential_subject": self.credential_subject.clone(),
             "credential_document": self.credential_document.clone(),
-        }))
+        });
+        // Preserve historical hashes when the optional lifetime is absent.
+        if let Some(seconds) = self.offer_ttl_seconds {
+            payload["offer_ttl_seconds"] = seconds.into();
+        }
+        Ok(payload)
     }
 }
 
@@ -341,7 +349,16 @@ impl InitiationService {
     fn offer_expires_at(
         &self,
         now: DateTime<Utc>,
+        requested_seconds: Option<u64>,
     ) -> Result<DateTime<Utc>, InitiationServiceError> {
+        if let Some(seconds) = requested_seconds {
+            return crate::offer_lifetime::shortened_expiry(
+                now,
+                self.offer_ttl_minutes.to_i64(),
+                seconds,
+            )
+            .map_err(|_| InitiationError::InvalidOfferLifetime.into());
+        }
         self.offer_ttl_minutes
             .to_i64()
             .and_then(Duration::try_minutes)
@@ -350,6 +367,14 @@ impl InitiationService {
             // expanded years. Do not panic, clamp, or reject valid integers at startup.
             .filter(|expires| (1..=9999).contains(&expires.year()))
             .ok_or(InitiationServiceError::OfferExpiryOutOfRange)
+    }
+
+    pub(crate) fn validate_offer_lifetime(
+        &self,
+        seconds: u64,
+    ) -> Result<(), InitiationServiceError> {
+        self.offer_expires_at(self.ports.clock.now(), Some(seconds))
+            .map(|_| ())
     }
 
     pub async fn initiate(
@@ -407,7 +432,7 @@ impl InitiationService {
         }
         let now = self.ports.clock.now();
         let seed = self.ports.seeds.generate();
-        let expires_at = self.offer_expires_at(now)?;
+        let expires_at = self.offer_expires_at(now, request.offer_ttl_seconds)?;
         let mut transaction = CredentialTransaction {
             id: seed.transaction_id,
             organization_id: request.organization_id.clone(),
@@ -767,6 +792,8 @@ fn sha256(value: String) -> String {
 pub enum InitiationError {
     #[error("issuer_did is required")]
     IssuerDidRequired,
+    #[error("offer_ttl_seconds must be at least 60 and no greater than the configured default")]
+    InvalidOfferLifetime,
     #[error("{0} is reserved for internal use")]
     ReservedClaim(String),
     #[error("credential_subject cannot be combined with claims")]
@@ -1082,6 +1109,97 @@ mod tests {
                 assert!(!stages.contains(&"reserve-transaction-atomically"));
             }
         }
+    }
+
+    #[test]
+    fn offer_lifetime_preflight_has_initiation_authority_and_no_reservation_or_projection() {
+        use crate::initiation_http::InitiationHttpService;
+        use crate::initiation_response::{
+            InitiationDidcommDelivery, InitiationDidcommDeliveryError,
+            InitiationDidcommDeliveryReceipt, InitiationOfferProjector,
+        };
+        use axum::http::HeaderMap;
+        use axum::response::IntoResponse;
+        struct NeverDeliver;
+        #[async_trait]
+        impl InitiationDidcommDelivery for NeverDeliver {
+            async fn deliver(
+                &self,
+                _: &CredentialTransaction,
+                _: &str,
+            ) -> Result<InitiationDidcommDeliveryReceipt, InitiationDidcommDeliveryError>
+            {
+                panic!("read-only lifetime validation must not deliver or project an offer")
+            }
+        }
+        let (service, repository, calls) = service_harness();
+        let service = service.with_offer_ttl_minutes(2_i64.into());
+        let projector =
+            InitiationOfferProjector::new("https://issuer.example", Arc::new(NeverDeliver))
+                .unwrap();
+        let http = InitiationHttpService::new(service, projector, Some("test-api-key"));
+        let mut headers = HeaderMap::new();
+        headers.insert("x-organization-id", "org-1".parse().unwrap());
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        headers.insert("x-api-key", "wrong".parse().unwrap());
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        headers.insert("x-api-key", "test-api-key".parse().unwrap());
+        for seconds in [0, 59, 121, u64::MAX] {
+            assert_eq!(
+                http.validate_offer_lifetime(&headers, seconds)
+                    .unwrap_err()
+                    .into_response()
+                    .status(),
+                422
+            );
+            assert!(repository.transaction.lock().unwrap().is_none());
+        }
+        assert_eq!(http.validate_offer_lifetime(&headers, 60).unwrap(), "org-1");
+        headers.remove("x-organization-id");
+        assert!(http.validate_offer_lifetime(&headers, 60).is_err());
+        assert!(repository.transaction.lock().unwrap().is_none());
+        assert!(calls.take().is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_offer_lifetime_shortens_only_and_is_idempotent() {
+        let (service, repository, _) = service_harness();
+        let service = service.with_offer_ttl_minutes(2_i64.into());
+        let original = request();
+        assert!(original
+            .semantic_payload()
+            .unwrap()
+            .get("offer_ttl_seconds")
+            .is_none());
+        let mut short = original.clone();
+        short.offer_ttl_seconds = Some(60);
+        assert_ne!(
+            idempotency_binding(Some("offer-ttl"), &original).unwrap(),
+            idempotency_binding(Some("offer-ttl"), &short).unwrap()
+        );
+        let created = service.initiate(&short, Some("offer-ttl")).await.unwrap();
+        assert_eq!(
+            created.transaction.expires_at - created.transaction.created_at,
+            Duration::seconds(60)
+        );
+        let recovered = service.initiate(&short, Some("offer-ttl")).await.unwrap();
+        assert_eq!(
+            recovered.transaction.expires_at,
+            created.transaction.expires_at
+        );
+        for seconds in [0, 59, 121, u64::MAX] {
+            let (service, repository, _) = service_harness();
+            let service = service.with_offer_ttl_minutes(2_i64.into());
+            short.offer_ttl_seconds = Some(seconds);
+            assert!(matches!(
+                service.initiate(&short, None).await,
+                Err(InitiationServiceError::Request(
+                    InitiationError::InvalidOfferLifetime
+                ))
+            ));
+            assert!(repository.transaction.lock().unwrap().is_none());
+        }
+        assert!(repository.transaction.lock().unwrap().is_some());
     }
 
     #[tokio::test]

@@ -1613,6 +1613,9 @@ try {
         -Phase "maintenance_quiesced" `
         -WritersStopped $true `
         -RedisPassword $redisPassword
+    Set-BetaApplicantNonrootState -Expected $script:StateVolumePlan `
+        -BackupFile (Join-Path $backupDir 'applicant_store.json') `
+        -HelperImage $script:VolumeHelperImage
     Write-Step "Verify preserved beta OpenBao readiness"
     $baoContainer = Get-ComposeContainerId -Service 'openbao'
     $baoStatus = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $baoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/bao/data/tls/ca.crt')
