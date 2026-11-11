@@ -26,7 +26,7 @@ env:
   - name: VITE_DEV_PROXY_TARGET
     value: http://gateway:8000
   - name: VITE_DEV_PUBLIC_ORIGIN
-    value: {{ .Values.publicOrigin | default (printf "https://%s" .Values.publicHost) | quote }}
+    value: {{ include "marty.publicOrigin" . | quote }}
 volumeMounts:
   - name: ui-dev-source
     mountPath: /workspace/ui

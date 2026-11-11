@@ -13,7 +13,7 @@ services:
   redis:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}
-    command: ["sh", "-c", "exec redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru --requirepass \"$$REDIS_PASSWORD\""]
+    command: ["sh", "-c", "exec redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy noeviction --requirepass \"$$REDIS_PASSWORD\""]
     healthcheck:
       test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
 

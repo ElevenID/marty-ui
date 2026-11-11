@@ -40,7 +40,7 @@ K8S_DIR="${K8S_DIR:-${REPO_ROOT}/k8s/oracle}"
 IMAGE_TAG="${IMAGE_TAG:-}"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env.production}"
 NAMESPACE="${NAMESPACE:-marty-prod}"
-SUBCOMMAND="${1:-deploy}"
+SUBCOMMAND="deploy"
 
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-${CONTAINER_REGISTRY:-${OCIR_REGISTRY:-}}}"
 REGISTRY_HOST="${REGISTRY_HOST:-}"
@@ -53,21 +53,57 @@ OCIR_TENANCY_NAMESPACE="${OCIR_TENANCY_NAMESPACE:-}"
 OCI_USERNAME="${OCI_USERNAME:-}"
 
 # ─── Parse flags ──────────────────────────────────────────────────────────────
+usage() {
+  cat <<'USAGE'
+Usage: scripts/deploy-kubernetes.sh [deploy|setup-secrets|update-images|status] [options]
+
+Maintain an existing reviewed legacy manifest deployment. For a new AWS/K3s
+installation, use docs/kubernetes-installation-configuration.md and the Helm chart.
+
+  --env-file PATH           Operator-owned shell configuration
+  --k8s-dir PATH            Reviewed manifest directory (default: k8s/oracle)
+  --namespace NAME          Target namespace (default: marty-prod)
+  --tag TAG                 Exact release tag
+  --version-file PATH       Release version file when no tag is supplied
+  --registry PREFIX         Image registry and repository prefix
+  --registry-host HOST      Registry authentication host
+  --registry-username NAME  Registry authentication username
+  --image-pull-secret NAME  Existing manifest's registry Secret name
+  --region REGION          Legacy OCI region
+  --oci-namespace NAME      Legacy OCIR tenancy namespace
+  --registry-namespace NAME Alias for --oci-namespace
+  -h, --help               Show this help without loading configuration or contacting Kubernetes
+
+Explicit flags override values loaded from the environment file. The reviewed
+manifests must already match the selected namespace and image-pull Secret.
+Status requires only kubectl access; it does not require release credentials.
+USAGE
+}
+
+declare -A CLI_OVERRIDES=()
+SUBCOMMAND_SELECTED=false
 while [[ $# -gt 0 ]]; do
   case $1 in
-    deploy|setup-secrets|update-images|status) SUBCOMMAND="$1"; shift ;;
-    --tag)               IMAGE_TAG="$2"; shift 2 ;;
-    --env-file)          ENV_FILE="$2"; shift 2 ;;
-    --k8s-dir)           K8S_DIR="$2"; shift 2 ;;
-    --namespace)         NAMESPACE="$2"; shift 2 ;;
-    --version-file)      VERSION_FILE="$2"; shift 2 ;;
-    --registry)          IMAGE_REGISTRY="$2"; shift 2 ;;
-    --registry-host)     REGISTRY_HOST="$2"; shift 2 ;;
-    --registry-username) REGISTRY_USERNAME="$2"; shift 2 ;;
-    --image-pull-secret) IMAGE_PULL_SECRET_NAME="$2"; shift 2 ;;
-    --region)            OCI_REGION="$2"; shift 2 ;;          # Legacy OCIR compatibility
-    --oci-namespace)     OCIR_TENANCY_NAMESPACE="$2"; shift 2 ;; # Legacy OCIR compatibility
-    --registry-namespace) OCIR_TENANCY_NAMESPACE="$2"; shift 2 ;; # Legacy OCIR compatibility
+    -h|--help) usage; exit 0 ;;
+    deploy|setup-secrets|update-images|status)
+      [[ "$SUBCOMMAND_SELECTED" == false ]] || error "Choose exactly one subcommand."
+      SUBCOMMAND="$1"; SUBCOMMAND_SELECTED=true; shift ;;
+    --tag|--env-file|--k8s-dir|--namespace|--version-file|--registry|--registry-host|--registry-username|--image-pull-secret|--region|--oci-namespace|--registry-namespace)
+      [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || error "$1 requires a value."
+      case $1 in
+        --tag) OPTION_NAME=IMAGE_TAG ;;
+        --env-file) OPTION_NAME=ENV_FILE; ENV_FILE="$2" ;;
+        --k8s-dir) OPTION_NAME=K8S_DIR ;;
+        --namespace) OPTION_NAME=NAMESPACE ;;
+        --version-file) OPTION_NAME=VERSION_FILE ;;
+        --registry) OPTION_NAME=IMAGE_REGISTRY ;;
+        --registry-host) OPTION_NAME=REGISTRY_HOST ;;
+        --registry-username) OPTION_NAME=REGISTRY_USERNAME ;;
+        --image-pull-secret) OPTION_NAME=IMAGE_PULL_SECRET_NAME ;;
+        --region) OPTION_NAME=OCI_REGION ;;
+        --oci-namespace|--registry-namespace) OPTION_NAME=OCIR_TENANCY_NAMESPACE ;;
+      esac
+      CLI_OVERRIDES["$OPTION_NAME"]="$2"; shift 2 ;;
     *) error "Unknown argument: $1" ;;
   esac
 done
@@ -82,6 +118,11 @@ else
   warn "Copy the Kubernetes secret/config template values to an env file and fill them in."
   [[ "$SUBCOMMAND" != "status" ]] && error "Cannot continue without env file."
 fi
+
+# The file supplies defaults; an explicit operator flag remains authoritative.
+for OPTION_NAME in "${!CLI_OVERRIDES[@]}"; do
+  printf -v "$OPTION_NAME" '%s' "${CLI_OVERRIDES[$OPTION_NAME]}"
+done
 
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-${CONTAINER_REGISTRY:-${OCIR_REGISTRY:-}}}"
 REGISTRY_AUTH_TOKEN="${REGISTRY_AUTH_TOKEN:-${OCIR_AUTH_TOKEN:-}}"
@@ -116,12 +157,14 @@ declare -A REGION_KEY=(
   [ap-singapore-1]=sin [sa-saopaulo-1]=gru [ca-toronto-1]=yyz
   [me-jeddah-1]=jed
 )
-if [[ -z "$IMAGE_REGISTRY" && -n "$OCI_REGION" && -n "$OCIR_TENANCY_NAMESPACE" ]]; then
+if [[ "$SUBCOMMAND" != status && -z "$IMAGE_REGISTRY" && -n "$OCI_REGION" && -n "$OCIR_TENANCY_NAMESPACE" ]]; then
   REGION_SHORT="${REGION_KEY[$OCI_REGION]:-}"
   [[ -z "$REGION_SHORT" ]] && error "Unknown OCI region: $OCI_REGION"
   IMAGE_REGISTRY="${REGION_SHORT}.ocir.io/${OCIR_TENANCY_NAMESPACE}"
 fi
-[[ -z "${IMAGE_REGISTRY:-}" ]] && error "Set IMAGE_REGISTRY in the env file or pass --registry."
+if [[ "$SUBCOMMAND" != status && -z "${IMAGE_REGISTRY:-}" ]]; then
+  error "Set IMAGE_REGISTRY in the env file or pass --registry."
+fi
 
 if [[ -z "$REGISTRY_HOST" ]]; then
   REGISTRY_HOST="${IMAGE_REGISTRY%%/*}"
@@ -317,15 +360,17 @@ cmd_setup_secrets() {
 }
 
 cmd_status() {
+  local failed=0
   step "Deployment Status — namespace: ${NAMESPACE}"
   echo ""
-  kubectl get pods        -n "$NAMESPACE" -o wide 2>/dev/null || true
+  kubectl get pods        -n "$NAMESPACE" -o wide || failed=1
   echo ""
-  kubectl get services    -n "$NAMESPACE"          2>/dev/null || true
+  kubectl get services    -n "$NAMESPACE" || failed=1
   echo ""
-  kubectl get statefulset -n "$NAMESPACE"          2>/dev/null || true
+  kubectl get statefulset -n "$NAMESPACE" || failed=1
   echo ""
-  kubectl get jobs        -n "$NAMESPACE"          2>/dev/null || true
+  kubectl get jobs        -n "$NAMESPACE" || failed=1
+  return "$failed"
 }
 
 cmd_update_images() {
@@ -372,16 +417,21 @@ cmd_update_images() {
     # Issuance is updated with the shared Rust services image above.
     [[ -z "$svc" || "$svc" == "issuance" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
-      -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
+      -n "$NAMESPACE" 2>/dev/null || { error "Image update failed for required deployment '${svc}'."; return 1; }
+    success "Updated ${svc}"
   done <<< "$app_services"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
-    -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
+    -n "$NAMESPACE" 2>/dev/null || { error "Image update failed for required deployment 'ui'."; return 1; }
+  success "Updated ui"
   if ! is_placeholder_secret "$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"; then
     kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \
       -n "$NAMESPACE" || return 1
     success "Updated selected cloudflared"
   fi
-  kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s || true
+  kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s || {
+    error "Deployment rollout did not complete; inspect status before retrying."
+    return 1
+  }
 }
 
 cmd_deploy() {
@@ -460,7 +510,7 @@ cmd_deploy() {
 
   kubectl delete job issuance-migrations -n "$NAMESPACE" --ignore-not-found=true
   apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"
-  info "Waiting for credentials issuance migrations to completeâ€¦"
+  info "Waiting for credentials issuance migrations to complete…"
   kubectl wait --for=condition=complete job/issuance-migrations -n "$NAMESPACE" --timeout=300s \
     || { kubectl logs job/issuance-migrations -n "$NAMESPACE" --tail=50; error "Issuance migration job failed"; }
   success "All database migrations completed"
@@ -478,8 +528,7 @@ cmd_deploy() {
     kubectl rollout status deployment/issuance -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/gateway -n "$NAMESPACE" --timeout=180s || return 1
   fi
-  kubectl rollout status deployment/gateway  -n "$NAMESPACE" --timeout=180s || true
-  kubectl rollout status deployment/auth     -n "$NAMESPACE" --timeout=180s || true
+  kubectl rollout status deployment/auth -n "$NAMESPACE" --timeout=180s || return 1
 
   step "Deploying UI…"
   apply_manifest "${K8S_DIR}/08-ui.yaml"
@@ -488,10 +537,15 @@ cmd_deploy() {
   if ! is_placeholder_secret "$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"; then
     step "Deploying Cloudflare Tunnel…"
     apply_manifest "${K8S_DIR}/09-cloudflared.yaml"
-    kubectl rollout status deployment/cloudflared -n "$NAMESPACE" --timeout=60s || true
+    kubectl rollout status deployment/cloudflared -n "$NAMESPACE" --timeout=60s || return 1
   else
     warn "Skipping cloudflared because CLOUDFLARE_TUNNEL_TOKEN is unset or placeholder."
   fi
+
+  kubectl rollout status deployment -n "$NAMESPACE" --timeout=300s || {
+    error "Deployment rollout did not complete; inspect status before retrying."
+    return 1
+  }
 
   echo ""
   success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

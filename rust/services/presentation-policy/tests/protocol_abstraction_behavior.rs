@@ -194,7 +194,7 @@ impl CredentialStatusResolver for Metadata {
 }
 
 fn policy() -> PresentationPolicy {
-    let mut policy = built_in_presentation_policies().remove(1);
+    let mut policy = built_in_presentation_policies(uuid::Uuid::from_u128(1)).remove(1);
     policy.organization_id = ORG;
     policy.trust_profile_id = Some(PROFILE_A);
     policy.presentation_proof_required = false;

@@ -15,6 +15,13 @@ from produce_selfhost_product_descriptor import produce
 from record_selfhost_bundle_preparation import record
 from stage_selfhost_disposable_preview import ASSETS
 
+# Match the native bundle renderer's host-discovery environment. Application,
+# Compose and proxy settings belong to the exact package inputs, not the shell
+# that happens to invoke this producer.
+RENDERER_ENVIRONMENT = (
+    "PATH", "SystemRoot", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TEMP", "TMP",
+)
+
 
 def write(path: Path, value: dict) -> None:
     with path.open("x", encoding="utf-8") as stream:
@@ -94,15 +101,25 @@ def package(source: Path, candidate_path: Path, packager: Path, output: Path,
     candidate = validate_candidate(read(candidate_path))
     if output.exists() or not output.is_absolute() or output.resolve().is_relative_to(source):
         raise ValueError("nightly package output must be fresh and outside source")
+    # Resolve explicit tools in the caller's directory once, before changing
+    # cwd for either render. Both stages must use the same selected renderer.
+    packager = packager.resolve(strict=True)
+    if compose_executable is not None:
+        compose_executable = compose_executable.resolve(strict=True)
+    if not packager.is_file() or compose_executable is not None and not compose_executable.is_file():
+        raise ValueError("nightly package tools must be regular files")
     output.mkdir(mode=0o700)
     keycloak = candidate["images"]["keycloak"]
-    environment = {**os.environ, "SELFHOST_IMAGE_PREFIX": "ghcr.io/elevenid/marty-ui",
+    environment = {key: os.environ[key] for key in RENDERER_ENVIRONMENT if key in os.environ}
+    environment.update({"SELFHOST_IMAGE_PREFIX": "ghcr.io/elevenid/marty-ui",
         "SELFHOST_IMAGE_TAG": base_version(candidate["tag"]),
-        "MARTY_KEYCLOAK_KMS_IMAGE": keycloak["uri"] + "@" + keycloak["digest"]}
-    rendered = subprocess.run(["docker", "compose", "--profile", "*", "--env-file",
+        "MARTY_KEYCLOAK_KMS_IMAGE": keycloak["uri"] + "@" + keycloak["digest"]})
+    renderer = [str(compose_executable)] if compose_executable is not None else ["docker", "compose"]
+    rendered = subprocess.run([*renderer, "--profile", "*", "--env-file",
         ".env.selfhost.production.example", "-f", "docker-compose.selfhost.prod.yml",
         "-f", "docker-compose.selfhost.bundle.override.yml", "config", "--format", "json"],
-        cwd=source, env=environment, check=True, capture_output=True, text=True, timeout=60)
+        cwd=source, env=environment, stdin=subprocess.DEVNULL,
+        check=True, capture_output=True, text=True, timeout=60)
     model = json.loads(rendered.stdout)
     external = pin_external_images(model, source)
     locked = image_lock(candidate, model, source, external)
@@ -131,7 +148,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "candidate", "packager", "output"):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--compose-executable", type=Path)
+    parser.add_argument("--compose-executable", type=Path,
+                        help="Standalone Compose renderer for both image-lock and bundle rendering")
     args = parser.parse_args()
     package(args.source, args.candidate, args.packager, args.output, args.compose_executable)
 

@@ -6,6 +6,7 @@ x-runtime-env: &runtime-env
   ENVIRONMENT: production
   GRPC_INSECURE_ALLOWED: "false"
   MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+  MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
   MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
   MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-marty.localhost}
   PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
@@ -120,7 +121,9 @@ services:
     # volume) before dropping privileges. The socket mode serves heterogeneous
     # workload UIDs; only the named consumers mount this volume. No Redis TCP
     # listener or TLS key file is needed.
-    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # Redis retains signing identities and replay markers as well as cache data.
+    # Refuse new writes at the memory ceiling instead of evicting retained keys.
+    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/redis

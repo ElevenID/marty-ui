@@ -43,6 +43,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROFILE = ROOT / "deploy/helm/openbao/values-k3s-dev.yaml"
 UPSTREAM = ROOT / "deploy/helm/openbao/upstream.json"
 NAMESPACE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+SECRET_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,255}\Z")
 PUBLICATION_SCHEMA = "marty.kubernetes-secret-publication/v1"
 PUBLICATION_CONTRACT_LIMIT = 128 * 1024
@@ -141,6 +142,31 @@ def private_directory(path: Path) -> None:
     require(stat.S_IMODE(path.stat().st_mode) == 0o700, "state directory must be private")
 
 
+def helm_executable(path: Path) -> Path:
+    """Check the selected CLI before retaining state or touching the cluster."""
+    require(path.is_file() and os.access(path, os.X_OK),
+            "--helm must select an existing executable Helm 3 binary")
+    # An explicitly supplied relative path must not be resolved again via PATH.
+    selected = path.resolve(strict=True)
+    try:
+        result = subprocess.run([str(selected), "version", "--short"],
+                                stdin=subprocess.DEVNULL, capture_output=True,
+                                check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BootstrapError("selected Helm executable could not complete its version check") from error
+    require(result.returncode == 0 and len(result.stdout) <= 256
+            and re.fullmatch(rb"v3\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+-]+)?", result.stdout.strip()) is not None,
+            "selected Helm executable must report a supported Helm 3 version")
+    return selected
+
+
+def validate_image_pull_secret_names(names: list[str]) -> None:
+    require(len(names) <= 16 and len(names) == len(set(names)),
+            "select at most 16 unique image pull Secret names")
+    require(all(0 < len(name) <= 253 and SECRET_NAME.fullmatch(name) is not None for name in names),
+            "image pull Secret names must be Kubernetes DNS subdomain names")
+
+
 class Transport:
     def __init__(self, state: Path, kubeconfig: Path, namespace: str, kubectl: str):
         self.state = state
@@ -182,6 +208,21 @@ class Transport:
         command = 'umask 077; set -C; cat > "$1"; chmod "$2" "$1"'
         self.execute(pod, ["/bin/sh", "-ec", command, "--", destination,
                            "700" if executable else "600"], data=contents)
+
+
+def preflight_image_pull_secrets(transport: Transport, names: list[str]) -> None:
+    """Observe only selected Secret names/types before any bootstrap mutation."""
+    for name in names:
+        summary = transport.kubectl(
+            "image pull Secret preflight", "get", "secret", name,
+            "--ignore-not-found", "--request-timeout=10s",
+            '-o=jsonpath={.metadata.name}{"\\t"}{.type}', timeout=15)
+        require(bool(summary.strip()),
+                f"image pull Secret {name!r} is missing from namespace {transport.namespace!r}; provision it before bootstrap")
+        require(summary.strip() in {
+            (name + "\tkubernetes.io/dockerconfigjson").encode(),
+            (name + "\tkubernetes.io/dockercfg").encode(),
+        }, f"image pull Secret {name!r} must use kubernetes.io/dockerconfigjson or kubernetes.io/dockercfg")
 
 
 def root_command(transport: Transport, token: str, command: list[str], *, timeout: int = 300) -> bytes:
@@ -826,6 +867,8 @@ def bootstrap(args: argparse.Namespace) -> None:
     require(args.kubeconfig.is_file(), "explicit kubeconfig is unavailable")
     kubectl = shutil.which("kubectl")
     require(kubectl is not None, "kubectl must be installed")
+    validate_image_pull_secret_names(args.image_pull_secret)
+    helm = helm_executable(args.helm)
     private_directory(args.state_dir)
     state = args.state_dir
     values, _ = prepare(assets=args.assets, runtime_source_sha=args.runtime_source_sha,
@@ -860,6 +903,7 @@ def bootstrap(args: argparse.Namespace) -> None:
             "Kubernetes context selection is ambiguous")
     write_new(state / "kubeconfig", scoped.stdout)
     transport = Transport(state, state / "kubeconfig", args.namespace, kubectl)
+    preflight_image_pull_secrets(transport, args.image_pull_secret)
     bootstrap_id = str(uuid.uuid4())
     nonce = secrets.token_hex(6)
     workload_project = "marty-selfhost-disposable-k8s-" + nonce
@@ -871,10 +915,13 @@ def bootstrap(args: argparse.Namespace) -> None:
         "type": "Opaque", "immutable": True,
         "data": {"static.key": base64.b64encode(seal).decode()}})
     del seal
-    pull_values = {"global": {"imagePullSecrets": [{"name": name} for name in args.image_pull_secret]}}
-    write_new(state / "openbao-pull-secrets.json", encoded(pull_values))
+    pull_values = {"imagePullSecrets": [{"name": name} for name in args.image_pull_secret]}
+    # Both releases consume the same checked selection. Keep this installation
+    # input separate from the authenticated image-inventory projections.
+    write_new(state / "marty-pull-secrets.json", encoded(pull_values))
+    write_new(state / "openbao-pull-secrets.json", encoded({"global": pull_values}))
     transport.run("official OpenBao Helm installation",
-        [str(args.helm), "--kubeconfig", str(state / "kubeconfig"), "install", "openbao",
+        [str(helm), "--kubeconfig", str(state / "kubeconfig"), "install", "openbao",
          str(args.chart_package), "--namespace", args.namespace,
          "--values", str(PROFILE), "--values", str(state / "openbao-images.json"),
          "--values", str(state / "openbao-pull-secrets.json"), "--timeout", "5m"], timeout=330)

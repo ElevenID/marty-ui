@@ -65,6 +65,7 @@
     "publicHost": {
       "type": "string",
       "minLength": 1,
+      "maxLength": 253,
       "pattern": "^[a-zA-Z0-9.\\[\\]:-]+$"
     },
     "publicOrigin": {

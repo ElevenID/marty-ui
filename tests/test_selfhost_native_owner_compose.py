@@ -35,6 +35,30 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
 
 
+def test_customer_organization_name_reaches_managed_identity_and_runtime_owners():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    for owner in ("keycloak-configurator", "db-migrate", "organization", "auth",
+                  "issuance", "issuance-native"):
+        assert model["services"][owner]["environment"].get("MARTY_ORG_NAME") == (
+            "${MARTY_ORG_NAME:-Marty}"
+        ), owner
+
+
+@pytest.mark.parametrize("filename,memory", [
+    ("docker-compose.selfhost.prod.yml", "256mb"),
+    ("docker-compose.base.yml", "128mb"),
+    ("docker-compose.beta.yml", "128mb"),
+])
+def test_shared_redis_configures_retention_and_bounded_memory(filename, memory):
+    model = yaml.safe_load((ROOT / filename).read_text())
+    command = model["services"]["redis"]["command"]
+    if isinstance(command, list):
+        command = " ".join(command)
+    assert f"--maxmemory {memory}" in command
+    assert "--maxmemory-policy noeviction" in command
+    assert "--appendonly yes" in command
+
+
 @pytest.mark.parametrize("owner,setting", [
     ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
     ("flow", "OID4VP_ISSUER_DID"),
@@ -190,6 +214,28 @@ def rendered_models():
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
+
+
+@pytest.mark.parametrize("owner", ["organization", "auth"])
+def test_customer_name_cannot_drift_between_identity_consumers(rendered_models, owner):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"]["MARTY_ORG_NAME"] = "Another tenant"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("replacement", [
+    "--maxmemory 256mb --maxmemory-policy allkeys-lru",
+    "--maxmemory 512mb --maxmemory-policy noeviction",
+])
+def test_redis_preservation_change_does_not_admit_eviction_or_capacity_drift(rendered_models, replacement):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["redis"]["command"] = (
+        "redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 "
+        "--appendonly yes " + replacement
+    )
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 @pytest.mark.parametrize("fault", ["missing-file-setting", "missing-mount", "wrong-target", "inline-key"])

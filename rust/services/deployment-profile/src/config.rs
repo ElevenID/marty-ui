@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeEnvironment {
@@ -27,6 +28,7 @@ pub struct DeploymentServiceConfig {
     pub http_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
+    pub marty_organization_id: Uuid,
     pub organization_grpc_target: String,
     pub service_token: Option<String>,
     pub workload_tls: Option<WorkloadTlsFiles>,
@@ -89,6 +91,10 @@ impl DeploymentServiceConfig {
                 .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
                 .unwrap_or("organization:9002"),
         )?;
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .parse()
+            .map_err(|_| invalid("MARTY_ORG_ID"))?;
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
         if environment.is_deployed() && service_token.as_ref().is_none_or(|v| v.len() < 32) {
             return Err(DeploymentConfigError::Missing {
@@ -114,6 +120,7 @@ impl DeploymentServiceConfig {
             http_addr,
             database_url,
             database_max_connections,
+            marty_organization_id,
             organization_grpc_target,
             service_token,
             workload_tls,
@@ -263,6 +270,29 @@ mod tests {
         assert_eq!(config.http_addr.port(), 8010);
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert!(config.database_url.starts_with("postgresql://"));
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "00000000-0000-0000-0000-000000000001"
+        );
+    }
+
+    #[test]
+    fn customer_organization_id_is_parsed_for_default_deployment_seeding() {
+        let mut values = base("development");
+        values.insert(
+            "MARTY_ORG_ID".into(),
+            "750e8400-e29b-41d4-a716-446655440001".into(),
+        );
+        let config = DeploymentServiceConfig::from_values(values.clone()).unwrap();
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "750e8400-e29b-41d4-a716-446655440001"
+        );
+        values.insert("MARTY_ORG_ID".into(), "invalid".into());
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values),
+            Err(invalid("MARTY_ORG_ID")),
+        );
     }
 
     #[test]

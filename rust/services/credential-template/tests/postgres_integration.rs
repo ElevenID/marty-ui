@@ -30,6 +30,7 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         &pool,
         &CredentialTemplateDataReconciliationConfig {
             marty_organization_id: "00000000-0000-0000-0000-000000000001".into(),
+            marty_issuer_did: "did:web:issuer.example:orgs:marty".into(),
             public_api_origin: "https://issuer.example/".into(),
             public_hostname: "issuer.example".into(),
             selfhost_production: false,
@@ -184,6 +185,7 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         &pool,
         &CredentialTemplateDataReconciliationConfig {
             marty_organization_id: "00000000-0000-0000-0000-000000000001".into(),
+            marty_issuer_did: "did:web:issuer.example:orgs:marty".into(),
             public_api_origin: "https://issuer.example/".into(),
             public_hostname: "issuer.example".into(),
             selfhost_production: false,
@@ -229,6 +231,49 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         [template_id.clone(), physical_template_id.clone()]
             .into_iter()
             .collect()
+    );
+
+    let mut customer_template = template.clone();
+    customer_template.id = "ct-canyon-contract".into();
+    customer_template.organization_id = "750e8400-e29b-41d4-a716-446655440001".into();
+    customer_template.issuer_did = None;
+    store.delete_template(&customer_template.id).await.unwrap();
+    store.save_template(&customer_template).await.unwrap();
+    let customer_reconciliation = CredentialTemplateDataReconciliationConfig {
+        marty_organization_id: customer_template.organization_id.clone(),
+        marty_issuer_did: "did:web:academy.example.test%3A8443:orgs:canyon-skills".into(),
+        public_api_origin: "https://academy.example.test:8443/".into(),
+        public_hostname: "academy.example.test".into(),
+        selfhost_production: false,
+    };
+    let repaired = reconcile_credential_template_data(&pool, &customer_reconciliation)
+        .await
+        .unwrap();
+    assert_eq!(repaired.issuer_dids_repaired, 1);
+    assert_eq!(
+        store
+            .template_by_id(&customer_template.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .issuer_did,
+        Some(customer_reconciliation.marty_issuer_did.clone()),
+    );
+    assert_eq!(
+        store
+            .template_by_id(&template_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .issuer_did,
+        template.issuer_did,
+    );
+    assert_eq!(
+        reconcile_credential_template_data(&pool, &customer_reconciliation)
+            .await
+            .unwrap()
+            .issuer_dids_repaired,
+        0,
     );
 
     let wallet = WalletRegistryEntry {
