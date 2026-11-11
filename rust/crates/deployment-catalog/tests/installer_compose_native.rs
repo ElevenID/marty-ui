@@ -477,6 +477,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             "installer-ingress-fixture".into(),
         ),
         ("PUBLIC_API_URL", "https://localhost:18443".into()),
+        ("MARTY_ORG_NAME", "Canyon Skills Academy".into()),
         ("GATEWAY_OBSERVE_CLIENT_IP", "false".into()),
         ("PUBLIC_DOMAIN", "localhost:18443".into()),
         (
@@ -590,6 +591,24 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
             &[],
         );
         let services = model["services"].as_object().unwrap();
+        for owner in [
+            "keycloak-configurator",
+            "db-migrate",
+            "organization",
+            "auth",
+            "issuance",
+            "issuance-native",
+        ] {
+            assert_eq!(
+                services[owner]["environment"]["MARTY_ORG_NAME"], "Canyon Skills Academy",
+                "customer organization name did not reach {owner} for {case}"
+            );
+        }
+        let redis_command = services["redis"]["command"].as_array().unwrap();
+        assert_eq!(
+            &redis_command[redis_command.len() - 4..],
+            ["--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+        );
         let ingress = &services["installer-ingress"];
         assert_eq!(ingress["ports"][0]["host_ip"], bind_address);
         assert_eq!(ingress["ports"][0]["published"], "18443");

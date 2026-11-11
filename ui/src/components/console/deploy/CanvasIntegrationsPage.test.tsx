@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, within } from '@testing-library/react';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import CanvasIntegrationsPage, {
@@ -30,6 +31,8 @@ const {
   mockDeactivateCanvasProgramBinding,
   mockUpdateCanvasProgramBinding,
   mockUpdateCanvasPlatform,
+  mockDeleteCanvasPlatform,
+  mockDeleteCanvasProgramBinding,
   mockGetCanvasMirrorHealth,
   mockProcessPendingCanvasMirrorDeliveries,
   mockProcessCanvasMirrorStatusSyncFailures,
@@ -43,6 +46,7 @@ const {
   mockUpdateDeliveryDestination,
   mockCanCanvas,
   mockPermissionsState,
+  mockConsoleState,
 } = vi.hoisted(() => ({
   mockListCanvasPlatforms: vi.fn(),
   mockListCanvasProgramBindings: vi.fn(),
@@ -66,6 +70,8 @@ const {
   mockDeactivateCanvasProgramBinding: vi.fn(),
   mockUpdateCanvasProgramBinding: vi.fn(),
   mockUpdateCanvasPlatform: vi.fn(),
+  mockDeleteCanvasPlatform: vi.fn(),
+  mockDeleteCanvasProgramBinding: vi.fn(),
   mockGetCanvasMirrorHealth: vi.fn(),
   mockProcessPendingCanvasMirrorDeliveries: vi.fn(),
   mockProcessCanvasMirrorStatusSyncFailures: vi.fn(),
@@ -78,7 +84,8 @@ const {
   mockCreateDeliveryDestination: vi.fn(),
   mockUpdateDeliveryDestination: vi.fn(),
   mockCanCanvas: vi.fn(),
-  mockPermissionsState: { isLoading: false },
+  mockPermissionsState: { isLoading: false, canDelete: true },
+  mockConsoleState: { activeOrgId: 'org-1' },
 }));
 
 vi.mock('../../../hooks/useAuth', () => ({
@@ -93,7 +100,7 @@ vi.mock('../../../hooks/usePermissions', () => ({
 }));
 
 vi.mock('../../../contexts/ConsoleContext', () => ({
-  useConsole: () => ({ activeOrgId: 'org-1' }),
+  useConsole: () => mockConsoleState,
 }));
 
 vi.mock('../../../services/applicationTemplatesApi', () => ({
@@ -136,8 +143,8 @@ vi.mock('../../../services/canvasIntegrationsApi', () => ({
   validateCanvasCredentialsProvider: (...args: unknown[]) => mockValidateCanvasCredentialsProvider(...args),
   createCanvasPlatform: vi.fn(),
   createCanvasProgramBinding: vi.fn(),
-  deleteCanvasPlatform: vi.fn(),
-  deleteCanvasProgramBinding: vi.fn(),
+  deleteCanvasPlatform: (...args: unknown[]) => mockDeleteCanvasPlatform(...args),
+  deleteCanvasProgramBinding: (...args: unknown[]) => mockDeleteCanvasProgramBinding(...args),
   updateCanvasPlatform: (...args: unknown[]) => mockUpdateCanvasPlatform(...args),
   updateCanvasProgramBinding: (...args: unknown[]) => mockUpdateCanvasProgramBinding(...args),
 }));
@@ -189,6 +196,11 @@ const binding = {
   auto_approve_on_evidence: true,
   enabled: true,
 };
+
+const archiveTargets = [
+  { kind: 'platform', name: 'Canvas Main', id: 'platform-1', remove: mockDeleteCanvasPlatform, list: mockListCanvasPlatforms },
+  { kind: 'binding', name: 'Safety Course', id: 'binding-1', remove: mockDeleteCanvasProgramBinding, list: mockListCanvasProgramBindings },
+];
 
 describe('CanvasIntegrationsPage', () => {
   it('emits only the canonical activity identifier for the current typed rule', () => {
@@ -242,9 +254,12 @@ describe('CanvasIntegrationsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPermissionsState.isLoading = false;
+    mockPermissionsState.canDelete = true;
+    mockConsoleState.activeOrgId = 'org-1';
     mockCanCanvas.mockImplementation((resource, action) => (
       resource === 'integration-connector'
       && ['view', 'create', 'edit', 'delete'].includes(action)
+      && (action !== 'delete' || mockPermissionsState.canDelete)
     ));
     mockListCanvasPlatforms.mockResolvedValue([platform]);
     mockGetCanvasLtiRegistrationConfig.mockResolvedValue({
@@ -296,6 +311,8 @@ describe('CanvasIntegrationsPage', () => {
     mockDeactivateCanvasProgramBinding.mockResolvedValue({ enabled: false });
     mockUpdateCanvasProgramBinding.mockResolvedValue(binding);
     mockUpdateCanvasPlatform.mockResolvedValue(platform);
+    mockDeleteCanvasPlatform.mockResolvedValue(undefined);
+    mockDeleteCanvasProgramBinding.mockResolvedValue(undefined);
     mockListCanvasProgramBindings.mockResolvedValue([binding]);
     mockListCanvasIntegrationSecrets.mockResolvedValue([
       {
@@ -611,6 +628,113 @@ describe('CanvasIntegrationsPage', () => {
 
     await user.click(screen.getByLabelText(/deactivate safety course/i));
     await waitFor(() => expect(mockDeactivateCanvasProgramBinding).toHaveBeenCalledWith('binding-1'));
+  });
+
+  it.each(archiveTargets)('shows a failed $kind archive without losing inventory and allows explicit recovery', async ({ kind, name, id, remove, list }) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    remove.mockRejectedValueOnce(new Error(`The ${kind} is still in use.`));
+    try {
+      const { user } = renderWithRouter(<CanvasIntegrationsPage />, {
+        initialEntries: ['/console/org/deploy/canvas'],
+      });
+      const archive = await screen.findByRole('button', { name: `Archive ${name}` });
+      await user.click(archive);
+
+      const error = await screen.findByText(`The ${kind} is still in use.`);
+      expect(error).toBeVisible();
+      expect(screen.getByRole('row', { name: /Canvas Main/ })).toBeVisible();
+      expect(screen.getByRole('row', { name: /Safety Course/ })).toBeVisible();
+      expect(remove).toHaveBeenCalledExactlyOnceWith(id);
+      expect(list).toHaveBeenCalledTimes(1);
+      expect(confirm).toHaveBeenCalledWith(`Archive ${name}? Existing launches, evidence, and credentials will be retained.`);
+
+      confirm.mockReturnValueOnce(false);
+      await user.click(archive);
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(error).toBeVisible();
+      expect(list).toHaveBeenCalledTimes(1);
+
+      await user.click(within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Close' }));
+      expect(screen.queryByText(`The ${kind} is still in use.`)).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(1);
+      list.mockResolvedValueOnce([]);
+      await user.click(archive);
+
+      await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+      expect(remove).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenLastCalledWith(id);
+      expect(screen.queryByText(`The ${kind} is still in use.`)).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('row', { name: new RegExp(name) })).not.toBeInTheDocument());
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it.each([
+    ...archiveTargets.flatMap((target) => ['organization', 'permission'].map((scope) => ({ ...target, scope }))),
+    { ...archiveTargets[1], scope: 'platform selection' },
+  ].flatMap((target) => ['resolve', 'reject'].map((completion) => ({ ...target, completion }))))('keeps $kind archive feedback and refreshes within the $scope lifetime after late $completion', async ({ name, id, remove, scope, completion }) => {
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    let resolveArchive!: () => void;
+    let rejectArchive!: (error: Error) => void;
+    const pendingArchive = new Promise<void>((resolve, reject) => { resolveArchive = resolve; rejectArchive = reject; });
+    remove.mockReturnValueOnce(pendingArchive);
+    const otherPlatform = { ...platform, id: 'platform-2', display_name: 'Canvas Secondary' };
+    const otherBinding = { ...binding, id: 'binding-2', platform_id: 'platform-2', display_name: 'Advanced Course' };
+    mockListCanvasPlatforms.mockImplementation(async (organizationId) => (
+      scope === 'platform selection' ? [platform, otherPlatform]
+        : organizationId === 'org-2' ? [{ ...otherPlatform, organization_id: 'org-2' }] : [platform]
+    ));
+    mockListCanvasProgramBindings.mockImplementation(async ({ organizationId }) => (
+      scope === 'platform selection' ? [binding, otherBinding]
+        : organizationId === 'org-2' ? [otherBinding] : [binding]
+    ));
+
+    try {
+      const { user, rerender } = renderWithRouter(<CanvasIntegrationsPage />, {
+        initialEntries: ['/console/org/deploy/canvas'],
+      });
+      const changeScope = async (changed: boolean) => {
+        if (scope === 'platform selection') {
+          await user.click(screen.getByRole('row', { name: changed ? /Canvas Secondary/ : /Canvas Main/ }));
+        } else {
+          if (scope === 'organization') mockConsoleState.activeOrgId = changed ? 'org-2' : 'org-1';
+          else mockPermissionsState.canDelete = !changed;
+          rerender(<CanvasIntegrationsPage />);
+        }
+        if (changed && scope !== 'permission') await screen.findByRole('row', { name: /Advanced Course/ });
+        if (!changed) await screen.findByRole('button', { name: `Archive ${name}` });
+      };
+
+      await user.click(await screen.findByRole('button', { name: `Archive ${name}` }));
+      expect(remove).toHaveBeenCalledExactlyOnceWith(id);
+      await changeScope(true);
+      const platformReads = mockListCanvasPlatforms.mock.calls.length;
+      const bindingReads = mockListCanvasProgramBindings.mock.calls.length;
+      await act(async () => {
+        if (completion === 'resolve') resolveArchive();
+        else rejectArchive(new Error('Previous archive rejected.'));
+      });
+      expect(screen.queryByText('Previous archive rejected.')).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(mockListCanvasPlatforms).toHaveBeenCalledTimes(platformReads);
+      expect(mockListCanvasProgramBindings).toHaveBeenCalledTimes(bindingReads);
+      if (scope !== 'permission') expect(screen.getByRole('row', { name: /Advanced Course/ })).toBeVisible();
+
+      await changeScope(false);
+      expect(screen.queryByText('Previous archive rejected.')).not.toBeInTheDocument();
+      remove.mockRejectedValueOnce(new Error('Current archive rejected.'));
+      await user.click(screen.getByRole('button', { name: `Archive ${name}` }));
+      expect(await screen.findByText('Current archive rejected.')).toBeVisible();
+      await changeScope(true);
+      expect(screen.queryByText('Current archive rejected.')).not.toBeInTheDocument();
+      await changeScope(false);
+      expect(screen.queryByText('Current archive rejected.')).not.toBeInTheDocument();
+      expect(remove).toHaveBeenCalledTimes(2);
+      expect(remove).toHaveBeenLastCalledWith(id);
+    } finally {
+      confirm.mockRestore();
+    }
   });
 
   it('finalizes entered client and deployment IDs through the LTI installation endpoint', async () => {

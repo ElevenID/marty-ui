@@ -275,6 +275,8 @@ def test_production_redis_tls_preserves_public_trust_and_confines_private_key(re
     assert "command" not in server  # Preserve upstream ownership/user-drop entrypoint.
     assert server["args"][server["args"].index("--port") + 1] == "0"
     assert server["args"][server["args"].index("--tls-port") + 1] == "6379"
+    assert server["args"][server["args"].index("--maxmemory-policy") + 1] == "noeviction"
+    assert server["args"][server["args"].index("--maxmemory") + 1] == "128mb"
     for probe in ("startupProbe", "readinessProbe", "livenessProbe"):
         assert "--tls" in server[probe]["exec"]["command"]
         assert "--cacert" in server[probe]["exec"]["command"]

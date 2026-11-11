@@ -251,6 +251,14 @@ directory PVC. PostgreSQL and Redis use persistent StatefulSets; Redis has
 append-only persistence. StatefulSet PVCs survive Helm uninstall, and the
 applicant PVC has Helm's `keep` policy. Delete data only as an explicit reset.
 
+Redis uses `noeviction` because it stores signing identities, published DID
+documents and one-use signing-grant markers as well as cache entries. At its
+configured memory limit it refuses new writes while retaining existing keys;
+evicting either permanent records or unexpired replay markers is unsafe. Watch
+Redis memory and rejected commands during capacity testing. The existing
+memory cap and pod limits remain bounded; a full Redis instance needs operator
+attention and can make application writes unavailable.
+
 Single-replica application Deployments use `Recreate`. This keeps the
 development node within its existing no-surge budget and makes Helm wait for
 the application's one Ready pod. With `RollingUpdate` and

@@ -1,5 +1,6 @@
 //! Kubernetes secret assembly. Credential values never enter argv or diagnostics.
 use crate::{Catalog, Result};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::{
     collections::BTreeMap,
@@ -8,6 +9,14 @@ use std::{
 
 const SPEC: &str = include_str!("../../../../deploy-config/catalog/kubernetes-secrets.json");
 const LIMIT: u64 = 1024 * 1024;
+// Catalog template slots are URI password components, not whole URLs. Percent
+// signs are data too: a password containing "%40" must reach the server as
+// those three bytes, rather than being interpreted as an encoded at-sign.
+const URI_PASSWORD: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 fn placeholder(value: &str) -> bool {
     value.is_empty()
@@ -214,7 +223,7 @@ fn assemble(spec: &Value, namespace: &str, values: &BTreeMap<String, String>) ->
             } else if let Some(template) = field["template"].as_str() {
                 template_variables
                     .replace_all(template, |captures: &regex::Captures<'_>| {
-                        values[&captures[1]].clone()
+                        utf8_percent_encode(&values[&captures[1]], URI_PASSWORD).to_string()
                     })
                     .into_owned()
             } else {
@@ -511,6 +520,35 @@ mod tests {
                 .unwrap()
                 .keys()
                 .any(|name| name.contains("PRIVATE_KEY") || name == "tls.key"));
+        }
+    }
+
+    #[test]
+    fn uri_templates_encode_password_bytes_without_changing_scalar_secrets() {
+        for (password, encoded) in [
+            ("literal%40%2F", "literal%2540%252F"),
+            (
+                "reserved@:/?#[]'\\$`\n",
+                "reserved%40%3A%2F%3F%23%5B%5D%27%5C%24%60%0A",
+            ),
+            ("customer-é-東京", "customer-%C3%A9-%E6%9D%B1%E4%BA%AC"),
+            ("Unreserved-._~0123", "Unreserved-._~0123"),
+        ] {
+            let (spec, mut values, _) = values();
+            values.insert("MARTY_DB_PASSWORD".into(), password.into());
+            values.insert("RABBITMQ_PASSWORD".into(), password.into());
+            let manifest = assemble(&spec, "marty-prod", &values);
+            let main = &manifest["items"][0]["stringData"];
+            assert_eq!(main["MARTY_DB_PASSWORD"], password);
+            assert_eq!(main["RABBITMQ_PASSWORD"], password);
+            for (field, scheme, suffix) in [
+                ("DATABASE_URL", "postgresql+asyncpg", "postgres:5432/marty"),
+                ("DATABASE_SYNC_URL", "postgresql", "postgres:5432/marty"),
+                ("RABBITMQ_URL", "amqp", "rabbitmq:5672/"),
+            ] {
+                assert_eq!(main[field], format!("{scheme}://marty:{encoded}@{suffix}"));
+            }
+            assert_eq!(main["KEYCLOAK_DB_PASSWORD"], values["KEYCLOAK_DB_PASSWORD"]);
         }
     }
     #[test]

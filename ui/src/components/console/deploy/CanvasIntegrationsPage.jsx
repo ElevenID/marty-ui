@@ -1,5 +1,5 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -410,6 +410,10 @@ function CanvasIntegrationsPage() {
   const [bindingRequirementIndex, setBindingRequirementIndex] = useState(0);
   const [bindingWizardStep, setBindingWizardStep] = useState(0);
   const [saveError, setSaveError] = useState(null);
+  const [platformArchiveError, setPlatformArchiveError] = useState(null);
+  const [bindingArchiveError, setBindingArchiveError] = useState(null);
+  const platformArchiveOwner = useRef(null);
+  const bindingArchiveOwner = useRef(null);
   const [saving, setSaving] = useState(false);
   const [opsBusy, setOpsBusy] = useState('');
   const [opsError, setOpsError] = useState(null);
@@ -431,6 +435,19 @@ function CanvasIntegrationsPage() {
   const [bindingActionBusy, setBindingActionBusy] = useState('');
   const [portableOperationBusy, setPortableOperationBusy] = useState('');
   const [bindingReadiness, setBindingReadiness] = useState({});
+
+  // Archive feedback belongs only to the inventory and grants that started it.
+  useLayoutEffect(() => {
+    platformArchiveOwner.current = {};
+    setPlatformArchiveError(null);
+    return () => { platformArchiveOwner.current = null; };
+  }, [organizationId, canViewCanvas, canDeleteCanvas]);
+
+  useLayoutEffect(() => {
+    bindingArchiveOwner.current = {};
+    setBindingArchiveError(null);
+    return () => { bindingArchiveOwner.current = null; };
+  }, [organizationId, canViewCanvas, canDeleteCanvas, selectedPlatformId]);
 
   const {
     data: platformsData,
@@ -1010,15 +1027,29 @@ function CanvasIntegrationsPage() {
   const removePlatform = async (platform) => {
     if (!canDeleteCanvas) return;
     if (!window.confirm(`Archive ${platform.display_name || platform.canvas_account_id}? Existing launches, evidence, and credentials will be retained.`)) return;
-    await deleteCanvasPlatform(platform.id);
-    await refreshAll();
+    const owner = platformArchiveOwner.current;
+    setPlatformArchiveError(null);
+    try {
+      await deleteCanvasPlatform(platform.id);
+      if (!owner || platformArchiveOwner.current !== owner) return;
+      await refreshAll();
+    } catch (error) {
+      if (owner && platformArchiveOwner.current === owner) setPlatformArchiveError(error);
+    }
   };
 
   const removeBinding = async (binding) => {
     if (!canDeleteCanvas) return;
     if (!window.confirm(`Archive ${binding.display_name || binding.application_template_id}? Existing launches, evidence, and credentials will be retained.`)) return;
-    await deleteCanvasProgramBinding(binding.id);
-    await reloadBindings();
+    const owner = bindingArchiveOwner.current;
+    setBindingArchiveError(null);
+    try {
+      await deleteCanvasProgramBinding(binding.id);
+      if (!owner || bindingArchiveOwner.current !== owner) return;
+      await reloadBindings();
+    } catch (error) {
+      if (owner && bindingArchiveOwner.current === owner) setBindingArchiveError(error);
+    }
   };
 
   const runMirrorOps = async (action) => {
@@ -1599,6 +1630,11 @@ function CanvasIntegrationsPage() {
           />
 
           <Typography variant="h6">Installed platforms</Typography>
+          {platformArchiveError && (
+            <Alert severity="error" onClose={() => setPlatformArchiveError(null)}>
+              {platformArchiveError?.message || String(platformArchiveError)}
+            </Alert>
+          )}
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>
@@ -1691,6 +1727,11 @@ function CanvasIntegrationsPage() {
               Bind typed Canvas evidence rules to one active Open Badge credential template. New bindings remain inactive until every blocking readiness check passes.
             </Typography>
           </Box>
+          {bindingArchiveError && (
+            <Alert severity="error" onClose={() => setBindingArchiveError(null)}>
+              {bindingArchiveError?.message || String(bindingArchiveError)}
+            </Alert>
+          )}
           <TableContainer component={Paper}>
             <Table size="small">
               <TableHead>

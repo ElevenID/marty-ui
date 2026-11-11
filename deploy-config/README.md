@@ -15,6 +15,14 @@ The AWS/K3s path uses the Helm chart in `deploy/helm/marty`. It does not use the
 legacy manifest script. The sample production hostnames below describe the
 maintained ElevenID environments; customer installations select their own origin.
 
+See the [complete installation-path map](../docs/installation-paths.md) for
+hosting variants, Windows recovery, development tooling and verification limits.
+The legacy script's `--help` is available without cluster access. Its explicit
+flags override the selected environment file; `status` requires only kubectl
+access. The reviewed legacy manifests must already match the namespace and
+image-pull Secret selected by those flags. Failed required image updates and
+rollouts return nonzero and must be investigated before retrying.
+
 ## Structure
 
 - compose/selfhost-production
