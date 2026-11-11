@@ -11,12 +11,10 @@ import ExitToAppIcon from '@mui/icons-material/ExitToApp';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import PropTypes from 'prop-types';
 import { usePreview } from '../../contexts/PreviewContext';
-import { useAuth } from '../../hooks/useAuth';
 
-function PreviewModeBanner({ contextLabel, sx = {} }) {
+function PreviewModeBanner({ sx = {} }) {
   const { t } = useTranslation('common');
-  const { exitPreview } = usePreview();
-  const { organizationName } = useAuth();
+  const { contextLabel, exitPreview } = usePreview();
 
   return (
     <Box
@@ -31,6 +29,8 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
     >
       <Alert
         severity="warning"
+        role="region"
+        aria-label={t('previewMode.title')}
         icon={<VisibilityIcon />}
         sx={{
           borderRadius: 0,
@@ -57,13 +57,6 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
               sx={{ bgcolor: 'warning.dark', color: 'white' }}
             />
           )}
-          {organizationName && (
-            <Chip 
-              label={t('previewMode.org', { organizationName })} 
-              size="small" 
-              variant="outlined"
-            />
-          )}
         </Box>
         <Button
           variant="contained"
@@ -88,7 +81,6 @@ function PreviewModeBanner({ contextLabel, sx = {} }) {
 }
 
 PreviewModeBanner.propTypes = {
-  contextLabel: PropTypes.string,
   sx: PropTypes.object,
 };
 

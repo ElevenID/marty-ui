@@ -23,6 +23,7 @@ pub const MDL_MARTY_RELATIONSHIP_ID: &str = "60000000-0000-0000-0000-00000000003
 pub const MARTY_REVOCATION_PROFILE_ID: &str = "70000000-0000-0000-0000-000000000001";
 pub const MARTY_MEMBER_SD_JWT_TEMPLATE_ID: &str = "50000000-0000-0000-0000-000000000010";
 pub const MARTY_MEMBER_MDOC_TEMPLATE_ID: &str = "50000000-0000-0000-0000-000000000030";
+pub const MARTY_MEMBER_OPEN_BADGE_TEMPLATE_ID: &str = "50000000-0000-0000-0000-000000000040";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MartyBootstrapConfig {
@@ -99,6 +100,7 @@ pub async fn bootstrap_system_catalog(
     now: DateTime<Utc>,
 ) -> Result<(), TrustCatalogError> {
     validate_config(config)?;
+    // Independent catalog metadata has no Marty identity or trust side effects.
     for framework in system_frameworks(now) {
         if repository
             .framework_by_code(&framework.code)
@@ -109,6 +111,42 @@ pub async fn bootstrap_system_catalog(
         }
     }
 
+    // Defaults are not an issuer/key migration. Keep previously published
+    // identity and operator trust decisions while public owners stage a cohort.
+    if let Some(existing) = repository
+        .issuer_entity_by_id(id(MARTY_ISSUER_ENTITY_ID))
+        .await?
+    {
+        if existing.organization_id.as_deref() != Some(&config.organization_id) {
+            return Err(TrustCatalogError::InvalidConfig("issuer_tenant_conflict"));
+        }
+        if existing.issuer_id != config.issuer_did {
+            tracing::warn!(
+                "MARTY_TRUST_SEED.IDENTITY_RECONCILIATION_REQUIRED: existing issuer preserved"
+            );
+            return Ok(());
+        }
+    }
+    for profile_id in [
+        MARTY_TRUST_PROFILE_ID,
+        ICAO_TRAVEL_TRUST_PROFILE_ID,
+        MDL_AAMVA_TRUST_PROFILE_ID,
+    ] {
+        if let Some(existing) = repository.profile_by_id(id(profile_id)).await? {
+            if existing.organization_id != config.organization_id {
+                return Err(TrustCatalogError::InvalidConfig("profile_tenant_conflict"));
+            }
+            if existing.trust_sources.iter().any(|source| {
+                source.source_type == TrustSourceType::PinnedIssuer
+                    && (source.id == id(MARTY_TRUST_BUNDLE_SOURCE_ID)
+                        || source.name == "Marty Managed Issuer")
+                    && source.issuer_did.as_deref() != Some(config.issuer_did.as_str())
+            }) {
+                tracing::warn!("MARTY_TRUST_SEED.IDENTITY_RECONCILIATION_REQUIRED: existing issuer pin preserved");
+                return Ok(());
+            }
+        }
+    }
     let issuer = bootstrap_issuer(repository, config, now).await?;
     let login = login_profile(config, now);
     ensure_profile(repository, &login).await?;
@@ -121,6 +159,7 @@ pub async fn bootstrap_system_catalog(
             vec![
                 MARTY_MEMBER_SD_JWT_TEMPLATE_ID,
                 MARTY_MEMBER_MDOC_TEMPLATE_ID,
+                MARTY_MEMBER_OPEN_BADGE_TEMPLATE_ID,
             ],
             now,
         ),
@@ -258,39 +297,12 @@ async fn ensure_profile(
     repository: &dyn TrustProfileRepository,
     desired: &TrustProfile,
 ) -> Result<(), TrustCatalogError> {
-    if let Some(mut existing) = repository.profile_by_id(desired.id).await? {
+    if let Some(existing) = repository.profile_by_id(desired.id).await? {
         if existing.organization_id != desired.organization_id {
             return Err(TrustCatalogError::InvalidConfig("profile_tenant_conflict"));
         }
-        let mut changed = false;
-        if existing.revocation_profile_id != desired.revocation_profile_id {
-            existing.revocation_profile_id = desired.revocation_profile_id.clone();
-            changed = true;
-        }
-        for managed in desired
-            .trust_sources
-            .iter()
-            .filter(|source| source.source_type == TrustSourceType::PinnedIssuer)
-            .cloned()
-        {
-            if let Some(current) = existing
-                .trust_sources
-                .iter_mut()
-                .find(|source| source.id == managed.id || source.name == managed.name)
-            {
-                if current != &managed {
-                    *current = managed;
-                    changed = true;
-                }
-            } else {
-                existing.trust_sources.push(managed);
-                changed = true;
-            }
-        }
-        if changed {
-            existing.updated_at = desired.updated_at;
-            repository.save_profile(&existing, None).await?;
-        }
+        // Bootstrap supplies defaults only for absent profiles. Existing trust
+        // policy, issuer pins and revocation bindings belong to public owners.
         return Ok(());
     }
     repository.save_profile(desired, None).await?;
@@ -301,16 +313,19 @@ async fn ensure_relationship(
     repository: &dyn TrustProfileRepository,
     desired: TrustProfileIssuer,
 ) -> Result<(), TrustCatalogError> {
-    if let Some(mut existing) = repository.profile_issuer_by_id(desired.id).await? {
+    if let Some(existing) = repository.profile_issuer_by_id(desired.id).await? {
         if existing.trust_profile_id != desired.trust_profile_id {
             return Err(TrustCatalogError::InvalidConfig(
                 "relationship_profile_conflict",
             ));
         }
-        existing.issuer_id = desired.issuer_id;
-        existing.metadata = desired.metadata;
-        existing.updated_at = desired.updated_at;
-        repository.save_profile_issuer(&existing).await?;
+        if existing.issuer_id != desired.issuer_id {
+            return Err(TrustCatalogError::InvalidConfig(
+                "relationship_issuer_conflict",
+            ));
+        }
+        // The public relationship owner controls later versioned template/type
+        // authorizations. Do not reset those approvals to bootstrap defaults.
     } else {
         repository.save_profile_issuer(&desired).await?;
     }
@@ -335,7 +350,7 @@ fn login_profile(config: &MartyBootstrapConfig, now: DateTime<Utc>) -> TrustProf
     profile.revocation_policy.offline_grace_period_hours = 12;
     profile.revocation_policy.cache_duration_hours = 24;
     profile.time_policy.credential_freshness_hours = Some(24);
-    profile.supported_formats = vec!["SD_JWT_VC".into(), "MDOC".into()];
+    profile.supported_formats = vec!["SD_JWT_VC".into(), "MDOC".into(), "VC_JWT".into()];
     profile
 }
 

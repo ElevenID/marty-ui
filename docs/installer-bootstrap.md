@@ -200,6 +200,12 @@ operator and release metadata, reviewed tool pins, host adapter and executable
 bootstrap tests. A future native Windows entry point would need a PowerShell
 adapter; this POSIX shell script does not claim Windows support.
 
+The [Windows Docker Desktop recovery](windows-compose-recovery.md) and
+[candidate product/credential transition](windows-renewal-activation.md)
+commands operate an already retained installation. They do not provide a fresh
+Windows installer or extend this bootstrap's platform support. A Windows host
+needs a separately prepared Linux amd64 environment to use this bootstrap.
+
 ## Deployment operations
 
 For customer-managed unattended boot and read-only scheduled checks, see

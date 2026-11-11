@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Dialog,
   DialogActions,
@@ -43,7 +44,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
  *     }
  *   />
  */
-export default function ConfirmDeleteDialog({
+function ConfirmDeleteDialogState({
   /** Whether the dialog is visible. */
   open,
   /** Called when the user dismisses the dialog without confirming. */
@@ -76,32 +77,45 @@ export default function ConfirmDeleteDialog({
   loading: loadingProp,
 }) {
   const [internalLoading, setInternalLoading] = useState(false);
-  const loading = loadingProp !== undefined ? loadingProp : internalLoading;
+  const [error, setError] = useState('');
+  const active = useRef(false);
+  const requestPending = useRef(false);
+  const loading = Boolean(loadingProp || internalLoading);
+  const action = typeof confirmLabel === 'string' ? confirmLabel.toLowerCase() : 'delete';
+  const pendingLabel = action === 'revoke' ? 'Revoking…' : action === 'delete' ? 'Deleting…' : 'Working…';
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   const handleConfirm = async () => {
-    const result = onConfirm?.();
-    if (result && typeof result.then === 'function') {
-      setInternalLoading(true);
-      try {
-        await result;
-        onClose?.();
-      } finally {
-        setInternalLoading(false);
+    if (loading || requestPending.current) return;
+    requestPending.current = true;
+    setInternalLoading(true);
+    setError('');
+    try {
+      await onConfirm?.();
+      if (active.current) onClose?.();
+    } catch (actionError) {
+      if (active.current) {
+        setError((actionError instanceof Error && actionError.message) || 'This action could not be completed. Please try again.');
       }
-    } else {
-      onClose?.();
+    } finally {
+      requestPending.current = false;
+      if (active.current) setInternalLoading(false);
     }
   };
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+    <Dialog open={open} onClose={loading ? undefined : onClose} maxWidth="xs" fullWidth>
       <DialogTitle>{title}</DialogTitle>
 
       <DialogContent>
         <Typography>
           {itemName ? (
             <>
-              Are you sure you want to delete <strong>{itemName}</strong>? This
+              Are you sure you want to {action} <strong>{itemName}</strong>? This
               action cannot be undone.
             </>
           ) : (
@@ -110,6 +124,7 @@ export default function ConfirmDeleteDialog({
         </Typography>
 
         {warning}
+        {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       </DialogContent>
 
       <DialogActions>
@@ -123,9 +138,14 @@ export default function ConfirmDeleteDialog({
           disabled={loading}
           startIcon={<DeleteIcon />}
         >
-          {loading ? 'Deleting…' : confirmLabel}
+          {loading ? pendingLabel : confirmLabel}
         </Button>
       </DialogActions>
     </Dialog>
   );
+}
+
+export default function ConfirmDeleteDialog(props) {
+  // A replacement target or a reopened dialog must not inherit a prior request.
+  return <ConfirmDeleteDialogState key={`${Boolean(props.open)}:${props.itemName ?? ''}`} {...props} />;
 }

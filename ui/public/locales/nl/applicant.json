@@ -20,7 +20,8 @@
       "applyDescription": "Blader door beschikbare referenties en start een aanvraag",
       "viewMyCredentials": "Mijn referenties bekijken",
       "viewDescription": "Bekijk uw uitgegeven digitale referenties"
-    }
+    },
+    "loadError": "Het overzicht van uw referenties kon niet worden geladen. Probeer het opnieuw."
   },
   "credentials": {
     "title": "Mijn referenties",
@@ -139,7 +140,10 @@
       "fullName": "Volledige naam",
       "email": "E-mail",
       "emailHelp": "Neem contact op met de ondersteuning om uw e-mail te wijzigen",
-      "phone": "Telefoonnummer"
+      "phone": "Telefoonnummer",
+      "loadError": "Uw profiel kon niet worden geladen. Probeer het opnieuw.",
+      "saved": "Profiel opgeslagen.",
+      "save": "Profiel opslaan"
     },
     "notifications": {
       "title": "Meldingen",
@@ -148,11 +152,16 @@
       "applicationUpdates": "Aanvraagupdates",
       "applicationUpdatesDescription": "Ontvang een melding wanneer uw aanvraagstatus verandert",
       "expirationReminders": "Verloopherinneringen",
-      "expirationRemindersDescription": "Herinner me voordat referenties verlopen"
+      "expirationRemindersDescription": "Herinner me voordat referenties verlopen",
+      "unavailable": "Meldingsvoorkeuren zijn niet beschikbaar in deze implementatie."
     },
     "actions": {
       "save": "Instellingen opslaan",
       "saving": "Opslaan..."
+    },
+    "wallets": {
+      "loadError": "Beschikbare wallets konden niet worden geladen. Probeer het opnieuw.",
+      "savedAutomatically": "Uw walletkeuzes worden automatisch in deze browser opgeslagen."
     }
   },
   "catalog": {
@@ -169,12 +178,14 @@
       "enterprise": "Enterprise-referenties"
     },
     "filters": {
-      "category": "Categorie"
+      "category": "Categorie",
+      "clear": "Filters wissen"
     },
     "empty": {
       "title": "Geen referenties beschikbaar",
       "description": "Er zijn momenteel geen referenties beschikbaar voor uw organisatie.",
-      "message": "Geen referenties komen overeen met uw zoekcriteria. Probeer uw filters aan te passen."
+      "message": "Geen referenties komen overeen met uw zoekcriteria. Probeer uw filters aan te passen.",
+      "launchUnavailable": "De referentie voor deze cursus is momenteel niet beschikbaar. Neem contact op met de cursusaanbieder."
     },
     "card": {
       "free": "Gratis",
@@ -194,7 +205,9 @@
       "requiredInfo": "Vereiste informatie",
       "offeredBy": "Aangeboden door: {{vendorName}}",
       "templateVersion": "Sjabloon v{{version}}"
-    }
+    },
+    "searchLabel": "Referenties zoeken",
+    "errorLoading": "De referentiecatalogus kon niet worden geladen. Probeer het opnieuw of neem contact op met de ondersteuning als het probleem blijft bestaan."
   },
   "applicationForm": {
     "title": {
@@ -254,6 +267,20 @@
     },
     "fields": {
       "optional": "(optioneel)"
+    }
+  },
+  "identity": {
+    "details": {
+      "linkedCredentials": "Uitgegeven referenties",
+      "viewApplication": "Aanvraagdetails bekijken",
+      "applicationStatus": "Aanvraagstatus",
+      "credentialId": "Referentie-ID"
+    },
+    "guidance": {
+      "walletPresentation": "Gebruik de wallet waarin een referentie is opgeslagen om deze te presenteren.",
+      "expired": "Deze referentie is verlopen. Neem contact op met de uitgever over verlenging.",
+      "revoked": "Deze referentie is ingetrokken. Neem contact op met de uitgever voor hulp.",
+      "additionalInformation": "De uitgever heeft meer informatie nodig. Neem contact op met de uitgever voor instructies om deze aan te leveren."
     }
   }
 }

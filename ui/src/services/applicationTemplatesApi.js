@@ -30,12 +30,12 @@ export async function getApplicationTemplate(templateId, organizationId) {
   return get(`${API_BASE}/${encodeURIComponent(templateId)}${query}`);
 }
 
-export async function createApplicationTemplate(data) {
+export async function createApplicationTemplate(data, options = {}) {
   const organizationId = requireOrganizationId(data?.organization_id || data?.organizationId);
   return postWithIdempotency(API_BASE, {
     ...data,
     organization_id: organizationId,
-  });
+  }, options);
 }
 
 /**

@@ -8,7 +8,8 @@ use marty_presentation_policy::{
     CredentialStatusResolver, DisplayMetadata, EvaluatePresentationRequest, FreshnessPolicy,
     HolderBinding, IssuerTrustEvidence, PolicyStatus, PresentationPolicy,
     PresentationTrustResolver, PresentationVerificationOrchestrator, RequestPurpose,
-    RequestedClaim, ResolvedTrustProfile, RustCredentialKernel, VerifiedFactsOrchestrator,
+    RequestedClaim, ResolvedCredentialTemplate, ResolvedTrustProfile, RustCredentialKernel,
+    VerifiedFactsOrchestrator,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -93,6 +94,29 @@ struct GateTrust {
 
 #[async_trait]
 impl PresentationTrustResolver for GateTrust {
+    async fn load_credential_template(
+        &self,
+        template_id: &str,
+        organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, marty_presentation_policy::PresentationVerificationError>
+    {
+        if template_id != "runtime-gate-template" || organization_id != self.profile.organization_id
+        {
+            return Err(
+                marty_presentation_policy::PresentationVerificationError::Failed(
+                    "runtime gate template identity mismatch".into(),
+                ),
+            );
+        }
+        Ok(ResolvedCredentialTemplate {
+            id: template_id.into(),
+            organization_id,
+            credential_type: "RuntimeGateCredential".into(),
+            vct: Some("RuntimeGateCredential".into()),
+            doctype: None,
+            status: "ACTIVE".into(),
+        })
+    }
     async fn load_profile(
         &self,
         profile_id: Uuid,
@@ -168,6 +192,7 @@ impl CredentialStatusResolver for GateStatus {
 fn gate_policy(organization_id: Uuid, trust_profile_id: Uuid) -> PresentationPolicy {
     let now = Utc::now();
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::from_u128(3),
         organization_id,
         name: "Exact image positive OID4VP gate".into(),
@@ -286,6 +311,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
         organization_id,
         document: json!({
             "status": "active",
+            "allowed_algorithms": ["ES256"],
             "issuer_relationships": [{
                 "issuer_id": ISSUER,
                 "relationship_status": "TRUSTED",
@@ -309,6 +335,20 @@ async fn execute(input: GateInput) -> Result<Value, String> {
     policy
         .validate()
         .map_err(|_| "runtime gate policy rejected")?;
+    let query = json!({"id":"runtime-gate","input_descriptors":[{"id":"runtime-gate-template","format":{"dc+sd-jwt":{}},"constraints":{"fields":[{"path":["$.email"]},{"path":["$.vct"],"filter":{"type":"string","const":"RuntimeGateCredential"}}]}}]});
+    let transport = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+        credential_authority: None,
+        query_kind: marty_oid4vp_contract::QueryKind::PresentationExchange,
+        query_digest: marty_oid4vp_contract::digest_query_document(&query)
+            .map_err(|_| "runtime query rejected")?,
+        query_document: query,
+        presentation_submission: Some(
+            json!({"id":"runtime-gate-response","definition_id":"runtime-gate","descriptor_map":[{"id":"runtime-gate-template","format":"dc+sd-jwt","path":"$"}]}),
+        ),
+        vp_token_raw: presentation.clone(),
+        verifier_client_id: AUDIENCE.into(),
+        request_nonce: NONCE.into(),
+    };
     let request = EvaluatePresentationRequest {
         vp_token: Value::String(presentation),
         trust_profile_id: Some(trust_profile_id.to_string()),
@@ -318,7 +358,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
             ("oid4vp_verifier_context".into(), json!(true)),
             ("replay_check_verified".into(), json!(true)),
         ]),
-        oid4vp_transport: None,
+        oid4vp_transport: Some(transport),
         trusted_internal_context: true,
     };
     let facts = orchestrator
@@ -400,6 +440,7 @@ async fn execute(input: GateInput) -> Result<Value, String> {
 
 #[tokio::main]
 async fn main() {
+    marty_service_runtime::install_tls_crypto_provider();
     let result = match read_input(std::io::stdin().lock()) {
         Ok(input) => execute(input).await,
         Err(error) => Err(error),

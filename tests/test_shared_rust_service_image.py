@@ -190,12 +190,13 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
     for step in public:
         config = step["with"]
         assert config["file"] == "services/Dockerfile"
-        assert config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+        assert config["cache-from"] == "${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}"
         assert "cache-to" not in config
         assert config["secret-envs"] == (
             "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN\n"
             "sccache_url=SCCACHE_GHA_CACHE_URL\n"
             "sccache_mode=SCCACHE_GHA_RW_MODE\n"
+            "private_forks_read_token=PRIVATE_FORKS_READ_TOKEN\n"
         )
     ci_credential = next(
         step
@@ -213,12 +214,12 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
     assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in release_credential["with"]["script"]
     release_build = next(step for step in release_steps if step.get("id") == "services")
     config = release_build["with"]
-    assert config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+    assert config["cache-from"] == "${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}"
     assert "cache-to" not in config
     assert config["sbom"] is True
     assert config["provenance"] == "mode=max"
     warmer = warm["jobs"]["public-services"]
-    assert warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert warmer["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
     assert warmer["permissions"] == {"actions": "write", "contents": "read"}
     warm_build = next(
         step

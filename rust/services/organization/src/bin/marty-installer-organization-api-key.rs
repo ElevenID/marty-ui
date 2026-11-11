@@ -3,6 +3,7 @@
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() {
+    marty_service_runtime::install_tls_crypto_provider();
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
     let [command] = arguments.as_slice() else {
         eprintln!("usage: marty-installer-organization-api-key issue|revoke");

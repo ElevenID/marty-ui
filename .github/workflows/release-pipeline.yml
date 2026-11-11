@@ -1,0 +1,297 @@
+name: Release pipeline
+
+run-name: Release ${{ inputs.channel }} from ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Publish a Linux nightly, a stable stack, or both from this protected-main source
+        type: choice
+        options: [nightly, stable, both]
+        default: both
+        required: true
+      selfhost_external_images_json:
+        description: Optional stable image digest override; defaults to release/external-images.json
+        type: string
+        required: false
+      selfhost_public_profile:
+        description: Stable customer application profile
+        type: choice
+        options: [full, tester]
+        default: full
+        required: true
+      production_web:
+        description: After stable publication, publish the application, website and signed composition
+        type: boolean
+        default: false
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: release-pipeline-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_CHANNEL: ${{ inputs.channel }}
+  SELFHOST_EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
+  SELFHOST_PUBLIC_PROFILE: ${{ inputs.selfhost_public_profile }}
+  PRODUCTION_WEB: ${{ inputs.production_web }}
+
+jobs:
+  full-ci:
+    if: github.repository == 'ElevenID/marty-ui' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      ci_run_id: ${{ steps.run.outputs.ci_run_id }}
+      stable_tag: ${{ steps.run.outputs.stable_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Qualify the exact source once
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/release_pipeline.py qualify --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  nightly:
+    needs: full-ci
+    if: inputs.channel == 'nightly' || inputs.channel == 'both'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      nightly_run_id: ${{ steps.run.outputs.nightly_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Claim and publish the exact nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+        run: >-
+          python scripts/release_pipeline.py nightly
+          --ci-run-id "$CI_RUN_ID" --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-nightly-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  stable:
+    needs: full-ci
+    if: inputs.channel == 'stable' || inputs.channel == 'both'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      stable_run_id: ${{ steps.run.outputs.stable_run_id }}
+      stable_tag: ${{ steps.run.outputs.stable_tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Claim and qualify the stable candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+        run: >-
+          python scripts/release_pipeline.py stable
+          --ci-run-id "$CI_RUN_ID" --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-stable-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  stable-publish:
+    needs: [full-ci, stable]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      publisher_run_id: ${{ steps.run.outputs.publisher_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Continue through the existing stable publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
+        run: >-
+          python scripts/release_pipeline.py stable-publish
+          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID"
+          --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve original publisher observation or dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-publisher-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  web-application:
+    needs: [full-ci, stable, stable-publish]
+    if: inputs.production_web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      application_run_id: ${{ steps.run.outputs.application_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Publish the application against the completed stable backend
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
+          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
+        run: >-
+          python scripts/release_pipeline.py web-application
+          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
+          --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-application-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  web-website:
+    needs: [full-ci, stable, stable-publish]
+    if: inputs.production_web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      website_run_id: ${{ steps.run.outputs.website_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Publish the independent production website
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
+          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
+        run: >-
+          python scripts/release_pipeline.py web-website
+          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
+          --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-website-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90
+
+  web-compose:
+    needs: [full-ci, stable, stable-publish, web-application, web-website]
+    if: inputs.production_web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      composition_run_id: ${{ steps.run.outputs.composition_run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.12'
+      - id: run
+        name: Compose the exact successful website and application producers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ needs.full-ci.outputs.ci_run_id }}
+          STABLE_RUN_ID: ${{ needs.stable.outputs.stable_run_id }}
+          PUBLISHER_RUN_ID: ${{ needs.stable-publish.outputs.publisher_run_id }}
+          APPLICATION_RUN_ID: ${{ needs.web-application.outputs.application_run_id }}
+          WEBSITE_RUN_ID: ${{ needs.web-website.outputs.website_run_id }}
+        run: >-
+          python scripts/release_pipeline.py web-compose
+          --ci-run-id "$CI_RUN_ID" --stable-run-id "$STABLE_RUN_ID" --publisher-run-id "$PUBLISHER_RUN_ID"
+          --application-run-id "$APPLICATION_RUN_ID" --website-run-id "$WEBSITE_RUN_ID"
+          --journal "$RUNNER_TEMP/release-pipeline.json"
+      - name: Preserve stage results and any uncertain dispatch
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-pipeline-composition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-pipeline.json
+          if-no-files-found: warn
+          retention-days: 90

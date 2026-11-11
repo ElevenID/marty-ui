@@ -61,6 +61,7 @@ describe('WebhookManager', () => {
 
     await user.click(await screen.findByRole('button', { name: /add your first webhook/i }))
 
+    expect(mockGetAvailableEventTypes).toHaveBeenCalledWith('org-123')
     expect(screen.getAllByText('credential offered').length).toBeGreaterThan(0)
     expect(screen.getAllByText('applicant approved').length).toBeGreaterThan(0)
     expect(screen.getAllByText('device key expiring').length).toBeGreaterThan(0)

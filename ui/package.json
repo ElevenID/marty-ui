@@ -25,7 +25,7 @@
     "storybook:build": "cross-env DISABLE_PRERENDER=1 storybook build",
     "test:visual": "playwright test tests/visual",
     "check:demo-manifests": "node --test scripts/generated-text.test.mjs && node scripts/generate-demo-manifest-module.mjs --check",
-    "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs",
+    "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs && node scripts/patch-checker-worker-cleanup.mjs",
     "build:website": "node scripts/build-web-surface.mjs website",
     "build:application": "node scripts/build-web-surface.mjs application",
     "test:website": "node --test scripts/web-surface-contract.test.mjs scripts/web-surface-build-contract.test.mjs scripts/production-build-contract.test.mjs scripts/crawler-config.test.mjs && vitest run src/application/routing/appHandoff.test.ts src/application/routing/loginEntry.test.ts src/application/routing/publicEntry.test.ts src/components/__tests__/LandingPage.test.tsx src/apps/shared/WebSurfaceBoundary.test.tsx"

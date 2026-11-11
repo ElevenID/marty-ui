@@ -6,24 +6,33 @@ use crate::{
     PolicyStatus, PresentationPolicy, RequestPurpose, RequestedClaim,
 };
 
-const MARTY_ORG: Uuid = Uuid::from_u128(1);
 const ELEVEN_ID_ORG: Uuid = Uuid::from_u128(0x2222_2222_2222_2222_2222_2222_2222_2222);
 const MARTY_TRUST_PROFILE: Uuid = Uuid::from_u128(0x6000_0000_0000_0000_0000_0000_0000_0001);
 const CATALOG_NAMESPACE: Uuid = Uuid::from_u128(0x9d96_b1f3_0d84_46c8_aab4_b82a_4db1_6f51);
 
 pub async fn reconcile_builtin_policies(
     repository: &dyn PolicyRepository,
+    organization_id: Uuid,
 ) -> Result<usize, String> {
-    let policies = built_in_presentation_policies();
+    let policies = built_in_presentation_policies(organization_id);
     for policy in &policies {
         policy.validate().map_err(|error| error.to_string())?;
+        if repository
+            .get(policy.id)
+            .await?
+            .is_some_and(|existing| existing.organization_id != policy.organization_id)
+        {
+            return Err("built-in presentation policy belongs to a different organization".into());
+        }
+    }
+    for policy in &policies {
         repository.save(policy).await?;
     }
     Ok(policies.len())
 }
 
 #[must_use]
-pub fn built_in_presentation_policies() -> Vec<PresentationPolicy> {
+pub fn built_in_presentation_policies(organization_id: Uuid) -> Vec<PresentationPolicy> {
     vec![
         login_policy(
             "50000000-0000-0000-0000-000000000001",
@@ -39,7 +48,7 @@ pub fn built_in_presentation_policies() -> Vec<PresentationPolicy> {
         ),
         login_policy(
             "50000000-0000-0000-0000-000000000002",
-            MARTY_ORG,
+            organization_id,
             "MemberLogin-SD-JWT",
             "50000000-0000-0000-0000-000000000010",
             "Member Login Credential",
@@ -51,7 +60,7 @@ pub fn built_in_presentation_policies() -> Vec<PresentationPolicy> {
         ),
         login_policy(
             "50000000-0000-0000-0000-000000000003",
-            MARTY_ORG,
+            organization_id,
             "MemberLogin-mDoc",
             "50000000-0000-0000-0000-000000000030",
             "Membership ID (mDoc)",
@@ -61,8 +70,8 @@ pub fn built_in_presentation_policies() -> Vec<PresentationPolicy> {
             2,
             "2026-03-22T00:00:00Z",
         ),
-        open_badge_policy(),
-        private_age_policy(),
+        open_badge_policy(organization_id),
+        private_age_policy(organization_id),
     ]
 }
 
@@ -101,10 +110,10 @@ fn login_policy(
     )
 }
 
-fn open_badge_policy() -> PresentationPolicy {
+fn open_badge_policy(organization_id: Uuid) -> PresentationPolicy {
     policy(
         "50000000-0000-0000-0000-000000000004",
-        MARTY_ORG,
+        organization_id,
         "OpenBadgeLogin",
         "Passwordless login using a trusted, active Open Badges 3.0 membership credential.",
         DisplayMetadata {
@@ -139,11 +148,11 @@ fn open_badge_policy() -> PresentationPolicy {
     )
 }
 
-fn private_age_policy() -> PresentationPolicy {
+fn private_age_policy(organization_id: Uuid) -> PresentationPolicy {
     let id = "50000000-0000-0000-0000-000000000005";
     policy(
         id,
-        MARTY_ORG,
+        organization_id,
         "Private Online Age Proof",
         "Requests only age_over_21 from a trusted mDL; no date of birth, predicates, range proofs, or ZKP are requested.",
         DisplayMetadata {
@@ -232,6 +241,7 @@ fn policy(
 ) -> PresentationPolicy {
     let created_at = timestamp(created_at);
     PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: id.parse().expect("catalog policy UUID"),
         organization_id,
         name: name.into(),

@@ -31,6 +31,7 @@ import { Link } from 'react-router';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { usePermissions } from '../../../hooks/usePermissions';
 import { listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 
@@ -87,6 +88,9 @@ function IssuerDidStatus({ issuerDid }) {
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const canEdit = !permissionsLoading && can('credential-template', 'edit');
+  const canVersion = !permissionsLoading && can('credential-template', 'version');
   const organizationId = activeOrgId;
   const { data: templatesData, loading, error } = useAsyncData(
     () => {
@@ -219,7 +223,7 @@ function CredentialTemplatesPage() {
         icon={<InfoOutlinedIcon />}
         sx={{ mb: 3 }}
       >
-        <Typography variant="body2" fontWeight={600} gutterBottom>
+        <Typography variant="body2" gutterBottom sx={{ fontWeight: 600 }}>
           {t('templates.guardrailTitle')}
         </Typography>
         <Typography variant="body2">
@@ -258,7 +262,7 @@ function CredentialTemplatesPage() {
               {templates.map((template) => (
                   <TableRow key={template.id} hover>
                     <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
                         {template.name}
                       </Typography>
                     </TableCell>
@@ -300,14 +304,18 @@ function CredentialTemplatesPage() {
                           <VisibilityIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      <Tooltip title={t('templates.actions.edit')}>
+                      <Tooltip title={String(template.status).toLowerCase() === 'draft' ? 'Edit draft settings' : 'Create a draft version'}>
+                        <span>
                         <IconButton
                           component={Link}
-                          to={`/console/org/templates/credentials/${template.id}/edit`}
+                          to={`/console/org/templates/credentials/${encodeURIComponent(template.id)}/edit`}
+                          aria-label={String(template.status).toLowerCase() === 'draft' ? `Edit settings for ${template.name}` : `Create a draft version of ${template.name}`}
+                          disabled={String(template.status).toLowerCase() === 'draft' ? !canEdit : !canVersion}
                           size="small"
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
+                        </span>
                       </Tooltip>
                       <Tooltip title={t('templates.actions.createIssuanceFlow')}>
                         <IconButton

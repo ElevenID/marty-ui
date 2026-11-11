@@ -994,15 +994,29 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
 def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
     release = yaml.safe_load(_text(".github/workflows/cd.yml"))
     steps = release["jobs"]["verifier-differential"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    fetch = next(step for step in steps if step.get("name") == "Fetch the attested Core private fork dependencies")
     producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
-    assert "--source-digest \"$commit\"" in producer["run"]
-    assert "--deny-self-hosted-runners" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
-    assert "--expected-sha256 \"$digest\"" in producer["run"]
-    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert steps.index(prepare) < steps.index(fetch) < steps.index(producer)
+    for step in (prepare, producer):
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+    assert fetch == {
+        "name": "Fetch the attested Core private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "shell": "bash",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": "python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml",
+    }
+    assert "config/credentials-verifier-positive-producer.json" in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in prepare["run"]
+    assert "--source-digest \"$commit\"" in prepare["run"]
+    assert "--deny-self-hosted-runners" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
+    assert "--expected-sha256 \"$digest\"" in prepare["run"]
+    assert "--expected-commit \"$commit\"" in prepare["run"]
     assert "cargo +1.97.1 build --locked" in producer["run"]
     verifier = next(
         step for step in steps
@@ -1112,25 +1126,28 @@ def test_release_workflows_never_checkout_dispatch_or_transaction_data() -> None
         assert all(reference not in workflow for reference in forbidden_refs)
 
 
-def test_stack_release_uses_read_only_default_permissions() -> None:
+def test_stack_release_uses_read_only_defaults_and_scoped_operator_dispatch() -> None:
     document = yaml.safe_load(_text(".github/workflows/cd.yml"))
 
     assert document["permissions"] == {"contents": "read"}
-    for job in document["jobs"].values():
+    for name, job in document["jobs"].items():
         permissions = job.get("permissions", {})
-        assert permissions.get("actions") != "write"
+        if name == "publish-manifest":
+            assert permissions.get("actions") == "write"
+        else:
+            assert permissions.get("actions") != "write"
         assert permissions.get("security-events") != "write"
 
 
 def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     verifier = jobs["verifier-differential"]
-    producer = next(step for step in verifier["steps"]
-                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
-    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
+    prepare = next(step for step in verifier["steps"]
+                   if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    assert 'select(.repository == "ElevenID/marty-core")' in prepare["run"]
+    assert 'all(.[]; . == [$commit, $version])' in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
     script = next(step["run"] for step in verifier["steps"]
                   if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
     assert "--jwk-tool" in script
@@ -1398,6 +1415,13 @@ def test_workflow_changing_source_tag_uses_authenticated_operator_handoff() -> N
     assert "--artifact-id" in tag_step["run"]
     assert "--artifact-digest" in tag_step["run"]
     assert "release_tag_handoff.py wait" in tag_step["run"]
+    assert '--dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json"' in tag_step["run"]
+    dispatch_receipt = next(
+        step for step in publisher["steps"]
+        if step.get("with", {}).get("path") == "${{ runner.temp }}/stable-tag-dispatch.json"
+    )
+    assert dispatch_receipt["uses"].startswith("actions/upload-artifact@")
+    assert dispatch_receipt["with"]["if-no-files-found"] == "error"
     assert "gh release create" not in tag_step["run"]
     helper = _text("scripts/push_promoted_release_tag.py")
     assert "setup-git" not in helper
@@ -1414,7 +1438,7 @@ def test_bounded_publication_rejects_later_attempt_and_resume_before_builds() ->
     assert 'test "$GITHUB_REF" = refs/heads/main' in first["run"]
     assert '[ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]' in first["run"]
     assert "exit 1" in first["run"]
-    assert jobs["official-gate-evidence"]["timeout-minutes"] == 90
+    assert jobs["official-gate-evidence"]["timeout-minutes"] == 30
     assert jobs["publish-manifest"]["timeout-minutes"] == 90
 
 

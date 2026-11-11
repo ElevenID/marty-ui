@@ -107,11 +107,65 @@ function normalizeTrustedIssuer(issuer = {}) {
   };
 }
 
-function composeTrustProfileIssuer(relationship, issuerEntity) {
-  if (!relationship || !issuerEntity || relationship.issuer_id !== issuerEntity.id) {
-    const error = new Error('Trust Profile Issuer response references an unavailable Issuer Entity.');
-    error.code = 'MALFORMED_RESPONSE';
+function malformedTrustIssuer(message) {
+  const error = new Error(message);
+  error.code = 'MALFORMED_RESPONSE';
+  return error;
+}
+
+const hasIssuerIdentifier = (value) => typeof value === 'string' && value.trim().length > 0;
+
+function linkableIssuer(entity, organizationId) {
+  return entity?.organization_id === organizationId
+    || (entity?.organization_id == null && entity?.is_system_issuer === true);
+}
+
+function requireIssuerEntity(entity, organizationId, expectedDid, created = false) {
+  if (!hasIssuerIdentifier(entity?.id) || !hasIssuerIdentifier(entity?.issuer_id)
+    || !linkableIssuer(entity, organizationId)
+    || (created && entity.organization_id !== organizationId)
+    || (expectedDid !== undefined && entity.issuer_id !== expectedDid)) {
+    throw malformedTrustIssuer('Issuer Entity response does not match the requested identity and organization scope.');
+  }
+  return entity;
+}
+
+function issuerEntitiesById(entities) {
+  const result = new Map();
+  for (const entity of requireDirectArray(entities, 'Issuer Entity')) {
+    if (!hasIssuerIdentifier(entity?.id) || result.has(entity.id)) {
+      throw malformedTrustIssuer('Issuer Entity inventory contains a missing or duplicate identity.');
+    }
+    result.set(entity.id, entity);
+  }
+  return result;
+}
+
+/** The optional callback guards every dispatch and settlement, including rejection.
+ * It does not cancel or roll back a request that was already dispatched.
+ */
+function requireCurrentTrustIssuer({ isCurrent } = {}) {
+  if (isCurrent !== undefined && !isCurrent()) {
+    const error = new Error('The trust profile view or action changed.');
+    error.name = 'AbortError';
     throw error;
+  }
+}
+
+async function runTrustIssuerRequest(operation, options) {
+  requireCurrentTrustIssuer(options);
+  try {
+    return await operation();
+  } finally {
+    requireCurrentTrustIssuer(options);
+  }
+}
+
+function composeTrustProfileIssuer(relationship, issuerEntity, profileId, organizationId) {
+  requireIssuerEntity(issuerEntity, organizationId);
+  if (!hasIssuerIdentifier(relationship?.id) || relationship.trust_profile_id !== profileId
+    || relationship.issuer_id !== issuerEntity.id) {
+    throw malformedTrustIssuer('Trust Profile Issuer response does not match the requested profile and issuer identity.');
   }
 
   return {
@@ -123,6 +177,8 @@ function composeTrustProfileIssuer(relationship, issuerEntity) {
     issuer_did: issuerEntity.issuer_id,
     issuer_type: issuerEntity.issuer_type,
     issuer_url: issuerEntity.metadata?.issuer_url || null,
+    // Keep this legacy alias for existing callers. Relationship trust is the
+    // separate native relationship_status field, never issuer compliance.
     status: issuerEntity.compliance_status,
     compliance_status: issuerEntity.compliance_status,
     accreditation_body: issuerEntity.accreditation_body || null,
@@ -840,31 +896,41 @@ export async function deleteCredentialTemplate(id) {
 }
 
 /**
- * Create a new trust profile
+ * Create a new trust profile. Scoped callers can bind each idempotent attempt
+ * and its settlement to an optional isCurrent predicate.
  */
-export async function createTrustProfile(data) {
+export async function createTrustProfile(data, options = {}) {
+  // A shared caller-options object may also describe later helper reads. Those
+  // controls are not transport options for the create request.
+  const { singleAttemptReads: _singleAttemptReads, allowReadback: _allowReadback, ...createOptions } = options;
   const organizationId = requireOrganizationId(data);
   const payload = buildTrustProfilePayload({
     ...data,
     organization_id: organizationId,
   });
-  const result = await postWithIdempotency(TRUST_PROFILE_BASE, payload);
+  const result = await postWithIdempotency(TRUST_PROFILE_BASE, payload, createOptions);
   return normalizeTrustProfile(result);
 }
 
 /**
- * Activate a trust profile.
+ * Activate a trust profile. Ownership and allowReadback are helper-only options;
+ * callers without options retain the existing network-failure readback.
+ * singleAttemptReads opts out of lower transport retries for that readback.
  */
-export async function activateTrustProfile(id) {
+export async function activateTrustProfile(id, options = {}) {
   try {
-    const result = await post(`${TRUST_PROFILE_BASE}/${id}/activate`, {});
+    const result = await runTrustIssuerRequest(() => post(`${TRUST_PROFILE_BASE}/${id}/activate`, {}), options);
     return normalizeTrustProfile(result);
   } catch (error) {
-    if (!isNetworkAbortLikeError(error)) {
+    requireCurrentTrustIssuer(options);
+    if (!isNetworkAbortLikeError(error) || options.allowReadback === false) {
       throw error;
     }
 
-    const current = await getTrustProfile(id);
+    const current = await runTrustIssuerRequest(async () => {
+      if (!options.singleAttemptReads) return getTrustProfile(id);
+      return normalizeTrustProfile(await getWithRetryConfig(`${TRUST_PROFILE_BASE}/${id}`, {}, { maxRetries: 0 }));
+    }, options);
     if (isActiveResource(current)) {
       return current;
     }
@@ -875,8 +941,8 @@ export async function activateTrustProfile(id) {
 /**
  * Atomically synchronize every external registry source on a trust profile.
  */
-export async function synchronizeTrustProfileRegistries(id) {
-  return post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {});
+export async function synchronizeTrustProfileRegistries(id, options = {}) {
+  return runTrustIssuerRequest(() => post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {}), options);
 }
 
 /**
@@ -922,30 +988,60 @@ export async function deleteTrustProfile(id) {
 /**
  * List trusted issuers for a trust profile.
  */
-export async function listIssuerEntities(organizationId) {
+export async function listIssuerEntities(organizationId, options = {}) {
   const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
-  const result = await get(ISSUER_ENTITY_BASE, {
-    params: { organization_id: scopedOrganizationId },
-  });
+  const requestOptions = { params: { organization_id: scopedOrganizationId } };
+  // Opt-in callers own the whole continuation; no native retry may dispatch
+  // between the outer ownership checks. Legacy reads keep their retry policy.
+  const result = await runTrustIssuerRequest(() => (options.singleAttemptReads
+    ? getWithRetryConfig(ISSUER_ENTITY_BASE, requestOptions, { maxRetries: 0 })
+    : get(ISSUER_ENTITY_BASE, requestOptions)), options);
   return requireDirectArray(result, 'Issuer Entity');
 }
 
-export async function listTrustProfileIssuers(profileId, organizationId) {
+export async function listTrustProfileIssuers(profileId, organizationId, options = {}) {
+  const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
+  const profilePath = TRUST_PROFILE_BASE + '/' + encodeURIComponent(profileId) + '/issuers';
+  const loadRelationships = async () => {
+    const rows = [];
+    const seen = new Set();
+    // Match the native offset contract. The entity inventory is not paginated.
+    const limit = 100;
+    for (let offset = 0; ; offset += limit) {
+      const result = await runTrustIssuerRequest(() => get(profilePath, { params: { offset, limit } }), options);
+      requireCurrentTrustIssuer(options);
+      const page = requireDirectArray(result, 'Trust Profile Issuer');
+      if (page.length > limit || !Number.isSafeInteger(offset)) {
+        throw malformedTrustIssuer('Trust Profile Issuer pagination returned an invalid page.');
+      }
+      for (const relationship of page) {
+        if (!hasIssuerIdentifier(relationship?.id) || relationship.trust_profile_id !== profileId
+          || !hasIssuerIdentifier(relationship.issuer_id) || seen.has(relationship.id)) {
+          throw malformedTrustIssuer('Trust Profile Issuer pagination did not advance within the requested profile.');
+        }
+        seen.add(relationship.id);
+        rows.push(relationship);
+      }
+      if (page.length < limit) return rows;
+    }
+  };
   const [relationships, entities] = await Promise.all([
-    get(`${TRUST_PROFILE_BASE}/${profileId}/issuers`),
-    listIssuerEntities(organizationId),
+    loadRelationships(),
+    runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId), options),
   ]);
-  const directRelationships = requireDirectArray(relationships, 'Trust Profile Issuer');
-  const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
-  return directRelationships.map((relationship) => (
-    composeTrustProfileIssuer(relationship, entitiesById.get(relationship.issuer_id))
+  requireCurrentTrustIssuer(options);
+  const entitiesById = issuerEntitiesById(entities);
+  return relationships.map((relationship) => composeTrustProfileIssuer(
+    relationship, entitiesById.get(relationship.issuer_id), profileId, scopedOrganizationId,
   ));
 }
 
 /**
- * Add a trusted issuer to a trust profile.
+ * Add a trusted issuer to a trust profile. Existing three-argument callers keep
+ * their API; scoped callers can supply { isCurrent } for every internal await.
+ * singleAttemptReads additionally disables native inventory-read retries.
  */
-export async function addTrustProfileIssuer(profileId, organizationId, data) {
+export async function addTrustProfileIssuer(profileId, organizationId, data, options = {}) {
   const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
   const issuerDid = String(data?.issuer_did || data?.did || '').trim();
   if (!issuerDid) {
@@ -954,12 +1050,18 @@ export async function addTrustProfileIssuer(profileId, organizationId, data) {
     throw error;
   }
 
-  const entities = await listIssuerEntities(scopedOrganizationId);
+  const entities = await runTrustIssuerRequest(() => listIssuerEntities(scopedOrganizationId, options), options);
+  requireCurrentTrustIssuer(options);
+  issuerEntitiesById(entities);
+  // Prefer the organization's existing record, while preserving the native
+  // global-system exception. Other unowned/system inventory is not linkable.
   let issuerEntity = entities.find((entity) => (
     entity.organization_id === scopedOrganizationId && entity.issuer_id === issuerDid
+  )) || entities.find((entity) => (
+    entity.issuer_id === issuerDid && entity.organization_id == null && entity.is_system_issuer === true
   ));
   if (!issuerEntity) {
-    issuerEntity = await post(ISSUER_ENTITY_BASE, {
+    issuerEntity = await runTrustIssuerRequest(() => post(ISSUER_ENTITY_BASE, {
       organization_id: scopedOrganizationId,
       issuer_id: issuerDid,
       issuer_type: data.issuer_type || 'ORGANIZATION',
@@ -970,28 +1072,28 @@ export async function addTrustProfileIssuer(profileId, organizationId, data) {
       metadata: {
         ...(data.issuer_url ? { issuer_url: data.issuer_url } : {}),
       },
-    });
+    }), options);
+    requireCurrentTrustIssuer(options);
+    // A successful entity write may already exist even if this check fails.
+    // Never use a changed owner/DID/id to dispatch the subsequent relationship.
+    requireIssuerEntity(issuerEntity, scopedOrganizationId, issuerDid, true);
+  } else {
+    requireIssuerEntity(issuerEntity, scopedOrganizationId, issuerDid);
   }
 
-  const relationship = await post(`${TRUST_PROFILE_BASE}/${profileId}/issuers`, {
-    issuer_id: issuerEntity.id,
-    trust_level: data.trust_level ?? 100,
-    relationship_status: data.relationship_status || 'TRUSTED',
-    cascade_revocation_policy: data.cascade_revocation_policy || 'NOTIFY_ONLY',
-    metadata: {
-      credential_template_ids: data.credential_template_ids || [],
+  const relationship = await runTrustIssuerRequest(() => post(
+    TRUST_PROFILE_BASE + '/' + encodeURIComponent(profileId) + '/issuers', {
+      issuer_id: issuerEntity.id,
+      trust_level: data.trust_level ?? 100,
+      relationship_status: data.relationship_status || 'TRUSTED',
+      cascade_revocation_policy: data.cascade_revocation_policy || 'NOTIFY_ONLY',
+      metadata: {
+        credential_template_ids: data.credential_template_ids || [],
+      },
     },
-  });
-  return composeTrustProfileIssuer(relationship, issuerEntity);
-}
-
-/**
- * Get wallet compatibility for a trust profile
- * @param {string} id - Trust profile ID
- * @returns {Promise<Object>} Wallet compatibility data
- */
-export async function getTrustProfileWalletCompatibility(id) {
-  return get(`${TRUST_PROFILE_BASE}/${id}/wallet-compatibility`);
+  ), options);
+  requireCurrentTrustIssuer(options);
+  return composeTrustProfileIssuer(relationship, issuerEntity, profileId, scopedOrganizationId);
 }
 
 // ── Revocation Profile API ────────────────────────────────────────────────
@@ -1001,14 +1103,15 @@ const REVOCATION_PROFILE_BASE = '/v1/revocation-profiles';
 /**
  * Create a revocation profile.
  * @param {Object} data - Profile data
+ * @param {Object} [options] - Request options, including an optional isCurrent predicate
  * @returns {Promise<Object>}
  */
-export async function createRevocationProfile(data) {
+export async function createRevocationProfile(data, options = {}) {
   const organizationId = requireOrganizationId(data);
   return postWithIdempotency(REVOCATION_PROFILE_BASE, {
     ...data,
     organization_id: organizationId,
-  });
+  }, options);
 }
 
 /**

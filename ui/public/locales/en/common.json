@@ -77,6 +77,8 @@
   },
   "navigation": {
     "home": "Home",
+    "console": "Console",
+    "apiDocumentation": "API documentation",
     "product": "Product",
     "howItWorks": "How It Works",
     "whyVerifiableIdentity": "Why Verifiable Identity",

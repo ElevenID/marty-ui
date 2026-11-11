@@ -8,8 +8,8 @@
  * - /organizations/join?mode=code
  */
 
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Box,
   Container,
@@ -62,6 +62,7 @@ import {
 import { redirectBrowser } from '../../application/routing/appHandoff';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 
 const CAPABILITY_HINTS = [
   'Access organization workspace',
@@ -69,7 +70,18 @@ const CAPABILITY_HINTS = [
   'Use organization-specific settings and defaults',
 ];
 
-export default function JoinOrganizationPage({
+export default function JoinOrganizationPage(props) {
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const scope = JSON.stringify([
+    user?.user_id || user?.sub || user?.id || null, isAuthenticated, isLoading,
+    location.key, location.pathname, searchParams.toString(),
+  ]);
+  return <JoinOrganizationContent key={scope} {...props} />;
+}
+
+function JoinOrganizationContent({
   managePath = '/organizations',
   discoverPath = '/organizations/discover',
 }) {
@@ -77,6 +89,8 @@ export default function JoinOrganizationPage({
   const [searchParams] = useSearchParams();
   const { setActiveOrgId, refreshMemberships } = useConsole();
   const { isAuthenticated, isLoading: authLoading, login } = useAuth();
+  const beginAction = useAsyncActionScope();
+  const redirectTimer = useRef(null);
 
   const orgIdFromQuery = searchParams.get('orgId');
   const modeFromQuery = searchParams.get('mode');
@@ -98,6 +112,15 @@ export default function JoinOrganizationPage({
   const [inviteState, setInviteState] = useState(inviteToken ? JOIN_ORGANIZATION_INVITE_STATES.LOADING : null);
   const [invitation, setInvitation] = useState(null);
 
+  useLayoutEffect(() => () => { clearTimeout(redirectTimer.current); }, []);
+
+  const scheduleConsoleRedirect = (action) => {
+    clearTimeout(redirectTimer.current);
+    redirectTimer.current = setTimeout(() => {
+      if (action.isCurrent()) redirectBrowser('/console', { replace: false });
+    }, 1200);
+  };
+
   const showCodeMode = modeFromQuery === 'code';
 
   const ensureAuthenticated = () => {
@@ -116,6 +139,7 @@ export default function JoinOrganizationPage({
 
   useEffect(() => {
     if (!inviteToken) return;
+    let current = true;
 
     async function validateInvitation() {
       setInviteState(JOIN_ORGANIZATION_INVITE_STATES.LOADING);
@@ -127,6 +151,7 @@ export default function JoinOrganizationPage({
         getErrorMessage,
       });
 
+      if (!current) return;
       setInvitation(result.invitation);
       setSelectedOrg((prev) => prev || result.selectedOrg);
       setInviteState(result.inviteState);
@@ -134,9 +159,11 @@ export default function JoinOrganizationPage({
     }
 
     validateInvitation();
+    return () => { current = false; };
   }, [inviteToken]);
 
   useEffect(() => {
+    let current = true;
     async function loadDiscoverableOrgs() {
       setLoading(true);
 
@@ -146,6 +173,7 @@ export default function JoinOrganizationPage({
         getErrorMessage,
       });
 
+      if (!current) return;
       setOrganizations(result.organizations);
       if (result.selectedOrg) {
         setSelectedOrg(result.selectedOrg);
@@ -155,9 +183,11 @@ export default function JoinOrganizationPage({
     }
 
     loadDiscoverableOrgs();
+    return () => { current = false; };
   }, [orgIdFromQuery]);
 
   useEffect(() => {
+    let current = true;
     async function loadSelectedFromQuery() {
       if (!orgIdFromQuery || loading) return;
       setLoadingSelection(true);
@@ -170,12 +200,14 @@ export default function JoinOrganizationPage({
         getErrorMessage,
       });
 
+      if (!current) return;
       setSelectedOrg(result.selectedOrg);
       setError(result.error);
       setLoadingSelection(false);
     }
 
     loadSelectedFromQuery();
+    return () => { current = false; };
   }, [orgIdFromQuery, organizations, isAuthenticated, loading]);
 
   const filteredOrganizations = useMemo(() => {
@@ -192,27 +224,32 @@ export default function JoinOrganizationPage({
       return;
     }
 
+    const action = beginAction();
+    clearTimeout(redirectTimer.current);
     try {
       setJoining(true);
       setError(null);
       const result = await submitJoinOrganizationByCode({
         joinCode,
-        joinByCode,
-        refreshMemberships,
-        setActiveOrgId,
+        joinByCode: (code) => action.run(joinByCode, code),
+        refreshMemberships: () => action.run(refreshMemberships),
+        setActiveOrgId: (id) => action.run(setActiveOrgId, id, null, { navigate: false }),
       });
+
+      if (!action.isCurrent()) return;
 
       setSuccessOrgName(result.successOrgName);
       setSuccessState(result.successState);
 
       if (result.successState === 'joined') {
-        setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
+        scheduleConsoleRedirect(action);
       }
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       console.error('Failed to join by code:', err);
       setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to join organization using join code'));
     } finally {
-      setJoining(false);
+      if (action.isCurrent()) setJoining(false);
     }
   };
 
@@ -228,28 +265,33 @@ export default function JoinOrganizationPage({
       return;
     }
 
+    const action = beginAction();
+    clearTimeout(redirectTimer.current);
     try {
       setJoining(true);
       setError(null);
 
       const result = await submitJoinSelectedOrganization({
         selectedOrg,
-        joinOrganization,
-        refreshMemberships,
-        setActiveOrgId,
+        joinOrganization: (id) => action.run(joinOrganization, id),
+        refreshMemberships: () => action.run(refreshMemberships),
+        setActiveOrgId: (id) => action.run(setActiveOrgId, id, null, { navigate: false }),
       });
+
+      if (!action.isCurrent()) return;
 
       setSuccessOrgName(result.successOrgName);
       setSuccessState(result.successState);
 
       if (result.successState === 'joined') {
-        setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
+        scheduleConsoleRedirect(action);
       }
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       console.error('Failed to join organization:', err);
       setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to join organization'));
     } finally {
-      setJoining(false);
+      if (action.isCurrent()) setJoining(false);
     }
   };
 
@@ -260,6 +302,8 @@ export default function JoinOrganizationPage({
       return;
     }
 
+    const action = beginAction();
+    clearTimeout(redirectTimer.current);
     try {
       setInviteState(JOIN_ORGANIZATION_INVITE_STATES.ACCEPTING);
       setError(null);
@@ -268,23 +312,31 @@ export default function JoinOrganizationPage({
         inviteToken,
         invitation,
         selectedOrg,
-        acceptOrganizationInvitation,
-        refreshMemberships,
-        setActiveOrgId,
+        acceptOrganizationInvitation: (token) => action.run(acceptOrganizationInvitation, token),
+        refreshMemberships: () => action.run(refreshMemberships),
+        setActiveOrgId: (id) => action.run(setActiveOrgId, id, null, { navigate: false }),
       });
+
+      if (!action.isCurrent()) return;
 
       setSuccessOrgName(result.successOrgName);
       setInviteState(result.inviteState);
       setSuccessState(result.successState);
-      setTimeout(() => redirectBrowser('/console', { replace: false }), 1200);
+      scheduleConsoleRedirect(action);
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       console.error('Failed to accept invitation:', err);
       setInviteState(JOIN_ORGANIZATION_INVITE_STATES.ERROR);
       setError(getJoinOrganizationErrorText(err, getErrorMessage, 'Failed to accept invitation'));
+    } finally {
+      if (action.isCurrent()) {
+        setInviteState((state) => state === JOIN_ORGANIZATION_INVITE_STATES.ACCEPTING
+          ? JOIN_ORGANIZATION_INVITE_STATES.VALID : state);
+      }
     }
   };
 
-  if (inviteToken) {
+  if (inviteToken && successState !== 'joined') {
     return (
       <Container maxWidth="md" sx={{ py: 6 }}>
         <Paper sx={{ p: 4 }}>
@@ -297,7 +349,7 @@ export default function JoinOrganizationPage({
 
           {inviteState === JOIN_ORGANIZATION_INVITE_STATES.VALID && (
             <>
-              <Typography variant="h4" fontWeight={700} gutterBottom>
+              <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
                 Join {invitation?.organization_name || selectedOrg?.name}
               </Typography>
               <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -306,7 +358,7 @@ export default function JoinOrganizationPage({
 
               <Card variant="outlined" sx={{ mb: 3 }}>
                 <CardContent>
-                  <Typography variant="subtitle1" fontWeight={600} gutterBottom>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }} gutterBottom>
                     Invitation details
                   </Typography>
                   <Stack spacing={1}>
@@ -365,7 +417,7 @@ export default function JoinOrganizationPage({
         <Card>
           <CardContent sx={{ textAlign: 'center', py: 6 }}>
             <CheckCircleIcon color="success" sx={{ fontSize: 64, mb: 2 }} />
-            <Typography variant="h4" fontWeight={700} gutterBottom>
+            <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
               You joined {successOrgName}
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -386,13 +438,13 @@ export default function JoinOrganizationPage({
         <Card>
           <CardContent sx={{ textAlign: 'center', py: 6 }}>
             <HourglassTopIcon color="warning" sx={{ fontSize: 64, mb: 2 }} />
-            <Typography variant="h4" fontWeight={700} gutterBottom>
+            <Typography variant="h4" sx={{ fontWeight: 700 }} gutterBottom>
               Request submitted to {successOrgName}
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
               An administrator must approve your membership before access is granted.
             </Typography>
-            <Stack direction="row" spacing={2} justifyContent="center">
+            <Stack direction="row" spacing={2} sx={{ justifyContent: 'center' }}>
               <Button variant="outlined" onClick={() => navigate(managePath)}>
                 View My Organizations
               </Button>
@@ -409,7 +461,7 @@ export default function JoinOrganizationPage({
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={700}>
+        <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
           Join an Organization
         </Typography>
         <Typography variant="body1" color="text.secondary">
@@ -423,7 +475,7 @@ export default function JoinOrganizationPage({
       )}
       <Grid container spacing={3}>
         {/* Left side: discovery list + join code */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={{ mb: 3 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -500,7 +552,7 @@ export default function JoinOrganizationPage({
                         setError(null);
                       }}>
                         <CardContent sx={{ pb: 1.5 }}>
-                          <Typography fontWeight={600}>{org.name || org.display_name}</Typography>
+                          <Typography sx={{ fontWeight: 600 }}>{org.name || org.display_name}</Typography>
                           {org.description && (
                             <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                               {org.description}
@@ -523,7 +575,7 @@ export default function JoinOrganizationPage({
         </Grid>
 
         {/* Right side: org preview and action */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Card sx={{ minHeight: 480 }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -543,7 +595,7 @@ export default function JoinOrganizationPage({
                 </Box>
               ) : (
                 <>
-                  <Typography variant="h5" fontWeight={700} gutterBottom>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }} gutterBottom>
                     {selectedOrg.name || selectedOrg.display_name}
                   </Typography>
 

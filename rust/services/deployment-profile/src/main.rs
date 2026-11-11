@@ -14,6 +14,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -31,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect(&config.database_url)
         .await?;
     runtime.mark_healthy(DeploymentDependency::Database)?;
-    run_migrations(&pool).await?;
+    run_migrations(&pool, config.marty_organization_id).await?;
     runtime.mark_healthy(DeploymentDependency::Schema)?;
     let memberships = tenant_membership_provider(&config).await?;
     runtime.mark_healthy(DeploymentDependency::Organization)?;

@@ -88,6 +88,31 @@ class AclPolicyTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "Actual NTFS handle/ACL integration")
 class WindowsInputTests(unittest.TestCase):
+    def test_storage_namespace_allows_data_writes_without_reading_or_private_acl_claims(self):
+        with private_fixture() as (root, path):
+            path.write_bytes(b'S' * (windows.MAX_BYTES + 1))
+            with windows.hold_storage_namespace(path):
+                path.write_bytes(b'NORMAL_APPLICATION_WRITE')
+                with self.assertRaises(OSError): path.unlink()
+            with windows.hold_storage_namespace(root):
+                (root / 'new_data').write_bytes(b'SYNTHETIC_DATA')
+                with self.assertRaises(OSError): root.rename(root.with_name(root.name + '-moved'))
+    def test_explicit_asset_bound_and_exclusive_lock_do_not_relax_secret_reads(self):
+        with private_fixture() as (_, path):
+            raw = b'S' * (windows.MAX_BYTES + 1)
+            path.write_bytes(raw)
+            with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                windows.read_private_bytes(path)
+            with windows.hold_private_input(path, max_bytes=128 * 1024) as data:
+                self.assertEqual(data, raw)
+                with self.assertRaises(OSError): path.write_bytes(b'changed')
+            path.write_bytes(b'')
+            with windows.hold_private_input(path, exclusive=True):
+                with self.assertRaisesRegex(ValueError, windows.REFUSAL):
+                    with windows.hold_private_input(path, exclusive=True):
+                        self.fail('second coordinator acquired the lock')
+            with windows.hold_private_input(path, exclusive=True):
+                pass
     def test_generation_holds_directory_and_files_until_the_action_finishes(self):
         with private_fixture() as (root, path):
             path = path.rename(root / "leaf")

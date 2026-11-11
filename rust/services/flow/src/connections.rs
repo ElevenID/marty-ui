@@ -8,8 +8,8 @@ use thiserror::Error;
 use url::Url;
 
 use crate::{
-    migrate_flow_schema, FlowDependency, FlowGrpcChannelFactories, FlowMigrationError,
-    FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
+    migrate_flow_schema_for_organization, FlowDependency, FlowGrpcChannelFactories,
+    FlowMigrationError, FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
     HttpFlowReferenceProvider, HttpPhysicalDocumentProvider, HttpSigningProvider,
     PostgresFlowRepository,
 };
@@ -64,11 +64,16 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
+    let organization_id = crate::flow_seed_organization_id(Some(&config.marty_organization_id))?;
     match SchemaStartupMode::from_env()
         .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?
     {
-        SchemaStartupMode::Migrate => migrate_flow_schema(&pool).await?,
-        SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?,
+        SchemaStartupMode::Migrate => {
+            migrate_flow_schema_for_organization(&pool, organization_id).await?
+        }
+        SchemaStartupMode::Validate => {
+            crate::validate_flow_schema_for_organization(&pool, organization_id).await?
+        }
     }
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)

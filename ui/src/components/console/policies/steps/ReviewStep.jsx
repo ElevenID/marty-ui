@@ -25,7 +25,7 @@ import { ReviewSectionCard, ReviewActivationCard, ReviewField } from '../../../c
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
   const { t } = useTranslation('console');
-  const { policyConfig, trustProfile, selectedTemplate, activateImmediately } = data;
+  const { policyConfig, selectedTrustProfile: trustProfile, selectedTemplate, activateImmediately } = data;
 
   // Helper to format seconds to human-readable
   const formatDuration = (seconds) => {
@@ -51,7 +51,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         {t('wizards.presentationPolicy.reviewStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.reviewStep.description')}
       </Typography>
 
@@ -70,7 +70,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.policyName')}
                 value={policyConfig.name}
@@ -79,7 +79,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.description')}
                 value={policyConfig.description}
@@ -88,7 +88,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.purposeStatement')}
                 value={policyConfig.purpose}
@@ -111,12 +111,12 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <Typography variant="body1" gutterBottom>
                 {trustProfile.name}
               </Typography>
-              <Chip
+              {trustProfile.trust_framework_type && <Chip
                 label={trustProfile.trust_framework_type?.toUpperCase()}
                 size="small"
                 color="primary"
                 sx={{ mr: 1 }}
-              />
+              />}
               {trustProfile.is_default && (
                 <Chip label={t('wizards.presentationPolicy.trustProfileStep.defaultChip')} size="small" variant="outlined" />
               )}
@@ -173,25 +173,40 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             {t('wizards.presentationPolicy.reviewStep.fields.requiredClaims', { count: policyConfig.required_claims.length })}
           </Typography>
           <List dense>
-            {policyConfig.required_claims.map((claim, index) => (
-              <ListItem key={index}>
-                <ListItemText
-                  primary={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body2" component="span">
-                        {claim.claim_name}
-                      </Typography>
-                      {claim.accept_predicate && (
-                        <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
-                      )}
-                    </Box>
-                  }
-                  secondary={t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
-                    type: claim.credential_type,
-                  })}
-                />
-              </ListItem>
-            ))}
+            {policyConfig.required_claims.map((claim, index) => {
+              // Match the value selected by native normalization and template projection.
+              const requiredValue = claim.value_constraint ?? claim.required_value;
+              const hasRequiredValue = requiredValue !== '' && requiredValue != null;
+              return (
+                <ListItem key={index}>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="body2" component="span">
+                          {claim.claim_name}
+                        </Typography>
+                        {claim.accept_predicate && (
+                          <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
+                        )}
+                      </Box>
+                    }
+                    secondary={
+                      <>
+                        {t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
+                          type: claim.credential_type,
+                        })}
+                        {hasRequiredValue && (
+                          <Box component="span" sx={{ display: 'block', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                            {t('wizards.presentationPolicy.reviewStep.fields.requiredValue')}{': '}
+                            {JSON.stringify(requiredValue)}
+                          </Box>
+                        )}
+                      </>
+                    }
+                  />
+                </ListItem>
+              );
+            })}
           </List>
 
           {policyConfig.required_claims.length === 0 && (
@@ -221,18 +236,18 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.holderBinding')}
                 value={holderBindingLabels[policyConfig.holder_binding] || policyConfig.holder_binding}
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <Typography variant="subtitle2" color="text.secondary">
                 {t('wizards.presentationPolicy.reviewStep.fields.revocationCheck')}
               </Typography>
-              <Typography variant="body1">
+              <Typography variant="body1" component="div">
                 {policyConfig.freshness_requirements.require_revocation_check ? (
                   <Chip label={t('wizards.presentationPolicy.reviewStep.values.required')} size="small" color="success" />
                 ) : (
@@ -241,14 +256,14 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               </Typography>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.maxCredentialAge')}
                 value={formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
                 value={formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}

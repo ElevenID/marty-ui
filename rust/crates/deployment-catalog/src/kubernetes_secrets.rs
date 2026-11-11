@@ -1,5 +1,6 @@
 //! Kubernetes secret assembly. Credential values never enter argv or diagnostics.
 use crate::{Catalog, Result};
+use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::{
     collections::BTreeMap,
@@ -8,6 +9,14 @@ use std::{
 
 const SPEC: &str = include_str!("../../../../deploy-config/catalog/kubernetes-secrets.json");
 const LIMIT: u64 = 1024 * 1024;
+// Catalog template slots are URI password components, not whole URLs. Percent
+// signs are data too: a password containing "%40" must reach the server as
+// those three bytes, rather than being interpreted as an encoded at-sign.
+const URI_PASSWORD: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 fn placeholder(value: &str) -> bool {
     value.is_empty()
@@ -61,7 +70,13 @@ fn resolve(name: &str) -> Result<String> {
     }
     let value = String::from_utf8(bytes).map_err(|_| format!("{name}_FILE must be UTF-8"))?;
     // Match tr -d CR and Bash command substitution, including multiline certificates.
-    Ok(value.replace('\r', "").trim_end_matches('\n').to_owned())
+    Ok(normalize_file_value(&value))
+}
+
+/// Preserve the existing file-backed publication representation, including PEMs.
+/// Activation must compare these exact bytes while retaining raw generation files.
+pub(crate) fn normalize_file_value(value: &str) -> String {
+    value.replace('\r', "").trim_end_matches('\n').to_owned()
 }
 
 fn required(values: &BTreeMap<String, String>, name: &str) -> Result<()> {
@@ -159,6 +174,14 @@ fn specification() -> Value {
     serde_json::from_str(SPEC).expect("Kubernetes secret catalog is valid")
 }
 
+/// Describe the publication schema compiled into this binary, without resolving inputs.
+pub fn contract() -> Value {
+    json!({
+        "schema": "marty.kubernetes-secret-publication/v1",
+        "catalog": specification(),
+    })
+}
+
 fn input_names(spec: &Value) -> Vec<String> {
     let mut names: Vec<String> = spec["required"]
         .as_array()
@@ -200,7 +223,7 @@ fn assemble(spec: &Value, namespace: &str, values: &BTreeMap<String, String>) ->
             } else if let Some(template) = field["template"].as_str() {
                 template_variables
                     .replace_all(template, |captures: &regex::Captures<'_>| {
-                        values[&captures[1]].clone()
+                        utf8_percent_encode(&values[&captures[1]], URI_PASSWORD).to_string()
                     })
                     .into_owned()
             } else {
@@ -211,6 +234,26 @@ fn assemble(spec: &Value, namespace: &str, values: &BTreeMap<String, String>) ->
         items.push(json!({"apiVersion":"v1","kind":"Secret","metadata":{"name":secret["name"],"namespace":namespace},"type":"Opaque","stringData":data}));
     }
     json!({"apiVersion":"v1","kind":"List","items":items})
+}
+
+fn publish<F>(
+    spec: &Value,
+    namespace: &str,
+    values: &BTreeMap<String, String>,
+    mandatory: &[String],
+    mut apply_secret: F,
+) -> Result<()>
+where
+    F: FnMut(&Value) -> Result<()>,
+{
+    validate(values, mandatory)?;
+    let manifest = assemble(spec, namespace, values);
+    // Preserve fail-fast publication: a Kubernetes List can continue after a
+    // failed member, whereas the original shell stopped at its first failure.
+    for secret in manifest["items"].as_array().unwrap() {
+        apply_secret(secret)?;
+    }
+    Ok(())
 }
 
 /// Validate every input before any mutation, then send only private stdin to kubectl.
@@ -267,11 +310,7 @@ pub fn apply(
         .into_iter()
         .map(|name| resolve(&name).map(|value| (name, value)))
         .collect::<Result<_>>()?;
-    validate(&values, &mandatory)?;
-    let manifest = assemble(&spec, namespace, &values);
-    // Preserve fail-fast publication: a Kubernetes List can continue after a
-    // failed member, whereas the original shell stopped at its first failure.
-    for secret in manifest["items"].as_array().unwrap() {
+    publish(&spec, namespace, &values, &mandatory, |secret| {
         let mut child = Command::new("kubectl")
             .args(["apply", "-f", "-"])
             .stdin(Stdio::piped())
@@ -289,8 +328,8 @@ pub fn apply(
                 "Kubernetes secret apply failed (credential-bearing diagnostics suppressed)".into(),
             );
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -313,12 +352,142 @@ mod tests {
             .collect();
         (spec, values, mandatory)
     }
+
+    #[test]
+    fn contract_matches_the_compiled_catalog_and_every_assembled_secret_mapping() {
+        let contract = contract();
+        assert_eq!(
+            contract,
+            json!({
+                "schema": "marty.kubernetes-secret-publication/v1",
+                "catalog": serde_json::from_str::<Value>(SPEC).unwrap(),
+            })
+        );
+        let (spec, values, _) = values();
+        let manifest = assemble(&spec, "marty-prod", &values);
+        let declared = contract["catalog"]["secrets"].as_array().unwrap();
+        let assembled = manifest["items"].as_array().unwrap();
+        assert_eq!(declared.len(), assembled.len());
+        for (definition, item) in declared.iter().zip(assembled) {
+            assert_eq!(definition["name"], item["metadata"]["name"]);
+            let fields = definition["fields"].as_object().unwrap();
+            let data = item["stringData"].as_object().unwrap();
+            assert_eq!(
+                fields.keys().collect::<Vec<_>>(),
+                data.keys().collect::<Vec<_>>()
+            );
+            for (key, field) in fields {
+                if let Some(name) = field["env"].as_str() {
+                    assert_eq!(data[key], values[name]);
+                }
+            }
+        }
+        assert!(!serde_json::to_string(&contract)
+            .unwrap()
+            .contains("synthetic-distinct-credential"));
+    }
+
+    #[test]
+    fn notification_secrets_publish_the_required_certificate_and_kms_mappings() {
+        let (spec, mut values, mandatory) = values();
+        values.insert(
+            "NOTIFICATION_WORKLOAD_SERVER_CERT".into(),
+            "notification-certificate-line-1\nnotification-certificate-line-2".into(),
+        );
+        values.insert(
+            "MARTY_WORKLOAD_IDENTITY_CA_CERT".into(),
+            "workload-ca-line-1\nworkload-ca-line-2".into(),
+        );
+        let mut published = BTreeMap::new();
+        publish(&spec, "marty-prod", &values, &mandatory, |secret| {
+            published.insert(
+                secret["metadata"]["name"].as_str().unwrap().to_owned(),
+                secret["stringData"].clone(),
+            );
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            published["notification-workload-tls"],
+            json!({
+                "tls.crt": values["NOTIFICATION_WORKLOAD_SERVER_CERT"],
+                "ca.crt": values["MARTY_WORKLOAD_IDENTITY_CA_CERT"],
+            })
+        );
+        assert_eq!(
+            published["notification-tls-kms"],
+            json!({
+                "token": values["NOTIFICATION_TLS_KMS_TOKEN"],
+                "ca.crt": values["OPENBAO_TLS_CA_CERT"],
+            })
+        );
+        let input_catalog: Value = serde_json::from_str(include_str!(
+            "../../../../deploy-config/catalog/secrets.json"
+        ))
+        .unwrap();
+        for (id, name) in [
+            (
+                "notification_workload_server_cert",
+                "NOTIFICATION_WORKLOAD_SERVER_CERT",
+            ),
+            ("notification_tls_kms_token", "NOTIFICATION_TLS_KMS_TOKEN"),
+        ] {
+            assert!(mandatory.contains(&name.to_owned()));
+            assert_eq!(input_catalog["secrets"][id]["env"], name);
+            assert_eq!(
+                input_catalog["secrets"][id]["required_for"],
+                json!(["selfhost-production", "kubernetes-production"])
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_notification_inputs_refuse_before_any_secret_mutation() {
+        let (spec, values, mandatory) = values();
+        for name in [
+            "NOTIFICATION_WORKLOAD_SERVER_CERT",
+            "NOTIFICATION_TLS_KMS_TOKEN",
+        ] {
+            for invalid_value in ["", "CHANGE_ME", "replace-me-notification"] {
+                let mut invalid = values.clone();
+                invalid.insert(name.into(), invalid_value.into());
+                let mut mutations = 0;
+                let error = publish(&spec, "marty-prod", &invalid, &mandatory, |_| {
+                    mutations += 1;
+                    Ok(())
+                })
+                .unwrap_err();
+                assert_eq!(mutations, 0, "{name}");
+                assert!(error.contains(name));
+                assert!(!error.contains("synthetic-distinct-credential"));
+                assert!(!error.contains("replace-me-notification"));
+            }
+        }
+    }
+
+    #[test]
+    fn publication_stops_at_first_failed_secret() {
+        let (spec, values, mandatory) = values();
+        let mut names = Vec::new();
+        let error = publish(&spec, "marty-prod", &values, &mandatory, |secret| {
+            names.push(secret["metadata"]["name"].as_str().unwrap().to_owned());
+            if names.len() == 2 {
+                Err("publication refused".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+        assert_eq!(error, "publication refused");
+        assert_eq!(names, ["marty-secrets", "keycloak-kms"]);
+    }
+
     #[test]
     fn preserved_secret_schema_and_custody() {
         let (spec, values, mandatory) = values();
         validate(&values, &mandatory).unwrap();
         let manifest = assemble(&spec, "marty-prod", &values);
-        assert_eq!(manifest["items"].as_array().unwrap().len(), 34);
+        assert_eq!(manifest["items"].as_array().unwrap().len(), 36);
         let items = manifest["items"].as_array().unwrap();
         let main = &items
             .iter()
@@ -353,6 +522,35 @@ mod tests {
                 .any(|name| name.contains("PRIVATE_KEY") || name == "tls.key"));
         }
     }
+
+    #[test]
+    fn uri_templates_encode_password_bytes_without_changing_scalar_secrets() {
+        for (password, encoded) in [
+            ("literal%40%2F", "literal%2540%252F"),
+            (
+                "reserved@:/?#[]'\\$`\n",
+                "reserved%40%3A%2F%3F%23%5B%5D%27%5C%24%60%0A",
+            ),
+            ("customer-é-東京", "customer-%C3%A9-%E6%9D%B1%E4%BA%AC"),
+            ("Unreserved-._~0123", "Unreserved-._~0123"),
+        ] {
+            let (spec, mut values, _) = values();
+            values.insert("MARTY_DB_PASSWORD".into(), password.into());
+            values.insert("RABBITMQ_PASSWORD".into(), password.into());
+            let manifest = assemble(&spec, "marty-prod", &values);
+            let main = &manifest["items"][0]["stringData"];
+            assert_eq!(main["MARTY_DB_PASSWORD"], password);
+            assert_eq!(main["RABBITMQ_PASSWORD"], password);
+            for (field, scheme, suffix) in [
+                ("DATABASE_URL", "postgresql+asyncpg", "postgres:5432/marty"),
+                ("DATABASE_SYNC_URL", "postgresql", "postgres:5432/marty"),
+                ("RABBITMQ_URL", "amqp", "rabbitmq:5672/"),
+            ] {
+                assert_eq!(main[field], format!("{scheme}://marty:{encoded}@{suffix}"));
+            }
+            assert_eq!(main["KEYCLOAK_DB_PASSWORD"], values["KEYCLOAK_DB_PASSWORD"]);
+        }
+    }
     #[test]
     fn rejects_each_missing_required_value_and_all_grant_collisions_without_disclosure() {
         let (_, values, mandatory) = values();
@@ -374,7 +572,7 @@ mod tests {
         values.insert("CLOUDFLARE_TUNNEL_TOKEN".into(), "replace-me".into());
         values.insert("KEYCLOAK_MASTER_RS256_CERT".into(), "first\nsecond".into());
         let manifest = assemble(&spec, "marty-prod", &values);
-        assert_eq!(manifest["items"].as_array().unwrap().len(), 33);
+        assert_eq!(manifest["items"].as_array().unwrap().len(), 35);
         assert_eq!(
             manifest["items"][1]["stringData"]["keycloak-master-rs256.crt"],
             "first\nsecond"

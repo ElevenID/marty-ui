@@ -26,6 +26,9 @@ import { useAsyncData } from '../../../../hooks/useAsyncData';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../../services/presentationPolicyApi';
 import { loadScopedCatalog } from '../../../../services/loadScopedCatalog';
+import {
+  credentialTemplateValidity, MAX_VALIDITY_DAYS, MIN_VALIDITY_OFFSET, MAX_VALIDITY_OFFSET, SECONDS_PER_DAY,
+} from '../credentialTemplateValidity';
 
 const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
@@ -47,24 +50,28 @@ const CryptoValidityStep = ({ data, onChange }) => {
     (profile) => String(profile?.status || '').trim().toUpperCase() === 'ACTIVE',
   );
   
-  const validity = data.validity_rules || {
-    ttl_seconds: 31536000,
-    not_before_offset: 0,
-    max_validity_seconds: 63072000,
-  };
+  const validity = data.validity_rules || {};
+  const { values, errors } = credentialTemplateValidity(validity);
 
   const handleValidityChange = (key, value) => {
+    // Store the input draft, including an empty value, until submission validates it.
+    const { ttl_seconds: _ttl, max_validity_seconds: _maximum, not_before_offset: _offset, ...preserved } = validity;
     onChange({
       validity_rules: {
-        ...validity,
-        [key]: parseInt(value, 10) || 0,
+        ...preserved,
+        ...values,
+        [key]: value,
       },
     });
   };
 
-  // Helper to convert seconds to days
-  const secondsToDays = (seconds) => Math.min(2147483647, Math.max(1, Math.ceil(seconds / 86400)));
-  const daysToSeconds = (days) => days * 86400;
+  const daysError = t('wizards.credentialTemplate.cryptoValidityStep.validation.daysRange', {
+    defaultValue: 'Enter a whole number of days from 1 to {{max}}.', max: MAX_VALIDITY_DAYS,
+  });
+  const offsetError = t('wizards.credentialTemplate.cryptoValidityStep.validation.offsetRange', {
+    defaultValue: 'Enter a whole number of seconds from {{min}} to {{max}}.', min: MIN_VALIDITY_OFFSET, max: MAX_VALIDITY_OFFSET,
+  });
+  const exampleExpiry = new Date(Date.now() + Number(values.default_validity_days) * SECONDS_PER_DAY * 1000);
 
   return (
     <Box>
@@ -72,7 +79,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
         <VpnKeyIcon />
         {t('wizards.credentialTemplate.cryptoValidityStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.cryptoValidityStep.description')}
       </Typography>
       {revocationProfilesError && (
@@ -95,65 +102,71 @@ const CryptoValidityStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.title')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.cryptoValidityStep.validity.description')}
       </Typography>
       <Alert severity="info" sx={{ mb: 2 }}>Validity and maximum lifetime are stored in whole days. Seconds-based durations round up to the next day; the not-before offset stays in seconds.</Alert>
       <Grid container spacing={3}>
         {/* TTL (Time to Live) */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"
+            required
             label={t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidity')}
-            value={secondsToDays(validity.ttl_seconds)}
-            onChange={(e) => handleValidityChange('ttl_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
-            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidityHelper')}
+            value={values.default_validity_days}
+            onChange={(e) => handleValidityChange('default_validity_days', e.target.value)}
+            error={errors.default_validity_days}
+            helperText={errors.default_validity_days ? daysError : t('wizards.credentialTemplate.cryptoValidityStep.validity.defaultValidityHelper')}
             slotProps={{
-              htmlInput: { min: 1 }
+              htmlInput: { min: 1, max: MAX_VALIDITY_DAYS, step: 1 }
             }}
           />
         </Grid>
 
         {/* Max Validity */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"
+            required
             label={t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidity')}
-            value={secondsToDays(validity.max_validity_seconds)}
-            onChange={(e) => handleValidityChange('max_validity_seconds', daysToSeconds(parseInt(e.target.value, 10)))}
-            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidityHelper')}
+            value={values.max_validity_days}
+            onChange={(e) => handleValidityChange('max_validity_days', e.target.value)}
+            error={errors.max_validity_days}
+            helperText={errors.max_validity_days ? daysError : t('wizards.credentialTemplate.cryptoValidityStep.validity.maxValidityHelper')}
             slotProps={{
-              htmlInput: { min: 1 }
+              htmlInput: { min: 1, max: MAX_VALIDITY_DAYS, step: 1 }
             }}
           />
         </Grid>
 
         {/* Not Before Offset */}
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <TextField
             fullWidth
             type="number"
+            required
             label={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffset')}
-            value={validity.not_before_offset}
-            onChange={(e) => handleValidityChange('not_before_offset', e.target.value)}
-            helperText={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffsetHelper')}
+            value={values.not_before_offset_seconds}
+            onChange={(e) => handleValidityChange('not_before_offset_seconds', e.target.value)}
+            error={errors.not_before_offset_seconds}
+            helperText={errors.not_before_offset_seconds ? offsetError : t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffsetHelper')}
             slotProps={{
-              htmlInput: { min: 0 }
+              htmlInput: { min: MIN_VALIDITY_OFFSET, max: MAX_VALIDITY_OFFSET, step: 1 }
             }}
           />
         </Grid>
       </Grid>
-      <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
+      {!errors.default_validity_days && Number.isFinite(exampleExpiry.getTime()) && <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
         <Typography variant="body2" color="text.secondary">
           <strong>{t('wizards.credentialTemplate.cryptoValidityStep.validity.example')}</strong>{' '}
           {t('wizards.credentialTemplate.cryptoValidityStep.validity.exampleDescription', {
-            days: secondsToDays(validity.ttl_seconds),
-            date: new Date(Date.now() + daysToSeconds(secondsToDays(validity.ttl_seconds)) * 1000).toLocaleDateString(),
+            days: values.default_validity_days,
+            date: exampleExpiry.toLocaleDateString(),
           })}
         </Typography>
-      </Box>
+      </Box>}
       {!needsRevocation && <Alert severity="info" sx={{ mt: 3 }}>This issuance protocol does not use a digital Revocation Profile.</Alert>}
       {needsRevocation && <FormControl fullWidth required error={!data.revocation_profile_id} sx={{ mt: 3 }}>
         <InputLabel id="credential-template-revocation-profile-label">

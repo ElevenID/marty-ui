@@ -4,9 +4,11 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -713,7 +715,8 @@ def _classify_changed_paths(
     assert event in {"pull_request", "merge_group", "push", "workflow_dispatch", "schedule"}
     assert classifier["run"].strip() == "source scripts/ci/affected_components.sh"
     script = (ROOT / "scripts/ci/affected_components.sh").read_text()
-    script = script.replace("python3 scripts/ci/affected_components.py", "python3 " + str(ROOT / "scripts/ci/affected_components.py"))
+    classifier_path = shlex.quote((ROOT / "scripts/ci/affected_components.py").as_posix())
+    script = script.replace("python3 scripts/ci/affected_components.py", "python3 " + classifier_path)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
     # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
@@ -2007,6 +2010,205 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     )
 
 
+def _assert_gone_or_zombie_process(pid: str, *, wait_seconds: float = 0) -> None:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            observed = Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux can remove a task after procfs open succeeds but before read.
+            return
+        if observed.rsplit(") ", 1)[1].startswith("Z "):
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed-out worker {pid} survived its exit grace period")
+        time.sleep(0.02)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
+def test_native_operator_timeout_accepts_process_disappearance(monkeypatch, error) -> None:
+    def read_stat(path):
+        assert path == Path("/proc/123/stat")
+        raise error("synthetic task disappeared")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    _assert_gone_or_zombie_process("123")
+
+
+@pytest.mark.parametrize("state", ["R", "S", "D"])
+def test_native_operator_timeout_rejects_surviving_process(monkeypatch, state) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {state} 1 2 3")
+    with pytest.raises(AssertionError):
+        _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_unreaped_zombie(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) Z 1 2 3")
+    _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_worker_settling_after_timeout(monkeypatch) -> None:
+    states = iter(("R", "Z"))
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {next(states)} 1 2 3")
+    _assert_gone_or_zombie_process("123", wait_seconds=0.2)
+
+
+def test_native_operator_timeout_rejects_survivor_after_grace(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) R 1 2 3")
+    with pytest.raises(AssertionError, match="survived its exit grace period"):
+        _assert_gone_or_zombie_process("123", wait_seconds=0.04)
+
+
+def test_native_operator_timeout_preserves_unavailable_procfs_failure(monkeypatch) -> None:
+    def read_stat(_):
+        raise PermissionError("synthetic procfs access denied")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    with pytest.raises(PermissionError):
+        _assert_gone_or_zombie_process("123")
+
+
+@pytest.mark.parametrize("arch,cpu,budget", [("amd64", "x86_64", 30), ("arm64", "aarch64", 25)])
+@pytest.mark.parametrize("scenario,expected_status,expected_modes", [
+    ("success", 0, ["fetch", "test", "build"]),
+    ("transient", 0, ["fetch", "fetch", "test", "build"]),
+    ("exhausted", 1, ["fetch", "fetch"]),
+    ("timeout", 1, ["fetch", "fetch"]),
+    ("test-failure", 37, ["fetch", "test"]),
+    ("build-failure", 38, ["fetch", "test", "build"]),
+])
+def test_native_operator_acquires_locked_targets_before_single_offline_execution(
+    tmp_path: Path, arch: str, cpu: str, budget: int,
+    scenario: str, expected_status: int, expected_modes: list[str],
+) -> None:
+    bash, timeout = shutil.which("bash"), shutil.which("timeout")
+    if sys.platform != "linux" or not bash or not timeout:
+        pytest.skip("Linux workflow process deadlines require Bash and GNU timeout")
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-native-operator"]
+    row = next(item for item in job["strategy"]["matrix"]["include"] if item["arch"] == arch)
+    assert row["timeout_minutes"] == budget
+    assert row["target"] == f"{cpu}-unknown-linux-musl"
+    assert job["timeout-minutes"] == "${{ matrix.timeout_minutes }}"
+    steps = job["steps"]
+    fetch = next(step for step in steps if step.get("name") == "Fetch locked native operator dependencies")
+    exercise = next(step for step in steps if step.get("name") == "Exercise the static native operator against real HTTPS")
+    position = steps.index(fetch)
+    assert steps[position - 2]["uses"] == "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    assert steps[position - 2]["with"] == {"toolchain": "1.95.0", "targets": "${{ matrix.target }}"}
+    assert steps[position - 1] == {
+        "name": "Fetch locked private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "timeout-minutes": 5,
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": 'python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"',
+    }
+    assert steps[position + 1] is exercise
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert fetch["timeout-minutes"] == 5 and fetch["shell"] == "bash"
+    assert fetch["env"] == {"GIT_TERMINAL_PROMPT": "0"}
+    for step in (fetch, exercise):
+        assert not step.get("continue-on-error") and not step.get("if")
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    # Record actual workflow commands; only the acquisition may fail and retry.
+    fake_source = f"#!{sys.executable}\n" + '''import json, os, signal, sys, time
+from pathlib import Path
+name, args = Path(sys.argv[0]).name, sys.argv[1:]
+log = Path(os.environ["TEST_COMMAND_LOG"])
+with log.open("a") as stream:
+    stream.write(json.dumps({"name": name, "args": args, "prompt": os.environ.get("GIT_TERMINAL_PROMPT")}) + "\\n")
+if name == "rustc":
+    print("rustc 1.95.0\\nhost: " + os.environ["TEST_HOST_TARGET"])
+elif name == "cargo":
+    scenario = os.environ["TEST_SCENARIO"]
+    if "fetch" in args:
+        count = sum(row["name"] == "cargo" and "fetch" in row["args"] for row in map(json.loads, log.read_text().splitlines()))
+        if scenario == "timeout":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            with Path(os.environ["TEST_FETCH_PIDS"]).open("a") as stream:
+                stream.write(str(os.getpid()) + "\\n")
+            while True:
+                time.sleep(10)
+        if scenario == "exhausted" or (scenario == "transient" and count == 1):
+            print("synthetic public Git transfer failure", file=sys.stderr)
+            sys.exit(128)
+    elif args[0] == "test" and scenario == "test-failure":
+        sys.exit(37)
+    elif args[0] == "build" and scenario == "build-failure":
+        sys.exit(38)
+'''
+    for name in ("cargo", "rustc", "sleep"):
+        path = fake_bin / name
+        path.write_text(fake_source, encoding="utf-8")
+        path.chmod(0o755)
+    shim = fake_bin / "timeout"
+    shim.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\\n' "$1" "$2" >> "$TEST_TIMEOUT_CALLS"
+[[ "$1" == --kill-after=5s && "$2" == 120s ]]
+shift 2
+if [[ "$TEST_SCENARIO" == timeout ]]; then
+  exec "$TEST_REAL_TIMEOUT" --kill-after=0.2s 0.2s "$@"
+fi
+exec "$TEST_REAL_TIMEOUT" --kill-after=1s 5s "$@"
+''', encoding="utf-8")
+    shim.chmod(0o755)
+    host_target, target = f"{cpu}-unknown-linux-gnu", row["target"]
+    log, calls, pids = (tmp_path / name for name in ("commands.jsonl", "timeouts", "pids"))
+    environment = dict(os.environ, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                       TARGET=target, TEST_HOST_TARGET=host_target, TEST_SCENARIO=scenario,
+                       TEST_COMMAND_LOG=str(log), TEST_TIMEOUT_CALLS=str(calls),
+                       TEST_FETCH_PIDS=str(pids), TEST_REAL_TIMEOUT=timeout)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    result = subprocess.run([bash, "--noprofile", "--norc", "-s"], input=fetch["run"],
+                            cwd=tmp_path, env={**environment, **fetch["env"]},
+                            capture_output=True, text=True, timeout=15)
+    acquisition_status, acquisition_stdout, acquisition_stderr = result.returncode, result.stdout, result.stderr
+    if acquisition_status == 0:
+        # Execute the exact existing test/build commands, without provisioning.
+        commands = exercise["run"].split("cargo test ", 1)[1].split('export MARTY_DEPLOY_BIN=', 1)[0]
+        result = subprocess.run([bash, "--noprofile", "--norc", "-s"],
+                                input="set -euo pipefail\ncargo test " + commands,
+                                cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == expected_status, result.stderr
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    cargo = [event for event in events if event["name"] == "cargo"]
+    modes = ["fetch" if "fetch" in event["args"] else event["args"][0] for event in cargo]
+    assert modes == expected_modes
+    expected_arguments = {
+        "fetch": ["--config", "net.git-fetch-with-cli=true", "fetch", "--locked",
+                  "--manifest-path", "rust/Cargo.toml", "--target", host_target, "--target", target],
+        "test": ["test", "--locked", "--offline", "--manifest-path", "rust/Cargo.toml", "-p", "marty-managed-key-reference"],
+        "build": ["build", "--locked", "--offline", "--target", target, "--manifest-path",
+                  "rust/Cargo.toml", "-p", "marty-deployment-catalog", "--bin", "marty-deploy"],
+    }
+    for event, mode in zip(cargo, modes):
+        assert event["args"] == expected_arguments[mode]
+        if mode == "fetch":
+            assert event["prompt"] == "0"
+    attempts = modes.count("fetch")
+    assert calls.read_text(encoding="utf-8").splitlines() == ["--kill-after=5s 120s"] * attempts
+    assert [event["args"] for event in events if event["name"] == "sleep"] == [["2"]] * (attempts - 1)
+    if attempts == 2:
+        status = 137 if scenario == "timeout" else 128
+        assert f"attempt 1 failed (exit {status})." in acquisition_stderr
+    if scenario in {"transient", "exhausted"}:
+        assert "synthetic public Git transfer failure" in acquisition_stderr
+    annotations = [line for line in acquisition_stdout.splitlines() if line.startswith("::error::")]
+    assert annotations == (["::error::Locked native operator dependency acquisition failed after two bounded attempts."]
+                           if acquisition_status else [])
+    if scenario == "timeout":
+        assert len(pids.read_text(encoding="utf-8").splitlines()) == 2
+        for pid in pids.read_text(encoding="utf-8").splitlines():
+            _assert_gone_or_zombie_process(pid, wait_seconds=1)
+
+
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     _, document = _workflow(CI_PATH)
     job = document["jobs"]["test-rust-services"]
@@ -2056,13 +2258,16 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
     for name in (
-        "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
         "Verify local passport signing is forbidden",
     ):
         assert steps[name]["if"] == "matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
+    assert steps["Expose public image compiler cache credentials"]["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')"
+    )
+    assert not steps["Expose public image compiler cache credentials"].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     )
@@ -3756,6 +3961,7 @@ def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
     output = tmp_path / "synthetic-actions-output"
     environment["GITHUB_OUTPUT"] = output.as_posix()
     prelude = 'git() { case "$1" in fetch) return 0 ;; rev-parse) printf "%s\\n" "$SOURCE_SHA" ;; *) return 42 ;; esac; }\n'
+    prelude += 'python3() { '+shlex.quote(Path(sys.executable).as_posix())+' "$@"; }\n'
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
         input=prelude + script,
@@ -4842,6 +5048,9 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             )
             assert init["with"]["languages"] == "rust"
             assert init["with"]["build-mode"] == "none"
+            assert init["with"]["dependency-caching"] is False
+            assert init["with"]["trap-caching"] is False
+            assert init["with"]["debug"] is False
             assert init["with"]["config-file"] == (
                 "${{ (github.event_name == 'schedule' || "
                 "github.event_name == 'workflow_dispatch') && "
@@ -5148,8 +5357,12 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     for name in ("test-rust-services", "rust-lint-policy"):
         assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
-    for job in warm["jobs"].values():
-        assert job["if"] == "github.ref == 'refs/heads/main'"
+    for name, job in warm["jobs"].items():
+        assert job["if"] == (
+            "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
+            if name in {"rust", "images", "public-services"}
+            else "github.ref == 'refs/heads/main'"
+        )
     for job, mode in (
         (ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
         (warm["jobs"]["images"], "READ_WRITE"),
@@ -5210,7 +5423,7 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
     lint = names.index("Lint Rust services")
     assert cache < fallback < names.index("Check formatting") < lint
     assert not steps[fallback].get("continue-on-error", False)
-    assert not steps[fallback].get("if")
+    assert steps[fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
     services = ci["jobs"]["test-rust-services"]
     service_steps = services["steps"]
     service_names = [step.get("name") for step in service_steps]
@@ -5224,9 +5437,10 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
         < service_names.index("Compile reusable Rust test executables")
     )
     assert not service_steps[service_fallback].get("continue-on-error", False)
-    assert not service_steps[service_fallback].get("if")
-    assert services["env"]["RUSTC_WRAPPER"] == "sccache"
-    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == "sccache"
+    assert service_steps[service_fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
+    expected_wrapper = "${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}"
+    assert services["env"]["RUSTC_WRAPPER"] == expected_wrapper
+    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == expected_wrapper
     fallback_command = "bash scripts/ci/optional-sccache-fallback.sh"
     assert (
         steps[fallback]["run"]
@@ -5339,7 +5553,7 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     ):
         assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
     assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
-    assert capture_step["if"] == "always()"
+    assert capture_step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
     assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
     assert "-le 4096" in capture_step["run"]
     assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
@@ -5368,7 +5582,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         step = next(
             step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
-        assert step["if"] == "always()"
+        assert step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
     service_steps = jobs["test-rust-services"]["steps"]
@@ -5460,7 +5674,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     job = warm["jobs"]["images"]
-    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
     probe = next(
         step
         for step in job["steps"]

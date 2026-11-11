@@ -608,6 +608,37 @@ def local_build_arguments() -> list[str]:
     return []
 
 
+def require_pinned_envoy(image: str, *, runner=None, pause=None) -> None:
+    """Acquire the exact released Envoy digest before any runtime Compose up."""
+    if not isinstance(image, str) or not re.fullmatch(
+        r"envoyproxy/envoy@sha256:[0-9a-f]{64}", image
+    ):
+        raise ValueError("Released Envoy requires its approved digest-pinned image")
+    runner, pause = runner or subprocess.run, pause or time.sleep
+    options = {
+        "cwd": ROOT, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+        "check": False,
+    }
+    try:
+        if runner(["docker", "image", "inspect", image], timeout=30, **options).returncode == 0:
+            return
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError:
+        raise ValueError("Docker is unavailable for pinned Envoy acquisition") from None
+    for attempt in range(3):
+        try:
+            if runner(["docker", "pull", image], timeout=120, **options).returncode == 0:
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        except OSError:
+            raise ValueError("Docker is unavailable for pinned Envoy acquisition") from None
+        if attempt < 2:
+            pause(2 ** attempt)
+    raise ValueError("Pinned Envoy image is unavailable after three acquisition attempts")
+
+
 def configure_oidf_internal_tls_port() -> None:
     """Keep the bridge listener identical to the published HTTPS origin.
 
@@ -900,6 +931,11 @@ def main() -> int:
                 native_image, project, plan=native_plan,
                 cached_only=bool(local_binding),
             )
+        if not local_binding:
+            envoy = config["services"].get("envoy", {})
+            if envoy.get("pull_policy") != "missing" or envoy.get("build"):
+                raise ValueError("Released Envoy must reuse its acquired image without builds")
+            require_pinned_envoy(envoy.get("image"))
         up_result = subprocess.run(
             [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
             cwd=ROOT, check=False

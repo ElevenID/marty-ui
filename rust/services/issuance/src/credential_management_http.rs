@@ -51,12 +51,31 @@ impl CredentialManagementHttpService {
             .await
             .map_err(Into::into)
     }
+
+    pub async fn observe_sd_jwt_status(
+        &self,
+        request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+    ) -> Result<
+        marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        CredentialManagementHttpError,
+    > {
+        self.security.authorize(api_key)?;
+        self.security
+            .require_organization(trusted_organization, &request.organization_id, true)?;
+        self.lifecycle
+            .observe_sd_jwt_status(request)
+            .await
+            .map_err(CredentialManagementHttpError::Observation)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CredentialManagementHttpError {
     Security(TransactionReadError),
     Lifecycle(CredentialManagementError),
+    Observation(crate::managed_status::ManagedStatusError),
 }
 
 impl From<TransactionReadError> for CredentialManagementHttpError {

@@ -6,7 +6,7 @@ import ResourcePage from '../common/ResourcePage';
 export default function NotificationPreferencesPage() {
   const { t } = useTranslation('console');
   return <ResourcePage title={t('notificationPreferencesPage.title')}>
-    <Alert severity="info">Notification preferences are not supported by the notification API.</Alert>
-    <Typography sx={{ mt: 2 }}>This deployment has no notification preference read or update operation. No preference changes have been saved.</Typography>
+    <Alert severity="info">{t('notificationPreferencesPage.messages.unsupported')}</Alert>
+    <Typography sx={{ mt: 2 }}>{t('notificationPreferencesPage.messages.unsupportedDetails')}</Typography>
   </ResourcePage>;
 }

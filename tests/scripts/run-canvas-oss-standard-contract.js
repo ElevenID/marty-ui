@@ -2371,6 +2371,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
     state.custody?.retain('canvasLearnerSession',JSON.stringify(await learnerContext.cookies(canvasOrigin)));
     const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`, id => remember('learnerAccessToken', id));
+    await learnerSetupPage.close();
     const learnerCanvas = new CanvasClient(canvasOrigin, learnerBearer);
     state.learnerCanvas = learnerCanvas;
     const activityResults = await completeLearnerCanvasWork(learnerCanvas, adminCanvas, fixtures, markActive);
@@ -2463,6 +2464,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('course_completion');
     await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     pass('course_completion', 'Canvas CourseProgress reported all non-empty module requirements completed.');
+    await adminPage.close();
 
   return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
     adminContext, learnerContext, adminCanvas, learnerCanvas, fixtures, templates,
@@ -2480,9 +2482,14 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   if (!state.owned || Object.keys(state.owned.resources).length === 0) {
     return { scope: 'OWNED_CANVAS_FIXTURE_RETIREMENT', complete: true, resources: [] };
   }
-  const { adminPage, canvasOrigin, accountId } = state;
+  const { canvasOrigin, accountId } = state;
+  let adminPage = state.adminPage;
   const findKey = key => findCanvasDeveloperKey(state, key);
   const selectKey = async key => {
+    if (!adminPage || adminPage.isClosed()) {
+      adminPage = await state.adminContext.newPage();
+      state.adminPage = adminPage;
+    }
     // Recovery sessions have not created the token that normally selects English.
     // Pin only this browser session before using English accessible action names.
     await adminPage.goto(canvasDeveloperKeysUrl(canvasOrigin, accountId), {
@@ -3209,6 +3216,7 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  fenceOwnedCanvasBinding,
   reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,

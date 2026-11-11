@@ -70,6 +70,18 @@ CANVAS_SCOPED_JOBS = BuildProfile(
     "44040270000f93b7e7499cbec31b3bb3dd7e3df1",
 )
 
+D12_PASSPORT_CURRENT = BuildProfile(
+    "d12-passport-current-three-role",
+    "449ab93ca80d147622ae61283f7d8084f7c62884",
+    (("flow", "marty-flow"), ("gateway", "marty-gateway"),
+     ("issuance-native", "marty-issuance-service")),
+    ("marty-flow", "marty-gateway", "marty-issuance-service"),
+    "marty-d12-current-main-",
+    "d12-passport-current-native",
+    "11655e38c2dbf69bfa5bc3c873f80c5fad628723",
+    volumes=("ui-canvas-cargo", "marty-d12-current-main-native-target"),
+)
+
 
 ISSUANCE_OFFER_FORMAT = BuildProfile(
     "d05-issuance-offer-format-only",
@@ -79,6 +91,23 @@ ISSUANCE_OFFER_FORMAT = BuildProfile(
     "marty-d05-issuance-offer-format-",
     "current-issuer-ready-native",
 )
+
+D05_MEMBERSHIP_CURRENT = BuildProfile(
+    "d05-membership-verified-native-six-role",
+    "d15139805564c7211d574d45659d972e08af0378",
+    (("presentation-policy", "marty-presentation-policy"),
+     ("credential-template", "marty-credential-template"),
+     ("trust-profile", "marty-trust-profile"),
+     ("compliance-profile", "marty-compliance-profile"),
+     ("signing-keys", "marty-signing-keys"), ("gateway", "marty-gateway")),
+    ("marty-presentation-policy", "marty-credential-template", "marty-trust-profile",
+     "marty-compliance-profile", "marty-signing-keys", "marty-gateway"),
+    "marty-d05-membership-",
+    "d05-membership-native",
+    "ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca",
+    volumes=("ui-canvas-cargo", "marty-d12-current-main-native-target"),
+)
+
 
 OFFICIAL_ALL_SERVICES = BuildProfile(
     "oid4vc-all-services",
@@ -118,7 +147,7 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, ISSUANCE_OFFER_FORMAT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

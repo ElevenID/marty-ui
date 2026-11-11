@@ -46,6 +46,8 @@ pub enum RepositoryError {
     ApplicationOfferConflict(String),
     #[error("FLOW.INVALID_REPLAY_DIGEST")]
     InvalidReplayDigest,
+    #[error("FLOW.INVALID_VERIFICATION_RECEIPT")]
+    InvalidVerificationReceipt,
     #[error("FLOW.INVALID_PHYSICAL_START_SNAPSHOT")]
     InvalidPhysicalStartSnapshot,
     #[error("FLOW.ARTIFACT_CONFLICT: {0}")]
@@ -103,6 +105,10 @@ impl InMemoryFlowRepository {
     }
 
     pub fn save_instance(&self, instance: FlowInstance) -> Result<(), RepositoryError> {
+        crate::verification_receipt::reject_supplied_receipt(
+            &instance.context,
+            instance.result.as_ref(),
+        )?;
         checked_public_record(&instance)?;
         let mut state = self.lock()?;
         if state
@@ -145,10 +151,29 @@ impl InMemoryFlowRepository {
         instance: FlowInstance,
         nonce_digest: &str,
         replay_expires_at_ms: u64,
-        expected_status: FlowInstanceStatus,
+        expected: &FlowInstance,
         callback: Option<Message>,
         now_ms: u64,
     ) -> Result<bool, RepositoryError> {
+        crate::verification_receipt::reject_supplied_receipt(
+            &instance.context,
+            instance.result.as_ref(),
+        )?;
+        if instance.result.as_ref().is_some_and(|result| {
+            result
+                .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
+                .is_some()
+        }) || callback.as_ref().is_some_and(|message| {
+            message
+                .payload
+                .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
+                .is_some()
+        }) || expected.context[crate::presentation_request::FROZEN_PRESENTATION_REQUEST_KEY]
+            .get("credential_authority")
+            .is_some_and(|authority| !authority.is_null())
+        {
+            return Err(RepositoryError::InvalidVerificationReceipt);
+        }
         checked_public_record(&instance)?;
         if let Some(message) = &callback {
             checked_public_record(&message.payload)?;
@@ -157,9 +182,12 @@ impl InMemoryFlowRepository {
             return Err(RepositoryError::InvalidReplayDigest);
         }
         if !matches!(
-            expected_status,
+            expected.status,
             FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
-        ) {
+        ) || instance.id != expected.id
+            || instance.organization_id != expected.organization_id
+            || instance.flow_definition_id != expected.flow_definition_id
+        {
             return Ok(false);
         }
         let mut state = self.lock()?;
@@ -169,8 +197,7 @@ impl InMemoryFlowRepository {
         let accepted = !state.consumed_nonce_digests.contains_key(nonce_digest)
             && !state.finalized_instance_ids.contains(&instance.id)
             && state.instances.get(&instance.id).is_some_and(|stored| {
-                stored.status == expected_status
-                    && stored.expires_at_ms.is_none_or(|expiry| now_ms <= expiry)
+                stored == expected && stored.expires_at_ms.is_none_or(|expiry| now_ms <= expiry)
             });
         if !accepted {
             return Ok(false);
@@ -195,6 +222,66 @@ impl InMemoryFlowRepository {
         }
         state.instances.insert(instance.id.clone(), instance);
         Ok(true)
+    }
+
+    /// Atomic in-memory model of the receipt-bearing PostgreSQL transaction.
+    /// The supplied clock is the model's nonce-consumption observation; this
+    /// adapter does not claim durable storage across process restarts.
+    pub fn finalize_verification_with_receipt(
+        &self,
+        prepared: &crate::PreparedVerificationFinalization,
+        now_ms: u64,
+    ) -> Result<Option<crate::CommittedVerificationFinalization>, RepositoryError> {
+        let receipt_input = prepared
+            .receipt_input
+            .as_ref()
+            .ok_or(RepositoryError::InvalidVerificationReceipt)?;
+        receipt_input.validate_prepared(prepared)?;
+        let expected = prepared.expected_instance.kernel()?;
+        if !matches!(
+            expected.status,
+            FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+        ) {
+            return Ok(None);
+        }
+        let mut state = self.lock()?;
+        let accepted = state.instances.get(&expected.id) == Some(&expected)
+            && expected.expires_at_ms.is_none_or(|expiry| now_ms < expiry)
+            && !state.finalized_instance_ids.contains(&expected.id)
+            && state
+                .consumed_nonce_digests
+                .get(&prepared.nonce_digest)
+                .is_none_or(|expiry| *expiry <= now_ms);
+        if !accepted {
+            return Ok(None);
+        }
+        let consumed_at = i64::try_from(now_ms)
+            .ok()
+            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+            .ok_or(RepositoryError::InvalidVerificationReceipt)?;
+        let (instance, callback, receipt) = receipt_input.attach(prepared, consumed_at)?;
+        let stored = instance.kernel()?;
+        checked_public_record(&stored)?;
+        if let Some(callback) = &callback {
+            checked_public_record(&callback.payload)?;
+        }
+
+        state
+            .consumed_nonce_digests
+            .retain(|_, expiry| *expiry > now_ms);
+        state
+            .consumed_nonce_digests
+            .insert(prepared.nonce_digest.clone(), prepared.replay_expires_at_ms);
+        state.finalized_instance_ids.insert(instance.id.clone());
+        if let Some(callback) = callback {
+            state
+                .callback_outbox
+                .insert(callback.metadata.message_id.clone(), callback);
+        }
+        state.instances.insert(instance.id.clone(), stored);
+        Ok(Some(
+            crate::CommittedVerificationFinalization::after_commit(instance, receipt),
+        ))
     }
 
     pub fn callback(&self, event_id: &str) -> Result<Option<Message>, RepositoryError> {
@@ -248,6 +335,10 @@ impl InMemoryFlowRepository {
     ) -> Result<(ApplicationEventReceipt, bool), RepositoryError> {
         checked_public_record(&receipt)?;
         for candidate in &planned {
+            crate::verification_receipt::reject_supplied_receipt(
+                &candidate.instance.context,
+                candidate.instance.result.as_ref(),
+            )?;
             checked_public_record(&candidate.instance)?;
             checked_public_record(&candidate.plan_entry)?;
         }

@@ -5,6 +5,7 @@
  * Provides consistent header, tabs, and action button placement.
  */
 
+import { useEffect, useRef } from 'react';
 import { Box, Typography, Tabs, Tab, Paper, Breadcrumbs, Link as MuiLink } from '@mui/material';
 import { Link, useLocation } from 'react-router';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
@@ -37,6 +38,7 @@ function ResourcePage({
   children,
 }) {
   const location = useLocation();
+  const tabScrollerRef = useRef(null);
 
   // Prefer the most specific matching tab when nested tab paths share a prefix.
   const activeTab = tabs?.reduce((bestMatchIndex, tab, index, allTabs) => {
@@ -54,8 +56,38 @@ function ResourcePage({
       : bestMatchIndex;
   }, -1) ?? -1;
 
+  // Keep the active destination visible when the scroller narrows after layout.
+  useEffect(() => {
+    const scroller = tabScrollerRef.current;
+    if (!scroller) return undefined;
+    const selected = scroller.querySelector('[role="tab"][aria-selected="true"]');
+    if (!selected) return undefined;
+    let frame;
+    const reveal = () => {
+      const viewport = scroller.getBoundingClientRect();
+      const tab = selected.getBoundingClientRect();
+      if (tab.left < viewport.left || tab.width > viewport.width) {
+        scroller.scrollLeft += tab.left - viewport.left;
+      } else if (tab.right > viewport.right) {
+        scroller.scrollLeft += tab.right - viewport.right;
+      }
+    };
+    const scheduleReveal = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(reveal);
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleReveal);
+    observer?.observe(scroller);
+    observer?.observe(selected);
+    scheduleReveal();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [activeTab, location.pathname, tabs?.length]);
+
   return (
-    <Box data-testid={pageTestId}>
+    <Box data-testid={pageTestId} sx={{ minWidth: 0, maxWidth: '100%' }}>
       {/* Breadcrumbs */}
       {breadcrumbs && breadcrumbs.length > 0 && (
         <Breadcrumbs
@@ -86,12 +118,14 @@ function ResourcePage({
       <Box
         sx={{
           display: 'flex',
+          flexDirection: { xs: 'column', sm: 'row' },
           justifyContent: 'space-between',
           alignItems: 'flex-start',
+          gap: 2,
           mb: 3,
         }}
       >
-        <Box>
+        <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
           <Typography variant="h4" component="h1" gutterBottom>
             {title}
           </Typography>
@@ -103,7 +137,7 @@ function ResourcePage({
         </Box>
 
         {/* Actions */}
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', maxWidth: '100%' }}>
           {actions}
           {resourceName && buildPath && (
             <BuildButton
@@ -120,6 +154,10 @@ function ResourcePage({
         <Paper sx={{ mb: 3 }}>
           <Tabs
             value={activeTab >= 0 ? activeTab : 0}
+            variant="scrollable"
+            scrollButtons
+            allowScrollButtonsMobile
+            slotProps={{ scroller: { ref: tabScrollerRef } }}
             indicatorColor="primary"
             textColor="primary"
           >

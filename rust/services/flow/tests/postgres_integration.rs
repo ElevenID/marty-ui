@@ -24,6 +24,11 @@ use sqlx::{postgres::PgConnectOptions, PgPool};
 #[path = "support/flow_schema.rs"]
 mod flow_schema;
 
+#[path = "support/presentation_snapshot.rs"]
+mod presentation_snapshot;
+#[path = "support/receipt_fixture.rs"]
+mod receipt_fixture;
+
 const TEST_DATABASE_NAME: &str = "marty_atomic_test";
 const FIRST_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000001";
 const EXPIRED_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000002";
@@ -598,6 +603,7 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     let now_ms = u64::try_from(now.timestamp_millis())?;
     run_crud_contract(&repository, now).await?;
     insert_live_instance(pool, FIRST_INSTANCE_ID, now, None).await?;
+    let expected = repository.instance(FIRST_INSTANCE_ID).await?.unwrap();
 
     let candidate_a = terminal_instance(FIRST_INSTANCE_ID, now, "allow-a");
     let candidate_b = terminal_instance(FIRST_INSTANCE_ID, now, "allow-b");
@@ -611,14 +617,14 @@ async fn run_contract(pool: &PgPool) -> TestResult {
             &candidate_a,
             &digest_a,
             replay_expiry,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             Some(&callback_a),
         ),
         repository.finalize_verification(
             &candidate_b,
             &digest_b,
             replay_expiry,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             Some(&callback_b),
         )
     );
@@ -738,13 +744,14 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     )
     .await?;
     let expired = terminal_instance(EXPIRED_INSTANCE_ID, now, "allow");
+    let expected_expired = repository.instance(EXPIRED_INSTANCE_ID).await?.unwrap();
     assert!(
         !repository
             .finalize_verification(
                 &expired,
                 &"f".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_expired,
                 None,
             )
             .await?
@@ -762,6 +769,558 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     .fetch_one(pool)
     .await?;
     assert_eq!(expired_replays, 0);
+    run_finalization_snapshot_contract(pool, &repository, now, replay_expiry).await?;
+    run_verification_receipt_contract(pool, &repository).await?;
+    Ok(())
+}
+
+async fn run_verification_receipt_contract(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+) -> TestResult {
+    use marty_oid4vp_contract::{
+        digest_domain_json, FLOW_REQUEST_BINDING_DIGEST_DOMAIN, VERIFICATION_RECEIPT,
+    };
+    let id = "91000000-0000-0000-0000-000000000101";
+    let policy_time: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await?;
+    let expected = save_receipt_instance(repository, id, policy_time, None).await?;
+    let prepared = receipt_fixture::finalization(
+        expected.clone(),
+        Some(policy_time),
+        "header.receipt.signature",
+        policy_time,
+    )
+    .await?;
+    assert!(prepared
+        .instance
+        .result
+        .as_ref()
+        .unwrap()
+        .get(VERIFICATION_RECEIPT)
+        .is_none());
+    assert!(prepared
+        .callback
+        .as_ref()
+        .unwrap()
+        .payload
+        .get(VERIFICATION_RECEIPT)
+        .is_none());
+
+    let mut blocker = pool.begin().await?;
+    sqlx::query("SELECT id FROM flow_service.flow_instances WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_one(&mut *blocker)
+        .await?;
+    let release = async {
+        wait_for_receipt_row_waiters(pool, 1).await?;
+        // Force a real gap after Policy observation and a real row-lock wait.
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        let released_at: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *blocker)
+            .await?;
+        blocker.commit().await?;
+        Ok::<_, Box<dyn Error + Send + Sync>>(released_at)
+    };
+    let (committed, released_at) =
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(
+                repository.finalize_verification_with_receipt(&prepared),
+                release
+            )
+        })
+        .await?;
+    let released_at = released_at?;
+    let committed = committed?.expect("exact request must commit after the lock releases");
+    let receipt = committed.receipt();
+    assert_eq!(
+        receipt.policy_evaluated_at_epoch_micros,
+        policy_time.timestamp_micros()
+    );
+    assert!(receipt.nonce_consumed_at_epoch_micros >= released_at.timestamp_micros());
+    assert!(receipt.nonce_consumed_at_epoch_micros > receipt.policy_evaluated_at_epoch_micros);
+    assert_eq!(
+        receipt.request_binding_digest,
+        digest_domain_json(FLOW_REQUEST_BINDING_DIGEST_DOMAIN, &expected)?
+    );
+    let (nonce_digest, consumed_at, retention_expires_at): (
+        String,
+        chrono::DateTime<Utc>,
+        chrono::DateTime<Utc>,
+    ) = sqlx::query_as(
+        "SELECT nonce_digest, consumed_at, expires_at FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1",
+    ).bind(id).fetch_one(pool).await?;
+    assert_eq!(nonce_digest, receipt.nonce_digest);
+    assert_eq!(
+        consumed_at.timestamp_micros(),
+        receipt.nonce_consumed_at_epoch_micros
+    );
+    assert_eq!(
+        retention_expires_at.timestamp_micros(),
+        receipt.nonce_retention_expires_at_epoch_micros
+    );
+    let stored = repository.instance(id).await?.unwrap();
+    assert_eq!(&stored, committed.instance());
+    let receipt_value = serde_json::to_value(receipt)?;
+    assert_eq!(
+        stored.result.as_ref().unwrap()[VERIFICATION_RECEIPT],
+        receipt_value
+    );
+    let callback_payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(callback_payload[VERIFICATION_RECEIPT], receipt_value);
+    receipt.validate_callback(&callback_payload)?;
+    let mut stored_basis = stored.result.as_ref().unwrap().clone();
+    stored_basis
+        .as_object_mut()
+        .unwrap()
+        .remove(VERIFICATION_RECEIPT);
+    receipt.validate_result(&stored_basis)?;
+
+    // Removing the short-lived nonce guard must not remove or regenerate the
+    // completed result's durable receipt or its permitted same-response replay.
+    let deleted =
+        sqlx::query("DELETE FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    assert_eq!(deleted.rows_affected(), 1);
+    let recovered = repository.instance(id).await?.unwrap();
+    assert_eq!(
+        recovered.result.as_ref().unwrap()[VERIFICATION_RECEIPT],
+        receipt_value
+    );
+    assert_eq!(receipt_counts(pool, id).await?, (0, 1));
+    let recovered_callback: Value = sqlx::query_scalar(
+        "SELECT payload FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(recovered_callback, callback_payload);
+    let replay = receipt_fixture::prepare(
+        recovered.clone(),
+        None,
+        "header.receipt.signature",
+        Utc::now(),
+    )
+    .await?;
+    match replay {
+        marty_flow::PreparedVerificationSubmission::SameTerminal(response) => {
+            assert_eq!(
+                serde_json::to_value(response.verification_receipt.unwrap())?,
+                receipt_value
+            );
+        }
+        other => panic!("same terminal submission must recover its persisted receipt: {other:?}"),
+    }
+    assert!(matches!(
+        receipt_fixture::prepare(
+            recovered.clone(),
+            None,
+            "header.other.signature",
+            Utc::now(),
+        )
+        .await?,
+        marty_flow::PreparedVerificationSubmission::ReplayConflict
+    ));
+    assert_eq!(repository.instance(id).await?, Some(recovered));
+
+    run_receipt_race(pool, repository, false).await?;
+    run_receipt_snapshot_waits(pool, repository).await?;
+    run_receipt_callback_rollback(pool, repository).await?;
+    run_receipt_future_policy_rejection(pool, repository).await?;
+    run_receipt_race(pool, repository, true).await?;
+    Ok(())
+}
+
+async fn save_receipt_instance(
+    repository: &PostgresFlowRepository,
+    id: &str,
+    now: chrono::DateTime<Utc>,
+    expires_at: Option<chrono::DateTime<Utc>>,
+) -> Result<FlowInstanceRecord, Box<dyn Error + Send + Sync>> {
+    let instance = receipt_fixture::instance(id, now, expires_at);
+    assert!(repository.save_instance(&instance).await?);
+    // Preparation must use the actual database representation, including its
+    // microsecond precision, just as a production request does.
+    Ok(repository.instance(id).await?.unwrap())
+}
+
+async fn wait_for_receipt_row_waiters(pool: &PgPool, minimum: i64) -> TestResult {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM pg_stat_activity \
+                 WHERE datname=current_database() AND pid<>pg_backend_pid() \
+                 AND wait_event_type='Lock' \
+                 AND query LIKE '%FROM flow_service.flow_instances%FOR UPDATE%'",
+            )
+            .fetch_one(pool)
+            .await?;
+            if waiting >= minimum {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
+    })
+    .await??;
+    Ok(())
+}
+
+async fn receipt_counts(pool: &PgPool, id: &str) -> Result<(i64, i64), sqlx::Error> {
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1), \
+                (SELECT count(*) FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1)",
+    ).bind(id).fetch_one(pool).await
+}
+
+async fn assert_no_receipt_effects(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+    expected: &FlowInstanceRecord,
+) -> TestResult {
+    let stored = repository.instance(&expected.id).await?.unwrap();
+    assert_eq!(&stored, expected);
+    assert!(stored.result.is_none());
+    assert_eq!(receipt_counts(pool, &expected.id).await?, (0, 0));
+    Ok(())
+}
+
+async fn run_receipt_race(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+    legacy_contender: bool,
+) -> TestResult {
+    use marty_oid4vp_contract::VERIFICATION_RECEIPT;
+    let id = if legacy_contender {
+        "91000000-0000-0000-0000-000000000108"
+    } else {
+        "91000000-0000-0000-0000-000000000102"
+    };
+    let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await?;
+    let expected = save_receipt_instance(repository, id, now, None).await?;
+    let first =
+        receipt_fixture::finalization(expected.clone(), Some(now), "header.first.signature", now)
+            .await?;
+    let second = receipt_fixture::finalization(
+        expected,
+        (!legacy_contender).then_some(now),
+        "header.second.signature",
+        now,
+    )
+    .await?;
+    let mut blocker = pool.begin().await?;
+    sqlx::query("SELECT id FROM flow_service.flow_instances WHERE id=$1 FOR UPDATE")
+        .bind(id)
+        .fetch_one(&mut *blocker)
+        .await?;
+    let second_claim = async {
+        if legacy_contender {
+            repository
+                .finalize_verification(
+                    &second.instance,
+                    &second.nonce_digest,
+                    second.replay_expires_at_ms,
+                    &second.expected_instance,
+                    second.callback.as_ref(),
+                )
+                .await
+        } else {
+            repository
+                .finalize_verification_with_receipt(&second)
+                .await
+                .map(|result| result.is_some())
+        }
+    };
+    let release = async {
+        wait_for_receipt_row_waiters(pool, 2).await?;
+        blocker.commit().await?;
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
+    };
+    let (first_result, second_result, released) =
+        tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(
+                repository.finalize_verification_with_receipt(&first),
+                second_claim,
+                release
+            )
+        })
+        .await?;
+    released?;
+    let first_result = first_result?;
+    let second_result = second_result?;
+    assert_eq!(
+        usize::from(first_result.is_some()) + usize::from(second_result),
+        1
+    );
+    assert_eq!(receipt_counts(pool, id).await?, (1, 1));
+    let stored = repository.instance(id).await?.unwrap();
+    let result = stored.result.as_ref().unwrap();
+    let winner = if first_result.is_some() {
+        &first
+    } else {
+        &second
+    };
+    assert_eq!(result["submission_digest"], winner.submission_digest);
+    let payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    let should_have_receipt = first_result.is_some() || !legacy_contender;
+    assert_eq!(
+        result.get(VERIFICATION_RECEIPT).is_some(),
+        should_have_receipt
+    );
+    assert_eq!(
+        payload.get(VERIFICATION_RECEIPT),
+        result.get(VERIFICATION_RECEIPT)
+    );
+    if let Some(committed) = first_result {
+        assert_eq!(committed.instance(), &stored);
+        assert_eq!(
+            serde_json::to_value(committed.receipt())?,
+            result[VERIFICATION_RECEIPT]
+        );
+    }
+    Ok(())
+}
+
+async fn run_receipt_snapshot_waits(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+) -> TestResult {
+    for (id, change) in [
+        ("91000000-0000-0000-0000-000000000103", "context"),
+        ("91000000-0000-0000-0000-000000000104", "updated_at"),
+        ("91000000-0000-0000-0000-000000000105", "expiry"),
+    ] {
+        let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(pool)
+            .await?;
+        let expires_at = (change == "expiry").then_some(now + Duration::seconds(5));
+        let expected = save_receipt_instance(repository, id, now, expires_at).await?;
+        let prepared = receipt_fixture::finalization(
+            expected.clone(),
+            Some(now),
+            "header.wait.signature",
+            now,
+        )
+        .await?;
+        let mut replacement = expected.clone();
+        if change == "context" {
+            replacement.context["changed_request_authority"] = json!(true);
+        } else if change == "updated_at" {
+            replacement.updated_at += Duration::microseconds(1);
+        }
+        let mut blocker = pool.begin().await?;
+        sqlx::query("SELECT id FROM flow_service.flow_instances WHERE id=$1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *blocker)
+            .await?;
+        let release = async {
+            wait_for_receipt_row_waiters(pool, 1).await?;
+            if change == "expiry" {
+                sqlx::query(
+                    "SELECT pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz - clock_timestamp()))) + 0.05)",
+                ).bind(expires_at.unwrap()).execute(&mut *blocker).await?;
+            } else {
+                sqlx::query(
+                    "UPDATE flow_service.flow_instances SET context=$2, updated_at=$3 WHERE id=$1",
+                )
+                .bind(id)
+                .bind(&replacement.context)
+                .bind(replacement.updated_at)
+                .execute(&mut *blocker)
+                .await?;
+            }
+            blocker.commit().await?;
+            Ok::<_, Box<dyn Error + Send + Sync>>(())
+        };
+        let (outcome, released) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(
+                repository.finalize_verification_with_receipt(&prepared),
+                release
+            )
+        })
+        .await?;
+        released?;
+        if change == "expiry" {
+            // Receipt retention is bounded by the session deadline. Either the
+            // live row gate or its explicit receipt-clock check may reject it;
+            // a storage/deadlock error is not an acceptable expiry outcome.
+            assert!(matches!(
+                outcome,
+                Ok(None) | Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+        } else {
+            assert!(
+                outcome?.is_none(),
+                "changed {change} must not commit the prepared result"
+            );
+        }
+        assert_no_receipt_effects(pool, repository, &replacement).await?;
+    }
+    Ok(())
+}
+
+async fn run_receipt_callback_rollback(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+) -> TestResult {
+    let id = "91000000-0000-0000-0000-000000000106";
+    let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await?;
+    let expected = save_receipt_instance(repository, id, now, None).await?;
+    let prepared = receipt_fixture::finalization(
+        expected.clone(),
+        Some(now),
+        "header.rollback.signature",
+        now,
+    )
+    .await?;
+    sqlx::raw_sql(
+        "CREATE FUNCTION flow_service.reject_receipt_callback() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+           IF NEW.flow_instance_id = '91000000-0000-0000-0000-000000000106' THEN
+             RAISE EXCEPTION 'receipt callback rollback fixture';
+           END IF;
+           RETURN NEW;
+         END $$;
+         CREATE TRIGGER reject_receipt_callback BEFORE INSERT ON flow_service.flow_callback_outbox
+         FOR EACH ROW EXECUTE FUNCTION flow_service.reject_receipt_callback();",
+    ).execute(pool).await?;
+    let outcome = repository
+        .finalize_verification_with_receipt(&prepared)
+        .await;
+    sqlx::raw_sql(
+        "DROP TRIGGER reject_receipt_callback ON flow_service.flow_callback_outbox;
+         DROP FUNCTION flow_service.reject_receipt_callback();",
+    )
+    .execute(pool)
+    .await?;
+    assert!(matches!(outcome, Err(RepositoryError::Storage(_))));
+    assert_no_receipt_effects(pool, repository, &expected).await?;
+    assert!(repository
+        .finalize_verification_with_receipt(&prepared)
+        .await?
+        .is_some());
+    assert_eq!(receipt_counts(pool, id).await?, (1, 1));
+    Ok(())
+}
+
+async fn run_receipt_future_policy_rejection(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+) -> TestResult {
+    let id = "91000000-0000-0000-0000-000000000107";
+    let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(pool)
+        .await?;
+    let expected = save_receipt_instance(repository, id, now, None).await?;
+    let prepared = receipt_fixture::finalization(
+        expected.clone(),
+        Some(now + Duration::minutes(10)),
+        "header.future.signature",
+        now,
+    )
+    .await?;
+    assert!(matches!(
+        repository
+            .finalize_verification_with_receipt(&prepared)
+            .await,
+        Err(RepositoryError::InvalidVerificationReceipt)
+    ));
+    assert_no_receipt_effects(pool, repository, &expected).await?;
+    Ok(())
+}
+
+async fn run_finalization_snapshot_contract(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+    now: chrono::DateTime<Utc>,
+    replay_expiry: u64,
+) -> TestResult {
+    for (id, change_context, digest) in [
+        ("90000000-0000-0000-0000-000000000005", true, "5".repeat(64)),
+        (
+            "90000000-0000-0000-0000-000000000006",
+            false,
+            "6".repeat(64),
+        ),
+    ] {
+        insert_live_instance(pool, id, now, None).await?;
+        let expected = repository.instance(id).await?.unwrap();
+        let replacement_context = if change_context {
+            json!({"request_digest": "replacement", "nonce": "new-request"})
+        } else {
+            expected.context.clone()
+        };
+        let replacement_updated_at = if change_context {
+            expected.updated_at
+        } else {
+            expected.updated_at + Duration::microseconds(1)
+        };
+        sqlx::query("UPDATE flow_service.flow_instances SET context=$2, updated_at=$3 WHERE id=$1")
+            .bind(id)
+            .bind(&replacement_context)
+            .bind(replacement_updated_at)
+            .execute(pool)
+            .await?;
+        let replacement = repository.instance(id).await?.unwrap();
+        let callback = callback(id, u64::try_from(now.timestamp_millis())?, "snapshot")?;
+        assert!(
+            !repository
+                .finalize_verification(
+                    &terminal_instance(id, now, "stale"),
+                    &digest,
+                    replay_expiry,
+                    &expected,
+                    Some(&callback),
+                )
+                .await?
+        );
+        assert_eq!(repository.instance(id).await?, Some(replacement.clone()));
+        let counts: (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1), \
+                    (SELECT count(*) FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1)",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?;
+        assert_eq!(
+            counts,
+            (0, 0),
+            "stale result must roll back nonce and callback"
+        );
+
+        let mut fresh_terminal = replacement.clone();
+        fresh_terminal.status = FlowInstanceStatus::Completed;
+        fresh_terminal.result = Some(json!({"decision": "fresh"}));
+        fresh_terminal.completed_at = Some(now);
+        assert!(
+            repository
+                .finalize_verification(
+                    &fresh_terminal,
+                    &digest,
+                    replay_expiry,
+                    &replacement,
+                    Some(&callback),
+                )
+                .await?
+        );
+    }
     Ok(())
 }
 
@@ -784,6 +1343,10 @@ async fn run_callback_delivery_contract(
     let destinations = WebhookDestinationRegistry::parse(&registration)?;
 
     insert_live_instance(pool, DELIVERED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let expected_delivery = repository
+        .instance(DELIVERED_CALLBACK_INSTANCE_ID)
+        .await?
+        .unwrap();
     let callback = CallbackEvent::new(
         DELIVERED_CALLBACK_INSTANCE_ID,
         "org-1",
@@ -799,7 +1362,7 @@ async fn run_callback_delivery_contract(
                 &terminal_instance(DELIVERED_CALLBACK_INSTANCE_ID, now, "allow"),
                 &"d".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_delivery,
                 Some(&callback),
             )
             .await?
@@ -831,6 +1394,10 @@ async fn run_callback_delivery_contract(
     assert_eq!(delivered, ("delivered".into(), String::new(), json!({})));
 
     insert_live_instance(pool, REJECTED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let expected_rejection = repository
+        .instance(REJECTED_CALLBACK_INSTANCE_ID)
+        .await?
+        .unwrap();
     let rejected = CallbackEvent::new(
         REJECTED_CALLBACK_INSTANCE_ID,
         "org-1",
@@ -846,7 +1413,7 @@ async fn run_callback_delivery_contract(
                 &terminal_instance(REJECTED_CALLBACK_INSTANCE_ID, now, "allow"),
                 &"e".repeat(64),
                 replay_expiry,
-                FlowInstanceStatus::AwaitingWallet,
+                &expected_rejection,
                 Some(&rejected),
             )
             .await?
@@ -1304,6 +1871,7 @@ async fn reset_schema(pool: &PgPool) -> TestResult {
          CREATE SCHEMA deployment_profile_service;
          CREATE TABLE deployment_profile_service.deployment_profiles (
              id text PRIMARY KEY,
+             organization_id text NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
              enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb
          );
          INSERT INTO deployment_profile_service.deployment_profiles(id)

@@ -223,7 +223,10 @@ mod tests {
     use super::*;
 
     fn document() -> DidDocument {
-        let did = "did:web:issuer.example:orgs:acme";
+        document_for_did("did:web:issuer.example:orgs:acme")
+    }
+
+    fn document_for_did(did: &str) -> DidDocument {
         let mut document = DidDocument::new(did);
         document
             .set_assertion_methods(vec![json!(format!("{did}#issuer-key"))])
@@ -303,7 +306,22 @@ mod tests {
 
     #[tokio::test]
     async fn native_resolver_uses_the_configured_internal_did_web_route() {
-        let document = serde_json::to_value(document()).unwrap();
+        assert_native_resolver_uses_configured_internal_route("did:web:issuer.example:orgs:acme")
+            .await;
+    }
+
+    #[tokio::test]
+    async fn native_resolver_pins_ipv4_dids_through_the_configured_internal_route() {
+        for did in [
+            "did:web:203.0.113.42:orgs:acme",
+            "did:web:203.0.113.42%3A8443:orgs:acme",
+        ] {
+            assert_native_resolver_uses_configured_internal_route(did).await;
+        }
+    }
+
+    async fn assert_native_resolver_uses_configured_internal_route(did: &str) {
+        let document = serde_json::to_value(document_for_did(did)).unwrap();
         let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_requests = requests.clone();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -324,34 +342,34 @@ mod tests {
             std::iter::empty::<String>(),
         );
 
-        let resolved = resolver
-            .resolve("did:web:issuer.example:orgs:acme")
-            .await
-            .unwrap();
+        let resolved = resolver.resolve(did).await.unwrap();
 
         assert_eq!(resolved.source, "configured_internal_resolver");
-        assert_eq!(resolved.verification_keys.len(), 1);
         assert_eq!(
-            resolved.verification_keys[0]["kid"],
-            "did:web:issuer.example:orgs:acme#issuer-key"
+            resolved.verification_keys,
+            vec![json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "x",
+                "y": "y",
+                "kid": format!("{did}#issuer-key"),
+            })]
         );
         assert_eq!(resolved.content_sha256.len(), 64);
+        assert!(!resolved.retrieved_at.is_empty());
         let pinned = resolver
-            .resolve_pinned(
-                "did:web:issuer.example:orgs:acme",
-                &["did:web:issuer.example:orgs:acme#issuer-key".into()],
-            )
+            .resolve_pinned(did, &[format!("{did}#issuer-key")])
             .await
             .unwrap();
         assert_eq!(pinned.verification_keys, resolved.verification_keys);
+        assert_eq!(pinned.source, resolved.source);
+        assert_eq!(pinned.content_sha256, resolved.content_sha256);
+        assert!(!pinned.retrieved_at.is_empty());
         // An authentication-only key is not authorized to assert credentials,
         // even when the caller explicitly pins that method.
         assert_eq!(
             resolver
-                .resolve_pinned(
-                    "did:web:issuer.example:orgs:acme",
-                    &["did:web:issuer.example:orgs:acme#login-key".into()],
-                )
+                .resolve_pinned(did, &[format!("{did}#login-key")])
                 .await,
             Err(IssuerKeyResolutionError::Invalid)
         );

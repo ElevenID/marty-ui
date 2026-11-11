@@ -25,6 +25,13 @@ test('route contract is closed and invalid ownership cannot be admitted', () => 
   ]) assert.throws(() => validateWebSurfaceContract(mutation));
 });
 
+test('raw controls and URL separators never acquire website route ownership', () => {
+  for (const character of [...Array.from({ length: 33 }, (_, code) => String.fromCharCode(code)), String.fromCharCode(127), '\\', '?', '#']) {
+    assert.equal(getWebSurface(`/blog/${character}post`), 'application');
+  }
+  assert.equal(getWebSurface('/blog/日本語'), 'website');
+});
+
 test('canonical contract digest uses sorted compact JSON without a trailing newline', () => {
   assert.equal(canonicalJson({ b: 2, a: { d: 4, c: 3 } }), '{"a":{"c":3,"d":4},"b":2}');
   assert.equal(WEB_ROUTE_CONTRACT.version, 1);

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, renderHook } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { useDashboardData } from '../useDashboardData'
+import { getDashboardAccess } from '../../config/dashboardAccess'
+
+let mockAccess = getDashboardAccess(() => true)
+let mockPermissionsLoading = false
 
 const {
   mockListComplianceProfiles,
@@ -119,7 +123,9 @@ describe('useDashboardData', () => {
     vi.clearAllMocks()
     vi.useFakeTimers()
 
-    mockUseAuth.mockReturnValue({ organizationId: 'auth_org' })
+    mockAccess = getDashboardAccess(() => true)
+    mockPermissionsLoading = false
+    mockUseAuth.mockReturnValue({ user: { user_id: 'account-a' }, organizationId: 'auth_org' })
     mockUseConsole.mockReturnValue({ activeOrgId: 'org_live' })
     mockListComplianceProfiles.mockResolvedValue([])
     mockListTrustProfiles.mockResolvedValue([])
@@ -168,23 +174,125 @@ describe('useDashboardData', () => {
     vi.restoreAllMocks()
   })
 
-  it('preserves the last healthy status across polling failures and refreshes on recovery', async () => {
+  it('waits for current permissions and loads only sections authorized for an organization reader', async () => {
+    const fetch = vi.fn().mockResolvedValue(Response.json({ status: 'ready' }))
+    vi.stubGlobal('fetch', fetch)
+    mockPermissionsLoading = true
+    const { result, rerender } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+
+    expect(result.current.loading).toBe(true)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(mockGetOrganizationEnvironment).not.toHaveBeenCalled()
+    expect(mockGetTeamSnapshot).not.toHaveBeenCalled()
+
+    mockAccess = getDashboardAccess((resource, action) => resource === 'organization' && action === 'view')
+    mockPermissionsLoading = false
+    rerender()
+    await act(async () => { await Promise.resolve() })
+
+    expect(result.current.loading).toBe(false)
+    expect(mockGetOrganizationEnvironment).toHaveBeenCalledWith('org_live')
+    expect(mockGetOrganizationLifecycle).toHaveBeenCalledWith('org_live')
+    expect(fetch).toHaveBeenCalledWith('/health/ready', expect.any(Object))
+    for (const request of [mockGetTeamSnapshot, mockGetRuntimeStatus, mockGetCriticalEvents,
+      mockListComplianceProfiles, mockListTrustProfiles, mockListCredentialTemplates,
+      mockListApplicationTemplates, mockListDeliveryDestinations, mockListPolicySets,
+      mockGetPhysicalDocumentCapabilities, mockListPresentationPolicies, mockListRevocationProfiles,
+      mockListDeploymentProfiles, mockListFlows, mockListPublicIssuerIdentities, mockListApiKeys]) {
+      expect(request).not.toHaveBeenCalled()
+    }
+  })
+
+  it('requires every downstream resource grant before requesting composed runtime readiness', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ status: 'ready' })))
+    mockAccess = getDashboardAccess((resource) => resource !== 'presentation-policy')
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await act(async () => { await Promise.resolve() })
+
+    expect(mockGetOrganizationEnvironment).toHaveBeenCalled()
+    expect(mockGetRuntimeStatus).not.toHaveBeenCalled()
+    expect(mockListPresentationPolicies).not.toHaveBeenCalled()
+    expect(result.current.data.runtimeStatus).toBeNull()
+    expect(result.current.data.dashboardErrors.runtimeStatus).toBeNull()
+  })
+
+  it('preserves real errors from authorized dashboard sections', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ status: 'ready' })))
+    const failure = Object.assign(new Error('Team service unavailable'), { status: 503 })
+    mockAccess = getDashboardAccess((resource) => resource === 'team')
+    mockGetTeamSnapshot.mockRejectedValueOnce(failure)
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await act(async () => { await Promise.resolve() })
+
+    expect(mockGetTeamSnapshot).toHaveBeenCalledWith('org_live')
+    expect(result.current.data.dashboardErrors.teamData).toBe(failure)
+    expect(result.current.data.teamData).toBeNull()
+  })
+
+  it('requires the native issuance view grant before loading physical document capabilities', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ status: 'ready' })))
+    mockAccess = getDashboardAccess((resource) => resource !== 'issuance')
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await act(async () => { await Promise.resolve() })
+
+    expect(mockGetPhysicalDocumentCapabilities).not.toHaveBeenCalled()
+    expect(mockAccess.setupOverview).toBe(false)
+    expect(mockGetRuntimeStatus).toHaveBeenCalledWith('org_live')
+    expect(result.current.data.runtimeStatus).toMatchObject({ canIssue: true })
+  })
+
+  it.each(['account', 'permissions'])('clears restricted data and ignores old completions after a same-org %s change', async (change) => {
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => Response.json({ status: 'ready' })))
+    mockGetTeamSnapshot.mockResolvedValueOnce({ members: [{ id: 'private-member-a' }], pendingInvites: [], roleDistribution: {} })
+    const { result, rerender } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await act(async () => { await Promise.resolve() })
+    expect(result.current.data.teamData?.members).toEqual([{ id: 'private-member-a' }])
+
+    let resolveOld!: (value: unknown) => void
+    mockGetTeamSnapshot.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve }))
+    act(() => result.current.refetch())
+    if (change === 'account') {
+      mockUseAuth.mockReturnValue({ user: { user_id: 'account-b' }, organizationId: 'auth_org' })
+      mockGetTeamSnapshot.mockResolvedValueOnce({ members: [{ id: 'member-b' }], pendingInvites: [], roleDistribution: {} })
+    } else {
+      mockAccess = getDashboardAccess((resource, action) => resource === 'organization' && action === 'view')
+    }
+    rerender()
+
+    expect(result.current.data.teamData).toBeNull()
+    await act(async () => {
+      resolveOld({ members: [{ id: 'late-private-member-a' }], pendingInvites: [], roleDistribution: {} })
+      await Promise.resolve()
+    })
+    expect(result.current.loading).toBe(false)
+    expect(result.current.data.teamData?.members ?? null).toEqual(change === 'account' ? [{ id: 'member-b' }] : null)
+    expect(result.current.data.dashboardErrors.teamData).toBeNull()
+    expect(mockGetTeamSnapshot).toHaveBeenCalledTimes(change === 'account' ? 3 : 2)
+  })
+
+  it('replaces stale healthy indicators when polling fails and refreshes them on recovery', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const mockFetch = vi
       .fn()
       .mockResolvedValueOnce({
         ok: true,
-        json: vi.fn().mockResolvedValue({ status: 'healthy' }),
+        json: vi.fn().mockResolvedValue({
+          status: 'ready',
+          services: { 'issuance-native': { status: 'healthy' }, verification: { status: 'healthy' } },
+        }),
       })
       .mockRejectedValueOnce(new Error('health check failed'))
       .mockResolvedValueOnce({
         ok: true,
-        json: vi.fn().mockResolvedValue({ status: 'degraded' }),
+        json: vi.fn().mockResolvedValue({
+          status: 'ready',
+          services: { 'issuance-native': { status: 'healthy' }, verification: { status: 'healthy' } },
+        }),
       })
 
     vi.stubGlobal('fetch', mockFetch)
 
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
 
     await act(async () => {
       await Promise.resolve()
@@ -193,7 +301,8 @@ describe('useDashboardData', () => {
     })
 
     expect(result.current.loading).toBe(false)
-    expect(result.current.data.systemHealth).toEqual({ status: 'healthy' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' })
+    expect(mockFetch).toHaveBeenCalledWith('/health/ready', expect.objectContaining({ cache: 'no-store' }))
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60000)
@@ -201,7 +310,7 @@ describe('useDashboardData', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(2)
-    expect(result.current.data.systemHealth).toEqual({ status: 'healthy' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'error', issuer: 'unknown', verifier: 'unknown' })
     expect(consoleErrorSpy).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -210,7 +319,7 @@ describe('useDashboardData', () => {
     })
 
     expect(mockFetch).toHaveBeenCalledTimes(3)
-    expect(result.current.data.systemHealth).toEqual({ status: 'degraded' })
+    expect(result.current.data.systemHealth).toEqual({ gateway: 'healthy', issuer: 'healthy', verifier: 'healthy' })
   })
 
   it('loads trust setup dependencies alongside the rest of the dashboard data', async () => {
@@ -221,7 +330,7 @@ describe('useDashboardData', () => {
 
     vi.stubGlobal('fetch', mockFetch)
 
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
 
     await act(async () => {
       await Promise.resolve()
@@ -247,11 +356,47 @@ describe('useDashboardData', () => {
     expect(result.current.data).not.toHaveProperty('keyManagementConfig')
   })
 
+  it('keeps malformed native readiness unavailable through the real API normalizer and recovers on retry', async () => {
+    vi.useRealTimers()
+    const { getRuntimeStatus } = await vi.importActual<typeof import('../../services/dashboardApi')>('../../services/dashboardApi')
+    mockGetRuntimeStatus.mockImplementation(getRuntimeStatus)
+    let canIssue: unknown = 'false'
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (url.endsWith('/v1/organizations/org_live/runtime/status')) {
+        return Response.json({
+          can_issue: canIssue,
+          can_verify: false,
+          issuer_keys_valid: false,
+          issuer_active: false,
+          deployment_active: false,
+          policy_reachable: false,
+        })
+      }
+      if (url === '/health/ready') return Response.json({ status: 'ready' })
+      throw new Error(`Unexpected request: ${url}`)
+    }))
+
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data.runtimeStatus).toBeNull()
+    expect(result.current.data.dashboardErrors.runtimeStatus).toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INVALID', status: 502,
+      message: 'Runtime status returned invalid boolean fields: can_issue.',
+    })
+
+    canIssue = false
+    act(() => result.current.refetch())
+    await waitFor(() => expect(result.current.loading).toBe(false))
+    expect(result.current.data.runtimeStatus).toMatchObject({ canIssue: false, canVerify: false })
+    expect(result.current.data.dashboardErrors.runtimeStatus).toBeNull()
+  })
+
   it('clears dashboard data and does not fetch org-scoped resources without organization context', async () => {
     mockUseAuth.mockReturnValue({ organizationId: null })
     mockUseConsole.mockReturnValue({ activeOrgId: null })
 
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
 
     await act(async () => {
       await Promise.resolve()
@@ -268,12 +413,85 @@ describe('useDashboardData', () => {
     expect(mockGetTeamSnapshot).not.toHaveBeenCalled()
   })
 
+  it('clears the previous organization immediately while loading an explicitly unset environment', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    let resolveEnvironment!: (environment: null) => void
+    const nextEnvironment = new Promise<null>((resolve) => { resolveEnvironment = resolve })
+    mockGetOrganizationEnvironment.mockResolvedValueOnce('production').mockImplementationOnce(() => nextEnvironment)
+    const renders: Array<{ organizationId: string; environment: unknown; loading: boolean }> = []
+    const { result, rerender } = renderHook(() => {
+      const dashboard = useDashboardData(mockAccess, mockPermissionsLoading)
+      renders.push({ organizationId: mockUseConsole().activeOrgId, environment: dashboard.data.environment, loading: dashboard.loading })
+      return dashboard
+    })
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBe('production')
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_new' })
+    rerender()
+    expect(result.current.loading).toBe(true)
+    expect(result.current.data.environment).toBeNull()
+    expect(renders.filter((render) => render.organizationId === 'org_new')).toEqual(expect.arrayContaining([
+      { organizationId: 'org_new', environment: null, loading: true },
+    ]))
+    expect(renders.filter((render) => render.organizationId === 'org_new').every((render) => render.environment === null && render.loading)).toBe(true)
+
+    await act(async () => { resolveEnvironment(null); await nextEnvironment })
+    expect(mockGetOrganizationEnvironment).toHaveBeenNthCalledWith(1, 'org_live')
+    expect(mockGetOrganizationEnvironment).toHaveBeenNthCalledWith(2, 'org_new')
+    expect(result.current.loading).toBe(false)
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+  })
+
+  it('ignores an old environment response even after returning to the same organization', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    let resolveOriginal!: (environment: string) => void
+    const originalEnvironment = new Promise<string>((resolve) => { resolveOriginal = resolve })
+    mockGetOrganizationEnvironment
+      .mockImplementationOnce(() => originalEnvironment)
+      .mockResolvedValueOnce('staging')
+      .mockResolvedValueOnce(null)
+    const { result, rerender } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    expect(result.current.loading).toBe(true)
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_other' })
+    rerender()
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBe('staging')
+
+    mockUseConsole.mockReturnValue({ activeOrgId: 'org_live' })
+    rerender()
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    await act(async () => { resolveOriginal('production'); await originalEnvironment })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
+  it('keeps environment request failures distinct from unset and clears them on a successful retry', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
+    const failure = new Error('Environment service unavailable')
+    mockGetOrganizationEnvironment.mockRejectedValueOnce(failure).mockResolvedValueOnce(null)
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBe(failure)
+
+    act(() => result.current.refetch())
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.data.environment).toBeNull()
+    expect(result.current.data.dashboardErrors.environment).toBeNull()
+    expect(result.current.loading).toBe(false)
+  })
+
   it('loads native profiles beyond the first page independently of lifecycle metadata', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
     const first = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, status: 'DRAFT' }))
     const active = { id: 'active-profile', organization_id: 'org_live', status: 'ACTIVE' }
     mockListComplianceProfiles.mockResolvedValueOnce(first).mockResolvedValueOnce([active])
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     expect(mockListComplianceProfiles).toHaveBeenLastCalledWith({ organization_id: 'org_live', limit: 100, offset: 100 })
     expect(result.current.data.complianceProfiles).toEqual([...first, active])
@@ -286,7 +504,7 @@ describe('useDashboardData', () => {
     const first = Array.from({ length: 100 }, (_, index) => ({ id: `draft-${index}`, status: 'DRAFT' }))
     const active = { id: 'active-template', organization_id: 'org_live', status: 'ACTIVE' }
     mockListCredentialTemplates.mockResolvedValueOnce(first).mockResolvedValueOnce([active])
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     expect(mockListCredentialTemplates).toHaveBeenLastCalledWith({ organization_id: 'org_live', limit: 100, offset: 100 })
     expect(result.current.data.templates).toEqual([...first, active])
@@ -297,7 +515,7 @@ describe('useDashboardData', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ status: 'healthy' }) }))
     mockListComplianceProfiles.mockResolvedValueOnce(Array.from({ length: 100 }, (_, index) => ({ id: `profile-${index}`, status: 'ACTIVE' })))
       .mockRejectedValueOnce(new Error('profile page unavailable'))
-    const { result } = renderHook(() => useDashboardData())
+    const { result } = renderHook(() => useDashboardData(mockAccess, mockPermissionsLoading))
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
     expect(result.current.data.complianceProfiles).toEqual([])
     expect(result.current.data.resourceErrors.complianceProfiles?.message).toBe('profile page unavailable')

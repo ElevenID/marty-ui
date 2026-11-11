@@ -976,7 +976,11 @@ fn proto_result(record: &FlowInstanceRecord) -> Result<FlowResultResponse, Statu
             .unwrap_or_default()
             .into(),
         verified_claims,
-        evaluation_timestamp: timestamp(record.completed_at),
+        evaluation_timestamp: object
+            .and_then(|value| value.get("evaluation_timestamp"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| timestamp(record.completed_at)),
     })
 }
 
@@ -1275,6 +1279,12 @@ fn provider_status(error: FlowProviderError) -> Status {
         FlowProviderError::Conflict { .. } => {
             Status::already_exists("Referenced resource conflicts")
         }
+        FlowProviderError::PolicyRevisionMismatch => Status::failed_precondition(
+            "Presentation policy revision changed; start a new verification request",
+        ),
+        FlowProviderError::CredentialAuthorityChanged => Status::failed_precondition(
+            "Credential authority changed; start a new verification request",
+        ),
         FlowProviderError::InvalidResponse { .. }
         | FlowProviderError::Unavailable { .. }
         | FlowProviderError::Missing(_) => {

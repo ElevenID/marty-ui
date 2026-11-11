@@ -138,6 +138,7 @@ function VerificationSessionManager({ organizationId }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [tabIndex, setTabIndex] = useState(0);
+  const sessionsRequest = useRef(0);
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -146,10 +147,25 @@ function VerificationSessionManager({ organizationId }) {
   const [pendingSession, setPendingSession] = useState(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   const [wizardError, setWizardError] = useState(null);
+  const [policySelectionValid, setPolicySelectionValid] = useState(false);
+  const wizardRequest = useRef(0);
   const [issuerDid, setIssuerDid] = useState(null);
   const [issuerIdentities, setIssuerIdentities] = useState([]);
   const [issuerIdentityLoading, setIssuerIdentityLoading] = useState(true);
   const [issuerIdentityError, setIssuerIdentityError] = useState(null);
+  const issuerIdentityRequest = useRef(0);
+
+  useEffect(() => {
+    wizardRequest.current += 1;
+    setWizardOpen(false);
+    setWizardStep(0);
+    setWizardData({});
+    setPolicySelectionValid(false);
+    setPendingSession(null);
+    setWizardLoading(false);
+    setWizardError(null);
+    return () => { wizardRequest.current += 1; };
+  }, [organizationId]);
 
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
@@ -168,8 +184,10 @@ function VerificationSessionManager({ organizationId }) {
   // â”€â”€ Data fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const fetchSessions = useCallback(async () => {
+    const request = ++sessionsRequest.current;
     if (!organizationId) {
       setSessions([]);
+      setError(null);
       setLoading(false);
       return;
     }
@@ -177,26 +195,32 @@ function VerificationSessionManager({ organizationId }) {
     setError(null);
     try {
       const flowData = await listFlowExecutions(null, { organization_id: organizationId });
+      if (sessionsRequest.current !== request) return;
       const flowSessions = flowData
         .filter(isVerificationFlowInstance)
         .map(normalizeFlowSession);
       setSessions(flowSessions);
     } catch (err) {
-      setSessions([]);
-      setError(err.message || 'Failed to load verification sessions');
+      if (sessionsRequest.current === request) {
+        setSessions([]);
+        setError(err.message || 'Failed to load verification sessions');
+      }
     } finally {
-      setLoading(false);
+      if (sessionsRequest.current === request) setLoading(false);
     }
   }, [organizationId]);
 
   useEffect(() => {
+    setSessions([]);
     fetchSessions();
+    return () => { sessionsRequest.current += 1; };
   }, [fetchSessions]);
 
   const fetchVerifierIssuerDid = useCallback(async () => {
+    const request = ++issuerIdentityRequest.current;
+    setIssuerDid(null);
+    setIssuerIdentities([]);
     if (!organizationId) {
-      setIssuerDid(null);
-      setIssuerIdentities([]);
       setIssuerIdentityError(null);
       setIssuerIdentityLoading(false);
       return;
@@ -209,6 +233,7 @@ function VerificationSessionManager({ organizationId }) {
         key_purpose: 'oid4vp_request_signing',
         algorithm: 'ES256',
       });
+      if (issuerIdentityRequest.current !== request) return;
       const identities = Array.isArray(result) ? result : (result?.identities || []);
       const validIdentities = identities.filter((identity) => (
         String(identity?.issuer_did || '').trim().startsWith('did:')
@@ -223,16 +248,19 @@ function VerificationSessionManager({ organizationId }) {
           : null,
       );
     } catch (err) {
-      setIssuerDid(null);
-      setIssuerIdentities([]);
-      setIssuerIdentityError(err.message || 'Failed to resolve the OID4VP issuer DID');
+      if (issuerIdentityRequest.current === request) {
+        setIssuerDid(null);
+        setIssuerIdentities([]);
+        setIssuerIdentityError(err.message || 'Failed to resolve the OID4VP issuer DID');
+      }
     } finally {
-      setIssuerIdentityLoading(false);
+      if (issuerIdentityRequest.current === request) setIssuerIdentityLoading(false);
     }
   }, [organizationId]);
 
   useEffect(() => {
     fetchVerifierIssuerDid();
+    return () => { issuerIdentityRequest.current += 1; };
   }, [fetchVerifierIssuerDid]);
 
   // â”€â”€ Filtered session lists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -243,20 +271,30 @@ function VerificationSessionManager({ organizationId }) {
   // â”€â”€ Wizard handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const openWizard = () => {
+    wizardRequest.current += 1;
     setWizardStep(0);
     setWizardData(issuerDid ? { issuer_did: issuerDid } : {});
+    setPolicySelectionValid(false);
     setPendingSession(null);
+    setWizardLoading(false);
     setWizardError(null);
     setWizardOpen(true);
   };
 
   const closeWizard = () => {
+    wizardRequest.current += 1;
     setWizardOpen(false);
+    setWizardLoading(false);
     fetchSessions();
   };
 
   const handleWizardNext = async () => {
+    if (!policySelectionValid || !wizardData.policy_id) {
+      setWizardError('Select an active presentation policy before continuing.');
+      return;
+    }
     if (wizardStep === 1) {
+      const request = ++wizardRequest.current;
       // Step 1 â†’ 2: create the session
       setWizardLoading(true);
       setWizardError(null);
@@ -275,13 +313,16 @@ function VerificationSessionManager({ organizationId }) {
           deployment_profile_id: wizardData.deployment_profile_id || undefined,
           external_reference: wizardData.purpose || wizardData.flow_name || undefined,
         });
+        if (wizardRequest.current !== request) return;
         session = normalizeFlowSession(session);
         setPendingSession(session);
         setWizardStep(2);
       } catch (err) {
-        setWizardError(err.message || 'Failed to start verification session');
+        if (wizardRequest.current === request) {
+          setWizardError(err.message || 'Failed to start verification session');
+        }
       } finally {
-        setWizardLoading(false);
+        if (wizardRequest.current === request) setWizardLoading(false);
       }
       return;
     }
@@ -502,6 +543,7 @@ function VerificationSessionManager({ organizationId }) {
               value={wizardData}
               onChange={setWizardData}
               organizationId={organizationId}
+              onValidityChange={setPolicySelectionValid}
             />
           )}
           {wizardStep === 1 && (
@@ -536,7 +578,7 @@ function VerificationSessionManager({ organizationId }) {
               onClick={handleWizardNext}
               disabled={
                 wizardLoading ||
-                (wizardStep === 0 && !wizardData.policy_id) ||
+                !policySelectionValid || !wizardData.policy_id ||
                 (wizardStep === 1 && !(wizardData.issuer_did || issuerDid))
               }
               startIcon={wizardLoading ? <CircularProgress size={14} /> : null}

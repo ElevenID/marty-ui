@@ -166,6 +166,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -175,6 +176,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match (arguments.next().as_deref(), arguments.next()) {
         (Some("migrate"), None) => {
+            let organization_id =
+                migration::seed_organization_id(std::env::var("MARTY_ORG_ID").ok().as_deref())?;
             let database_url = std::env::var("DATABASE_URL")?;
             let options = database_url
                 .parse::<sqlx::postgres::PgConnectOptions>()?
@@ -183,7 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .max_connections(1)
                 .connect_with(options)
                 .await?;
-            migration::migrate_owned_schema(&pool).await?;
+            migration::migrate_owned_schema(&pool, organization_id).await?;
             pool.close().await;
             return Ok(());
         }

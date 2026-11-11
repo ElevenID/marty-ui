@@ -454,6 +454,93 @@ function requireApplicationScope(owned, requireCreated = true) {
   if (requireCreated) requireIdentifier(owned.applicationId, 'applicationId');
 }
 
+// A public UI claim has no API demo_run_id. Establish separate, explicit
+// custody from the fresh principal's actual before/after public reads instead.
+async function preparePublicUiClaimOwnership(page, owned, { now = Date.now } = {}) {
+  for (const field of ['organizationId', 'applicationTemplateId', 'credentialTemplateId', 'runId', 'principalId', 'registeredEmail']) {
+    requireIdentifier(owned[field], field);
+  }
+  if (owned.applicationId || owned.ownershipMode || owned.publicUiClaim) {
+    throw new Error('Public UI claim requires a fresh ownership ledger');
+  }
+  const identity = await requireJson(page, '/v1/auth/me');
+  requirePublicUiPrincipal(identity, owned);
+  const before = await requireJson(page, '/v1/me/applications?limit=500&offset=0');
+  if (!Array.isArray(before?.items) || before.items.length !== 0 || before.total !== 0 || before.offset !== 0) {
+    throw new Error('Public UI claim requires a complete zero-before application inventory');
+  }
+  const startedAt = now();
+  if (!Number.isSafeInteger(startedAt) || startedAt <= 0) throw new Error('Invalid public UI claim start');
+  return Object.freeze({ principalId: owned.principalId, organizationId: owned.organizationId,
+    applicationTemplateId: owned.applicationTemplateId, credentialTemplateId: owned.credentialTemplateId,
+    runId: owned.runId, startedAt, beforeTotal: 0 });
+}
+
+function requirePublicUiPrincipal(identity, owned) {
+  if (identity?.authenticated !== true || identity.user?.email !== owned.registeredEmail
+      || identity.user?.user_id !== owned.principalId
+      || identity.user?.organization_id !== owned.organizationId) {
+    throw new Error('Public UI claim principal does not match the fresh registered owner');
+  }
+}
+
+async function bindPublicUiClaimApplication(page, owned, before, captured, { now = Date.now } = {}) {
+  const completedAt = now();
+  if (!before || before.beforeTotal !== 0 || !Number.isSafeInteger(before.startedAt)
+      || !Number.isSafeInteger(completedAt) || completedAt < before.startedAt
+      || completedAt - before.startedAt > 30 * 60 * 1000
+      || ['principalId', 'organizationId', 'applicationTemplateId', 'credentialTemplateId', 'runId']
+        .some(field => before[field] !== owned[field])
+      || owned.applicationId || owned.ownershipMode || owned.publicUiClaim) {
+    throw new Error('Public UI claim has no current exact zero-before authority');
+  }
+  requireIdentifier(captured?.applicationId, 'Captured public UI application ID');
+  // Bind the actual product UI route, never a caller-created API application.
+  const expectedRoute = `https://beta.elevenidllc.com/console/applicant/apply/${encodeURIComponent(owned.credentialTemplateId)}`;
+  if (captured.claimUrl !== expectedRoute) throw new Error('Public UI claim route does not match the selected template');
+  const identity = await requireJson(page, '/v1/auth/me');
+  requirePublicUiPrincipal(identity, owned);
+  const profile = await requireJson(page, '/v1/me/applicant-profile');
+  requireIdentifier(profile?.id, 'Public UI applicant profile ID');
+  if (profile.user_id !== owned.principalId || profile.organization_id !== owned.organizationId
+      || !identity.user.email || profile.email !== identity.user.email
+      || (owned.applicantId && owned.applicantId !== profile.id)) {
+    throw new Error('Public UI applicant profile does not match the authenticated principal');
+  }
+  const after = await requireJson(page, '/v1/me/applications?limit=500&offset=0');
+  if (!Array.isArray(after?.items) || after.total !== 1 || after.offset !== 0
+      || after.items.length !== 1 || after.items[0]?.id !== captured.applicationId) {
+    throw new Error('Public UI claim requires the exact single new application inventory');
+  }
+  const application = await requireJson(page, `/v1/me/applications/${encodeURIComponent(captured.applicationId)}`);
+  const candidate = { ...owned, applicantId: profile.id, applicationId: captured.applicationId,
+    ownershipMode: 'PUBLIC_UI_CLAIM', publicUiClaim: Object.freeze({ ...before, completedAt,
+      applicationId: captured.applicationId, applicantId: profile.id, claimUrl: captured.claimUrl,
+      createdAt: application.created_at }) };
+  requireOwnedApplication(application, candidate);
+  requireOwnedApplication(after.items[0], candidate);
+  Object.assign(owned, { applicantId: candidate.applicantId, applicationId: candidate.applicationId,
+    ownershipMode: candidate.ownershipMode, publicUiClaim: candidate.publicUiClaim });
+  return application;
+}
+
+function requirePublicUiClaimApplication(application, owned, creating) {
+  const proof = owned.publicUiClaim;
+  const createdAt = Date.parse(application.created_at);
+  if (creating || !proof || proof.beforeTotal !== 0
+      || ['principalId', 'organizationId', 'applicationTemplateId', 'credentialTemplateId',
+        'runId', 'applicantId', 'applicationId'].some(field => proof[field] !== owned[field])
+      || !Number.isSafeInteger(proof.startedAt) || !Number.isSafeInteger(proof.completedAt)
+      || proof.completedAt < proof.startedAt || proof.completedAt - proof.startedAt > 30 * 60 * 1000
+      || proof.claimUrl !== `https://beta.elevenidllc.com/console/applicant/apply/${encodeURIComponent(owned.credentialTemplateId)}`
+      || application.created_at !== proof.createdAt
+      || !Number.isFinite(createdAt) || createdAt < proof.startedAt || createdAt > proof.completedAt
+      || !application.integration_context || Array.isArray(application.integration_context)
+      || Object.keys(application.integration_context).length !== 0) {
+    throw new Error('Application does not match the bounded public UI claim authority');
+  }
+}
+
 function requireOwnedApplication(application, owned, creating = false) {
   requireApplicationScope(owned, !creating);
   requireIdentifier(application?.id, 'Application response ID');
@@ -461,8 +548,12 @@ function requireOwnedApplication(application, owned, creating = false) {
       || application.organization_id !== owned.organizationId
       || application.application_template_id !== owned.applicationTemplateId
       || application.credential_template_id !== owned.credentialTemplateId
-      || application.applicant_id !== owned.applicantId
-      || application.integration_context?.demo_run_id !== owned.runId) {
+      || application.applicant_id !== owned.applicantId) {
+    throw new Error('Application response does not match this run and its organization, applicant, and templates');
+  }
+  if (owned.ownershipMode === 'PUBLIC_UI_CLAIM') {
+    requirePublicUiClaimApplication(application, owned, creating);
+  } else if (owned.ownershipMode || application.integration_context?.demo_run_id !== owned.runId) {
     throw new Error('Application response does not match this run and its organization, applicant, and templates');
   }
   return application;
@@ -907,6 +998,8 @@ module.exports = {
   approvedApplicationFlowPayload,
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
+  bindPublicUiClaimApplication,
+  preparePublicUiClaimOwnership,
   cancelOwnedIssuanceTransaction,
   cleanupApplicationCredential,
   compactObject,

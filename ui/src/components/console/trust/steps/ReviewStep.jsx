@@ -85,7 +85,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.trustProfile.reviewStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.trustProfile.reviewStep.description')}
       </Typography>
 
@@ -106,7 +106,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.trustProfile.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <ReviewField
                 label={t('wizards.trustProfile.reviewStep.fields.profileName')}
                 value={data.name}
@@ -116,7 +116,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
             </Grid>
 
             {data.description && (
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <ReviewField
                   label={t('wizards.trustProfile.reviewStep.fields.description')}
                   value={data.description}
@@ -125,14 +125,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               </Grid>
             )}
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.trustProfile.reviewStep.fields.frameworkType')}
                 value={getFrameworkLabel(t, data.framework_type)}
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                 {t('wizards.trustProfile.reviewStep.fields.supportedFormats')}
               </Typography>
@@ -210,7 +210,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         editLabel={t('wizards.trustProfile.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <Typography variant="subtitle2" color="text.secondary" gutterBottom>
                 {t('wizards.trustProfile.reviewStep.fields.allowedAlgorithms')}
               </Typography>
@@ -221,7 +221,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               </Box>
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.trustProfile.reviewStep.fields.selfSignedCredentials')}
                 value={data.validation_rules?.allow_self_signed
@@ -230,14 +230,14 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.trustProfile.reviewStep.fields.minimumKeySize')}
                 value={`${data.validation_rules?.min_key_size || 2048} ${t('wizards.trustProfile.reviewStep.values.bits')}`}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.trustProfile.reviewStep.fields.keyUsageValidation')}
                 value={data.validation_rules?.require_key_usage !== false
@@ -246,7 +246,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t(
                   'wizards.trustProfile.reviewStep.fields.revocationStrategy',
@@ -256,7 +256,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t(
                   'wizards.trustProfile.reviewStep.fields.clockSkew',
@@ -266,7 +266,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t(
                   'wizards.trustProfile.reviewStep.fields.credentialFreshness',

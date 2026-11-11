@@ -116,7 +116,7 @@ const FlowStepsConfigStep = ({
 
         {extensibleSteps.length > 0 && (
           <Box>
-            <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
+            <Stack direction="row" sx={{ alignItems: "center", gap: 1, mb: 1.5 }}>
               <WebhookIcon color="action" fontSize="small" />
               <Typography variant="subtitle2">Post-step webhooks</Typography>
             </Stack>

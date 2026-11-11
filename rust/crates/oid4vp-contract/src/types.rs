@@ -212,6 +212,10 @@ pub enum QueryKind {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vpEvaluationTransportV1 {
+    /// Authority frozen by a policy that explicitly selects the managed profile.
+    /// This is server transport, never a caller assertion of authenticated trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority: Option<crate::trust_authority::CredentialAuthoritySnapshotV1>,
     pub query_kind: QueryKind,
     pub query_document: Value,
     pub query_digest: String,

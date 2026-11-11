@@ -34,6 +34,7 @@ pub enum Role {
     CaRotation,
     Snapshot,
     SnapshotRotator,
+    Application,
 }
 struct Spec {
     mount: &'static str,
@@ -54,11 +55,22 @@ impl Role {
             "ca-rotation" => Ok(Self::CaRotation),
             "snapshot" => Ok(Self::Snapshot),
             "snapshot-rotator" => Ok(Self::SnapshotRotator),
+            "application" => Ok(Self::Application),
             _ => Err(REFUSAL),
         }
     }
     fn spec(self) -> Spec {
         let (mount, role, policy, role_file, secret_file, names_file, leaf, short) = match self {
+            Self::Application => (
+                crate::application_authority::MOUNT,
+                crate::application_authority::ROLE,
+                crate::application_authority::POLICY,
+                crate::application_authority::ROLE_FILE,
+                crate::application_authority::SECRET_FILE,
+                None,
+                None,
+                true,
+            ),
             Self::Audit => (
                 "selfhost-audit",
                 "custody-auditor",
@@ -420,6 +432,7 @@ fn renewal_acl(
 pub fn policy(role: Role, context: &Value) -> Result<String> {
     let spec = role.spec();
     match role {
+        Role::Application => crate::application_authority::policy(),
         Role::Renewal | Role::CaRotation => {
             let names = names(&context["names"])?;
             if role == Role::CaRotation && names.len() != 21 {
@@ -526,7 +539,7 @@ pub fn policy(role: Role, context: &Value) -> Result<String> {
         }
     }
 }
-fn owned_identity(_path: &Path, required: bool) -> Result<()> {
+pub(crate) fn owned_identity(_path: &Path, required: bool) -> Result<()> {
     if required {
         #[cfg(unix)]
         {
@@ -549,6 +562,37 @@ pub async fn login(
     identity: &Path,
     context: &Value,
 ) -> Result<Value> {
+    login_with_capture(bao, role, identity, context, None).await
+}
+
+/// The Kubernetes batch owns retirement even when post-login qualification fails.
+/// Capture a header-safe session as soon as it is known, before any later check
+/// or request; the public login contract and every shared validation stay intact.
+pub(crate) async fn renewal_login_captured(
+    bao: &OpenBaoHttp,
+    identity: &Path,
+    captured: &mut Option<String>,
+) -> Result<Value> {
+    login_with_capture(
+        bao,
+        Role::Renewal,
+        identity,
+        &json!({"allow_secret_id_rotation":false}),
+        Some(captured),
+    )
+    .await
+}
+
+async fn login_with_capture(
+    bao: &OpenBaoHttp,
+    role: Role,
+    identity: &Path,
+    context: &Value,
+    captured: Option<&mut Option<String>>,
+) -> Result<Value> {
+    if role == Role::Application {
+        return crate::application_authority::login(bao, identity, context).await;
+    }
     if !context.is_object() {
         return Err(REFUSAL);
     }
@@ -574,7 +618,16 @@ pub async fn login(
     } else {
         vec![]
     };
-    validated_login(bao, role, &role_id, &secret_id, policy_names, &context).await
+    validated_login_with_capture(
+        bao,
+        role,
+        &role_id,
+        &secret_id,
+        policy_names,
+        &context,
+        captured,
+    )
+    .await
 }
 
 async fn validated_login(
@@ -585,6 +638,36 @@ async fn validated_login(
     policy_names: Vec<String>,
     context: &Value,
 ) -> Result<Value> {
+    validated_login_with_capture(bao, role, role_id, secret_id, policy_names, context, None).await
+}
+
+fn capture_login_session(auth: &Value, captured: Option<&mut Option<String>>) -> Result<()> {
+    if let Some(captured) = captured {
+        if captured.is_some() {
+            return Err(REFUSAL);
+        }
+        let token = auth["client_token"]
+            .as_str()
+            .filter(|value| {
+                (20..=1024).contains(&value.len())
+                    && value.bytes().all(|byte| byte.is_ascii_graphic())
+            })
+            .ok_or(REFUSAL)?;
+        *captured = Some(token.to_owned());
+    }
+    Ok(())
+}
+
+async fn validated_login_with_capture(
+    bao: &OpenBaoHttp,
+    role: Role,
+    role_id: &str,
+    secret_id: &str,
+    policy_names: Vec<String>,
+    context: &Value,
+    captured: Option<&mut Option<String>>,
+) -> Result<Value> {
+    let captured_renewal = captured.is_some() && role == Role::Renewal;
     let spec = role.spec();
     let response = request(
         bao,
@@ -595,6 +678,20 @@ async fn validated_login(
     )
     .await?;
     let auth = &response["auth"];
+    capture_login_session(auth, captured)?;
+    if captured_renewal
+        && (auth["token_type"] != "service"
+            || auth["orphan"] != true
+            || auth["num_uses"] != 0
+            || auth
+                .get("token_policies")
+                .is_some_and(|value| value != &json!([spec.policy]))
+            || auth
+                .get("identity_policies")
+                .is_some_and(|value| !value.is_null() && value != &json!([])))
+    {
+        return Err(REFUSAL);
+    }
     let token = auth["client_token"]
         .as_str()
         .filter(|v| v.len() >= 20)
@@ -643,8 +740,12 @@ async fn validated_login(
         {
             return Err(REFUSAL);
         }
+        if captured_renewal {
+            captured_renewal_leaf(data)?;
+        }
     }
     match role {
+        Role::Application => return Err(REFUSAL),
         Role::Audit | Role::Evidence => {
             let leaf_policy = if role == Role::Audit {
                 AUDIT_POLICY
@@ -855,6 +956,26 @@ async fn validated_login(
     Ok(json!({"role_id":role_id,"secret_id":secret_id,"names":policy_names,"token":token}))
 }
 
+fn captured_renewal_leaf(data: &Value) -> Result<()> {
+    // A policy-name equality check alone does not constrain the role's glob
+    // grants or periodic lifetime. Keep the historical profiles unchanged.
+    if data["token_type"] != "service"
+        || ["allowed_policies_glob", "disallowed_policies_glob"]
+            .iter()
+            .any(|name| {
+                data.get(*name)
+                    .is_some_and(|value| !value.is_null() && value != &json!([]))
+            })
+        || ["period", "token_period"].iter().any(|name| {
+            data.get(*name)
+                .is_some_and(|value| !value.is_null() && value != 0)
+        })
+    {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
 fn credential<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value[key].as_str().filter(|v| !v.is_empty()).ok_or(REFUSAL)
 }
@@ -925,7 +1046,7 @@ pub async fn rotate(
     context: &Value,
     retiring: bool,
 ) -> Result<()> {
-    if role == Role::CaRotation {
+    if matches!(role, Role::CaRotation | Role::Application) {
         return Err(REFUSAL);
     }
     let identity = private_directory(identity)?;
@@ -1150,6 +1271,9 @@ pub async fn bootstrap(
     output: &Path,
     context: &Value,
 ) -> Result<()> {
+    if role == Role::Application {
+        return crate::application_authority::bootstrap(bao, output, context).await;
+    }
     if !context.is_object() {
         return Err(REFUSAL);
     }
@@ -1367,6 +1491,54 @@ pub async fn mint(
 #[cfg(test)]
 mod ingress_renewal_policy_tests {
     use super::*;
+
+    #[test]
+    fn known_renewal_session_is_captured_before_later_login_validation() {
+        let auth =
+            json!({"client_token":"synthetic-known-session-token", "lease_duration":"malformed"});
+        let mut captured = None;
+        capture_login_session(&auth, Some(&mut captured)).unwrap();
+        assert_eq!(captured.as_deref(), Some("synthetic-known-session-token"));
+        assert!(auth["lease_duration"].as_u64().is_none());
+        assert!(capture_login_session(&auth, Some(&mut captured)).is_err());
+        // Historical callers opt out and retain their existing validation.
+        assert!(capture_login_session(&json!({}), None).is_ok());
+    }
+
+    #[test]
+    fn unsafe_or_unknown_login_reply_never_becomes_a_captured_session() {
+        for value in [
+            json!(null),
+            json!("too-short"),
+            json!("x".repeat(1025)),
+            json!("synthetic-session-with\na-header-injection"),
+            json!("synthetic session with spaces"),
+        ] {
+            let mut captured = None;
+            assert!(
+                capture_login_session(&json!({"client_token":value}), Some(&mut captured)).is_err()
+            );
+            assert!(captured.is_none());
+        }
+    }
+
+    #[test]
+    fn captured_renewal_rejects_glob_grants_and_periodic_leaf_roles() {
+        let original = json!({"token_type":"service","allowed_policies_glob":[],
+            "disallowed_policies_glob":[],"period":0,"token_period":0});
+        assert!(captured_renewal_leaf(&original).is_ok());
+        for (field, value) in [
+            ("token_type", json!("batch")),
+            ("allowed_policies_glob", json!(["*"])),
+            ("disallowed_policies_glob", json!(["unrelated-*"])),
+            ("period", json!(28800)),
+            ("token_period", json!(28800)),
+        ] {
+            let mut altered = original.clone();
+            altered[field] = value;
+            assert!(captured_renewal_leaf(&altered).is_err(), "{field}");
+        }
+    }
 
     fn workload_names() -> Vec<String> {
         (0..21)

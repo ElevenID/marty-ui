@@ -392,14 +392,14 @@ def is_expected_entitlement_response(entry: dict[str, Any]) -> bool:
     )
 
 
-def is_expected_cross_org_admin_denial(entry: dict[str, Any]) -> bool:
+def is_expected_cross_org_admin_denial(entry: dict[str, Any], organization_id: str = CROSS_ORG_SENTINEL) -> bool:
     """Recognize only the audit's explicit cross-organization access probes."""
     if int(entry.get("status") or 0) != 403:
         return False
     parsed = urlparse(str(entry.get("url") or ""))
     return (
         parsed.path in CROSS_ORG_ADMIN_PATHS
-        and parse_qs(parsed.query).get("organization_id") == [CROSS_ORG_SENTINEL]
+        and parse_qs(parsed.query).get("organization_id") == [organization_id]
     )
 
 
@@ -513,6 +513,8 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "The audit ended on a loading/auth/login interstitial state.",
         )
 
+    foreign_steps = [step for step in steps if step.get("label") == "unauthorized-administration-denied"]
+    foreign_id = foreign_steps[0].get("organization_id") if len(foreign_steps) == 1 and verified_cross_org_denial(report) else None
     for response in bad_responses:
         status = int(response.get("status") or 0)
         if status == 503:
@@ -530,7 +532,7 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
                 url=response.get("url"),
                 message_id=response.get("message_id"),
             )
-        elif is_expected_cross_org_admin_denial(response):
+        elif foreign_id and is_expected_cross_org_admin_denial(response, foreign_id):
             expected_cross_org_denials.append(
                 {
                     "status": status,
@@ -609,11 +611,108 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+DIRECT_LINK_TARGETS = {
+    "credential.compliance_profile_id": "compliance_profile",
+    "credential.issuer_did": "issuer_identity",
+    "credential.trust_profile_id": "trust_profile",
+    "credential.revocation_profile_id": "revocation_profile",
+    "application.credential_template_id": "credential_template",
+    "policy.trust_profile_id": "trust_profile",
+    "deployment.trust_profile_id": "trust_profile",
+    "deployment.default_policy_id": "presentation_policy",
+    "issuance_flow.trust_profile_id": "trust_profile",
+    "issuance_flow.credential_template_id": "credential_template",
+    "verification_flow.trust_profile_id": "trust_profile",
+    "verification_flow.presentation_policy_id": "presentation_policy",
+}
+MEMBER_LINK_TARGETS = {
+    "deployment.presentation_policy_ids": "presentation_policy",
+    "issuance_flow.deployment_profile_ids": "deployment_profile",
+    "verification_flow.deployment_profile_ids": "deployment_profile",
+    "policy.credential_template": "credential_template",
+}
+REQUIRED_INVENTORY_TYPES = frozenset({
+    "signing_service", "issuer_identity", "verifier_issuer_identity", "compliance_profile",
+    "trust_profile", "revocation_profile", "credential_template", "application_template",
+    "presentation_policy", "deployment_profile", "issuance_flow", "verification_flow", "api_key",
+})
+
+
+def verified_linked_inventory(report: dict[str, Any]) -> bool:
+    steps = [step for step in report.get("steps") or [] if step.get("label") == "resource-inventory-verified"]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    try:
+        UUID(str(step.get("organization_id") or ""))
+    except ValueError:
+        return False
+    inventory = step.get("inventory")
+    if not isinstance(inventory, list) or len(inventory) != len(REQUIRED_INVENTORY_TYPES):
+        return False
+    resources = {}
+    for item in inventory:
+        if not isinstance(item, dict) or item.get("resource_type") in resources:
+            return False
+        kind = item.get("resource_type")
+        if kind not in REQUIRED_INVENTORY_TYPES or not str(item.get("id") or "").strip():
+            return False
+        if kind == "signing_service":
+            if str(item.get("status") or "").lower() not in {"configured", "active", "registered"}:
+                return False
+        elif str(item.get("status") or "").lower() != "active":
+            return False
+        resources[kind] = str(item["id"])
+    if set(resources) != REQUIRED_INVENTORY_TYPES:
+        return False
+    links = step.get("linked_resource_ids")
+    if not isinstance(links, dict) or set(links) != set(DIRECT_LINK_TARGETS) | set(MEMBER_LINK_TARGETS):
+        return False
+    for label, target in DIRECT_LINK_TARGETS.items():
+        if links[label] != resources[target]:
+            return False
+    for label, target in MEMBER_LINK_TARGETS.items():
+        if not isinstance(links[label], list) or resources[target] not in links[label]:
+            return False
+    return True
+
+
+def verified_cross_org_denial(report: dict[str, Any]) -> bool:
+    steps = [step for step in report.get("steps") or [] if step.get("label") == "unauthorized-administration-denied"]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    statuses = step.get("statuses")
+    binding = step.get("foreign_owner_binding")
+    inventory = [item for item in report.get("steps") or [] if item.get("label") == "resource-inventory-verified"]
+    organization_id = step.get("organization_id")
+    try:
+        valid_id = str(UUID(str(organization_id))) == organization_id
+    except (ValueError, TypeError):
+        valid_id = False
+    return (valid_id and organization_id != CROSS_ORG_SENTINEL
+            and len(inventory) == 1 and inventory[0].get("organization_id") != organization_id
+            and isinstance(binding, dict) and binding.get("owner_org_id") == organization_id
+            and binding.get("owner_org_status") == "active"
+            and binding.get("owner_membership_is_owner") is True
+            and binding.get("tested_org_absent") is True
+            and binding.get("owner_session_retired") is True
+            and isinstance(binding.get("owner_user_sha256"), str)
+            and len(binding["owner_user_sha256"]) == 64
+            and isinstance(binding.get("tested_user_sha256"), str)
+            and len(binding["tested_user_sha256"]) == 64
+            and binding["owner_user_sha256"] != binding["tested_user_sha256"]
+            and isinstance(statuses, dict)
+            and set(statuses) == CROSS_ORG_ADMIN_PATHS
+            and all(type(statuses[path]) is int and statuses[path] == 403 for path in CROSS_ORG_ADMIN_PATHS))
+
+
 def organization_management_behavior_assertions(report: dict[str, Any]) -> dict[str, bool]:
     """Map the live audit evidence to the exact D-10 behavior contract."""
     labels = {str(step.get("label") or "") for step in report.get("steps") or []}
+    inventory_verified = verified_linked_inventory(report)
     return {
-        "configure_organization": {"post-org-probe", "resource-inventory-verified"}.issubset(labels),
+        "configure_organization": "post-org-probe" in labels and inventory_verified,
         "configure_issuer_profiles": {
             "kms-service-configured",
             "issuer-identity-active",
@@ -630,8 +729,8 @@ def organization_management_behavior_assertions(report: dict[str, Any]) -> dict[
             "verification-flow-active",
             "api-key-created",
             "resource-inventory-verified",
-        }.issubset(labels),
-        "unauthorized_administration_denied": "unauthorized-administration-denied" in labels,
+        }.issubset(labels) and inventory_verified,
+        "unauthorized_administration_denied": verified_cross_org_denial(report),
     }
 
 
@@ -2505,12 +2604,15 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
             ("verification_flow.trust_profile_id", verification_flow.get("trust_profile_id"), trust.get("id")),
             ("verification_flow.presentation_policy_id", verification_flow.get("presentation_policy_id"), policy.get("id")),
         ]
+        linked_resource_ids: dict[str, Any] = {label: actual for label, actual, _ in expected_links}
         dependency_errors.extend(
             label for label, actual, expected in expected_links if actual != expected
         )
+        linked_resource_ids["deployment.presentation_policy_ids"] = deployment.get("presentation_policy_ids") or []
         if policy.get("id") not in (deployment.get("presentation_policy_ids") or []):
             dependency_errors.append("deployment.presentation_policy_ids")
         for flow_label, flow in (("issuance_flow", issuance_flow), ("verification_flow", verification_flow)):
+            linked_resource_ids[f"{flow_label}.deployment_profile_ids"] = flow.get("deployment_profile_ids") or []
             if deployment.get("id") not in (flow.get("deployment_profile_ids") or []):
                 dependency_errors.append(f"{flow_label}.deployment_profile_ids")
         credential_claim_ids = {
@@ -2521,6 +2623,7 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
             ]
             if isinstance(requirement, dict)
         }
+        linked_resource_ids["policy.credential_template"] = sorted(str(value) for value in credential_claim_ids if value)
         if credential.get("id") not in credential_claim_ids:
             dependency_errors.append("policy.credential_template")
 
@@ -2539,14 +2642,97 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
     audit.snapshot(
         "resource-inventory-verified",
         "Verified every required run-created primitive in the fresh organization.",
-        {"organization_id": organization_id, "inventory": inventory},
+        {"organization_id": organization_id, "inventory": inventory,
+         "linked_resource_ids": linked_resource_ids},
     )
 
 
-def verify_unauthorized_administration_denied(audit: Audit) -> None:
-    """Prove that this administrator cannot enumerate another organization's primitives."""
+def bind_foreign_owner(owner_probe: dict[str, Any], tested_probe: dict[str, Any], organization_id: str) -> dict[str, Any]:
+    """Bind an independently authenticated active owner to a real foreign organization."""
+    owner_me = owner_probe.get("/v1/auth/me") or {}
+    tested_me = tested_probe.get("/v1/auth/me") or {}
+    owner_mine = owner_probe.get("/v1/organizations/mine") or {}
+    tested_mine = tested_probe.get("/v1/organizations/mine") or {}
+    if any(probe.get("status") != 200 for probe in (owner_me, tested_me, owner_mine, tested_mine)):
+        raise ValueError("D10_FOREIGN_OWNER_AUTH_UNVERIFIED")
+    owner = owner_me.get("body") or {}
+    tested = tested_me.get("body") or {}
+    owner_user = owner.get("user") if isinstance(owner, dict) and owner.get("authenticated") is True else None
+    tested_user = tested.get("user") if isinstance(tested, dict) and tested.get("authenticated") is True else None
+    owner_id = owner_user.get("user_id") if isinstance(owner_user, dict) else None
+    tested_id = tested_user.get("user_id") if isinstance(tested_user, dict) else None
+    if not isinstance(owner_id, str) or not owner_id or not isinstance(tested_id, str) or not tested_id or owner_id == tested_id:
+        raise ValueError("D10_FOREIGN_OWNER_NOT_INDEPENDENT")
+    owner_orgs, tested_orgs = owner_mine.get("body"), tested_mine.get("body")
+    if not isinstance(owner_orgs, list) or not isinstance(tested_orgs, list):
+        raise ValueError("D10_FOREIGN_ORGANIZATION_MEMBERSHIP_UNVERIFIED")
+    matches = [row for row in owner_orgs if isinstance(row, dict) and row.get("id") == organization_id]
+    if (len(matches) != 1 or matches[0].get("status") != "active"
+            or not isinstance(matches[0].get("membership"), dict)
+            or matches[0]["membership"].get("is_owner") is not True
+            or any(isinstance(row, dict) and row.get("id") == organization_id for row in tested_orgs)):
+        raise ValueError("D10_FOREIGN_ORGANIZATION_NOT_INDEPENDENT_ACTIVE_OWNER")
+    digest = lambda value: hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return {"owner_org_id": organization_id, "owner_org_status": "active",
+            "owner_membership_is_owner": True, "tested_org_absent": True,
+            "owner_user_sha256": digest(owner_id), "tested_user_sha256": digest(tested_id)}
+
+
+def discover_foreign_owner_id(owner_probe: dict[str, Any], tested_probe: dict[str, Any]) -> str:
+    """Select only a unique, real active organization owned outside the tested account."""
+    rows = (owner_probe.get("/v1/organizations/mine") or {}).get("body")
+    if not isinstance(rows, list):
+        raise ValueError("D10_FOREIGN_ORGANIZATION_DISCOVERY_UNAVAILABLE")
+    candidates = []
+    for row in rows:
+        organization_id = row.get("id") if isinstance(row, dict) else None
+        try:
+            if not organization_id or str(UUID(organization_id)) != organization_id or organization_id == CROSS_ORG_SENTINEL:
+                continue
+            bind_foreign_owner(owner_probe, tested_probe, organization_id)
+            candidates.append(organization_id)
+        except (TypeError, ValueError):
+            continue
+    if len(candidates) != 1:
+        raise ValueError("D10_FOREIGN_ORGANIZATION_NOT_UNIQUE_ACTIVE_OWNER")
+    return candidates[0]
+
+
+def retire_fixture_session(context: Any, base_url: str) -> None:
+    logout = context.request.post(f"{base_url}/v1/auth/logout", max_redirects=0, timeout=10000)
+    after = context.request.get(f"{base_url}/v1/auth/me", timeout=10000)
+    if logout.status not in (200, 204, 302, 303, 307) or after.status != 200 or after.json().get("authenticated") is not False:
+        raise ValueError("D10_FOREIGN_FIXTURE_SESSION_NOT_RETIRED")
+
+
+def verify_foreign_owner_fixture(audit: Audit, browser: Any, tested_probe: dict[str, Any],
+                                 foreign_org_id: str | None, foreign_email: str,
+                                 foreign_password: str) -> tuple[str, dict[str, Any]]:
+    """Read and bind the independent owner before creating any D10 resources."""
+    owner_context = browser.new_context(base_url=audit.base_url, viewport=RECORDING_VIEWPORT,
+                                        ignore_https_errors=False)
+    try:
+        owner_page = owner_context.new_page()
+        owner_audit = Audit(owner_page, audit.artifact_dir / "foreign-owner-login", audit.base_url)
+        owner_audit.artifact_dir.mkdir(parents=True, exist_ok=True)
+        log_in(owner_audit, foreign_email, foreign_password)
+        owner_probe = fetch_json_from_page(owner_page, ["/v1/auth/me", "/v1/organizations/mine"])
+        foreign_org_id = foreign_org_id or discover_foreign_owner_id(owner_probe, tested_probe)
+        binding = bind_foreign_owner(owner_probe, tested_probe, foreign_org_id)
+    finally:
+        try:
+            retire_fixture_session(owner_context, audit.base_url)
+        finally:
+            owner_context.close()
+    binding["owner_session_retired"] = True
+    return foreign_org_id, binding
+
+
+def verify_unauthorized_administration_denied(audit: Audit, foreign_org_id: str,
+                                                binding: dict[str, Any]) -> None:
+    """Prove four denials against the preflight-bound active foreign organization."""
     probes = {
-        path: fetch_org_collection(audit.page, path, CROSS_ORG_SENTINEL)
+        path: fetch_org_collection(audit.page, path, foreign_org_id)
         for path in sorted(CROSS_ORG_ADMIN_PATHS)
     }
     statuses = {path: int(probe.get("status") or 0) for path, probe in probes.items()}
@@ -2554,13 +2740,13 @@ def verify_unauthorized_administration_denied(audit: Audit) -> None:
         audit.snapshot(
             "unauthorized-administration-not-denied",
             "At least one cross-organization administration request was not denied with 403.",
-            {"organization_id": CROSS_ORG_SENTINEL, "statuses": statuses},
+            {"organization_id": foreign_org_id, "foreign_owner_binding": binding, "statuses": statuses},
         )
         return
     audit.snapshot(
         "unauthorized-administration-denied",
         "Cross-organization reads of credential, trust, policy, and deployment primitives were denied.",
-        {"organization_id": CROSS_ORG_SENTINEL, "statuses": statuses},
+        {"organization_id": foreign_org_id, "foreign_owner_binding": binding, "statuses": statuses},
     )
 
 
@@ -2601,6 +2787,8 @@ def main() -> int:
             "file for subsequent lifecycle steps."
         ),
     )
+    parser.add_argument("--check-foreign-fixture", action="store_true",
+                        help="Read only: verify the existing independent owner and select one active foreign organization.")
     args = parser.parse_args()
     functional_rerun = os.environ.get("RECORD_VIDEO") == "0"
     record_video = args.record_video and not functional_rerun
@@ -2628,6 +2816,40 @@ def main() -> int:
         print("Missing TEST_VENDOR_EMAIL/TEST_VENDOR_PASSWORD or admin fallback in beta env.", file=sys.stderr)
         return 2
     KNOWN_SECRETS.add(password)
+    foreign_email = os.environ.get("D10_FOREIGN_OWNER_EMAIL")
+    foreign_password = os.environ.get("D10_FOREIGN_OWNER_PASSWORD")
+    foreign_org_id = os.environ.get("D10_FOREIGN_ORG_ID")
+    try:
+        if (not foreign_email or not foreign_password or foreign_email.casefold() == email.casefold()
+                or (not args.check_foreign_fixture and not foreign_org_id)
+                or (foreign_org_id and (str(UUID(foreign_org_id)) != foreign_org_id
+                                       or foreign_org_id == CROSS_ORG_SENTINEL))):
+            raise ValueError
+    except ValueError:
+        print("D10 requires an independently owned active foreign organization fixture.", file=sys.stderr)
+        return 2
+    KNOWN_SECRETS.add(foreign_password)
+
+    if args.check_foreign_fixture:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(base_url=base_url, viewport=RECORDING_VIEWPORT,
+                                          ignore_https_errors=False)
+            try:
+                page = context.new_page()
+                check_audit = Audit(page, resolve_artifact_dir("foreign-fixture-read-only"), base_url)
+                check_audit.artifact_dir.mkdir(parents=True, exist_ok=True)
+                log_in(check_audit, email, password)
+                tested_probe = fetch_json_from_page(page, ["/v1/auth/me", "/v1/organizations/mine"])
+                selected_id, binding = verify_foreign_owner_fixture(
+                    check_audit, browser, tested_probe, foreign_org_id, foreign_email, foreign_password)
+                retire_fixture_session(context, base_url)
+                print(json.dumps({"state": "FOREIGN_OWNER_READ_ONLY_VERIFIED", "organization_id": selected_id,
+                                  "binding": binding}, sort_keys=True))
+                return 0
+            finally:
+                context.close()
+                browser.close()
 
     try:
         signing_inputs = load_signing_inputs()
@@ -2680,6 +2902,10 @@ def main() -> int:
             log_in(audit, email, password)
             auth_probe = fetch_json_from_page(page, ["/v1/auth/me", "/v1/organizations/mine"])
             audit.snapshot("auth-probe", "Fetched auth/session probes.", {"auth_probe": auth_probe})
+            selected_foreign_id, foreign_binding = verify_foreign_owner_fixture(
+                audit, browser, auth_probe, foreign_org_id, foreign_email, foreign_password)
+            if selected_foreign_id != foreign_org_id:
+                raise ValueError("D10_FOREIGN_ORGANIZATION_PRECHECK_CHANGED")
 
             created_slug = create_org(audit, run_id, email)
             post_org_probe = fetch_json_from_page(page, ["/v1/auth/me", "/v1/organizations/mine"])
@@ -2713,7 +2939,7 @@ def main() -> int:
                 trace_stopped = True
             create_api_key(audit, run_id)
             verify_resource_inventory(audit, run_id)
-            verify_unauthorized_administration_denied(audit)
+            verify_unauthorized_administration_denied(audit, foreign_org_id, foreign_binding)
         except Exception as exc:
             audit.snapshot("audit-exception", f"Audit stopped with exception: {exc!r}")
             # Do not re-emit an original Playwright exception chain that may
@@ -2764,7 +2990,7 @@ def main() -> int:
             report_path.write_text(redact_sensitive(json.dumps(report, indent=2, default=str)), encoding="utf-8")
             print(f"[audit] report={report_path}")
 
-    if args.github_env is not None and report["release_checks"]["status"] == "pass":
+    if args.github_env is not None and report["releaseReady"] is True:
         environment = export_audit_lifecycle_environment(report, args.github_env)
         print(
             "[audit] exported_lifecycle_resources="

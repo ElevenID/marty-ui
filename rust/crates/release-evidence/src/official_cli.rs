@@ -3,6 +3,7 @@ use std::{fs::File, path::Path};
 use marty_release_evidence::{
     deployment_bundle::read_bounded,
     official::{validate_official_suite, LANES, MAX_MANIFEST_BYTES, MAX_SUMMARY_BYTES},
+    official_automation::validate_automated_official_suite,
     official_review::{
         prepare_official_review, validate_official_suite_with_review, MAX_DISPOSITION_BYTES,
     },
@@ -32,11 +33,18 @@ fn run() -> Result<String, &'static str> {
     if prepare {
         args.remove(0);
     }
+    let automated = args.first().is_some_and(|value| value == "--automated");
+    if automated {
+        if prepare {
+            return Err("official qualification modes cannot be combined");
+        }
+        args.remove(0);
+    }
     let main_review = if args
         .first()
         .is_some_and(|value| value == "--with-main-review")
     {
-        if args.len() < 3 || prepare {
+        if args.len() < 3 || prepare || automated {
             return Err("official review arguments are invalid");
         }
         let values = args.drain(..3).collect::<Vec<_>>();
@@ -45,7 +53,7 @@ fn run() -> Result<String, &'static str> {
         None
     };
     if args.len() != 6 {
-        return Err("usage: validate-official-suite [--prepare-review | --with-main-review RECORD MAIN_COMMIT] MANIFEST SOURCE_SHA HARNESS_SHA RUN_ID RUN_ATTEMPT SUMMARY_DIRECTORY");
+        return Err("usage: validate-official-suite [--automated | --prepare-review | --with-main-review RECORD MAIN_COMMIT] MANIFEST SOURCE_SHA HARNESS_SHA RUN_ID RUN_ATTEMPT SUMMARY_DIRECTORY");
     }
     let run_id = args[3]
         .parse::<u64>()
@@ -71,6 +79,13 @@ fn run() -> Result<String, &'static str> {
         let plan =
             prepare_official_review(&manifest, &summaries, &args[1], &args[2], run_id, attempt)?;
         return String::from_utf8(plan.bytes()?).map_err(|_| "cannot encode official review plan");
+    }
+    if automated {
+        let receipt = validate_automated_official_suite(
+            &manifest, &summaries, &args[1], &args[2], run_id, attempt,
+        )?;
+        return serde_json::to_string(&receipt)
+            .map_err(|_| "cannot serialize automated official gate receipt");
     }
     let receipt = if let Some((record, main_commit)) = main_review {
         let bytes = read(Path::new(&record), MAX_DISPOSITION_BYTES)?;

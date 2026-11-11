@@ -4,7 +4,7 @@
  * Profile and preferences for applicants.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router';
 import {
   Box,
@@ -14,9 +14,7 @@ import {
   Button,
   Grid,
   Alert,
-  Switch,
   FormControlLabel,
-  Divider,
   Checkbox,
   Chip,
   CircularProgress,
@@ -27,6 +25,7 @@ import AccountBalanceWalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '../../../hooks/useAuth';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { getMyApplicantProfile, upsertMyApplicantProfile } from '../../../services/applicantApi';
 import { listWallets } from '../../../services/walletRegistryApi';
 import useWalletPreferences from '../../../hooks/useWalletPreferences';
@@ -49,6 +48,13 @@ function ApplicantSettingsPage() {
   const { t } = useTranslation('applicant');
   const location = useLocation();
   const { user } = useAuth();
+  const userId = user?.user_id;
+  const currentUser = useRef(user);
+  currentUser.current = user;
+  const profileRequest = useRef(0);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileLoadError, setProfileLoadError] = useState(false);
+  const [profileRetryCount, setProfileRetryCount] = useState(0);
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState(null);
@@ -58,16 +64,15 @@ function ApplicantSettingsPage() {
     email: user?.email || '',
     phone: '',
   });
-  const [notifications, setNotifications] = useState({
-    emailAlerts: true,
-    applicationUpdates: true,
-    expirationReminders: true,
-  });
 
   // Wallet preferences
-  const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(user?.user_id);
-  const [registryWallets, setRegistryWallets] = useState([]);
-  const [walletsLoading, setWalletsLoading] = useState(true);
+  const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(userId);
+  const { data: wallets, loading: walletsLoading, error: walletsError, reload: reloadWallets } = useAsyncData(
+    () => listWallets(true),
+    [],
+  );
+  const registryWallets = Array.isArray(wallets) ? wallets : [];
+  const walletLoadFailed = walletsError || (!walletsLoading && !Array.isArray(wallets));
   const walletSelectionRestricted = Boolean(walletSelectionAllowlist);
   const selectableRegistryWallets = filterSelectableWallets(registryWallets, WALLET_SELECTION_ALLOWED_WALLET_IDS);
   const platform = getPlatform();
@@ -80,60 +85,69 @@ function ApplicantSettingsPage() {
     new Set(iosSameDeviceLimitedWallets.map((wallet) => wallet.name).filter(Boolean)),
   );
 
-  // Load applicant profile on mount
+  // Reload only for the account or an explicit retry. Updating unrelated auth
+  // context or translations must not overwrite an in-progress profile edit.
   useEffect(() => {
+    const request = ++profileRequest.current;
+    const profileUser = currentUser.current;
+    const isCurrent = () => profileRequest.current === request;
+
+    setProfileLoading(true);
+    setProfileLoadError(false);
+    setApplicantId(null);
+    setSaving(false);
+    setSuccess(false);
+    setError(null);
+    setProfile({
+      name: userDisplayName(profileUser),
+      email: profileUser?.email || '',
+      phone: '',
+    });
+
     const loadProfile = async () => {
-      if (user?.user_id) {
-        try {
+      try {
+        if (userId) {
           let applicant = await getMyApplicantProfile();
+          if (!isCurrent()) return;
 
           // If no profile exists, create one
           if (!applicant) {
-            const nameParts = userDisplayName(user).trim().split(/\s+/).filter(Boolean);
-            const created = await upsertMyApplicantProfile({
-              email: user.email || '',
-              given_name: user.given_name || nameParts[0] || '',
-              family_name: user.family_name || nameParts.slice(1).join(' ') || '',
+            const nameParts = userDisplayName(profileUser).trim().split(/\s+/).filter(Boolean);
+            applicant = await upsertMyApplicantProfile({
+              email: profileUser.email || '',
+              given_name: profileUser.given_name || nameParts[0] || '',
+              family_name: profileUser.family_name || nameParts.slice(1).join(' ') || '',
             });
-            applicant = created;
           }
+          if (!isCurrent()) return;
 
-          if (applicant) {
+          if (applicant?.id) {
             setApplicantId(applicant.id);
             setProfile({
               name: applicant.full_name
                 || [applicant.given_name, applicant.family_name].filter(Boolean).join(' ')
-                || userDisplayName(user),
-              email: applicant.email || user.email || '',
+                || userDisplayName(profileUser),
+              email: applicant.email || profileUser.email || '',
               phone: applicant.phone || '',
             });
+          } else {
+            setProfileLoadError(true);
           }
-        } catch (err) {
-          console.error('Error loading applicant profile:', err);
-          setError(err.message || t('settings.errorNotFound'));
         }
+      } catch (err) {
+        if (!isCurrent()) return;
+        console.error('Error loading applicant profile:', err);
+        setProfileLoadError(true);
+      } finally {
+        if (isCurrent()) setProfileLoading(false);
       }
     };
 
     loadProfile();
-  }, [user, t]);
-
-  // Load wallet registry
-  useEffect(() => {
-    const loadWallets = async () => {
-      setWalletsLoading(true);
-      try {
-        const wallets = await listWallets(true);
-        setRegistryWallets(Array.isArray(wallets) ? wallets : []);
-      } catch (err) {
-        console.error('Error loading wallet registry:', err);
-      } finally {
-        setWalletsLoading(false);
-      }
+    return () => {
+      profileRequest.current += 1;
     };
-
-    loadWallets();
-  }, []);
+  }, [userId, profileRetryCount]);
 
   useEffect(() => {
     if (location.hash !== '#wallet-selection') {
@@ -149,17 +163,15 @@ function ApplicantSettingsPage() {
   }, [location.hash]);
 
   const handleSave = async () => {
+    if (profileLoading || saving || !applicantId) return;
+    const request = profileRequest.current;
     setSaving(true);
     setError(null);
     setSuccess(false);
 
     try {
-      if (!applicantId) {
-        throw new Error(t('settings.errorNotFound'));
-      }
-
       // Split name into given_name and family_name
-      const nameParts = profile.name.trim().split(' ');
+      const nameParts = profile.name.trim().split(/\s+/).filter(Boolean);
       const given_name = nameParts[0] || '';
       const family_name = nameParts.slice(1).join(' ') || '';
 
@@ -169,22 +181,20 @@ function ApplicantSettingsPage() {
         phone: profile.phone,
       });
 
-      setSuccess(true);
-      setTimeout(() => setSuccess(false), 3000);
+      if (profileRequest.current === request) setSuccess(true);
     } catch (err) {
+      if (profileRequest.current !== request) return;
       console.error('Error saving settings:', err);
       setError(err.message || 'Failed to save settings');
     } finally {
-      setSaving(false);
+      if (profileRequest.current === request) setSaving(false);
     }
   };
 
   const handleProfileChange = (field) => (event) => {
+    setSuccess(false);
+    setError(null);
     setProfile((prev) => ({ ...prev, [field]: event.target.value }));
-  };
-
-  const handleNotificationChange = (field) => (event) => {
-    setNotifications((prev) => ({ ...prev, [field]: event.target.checked }));
   };
 
   return (
@@ -192,37 +202,55 @@ function ApplicantSettingsPage() {
       <Typography variant="h4" gutterBottom>
         {t('settings.title')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" paragraph>
+      <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
         {t('settings.description')}
       </Typography>
-
-      {success && (
-        <Alert severity="success" sx={{ mb: 3 }}>
-          {t('settings.successMessage')}
-        </Alert>
-      )}
-
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
 
       {/* Profile Settings */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>
           {t('settings.profile.title')}
         </Typography>
+        {profileLoading && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }} role="status">
+            <CircularProgress size={20} />
+            {t('common.loading', { ns: 'common' })}
+          </Box>
+        )}
+        {profileLoadError && (
+          <Alert
+            severity="error"
+            sx={{ mb: 3 }}
+            action={(
+              <Button color="inherit" onClick={() => setProfileRetryCount((count) => count + 1)}>
+                {t('actions.retry', { ns: 'common' })}
+              </Button>
+            )}
+          >
+            {t('settings.profile.loadError', 'Your profile could not be loaded. Please try again.')}
+          </Alert>
+        )}
+        {success && (
+          <Alert severity="success" sx={{ mb: 3 }}>
+            {t('settings.profile.saved', 'Profile saved.')}
+          </Alert>
+        )}
+        {error && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            {error}
+          </Alert>
+        )}
         <Grid container spacing={3}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               label={t('settings.profile.fullName')}
               value={profile.name}
               onChange={handleProfileChange('name')}
+              disabled={profileLoading || saving || !applicantId}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               label={t('settings.profile.email')}
@@ -232,15 +260,25 @@ function ApplicantSettingsPage() {
               helperText={t('settings.profile.emailHelp')}
             />
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <TextField
               fullWidth
               label={t('settings.profile.phone')}
               value={profile.phone}
               onChange={handleProfileChange('phone')}
+              disabled={profileLoading || saving || !applicantId}
             />
           </Grid>
         </Grid>
+        <Button
+          variant="contained"
+          startIcon={<SaveIcon />}
+          onClick={handleSave}
+          disabled={profileLoading || saving || !applicantId}
+          sx={{ mt: 3 }}
+        >
+          {saving ? t('settings.actions.saving') : t('settings.profile.save', 'Save profile')}
+        </Button>
       </Paper>
 
       {/* Notification Settings */}
@@ -248,48 +286,9 @@ function ApplicantSettingsPage() {
         <Typography variant="h6" gutterBottom>
           {t('settings.notifications.title')}
         </Typography>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={notifications.emailAlerts}
-              onChange={handleNotificationChange('emailAlerts')}
-            />
-          }
-          label={t('settings.notifications.emailAlerts')}
-        />
-        <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          {t('settings.notifications.emailAlertsDescription')}
-        </Typography>
-
-        <Divider sx={{ my: 2 }} />
-
-        <FormControlLabel
-          control={
-            <Switch
-              checked={notifications.applicationUpdates}
-              onChange={handleNotificationChange('applicationUpdates')}
-            />
-          }
-          label={t('settings.notifications.applicationUpdates')}
-        />
-        <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          {t('settings.notifications.applicationUpdatesDescription')}
-        </Typography>
-
-        <Divider sx={{ my: 2 }} />
-
-        <FormControlLabel
-          control={
-            <Switch
-              checked={notifications.expirationReminders}
-              onChange={handleNotificationChange('expirationReminders')}
-            />
-          }
-          label={t('settings.notifications.expirationReminders')}
-        />
-        <Typography variant="body2" color="text.secondary" paragraph sx={{ ml: 6 }}>
-          {t('settings.notifications.expirationRemindersDescription')}
-        </Typography>
+        <Alert severity="info">
+          {t('settings.notifications.unavailable', 'Notification preferences are not available in this deployment.')}
+        </Alert>
       </Paper>
 
       {/* My Wallets */}
@@ -298,13 +297,16 @@ function ApplicantSettingsPage() {
         sx={{ p: 3, mb: 3, scrollMarginTop: { xs: 80, sm: 96 } }}
         data-testid="wallet-selection-section"
       >
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1 }}>
           <AccountBalanceWalletIcon color="primary" />
           <Typography variant="h6">My Wallets</Typography>
         </Stack>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Choose the wallet apps you use. When you claim a credential, we&apos;ll show a tab for each
           selected wallet so you get the right handoff and QR code.
+        </Typography>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          {t('settings.wallets.savedAutomatically', 'Wallet choices are saved automatically in this browser.')}
         </Typography>
 
         {walletSelectionRestricted && (
@@ -327,6 +329,17 @@ function ApplicantSettingsPage() {
           <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
             <CircularProgress size={24} />
           </Box>
+        ) : walletLoadFailed ? (
+          <Alert
+            severity="error"
+            action={(
+              <Button color="inherit" onClick={reloadWallets}>
+                {t('actions.retry', { ns: 'common' })}
+              </Button>
+            )}
+          >
+            {t('settings.wallets.loadError', 'Available wallets could not be loaded. Please try again.')}
+          </Alert>
         ) : registryWallets.length === 0 ? (
           <Alert severity="info">No wallets are available in the registry yet.</Alert>
         ) : (
@@ -335,11 +348,42 @@ function ApplicantSettingsPage() {
               const enabled = !walletSelectionAllowlist || walletSelectionAllowlist.has(w.id);
               const checked = preferredWallets.includes(w.id);
               return (
-                <Box
+                <FormControlLabel
                   key={w.id}
+                  disabled={!enabled}
+                  control={(
+                    <Checkbox
+                      checked={checked}
+                      onChange={(_, selected) => selected ? addWallet(w.id) : removeWallet(w.id)}
+                      slotProps={{ input: { 'aria-label': w.name } }}
+                      sx={{ mr: 1, p: 0 }}
+                    />
+                  )}
+                  label={(
+                    <Box
+                      component="span"
+                      sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}
+                    >
+                      <Box component="span" sx={{ flex: '1 1 160px', minWidth: 0 }}>
+                        <Typography component="span" variant="subtitle2" sx={{ display: 'block' }}>{w.name}</Typography>
+                        {w.description && (
+                          <Typography component="span" variant="caption" color="text.secondary">
+                            {w.description}
+                          </Typography>
+                        )}
+                      </Box>
+                      <Box component="span" sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {!enabled && <Chip component="span" label="Unavailable" size="small" variant="outlined" />}
+                        {(w.supported_platforms || w.platforms || []).map((p) => (
+                          <Chip key={p} component="span" label={p} size="small" variant="outlined" />
+                        ))}
+                      </Box>
+                    </Box>
+                  )}
                   sx={{
                     display: 'flex',
                     alignItems: 'center',
+                    m: 0,
                     p: 1.5,
                     borderRadius: 1,
                     border: 1,
@@ -348,40 +392,14 @@ function ApplicantSettingsPage() {
                     cursor: enabled ? 'pointer' : 'not-allowed',
                     opacity: enabled ? 1 : 0.52,
                     '&:hover': enabled ? { bgcolor: 'action.hover' } : undefined,
+                    '& .MuiFormControlLabel-label': { flex: 1, minWidth: 0 },
                   }}
-                  onClick={() => {
-                    if (!enabled) return;
-                    checked ? removeWallet(w.id) : addWallet(w.id);
-                  }}
-                >
-                  <Checkbox checked={checked} disabled={!enabled} sx={{ mr: 1, p: 0 }} />
-                  <Box sx={{ flex: 1 }}>
-                    <Typography variant="subtitle2">{w.name}</Typography>
-                    {w.description && (
-                      <Typography variant="caption" color="text.secondary">
-                        {w.description}
-                      </Typography>
-                    )}
-                  </Box>
-                  {!enabled && <Chip label="Unavailable" size="small" variant="outlined" sx={{ ml: 0.5 }} />}
-                  {(w.supported_platforms || w.platforms || []).map((p) => (
-                    <Chip key={p} label={p} size="small" variant="outlined" sx={{ ml: 0.5 }} />
-                  ))}
-                </Box>
+                />
               );
             })}
           </Stack>
         )}
       </Paper>
-
-      <Button
-        variant="contained"
-        startIcon={<SaveIcon />}
-        onClick={handleSave}
-        disabled={saving}
-      >
-        {saving ? t('settings.actions.saving') : t('settings.actions.save')}
-      </Button>
     </Box>
   );
 }

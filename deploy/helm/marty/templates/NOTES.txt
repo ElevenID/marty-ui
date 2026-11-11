@@ -1,0 +1,14 @@
+Marty is installed in namespace {{ .Release.Namespace }}.
+
+Public origin: {{ include "marty.publicOrigin" . }}
+
+Check completion and evidence with standard tools:
+  helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
+  kubectl get pods,jobs,pvc,ingress -n {{ .Release.Namespace }}
+  kubectl logs job/marty-migrate-{{ .Release.Revision }} -n {{ .Release.Namespace }} --all-containers
+  kubectl logs job/marty-keycloak-{{ .Release.Revision }} -n {{ .Release.Namespace }}
+  kubectl get events -n {{ .Release.Namespace }} --sort-by=.metadata.creationTimestamp
+
+OpenBao, its seal key, credential bootstrap and TLS certificate issuance are
+managed separately. PersistentVolumes must remain available across node reboot.
+This single-node development chart does not establish high availability.

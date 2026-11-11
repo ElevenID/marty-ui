@@ -7,9 +7,12 @@ pub mod workload;
 pub mod forwarded_principal;
 
 pub mod config;
+mod crypto_provider;
 pub mod grpc_request;
 mod secret_kms;
+pub mod startup;
 mod tls;
+pub use crypto_provider::install_tls_crypto_provider;
 pub use secret_kms::{SecretKmsNames, SecretKmsSelection};
 pub use tls::RemoteTlsIdentityFiles as GrpcServerTls;
 pub use tls::{

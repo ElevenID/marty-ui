@@ -74,7 +74,7 @@ export async function listWebhooks(organizationId) {
  * @param {string} webhookData.description - Optional description
  * @returns {Promise<Object>} - Created webhook with secret for HMAC verification
  */
-export async function createWebhook(organizationId, { name, url, eventTypes, description }) {
+export async function createWebhook(organizationId, { name, url, eventTypes, description }, options = {}) {
   const orgId = requireOrganizationId(organizationId, 'creating webhooks');
   const response = await postWithIdempotency(BASE_PATH, {
     organization_id: orgId,
@@ -82,7 +82,7 @@ export async function createWebhook(organizationId, { name, url, eventTypes, des
     url,
     event_types: eventTypes,
     description: description || '',
-  });
+  }, options);
   return normalizeWebhookResponse(response);
 }
 
@@ -90,17 +90,20 @@ export async function createWebhook(organizationId, { name, url, eventTypes, des
  * Create the endpoint and its delivery subscription as one UI operation.
  * If subscription creation fails, compensate by removing the inert endpoint.
  */
-export async function createWebhookConfiguration(organizationId, webhookData) {
-  const webhook = await createWebhook(organizationId, webhookData);
+export async function createWebhookConfiguration(organizationId, webhookData, options = {}) {
+  const webhook = await createWebhook(organizationId, webhookData, options);
   try {
     const subscription = await createSubscription(organizationId, {
       name: pairedSubscriptionName(webhook),
       description: webhookData.description || '',
       eventTypes: webhookData.eventTypes,
       deliveryTargetId: webhook.id,
-    });
+    }, options);
     return { ...webhook, subscription_id: subscription.id };
   } catch (error) {
+    // An abandoned view cannot start another mutation, including compensation.
+    // Unscoped callers retain their existing endpoint cleanup behavior.
+    if (options.isCurrent && !options.isCurrent()) throw error;
     try {
       await deleteWebhook(organizationId, webhook.id);
     } catch (cleanupError) {
@@ -250,10 +253,14 @@ export async function regenerateWebhookSecret(organizationId, webhookId) {
 
 /**
  * Get available webhook event types
+ * @param {string} organizationId - Organization whose webhook permission authorizes the catalog
  * @returns {Promise<Array>} - Array of event type objects with categories
  */
-export async function getAvailableEventTypes() {
-  const response = await get(`${BASE_PATH}/event-types`);
+export async function getAvailableEventTypes(organizationId) {
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(organizationId, 'loading webhook event types'),
+  });
+  const response = await get(withQuery(`${BASE_PATH}/event-types`, queryString));
   const eventTypes = Array.isArray(response?.event_types) ? response.event_types : [];
   const grouped = new Map();
   for (const type of eventTypes) {

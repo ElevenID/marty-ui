@@ -1,5 +1,6 @@
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
 const HISTORICAL_ALEMBIC_ERROR: &str =
@@ -83,10 +84,18 @@ const BASE_TABLES: &[&str] = &[
     "physical_document_jobs",
 ];
 
+/// The migration command needs only the tenant identity, not service credentials.
+pub fn seed_organization_id(value: Option<&str>) -> Result<Uuid, sqlx::Error> {
+    marty_service_runtime::config::trimmed_nonempty(value)
+        .unwrap_or("00000000-0000-0000-0000-000000000001")
+        .parse()
+        .map_err(|_| sqlx::Error::Protocol("MARTY_ORG_ID is invalid".into()))
+}
+
 /// Claim the Rust-owned issuance schema under one database lock. A fresh
 /// database receives the checked-in baseline; a Rust-owned database must have
 /// its baseline ledger. Historical Alembic schemas are not supported.
-pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+pub async fn migrate_owned_schema(pool: &PgPool, organization_id: Uuid) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_schema_owner_v1', 0))")
         .execute(&mut *transaction)
@@ -116,7 +125,8 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         ))
         .execute(&mut *transaction)
         .await?;
-        crate::migration_seed::seed_marty_application_templates(&mut transaction).await?;
+        crate::migration_seed::seed_marty_application_templates(&mut transaction, organization_id)
+            .await?;
     } else {
         let has_alembic: bool = sqlx::query_scalar(
             "SELECT to_regclass('issuance_service.alembic_version') IS NOT NULL",

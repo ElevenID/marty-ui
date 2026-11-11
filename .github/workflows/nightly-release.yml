@@ -100,10 +100,18 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations')
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -111,6 +119,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Expose existing read-only compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' || (matrix.role != 'services' && matrix.role != 'migrations')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -125,6 +134,8 @@ jobs:
         id: build
         uses: ./.github/actions/build-product-image
         with:
+          private-forks-enabled: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && 'true' || 'false' }}
+          private-forks-read-token: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
           producer: nightly
           source-sha: ${{ github.sha }}
           version: ${{ needs.admit.outputs.version }}
@@ -189,11 +200,18 @@ jobs:
       artifact_id: ${{ steps.native_artifact.outputs.artifact-id }}
       archive_sha256: ${{ steps.native_archive.outputs.sha256 }}
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_RELEASE_DEBUG: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
@@ -201,6 +219,13 @@ jobs:
         with:
           toolchain: 1.95.0
           targets: x86_64-unknown-linux-musl
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Build existing Rust packager and Linux operator
         env:
           MARTY_DEPLOY_SOURCE_SHA: ${{ github.sha }}

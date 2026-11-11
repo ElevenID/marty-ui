@@ -4,8 +4,11 @@ import { renderWithoutRouter, screen, waitFor } from '@test/utils';
 import type { ReactNode } from 'react';
 
 import ConsoleRoutes from './ConsoleRoutes';
+import { TeamSnapshotPanel } from '../../components/console/dashboard/TeamSnapshotPanel';
+import { SetupReadinessPanel } from '../../components/console/dashboard/SetupReadinessPanel';
 
-const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions } = vi.hoisted(() => ({
+const { mockLogin, mockUseAuth, mockUseConsole, mockUsePermissions, mockCredentialTemplates } = vi.hoisted(() => ({
+  mockCredentialTemplates: vi.fn().mockResolvedValue([]),
   mockUsePermissions: vi.fn(),
   mockLogin: vi.fn(),
   mockUseAuth: vi.fn(),
@@ -25,6 +28,17 @@ vi.mock('../../contexts/ConsoleContext', () => ({
 
 vi.mock('../../services/api', () => ({
   get: vi.fn(),
+}));
+
+vi.mock('../../services/presentationPolicyApi', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../services/presentationPolicyApi')>(),
+  listPresentationPolicies: vi.fn().mockResolvedValue([]),
+  listCredentialTemplates: (...args: unknown[]) => mockCredentialTemplates(...args),
+  listTrustProfiles: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock('../../components/vendor/FlowManager', () => ({
+  default: () => <div data-testid="flow-manager" />,
 }));
 
 vi.mock('../../components/ProtectedRoute', () => {
@@ -73,7 +87,7 @@ vi.mock('../../components/organizations/CreateOrganizationPage', () => ({
   default: () => <div data-testid="create-organization-page" />,
 }));
 
-vi.mock('../../components/console', () => ({
+vi.mock('../../components/console', async () => ({
   ConsoleDashboard: () => <div data-testid="console-dashboard" />,
   TrustPage: () => <div data-testid="trust-page" />,
   TrustProfilesPage: () => <div data-testid="trust-profiles-page" />,
@@ -84,14 +98,15 @@ vi.mock('../../components/console', () => ({
   TrustProfileDetailPage: () => <div data-testid="trust-profile-detail-page" />,
   TrustProfileEditPage: () => <div data-testid="trust-profile-edit-page" />,
   TemplatesPage: () => <div data-testid="templates-page" />,
-  CredentialTemplatesPage: () => <div data-testid="credential-templates-page" />,
+  CredentialTemplatesPage: (await import('../../components/console/templates/CredentialTemplatesPage')).default,
+  CredentialTemplateEditorPage: () => <div data-testid="credential-template-editor-page" />,
   CredentialTemplateDetailPage: () => <div data-testid="credential-template-detail-page" />,
   ApplicationTemplatesPage: () => <div data-testid="application-templates-page" />,
   ApplicationTemplateEditorPage: () => <div data-testid="application-template-editor-page" />,
   ApplicationTemplateDetailPage: () => <div data-testid="application-template-detail-page" />,
   CredentialTemplateWizard: () => <div data-testid="credential-template-wizard" />,
   PoliciesPage: () => <div data-testid="policies-page" />,
-  PresentationPoliciesPage: () => <div data-testid="presentation-policies-page" />,
+  PresentationPoliciesPage: (await import('../../components/console/policies/PresentationPoliciesPage')).default,
   ComplianceProfilePage: ({ mode = "view" }: { mode?: string }) => <div data-testid={`compliance-profile-${mode}`} />,
   ComplianceProfilesPage: () => <div data-testid="compliance-profiles-page" />,
   PresentationPolicyWizard: () => <div data-testid="presentation-policy-wizard" />,
@@ -107,7 +122,7 @@ vi.mock('../../components/console', () => ({
   KeyManagementServiceWizard: () => <div data-testid="key-management-service-wizard" />,
   IssuerIdentityWizard: () => <div data-testid="issuer-identity-wizard" />,
   FlowsPage: () => <div data-testid="flows-page" />,
-  FlowDefinitionsPage: () => <div data-testid="flow-definitions-page" />,
+  FlowDefinitionsPage: (await import('../../components/console/flows/FlowDefinitionsPage')).default,
   FlowInstancesPage: () => <div data-testid="flow-instances-page" />,
   FlowDefinitionWizard: () => <div data-testid="flow-definition-wizard" />,
   CustomFlowBuilder: () => <div data-testid="custom-flow-builder" />,
@@ -126,7 +141,7 @@ vi.mock('../../components/console', () => ({
   RolesPage: () => <div data-testid="roles-page" />,
   NotificationsPage: () => <div data-testid="notifications-page" />,
   MembershipRequestsPage: () => <div data-testid="membership-requests-page" />,
-  RoleEscalationRequestsPage: () => <div data-testid="role-escalation-requests-page" />,
+  RoleEscalationRequestsPage: (await import('../../components/console/org/RoleEscalationRequestsPage')).default,
   SigningKeysPage: () => <div data-testid="signing-keys-page" />,
   WebhooksPage: () => <div data-testid="webhooks-page" />,
   AuditPage: () => <div data-testid="audit-page" />,
@@ -142,17 +157,116 @@ afterEach(() => {
 });
 
 function CurrentPath() {
-  return <span data-testid="current-path">{useLocation().pathname}</span>;
+  const { pathname, search } = useLocation();
+  return <span data-testid="current-path">{pathname}{search}</span>;
 }
 
-function renderConsoleRoutes(path: string) {
+function renderConsoleRoutes(path: string, navigation?: ReactNode) {
   return renderWithoutRouter(
     <MemoryRouter initialEntries={[path]}>
+      {navigation}
       <ConsoleRoutes />
       <CurrentPath />
     </MemoryRouter>
   );
 }
+
+describe('resource navigation through the console route table', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCredentialTemplates.mockResolvedValue([]);
+    mockUseAuth.mockReturnValue({ isAuthenticated: true, isLoading: false });
+    mockUseConsole.mockReturnValue({ mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }], isLoading: false });
+    mockUsePermissions.mockReturnValue({ can: () => true, isLoading: false });
+  });
+
+  it.each(['draft', 'active', 'deprecated', 'archived'])('opens the registered editor from the %s credential-template row action', async (status) => {
+    mockCredentialTemplates.mockResolvedValue([{ id: 'template-1', organization_id: 'org-1', name: 'Audit template', status, claims: [] }]);
+    const { user } = renderConsoleRoutes('/console/org/templates/credentials');
+    await screen.findByText('Audit template');
+    await user.click(screen.getByRole('link', { name: status === 'draft' ? 'Edit settings for Audit template' : 'Create a draft version of Audit template' }));
+    expect(await screen.findByTestId('credential-template-editor-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/templates/credentials/template-1/edit');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retired Role Requests deep link useful without requiring Team access', async () => {
+    mockUsePermissions.mockReturnValue({ can: (resource: string, action: string) => resource === 'role' && action === 'view', isLoading: false });
+    const { user } = renderConsoleRoutes('/console/org/role-requests?source=bookmark');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Role change requests are not available in this console.');
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/role-requests?source=bookmark');
+    expect(screen.queryByRole('link', { name: 'View team' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'View roles' }));
+    expect(await screen.findByTestId('roles-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/roles');
+  });
+
+  it('opens the operational instances page from the Flow Definitions tab', async () => {
+    const { user } = renderConsoleRoutes('/console/org/flows/definitions');
+
+    await user.click(screen.getByRole('tab', { name: 'Flow Instances' }));
+
+    expect(await screen.findByTestId('flow-instances-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/operate/flow-instances');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('uses a translated singular resource label and opens the flow builder', async () => {
+    const { user } = renderConsoleRoutes('/console/org/flows/definitions');
+
+    await user.click(screen.getByRole('button', { name: 'Build Flow Definition' }));
+
+    expect(await screen.findByTestId('flow-definition-wizard')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/flows/definitions/new');
+  });
+
+  it('opens supported verification sessions from Presentation Policies', async () => {
+    const { user } = renderConsoleRoutes('/console/org/policies/presentation');
+
+    expect(screen.queryByRole('link', { name: 'Evaluate VP' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Start QR Verification' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('link', { name: 'Verification sessions' }));
+
+    expect(await screen.findByTestId('verification-sessions-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/operate/verify');
+    expect(screen.queryByTestId('flow-definition-wizard')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('preserves invitation intent when the dashboard Team action opens Team', async () => {
+    const { user } = renderConsoleRoutes('/console/org', <TeamSnapshotPanel teamData={{
+      members: [{ id: 'member-1', email: 'operator@example.test' }],
+      roleDistribution: { admin: 1 },
+    }} />);
+
+    await user.click(screen.getByRole('link', { name: 'Invite' }));
+
+    expect(await screen.findByTestId('team-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/team?invite=1');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+
+  it('opens Revocation Profiles from the ready lifecycle row itself', async () => {
+    const { user } = renderConsoleRoutes('/console/org', <SetupReadinessPanel readiness={{
+      activeIntent: 'lifecycle',
+      intents: {
+        lifecycle: {
+          id: 'lifecycle',
+          label: 'Revoke or renew credentials',
+          order: ['revocation'],
+          steps: { revocation: { state: 'ready', message: '1 active Revocation Profile' } },
+        },
+      },
+    }} />);
+
+    await user.click(screen.getByRole('link', { name: /Revocation Profile Ready/ }));
+
+    expect(await screen.findByTestId('revocation-profiles-page')).toBeInTheDocument();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/trust/revocation');
+    expect(screen.queryByTestId('console-dashboard')).not.toBeInTheDocument();
+  });
+});
 
 describe('ConsoleRoutes login routing', () => {
   beforeEach(() => {
@@ -169,6 +283,26 @@ describe('ConsoleRoutes login routing', () => {
       memberships: [],
       isLoading: false,
     });
+  });
+
+  it('centers the console initialization state without forwarding layout props to the DOM', () => {
+    mockUseConsole.mockReturnValue({ isLoading: true });
+
+    renderConsoleRoutes('/console');
+
+    const loadingState = screen.getByRole('progressbar').parentElement;
+    expect(screen.getByText('Loading console...')).toBeVisible();
+    expect(loadingState).toHaveStyle({
+      display: 'flex',
+      'flex-direction': 'column',
+      'align-items': 'center',
+      'justify-content': 'center',
+      'min-height': `${window.innerHeight / 2}px`,
+    });
+    for (const attribute of ['display', 'flexDirection', 'alignItems', 'justifyContent', 'minHeight']) {
+      expect(loadingState).not.toHaveAttribute(attribute);
+    }
+    expect(mockLogin).not.toHaveBeenCalled();
   });
 
   it('keeps login inside the console when public pages are disabled', async () => {

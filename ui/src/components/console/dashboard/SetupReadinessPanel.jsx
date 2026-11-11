@@ -78,7 +78,7 @@ const getResourceConfig = (t) => ({
   revocation: {
     label: 'Revocation Profile',
     icon: PolicyIcon,
-    path: '/console/org/policies/revocation',
+    path: '/console/org/trust/revocation',
     tooltip: 'Defines revocation or renewal controls for credential lifecycle operations.',
   },
   trust: {
@@ -179,24 +179,24 @@ function ReadinessRow({ resourceKey, readiness }) {
         <ListItemText
           primary={
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="body1" fontWeight={500}>
+              <Typography variant="body1" sx={{ fontWeight: 500 }}>
                 {config.label}
               </Typography>
               <Tooltip title={config.tooltip} placement="top">
                 <InfoOutlinedIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
               </Tooltip>
               {state === ReadinessState.READY && (
-                <Typography variant="caption" color="success.main" fontWeight={500}>
+                <Typography variant="caption" color="success.main" sx={{ fontWeight: 500 }}>
                   {t('setupReadiness.stateReady')}
                 </Typography>
               )}
               {state === ReadinessState.BLOCKED && (
-                <Typography variant="caption" color="warning.main" fontWeight={500}>
+                <Typography variant="caption" color="warning.main" sx={{ fontWeight: 500 }}>
                   {t('setupReadiness.stateBlocked')}
                 </Typography>
               )}
               {state === ReadinessState.MISSING && !dependencyBlocked && (
-                <Typography variant="caption" color="text.secondary" fontWeight={500}>
+                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
                   {t('setupReadiness.stateMissing')}
                 </Typography>
               )}

@@ -157,7 +157,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
@@ -165,11 +165,11 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
 
   return (
     <Box>
-      <Box display="flex" alignItems="center" mb={3}>
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 3 }}>
         <IconButton onClick={onBack} sx={{ mr: 2 }}>
           <ArrowBackIcon />
         </IconButton>
-        <Box flex={1}>
+        <Box sx={{ flex: 1 }}>
           <Typography variant="h4">{t('laneManager.title', { profileName: deploymentProfile.name })}</Typography>
           <Typography variant="body2" color="text.secondary">
             {t('laneManager.description')}
@@ -193,25 +193,25 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
 
       <Grid container spacing={3}>
         {lanes.map((lane) => (
-          <Grid item xs={12} md={6} key={lane.id}>
+          <Grid size={{ xs: 12, md: 6 }} key={lane.id}>
             <Card>
               <CardContent>
-                <Box display="flex" alignItems="center" mb={1}>
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                   <DevicesIcon sx={{ mr: 1 }} color="primary" />
                   <Typography variant="h6">{lane.name}</Typography>
                 </Box>
-                <Typography variant="body2" color="text.secondary" mb={2}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                   {lane.description}
                 </Typography>
                 
                 {lane.metadata?.zone && (
-                  <Typography variant="caption" display="block" mb={1}>
+                  <Typography variant="caption" sx={{ display: 'block', mb: 1 }}>
                     <strong>{t('laneManager.card.zone')}:</strong> {lane.metadata.zone}
                   </Typography>
                 )}
                 
                 {lane.metadata?.operator_info && (
-                  <Typography variant="caption" display="block" mb={1}>
+                  <Typography variant="caption" sx={{ display: 'block', mb: 1 }}>
                     <strong>{t('laneManager.card.operator')}:</strong> {lane.metadata.operator_info}
                   </Typography>
                 )}
@@ -261,7 +261,7 @@ const LaneManager = ({ deploymentProfile, onBack }) => {
           </Grid>
         ))}
         {lanes.length === 0 && (
-          <Grid item xs={12}>
+          <Grid size={{ xs: 12 }}>
             <Paper sx={{ p: 4, textAlign: 'center' }}>
               <Typography color="text.secondary">
                 {t('laneManager.empty')}

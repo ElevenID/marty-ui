@@ -24,6 +24,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -45,31 +46,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     validate_presentation_policy_schema(&pool).await?;
     runtime.mark_healthy(PresentationPolicyDependency::Schema)?;
 
-    let control = Arc::new(if let Some(ca) = &config.organization_grpc_ca_cert {
-        NativePresentationControlPlane::connect_with_ca(
-            &config.organization_grpc_target,
-            ca,
-            &config.trust_profile_url,
-            &config.credential_status_url_template,
-            config.service_token.as_deref(),
-            config.issuance_api_key.as_deref(),
-            config.dependency_timeout,
-        )
-        .await?
-    } else {
-        NativePresentationControlPlane::connect_lazy(
-            &config.organization_grpc_target,
-            &config.trust_profile_url,
-            &config.credential_status_url_template,
-            config.service_token.as_deref(),
-            config.issuance_api_key.as_deref(),
-            config.dependency_timeout,
-        )?
-    });
+    let control = Arc::new(
+        if let Some(ca) = &config.organization_grpc_ca_cert {
+            NativePresentationControlPlane::connect_with_ca(
+                &config.organization_grpc_target,
+                ca,
+                &config.trust_profile_url,
+                &config.credential_status_url_template,
+                config.service_token.as_deref(),
+                config.issuance_api_key.as_deref(),
+                config.dependency_timeout,
+            )
+            .await?
+        } else {
+            NativePresentationControlPlane::connect_lazy(
+                &config.organization_grpc_target,
+                &config.trust_profile_url,
+                &config.credential_status_url_template,
+                config.service_token.as_deref(),
+                config.issuance_api_key.as_deref(),
+                config.dependency_timeout,
+            )?
+        }
+        .with_verification_sources(&config.credential_template_url, &config.organization_url)?,
+    );
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 
     let store = Arc::new(PostgresPolicyStore::new(pool));
-    reconcile_builtin_policies(store.as_ref()).await?;
+    reconcile_builtin_policies(store.as_ref(), config.marty_organization_id).await?;
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));

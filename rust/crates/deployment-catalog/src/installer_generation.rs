@@ -5,28 +5,24 @@
 #![cfg(target_os = "linux")]
 use crate::{
     activation_preflight, approle, generation, installer_managed_renewal,
-    installer_renewal_bootstrap as fs, keycloak_provision, operator_http,
+    installer_renewal_bootstrap as fs, keycloak_provision,
+    operator_process::{retire, run_child, workload_executable},
 };
 use marty_openbao_http::OpenBaoHttp;
-use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::CString,
-    fs::{File, OpenOptions},
+    fs::File,
     io::Write,
     os::{
         fd::{AsRawFd, FromRawFd},
-        unix::{
-            fs::{MetadataExt, OpenOptionsExt},
-            process::CommandExt,
-        },
+        unix::fs::MetadataExt,
     },
     path::Path,
-    process::{Child, Command, Stdio},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 type Result<T> = std::result::Result<T, String>;
@@ -178,77 +174,6 @@ fn producer_outputs(tls: &File, keycloak: &File) -> Result<()> {
     Ok(())
 }
 
-struct OwnedChild {
-    child: Child,
-    reaped: bool,
-}
-impl OwnedChild {
-    fn kill(&self) {
-        unsafe {
-            libc::kill(-(self.child.id() as i32), libc::SIGKILL);
-        }
-    }
-    fn exited(&self) -> Result<bool> {
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        require(
-            unsafe {
-                libc::waitid(
-                    libc::P_PID,
-                    self.child.id(),
-                    &mut info,
-                    libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-                )
-            } == 0,
-        )?;
-        Ok(unsafe { info.si_pid() } != 0)
-    }
-}
-impl Drop for OwnedChild {
-    fn drop(&mut self) {
-        if !self.reaped {
-            self.kill();
-            let _ = self.child.wait();
-        }
-    }
-}
-fn run_child(
-    executable: &Path,
-    env: &BTreeMap<String, String>,
-    cwd: &Path,
-    timeout: Duration,
-) -> Result<()> {
-    require(timeout > Duration::ZERO && timeout <= Duration::from_secs(600))?;
-    let child = Command::new(executable)
-        .env_clear()
-        .envs(env)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-        .map_err(|_| RECOVERY)?;
-    let mut owned = OwnedChild {
-        child,
-        reaped: false,
-    };
-    let deadline = Instant::now() + timeout;
-    while !owned.exited()? {
-        if Instant::now() >= deadline {
-            return Err(RECOVERY.into());
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    // Reserve leader PID until all same-group descendants are killed, even on success.
-    owned.kill();
-    let status = owned.child.wait().map_err(|_| RECOVERY)?;
-    owned.reaped = true;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(RECOVERY.into())
-    }
-}
 fn workload_environment(owner: &str, output: &Path) -> BTreeMap<String, String> {
     [
         ("PATH", "/usr/local/bin:/usr/bin:/bin".into()),
@@ -278,51 +203,6 @@ fn workload_environment(owner: &str, output: &Path) -> BTreeMap<String, String> 
     .map(|(k, v)| (k.into(), v))
     .collect()
 }
-fn workload_executable() -> Result<()> {
-    let path = Path::new(EXECUTABLE);
-    require(path.canonicalize().map_err(|_| REFUSED)? == path)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|_| REFUSED)?;
-    let metadata = file.metadata().map_err(|_| REFUSED)?;
-    require(
-        metadata.is_file()
-            && metadata.uid() == 0
-            && metadata.nlink() == 1
-            && metadata.mode() & 0o022 == 0
-            && metadata.mode() & 0o111 != 0
-            && metadata.len() > 0
-            && metadata.len() <= 512 * 1024 * 1024,
-    )?;
-    let mut info = std::mem::MaybeUninit::<libc::statvfs>::uninit();
-    require(unsafe { libc::fstatvfs(file.as_raw_fd(), info.as_mut_ptr()) } == 0)?;
-    require(unsafe { info.assume_init() }.f_flag & libc::ST_RDONLY != 0)
-}
-async fn retire(bao: &OpenBaoHttp, token: &str) -> Result<()> {
-    operator_http::request(
-        bao,
-        Method::POST,
-        "auth/token/revoke-self",
-        Some(&json!({})),
-        Some(token),
-    )
-    .await
-    .map_err(|_| RECOVERY)?;
-    let response = operator_http::builder(
-        bao,
-        Method::POST,
-        "auth/token/lookup",
-        Some(&json!({"token":token})),
-        Some(token),
-    )
-    .send()
-    .await
-    .map_err(|_| RECOVERY)?;
-    require(response.status() == StatusCode::FORBIDDEN)
-}
-
 /// Each fixed input is selected by both its file and digest environment entry.
 /// A partial or competing selection must never fall through to the historical
 /// private producer, which deliberately retains its original validation.
@@ -1059,40 +939,6 @@ mod tests {
             accepted += usize::from(result);
         }
         assert_eq!(accepted, 3);
-    }
-    fn script(root: &Path, body: &str) -> std::path::PathBuf {
-        let path = root.join(format!("child-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        path
-    }
-    #[test]
-    fn real_child_timeout_and_failure_are_redacted_and_success_cancels_descendants() {
-        let temp = private();
-        let env = BTreeMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
-        let child = script(temp.path(), "printf secret >&2; sleep 30 & wait");
-        let started = Instant::now();
-        let error = run_child(&child, &env, temp.path(), Duration::from_millis(100)).unwrap_err();
-        assert!(!error.contains("secret"));
-        assert!(started.elapsed() < Duration::from_secs(3));
-        let child = script(temp.path(), "sleep 30 & echo $! > descendant; exit 0");
-        run_child(&child, &env, temp.path(), Duration::from_secs(2)).unwrap();
-        let pid = std::fs::read_to_string(temp.path().join("descendant")).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        loop {
-            let observed = std::fs::read_to_string(format!("/proc/{}/stat", pid.trim()));
-            if match &observed {
-                Err(_) => true,
-                Ok(stat) => stat.split_whitespace().nth(2) == Some("Z"),
-            } {
-                break;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "owned descendant survived cancellation"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
     }
     #[test]
     fn readonly_identity_and_input_paths_are_mandatory() {

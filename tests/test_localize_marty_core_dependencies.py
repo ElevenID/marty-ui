@@ -246,3 +246,69 @@ def test_shared_service_image_does_not_rebuild_external_sources() -> None:
 
     assert "WORKDIR /build/marty-credentials" not in dockerfile
     assert "localize_marty_core_dependencies.py" not in dockerfile
+
+
+def test_inherited_workspace_dependency_is_checked_without_cargo(tmp_path):
+    import pytest
+    from localize_marty_core_dependencies import validate_workspace_dependencies
+    root = tmp_path / "Cargo.toml"
+    root.write_text('[workspace]\nmembers=["member"]\n[workspace.dependencies]\nserde="1"\n', encoding="utf-8")
+    member = tmp_path / "member/Cargo.toml"
+    member.parent.mkdir()
+    member.write_text('[package]\nname="member"\nversion="0.1.0"\n[dependencies]\nmarty-oid4vp-contract.workspace=true\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing workspace dependency marty-oid4vp-contract"):
+        validate_workspace_dependencies(root)
+    root.write_text(root.read_text() + 'marty-oid4vp-contract="1"\n', encoding="utf-8")
+    validate_workspace_dependencies(root)
+
+
+def test_inherited_dev_build_and_target_alias_keys(tmp_path):
+    import pytest
+    from localize_marty_core_dependencies import validate_workspace_dependencies
+    root = tmp_path / "Cargo.toml"
+    root.write_text('[workspace]\nmembers=["member"]\n[workspace.dependencies]\nalias={package="actual-package",version="1"}\n', encoding="utf-8")
+    member = tmp_path / "member/Cargo.toml"
+    member.parent.mkdir()
+    for table in ["dependencies", "dev-dependencies", "build-dependencies", "target.'cfg(unix)'.dependencies"]:
+        member.write_text(f'[package]\nname="member"\nversion="0.1.0"\n[{table}]\nalias.workspace=true\n', encoding="utf-8")
+        validate_workspace_dependencies(root)
+        member.write_text(member.read_text().replace("alias.workspace", "actual-package.workspace"), encoding="utf-8")
+        with pytest.raises(ValueError, match="Missing workspace dependency actual-package"):
+            validate_workspace_dependencies(root)
+
+
+def test_inherited_dependency_respects_explicit_and_nearest_workspace(tmp_path):
+    import pytest
+    from localize_marty_core_dependencies import validate_workspace_dependencies
+    root = tmp_path / "Cargo.toml"
+    root.write_text('[workspace]\nmembers=["nested"]\n[workspace.dependencies]\nouter="1"\n', encoding="utf-8")
+    nested = tmp_path / "nested/Cargo.toml"
+    nested.parent.mkdir()
+    nested.write_text('[package]\nname="nested"\nversion="0.1.0"\n[workspace]\n[dependencies]\nouter.workspace=true\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing workspace dependency outer"):
+        validate_workspace_dependencies(root)
+    nested.write_text(nested.read_text().replace('version="0.1.0"', 'version="0.1.0"\nworkspace=".."'), encoding="utf-8")
+    validate_workspace_dependencies(root)
+
+
+def test_inherited_workspace_error_reaches_existing_ownership_guard(tmp_path):
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("ownership_guard", ROOT / "scripts/check_rust_ownership.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    manifest = tmp_path / "ownership.json"
+    manifest.write_text(json.dumps({
+        "schema": "marty.rust-ownership/v1",
+        "capabilities": [{"id": "fixture", "phase": 1, "status": "planned",
+                          "canonical": {"repository": "fixture", "paths": ["rust"]}, "legacy": []}],
+        "guardrails": {"python_scan_roots": [], "excluded_path_parts": [],
+                       "restricted_import_roots": [], "approved_imports": [], "text_rules": []},
+    }), encoding="utf-8")
+    cargo = tmp_path / "rust/Cargo.toml"
+    cargo.parent.mkdir()
+    cargo.write_text('[workspace]\n[package]\nname="fixture"\nversion="0.1.0"\n[dependencies]\nmissing.workspace=true\n', encoding="utf-8")
+    findings = module.scan_repository(tmp_path, manifest)
+    assert len(findings) == 1 and "Missing workspace dependency missing" in findings[0]
+    cargo.write_text(cargo.read_text() + '[workspace.dependencies]\nmissing="1"\n', encoding="utf-8")
+    assert module.scan_repository(tmp_path, manifest) == []

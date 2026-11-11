@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Durat
 
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 const MINIMUM_SECRET_BYTES: usize = 32;
 
@@ -32,9 +33,12 @@ pub struct PresentationPolicyServiceConfig {
     pub grpc_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
+    pub marty_organization_id: Uuid,
     pub organization_grpc_target: String,
     pub organization_grpc_ca_cert: Option<PathBuf>,
     pub trust_profile_url: String,
+    pub credential_template_url: String,
+    pub organization_url: String,
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
@@ -104,6 +108,10 @@ impl PresentationPolicyServiceConfig {
         if database_max_connections == 0 || database_max_connections > 100 {
             return Err(invalid("PRESENTATION_POLICY_DATABASE_MAX_CONNECTIONS"));
         }
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .parse()
+            .map_err(|_| invalid("MARTY_ORG_ID"))?;
         let organization_grpc_target =
             grpc_target(value(&values, "ORG_GRPC_TARGET").unwrap_or("organization:9002"))?;
         let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
@@ -119,6 +127,15 @@ impl PresentationPolicyServiceConfig {
         let trust_profile_url = service_url(
             value(&values, "TRUST_PROFILE_SERVICE_URL").unwrap_or("http://trust-profile:8004"),
             "TRUST_PROFILE_SERVICE_URL",
+        )?;
+        let credential_template_url = service_url(
+            value(&values, "CREDENTIAL_TEMPLATE_SERVICE_URL")
+                .unwrap_or("http://credential-template:8003"),
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        )?;
+        let organization_url = service_url(
+            value(&values, "ORGANIZATION_SERVICE_URL").unwrap_or("http://organization:8002"),
+            "ORGANIZATION_SERVICE_URL",
         )?;
         let issuance_url = service_url(
             value(&values, "ISSUANCE_NATIVE_SERVICE_URL")
@@ -201,9 +218,12 @@ impl PresentationPolicyServiceConfig {
             grpc_addr,
             database_url,
             database_max_connections,
+            marty_organization_id,
             organization_grpc_target,
             organization_grpc_ca_cert,
             trust_profile_url,
+            credential_template_url,
+            organization_url,
             credential_status_url_template,
             service_token,
             issuance_api_key,

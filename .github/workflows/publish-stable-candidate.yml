@@ -1,5 +1,7 @@
 name: Publish stable candidate
 
+run-name: Publish stable candidate ${{ inputs.candidate_run_id || github.event.workflow_run.id }}
+
 on:
   workflow_run:
     workflows: [Stack release]

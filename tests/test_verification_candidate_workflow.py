@@ -81,7 +81,10 @@ def test_candidate_workflow_is_manual_nonpublishing_and_least_privilege() -> Non
     assert document["permissions"] == {"contents": "read"}
     build = document["jobs"]["build"]
     assert build["runs-on"] == "ubuntu-latest"
-    assert build["env"] == {"DOCKER_BUILD_RECORD_UPLOAD": "false"}
+    assert build["env"] == {
+        "DOCKER_BUILD_RECORD_UPLOAD": "false",
+        "PRIVATE_FORKS_ENABLED": "${{ vars.PRIVATE_FORKS_ENABLED }}",
+    }
     assert build["permissions"] == {
         "contents": "read",
         "id-token": "write",
@@ -91,7 +94,24 @@ def test_candidate_workflow_is_manual_nonpublishing_and_least_privilege() -> Non
     assert "environment:" not in source
     assert "packages:" not in source
     assert "deployments:" not in source
-    assert "secrets." not in source
+    steps = build["steps"]
+    authorize = next(step for step in steps if step.get("name") == "Authorize private fork access")
+    image = next(step for step in steps if step.get("name") == "Build one local Linux amd64 OCI archive")
+    assert authorize == {
+        "name": "Authorize private fork access",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}",
+        "run": 'python3 ".github/scripts/private-forks.py" check\n',
+    }
+    assert steps.index(authorize) < steps.index(image)
+    assert image["env"] == {
+        "PRIVATE_FORKS_READ_TOKEN": "${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}",
+    }
+    assert image["with"]["secret-envs"] == "private_forks_read_token=PRIVATE_FORKS_READ_TOKEN\n"
+    assert "PRIVATE_FORKS_READ_TOKEN" not in image["with"]["build-args"]
+    assert "cache-from" not in image["with"] and "cache-to" not in image["with"]
+    assert source.count("secrets.") == 1
     assert "docker/login-action" not in source
     assert "softprops/action-gh-release" not in source
 

@@ -6,6 +6,7 @@ import importlib.util
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -697,6 +698,13 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "@sha256:" in section
 
+    infrastructure_model = yaml.compose(infrastructure)
+    envoy = _mapping_value(_mapping_value(infrastructure_model, "services"), "envoy")
+    assert _mapping_value(envoy, "image").value == (
+        "envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd"
+    )
+    assert _mapping_value(envoy, "pull_policy").value == "missing"
+
     for service in ("openbao", "openbao-init"):
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "${MARTY_OPENBAO_DIDCOMM_IMAGE:?" in section
@@ -709,6 +717,60 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
     assert "GET /ready HTTP/1.1" in infrastructure
     assert "Connection: close" in infrastructure
     assert "HTTP/1.0" not in infrastructure
+
+
+@pytest.mark.parametrize("image", [
+    "envoyproxy/envoy:latest",
+    "envoyproxy/envoy@sha256:" + "a" * 63,
+    "other-registry.example/envoyproxy/envoy@sha256:" + "a" * 64,
+    "envoyproxy/envoy@sha256:" + "a" * 64 + "?token=synthetic-secret",
+    None,
+])
+def test_envoy_acquisition_refuses_unpinned_or_substituted_references(image):
+    with pytest.raises(ValueError, match="approved digest-pinned image") as failure:
+        stack.require_pinned_envoy(image, runner=lambda *_args, **_kwargs: pytest.fail("unexpected Docker operation"))
+    assert "synthetic-secret" not in str(failure.value)
+
+
+@pytest.mark.parametrize("timed_out_operation", ["inspect", "pull"])
+def test_envoy_acquisition_recovers_from_a_bounded_read_timeout(timed_out_operation):
+    image = "envoyproxy/envoy@sha256:" + "a" * 64
+    commands, pauses = [], []
+
+    def runner(command, **options):
+        commands.append(command)
+        assert command[-1] == image
+        assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
+        assert options["check"] is False
+        inspect = command[1:3] == ["image", "inspect"]
+        assert options["timeout"] == (30 if inspect else 120)
+        if (inspect and timed_out_operation == "inspect") or (
+            not inspect and timed_out_operation == "pull" and len(commands) == 2
+        ):
+            raise subprocess.TimeoutExpired(command, options["timeout"], stderr="synthetic-secret-url")
+        return SimpleNamespace(returncode=1 if inspect else 0)
+
+    stack.require_pinned_envoy(image, runner=runner, pause=pauses.append)
+    assert commands[0] == ["docker", "image", "inspect", image]
+    assert commands[1:] == [["docker", "pull", image]] * (2 if timed_out_operation == "pull" else 1)
+    assert pauses == ([1] if timed_out_operation == "pull" else [])
+
+
+@pytest.mark.parametrize("failed_operation", ["inspect", "pull"])
+def test_envoy_acquisition_reports_docker_errors_without_provider_details(failed_operation):
+    commands = []
+
+    def runner(command, **_):
+        commands.append(command)
+        if failed_operation == "inspect" or command[1] == "pull":
+            raise OSError("synthetic-private-path-and-token")
+        return SimpleNamespace(returncode=1)
+
+    with pytest.raises(ValueError, match="Docker is unavailable for pinned Envoy acquisition") as failure:
+        stack.require_pinned_envoy("envoyproxy/envoy@sha256:" + "a" * 64, runner=runner)
+    assert "synthetic-private" not in str(failure.value)
+    assert failure.value.__suppress_context__
+    assert len(commands) == (1 if failed_operation == "inspect" else 2)
 
 
 def test_local_build_needs_no_python_wheel_artifacts(

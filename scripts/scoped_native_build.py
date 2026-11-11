@@ -6,12 +6,14 @@ mutation entry point requiring a separately reviewed prepared-input digest.
 The default passport source, recipe bytes and durability gate remain unchanged.
 """
 from __future__ import annotations
+import importlib.util
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shutil
+import sys
 from contextlib import contextmanager
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
     daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
@@ -29,6 +31,8 @@ CURRENT_ISSUER_POLICY_PROFILES = (CURRENT_ISSUER_POLICY_PROFILE, CURRENT_ISSUER_
 ISSUANCE_OFFER_PROFILE = "d05-issuance-offer-format-only"
 CURRENT_ISSUER_READY_PROFILES = (CURRENT_ISSUER_READY_PROFILE, *CURRENT_ISSUER_POLICY_PROFILES, ISSUANCE_OFFER_PROFILE)
 OFFICIAL_PROFILES = (OFFICIAL_PROFILE, LATEST_OFFICIAL_PROFILE)
+D05_MEMBERSHIP_PROFILE = "d05-membership-verified-native-six-role"
+CREATED_BUILD_PROFILES = (*CURRENT_ISSUER_READY_PROFILES, D05_MEMBERSHIP_PROFILE)
 LATEST_FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c1"
 OFFICIAL_FREEZE_SHA256 = "b77d6883f51bc1d3cf19d6cfa76fe567477c7d27e32134e05007c9104e49c941"
 
@@ -137,6 +141,10 @@ def verify(plan, git, profile=None):
         require(sha(lock_guard) == sha(Path(__file__).with_name("ci") / "check_core_localized_lock.py"),
                 "EXACT_REVIEWED_LOCK_GUARD_REQUIRED")
         verify_official_inputs(freeze, seed, source_script.read_text(), scope, tool.read_text())
+    if profile == D05_MEMBERSHIP_PROFILE:
+        require(sha(read_ref(plan["lockGuard"]))
+                == sha(Path(__file__).with_name("ci") / "check_core_localized_lock.py"),
+                "EXACT_D05_LOCALIZATION_GUARD_REQUIRED")
     recipe = read_ref(plan["recipe"])
     exact_recipe_bytes(recipe, profile)
     require(re.fullmatch(r"sha256:[a-f0-9]{64}", plan.get("builderImage", "")), "PINNED_BUILDER_REQUIRED")
@@ -150,6 +158,25 @@ def exact_recipe_bytes(recipe, profile=None):
 
 
 def render_recipe(profile=None):
+    recipe = _render_recipe(profile)
+    if profile != D05_MEMBERSHIP_PROFILE:
+        return recipe
+    recipe = recipe.replace("export CARGO_HOME=", "export PYTHONDONTWRITEBYTECODE=1\nexport CARGO_HOME=", 1)
+    recipe = recipe.replace("python3 scripts/localize_marty_core_dependencies.py",
+                            "cp rust/Cargo.lock /out/original-cargo-lock.toml\npython3 -B scripts/localize_marty_core_dependencies.py", 1)
+    marker = "cargo metadata --offline --format-version 1 --manifest-path rust/Cargo.toml > /out/localized-metadata.json\n"
+    evidence = """cp rust/Cargo.lock /out/localized-cargo-lock.toml
+cp rust/Cargo.toml /out/localized-root-cargo.toml
+cp rust/services/issuance/Cargo.toml /out/localized-issuance-cargo.toml
+cp .github/feature-regression/rust-probe/Cargo.toml /out/localized-probe-cargo.toml
+python3 -B /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml --build-profile d05-membership-verified-native-six-role > /out/localized-lock-proof.json
+cargo metadata --locked --offline --format-version 1 --manifest-path rust/Cargo.toml > /out/locked-localized-metadata.json
+"""
+    require(recipe.count(marker) == 1, "D05_RECIPE_LOCALIZATION_SEAM_CHANGED")
+    return recipe.replace(marker, marker + evidence, 1)
+
+
+def _render_recipe(profile=None):
     if profile in OFFICIAL_PROFILES:
         return render_official_recipe(profile)
     scope = build_scope(profile)
@@ -336,19 +363,27 @@ def build_arguments(plan, profile=None):
     selected_sources(plan, profile)
     scope = build_scope(profile)
     require(re.fullmatch(re.escape(scope["prefix"]) + r"[a-f0-9-]{36}", plan.get("containerName", "")) and plan["containerName"] == scope["prefix"] + plan["runId"], "RUN_BOUND_CONTAINER_NAME_REQUIRED")
-    memory = current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES else "2g"
+    # The current local D12 three-role attempt has a harder resident cap while
+    # retaining the existing 4 GiB combined memory+swap ceiling and j1 recipe.
+    memory = (current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES
+              else "1g" if profile == "d12-passport-current-three-role" else "2g")
     args = ["docker", "--context", "desktop-linux", "run", "--detach", "--pull", "never", "--network", "none", "--name", plan["containerName"],
         "--cpus", "1", "--memory", memory, "--memory-swap", memory if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
         "--label", "elevenid.owner=" + scope["owner"],
         "--label", "elevenid.run=" + plan["runId"]]
     if profile in CURRENT_ISSUER_READY_PROFILES:
         args += ["--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
+    if profile == D05_MEMBERSHIP_PROFILE:
+        args += ["--pids-limit", "128", "--cap-drop", "ALL", "--security-opt", "no-new-privileges"]
     for source, target, readonly in ((plan["sources"]["ui"]["directory"], "/src/ui", True), (plan["sources"]["core"]["directory"], "/build/core", True),
             (plan["outputDirectory"], "/out", False), (plan["recipe"]["path"], "/build.sh", True)):
         args += ["--mount", "type=bind,src=" + daemon_source(source) + ",dst=" + target + (",readonly" if readonly else "")]
     if profile in OFFICIAL_PROFILES:
         args += ["--mount", "type=bind,src=" + daemon_source(plan["buildTool"]["path"])
                  + ",dst=/build/tool.sh,readonly"]
+        args += ["--mount", "type=bind,src=" + daemon_source(plan["lockGuard"]["path"])
+                 + ",dst=/build/lock_guard.py,readonly"]
+    if profile == D05_MEMBERSHIP_PROFILE:
         args += ["--mount", "type=bind,src=" + daemon_source(plan["lockGuard"]["path"])
                  + ",dst=/build/lock_guard.py,readonly"]
     for volume, target in zip(scope["volumes"], ("/cargo", "/target")):
@@ -360,6 +395,108 @@ def current_issuer_capacity(helper, private, profile=CURRENT_ISSUER_READY_PROFIL
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
     require(host_kib >= current_issuer_limits(profile)[2], "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED")
     require(shutil.disk_usage(private).free >= 8 * 1024 ** 3, "CURRENT_ISSUER_DISK_HEADROOM_REQUIRED")
+    return host_kib
+
+
+def membership_created_identity(helper, plan, cid, expected_status="created"):
+    """Inspect the closed six-role compiler before its recipe may start."""
+    scope = build_scope(D05_MEMBERSHIP_PROFILE)
+    row = json.loads(helper.run("docker", "inspect", cid).stdout)[0]
+    image = json.loads(helper.run("docker", "image", "inspect", plan["builderImage"]).stdout)[0]
+    host = row["HostConfig"]
+    require(row["Id"] == cid and row["Name"] == "/" + plan["containerName"]
+            and row["Image"] == plan["builderImage"]
+            and row["State"]["Status"] == expected_status
+            and row["Config"]["Entrypoint"] == ["/bin/sh"]
+            and row["Config"]["Cmd"] == ["/build.sh"]
+            and row["Config"]["Labels"] == {**(image["Config"].get("Labels") or {}),
+                "elevenid.owner": scope["owner"], "elevenid.run": plan["runId"]},
+            "D05_COMPILER_IDENTITY_CHANGED")
+    require(host["NetworkMode"] == "none" and host["Memory"] == 2 * 1024 ** 3
+            and host["MemorySwap"] == 4 * 1024 ** 3 and host["PidsLimit"] == 128
+            and host["NanoCpus"] == 10 ** 9 and host["Privileged"] is False
+            and "ALL" in host["CapDrop"] and "no-new-privileges" in host["SecurityOpt"],
+            "D05_COMPILER_LIMITS_CHANGED")
+    binds = {"/src/ui": plan["sources"]["ui"]["directory"],
+             "/build/core": plan["sources"]["core"]["directory"],
+             "/out": plan["outputDirectory"], "/build.sh": plan["recipe"]["path"],
+             "/build/lock_guard.py": plan["lockGuard"]["path"]}
+    mounts = {m["Destination"]: m for m in row["Mounts"]}
+    require(len(mounts) == len(row["Mounts"]) == 7
+            and set(mounts) == set(binds) | {"/cargo", "/target"}, "D05_COMPILER_MOUNTS_CHANGED")
+    for destination, source in binds.items():
+        require(mounts[destination]["Type"] == "bind"
+                and mounts[destination]["RW"] is (destination == "/out")
+                and daemon_source(mounts[destination]["Source"]) == daemon_source(source),
+                "D05_COMPILER_MOUNTS_CHANGED")
+    for destination, volume in zip(("/cargo", "/target"), scope["volumes"]):
+        require(mounts[destination]["Type"] == "volume" and mounts[destination]["Name"] == volume
+                and mounts[destination]["RW"] is True, "D05_COMPILER_MOUNTS_CHANGED")
+    return row
+
+
+def membership_terminal_cache_projection(row):
+    """R5 terminal-consumer contract; mount ordering is not container identity."""
+    state = row["State"]
+    require(state["Status"] == "exited" and type(state["Pid"]) is int and state["Pid"] == 0
+            and all(state[k] is False for k in ("Running", "Restarting", "Paused")),
+            "D05_CACHE_CONSUMER_NOT_TERMINAL")
+    require(row["HostConfig"]["RestartPolicy"] == {"Name": "no", "MaximumRetryCount": 0},
+            "D05_CACHE_CONSUMER_AUTO_RESTART")
+    require(any(m["Type"] == "volume" and m.get("Name") == "ui-canvas-cargo"
+                for m in row["Mounts"]), "D05_CACHE_CONSUMER_MOUNT_CHANGED")
+    mounts = [{k: m.get(k) for k in ("Type", "Name", "Source", "Destination", "RW")}
+              for m in row["Mounts"]]
+    require(all(isinstance(m["Destination"], str) for m in mounts)
+            and len({m["Destination"] for m in mounts}) == len(mounts),
+            "D05_CACHE_MOUNT_DESTINATIONS_AMBIGUOUS")
+    return {**{k: row[k] for k in ("Id", "Name", "Created", "Image")},
+            "State": {k: state[k] for k in ("Status", "Pid", "Running", "Restarting", "Paused",
+                      "OOMKilled", "StartedAt", "FinishedAt", "ExitCode")},
+            "RestartPolicy": row["HostConfig"]["RestartPolicy"],
+            "Labels": row["Config"].get("Labels"),
+            "Command": {k: row["Config"].get(k) for k in ("Entrypoint", "Cmd", "User", "WorkingDir")},
+            "Mounts": sorted(mounts, key=lambda m: m["Destination"])}
+
+
+def membership_consumers(helper, plan, expected=None, owned_cid=None, owned_status=None):
+    """Fresh stable cache generations, target zero except our fully verified compiler.
+
+    The normal exact-CID retirement caller must call this again with no owned_cid
+    after removal; finish itself deliberately retains the terminal compiler.
+    """
+    if owned_cid is not None:
+        membership_created_identity(helper, plan, owned_cid, owned_status)
+    def ids(volume):
+        values = helper.run("docker", "--context", "desktop-linux", "ps", "-aq", "--no-trunc",
+                            "--filter", "volume=" + volume).stdout.split()
+        require(len(values) <= 32 and len(values) == len(set(values))
+                and all(re.fullmatch(r"[a-f0-9]{64}", v) for v in values),
+                "D05_VOLUME_CONSUMER_SET_INVALID")
+        return set(values)
+    cache, target = build_scope(D05_MEMBERSHIP_PROFILE)["volumes"]
+    before = ids(cache)
+    require((owned_cid is None or owned_cid in before)
+            and ids(target) == ({owned_cid} if owned_cid else set()),
+            "D05_TARGET_NOT_EXCLUSIVELY_OWNED")
+    rows = {}
+    for cid in sorted(before - ({owned_cid} if owned_cid else set())):
+        inspected = json.loads(helper.run("docker", "--context", "desktop-linux", "inspect", cid).stdout)
+        require(len(inspected) == 1 and inspected[0]["Id"] == cid, "D05_CACHE_CONSUMER_CHANGED")
+        rows[cid] = membership_terminal_cache_projection(inspected[0])
+    require(ids(cache) == before and ids(target) == ({owned_cid} if owned_cid else set()),
+            "D05_VOLUME_CONSUMER_SET_CHANGED")
+    require(expected is None or rows == expected, "D05_CACHE_IDENTITY_OR_GENERATION_CHANGED")
+    return rows
+
+
+def membership_capacity(helper, private):
+    host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                              "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
+    # Linux 2 GiB + Windows controller 1 GiB + unchanged host reserve 1 GiB + 64 MiB.
+    require(host_kib * 1024 >= 4 * 1024 ** 3 + 64 * 1024 ** 2,
+            "D05_HOST_HEADROOM_REQUIRED")
+    require(shutil.disk_usage(private).free >= 8 * 1024 ** 3, "D05_DISK_HEADROOM_REQUIRED")
     return host_kib
 
 def current_issuer_created_identity(helper, plan, cid, expected_status="created", profile=CURRENT_ISSUER_READY_PROFILE):
@@ -415,9 +552,97 @@ class LocalBuildJournal:
 def build_journal(plan, private, profile=None):
     if "journalBackend" not in plan:
         return LocalBuildJournal(private)
-    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES, "canvas-issuer-scoped-jobs", *OFFICIAL_PROFILES), "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
+    require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES,
+                        "canvas-issuer-scoped-jobs", "d12-passport-current-three-role", D05_MEMBERSHIP_PROFILE, *OFFICIAL_PROFILES),
+            "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
+
+
+def bound_cache_journal(plan, bound, cached, git):
+    """Read the cache journal from its own verified source root, not this build root."""
+    receipt = Path(bound["path"])
+    require(receipt.is_absolute() and receipt.is_file() and not receipt.is_symlink()
+            and receipt.resolve(strict=True) == receipt
+            and sha(receipt) == bound["sha256"]
+            and receipt.stat().st_size == bound["bytes"],
+            "D12_CACHE_RECEIPT_PRIVATE_PATH_CHANGED")
+    private = receipt.parent
+    approved = (Path.home() / ".codex/private").resolve()
+    require(private.name == "source-export" and private.is_relative_to(approved)
+            and not private.is_symlink() and not private.is_junction(),
+            "D12_CACHE_PRIVATE_ROOT_CHANGED")
+    backend = cached["journalBackend"]
+    desktop = backend["desktop"]
+    require(cached["runId"] == plan["cargoCacheRunId"]
+            and backend == plan["cargoCacheJournalBackend"]
+            and desktop["engineId"] == plan["engineId"]
+            and desktop["image"] == plan["builderImage"]
+            and Path(desktop["configDirectory"]).resolve() == private / "docker-config"
+            and desktop["volumeName"] == "marty-d02-journal-" + cached["runId"]
+            and desktop["volumeProof"]["Labels"] == {
+                "elevenid.owner": "d02-private-journal", "elevenid.run": cached["runId"]},
+            "D12_CACHE_JOURNAL_CUSTODY_CHANGED")
+    source_receipt = private / "source-export-receipt.json"
+    require(source_receipt.is_file() and not source_receipt.is_symlink(),
+            "D12_CACHE_SOURCE_RECEIPT_MISSING")
+    source = json.loads(source_receipt.read_bytes())
+    require(source.get("schema") == "marty.d12-current-native-source-export/v1"
+            and source.get("state") == "SOURCE_EXPORTED_NO_COMPILER"
+            and source["sources"]["ui"]["revision"] == cached["uiRevision"]
+            and source["sources"]["ui"]["tree"] == cached["uiTree"]
+            and source["sources"]["ui"]["inventory"]["sha256"] == cached["uiInventorySha256"]
+            and source["sources"]["ui"]["repository"] == plan["sources"]["ui"]["repository"]
+            and source["sources"]["core"]["revision"] == plan["coreRevision"],
+            "D12_CACHE_SOURCE_CUSTODY_CHANGED")
+    names = {"scoped_linux_journal.py": backend["workerSha256"],
+             "scoped_native_runtime.py": backend["sharedSha256"],
+             "desktop_journal_transport.py": desktop["transportSha256"]}
+    for name, digest in names.items():
+        file = private / "operator" / name
+        stated = source["operators"][name]
+        require(file.is_file() and not file.is_symlink()
+                and file.resolve(strict=True) == file
+                and stated["path"] == str(file)
+                and stated["sha256"] == digest == sha(file)
+                and git(["-C", source["sources"]["ui"]["repository"], "show",
+                         source["producerRevision"] + ":scripts/" + name]) == file.read_bytes(),
+                "D12_CACHE_OPERATOR_SOURCE_CHANGED")
+    worker = private / "operator/scoped_linux_journal.py"
+    loaded_shared = Path(sys.modules["scoped_native_runtime"].__file__)
+    require(loaded_shared.is_file() and sha(loaded_shared) == backend["sharedSha256"],
+            "D12_CACHE_LOADED_SHARED_CHANGED")
+    name = "marty_bound_cache_journal_" + cached["runId"].replace("-", "_")
+    spec = importlib.util.spec_from_file_location(name, worker)
+    require(spec is not None and spec.loader is not None, "D12_CACHE_JOURNAL_IMPORT_REFUSED")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LinuxBuildJournal(private, cached["runId"], backend)
+
+
+def require_d12_fresh_target(plan, helper):
+    """Refuse Docker's implicit volume creation or reuse for the new D12 build."""
+    from scoped_native_profiles import D12_PASSPORT_CURRENT
+    volume = D12_PASSPORT_CURRENT.volumes[1]
+    proof = json.loads(read_ref(plan["targetVolumeReceipt"]).read_bytes())
+    require(proof.get("state") == "CREATED_EMPTY_OWNED_TARGET"
+            and proof.get("volume") == volume
+            and proof.get("runId") == plan["runId"]
+            and proof.get("engineId") == plan["engineId"]
+            and proof.get("owner") == D12_PASSPORT_CURRENT.owner
+            and proof.get("emptyReadback") is True
+            and proof.get("sourceIndependent") is True
+            and proof.get("consumers") == [], "D12_FRESH_OWNED_TARGET_REQUIRED")
+    rows = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", volume).stdout)
+    require(len(rows) == 1 and rows[0]["Name"] == volume
+            and rows[0]["Driver"] == rows[0]["Scope"] == "local"
+            and rows[0]["CreatedAt"] == proof["createdAt"]
+            and rows[0]["Labels"].get("elevenid.owner") == D12_PASSPORT_CURRENT.owner
+            and rows[0]["Labels"].get("elevenid.run") == plan["runId"],
+            "D12_OWNED_TARGET_CHANGED")
+    consumers = helper.run("docker", "--context", "desktop-linux", "ps", "--all", "--quiet",
+                           "--filter", "volume=" + volume).stdout.strip()
+    require(not consumers, "D12_TARGET_ALREADY_CONSUMED")
 
 
 @contextmanager
@@ -436,13 +661,37 @@ def start(prepared_ref, helper, git, profile=None):
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
     private, output = verify(plan, git, profile)
+    if profile == "d12-passport-current-three-role":
+        # This is the original committed lock, before Core path localization.
+        # Cache preparation is a separate terminal owned operation; the native
+        # build remains offline and network=none. Refuse before any build intent.
+        from scoped_native_cargo_cache import validate_bound_receipt
+        bound = plan.get("cargoCacheReceipt")
+        require(isinstance(bound, dict) and set(bound) == {"path", "sha256", "bytes"},
+                "D12_EXACT_CARGO_CACHE_RECEIPT_REQUIRED")
+        validate_bound_receipt(plan, Path(bound["path"]), bound["sha256"])
+        cached = json.loads(read_ref(bound).read_bytes())
+        require(plan["cargoCacheRunId"] == cached["runId"]
+                and plan["cargoCacheJournalBackend"] == cached["journalBackend"],
+                "D12_CACHE_JOURNAL_CHANGED")
+        cache_store = bound_cache_journal(plan, bound, cached, git)
+        require(cache_store.read("build-receipt.json") == cached,
+                "D12_AUTHORITATIVE_CACHE_RECEIPT_CHANGED")
+        volume = json.loads(helper.run("docker", "--context", "desktop-linux", "volume", "inspect", "ui-canvas-cargo").stdout)[0]
+        require(volume["Name"] == "ui-canvas-cargo"
+                and volume["CreatedAt"] == cached["cargoVolumeCreatedAt"],
+                "D12_CARGO_CACHE_VOLUME_REPLACED")
     store = build_journal(plan, private, profile)
     require(sha(helper.__file__) == REVIEWED_BUILD_HELPER_SHA256, "REVIEWED_SHARED_BUILD_HELPER_CHANGED")
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     require(not list(output.iterdir()), "PRESERVE_PREVIOUS_BUILD_OUTPUTS")
     require(helper.VOLUMES == VOLUMES, "SHARED_RESOURCE_SCOPE_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        require_d12_fresh_target(plan, helper)
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
+    if profile == D05_MEMBERSHIP_PROFILE:
+        membership_capacity(helper, private)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
     if profile in OFFICIAL_PROFILES:
         volume = build_scope(profile)["volumes"][1]
@@ -451,6 +700,7 @@ def start(prepared_ref, helper, git, profile=None):
                 and rows[0]["Labels"].get("io.elevenid.demo-audit.owner")
                 == "root-local-oid4vc-current-source-20261028",
                 "OWNED_SEEDED_TARGET_VOLUME_MISSING")
+    cache_baseline = membership_consumers(helper, plan) if profile == D05_MEMBERSHIP_PROFILE else None
     resource_state = None
     if profile is not None:
         # The existing resource helper itself creates one 64 MiB read-only probe.
@@ -468,6 +718,8 @@ def start(prepared_ref, helper, git, profile=None):
             resource_state[cache_prefix + "Probe"] = {
                 "effect": "EXISTING_READONLY_NETWORK_NONE_TARGET_MANIFEST_PROBE",
                 "volume": build_scope(profile)["volumes"][1], "outcome": "INTENT_DISPATCH_MAY_FOLLOW"}
+        if profile == D05_MEMBERSHIP_PROFILE:
+            resource_state["terminalCacheBaseline"] = cache_baseline
         resource_state["intentDurability"] = store.exclusive("build-apply-intent.json", resource_state)
         barrier = store.state(resource_state)
         if not (durable_barrier(resource_state["intentDurability"]) and durable_barrier(barrier)):
@@ -486,6 +738,10 @@ def start(prepared_ref, helper, git, profile=None):
                         "DURABLE_TARGET_SEED_RESULT_REQUIRED")
             with selected_resource_volumes(helper, build_scope(profile)["volumes"]):
                 resource = helper.resources(private, plan["builderImage"])
+            if profile == "d12-passport-current-three-role":
+                require_d12_fresh_target(plan, helper)
+            if profile == D05_MEMBERSHIP_PROFILE:
+                membership_consumers(helper, plan, cache_baseline)
             resource_state.update(state="RESOURCE_CHECK_READY", resourcesBefore=resource)
             resource_state["resourceProbe"]["outcome"] = "HELPER_RETURNED_READY_CID_NOT_EXPOSED"
             require(durable_barrier(store.state(resource_state)),
@@ -502,6 +758,8 @@ def start(prepared_ref, helper, git, profile=None):
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_AFTER_RESOURCE_CHECK")
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
+    if profile == D05_MEMBERSHIP_PROFILE:
+        membership_capacity(helper, private)
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     if resource_state is None:
         state["intentDurability"] = store.exclusive("build-apply-intent.json", state)
@@ -511,6 +769,8 @@ def start(prepared_ref, helper, git, profile=None):
         if profile in OFFICIAL_PROFILES:
             cache_prefix = "targetReuse" if profile == LATEST_OFFICIAL_PROFILE else "targetSeed"
             state.update({key: resource_state[key] for key in (cache_prefix + "Probe", cache_prefix + "Readback")})
+    if profile == D05_MEMBERSHIP_PROFILE:
+        state["terminalCacheBaseline"] = cache_baseline
     journal_barrier = store.state(state)
     if not (durable_barrier(state["intentDurability"]) and durable_barrier(journal_barrier)):
         state["state"] = "BUILD_DURABILITY_BLOCKED_NO_DOCKER_DISPATCH" if resource_state is None else "BUILD_DURABILITY_BLOCKED_NO_COMPILER_DISPATCH"
@@ -518,17 +778,25 @@ def start(prepared_ref, helper, git, profile=None):
         raise ValueError("DURABLE_INTENT_AND_JOURNAL_REQUIRED")
     try:
         args = build_arguments(plan, profile)
-        if profile in CURRENT_ISSUER_READY_PROFILES:
+        if profile in CREATED_BUILD_PROFILES:
             require(args[3:5] == ["run", "--detach"], "BUILD_ARGUMENTS_CHANGED")
             args = args[:3] + ["create"] + args[5:]
+        if profile == D05_MEMBERSHIP_PROFILE:
+            membership_consumers(helper, plan, cache_baseline)
+            require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_BEFORE_D05_CREATE")
         result = helper.run(*args)
         cid = result.stdout.strip()
         require(re.fullmatch(r"[a-f0-9]{64}", cid), "BUILD_DISPATCH_UNRESOLVED")
-        state.update(state="BUILD_CREATED" if profile in CURRENT_ISSUER_READY_PROFILES else "BUILD_RUNNING", containerId=cid)
-        if profile in CURRENT_ISSUER_READY_PROFILES:
+        state.update(state="BUILD_CREATED" if profile in CREATED_BUILD_PROFILES else "BUILD_RUNNING", containerId=cid)
+        if profile in CREATED_BUILD_PROFILES:
             require(durable_barrier(store.state(state)), "BUILD_CREATED_JOURNAL_REQUIRED")
-            current_issuer_created_identity(helper, plan, cid, profile=profile)
-            current_issuer_capacity(helper, private, profile)
+            if profile == D05_MEMBERSHIP_PROFILE:
+                membership_consumers(helper, plan, cache_baseline, cid, "created")
+                membership_capacity(helper, private)
+                require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_BEFORE_D05_START")
+            else:
+                current_issuer_created_identity(helper, plan, cid, profile=profile)
+                current_issuer_capacity(helper, private, profile)
             state["state"] = "BUILD_START_INTENT"
             require(durable_barrier(store.state(state)), "BUILD_START_INTENT_JOURNAL_REQUIRED")
             require(helper.run("docker", "start", cid).stdout.strip() == cid, "BUILD_START_ACK_CHANGED")
@@ -558,6 +826,8 @@ def finish(prepared_ref, helper, git, profile=None):
     require(row["State"]["Status"] == "exited", "BUILD_STILL_ACTIVE")
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_created_identity(helper, plan, state["containerId"], "exited", profile=profile)
+    if profile == D05_MEMBERSHIP_PROFILE:
+        membership_consumers(helper, plan, state["terminalCacheBaseline"], state["containerId"], "exited")
     if profile in OFFICIAL_PROFILES:
         mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
         for destination, volume in zip(("/cargo", "/target"), scope["volumes"]):
@@ -565,6 +835,28 @@ def finish(prepared_ref, helper, git, profile=None):
                     "OFFICIAL_COMPILER_VOLUME_CHANGED")
         require(all(mounts[d]["RW"] is False for d in ("/src/ui", "/build/core", "/build.sh", "/build/tool.sh", "/build/lock_guard.py")),
                 "OFFICIAL_SOURCE_MOUNT_CHANGED")
+    if profile == "d12-passport-current-three-role":
+        mounts = {mount["Destination"]: mount for mount in row["Mounts"]}
+        require(len(mounts) == len(row["Mounts"]) == 6
+                and set(mounts) == {"/src/ui", "/build/core", "/out", "/build.sh", "/cargo", "/target"}
+                and mounts["/cargo"]["Type"] == mounts["/target"]["Type"] == "volume"
+                and mounts["/cargo"]["Name"] == scope["volumes"][0]
+                and mounts["/target"]["Name"] == scope["volumes"][1]
+                and all(mounts[d]["Type"] == "bind" and mounts[d]["RW"] is False
+                        for d in ("/src/ui", "/build/core", "/build.sh"))
+                and mounts["/out"]["Type"] == "bind" and mounts["/out"]["RW"] is True
+                and all(daemon_source(mounts[d]["Source"]) == daemon_source(p)
+                        for d, p in (("/src/ui", plan["sources"]["ui"]["directory"]),
+                                     ("/build/core", plan["sources"]["core"]["directory"]),
+                                     ("/out", plan["outputDirectory"]),
+                                     ("/build.sh", plan["recipe"]["path"])))
+                and row["Name"] == "/" + plan["containerName"]
+                and row["Config"]["Entrypoint"] == ["/bin/sh"]
+                and row["Config"]["Cmd"] == ["/build.sh"]
+                and row["HostConfig"]["NetworkMode"] == "none"
+                and row["HostConfig"]["Memory"] == 1024 ** 3
+                and row["HostConfig"]["MemorySwap"] == 4 * 1024 ** 3,
+                "D12_COMPILER_MOUNTS_CHANGED")
     result = {**state, "state": "BUILD_FAILED_RETAINED", "exitCode": row["State"]["ExitCode"], "oomKilled": row["State"].get("OOMKilled", False), "uiRevision": scope["uiRevision"], "coreRevision": scope["coreRevision"], "roleBinaries": scope["roles"]}
     if result["exitCode"] == 0 and not result["oomKilled"]:
         output = Path(plan["outputDirectory"])
@@ -615,6 +907,17 @@ def finish(prepared_ref, helper, git, profile=None):
                           coreFeatureResolution=ref(output / "core-feature-resolution.json"),
                           productionFeatureTree=ref(output / "production-feature-tree.txt"),
                           canonicalCompilerLog=ref(output / "compiler.log"))
+        if profile == D05_MEMBERSHIP_PROFILE:
+            result.update(imagesBuilt=False, releaseQualified=False, recordingQualified=False,
+                          originalCargoLock=ref(output / "original-cargo-lock.toml"),
+                          localizedCargoLock=ref(output / "localized-cargo-lock.toml"),
+                          localizedLockProof=ref(output / "localized-lock-proof.json"),
+                          lockedLocalizedMetadata=ref(output / "locked-localized-metadata.json"),
+                          productionFeatureTree=ref(output / "production-feature-tree.txt"),
+                          localizedManifests={
+                              "rust/Cargo.toml": ref(output / "localized-root-cargo.toml"),
+                              "rust/services/issuance/Cargo.toml": ref(output / "localized-issuance-cargo.toml"),
+                              ".github/feature-regression/rust-probe/Cargo.toml": ref(output / "localized-probe-cargo.toml")})
         result["coreCompilerArtifacts"] = ref(output / "core-compiler-artifacts.json")
     store.exclusive("build-receipt.json", result)
     return result

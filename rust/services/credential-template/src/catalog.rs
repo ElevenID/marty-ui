@@ -329,6 +329,7 @@ pub async fn seed_system_catalog(
     now: DateTime<Utc>,
     marty_organization_id: &str,
     public_api_origin: &str,
+    issuer_did: &str,
 ) -> Result<CatalogSeedSummary, CredentialTemplateRepositoryError> {
     let mut summary = CatalogSeedSummary::default();
     for wallet in system_wallet_catalog(now) {
@@ -353,6 +354,7 @@ pub async fn seed_system_catalog(
                 now,
                 marty_organization_id,
                 public_api_origin,
+                issuer_did,
             ))
             .await?;
         summary.login_badge_inserted = true;
@@ -364,13 +366,10 @@ pub fn marty_login_badge(
     now: DateTime<Utc>,
     marty_organization_id: &str,
     public_api_origin: &str,
+    issuer_did: &str,
 ) -> CredentialTemplate {
     let public_api_origin = public_api_origin.trim_end_matches('/');
     let vct = format!("{public_api_origin}/credentials/marty-verified-member-badge");
-    let issuer_host = url::Url::parse(public_api_origin)
-        .ok()
-        .and_then(|origin| origin.host_str().map(str::to_owned))
-        .unwrap_or_default();
     let claims = vec![
         claim(
             "marty-ob-member-id",
@@ -505,7 +504,7 @@ pub fn marty_login_badge(
         trust_profile_id: Some(MARTY_LOGIN_TRUST_PROFILE_ID.to_owned()),
         revocation_profile_id: Some(MARTY_REVOCATION_PROFILE_ID.to_owned()),
         issuer_algorithm: Some("ES256".to_owned()),
-        issuer_did: Some(format!("did:web:{issuer_host}:orgs:marty")),
+        issuer_did: Some(issuer_did.to_owned()),
         issuance_protocol: "OID4VCI_PRE_AUTH".to_owned(),
         version: 4,
         created_at: now,

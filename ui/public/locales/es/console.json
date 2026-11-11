@@ -1,9 +1,233 @@
 {
+  "operate": {
+    "applications": {
+      "signIn": "Inicia sesión para ver las solicitudes.",
+      "selectOrganization": "Selecciona una organización para ver las solicitudes.",
+      "permissionsLoading": "Comprobando permisos de solicitudes",
+      "readDenied": "No tienes permiso para ver las solicitudes de esta organización.",
+      "reissueSucceeded": "Se ha generado una nueva invitación a la billetera. La persona solicitante puede volver a obtener su credencial.",
+      "actionFailed": "No se pudo actualizar la solicitud. Inténtalo de nuevo.",
+      "clearFilters": "Borrar filtros",
+      "notReported": "No informado",
+      "actions": {
+        "issue": "Generar invitación a la billetera",
+        "reissue": "Reenviar invitación a la billetera"
+      },
+      "filters": {
+        "underReview": "En revisión",
+        "pendingInformation": "Esperando información"
+      },
+      "tableHeaders": {
+        "applicationReference": "Referencia de la solicitud"
+      }
+    }
+  },
+  "trust": {
+    "trustProfileWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de confianza.",
+      "createDenied": "No tienes permiso para crear perfiles de confianza en la organización seleccionada.",
+      "issuerDenied": "Para añadir relaciones con emisores se necesitan permisos para ver y crear emisores de confianza. Elimina los emisores seleccionados para continuar sin ellos.",
+      "registryDenied": "Para sincronizar fuentes de registros se necesita permiso para ver perfiles de confianza. Elimina los registros seleccionados para continuar sin ellos.",
+      "activateDenied": "No tienes permiso para activar perfiles de confianza. Desactiva la activación inmediata para crear un borrador.",
+      "responseMismatch": "El servidor no confirmó la operación solicitada para el perfil de confianza. Revisa la lista de perfiles antes de volver a intentarlo.",
+      "profileCreated": "Este perfil de confianza se ha creado: {{id}}. Comprueba su estado actual y completa la configuración antes de volver a intentarlo."
+    },
+    "revocationWizard": {
+      "selectOrganization": "Selecciona una organización para crear un perfil de revocación.",
+      "createDenied": "No tienes permiso para crear perfiles de revocación en la organización seleccionada.",
+      "responseMismatch": "La respuesta no confirma un nuevo perfil en borrador para la organización seleccionada. Revisa la lista de perfiles antes de volver a intentarlo."
+    },
+    "trustProfilesPage": {
+      "title": "Perfiles de confianza",
+      "description": "Defina los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",
+      "selectOrganization": "Seleccione una organización para ver sus perfiles de confianza.",
+      "readDenied": "No tiene permiso para ver los perfiles de confianza de esta organización.",
+      "scopeMismatch": "La respuesta del catálogo no corresponde a la organización seleccionada o contiene un perfil no válido.",
+      "loadFailed": "No se pudieron cargar los perfiles de confianza.",
+      "retryProfiles": "Volver a cargar los perfiles",
+      "emptyTitle": "No hay perfiles de confianza configurados",
+      "emptyDescription": "Cree un perfil de confianza para configurar los formatos de credenciales, las fuentes de confianza y las reglas de validación que acepta su organización.",
+      "createProfile": "Crear perfil de confianza",
+      "pinnedSources": "Fuentes de emisores fijados",
+      "pinnedSourcesHelp": "Las fuentes fijadas forman parte de la política de confianza del perfil. Abra un perfil para revisar sus relaciones con emisores vinculados.",
+      "allowedAlgorithms": "Algoritmos permitidos",
+      "name": "Nombre",
+      "framework": "Marco",
+      "status": "Estado",
+      "lastUpdated": "Última actualización",
+      "actions": "Acciones",
+      "viewDetails": "Ver detalles",
+      "edit": "Editar",
+      "consoleBreadcrumb": "Consola",
+      "trustBreadcrumb": "Confianza"
+    },
+    "trustProfileEdit": {
+      "selectOrganization": "Seleccione una organización antes de editar un perfil de confianza.",
+      "permissionDenied": "No tiene permiso para editar perfiles de confianza.",
+      "scopeMismatch": "La respuesta del perfil de confianza no coincide con el perfil solicitado y la organización seleccionada.",
+      "invalidResponse": "La respuesta del perfil de confianza no es válida.",
+      "suspendedStatus": "Suspendido",
+      "unknownStatus": "Desconocido",
+      "notFound": "No se encontró el perfil de confianza."
+    },
+    "revocationDetail": {
+      "selectOrganization": "Selecciona una organización para ver los perfiles de revocación.",
+      "readDenied": "No tienes permiso para ver los perfiles de revocación de la organización seleccionada.",
+      "profileScopeMismatch": "La respuesta no corresponde al perfil solicitado de la organización seleccionada.",
+      "activationScopeMismatch": "La respuesta de activación no confirma una versión ACTIVA del perfil solicitado de la organización seleccionada.",
+      "retryProfile": "Reintentar cargar el perfil",
+      "activate": "Activar",
+      "activating": "Activando…",
+      "activationFailed": "No se pudo activar el perfil de revocación.",
+      "loadFailed": "No se pudo cargar el perfil de revocación.",
+      "statusDraft": "Borrador",
+      "statusActive": "Activo",
+      "statusSuspended": "Suspendido",
+      "statusUnknown": "Estado desconocido",
+      "checkModeTitle": "Política de comprobación de revocación",
+      "mechanismsTitle": "Mecanismos de revocación",
+      "metadataTitle": "Metadatos del perfil",
+      "noMechanisms": "No se devolvieron mecanismos de revocación.",
+      "statusListUrl": "Endpoint de la lista de estado",
+      "profileId": "ID del perfil",
+      "organization": "Organización",
+      "created": "Creado",
+      "updated": "Última actualización",
+      "offlineGrace": "Período de gracia sin conexión",
+      "cacheTtl": "TTL de la caché",
+      "notAvailable": "No disponible",
+      "backToList": "Volver a los perfiles de revocación",
+      "disabledAdvisory": "La comprobación del estado de las credenciales está desactivada en este perfil. Úsalo solo cuando las comprobaciones de revocación se excluyan deliberadamente.",
+      "checkModes": {
+        "always": "Comprobar siempre",
+        "alwaysDescription": "Configurado para comprobar el estado de las credenciales en cada verificación.",
+        "cached": "Comprobaciones con caché",
+        "cachedDescription": "Las comprobaciones de estado usan el tiempo de validez de la caché configurado.",
+        "offlineGrace": "Gracia sin conexión",
+        "offlineGraceDescription": "Las comprobaciones de estado sin conexión usan el período de gracia configurado.",
+        "disabled": "Desactivado",
+        "disabledDescription": "La comprobación del estado de las credenciales está desactivada.",
+        "unknown": "Política de comprobación desconocida",
+        "unknownDescription": "El servidor devolvió una política de comprobación no reconocida."
+      },
+      "mechanisms": {
+        "statusList2021": "Status List 2021",
+        "bitstringStatusList": "Bitstring Status List",
+        "tokenStatusList": "Token Status List",
+        "ocsp": "OCSP",
+        "crl": "CRL",
+        "unknown": "Mecanismo de revocación no reconocido"
+      }
+    },
+    "trustProfileDetail": {
+      "selectOrganization": "Seleccione una organización para ver este perfil de confianza.",
+      "profileReadDenied": "No tiene permiso para ver perfiles de confianza en esta organización.",
+      "issuerReadDenied": "No tiene permiso para ver relaciones con emisores en esta organización.",
+      "profileScopeMismatch": "Este perfil de confianza no está disponible en la organización seleccionada.",
+      "retryProfile": "Reintentar perfil",
+      "retryIssuers": "Reintentar lista de emisores",
+      "issuerScopeMismatch": "La respuesta del emisor no coincide con este perfil, la organización o el DID solicitado.",
+      "issuerNotConfirmed": "La relación con el emisor aceptada no se pudo confirmar en la lista actual. Vuelva a consultar la lista de emisores.",
+      "issuerLoadFailed": "No se pudo cargar la lista de emisores.",
+      "issuerAddFailed": "No se pudo confirmar que se añadiera el emisor.",
+      "issuerAwaitingReadback": "El vínculo fue aceptado. El reintento consulta la lista actual de emisores sin volver a enviar el vínculo.",
+      "statusUnknown": "Desconocido",
+      "relationshipStatusLabel": "Relación de confianza",
+      "issuerComplianceLabel": "Conformidad del emisor",
+      "statusDraft": "Borrador",
+      "statusActive": "Activo",
+      "statusSuspended": "Suspendido",
+      "statusArchived": "Archivado",
+      "relationshipTrusted": "De confianza",
+      "relationshipDenied": "Denegado",
+      "relationshipUnderReview": "En revisión",
+      "complianceAccredited": "Acreditado",
+      "complianceCompliant": "Conforme",
+      "complianceSuspended": "Suspendido",
+      "complianceRevoked": "Revocado",
+      "credentialWalletGuidance": "Los perfiles de cartera están disponibles en las plantillas de credenciales. Consulte el perfil de cartera compatible de una plantilla; la configuración derivada no demuestra interoperabilidad ni una entrega correcta.",
+      "viewCredentialTemplates": "Ver plantillas de credenciales"
+    }
+  },
+  "membershipReview": {
+    "pending": "Pendiente",
+    "description": "Revisa las membresías pendientes y aprueba el acceso con los roles ya asignados.",
+    "signIn": "Inicia sesión para revisar las solicitudes de membresía.",
+    "selectOrganization": "Selecciona una organización para revisar las solicitudes de membresía.",
+    "permissionsLoading": "Comprobando permisos de membresía",
+    "readDenied": "No tienes permiso para ver las membresías pendientes de esta organización.",
+    "approvalOnly": "Aquí puedes aprobar las membresías pendientes. El rechazo no está disponible.",
+    "viewOnly": "Puedes ver las solicitudes, pero no tienes permiso para aprobarlas.",
+    "applicant": "Solicitante",
+    "roles": "Roles asignados",
+    "account": "Cuenta {{id}}",
+    "noRoles": "Sin roles asignados",
+    "approvalFailed": "No se pudo aprobar la solicitud de membresía.",
+    "loadFailed": "No se pudieron cargar las solicitudes de membresía."
+  },
 	"dashboard": {
+		"developerQuickStart": {
+			"loading": "Cargando metadatos de integración..."
+		},
 		"title": "Panel",
-		"welcome": "Bienvenido de nuevo"
+		"welcome": "Bienvenido de nuevo",
+		"criticalEvents": {
+			"noCriticalEvents": "No se han notificado eventos críticos en las últimas 24 horas."
+		},
+		"runtimeReadiness": {
+			"issuance": {
+				"noDeployments": "No hay despliegues activos",
+				"deploymentsReason": "Se requiere un perfil de despliegue activo para emitir credenciales.",
+				"configureDeployment": "Configurar despliegue",
+				"notReady": "La emisión de credenciales no está lista",
+				"readinessReason": "Revise el flujo de emisión y sus recursos necesarios antes de emitir credenciales.",
+				"reviewFlows": "Revisar flujos de emisión",
+				"operational": "La emisión de credenciales está lista",
+				"issuerConfigurationRequired": "La configuración del emisor necesita revisión",
+				"issuerConfigurationReason": "Revise la identidad del emisor y el DID del emisor al que hace referencia la plantilla de credencial activa antes de emitir credenciales."
+			},
+			"verification": {
+				"notReady": "La verificación de credenciales no está lista",
+				"readinessReason": "Revise la configuración de verificación antes de iniciar una sesión.",
+				"reviewSetup": "Revisar configuración de verificación",
+				"operational": "La verificación de credenciales está lista",
+				"policyUnreachable": "No hay políticas de presentación activas",
+				"policyReason": "Se requiere al menos una política de presentación activa para verificar credenciales."
+			},
+			"issuerConfiguration": {
+				"title": "Configuración del emisor",
+				"configured": "Configurado",
+				"notConfigured": "No configurado",
+				"configuredDetail": "Una plantilla de credencial activa hace referencia a un DID de emisor.",
+				"notConfiguredDetail": "Ninguna plantilla de credencial activa hace referencia a un DID de emisor.",
+				"reason": "Las plantillas de credenciales necesitan un DID de emisor antes de poder usarse para la emisión.",
+				"manage": "Gestionar identidades de emisor"
+			}
+		},
+		"systemStatus": {
+			"issuanceService": "Servicio de emisión",
+			"notReported": "Este servicio no se incluyó en la última comprobación de disponibilidad."
+		}
 	},
 	"flows": {
+		"flowDetail": {
+			"lifecycleTitle": "Ciclo de vida del flujo",
+			"statusChips": {
+				"active": "Activo",
+				"draft": "Borrador",
+				"paused": "En pausa",
+				"archived": "Archivado",
+				"unknown": "Estado desconocido"
+			},
+			"entryPoints": {
+				"linkUnavailable": "No hay ningún enlace de solicitud disponible para este flujo.",
+				"qrUnavailable": "No hay ningún código QR disponible para este flujo."
+			},
+			"errors": {
+				"copyFailed": "No se pudo copiar el enlace. Inténtalo de nuevo.",
+				"invalidActivation": "La respuesta de activación no corresponde a este flujo."
+			}
+		},
 		"title": "Flujos",
 		"flowDefinitions": "Definiciones de flujo",
 		"flowInstances": "Instancias de flujo",
@@ -36,9 +260,21 @@
 			"console": "Consola",
 			"flows": "Flujos",
 			"flowInstances": "Instancias de flujo"
-		}
+		},
+		"flowDefinition": "Definición de flujo"
 	},
 	"deploy": {
+		"keyManagementWizard": {
+			"selectOrganization": "Seleccione una organización para registrar un servicio de firma.",
+			"readDenied": "No tiene permiso para ver los servicios de firma de la organización seleccionada.",
+			"createDenied": "No tiene permiso para registrar servicios de firma en la organización seleccionada."
+		},
+		"issuerIdentityWizard": {
+			"selectOrganization": "Selecciona una organización para crear una identidad de emisor.",
+			"readDenied": "No tienes permiso para ver las capacidades de los emisores en la organización seleccionada.",
+			"createDenied": "No tienes permiso para crear identidades de emisor en la organización seleccionada.",
+			"responseMismatch": "El servidor no confirmó la identidad de emisor solicitada. Revisa la lista de identidades de emisor antes de volver a intentarlo."
+		},
 		"title": "Despliegue",
 		"deploymentProfiles": "Perfiles de despliegue",
 		"deploymentProfilesDescription": "Configura perfiles de despliegue para APIs, quioscos y dispositivos en entornos en línea y fuera de línea.",
@@ -238,16 +474,81 @@
 			"loadFailed": "No se pudieron cargar las preferencias de notificación",
 			"saveSuccess": "Preferencias de notificación actualizadas correctamente",
 			"saveFailed": "No se pudieron guardar las preferencias de notificación",
-			"emailDisabledNote": "Nota: el correo está deshabilitado en el método seleccionado arriba."
+			"emailDisabledNote": "Nota: el correo está deshabilitado en el método seleccionado arriba.",
+			"unsupported": "La API de notificaciones no admite preferencias de notificación.",
+			"unsupportedDetails": "Esta instalación no permite consultar ni actualizar las preferencias de notificación. No se ha guardado ningún cambio en las preferencias."
 		}
 	},
 	"wizards": {
+		"credentialTemplate": {
+			"cryptoValidityStep": {
+				"validation": {
+					"daysRange": "Introduce un número entero de días entre 1 y {{max}}.",
+					"offsetRange": "Introduce un número entero de segundos entre {{min}} y {{max}}.",
+					"reviewSettings": "Revisa los ajustes de validez resaltados antes de crear la plantilla."
+				}
+			}
+		},
 		"common": {
 			"optional": "Opcional"
+		},
+		"presentationPolicy": {
+			"claimsConfigurationStep": {
+				"validation": {
+					"claimName": "Introduce un nombre de atributo.",
+					"credentialType": "Selecciona uno de los tipos de credencial aceptados.",
+					"completeClaims": "Completa el nombre de la política, el propósito, los tipos de credencial aceptados y todos los atributos obligatorios antes de continuar.",
+					"templateRequirementsMismatch": "Estos requisitos no coinciden con la plantilla de credencial seleccionada. Selecciona de nuevo la plantilla o crea una nueva política personalizada.",
+					"templateIncomplete": "La plantilla de credencial seleccionada está incompleta. Selecciona de nuevo la plantilla antes de continuar.",
+					"templateTypeMismatch": "Esta política está vinculada a la plantilla de credencial seleccionada. Utiliza su tipo de credencial o crea una nueva política personalizada para configurar otros tipos.",
+					"templateDuplicateClaim": "Solicita «{{claimName}}» una sola vez en esta política.",
+					"templateUnknownClaim": "«{{claimName}}» no es un atributo de la plantilla de credencial seleccionada. Selecciona un atributo de la plantilla o crea una nueva política personalizada.",
+					"templateValueConflict": "El valor requerido para «{{claimName}}» entra en conflicto con una restricción de la plantilla seleccionada."
+				},
+				"labels": {
+					"removeClaim": "Eliminar atributo {{index}}"
+				}
+			},
+			"reviewStep": {
+				"fields": {
+					"requiredValue": "Valor requerido"
+				}
+			}
 		}
 	},
 	"org": {
+		"roleEscalation": {
+			"title": "Solicitudes de cambio de rol",
+			"unavailable": "Las solicitudes de cambio de rol no están disponibles en esta consola.",
+			"management": "Los usuarios con permiso para asignar roles pueden cambiar los roles de los miembros en Equipo. La página Roles muestra los roles disponibles y sus permisos.",
+			"teamLink": "Ver equipo",
+			"rolesLink": "Ver roles"
+		},
+		"setup": {
+			"chooseTitle": "Elige una organización",
+			"chooseDescription": "Selecciona una organización para abrir su consola.",
+			"accessTitle": "Acceso a la consola de la organización",
+			"accessDescriptionWithCreate": "Únete a una organización con acceso a la consola o crea una para continuar.",
+			"accessDescription": "Únete a una organización con acceso a la consola para continuar.",
+			"noMembershipsTitle": "Aún no tienes membresías con acceso a la consola"
+		},
 		"team": {
+			"access": {
+				"rolesTitle": "Roles",
+				"signIn": "Inicia sesión para ver el equipo.",
+				"selectOrganization": "Selecciona una organización para ver su equipo.",
+				"readDenied": "No tienes permiso para ver este equipo.",
+				"rolesLoadFailed": "No se pudieron cargar los roles disponibles. Vuelve a intentarlo para invitar miembros o cambiar roles.",
+				"rolesReadRequired": "Para invitar miembros o cambiar sus roles necesitas acceso a los roles disponibles. Solicita acceso a un administrador de la organización."
+			},
+			"memberships": {
+				"title": "Estado de las membresías",
+				"status": "Estado",
+				"pending": "Pendiente de aprobación",
+				"deactivated": "Desactivada",
+				"unknown": "Estado no disponible",
+				"reviewRequests": "Ver solicitudes de membresía"
+			},
 			"title": "Equipo",
 			"subtitle": "Gestiona miembros, roles e invitaciones"
 		},
@@ -260,7 +561,9 @@
 				"defaultCredentialTemplate": "Plantilla de credencial predeterminada"
 			},
 			"values": {
-				"noneManualSelection": "Ninguno (se requiere selección manual)"
+				"noneManualSelection": "Ninguno (se requiere selección manual)",
+				"unavailable": "Recurso no disponible",
+				"detailsUnavailable": "Detalles del recurso no disponibles"
 			},
 			"actions": {
 				"save": "Guardar predeterminados",
@@ -269,8 +572,27 @@
 			"messages": {
 				"loadFailed": "No se pudieron cargar los valores predeterminados de la organización",
 				"saveFailed": "No se pudieron guardar los valores predeterminados de la organización",
-				"saveSuccess": "Valores predeterminados guardados correctamente"
+				"saveSuccess": "Valores predeterminados guardados correctamente",
+				"organizationRequired": "Selecciona una organización antes de configurar los valores predeterminados.",
+				"permissionDenied": "No tienes permiso para ver los valores predeterminados de la organización.",
+				"unavailableDefaultsPreserved": "Uno o varios valores predeterminados guardados no están disponibles. Se conservan al cambiar otros valores predeterminados. Si tienes permiso para editar, puedes sustituirlos o borrar la selección.",
+				"catalogPermissionRequired": "Algunos detalles de los recursos están ocultos porque no tienes permiso para ver sus catálogos."
 			}
+		}
+	},
+	"policies": {
+		"verificationSessions": "Sesiones de verificación"
+	},
+	"organizationCreation": {
+		"createAction": "Crear organización",
+		"emptyDescription": "Aún no eres miembro de ninguna organización. Crea una organización, descubre organizaciones públicas o únete a una con un código.",
+		"discoveryRequired": "Las organizaciones con acceso abierto o sujeto a aprobación siempre se pueden encontrar en la búsqueda pública de organizaciones.",
+		"discoveryPublic": "Esta organización puede aparecer en la búsqueda pública de organizaciones.",
+		"discoveryPrivate": "Esta organización no aparece en la búsqueda pública de organizaciones."
+	},
+	"applicationTemplatesPage": {
+		"validation": {
+			"validityDays": "Introduce un número entero de días entre 1 y 3650."
 		}
 	}
 }

@@ -380,7 +380,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     cache = steps["Record optional recovery compiler cache outcomes"]
     assert (
-        cache["if"] == "always()"
+        cache["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         and "timeout 10s sccache --show-stats 2>/dev/null" in cache["run"]
     )
     assert (
@@ -428,7 +428,9 @@ def test_main_warmer_reuses_exact_recovery_build_only_owner():
         (ROOT / ".github/workflows/warm-ci-caches.yml").read_text()
     )
     warmer = workflow["jobs"]["rust"]
-    assert warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert warmer["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
+    )
     assert warmer["env"]["SCCACHE_GHA_RW_MODE"] == "READ_WRITE"
     assert (
         "scripts/probe_integration_secret_coordinated_restore.py"

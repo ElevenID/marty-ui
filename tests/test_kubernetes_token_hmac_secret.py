@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import hashlib
+import base64
 import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 
@@ -16,6 +18,9 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "synthetic-existing-shared-token-$literal;not-a-command"
+METADATA_COMMANDS = ("kubernetes-secrets-contract", "kubernetes-application-token-contract",
+                     "kubernetes-application-activation-contract", "kubernetes-renewal-contract",
+                     "kubernetes-renewal-activation-contract")
 FUNCTIONS = (
     "catalog_required_secret_envs",
     "is_placeholder_secret",
@@ -86,11 +91,375 @@ fn main() {
         child.stdin.take().unwrap().write_all(&bytes).unwrap();
         std::process::exit(child.wait().unwrap().code().unwrap_or(1));
     }
-    if env::var("TEST_APPLY_FAIL").is_ok() { eprintln!("synthetic-sensitive-diagnostic"); std::process::exit(1); }
+    let fail_name=env::var("TEST_APPLY_FAIL_NAME").ok();
+    if env::var("TEST_APPLY_FAIL").is_ok() || fail_name.is_some_and(|name| String::from_utf8_lossy(&bytes).contains(&format!("\"name\":\"{name}\""))) {
+        eprintln!("synthetic-sensitive-diagnostic"); std::process::exit(1);
+    }
 }''', encoding="utf-8")
     kubectl = directory / ("kubectl.exe" if os.name == "nt" else "kubectl")
     subprocess.run(["rustc", "+1.95.0", str(source), "-o", str(kubectl)], check=True, capture_output=True)
     return binary, kubectl
+
+
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_is_compiled_and_needs_no_inputs_repo_or_cluster(
+    native_tools, tmp_path, command,
+):
+    misleading = tmp_path / "deploy-config/catalog"
+    misleading.mkdir(parents=True)
+    (misleading / "kubernetes-secrets.json").write_text('{"required":[],"secrets":[]}')
+    (misleading / "kubernetes-application-tokens.json").write_text('{"tokens":[]}')
+    environment = {
+        "PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+        "MARTY_REPO_ROOT": str(tmp_path), "KUBECONFIG": str(tmp_path / "absent-kubeconfig"),
+        # Any attempt to resolve credentials would fail on this deliberately
+        # conflicting source; metadata must not inspect either source.
+        "POSTGRES_PASSWORD": "PRIVATE_METADATA_CREDENTIAL_CANARY",
+        "POSTGRES_PASSWORD_FILE": str(tmp_path / "absent-private-input"),
+        "SIGNING_KEYS_OPENBAO_TOKEN": "PRIVATE_APPLICATION_CREDENTIAL_CANARY",
+        "SIGNING_KEYS_OPENBAO_TOKEN_FILE": str(tmp_path / "absent-application-input"),
+    }
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), command], cwd=tmp_path,
+        env=environment, input="PRIVATE_STDIN_CANARY", capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
+    expected = (
+        {"schema": "marty.kubernetes-secret-publication/v1",
+         "catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
+        if command == "kubernetes-secrets-contract"
+        else json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+    )
+    if command == "kubernetes-application-activation-contract":
+        application = json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+        expected = {
+            "schema": "marty.kubernetes-application-activation/v1",
+            "destination": "marty-secrets",
+            "activationAnnotation": "marty.elevenid.com/application-activation",
+            "minimumTtlSeconds": 1800,
+            "inputs": sorted(({"input": entry["input"], "file": entry["file"], "key": entry["input"]}
+                              for entry in application["tokens"] if entry["replacementRole"] is not None),
+                             key=lambda entry: entry["input"]),
+        }
+    if command in {"kubernetes-renewal-contract", "kubernetes-renewal-activation-contract"}:
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from passport_remote_tls import SELFHOST_TLS_FILES
+        keycloak_files = {"keycloak_signing_kms_token"}
+        for realm in ("master", "11id"):
+            keycloak_files.add(f"keycloak_{realm}_rs256_cert")
+            keycloak_files.update(f"keycloak_{realm}_{purpose}_token" for purpose in ("cookie", "ciba"))
+        expected = {
+            "schema": "marty.kubernetes-renewal/v1",
+            "enrollmentOperation": "kubernetes-renewal-enroll",
+            "stagingOperation": "kubernetes-renewal-stage",
+            "bindingSchema": "marty.kubernetes-renewal-binding/v1",
+            "identityFiles": ["renewal-leaf-policies.json", "renewal-role-id", "renewal-secret-id"],
+            "minimumTtlSeconds": 3600, "operationBudgetSeconds": 900,
+            "renewableFiles": sorted(set(SELFHOST_TLS_FILES) | keycloak_files),
+            "unchangedFiles": ["workload_identity_ca_cert"], "changedFiles": 39,
+            "scopedLeafTokens": 21, "tlsMetadataFile": "selfhost-tls-kms-roles.json",
+        }
+        if command == "kubernetes-renewal-activation-contract":
+            catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+            files = (set(SELFHOST_TLS_FILES) | keycloak_files) - {"workload_identity_ca_cert"}
+            mappings = [
+                {"input": file.upper(), "file": file, "secret": secret["name"], "key": key}
+                for file in files for secret in catalog["secrets"]
+                for key, field in secret["fields"].items() if field == {"env": file.upper()}
+            ]
+            assert len(mappings) == 39
+            assert len({entry["secret"] for entry in mappings}) == 33
+            expected = {
+                "schema": "marty.kubernetes-renewal-activation/v1",
+                "minimumTtlSeconds": 3600, "secretCount": 33, "changedFiles": 39,
+                "activationAnnotation": "marty.elevenid.com/renewal-activation",
+                "inputs": sorted(mappings, key=lambda entry: entry["input"]),
+            }
+    assert json.loads(result.stdout) == expected
+    assert "PRIVATE_" not in result.stdout
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("arguments", [
+    ["unexpected"], ["--repo-root", "/invalid"], ["--help", "unexpected"],
+])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_rejects_extra_parameters_without_catalog_or_cluster(
+    native_tools, tmp_path, arguments, command,
+):
+    environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+                   "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), command, *arguments],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert f"usage: marty-deploy {command}" in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("prefix", [["--repo-root", "/invalid"], ["--repo-root=/invalid"]])
+@pytest.mark.parametrize("suffix", [[], ["--help"]])
+@pytest.mark.parametrize("command", METADATA_COMMANDS)
+def test_native_publication_contract_rejects_repository_prefix_before_help_or_catalog(
+    native_tools, tmp_path, prefix, suffix, command,
+):
+    environment = {"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path),
+                   "MARTY_REPO_ROOT": str(tmp_path / "absent-repo")}
+    if os.name == "nt":
+        environment["SystemRoot"] = os.environ["SystemRoot"]
+    result = subprocess.run(
+        [str(native_tools[0]), *prefix, command, *suffix],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert f"usage: marty-deploy {command}" in result.stderr
+    assert "/invalid" not in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.fixture
+def application_publication(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Private application activation uses POSIX operator custody")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import bootstrap_kubernetes_openbao as bootstrap
+
+    tmp_path.chmod(0o700)
+    current, candidate = tmp_path / "current", tmp_path / "candidate"
+    current.mkdir(mode=0o700)
+    candidate.mkdir(mode=0o700)
+    application = json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())
+    replacements = {entry["file"]: entry["input"] for entry in application["tokens"]
+                    if entry["replacementRole"] is not None}
+    names = set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES | set(bootstrap.TOKEN_FILES.values())
+    before, after = {}, {}
+    for name in names:
+        before[name] = ("PRIVATE_CURRENT_CANARY_" + name).encode()
+        after[name] = (("PRIVATE_CANDIDATE_CANARY_" + name).encode()
+                       if name in replacements else before[name])
+        for directory, payload in ((current, before[name]), (candidate, after[name])):
+            (directory / name).write_bytes(payload)
+            (directory / name).chmod(0o600)
+    secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+              "metadata": {"name": "marty-secrets", "namespace": "marty-test",
+                           "uid": "69c5c551-e49f-43c7-a4d5-83d0e385b225", "resourceVersion": "41",
+                           "annotations": {"example.test/preserve": "original"}},
+              "data": {key: base64.b64encode(before[name]).decode()
+                       for name, key in replacements.items()}}
+    secret["data"]["TOKEN_HMAC_KEY"] = base64.b64encode(b"PRIVATE_PRESERVED_HMAC_CANARY").decode()
+    source = tmp_path / "before.json"
+    source.write_text(json.dumps(secret))
+    source.chmod(0o600)
+    request = {"operation": "prepare", "namespace": "marty-test", "current": str(current),
+               "candidate": str(candidate), "observed": str(source), "output": str(tmp_path / "patch.json"),
+               "activationId": "0123456789abcdef0123456789abcdef"}
+    return request, secret, before, after, replacements
+
+
+def native_application_publication(native_tools, tmp_path, request):
+    return subprocess.run(
+        [str(native_tools[0]), "operator", "kubernetes-application-publication"],
+        input=json.dumps(request), text=True, capture_output=True, timeout=20,
+        cwd=tmp_path, env={"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path)},
+    )
+
+
+def test_native_application_patch_and_observation_keep_payloads_private(
+    native_tools, tmp_path, application_publication,
+):
+    request, secret, before, after, replacements = application_publication
+    result = native_application_publication(native_tools, tmp_path, request)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ready": True, "secret": "marty-secrets", "count": 11}
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    patch_path = Path(request["output"])
+    assert patch_path.stat().st_mode & 0o7777 == 0o600
+    patch = json.loads(patch_path.read_text())
+    assert patch[:2] == [
+        {"op": "test", "path": "/metadata/uid", "value": secret["metadata"]["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": "41"},
+    ]
+    assert len(patch) == 14
+    applied = json.loads(json.dumps(secret))
+    for name, key in replacements.items():
+        applied["data"][key] = base64.b64encode(after[name]).decode()
+    applied["metadata"]["resourceVersion"] = "42"
+    applied["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = request["activationId"]
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(applied))
+    result_path.chmod(0o600)
+    verify = {key: value for key, value in request.items() if key != "output"}
+    verify.update(operation="verify", result=str(result_path))
+    result = native_application_publication(native_tools, tmp_path, verify)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["state"] == "candidate"
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    for path, expected in ((Path(request["current"]), before), (Path(request["candidate"]), after)):
+        assert {file.name: file.read_bytes() for file in path.iterdir()} == expected
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("drift", ["uid", "version", "preserved-key", "marker"])
+def test_native_application_outcome_refuses_conflicting_or_foreign_writers(
+    native_tools, tmp_path, application_publication, drift,
+):
+    request, secret, _, after, replacements = application_publication
+    observed = json.loads(json.dumps(secret))
+    for name, key in replacements.items():
+        observed["data"][key] = base64.b64encode(after[name]).decode()
+    observed["metadata"]["resourceVersion"] = "42"
+    observed["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = request["activationId"]
+    if drift == "uid":
+        observed["metadata"]["uid"] = "2949fcec-a21a-41d1-a774-e833c93c1f57"
+    elif drift == "version":
+        observed["metadata"]["resourceVersion"] = "41"
+    elif drift == "preserved-key":
+        observed["data"]["TOKEN_HMAC_KEY"] = base64.b64encode(b"PRIVATE_FOREIGN_WRITER_CANARY").decode()
+    else:
+        observed["metadata"]["annotations"]["marty.elevenid.com/application-activation"] = "a" * 32
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps(observed))
+    result_path.chmod(0o600)
+    verify = {key: value for key, value in request.items() if key != "output"}
+    verify.update(operation="verify", result=str(result_path))
+    result = native_application_publication(native_tools, tmp_path, verify)
+    assert result.returncode != 0
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+def test_native_application_patch_refuses_incomplete_generation_before_output(
+    native_tools, tmp_path, application_publication,
+):
+    request, _, _, _, _ = application_publication
+    (Path(request["candidate"]) / "keycloak_signing_kms_token").unlink()
+    result = native_application_publication(native_tools, tmp_path, request)
+    assert result.returncode != 0
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    assert not Path(request["output"]).exists()
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.fixture
+def renewal_publication(tmp_path):
+    if os.name != "posix":
+        pytest.skip("Private Renewal activation uses POSIX operator custody")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import bootstrap_kubernetes_openbao as bootstrap
+
+    tmp_path.chmod(0o700)
+    current, candidate = tmp_path / "current", tmp_path / "candidate"
+    current.mkdir(mode=0o700)
+    candidate.mkdir(mode=0o700)
+    changed = (set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES) - {"workload_identity_ca_cert"}
+    names = changed | set(bootstrap.TOKEN_FILES.values()) | {"workload_identity_ca_cert", "openbao_tls_ca_cert"}
+    before, after = {}, {}
+    for name in names:
+        before[name] = ("PRIVATE_CURRENT_CANARY_" + name).encode()
+        after[name] = ("PRIVATE_CANDIDATE_CANARY_" + name).encode() if name in changed else before[name]
+        if name.endswith("cert"):
+            before[name] = b"-----BEGIN CERTIFICATE-----\r\n" + before[name] + b"\r\n-----END CERTIFICATE-----\r\n"
+            after[name] = b"-----BEGIN CERTIFICATE-----\r\n" + after[name] + b"\r\n-----END CERTIFICATE-----\r\n"
+        for directory, payload in ((current, before[name]), (candidate, after[name])):
+            (directory / name).write_bytes(payload)
+            (directory / name).chmod(0o600)
+    catalog = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+
+    def build(name):
+        entry = next(entry for entry in catalog["secrets"] if entry["name"] == name)
+        fields = {key: field["env"].lower() for key, field in entry["fields"].items()}
+        selected = {key: file for key, file in fields.items() if file in changed}
+        secret = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                  "metadata": {"name": name, "namespace": "marty-test", "uid": "existing-secret-uid",
+                               "resourceVersion": "41", "annotations": {"example.test/preserve": "original"}},
+                  "data": {key: base64.b64encode(before[file].replace(b"\r", b"").rstrip(b"\n")).decode()
+                           for key, file in fields.items()}}
+        secret["data"]["unrelated"] = base64.b64encode(b"PRIVATE_PRESERVED_CANARY").decode()
+        observed = tmp_path / "before.json"
+        observed.write_text(json.dumps(secret))
+        observed.chmod(0o600)
+        request = {"operation": "prepare", "namespace": "marty-test", "secret": name,
+                   "current": str(current), "candidate": str(candidate), "observed": str(observed),
+                   "output": str(tmp_path / "patch.json"), "activationId": "0123456789abcdef0123456789abcdef"}
+        return request, secret, before, after, selected
+
+    return build
+
+
+def native_renewal_publication(native_tools, tmp_path, request):
+    return subprocess.run(
+        [str(native_tools[0]), "operator", "kubernetes-renewal-publication"],
+        input=json.dumps(request), text=True, capture_output=True, timeout=20,
+        cwd=tmp_path, env={"PATH": str(native_tools[1].parent), "TEST_ROOT": str(tmp_path)},
+    )
+
+
+@pytest.mark.parametrize("secret_name", ["keycloak-kms", "signing-keys-integration-secret-server-tls"])
+def test_native_renewal_publication_has_private_per_secret_patches_and_exact_readback(
+    native_tools, tmp_path, renewal_publication, secret_name,
+):
+    request, secret, before, after, selected = renewal_publication(secret_name)
+    result = native_renewal_publication(native_tools, tmp_path, request)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"ready": True, "secret": secret_name, "count": len(selected)}
+    assert "PRIVATE_" not in result.stdout + result.stderr
+    output = Path(request["output"])
+    assert output.stat().st_mode & 0o7777 == 0o600
+    patch = json.loads(output.read_text())
+    assert patch[:2] == [
+        {"op": "test", "path": "/metadata/uid", "value": secret["metadata"]["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": "41"},
+    ]
+    assert len(patch) == len(selected) + 3
+    applied = json.loads(json.dumps(secret))
+    for key, file in selected.items():
+        published = base64.b64encode(after[file].replace(b"\r", b"").rstrip(b"\n")).decode()
+        assert {"op": "replace", "path": f"/data/{key}", "value": published} in patch
+        applied["data"][key] = published
+    applied["metadata"]["resourceVersion"] = "42"
+    applied["metadata"]["annotations"]["marty.elevenid.com/renewal-activation"] = request["activationId"]
+    verify = {key: value for key, value in request.items() if key != "output"}
+    result_path = tmp_path / "result.json"
+    verify.update(operation="verify", result=str(result_path))
+    for observation, state in ((applied, "candidate"), (secret, "unchanged")):
+        result_path.write_text(json.dumps(observation))
+        result_path.chmod(0o600)
+        result = native_renewal_publication(native_tools, tmp_path, verify)
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout) == {"ready": True, "secret": secret_name,
+                                            "count": len(selected), "state": state}
+        assert "PRIVATE_" not in result.stdout + result.stderr
+    for path, expected in ((Path(request["current"]), before), (Path(request["candidate"]), after)):
+        assert {file.name: file.read_bytes() for file in path.iterdir()} == expected
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["foreign-owner", "changed-live-ca", "unrelated-generation"])
+def test_native_renewal_publication_refuses_other_owners_trust_and_generation_changes(
+    native_tools, tmp_path, renewal_publication, fault,
+):
+    request, secret, _, _, _ = renewal_publication("keycloak-kms")
+    if fault == "foreign-owner":
+        secret["metadata"]["ownerReferences"] = [{"kind": "Certificate", "uid": "foreign-owner"}]
+    elif fault == "changed-live-ca":
+        secret["data"]["openbao_tls_ca_cert"] = base64.b64encode(b"PRIVATE_WRONG_CA_CANARY").decode()
+    else:
+        (Path(request["candidate"]) / "openbao_tls_ca_cert").write_bytes(b"PRIVATE_CHANGED_CA_CANARY")
+    Path(request["observed"]).write_text(json.dumps(secret))
+    result = native_renewal_publication(native_tools, tmp_path, request)
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "PRIVATE_" not in result.stderr
+    assert not Path(request["output"]).exists()
+    assert not (tmp_path / "native-manifest.json").exists()
 
 
 @pytest.fixture
@@ -220,7 +589,8 @@ kubectl() {
 readonly -f kubectl
 """
 
-    def run(changes=None, *, operation="setup", file_bytes=None, next_file_value=None):
+    def run(changes=None, *, operation="setup", file_bytes=None, next_file_value=None,
+            timeout=20):
         selected = dict(env)
         if file_bytes is not None:
             path = tmp_path / "synthetic-token.txt"
@@ -234,16 +604,39 @@ readonly -f kubectl
             "setup": "cmd_setup_secrets",
             "resolve": 'value="$(resolve_secret_input TOKEN_HMAC_KEY)"\nrequire_resolved_secret TOKEN_HMAC_KEY "$value"\nprintf "%s" "$value"',
         }[operation]
-        result = subprocess.run(
-            [bash, "--noprofile", "--norc", "-s"],
-            input=prelude + extracted_functions() + "\n" + suffix + "\n",
+        script = prelude + extracted_functions() + "\n" + suffix + "\n"
+        command = [bash, "--noprofile", "--norc", "-s"]
+        process = subprocess.Popen(
+            command,
             text=True,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             cwd=tmp_path,
             env=selected,
-            timeout=20,
-            check=False,
+            start_new_session=os.name == "posix",
         )
+        try:
+            stdout, stderr = process.communicate(script, timeout=timeout)
+        except BaseException:
+            # The shell owns a native publisher, wrappers and client children.
+            # Stop that test-owned group on timeout or interruption before the
+            # API fixture is torn down, and preserve the original exception.
+            try:
+                if os.name == "posix":
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
+            raise
+        result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         calls = [
             path.read_bytes().decode().rstrip("\0").split("\0")
             for path in tmp_path.glob("call-*")
@@ -337,7 +730,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-            == 33
+            == 35
     )
     created_names = {
         call[3]
@@ -350,6 +743,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
         "es-workload-tls", "es-tls-kms",
         "rp-workload-tls", "rp-tls-kms",
         "ct-workload-tls", "ct-tls-kms",
+        "notification-workload-tls", "notification-tls-kms",
     } <= created_names
     signing_tls = next(
         call for call in calls
@@ -413,6 +807,61 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
         )
         assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_secret)
         assert any(arg.startswith("--from-literal=token=") for arg in kms_secret)
+
+
+def test_native_publishes_notification_certificates_and_scoped_token_once(harness, tmp_path):
+    inputs = {
+        "TOKEN_HMAC_KEY": TOKEN,
+        "NOTIFICATION_WORKLOAD_SERVER_CERT": "PUBLIC_NOTIFICATION_CERTIFICATE_CANARY",
+        "MARTY_WORKLOAD_IDENTITY_CA_CERT": "PUBLIC_WORKLOAD_CA_CANARY",
+        "OPENBAO_TLS_CA_CERT": "PUBLIC_OPENBAO_CA_CANARY",
+        "NOTIFICATION_TLS_KMS_TOKEN": "PRIVATE_NOTIFICATION_TLS_TOKEN_CANARY",
+    }
+    result, _ = harness(inputs)
+    assert result.returncode == 0, result.stderr
+    manifests = [json.loads(line) for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
+    expected = {
+        "notification-workload-tls": {
+            "tls.crt": inputs["NOTIFICATION_WORKLOAD_SERVER_CERT"],
+            "ca.crt": inputs["MARTY_WORKLOAD_IDENTITY_CA_CERT"],
+        },
+        "notification-tls-kms": {
+            "token": inputs["NOTIFICATION_TLS_KMS_TOKEN"],
+            "ca.crt": inputs["OPENBAO_TLS_CA_CERT"],
+        },
+    }
+    for name, fields in expected.items():
+        selected = [item for item in manifests if item["metadata"]["name"] == name]
+        assert len(selected) == 1
+        assert selected[0] == {
+            "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": name, "namespace": "synthetic-owned-namespace"},
+            "stringData": fields,
+        }
+    assert "PRIVATE_NOTIFICATION_TLS_TOKEN_CANARY" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("name", ["NOTIFICATION_WORKLOAD_SERVER_CERT", "NOTIFICATION_TLS_KMS_TOKEN"])
+def test_missing_notification_input_prevents_all_native_secret_publication(harness, tmp_path, name):
+    result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, name: ""})
+    assert result.returncode != 0
+    assert name + " must be set to a non-placeholder value" in result.stderr
+    assert not (tmp_path / "native-manifest.json").exists()
+
+
+def test_notification_apply_failure_retains_prefix_and_stops_before_later_secrets(harness, tmp_path):
+    result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_APPLY_FAIL_NAME": "notification-tls-kms"})
+    assert result.returncode != 0
+    assert "secret apply failed" in result.stderr
+    assert "synthetic-sensitive-diagnostic" not in result.stdout + result.stderr
+    attempted = [json.loads(line)["metadata"]["name"]
+                 for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
+    inventory = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+    names = [entry["name"] for entry in inventory["secrets"] if "optional_env" not in entry]
+    stop = names.index("notification-tls-kms") + 1
+    assert "notification-workload-tls" in attempted[:-1]
+    assert attempted == names[:stop]
+    assert stop < len(names), "failure must exercise a remaining destination"
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])
@@ -675,6 +1124,39 @@ def test_native_apply_stops_at_first_failure(harness):
     assert len([call for call in calls if call[:3] == ["create", "secret", "generic"]]) == 1
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group ownership")
+def test_harness_timeout_stops_native_client_descendants(harness, tmp_path):
+    import fcntl
+    import time
+
+    # The actual shell -> native publisher -> wrapper chain starts this owned
+    # client. A lock held by the client proves it has exited after the deadline.
+    client = tmp_path / "hanging-kubectl"
+    client.write_text(
+        f"#!{sys.executable}\n"
+        "import fcntl, os, time\n"
+        "from pathlib import Path\n"
+        "root = Path(os.environ['TEST_ROOT'])\n"
+        "with (root / 'client.lock').open('w') as lock:\n"
+        "    fcntl.flock(lock, fcntl.LOCK_EX)\n"
+        "    (root / 'client-ready').write_text('ready')\n"
+        "    time.sleep(30)\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    client.chmod(0o700)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": str(client),
+                 "TEST_API_SERVER": "http://127.0.0.1:1",
+                 "TEST_KUBECONFIG": str(tmp_path / "unused-kubeconfig")}, timeout=5)
+    assert time.monotonic() - started < 15, "timed-out descendants were not stopped promptly"
+    assert (tmp_path / "client-ready").read_text() == "ready"
+    with (tmp_path / "client.lock").open() as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert len((tmp_path / "native-manifest.json").read_text().splitlines()) == 1
+
+
 def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness, tmp_path):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
@@ -720,15 +1202,18 @@ def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness,
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
+        # This integration launches 35 real clients sequentially. Give their
+        # startup/API work a bounded aggregate budget while each request
+        # retains the wrapper's three-second timeout.
         result, _ = harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": binary,
                              "TEST_API_SERVER": f"http://127.0.0.1:{server.server_port}",
-                             "TEST_KUBECONFIG": str(config)})
+                             "TEST_KUBECONFIG": str(config)}, timeout=120)
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
     assert result.returncode == 0, result.stderr
-    assert len(received) == 33
+    assert len(received) == 35
     expected = [json.loads(line) for line in (tmp_path / "native-manifest.json").read_text().splitlines()]
     for actual, manifest in zip(received, expected, strict=True):
         assert actual["metadata"]["name"] == manifest["metadata"]["name"]

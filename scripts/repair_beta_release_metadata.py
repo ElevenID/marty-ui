@@ -362,6 +362,14 @@ class Operation:
     def persist(self):
         save_state(self.output / "operation.json", self.state)
 
+    def registration_snapshot(self, stem):
+        """Return the raw daemon registration IDs for the reviewed phase."""
+        return set(self.g.observe_lines(["ps", "-aq", "--no-trunc"], stem))
+
+    def assert_registration_cohort(self, actual, expected, error_code, *, phase):
+        """Default policy requires exact registration equality at every phase."""
+        require(actual == expected, error_code)
+
     def guarded(self, role, cid, model, running):
         row = self.g.inspect(cid)
         self.g.candidate_guard(role, copy.deepcopy(row), model, running=running)
@@ -419,7 +427,7 @@ class Operation:
     def baseline(self):
         self.g.engine()
         self.retained_twenty()
-        all_ids = set(self.g.observe_lines(["ps", "-aq", "--no-trunc"], "all-before"))
+        all_ids = self.registration_snapshot("all-before")
         none = self.g.observe(
             ["network", "inspect", "none"], "read-helper-none-network"
         )[0]
@@ -622,8 +630,9 @@ class Operation:
 
     def execute(self, preflight):
         all_ids, before = self.baseline()
-        require(
-            sorted(all_ids) == preflight["allIds"], "BASELINE_REGISTRATIONS_CHANGED"
+        self.assert_registration_cohort(
+            sorted(all_ids), preflight["allIds"], "BASELINE_REGISTRATIONS_CHANGED",
+            phase="execute-before",
         )
         for role in ROLES:
             previous = load(preflight["before"][role])
@@ -644,12 +653,12 @@ class Operation:
             after[role] = self.create_start(role, self.c["newModels"][role], "apply")
         self.retained_twenty()
         served = self.public(self.marker, self.c["publicManifest"])
-        ids = set(self.g.observe_lines(["ps", "-aq", "--no-trunc"], "all-after"))
-        require(
-            ids
-            == (all_ids - set(self.c["oldCids"].values()))
+        ids = self.registration_snapshot("all-after")
+        self.assert_registration_cohort(
+            ids,
+            (all_ids - set(self.c["oldCids"].values()))
             | set(self.state["newCids"].values()),
-            "UNRELATED_CONTAINER_REGISTRATION_CHANGED",
+            "UNRELATED_CONTAINER_REGISTRATION_CHANGED", phase="execute-after",
         )
         return dict(
             state="BETA_RELEASE_METADATA_REPAIRED",
@@ -1037,14 +1046,12 @@ class Operation:
                 )[0]
                 self.g.NETWORK_IDS[network["name"]] = n["Id"]
         baseline = load(self.c["preflightResult"])
-        current = set(
-            self.g.observe_lines(["ps", "-aq", "--no-trunc"], "recovery-all-before")
-        )
-        require(
-            current
-            == (set(baseline["allIds"]) - {self.c["oldCids"][r] for r in changed})
+        current = self.registration_snapshot("recovery-all-before")
+        self.assert_registration_cohort(
+            current,
+            (set(baseline["allIds"]) - {self.c["oldCids"][r] for r in changed})
             | set(changed.values()),
-            "RECOVERY_UNRELATED_ID_CHANGED",
+            "RECOVERY_UNRELATED_ID_CHANGED", phase="recovery-before",
         )
         for role in ROLES:
             if role in changed:
@@ -1091,14 +1098,12 @@ class Operation:
                     )
                     self.healthy(role, row["Id"], self.models[role])
         served = self.original_public()
-        ids = set(
-            self.g.observe_lines(["ps", "-aq", "--no-trunc"], "recovery-all-after")
-        )
-        require(
-            ids
-            == (set(baseline["allIds"]) - {self.c["oldCids"][r] for r in changed})
+        ids = self.registration_snapshot("recovery-all-after")
+        self.assert_registration_cohort(
+            ids,
+            (set(baseline["allIds"]) - {self.c["oldCids"][r] for r in changed})
             | {r["Id"] for r in recovered.values()},
-            "RECOVERY_UNRELATED_ID_CHANGED",
+            "RECOVERY_UNRELATED_ID_CHANGED", phase="recovery-after",
         )
         return dict(
             state="BETA_METADATA_ORIGINAL_CONFIG_RESTORED",

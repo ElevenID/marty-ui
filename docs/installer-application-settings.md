@@ -174,6 +174,11 @@ configuration acceptance is not proof of credentials or remote availability.
 | `COMPLIANCE_PROFILE_RUST_LOG`, `DEPLOYMENT_PROFILE_RUST_LOG`, `REVOCATION_PROFILE_RUST_LOG` | Existing Rust log-filter strings up to 1,024 bytes. |
 | `CANVAS_LEGACY_EVENT_INGEST_ENABLED`, `CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS`, `DIDCOMM_ALLOW_PRIVATE_ENDPOINTS`, `DIDCOMM_ALLOW_PRIVATE_IPS`, `PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED` | Accepted only as `false`; see the explicit unsupported combinations below. |
 
+For a fresh installation, `MARTY_ORG_NAME` reaches the managed identity
+configurator, Organization bootstrap and Auth through the same canonical Compose
+environment. It does not rename an existing organization or change the retained
+organization ID, issuer DID or slug.
+
 ## Credential files and lifecycle custody
 
 Only these names are accepted in `secret_files`. Secret contents never belong

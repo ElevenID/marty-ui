@@ -21,6 +21,16 @@ CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-native": "marty-issuance-service"}
 MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
 RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
+# The current D12 functional cohort has event-stream in the 22 owned runtime
+# slots. Keep the historical Canvas cohort exact for every older profile.
+D12_CURRENT_RUNTIME_ROLES = (RUNTIME_ROLES - {"canvas-sandbox"}) | {"event-stream"}
+
+def runtime_roles(profile=None):
+    if profile == "d12-passport-current-functional":
+        return D12_CURRENT_RUNTIME_ROLES
+    require(profile in (None, "native-devtest-passport-four-role", "d12-passport-canonical-subset"),
+            "UNREVIEWED_RUNTIME_ROLE_PROFILE")
+    return RUNTIME_ROLES
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
 JOURNAL_FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
 JOURNAL_FILE_MAXIMUM = 256 * 1024
@@ -133,6 +143,12 @@ def selected_sources(plan, profile=None):
         require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
                 "D12_ROLLOUT_IS_NOT_A_BUILD_PROFILE")
         ui_revision, core_revision, roles = SOURCE, CORE, ROLE_BINARIES
+    elif profile == "d12-passport-current-functional":
+        from scoped_native_profiles import D12_PASSPORT_CURRENT
+        require(plan.get("rolloutProfile") == profile and plan.get("buildProfile") is None,
+                "D12_ROLLOUT_IS_NOT_BUILD_PROFILE")
+        ui_revision, core_revision, roles = (D12_PASSPORT_CURRENT.ui_revision,
+            D12_PASSPORT_CURRENT.core_revision, dict(D12_PASSPORT_CURRENT.roles))
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)

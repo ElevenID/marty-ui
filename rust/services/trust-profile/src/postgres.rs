@@ -1,5 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use marty_oid4vp_contract::trust_authority::{
+    credential_authority_basis_digest, CredentialAuthoritySnapshotV1,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -385,6 +388,113 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
             .await
             .map_err(database)?;
         row.as_ref().map(profile_from_row).transpose()
+    }
+
+    async fn credential_authority_snapshot(
+        &self,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<Option<CredentialAuthoritySnapshotV1>, TrustProfileRepositoryError> {
+        let mut transaction = self.pool.begin().await.map_err(database)?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *transaction)
+            .await
+            .map_err(database)?;
+        let profile_id = profile_id.to_string();
+        // Concurrent first observers rendezvous on the same primary key. No
+        // decision graph is read until this revision row is exclusively locked.
+        sqlx::query(
+            "INSERT INTO trust_profile_service.credential_authority_revisions(profile_id)
+             SELECT id FROM trust_profile_service.trust_profiles
+             WHERE id=$1 AND organization_id=$2 ON CONFLICT(profile_id) DO NOTHING",
+        )
+        .bind(&profile_id)
+        .bind(organization_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(database)?;
+        let Some(revision) = sqlx::query(
+            "SELECT version,content_digest FROM trust_profile_service.credential_authority_revisions
+             WHERE profile_id=$1 FOR UPDATE",
+        )
+        .bind(&profile_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(database)? else {
+            return Ok(None);
+        };
+
+        // A single READ COMMITTED statement gives a coherent, current profile,
+        // relationship and issuer snapshot after the revision lock. Ordinary
+        // graph writers need not take the revision lock. Separate SELECTs here
+        // would allow a mixed graph; reading before the lock could publish an
+        // older graph under a newer revision.
+        let Some(row) = sqlx::query(
+            "SELECT p.*,
+                COALESCE((
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'relationship', to_jsonb(r), 'issuer', to_jsonb(i)) ORDER BY r.id)
+                    FROM (SELECT * FROM trust_profile_service.trust_profile_issuers
+                          WHERE trust_profile_id=p.id ORDER BY id LIMIT 129) r
+                    LEFT JOIN trust_profile_service.issuer_entities i ON i.id=r.issuer_id
+                ), '[]'::jsonb) AS authority_relationships
+             FROM trust_profile_service.trust_profiles p
+             WHERE p.id=$1 AND p.organization_id=$2",
+        )
+        .bind(&profile_id)
+        .bind(organization_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(database)?
+        else {
+            return Ok(None);
+        };
+        let profile = profile_from_row(&row)?;
+        let graph: Value = row.try_get("authority_relationships").map_err(database)?;
+        let relationships = graph
+            .as_array()
+            .ok_or_else(|| invalid("credential_authority.graph"))?
+            .iter()
+            .map(|entry| {
+                let relationship: TrustProfileIssuer =
+                    serde_json::from_value(entry["relationship"].clone())
+                        .map_err(|_| invalid("credential_authority.relationship"))?;
+                let issuer: IssuerEntity = serde_json::from_value(entry["issuer"].clone())
+                    .map_err(|_| invalid("credential_authority.issuer"))?;
+                Ok((relationship, issuer))
+            })
+            .collect::<Result<Vec<_>, TrustProfileRepositoryError>>()?;
+        let basis = crate::credential_authority::authority_basis(&profile, relationships)?;
+        let digest = credential_authority_basis_digest(&basis)
+            .map_err(|_| invalid("credential_authority.digest"))?;
+        let previous_version =
+            u32::try_from(revision.try_get::<i64, _>("version").map_err(database)?)
+                .map_err(|_| invalid("credential_authority.version"))?;
+        let previous_digest: Option<String> =
+            revision.try_get("content_digest").map_err(database)?;
+        let version = if previous_digest.as_deref() == Some(digest.as_str()) && previous_version > 0
+        {
+            previous_version
+        } else {
+            previous_version
+                .checked_add(1)
+                .ok_or_else(|| invalid("credential_authority.version"))?
+        };
+        let snapshot = crate::credential_authority::authority_snapshot(basis, version)?;
+        if version != previous_version {
+            sqlx::query(
+                "UPDATE trust_profile_service.credential_authority_revisions
+                 SET version=$2,content_digest=$3,observed_at=clock_timestamp() WHERE profile_id=$1",
+            )
+            .bind(&profile_id)
+            .bind(i64::from(version))
+            .bind(&digest)
+            .execute(&mut *transaction)
+            .await
+            .map_err(database)?;
+        }
+        transaction.commit().await.map_err(database)?;
+        Ok(Some(snapshot))
     }
 
     async fn profiles_by_organization(

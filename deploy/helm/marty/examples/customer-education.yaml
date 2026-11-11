@@ -1,0 +1,42 @@
+# Fictional customer profile: see docs/customer-deployment-scenario.md.
+# Nonsecret configuration only. Supply verified marty-images.json and
+# marty-pull-secrets.json separately, then an installation-specific endpoint
+# layer. The reserved .example domain is not a deployable public endpoint.
+publicHost: credentials.canyon-skills.example
+publicOrigin: https://credentials.canyon-skills.example
+organization:
+  id: 750e8400-e29b-41d4-a716-446655440001
+  slug: canyon-skills
+  adminEmail: admin@canyon-skills.example
+  # For a NEW installation, the chart derives did:web from origin and slug.
+  # Preserve the existing DID explicitly when maintaining a retained tenant.
+openbao:
+  address: https://openbao:8200
+ingress:
+  enabled: true
+  tlsSecretName: canyon-edge-tls
+networkPolicy:
+  enabled: true
+  ingressNamespace: kube-system
+persistence:
+  # K3s default StorageClass; volume data remains attached to this one node.
+  storageClass: ''
+  postgresSize: 10Gi
+  redisSize: 1Gi
+  applicantSize: 1Gi
+canvasWorker:
+  # Direct Open Badges issuance has no external LMS prerequisite.
+  enabled: false
+config:
+  MARTY_ORG_NAME: Canyon Skills Academy
+  MARTY_ORG_ADMIN_FIRST_NAME: Canyon
+  MARTY_ORG_ADMIN_LAST_NAME: Administrator
+  ORGANIZATION_CREATION_ENABLED: 'false'
+  KEYCLOAK_USER_REGISTRATION_ENABLED: 'false'
+  KEYCLOAK_SOCIAL_LOGIN_ENABLED: 'false'
+  KEYCLOAK_VERIFY_EMAIL: 'false'
+  KEYCLOAK_RESET_PASSWORD_ENABLED: 'false'
+  CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: 'true'
+  CREDENTIAL_LOGIN_CREATE_USERS: 'false'
+  CANVAS_MIRROR_WORKER_ENABLED: 'false'
+  MARTY_KMS_BOOTSTRAP_ENABLED: 'true'

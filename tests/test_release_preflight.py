@@ -31,6 +31,9 @@ def source(tmp_path: Path) -> Path:
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
+    cargo = tmp_path / "rust/Cargo.toml"
+    cargo.parent.mkdir(exist_ok=True)
+    cargo.write_text('[workspace]\nmembers=[]\n', encoding="utf-8")
     return tmp_path
 
 
@@ -120,3 +123,21 @@ def test_claim_entry_points_require_eligibility_before_external_work(workflow_na
     assert "--require-eligible" in steps[index]["run"]
     assert not steps[index].get("continue-on-error", False)
     assert all("gh api" not in step.get("run", "") for step in steps[:index])
+
+
+def test_inherited_dependency_refuses_before_release_inputs_or_build_setup(tmp_path):
+    cargo = tmp_path / "rust/Cargo.toml"
+    cargo.parent.mkdir()
+    cargo.write_text('[workspace]\n[package]\nname="fixture"\nversion="0.1.0"\n[dependencies]\nmarty-oid4vp-contract.workspace=true\n', encoding="utf-8")
+    # No lock, release inputs, dependency cache or Cargo executable is needed to
+    # diagnose this exact candidate's dangling workspace inheritance.
+    with pytest.raises(ValueError, match="Missing workspace dependency marty-oid4vp-contract"):
+        preflight.check(tmp_path, SOURCE)
+
+
+def test_valid_inherited_dependency_retains_next_release_input_gate(tmp_path):
+    cargo = tmp_path / "rust/Cargo.toml"
+    cargo.parent.mkdir()
+    cargo.write_text('[workspace]\n[workspace.dependencies]\nalias="1"\n[package]\nname="fixture"\nversion="0.1.0"\n[dependencies]\nalias.workspace=true\n', encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="stack-lock.json"):
+        preflight.check(tmp_path, SOURCE)

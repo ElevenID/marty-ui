@@ -1,6 +1,7 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -46,6 +47,7 @@ import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common'
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { getOperateTabs } from '../../../config/operateTabs';
 import { advanceFlowInstance, cancelFlowExecution, getFlowInstance, listFlowInstances, listFlows } from '../../../services/flowsApi';
 
 function requireInstanceScope(instance, organizationId, instanceId) {
@@ -108,13 +110,6 @@ function ExecutionActions({ instance, organizationId, loading, reload }) {
   </Box>;
 }
 
-const OPERATE_TABS = [
-  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
-  { label: 'Applications', path: '/console/org/operate/applications' },
-  { label: 'Issued Credentials', path: '/console/org/operate/issuance' },
-  { label: 'Verification Sessions', path: '/console/org/operate/verify' },
-];
-
 function readContext(instance) {
   return instance?.context_data && typeof instance.context_data === 'object' ? instance.context_data : {};
 }
@@ -160,7 +155,7 @@ function RelatedRecord({ icon: Icon, label, value, path }) {
   if (!value) return null;
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Icon color="action" fontSize="small" />
         <Typography variant="caption" color="text.secondary">{label}</Typography>
       </Stack>
@@ -212,7 +207,7 @@ function InstanceTimeline({ instance }) {
             primary={String(event.label).replaceAll('_', ' ')}
             secondary={[event.detail, event.timestamp ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
             slotProps={{
-              primary: { variant: 'body2', fontWeight: 600, textTransform: 'capitalize' },
+              primary: { variant: 'body2', sx: { fontWeight: 600, textTransform: 'capitalize' } },
               secondary: { variant: 'caption' }
             }} />
         </ListItem>
@@ -221,14 +216,14 @@ function InstanceTimeline({ instance }) {
   );
 }
 
-function InstanceDetail({ instance, organizationId, loading, error, reload }) {
+function InstanceDetail({ instance, organizationId, loading, error, reload, tabs }) {
   const jobId = instance?.physicalJob?.id || instance?.physicalJob?.job_id || null;
   const jobStatus = instance?.physicalJob?.status || null;
   return (
     <ResourcePage
       title={instance ? `Flow Instance ${instance.id}` : 'Flow Instance'}
       description="Runtime state, protocol progress, and related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },
@@ -243,7 +238,7 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
         <Stack spacing={3}>
           <ExecutionActions instance={instance} organizationId={organizationId} loading={loading} reload={reload} />
           <Paper variant="outlined" sx={{ p: 3 }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
+            <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 2 }}>
               <Box>
                 <Typography variant="overline" color="text.secondary">Current step</Typography>
                 <Typography variant="h6">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting to start'}</Typography>
@@ -283,6 +278,8 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
 }
 
 function ScopedFlowInstancesPage({ instanceId, organizationId }) {
+  const { t } = useTranslation('console');
+  const tabs = getOperateTabs(t);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -316,13 +313,13 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
     });
   }, [instances, searchQuery, statusFilter]);
 
-  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} />;
+  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} tabs={tabs} />;
 
   return (
     <ResourcePage
       title="Flow Instances"
       description="The operational record of every MIP flow execution and its related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },
@@ -365,7 +362,7 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
               ) : filteredInstances.map((instance) => (
                 <TableRow key={instance.id} hover>
                   <TableCell><Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{instance.id}</Typography></TableCell>
-                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" display="block" color="text.secondary">{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
+                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
                   <TableCell><Typography variant="body2">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting'}</Typography>{instance.currentStepNumber && instance.totalSteps && <Typography variant="caption" color="text.secondary">Step {instance.currentStepNumber} of {instance.totalSteps}</Typography>}</TableCell>
                   <TableCell>{instance.applicationId ? <Chip size="small" label="Application" /> : instance.credentialId ? <Chip size="small" label="Credential" /> : instance.physicalJob ? <Chip size="small" label={`Physical: ${instance.physicalJob.status || 'pending'}`} /> : <Typography variant="caption" color="text.secondary">None</Typography>}</TableCell>
                   <TableCell>{formatDate(instance.startedAt)}</TableCell>

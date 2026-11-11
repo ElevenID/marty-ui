@@ -380,8 +380,9 @@ async fn submit_direct_post(
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let instance = required_instance(&state, &instance_id).await?;
+    let expected_instance = instance.clone();
     let (input, instance) = direct_post_input(&state, instance, form).await?;
-    let result = evaluate_submission(&state, instance, input, false).await?;
+    let result = evaluate_submission(&state, instance, input, false, expected_instance).await?;
     if result.decision.as_deref() != Some("allow") || result.result.as_deref() != Some("passed") {
         return Err(FlowHttpError::new(
             StatusCode::BAD_REQUEST,
@@ -473,6 +474,9 @@ async fn submit_dc_api(
         ));
     }
     let mut instance = required_instance(&state, &instance_id).await?;
+    // Origin observations below belong to the replacement record, not to the
+    // persisted preimage used by finalization's compare-and-swap.
+    let expected_instance = instance.clone();
     let mut data = Value::Object(request.data.into_iter().collect());
     let mut response_mode = None;
     if let Some(response) = data
@@ -545,7 +549,7 @@ async fn submit_dc_api(
         audience_override: Some(format!("origin:{origin}")),
     };
     Ok(Json(json!(
-        evaluate_submission(&state, instance, input, true).await?
+        evaluate_submission(&state, instance, input, true, expected_instance).await?
     )))
 }
 
@@ -554,9 +558,10 @@ async fn evaluate_submission(
     instance: crate::FlowInstanceRecord,
     input: VerificationSubmissionInput,
     permit_terminal_replay: bool,
+    expected_instance: crate::FlowInstanceRecord,
 ) -> Result<crate::VerificationResultResponse, FlowHttpError> {
-    let expected_status = instance.status;
-    let expected_updated_at = instance.updated_at;
+    let expected_status = expected_instance.status;
+    let expected_updated_at = expected_instance.updated_at;
     let verifier_sender_id = instance
         .context
         .get("oid4vp_client_id")
@@ -580,7 +585,15 @@ async fn evaluate_submission(
     )
     .await?;
     match prepared {
-        PreparedVerificationSubmission::Final(finalization) => {
+        PreparedVerificationSubmission::Final(mut finalization) => {
+            finalization.expected_instance = expected_instance;
+            if finalization.receipt_input.is_some() {
+                finalization.receipt_input = Some(
+                    crate::verification_receipt::PreparedVerificationReceipt::prepare(
+                        &finalization,
+                    )?,
+                );
+            }
             commit_verification(state, &finalization, permit_terminal_replay).await
         }
         PreparedVerificationSubmission::Retryable(response) => Ok(response),
@@ -615,34 +628,52 @@ async fn commit_verification(
     finalization: &PreparedVerificationFinalization,
     permit_terminal_replay: bool,
 ) -> Result<crate::VerificationResultResponse, FlowHttpError> {
-    let response = finalization.instance.verification_projection()?;
-    if !state
+    let response = if finalization.receipt_input.is_some() {
+        state
+            .repository
+            .finalize_verification_with_receipt(finalization)
+            .await?
+            .map(|committed| committed.instance().verification_projection())
+            .transpose()?
+    } else if state
         .repository
         .finalize_verification(
             &finalization.instance,
             &finalization.nonce_digest,
             finalization.replay_expires_at_ms,
-            finalization.expected_status,
+            &finalization.expected_instance,
             finalization.callback.as_ref(),
         )
         .await?
     {
-        let current = required_instance(state, &finalization.instance.id).await?;
-        let same_digest = current
-            .result
-            .as_ref()
-            .and_then(|result| result.get("submission_digest"))
-            .and_then(Value::as_str)
-            .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
-        if same_digest && permit_terminal_replay {
-            return Ok(current.verification_projection()?);
-        }
-        if same_digest {
-            return Err(already_processed());
-        }
-        return Err(replay_conflict());
+        Some(finalization.instance.verification_projection()?)
+    } else {
+        None
+    };
+    if let Some(response) = response {
+        return Ok(response);
     }
-    Ok(response)
+    let current = required_instance(state, &finalization.instance.id).await?;
+    let same_digest = current
+        .result
+        .as_ref()
+        .and_then(|result| result.get("submission_digest"))
+        .and_then(Value::as_str)
+        .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
+    if same_digest && permit_terminal_replay {
+        return Ok(current.verification_projection()?);
+    }
+    if same_digest {
+        return Err(already_processed());
+    }
+    if matches!(
+        current.status,
+        marty_verification::flow::FlowInstanceStatus::AwaitingWallet
+            | marty_verification::flow::FlowInstanceStatus::InProgress
+    ) {
+        return Err(verification_request_changed());
+    }
+    Err(replay_conflict())
 }
 
 async fn submit_siop(
@@ -670,12 +701,19 @@ async fn submit_siop(
                     &prepared.finalization.instance,
                     &prepared.finalization.nonce_digest,
                     prepared.finalization.replay_expires_at_ms,
-                    prepared.finalization.expected_status,
+                    &prepared.finalization.expected_instance,
                     None,
                 )
                 .await?
             {
                 let current = required_instance(&state, &request.instance_id).await?;
+                if matches!(
+                    current.status,
+                    marty_verification::flow::FlowInstanceStatus::AwaitingWallet
+                        | marty_verification::flow::FlowInstanceStatus::InProgress
+                ) {
+                    return Err(verification_request_changed());
+                }
                 if let PreparedSiopSubmission::SameTerminal(response) = prepare_siop_submission(
                     current,
                     &request.id_token,
@@ -818,6 +856,14 @@ fn replay_conflict() -> FlowHttpError {
     )
 }
 
+fn verification_request_changed() -> FlowHttpError {
+    FlowHttpError::new(
+        StatusCode::CONFLICT,
+        "verification_request_changed",
+        "Verification request changed during evaluation; retrieve the current request and retry",
+    )
+}
+
 impl From<FlowVerificationStartError> for FlowHttpError {
     fn from(error: FlowVerificationStartError) -> Self {
         match error {
@@ -856,6 +902,11 @@ impl From<FlowVerificationRequestError> for FlowHttpError {
     fn from(error: FlowVerificationRequestError) -> Self {
         match error {
             FlowVerificationRequestError::Provider(error) => error.into(),
+            FlowVerificationRequestError::RestartRequired => Self::new(
+                StatusCode::CONFLICT,
+                "verification_restart_required",
+                "Start a new verification request to bind its policy and credential authority revisions",
+            ),
             FlowVerificationRequestError::MethodNotAllowed => Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "verification_request_method_not_allowed",
@@ -880,6 +931,12 @@ impl From<FlowVerificationSubmissionError> for FlowHttpError {
     fn from(error: FlowVerificationSubmissionError) -> Self {
         match error {
             FlowVerificationSubmissionError::Provider(error) => error.into(),
+            FlowVerificationSubmissionError::RestartRequired
+            | FlowVerificationSubmissionError::PolicyRevisionMismatch => Self::new(
+                StatusCode::CONFLICT,
+                "verification_restart_required",
+                "Start a new verification request to bind its policy revision",
+            ),
             FlowVerificationSubmissionError::Record(_)
             | FlowVerificationSubmissionError::InvalidContext(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,

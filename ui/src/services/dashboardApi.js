@@ -49,6 +49,18 @@ function requireDashboardFields(response, sourceName, requiredFields) {
   return response;
 }
 
+function requireOrganizationEnvironment(response) {
+  requireDashboardFields(response, 'Organization environment', ['environment']);
+  if (response.environment !== null
+    && !['development', 'staging', 'production'].includes(response.environment)) {
+    const error = new Error('Organization environment returned an invalid environment value.');
+    error.code = 'DASHBOARD_PAYLOAD_INVALID';
+    error.status = 502;
+    throw error;
+  }
+  return response;
+}
+
 /**
  * Get team snapshot data for dashboard
  * @param {string} organizationId - Organization ID
@@ -77,6 +89,14 @@ export async function getTeamSnapshot(organizationId) {
  */
 export async function getRuntimeStatus(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading runtime status');
+  const requiredFlags = [
+    'can_issue',
+    'can_verify',
+    'issuer_keys_valid',
+    'issuer_active',
+    'deployment_active',
+    'policy_reachable',
+  ];
   const response = requireDashboardFields(
     await getWithRetryConfig(
       `${BASE_PATH}/${encodeURIComponent(orgId)}/runtime/status`,
@@ -84,22 +104,23 @@ export async function getRuntimeStatus(organizationId) {
       { maxRetries: 1 },
     ),
     'Runtime status',
-    [
-      'can_issue',
-      'can_verify',
-      'issuer_keys_valid',
-      'issuer_active',
-      'deployment_active',
-      'policy_reachable',
-    ]
+    requiredFlags
   );
+  const invalidFlags = requiredFlags.filter((field) => typeof response[field] !== 'boolean');
+  if (invalidFlags.length > 0) {
+    const error = new Error(`Runtime status returned invalid boolean fields: ${invalidFlags.join(', ')}.`);
+    error.code = 'DASHBOARD_PAYLOAD_INVALID';
+    error.status = 502;
+    error.messageId = null;
+    throw error;
+  }
   return {
-    canIssue: Boolean(response.can_issue),
-    canVerify: Boolean(response.can_verify),
-    issuerKeysValid: Boolean(response.issuer_keys_valid),
-    issuerActive: Boolean(response.issuer_active),
-    deploymentActive: Boolean(response.deployment_active),
-    policyReachable: Boolean(response.policy_reachable),
+    canIssue: response.can_issue,
+    canVerify: response.can_verify,
+    issuerKeysValid: response.issuer_keys_valid,
+    issuerActive: response.issuer_active,
+    deploymentActive: response.deployment_active,
+    policyReachable: response.policy_reachable,
     lastIssuance: response.last_issuance_timestamp || null,
     lastVerification: response.last_verification_timestamp || null,
   };
@@ -117,16 +138,14 @@ export async function getCriticalEvents(organizationId) {
 /**
  * Get organization environment setting
  * @param {string} organizationId - Organization ID
- * @returns {Promise<string>} Environment ('development', 'staging', 'production')
+ * @returns {Promise<string|null>} Environment ('development', 'staging', 'production'), or null when not configured
  */
 export async function getOrganizationEnvironment(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading organization environment');
-  const response = requireDashboardFields(
-    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`),
-    'Organization environment',
-    ['environment']
+  const response = requireOrganizationEnvironment(
+    await getDashboard(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`)
   );
-  return response.environment || null;
+  return response.environment;
 }
 
 /**
@@ -138,7 +157,9 @@ export async function getOrganizationEnvironment(organizationId) {
 export async function updateOrganizationEnvironment(organizationId, environment) {
   const orgId = requireOrganizationId(organizationId, 'updating organization environment');
   try {
-    return await patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`, { environment });
+    return requireOrganizationEnvironment(
+      await patch(`${BASE_PATH}/${encodeURIComponent(orgId)}/environment`, { environment })
+    );
   } catch (error) {
     logDashboardError('Failed to update organization environment:', error);
     throw error;

@@ -12,7 +12,8 @@
       "title": "Schnellaktionen",
       "applyForCredential": "Nachweis beantragen",
       "viewMyCredentials": "Meine Nachweise anzeigen"
-    }
+    },
+    "loadError": "Die Übersicht Ihrer Nachweise konnte nicht geladen werden. Bitte versuchen Sie es erneut."
   },
   "credentials": {
     "title": "Meine Nachweise",
@@ -40,6 +41,44 @@
   "catalog": {
     "title": "Nachweis-Katalog",
     "description": "Verfügbare Nachweise durchsuchen und beantragen",
-    "searchPlaceholder": "Nachweisen suchen..."
+    "searchPlaceholder": "Nachweisen suchen...",
+    "searchLabel": "Nachweise suchen",
+    "filters": {
+      "clear": "Filter zurücksetzen"
+    },
+    "errorLoading": "Der Nachweiskatalog konnte nicht geladen werden. Versuchen Sie es erneut oder wenden Sie sich an den Support, wenn das Problem weiterhin besteht.",
+    "empty": {
+      "launchUnavailable": "Der Nachweis für diesen Kurs ist derzeit nicht verfügbar. Wenden Sie sich an den Kursanbieter.",
+      "title": "Keine Nachweise verfügbar",
+      "description": "Für Ihre Organisation sind derzeit keine Nachweise verfügbar."
+    }
+  },
+  "settings": {
+    "profile": {
+      "loadError": "Ihr Profil konnte nicht geladen werden. Bitte versuchen Sie es erneut.",
+      "saved": "Profil gespeichert.",
+      "save": "Profil speichern"
+    },
+    "notifications": {
+      "unavailable": "Benachrichtigungseinstellungen sind in dieser Bereitstellung nicht verfügbar."
+    },
+    "wallets": {
+      "loadError": "Verfügbare Wallets konnten nicht geladen werden. Bitte versuchen Sie es erneut.",
+      "savedAutomatically": "Ihre Wallet-Auswahl wird automatisch in diesem Browser gespeichert."
+    }
+  },
+  "identity": {
+    "details": {
+      "linkedCredentials": "Ausgestellte Nachweise",
+      "viewApplication": "Antragsdetails anzeigen",
+      "applicationStatus": "Antragsstatus",
+      "credentialId": "Nachweis-ID"
+    },
+    "guidance": {
+      "walletPresentation": "Verwenden Sie zur Vorlage eines Nachweises die Wallet, in der er gespeichert ist.",
+      "expired": "Dieser Nachweis ist abgelaufen. Wenden Sie sich zur Verlängerung an den Aussteller.",
+      "revoked": "Dieser Nachweis wurde widerrufen. Wenden Sie sich an den Aussteller, um Hilfe zu erhalten.",
+      "additionalInformation": "Der Aussteller benötigt weitere Informationen. Fragen Sie beim Aussteller nach, wie Sie diese bereitstellen können."
+    }
   }
 }

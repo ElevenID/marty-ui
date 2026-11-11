@@ -106,6 +106,11 @@ pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
+pub mod kubernetes_application;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_legacy_recovery;
+pub mod kubernetes_renewal;
+pub mod kubernetes_renewal_activation;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 
@@ -772,6 +777,8 @@ mod tests {
 }
 
 pub mod activation_preflight;
+pub mod application_authority;
+pub mod application_tokens;
 pub mod approle;
 pub mod ca_issuer;
 pub mod generation;
@@ -782,4 +789,6 @@ pub mod operator;
 pub mod operator_certificates;
 mod operator_files;
 mod operator_http;
+#[cfg(target_os = "linux")]
+mod operator_process;
 pub mod snapshot;

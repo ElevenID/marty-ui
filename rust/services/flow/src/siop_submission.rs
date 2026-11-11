@@ -135,7 +135,7 @@ pub fn prepare_siop_submission(
     ) {
         return Err(FlowSiopSubmissionError::InvalidState);
     }
-    let expected_status = instance.status;
+    let expected_instance = instance.clone();
     let context = instance_context(&instance)?;
     let expected_nonce = required_string(context, "nonce")?.to_owned();
     let expected_audience = required_string(context, "siop_client_id")?.to_owned();
@@ -199,8 +199,9 @@ pub fn prepare_siop_submission(
     Ok(PreparedSiopSubmission::Final(Box::new(
         PreparedSiopFinalization {
             finalization: PreparedVerificationFinalization {
+                receipt_input: None,
                 instance,
-                expected_status,
+                expected_instance,
                 nonce_digest: sha256_hex(expected_nonce.as_bytes()),
                 replay_expires_at_ms,
                 callback: None,
