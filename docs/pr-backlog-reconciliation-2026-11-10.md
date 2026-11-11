@@ -1,13 +1,13 @@
 # Marty UI pull-request reconciliation
 
-The review began with 44 open pull requests. PRs #1888, #1889 and #1890 were
-opened during reconciliation and are included in this disposition map.
+The review began with 44 open pull requests. PRs #1888, #1889, #1890 and #1891
+were opened during reconciliation and are included in this disposition map.
 Original source branches and pull-request commit histories are retained.
 
 ## One candidate for the reviewed changes
 
 PR [#1881](https://github.com/ElevenID/marty-ui/pull/1881) is the integration
-candidate for the following 22 source PRs. It uses the existing human-authored
+candidate for the following 23 source PRs. It uses the existing human-authored
 branch so normal private-fork and protected-merge checks apply. The dependency
 bot security policy, required checks and merge queue are unchanged.
 
@@ -22,6 +22,7 @@ bot security policy, required checks and merge queue are unchanged.
 | #1886, #1888 | Correct Kubernetes JSON-patch transport to `/dev/stdin`; retain the exact payload, preconditions, private evidence and single attempt. Raise only the existing release-contract job timeout from 35 to 45 minutes after the observed timeout, preserving every test and gate. |
 | #1889 | Refuse private Helm configuration values and nonboolean worker activation, stop on failed secret-file reads, validate UI startup metadata, refuse another tenant's retained default revocation profile transactionally, and resolve manual preflight environment values through the actual Compose model. |
 | #1890 | Finish Storybook's MSW 3 loader/worker migration, isolate the generated mock worker from production output, require a native `TypeError` for the new `fetch failed` retry case, and align the Bun graph with the existing canonical npm lock. This follow-up was merged into the integration branch. |
+| #1891 | Align the remaining Canvas workflow image guard with the reviewed immutable Playwright runtime. Seven direct Bash acceptance/refusal cases preserve the registry, digest, version, distribution and platform controls. This follow-up was merged into the integration branch. |
 
 The combined tree preserves the independently reviewed component changes.
 Overlapping workflow and authentication-test files were reconciled explicitly:
@@ -46,6 +47,13 @@ rendering fixture supplies the shared-resource URL required by the shipped
 passkey-ready template. Canvas's reviewed browser image and strict portability
 checks follow the retained Playwright package version. Existing behavior checks
 and activation controls remain in place.
+
+The subsequent supply-chain run detected
+[RUSTSEC-2026-0486](https://github.com/RustSec/advisory-db/blob/main/crates/rustix/RUSTSEC-2026-0486.md)
+in `rustix` 1.1.4.
+The dependency is updated to the upstream fixed 1.1.6 release, including the
+platform clock's exact version requirement. The audit policy and advisory
+refusals remain unchanged.
 
 All source heads are retained as commit ancestors of the published candidate.
 Closing an original PR means its work moved into this candidate; it does not
