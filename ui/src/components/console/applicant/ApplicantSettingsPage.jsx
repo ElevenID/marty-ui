@@ -66,7 +66,7 @@ function ApplicantSettingsPage() {
   });
 
   // Wallet preferences
-  const { walletIds: preferredWallets, addWallet, removeWallet } = useWalletPreferences(userId);
+  const { walletIds: preferredWallets, error: walletSaveError, retry: retryWalletSave, addWallet, removeWallet } = useWalletPreferences(userId);
   const { data: wallets, loading: walletsLoading, error: walletsError, reload: reloadWallets } = useAsyncData(
     () => listWallets(true),
     [],
@@ -308,6 +308,16 @@ function ApplicantSettingsPage() {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           {t('settings.wallets.savedAutomatically', 'Wallet choices are saved automatically in this browser.')}
         </Typography>
+
+        {walletSaveError && (
+          <Alert
+            severity="error"
+            sx={{ mb: 2 }}
+            action={<Button color="inherit" onClick={retryWalletSave}>{t('actions.retry', { ns: 'common' })}</Button>}
+          >
+            {t('settings.wallets.saveError', walletSaveError)}
+          </Alert>
+        )}
 
         {walletSelectionRestricted && (
           <Alert severity="info" sx={{ mb: 2 }}>

@@ -242,4 +242,32 @@ describe('authentication callback with session providers', () => {
     expect(authReads).toBe(completedReads);
     expect(screen.getByTestId('path')).toHaveTextContent('/console/after-second');
   });
+
+  it.each(['503', 'invalid identity'])('never uses a previously displayed account as callback proof when the fresh session read returns %s', async failure => {
+    let exchanged = false;
+    let exchanges = 0;
+    server.use(
+      http.get('*/v1/auth/me', () => {
+        if (!exchanged) return HttpResponse.json({ authenticated: true, user: principal });
+        return failure === '503'
+          ? HttpResponse.json({ detail: 'Session unavailable' }, { status: 503 })
+          : HttpResponse.json({ authenticated: true, user: {} });
+      }),
+      http.get('*/v1/auth/callback', () => {
+        exchanges += 1;
+        exchanged = true;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const { user } = renderWithRouter(<CallbackApplication />, { initialEntries: ['/console/applicant/catalog'] });
+    await waitFor(() => expect(screen.getByTestId('auth-state')).toHaveTextContent('signed-in-user'));
+    await waitFor(() => expect(screen.getByTestId('console-state')).toHaveTextContent('ready'));
+    await user.click(screen.getByRole('button', { name: 'Start replacement sign-in' }));
+
+    expect(await screen.findByText('Authentication could not be confirmed. Please sign in again.')).toBeVisible();
+    expect(screen.getByTestId('auth-state')).toHaveTextContent('signed-out');
+    expect(screen.getByTestId('path')).toHaveTextContent('/console/auth/callback');
+    expect(screen.queryByRole('heading', { name: 'Replacement destination' })).not.toBeInTheDocument();
+    expect(exchanges).toBe(1);
+  });
 });

@@ -7,6 +7,7 @@
 import { LOGOUT_STARTED_EVENT } from './authEvents';
 import { getPublicEntryCanonicalOrigin, publicEntryHref } from '../application/routing/publicEntry';
 import { redirectBrowser } from '../application/routing/appHandoff';
+import { createProfilePictureBody } from './profilePicturePayload';
 
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
@@ -18,25 +19,29 @@ const AUTH_BASE_URL = '/v1/auth';
  */
 export async function getCurrentUser() {
   if (getPublicEntryCanonicalOrigin()) return { authenticated: false, user: null };
-  try {
-    const response = await fetch(`${AUTH_BASE_URL}/me`, {
-      method: 'GET',
-      credentials: 'include', // Include cookies
-      cache: 'no-store',
-      headers: {
-        'Accept': 'application/json',
-      },
-    });
+  const response = await fetch(`${AUTH_BASE_URL}/me`, {
+    method: 'GET',
+    credentials: 'include', // Include cookies
+    cache: 'no-store',
+    headers: {
+      'Accept': 'application/json',
+    },
+  });
 
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching current user:', error);
-    return { authenticated: false, user: null };
+  // Only an explicit unauthenticated result ends a known session. Transport,
+  // server, and malformed-response failures are not authentication decisions.
+  if (response.status === 401) return { authenticated: false, user: null };
+  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+  const result = await response.json();
+  if (result?.authenticated === false) return { authenticated: false, user: null };
+  const principalId = result?.user?.user_id || result?.user?.sub || result?.user?.id;
+  const hasPrincipal = typeof principalId === 'string'
+    ? Boolean(principalId.trim())
+    : typeof principalId === 'number' && Number.isFinite(principalId);
+  if (result?.authenticated !== true || !result.user || Array.isArray(result.user) || !hasPrincipal) {
+    throw new Error('The account response could not be read. Please try again.');
   }
+  return result;
 }
 
 /**
@@ -166,7 +171,7 @@ export async function updateProfilePicture(pictureDataUrl) {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ picture: pictureDataUrl }),
+      body: createProfilePictureBody(pictureDataUrl),
     });
 
     if (!response.ok) {

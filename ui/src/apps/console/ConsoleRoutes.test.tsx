@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Outlet, useLocation } from 'react-router';
-import { renderWithoutRouter, screen, waitFor } from '@test/utils';
+import { act, renderWithoutRouter, screen, waitFor } from '@test/utils';
 import type { ReactNode } from 'react';
 
 import ConsoleRoutes from './ConsoleRoutes';
+import { get } from '../../services/api';
+import { NotificationProvider } from '../../contexts/NotificationContext';
 import { TeamSnapshotPanel } from '../../components/console/dashboard/TeamSnapshotPanel';
 import { SetupReadinessPanel } from '../../components/console/dashboard/SetupReadinessPanel';
 
@@ -164,9 +166,11 @@ function CurrentPath() {
 function renderConsoleRoutes(path: string, navigation?: ReactNode) {
   return renderWithoutRouter(
     <MemoryRouter initialEntries={[path]}>
-      {navigation}
-      <ConsoleRoutes />
-      <CurrentPath />
+      <NotificationProvider>
+        {navigation}
+        <ConsoleRoutes />
+        <CurrentPath />
+      </NotificationProvider>
     </MemoryRouter>
   );
 }
@@ -489,5 +493,76 @@ describe('canonical compliance profile routes', () => {
   it.each([['/new', 'create'], ['/profile-one', 'view'], ['/profile-one/edit', 'edit']])('routes %s to the owned consumer page', (suffix, mode) => {
     renderConsoleRoutes('/console/org/policies/compliance' + suffix);
     expect(screen.getByTestId('compliance-profile-' + mode)).toBeInTheDocument();
+  });
+});
+
+describe('operator permission recovery with the real hook', () => {
+  const paths = [
+    { path: '/console/org/operator/key-management', action: 'view', target: 'signing-keys-page' },
+    { path: '/console/org/operator/key-management/services/new', action: 'create', target: 'key-management-service-wizard' },
+  ];
+  const principal = { isAuthenticated: true, isLoading: false, user: { user_id: 'user-a' } };
+  const scope = { mode: 'org', activeOrgId: 'org-1', memberships: [{ id: 'org-1' }], membershipsLoaded: true, isLoading: false };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.mocked(get).mockReset();
+    mockUseAuth.mockReturnValue(principal);
+    mockUseConsole.mockReturnValue(scope);
+    const real = await vi.importActual<typeof import('../../hooks/usePermissions')>('../../hooks/usePermissions');
+    mockUsePermissions.mockImplementation(real.usePermissions);
+  });
+  afterEach(() => { vi.restoreAllMocks(); mockUsePermissions.mockReset(); });
+
+  it.each(paths)('recovers $action permission failures without mounting protected content during Retry', async ({ path, action, target }) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(get).mockRejectedValue(Object.assign(new Error('Permissions temporarily unavailable'), { status: 503 }));
+    const { user } = renderConsoleRoutes(path);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Permissions temporarily unavailable');
+    expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('key-management-service-wizard')).not.toBeInTheDocument();
+    let finishRetry!: (value: { permissions: string[]; roles: any[] }) => void;
+    vi.mocked(get).mockReturnValue(new Promise(resolve => { finishRetry = resolve; }));
+    await user.click(screen.getByRole('button', { name: /Retry/i }));
+    expect(screen.getByText('Checking operator permissions...')).toBeInTheDocument();
+    expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('key-management-service-wizard')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
+    expect(get).toHaveBeenLastCalledWith('/v1/organizations/org-1/members/me/permissions');
+    await act(async () => finishRetry({ permissions: [`signing-key:${action}`], roles: [] }));
+    expect(await screen.findByTestId(target)).toBeInTheDocument();
+    expect(screen.queryByText('Permissions temporarily unavailable')).not.toBeInTheDocument();
+  });
+
+  it.each(paths.flatMap(route => ['403', 'empty grants'].map(denial => ({ ...route, denial }))))(
+    'preserves confirmed $action denial ($denial) without offering Retry', async ({ path, denial }) => {
+      if (denial === '403') vi.mocked(get).mockRejectedValue({ status: 403 });
+      else vi.mocked(get).mockResolvedValue({ permissions: [], roles: [] });
+      renderConsoleRoutes(path);
+      expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission');
+      expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('key-management-service-wizard')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(['organization', 'account'])('discards an old operator Retry after changing %s', async owner => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(get).mockRejectedValue(new Error('Permissions temporarily unavailable'));
+    const route = () => <MemoryRouter initialEntries={[paths[0].path]}><NotificationProvider><ConsoleRoutes /></NotificationProvider></MemoryRouter>;
+    const { user, rerender } = renderWithoutRouter(route());
+    const retry = await screen.findByRole('button', { name: /Retry/i });
+    let finishOldRetry!: (value: { permissions: string[]; roles: any[] }) => void;
+    vi.mocked(get).mockResolvedValue({ permissions: [], roles: [] })
+      .mockReturnValueOnce(new Promise(resolve => { finishOldRetry = resolve; }));
+    await user.click(retry);
+    if (owner === 'organization') mockUseConsole.mockReturnValue({ ...scope, activeOrgId: 'org-2', memberships: [{ id: 'org-2' }] });
+    else mockUseAuth.mockReturnValue({ ...principal, user: { user_id: 'user-b' } });
+    rerender(route());
+    expect(await screen.findByRole('alert')).toHaveTextContent('You do not have permission');
+    await act(async () => finishOldRetry({ permissions: ['signing-key:view'], roles: [] }));
+    expect(screen.queryByTestId('signing-keys-page')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Retry/i })).not.toBeInTheDocument();
+    expect(get).toHaveBeenLastCalledWith(`/v1/organizations/${owner === 'organization' ? 'org-2' : 'org-1'}/members/me/permissions`);
   });
 });
