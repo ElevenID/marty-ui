@@ -701,6 +701,51 @@ impl KeycloakOidcProvider {
 
 #[async_trait]
 impl OidcProvider for KeycloakOidcProvider {
+    fn passkey_management_url(&self, return_uri: &str) -> Option<String> {
+        if self.config.provider_mode != OidcProviderMode::Keycloak {
+            return None;
+        }
+        let target = Url::parse(return_uri).ok()?;
+        if !matches!(target.scheme(), "https" | "http")
+            || !target.username().is_empty()
+            || target.password().is_some()
+        {
+            return None;
+        }
+        let mut url = Url::parse(&format!(
+            "{}/account/account-security/signing-in",
+            self.config.external_issuer_url
+        ))
+        .ok()?;
+        url.query_pairs_mut()
+            .append_pair("referrer", &self.config.client_id)
+            .append_pair("referrer_uri", return_uri);
+        Some(url.into())
+    }
+
+    fn supports_passkey_enrollment(&self) -> bool {
+        self.config.provider_mode == OidcProviderMode::Keycloak
+    }
+
+    fn passkey_enrollment_url(
+        &self,
+        request: &OidcAuthorizationRequest,
+        id_token_hint: &str,
+    ) -> Result<String, PortError> {
+        if !self.supports_passkey_enrollment() || request.registration || id_token_hint.is_empty() {
+            return Err(PortError::new(
+                "passkey_enrollment_unsupported",
+                "Native Keycloak enrollment is unavailable",
+            ));
+        }
+        let mut url = Url::parse(&self.authorization_url(request)?)
+            .map_err(|error| config_error(error.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("kc_action", "webauthn-register-passwordless")
+            .append_pair("id_token_hint", id_token_hint);
+        Ok(url.into())
+    }
+
     fn authorization_url(&self, request: &OidcAuthorizationRequest) -> Result<String, PortError> {
         let endpoint = if self.config.provider_mode == OidcProviderMode::External {
             let metadata = self.external_metadata()?;

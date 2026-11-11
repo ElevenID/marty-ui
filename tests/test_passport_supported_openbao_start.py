@@ -135,10 +135,15 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
             phase = match.group(1) if match else "unknown"
             pytest.fail(f"Disposable OpenBao bootstrap failed at {phase}")
         assert "scoped tokens initialized" in result.stdout
+        assert {path.name for path in output_dir.iterdir()} == {
+            "bao_token", "callback_signer_bao_token", "notification_openbao_token",
+        }
         service = (output_dir / "bao_token").read_text(encoding="ascii")
         callback = (output_dir / "callback_signer_bao_token").read_text(encoding="ascii")
         notification = (output_dir / "notification_openbao_token").read_text(encoding="ascii")
-        assert service and callback and notification and len({service, callback, notification}) == 3
+        tokens = {service, callback, notification}
+        assert len(tokens) == 3
+        assert all(len(token) >= 20 for token in tokens)
         if os.name == "posix":
             assert stat.S_IMODE((output_dir / "bao_token").stat().st_mode) == 0o644
             assert stat.S_IMODE((output_dir / "callback_signer_bao_token").stat().st_mode) == 0o644

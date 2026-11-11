@@ -18,7 +18,7 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 VERIFICATION_FLOOR = "b2b2953f9fe00d848761830623935773419bdf60"
 INTEGRATION_HARNESS = "bdd3b33b9268ca4c8c3d37126e7c253ec8fce710"
 PRODUCER_WORKFLOW_ID = "346930832"
-SETUP_DOCKER = "docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70"
+SETUP_DOCKER = "docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6"
 SETUP_BUILDX = "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069"
 BUILDKIT_IMAGE = "moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8"
 
@@ -239,8 +239,8 @@ def test_candidate_workflow_uses_fixed_actions_and_exact_five_file_bundle() -> N
         SETUP_DOCKER,
         "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
         "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc",
-        "anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26",
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+        "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     ):
         assert source.count(action) == 1
     assert (
@@ -327,7 +327,7 @@ def test_consumer_downloads_and_authenticates_the_exact_five_file_bundle() -> No
 
     assert (
         source.count(
-            "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
         )
         == 1
     )
@@ -375,9 +375,9 @@ def test_consumer_uses_only_fixed_actions_and_drops_registry_credentials() -> No
 
     expected_actions = {
         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1": 2,
-        "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c": 1,
-        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97": 1,
-        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a": 1,
+        "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333": 1,
+        "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0": 1,
+        "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9": 1,
         SETUP_DOCKER: 1,
     }
     assert {

@@ -93,6 +93,30 @@ fn defaults_restore_registration_without_advertising_unconfigured_mail() {
 }
 
 #[test]
+fn passkeys_require_explicit_stable_rp_and_typed_enablement() {
+    for values in [
+        json!({"KEYCLOAK_PASSKEYS_ENABLED":true}),
+        json!({"KEYCLOAK_PASSKEYS_ENABLED":"true","KEYCLOAK_PASSKEY_RP_ID":"login.example.test"}),
+        json!({"KEYCLOAK_PASSKEYS_ENABLED":true,"KEYCLOAK_PASSKEY_RP_ID":"https://login.example.test"}),
+        json!({"KEYCLOAK_PASSKEYS_ENABLED":true,"KEYCLOAK_PASSKEY_RP_ID":"LOGIN.example.test"}),
+    ] {
+        assert!(configuration(values, json!({})).environment(true).is_err());
+    }
+    let configured = configuration(
+        json!({"KEYCLOAK_PASSKEYS_ENABLED":true,"KEYCLOAK_PASSKEY_RP_ID":"login.example.test"}),
+        json!({}),
+    );
+    let env = configured.environment(true).unwrap();
+    assert_eq!(env["KEYCLOAK_PASSKEYS_ENABLED"], "true");
+    assert_eq!(env["KEYCLOAK_PASSKEY_RP_ID"], "login.example.test");
+    assert!(configured.environment(false).is_err());
+    assert!(!configuration(json!({}), json!({}))
+        .environment(true)
+        .unwrap()
+        .contains_key("KEYCLOAK_PASSKEYS_ENABLED"));
+}
+
+#[test]
 fn legacy_journal_remains_readable_but_a_partial_new_selection_is_not_adopted() {
     let root = private_root();
     let (installation, mut state) = state(root.path());

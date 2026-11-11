@@ -24,7 +24,7 @@
                                value="${(login.username!'')}"
                                type="text"
                                autofocus
-                               autocomplete="username"
+                               autocomplete="${(enableWebAuthnConditionalUI?has_content)?then('username webauthn', 'username')}"
                                aria-invalid="<#if messagesPerField.existsError('username')>true</#if>"
                         />
                         <#if messagesPerField.existsError('username')>
@@ -47,6 +47,10 @@
                 </form>
             </div>
         </div>
+        <#if enableWebAuthnConditionalUI?has_content>
+            <#import "passkeys.ftl" as passkeys>
+            <@passkeys.conditionalUIData />
+        </#if>
     <#elseif section = "info">
         <#if realm.password && realm.registrationAllowed && !registrationDisabled??>
             <div id="kc-registration-container">

@@ -387,7 +387,7 @@ describe('issuer wizard current form and native acknowledgments', () => {
     await waitFor(() => expect(requests.reads).toHaveLength(stage === 'recheck' ? 2 : 1));
     await requests.settle(HttpResponse.error());
     expect(requests.reads).toHaveLength(stage === 'recheck' ? 2 : 1); expect(requests.writes).toHaveLength(0);
-    expect(screen.getAllByRole('alert').some(node => /Failed to fetch/.test(node.textContent || ''))).toBe(true);
+    expect(screen.getAllByRole('alert').some(node => /Failed to fetch|fetch failed/.test(node.textContent || ''))).toBe(true);
     if (stage === 'discovery') {
       fireEvent.click(screen.getByRole('button', { name: 'Refresh issuer capabilities' })); await ready();
     }

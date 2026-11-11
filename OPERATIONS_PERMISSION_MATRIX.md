@@ -1,231 +1,127 @@
 # Marty UI Operations Permission Matrix
 
-**Last Updated:** April 10, 2026  
-**Audience:** Operations, support, QA, and release reviewers  
-**Scope:** Organization-scoped RBAC used by the Marty UI console and the backing organization service
-
-This document explains the current permission model used by the org console. It is intended to answer two practical questions:
-
-1. **Which roles actually exist today?**
-2. **What can each role do across the main console resources?**
-
-It complements `RELEASE_READINESS.md`, which tracks launch sign-off.
-
----
+**Last updated:** November 10, 2026
+**Audience:** Operations, support, QA, and release reviewers
+**Scope:** Organization-scoped RBAC in the console and organization service
 
 ## Source of truth
 
-The current RBAC model is defined by the organization service and loaded into the UI as flat `resource:action` permissions.
-
-Primary implementation references:
-
-- `services/organization/infrastructure/migrations/versions/20260215_0001_add_rbac_tables.py`
-- `services/organization/application/rbac_use_cases.py`
-- `ElevenID/Marty` package `marty-common` (`marty_common.org_authorization`)
-- `ui/src/config/permissions.js`
-- `ui/src/hooks/usePermissions.js`
-- `ui/src/components/console/org/RolesPage.jsx`
-
----
-
-## Important terminology note
-
-There is a **current terminology mismatch** in the codebase:
-
-- The **backend-seeded system roles** are:
-  - `owner`
-  - `admin`
-  - `member`
-  - `viewer`
-- Some newer **UI copy and team-management flows** also reference:
-  - `admin`
-  - `developer`
-  - `operator`
-
-For operations and release decisions, treat **`owner/admin/member/viewer` as the canonical roles that are seeded today**.
-
-Use `developer` and `operator` as **product/UI terminology still being normalized**, not as the current authoritative system-role set.
-
----
-
-## How permissions work
-
-Permissions are stored and evaluated as flat keys in the form:
-
-- `resource:action`
-
-Examples:
-
-- `team:view`
-- `role:create`
-- `audit:export`
-- `deployment-profile:activate`
-
-The UI fetches the effective permission set for the active organization from:
-
-- `GET /v1/organizations/{id}/members/me/permissions`
-
-Custom roles can be created by selecting permission IDs from the permission catalog.
-
----
-
-## System role summary
-
-| Role | Purpose | Access level | Special notes |
-| --- | --- | --- | --- |
-| `owner` | Organization owner | Full access to all catalog permissions | Also retains ownership semantics beyond ordinary RBAC; owner transfer is handled outside the flat permission catalog |
-| `admin` | Full org administrator | Full access to all catalog permissions | Operationally equivalent to owner for most console actions |
-| `member` | General builder/operator role | Can manage most design, deploy, issuance, and verification resources | Cannot manage org settings, team membership, or roles; gets view-only access for those areas |
-| `viewer` | Read-only observer | View-only access across resources | No create/edit/delete/invite/approve/export/execute actions |
-
----
-
-## Practical access summary by resource
-
-In the table below, `owner` and `admin` share the same catalog permissions unless noted otherwise.
-
-| Resource | Owner / Admin | Member | Viewer | Notes |
-| --- | --- | --- | --- | --- |
-| Trust Profiles | Full | Full | View | Includes activate/suspend |
-| Trusted Issuers | Full | Full | View | CRUD only |
-| Credential Templates | Full | Full | View | Includes activate/deprecate/version |
-| Compliance Profiles | Full | Full | View | Includes activate/suspend |
-| Presentation Policies | Full | Full | View | Includes activate/suspend/version/evaluate |
-| Revocation Profiles | Full | Full | View | Includes activate; no edit action in current catalog |
-| Deployment Profiles | Full | Full | View | Includes activate/suspend |
-| Flow Definitions | Full | Full | View | Includes activate |
-| Flow Instances | Full | Full | View | Includes start/advance/cancel |
-| Issuance | Full | Full | View | Includes initiate |
-| Application Templates | Full | Full | View | Includes activate |
-| Applications | Full | Full | View | Includes approve/reject |
-| Organization Settings | Full | View only | View only | `member` and `viewer` do not get org edit |
-| Team | Full | View only | View only | `member` and `viewer` cannot invite/manage members |
-| Roles | Full | View only | View only | `member` and `viewer` cannot create/edit/delete/assign roles |
-| API Keys | Full | Full | View | Includes revoke/delete |
-| Signing Keys | Full | Full | View | Current catalog supports view/create/delete |
-| Webhooks | Full | Full | View | Includes test |
-| Notifications | Full | Full | View | Current catalog supports view/send |
-| Audit | Full (view + export) | View only | View only | `member` does **not** get export |
-| Verification | Full | Full | View | Includes execute |
-
----
-
-## Exact permission catalog
-
-The current catalog seeded by the organization service is:
-
-### Trust
-
-- `trust-profile`: `view`, `create`, `edit`, `delete`, `activate`, `suspend`
-- `trusted-issuer`: `view`, `create`, `edit`, `delete`
-- `compliance-profile`: `view`, `create`, `edit`, `delete`, `activate`, `suspend`
-- `presentation-policy`: `view`, `create`, `edit`, `delete`, `activate`, `suspend`, `version`, `evaluate`
-- `revocation-profile`: `view`, `create`, `delete`, `activate`
-
-### Templates and applications
-
-- `credential-template`: `view`, `create`, `edit`, `delete`, `activate`, `deprecate`, `version`
-- `application-template`: `view`, `create`, `edit`, `delete`, `activate`
-- `application`: `view`, `approve`, `reject`
-
-### Deploy and operate
-
-- `deployment-profile`: `view`, `create`, `edit`, `delete`, `activate`, `suspend`
-- `flow-definition`: `view`, `create`, `edit`, `delete`, `activate`
-- `flow-instance`: `view`, `start`, `advance`, `cancel`
-- `issuance`: `view`, `initiate`
-- `verification`: `view`, `execute`
-
-### Organization and access control
-
-- `organization`: `view`, `edit`
-- `team`: `view`, `invite`, `manage`
-- `role`: `view`, `create`, `edit`, `delete`, `assign`
-
-### Keys, notifications, and observability
-
-- `api-key`: `view`, `create`, `edit`, `revoke`, `delete`
-- `signing-key`: `view`, `create`, `delete`
-- `webhook`: `view`, `create`, `edit`, `delete`, `test`
-- `notification`: `view`, `send`
-- `audit`: `view`, `export`
-
----
-
-## What the seeded system roles include
-
-### `owner`
-
-- Every permission in the catalog
-- Plus ownership semantics such as owner protection and transfer workflows
-
-### `admin`
-
-- Every permission in the catalog
-- Full operational access to org settings, members, roles, keys, audit export, and runtime actions
-
-### `member`
-
-`member` receives every catalog permission **except** write/admin actions on these areas:
-
-- `organization`
-- `team`
-- `role`
-- `audit:export`
-
-Concretely, `member` keeps:
-
-- `organization:view`
-- `team:view`
-- `role:view`
-- `audit:view`
-
-and gets full action coverage on the other design/deploy/operate resources.
-
-### `viewer`
-
-`viewer` receives only `view` actions for every resource in the catalog.
-
----
-
-## Console behavior notes
-
-### Navigation gating in the UI
-
-The current sidebar explicitly gates at least these areas by permission:
-
-- Team navigation requires `team:view`
-- Roles navigation requires `role:view`
-
-Other pages may still be visible depending on route structure, but backend authorization remains the final gate.
-
-### Fail-closed behavior
-
-The UI denies actions while permissions are still loading.
-
-### Admin fallback behavior
-
-If detailed permissions cannot be loaded, backend authorization helpers fall back to allowing `admin` / `owner` access for protected actions.
-
-### Custom roles
-
-Organizations can create custom roles from the permission catalog. System roles are seeded automatically for each organization and cannot be deleted.
-
----
-
-## Operational guidance
-
-For support and QA, use the following rules of thumb:
-
-- If a user needs full organization administration, assign `admin`.
-- If a user should build and operate credential workflows but not manage people or org settings, `member` is the closest current built-in role.
-- If a user should only inspect or review state, use `viewer`.
-- If you need a stricter split such as **developer** vs **operator**, create or inspect **custom roles** rather than assuming those are the seeded system roles today.
-
----
-
-## Known gap to track
-
-The product direction increasingly uses `admin`, `developer`, and `operator` terminology in the UI, but the seeded backend system roles are still `owner`, `admin`, `member`, and `viewer`.
-
-That mismatch should remain tracked as a readiness item until docs, UI copy, tests, and backend defaults all agree on the same canonical role model.
+The console evaluates flat `resource:action` permission keys for the authenticated
+principal and selected organization. Use these owners when qualifying a release:
+
+- [Permission catalog](contracts/organization-permission-catalog.json)
+- [Rust organization role templates](rust/services/organization/src/catalog.rs)
+- [Seeded-role entitlement tests](rust/services/organization/tests/permission_catalog.rs)
+- [Rust organization RBAC routes](rust/services/organization/src/rbac_http.rs)
+- [Rust gateway authentication middleware](rust/services/gateway/src/middleware.rs)
+- [UI permission checks](ui/src/config/permissions.js) and
+  [permission loading](ui/src/hooks/usePermissions.js)
+
+The API returns the selected member's effective grants through
+`GET /v1/organizations/{id}/members/me/permissions`. Custom roles select
+permissions from the same catalog. Persisted grants and current source take
+precedence over historical role names or UI labels.
+
+## Seeded system roles
+
+The eight current templates are `owner`, `admin`, `access_admin`,
+`catalog_admin`, `reviewer`, `operator`, `viewer`, and `applicant`.
+`applicant` is the default for new members. `member` and `developer` are not
+current seeded role templates; do not invent those test principals or assume
+their historical grants.
+
+| Role | Current template grants | Operational use |
+| --- | --- | --- |
+| `owner` | Every catalog permission, with separate ownership semantics | Organization ownership and transfer |
+| `admin` | Every catalog permission | Full organization administration |
+| `access_admin` | All catalog actions on organization, team, role, policy-set, api-key, signing-key, webhook, integration-connector, notification, and audit resources | Access, settings, integration, and key administration |
+| `catalog_admin` | All catalog actions on trust-profile, policy-set, trusted-issuer, credential-template, wallet, compliance-profile, presentation-policy, revocation-profile, deployment-profile, flow-definition, application-template, and integration-connector resources | Manage credential and policy configuration |
+| `reviewer` | Selected organization/catalog/application views plus application review, approve, and reject | Review applications |
+| `operator` | Selected organization/catalog/runtime views plus flow-instance start, advance, and cancel; issuance initiate and revoke; passport-certificate issue; verification execute | Run credential and verification workflows |
+| `viewer` | Every catalog permission whose action is `view` | Read-only organization inspection |
+| `applicant` | application-template:view, application:view, credential-template:view, issuance:view, organization:view, wallet:view | Catalog and application access without organization console access |
+
+The `reviewer` view set is organization, trust-profile, trusted-issuer,
+credential-template, wallet, compliance-profile, presentation-policy,
+revocation-profile, deployment-profile, application-template, and application.
+
+The `operator` view set is organization, trust-profile, credential-template,
+wallet, application-template, deployment-profile, flow-definition,
+flow-instance, issuance, and verification.
+
+These resource sets are exact template inputs. An administrator role for one
+area does not grant all actions in another area. In particular, reviewers do
+not inherit operational issuance permissions, and operators do not inherit
+application approval, team management, or key administration.
+
+## Practical access boundaries
+
+| Operation | Template coverage to exercise |
+| --- | --- |
+| Organization settings, team membership, role assignment | Full owner/admin and access_admin grants; negative controls for other roles according to their exact view sets |
+| Trust, templates, policies, deployment and flow definitions | Full owner/admin and catalog_admin grants; access_admin also owns policy-set; view and denial cases for other roles |
+| Application review, approval, rejection | Owner/admin and reviewer positives; operator, viewer, and applicant negatives |
+| Issuance and operational flow execution | Owner/admin and operator positives; reviewer, viewer, and applicant execution negatives |
+| Signing keys and API keys | Owner/admin and access_admin positives; all other roles checked against explicit grants |
+| Passport and mdoc certificate authority actions | Test each distinct catalog permission; operator's passport-certificate:issue does not imply CSCA or mdoc authority |
+| Audit export and ingestion | Owner/admin and access_admin positives; viewer receives audit:view only |
+| Applicant experience | All six applicant grants and explicit organization-console denial; do not substitute a broad viewer or custom role |
+
+The complete action list lives in the
+[shared catalog](contracts/organization-permission-catalog.json). Review it with
+the template source when permissions change; do not infer a missing action from
+a broad label such as “full access.” The seeded-role tests assert the actual role
+names, default membership role, and intended entitlements.
+
+## Console behavior
+
+The permission hook requires an authenticated principal and an actual selected
+organization membership. Grants belong to that scope; an organization switch,
+logout, or superseding request must not reuse the previous scope's permissions.
+
+While grants are loading, or when permission loading fails, the hook returns no
+effective grants. It does not synthesize owner/admin grants after an API failure.
+Backend authentication, tenant ownership, and authorization remain required even
+when navigation or action controls are hidden.
+
+Use custom roles for requirements outside the seeded templates, then qualify
+their allowed and denied operations against the same catalog. Preserve system
+role and ownership protections when managing those roles.
+
+## Organization authorization qualification
+
+The historical `ORG_AUTHORIZATION_PHASE2_MIGRATION.md` report is retired. Its
+Python service examples, mutable-image build receipts, endpoint counts and
+completion claims are recoverable at UI commit
+`83c6ac3da39e515965e9fc3a2ac49f2e155ecd66`; they are not current deployment or
+authorization instructions. Use the Rust source owners above and the owning
+service's authorization tests.
+
+Keep these acceptance requirements when qualifying a release:
+
+- Exercise same-organization success and cross-organization denial for trust,
+  flow, compliance, presentation, deployment and revocation resources, including
+  reads, lists, creation, mutation, activation, subordinate records and artifacts.
+  Prove allowed and denied operations for **all eight seeded roles** and relevant
+  custom-role principals. The historical report's blanket admin-only labels do
+  not override current permissions.
+- Qualify deployment-profile API-key generation separately from organization
+  authentication keys. Verify least privilege and tenant ownership at both the
+  gateway and service, including forged/missing caller context and direct
+  service requests; UI visibility and database schema separation are insufficient.
+- Preserve intended wallet request/submission, presentation evaluation, signed
+  webhooks and internal revocation operations through their actual protocol or
+  service authentication. Historical descriptions of these as public or
+  unauthenticated are not exemptions from current authorization requirements.
+- Retain authorization-failure audit events, privacy-safe organization/request
+  correlation, denial metrics/alerts, membership-verification rate limits and
+  automated cross-organization attack checks as qualification requirements.
+- Measure membership lookup behavior under load and permission changes. The
+  old `<50 ms p99` membership target is an unqualified historical performance
+  goal. Review cache lifetime, invalidation and revocation with the current
+  owner; historical fixed TTLs, replicas and message-bus suggestions are not
+  required architecture.
+
+These runtime, security, and performance checks need current evidence. Retiring
+the historical report and documenting the current role model does not establish
+complete endpoint or deployed-release qualification.

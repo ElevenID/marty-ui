@@ -9,9 +9,9 @@ use marty_auth::{
     AuthApplication, AuthApplicationConfig, AuthApplicationError, AuthApplicationPorts,
     AuthAuditSink, AuthEvent, AuthEventPublisher, AuthenticatedUser, HandleCallbackCommand,
     InitiateLoginCommand, OidcAuthorizationRequest, OidcCodeExchange, OidcLogoutRequest,
-    OidcProvider, OidcTokenSet, OidcUserInfo, OidcValidatedIdentity, PkceState,
-    PkceStateRepository, PortError, Session, SessionRepository, SessionSpec, UserProvisioner,
-    UserType,
+    OidcProvider, OidcTokenSet, OidcUserInfo, OidcValidatedIdentity, PasskeyEmailEnrollment,
+    PasskeyEnrollmentEmail, PasskeyEnrollmentStart, PkceState, PkceStateRepository, PortError,
+    Session, SessionRepository, SessionSpec, UserProvisioner, UserType,
 };
 use serde_json::json;
 
@@ -110,12 +110,27 @@ impl PkceStateRepository for MemoryStates {
 
 #[derive(Default)]
 struct FakeOidc {
+    enrollment_hint: Mutex<Option<String>>,
     authorization: Mutex<Option<OidcAuthorizationRequest>>,
     validated_nonce: Mutex<Option<String>>,
 }
 
 #[async_trait]
 impl OidcProvider for FakeOidc {
+    fn passkey_management_url(&self, _return_uri: &str) -> Option<String> {
+        Some("https://login.example/account/account-security/signing-in".into())
+    }
+    fn supports_passkey_enrollment(&self) -> bool {
+        true
+    }
+    fn passkey_enrollment_url(
+        &self,
+        request: &OidcAuthorizationRequest,
+        id_token_hint: &str,
+    ) -> Result<String, PortError> {
+        *self.enrollment_hint.lock().unwrap() = Some(id_token_hint.to_owned());
+        self.authorization_url(request)
+    }
     fn authorization_url(&self, request: &OidcAuthorizationRequest) -> Result<String, PortError> {
         *self.authorization.lock().expect("authorization lock") = Some(request.clone());
         Ok(format!(
@@ -201,15 +216,45 @@ struct Harness {
     states: Arc<MemoryStates>,
     oidc: Arc<FakeOidc>,
     events: Arc<MemoryEvents>,
+    emails: Arc<EnrollmentEmails>,
+}
+
+#[derive(Default)]
+struct EnrollmentEmails {
+    sent: Mutex<Vec<PasskeyEnrollmentEmail>>,
+    fail: Mutex<bool>,
+}
+
+#[async_trait]
+impl PasskeyEmailEnrollment for EnrollmentEmails {
+    async fn send_enrollment_email(
+        &self,
+        request: &PasskeyEnrollmentEmail,
+    ) -> Result<(), PortError> {
+        if *self.fail.lock().unwrap() {
+            return Err(PortError::new(
+                "smtp_unavailable",
+                "synthetic delivery failure",
+            ));
+        }
+        self.sent.lock().unwrap().push(request.clone());
+        Ok(())
+    }
 }
 
 fn harness() -> Harness {
+    harness_with_passkeys(true)
+}
+
+fn harness_with_passkeys(passkeys_enabled: bool) -> Harness {
     let sessions = Arc::new(MemorySessions::default());
     let states = Arc::new(MemoryStates::default());
     let oidc = Arc::new(FakeOidc::default());
     let events = Arc::new(MemoryEvents::default());
+    let emails = Arc::new(EnrollmentEmails::default());
     let app = AuthApplication::new(
         AuthApplicationPorts {
+            passkey_email: Some(emails.clone()),
             sessions: sessions.clone(),
             pkce_states: states.clone(),
             oidc: oidc.clone(),
@@ -218,6 +263,8 @@ fn harness() -> Harness {
             audit: Some(Arc::new(FailingAudit)),
         },
         AuthApplicationConfig {
+            passkeys_enabled,
+            passkey_client_id: "marty-ui".into(),
             session_ttl_seconds: 86_400,
             post_logout_redirect_uri: "https://ui.example/".to_owned(),
         },
@@ -228,6 +275,7 @@ fn harness() -> Harness {
         states,
         oidc,
         events,
+        emails,
     }
 }
 
@@ -317,6 +365,7 @@ async fn pre_cutover_state_without_nonce_fails_closed_after_single_use_consumpti
             redirect_uri: "/".to_owned(),
             oidc_redirect_uri: None,
             nonce: None,
+            passkey_enrollment: None,
             created_at: now(),
             expires_at: now() + Duration::minutes(5),
         })
@@ -433,4 +482,253 @@ async fn logout_is_idempotent_and_emits_both_domain_events() {
     assert!(repeated.success);
     assert!(repeated.sso_logout_url.is_none());
     assert_eq!(harness.events.0.lock().expect("events lock").len(), 2);
+}
+
+fn enrollment_session() -> Session {
+    Session::create(SessionSpec {
+        user: user(),
+        ttl_seconds: 600,
+        now: now(),
+        ip_address: None,
+        user_agent: None,
+        id_token: Some("original-id-token".into()),
+        refresh_token: None,
+        oidc_claims: Some(json!({"sub":"user-1"})),
+    })
+}
+
+#[tokio::test]
+async fn credential_accounts_enroll_via_native_email_with_no_local_password_or_invented_oidc_state()
+{
+    for exchanged_token in [false, true] {
+        let harness = harness();
+        let mut original = enrollment_session();
+        original.user.user_id = "internal-application-id".into();
+        original.keycloak_subject = Some("keycloak-account-id".into());
+        original.id_token = exchanged_token.then(|| "exchanged-token".into());
+        original.oidc_claims = exchanged_token.then(|| json!({"sub":"keycloak-account-id"}));
+        harness.sessions.save(&original).await.unwrap();
+        assert!(harness.app.passkey_enrollment_available(&original));
+        let result = harness
+            .app
+            .initiate_passkey_enrollment(&original.session_id, enrollment_command(), now())
+            .await
+            .unwrap();
+        assert_eq!(result, PasskeyEnrollmentStart::EmailSent);
+        assert_eq!(
+            harness.emails.sent.lock().unwrap().as_slice(),
+            &[PasskeyEnrollmentEmail {
+                subject: "keycloak-account-id".into(),
+                expected_email: "alice@example.com".into(),
+                client_id: "marty-ui".into(),
+                redirect_uri: "https://ui.example/console/profile".into(),
+            }]
+        );
+        assert_eq!(
+            harness.sessions.get(&original.session_id).await.unwrap(),
+            Some(original)
+        );
+        assert!(harness.states.0.lock().unwrap().is_empty());
+        assert!(harness.oidc.authorization.lock().unwrap().is_none());
+        assert!(harness.events.0.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn enrollment_email_rejects_stale_contradictory_and_cross_origin_bindings_and_delivery_failure(
+) {
+    for mutation in ["stale", "future", "conflict", "foreign", "delivery"] {
+        let harness = harness();
+        let mut original = enrollment_session();
+        original.keycloak_subject = Some("keycloak-account-id".into());
+        original.id_token = None;
+        original.oidc_claims = None;
+        if mutation == "stale" {
+            original.created_at = now() - Duration::seconds(301);
+        }
+        if mutation == "future" {
+            original.created_at = now() + Duration::seconds(1);
+        }
+        if mutation == "conflict" {
+            original.oidc_claims = Some(json!({"sub":"other-account"}));
+        }
+        if mutation == "delivery" {
+            *harness.emails.fail.lock().unwrap() = true;
+        }
+        let mut command = enrollment_command();
+        if mutation == "foreign" {
+            command.redirect_uri = Some("https://foreign.example/".into());
+        }
+        harness.sessions.save(&original).await.unwrap();
+        assert!(harness
+            .app
+            .initiate_passkey_enrollment(&original.session_id, command, now())
+            .await
+            .is_err());
+        assert!(harness.emails.sent.lock().unwrap().is_empty());
+        assert!(harness.states.0.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn management_requires_an_enabled_bound_non_impersonated_session() {
+    let enabled = harness();
+    let disabled = harness_with_passkeys(false);
+    let mut session = enrollment_session();
+    let target = "https://ui.example/console/profile";
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_some());
+    assert!(disabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
+    session.id_token = None;
+    session.oidc_claims = None;
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
+    session.keycloak_subject = Some("trusted-badge-account".into());
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_some());
+    session.user.impersonation = Some(serde_json::from_value(json!({"active":true})).unwrap());
+    assert!(enabled
+        .app
+        .passkey_management_url(&session, target)
+        .is_none());
+}
+
+fn enrollment_command() -> InitiateLoginCommand {
+    InitiateLoginCommand {
+        redirect_uri: Some("/console/profile".into()),
+        oidc_redirect_uri: Some("https://ui.example/v1/auth/callback".into()),
+    }
+}
+
+fn enrollment_callback(state: String) -> HandleCallbackCommand {
+    HandleCallbackCommand {
+        code: "enrollment-code".into(),
+        state,
+        ip_address: None,
+        user_agent: None,
+    }
+}
+
+#[tokio::test]
+async fn enrollment_is_bound_to_original_session_subject_and_preserves_authorization() {
+    let harness = harness();
+    let mut original = enrollment_session();
+    original.user.roles = vec!["original-role".into()];
+    original.user.organization_id = Some("original-org".into());
+    harness.sessions.save(&original).await.unwrap();
+    let start = harness
+        .app
+        .initiate_passkey_enrollment(&original.session_id, enrollment_command(), now())
+        .await
+        .unwrap();
+    let PasskeyEnrollmentStart::Authorization(start) = start else {
+        panic!("OIDC enrollment must use PKCE");
+    };
+    let stored = harness
+        .states
+        .0
+        .lock()
+        .unwrap()
+        .get(&start.state)
+        .unwrap()
+        .clone();
+    let binding = stored.passkey_enrollment.unwrap();
+    assert_eq!(binding.session_id, original.session_id);
+    assert_eq!(binding.subject, "user-1");
+    assert_eq!(
+        harness.oidc.enrollment_hint.lock().unwrap().as_deref(),
+        Some("original-id-token")
+    );
+    let result = harness
+        .app
+        .handle_callback(enrollment_callback(start.state.clone()), now())
+        .await
+        .unwrap();
+    assert_eq!(result.session, original);
+    assert_eq!(harness.sessions.0.lock().unwrap().len(), 1);
+    assert!(harness.events.0.lock().unwrap().is_empty());
+    assert!(matches!(
+        harness
+            .app
+            .handle_callback(enrollment_callback(start.state), now())
+            .await,
+        Err(AuthApplicationError::InvalidState)
+    ));
+}
+
+#[tokio::test]
+async fn enrollment_rejects_account_switch_and_revoked_original_session_before_new_session_creation(
+) {
+    for mutation in ["subject", "revoked"] {
+        let harness = harness();
+        let mut original = enrollment_session();
+        if mutation == "subject" {
+            original.oidc_claims = Some(json!({"sub":"different-keycloak-subject"}));
+        }
+        harness.sessions.save(&original).await.unwrap();
+        let start = harness
+            .app
+            .initiate_passkey_enrollment(&original.session_id, enrollment_command(), now())
+            .await
+            .unwrap();
+        let PasskeyEnrollmentStart::Authorization(start) = start else {
+            panic!("OIDC enrollment must use PKCE");
+        };
+        if mutation == "revoked" {
+            original.revoke();
+            harness.sessions.save(&original).await.unwrap();
+        }
+        assert!(matches!(
+            harness
+                .app
+                .handle_callback(enrollment_callback(start.state), now())
+                .await,
+            Err(AuthApplicationError::PasskeyEnrollmentMismatch)
+        ));
+        assert_eq!(harness.sessions.0.lock().unwrap().len(), 1);
+        assert!(harness.events.0.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn enrollment_unavailable_sessions_cannot_create_state_or_authorization_requests() {
+    for mutation in [
+        "no-hint",
+        "no-identity",
+        "expired",
+        "impersonated",
+        "disabled",
+    ] {
+        let harness = harness_with_passkeys(mutation != "disabled");
+        let mut original = enrollment_session();
+        match mutation {
+            "no-hint" => original.id_token = None,
+            "no-identity" => original.oidc_claims = None,
+            "impersonated" => {
+                original.user.impersonation =
+                    Some(serde_json::from_value(json!({"active":true})).unwrap())
+            }
+            "disabled" => (),
+            _ => original.expires_at = now(),
+        }
+        harness.sessions.save(&original).await.unwrap();
+        assert!(matches!(
+            harness
+                .app
+                .initiate_passkey_enrollment(&original.session_id, enrollment_command(), now())
+                .await,
+            Err(AuthApplicationError::PasskeyEnrollmentUnavailable)
+        ));
+        assert!(harness.states.0.lock().unwrap().is_empty());
+        assert!(harness.oidc.authorization.lock().unwrap().is_none());
+    }
 }

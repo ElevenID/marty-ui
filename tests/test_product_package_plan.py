@@ -101,6 +101,18 @@ def test_product_boundary_drift_is_rejected(tmp_path, mutation):
         MODULE.build_plan(root, "marty-server", SHA)
 
 
+def test_server_payload_contains_the_complete_native_account_theme():
+    plan = MODULE.build_plan(ROOT, "marty-server", SHA)
+    packaged = {item["path"] for item in plan["runtime_files"]}
+    account = ROOT / "config/keycloak/themes/11id/account"
+    required = {path.relative_to(ROOT).as_posix() for path in account.rglob("*") if path.is_file()}
+    assert required and required <= packaged
+    assert "config/keycloak/themes/11id/account/theme.properties" in packaged
+    # Error rendering is inherited from the installed Keycloak parent, so no
+    # deleted custom redirect template may remain a required release input.
+    assert "config/keycloak/themes/11id/login/error.ftl" not in packaged
+
+
 def test_actual_product_plans_are_deterministic_and_have_disjoint_images():
     server = MODULE.build_plan(ROOT, "marty-server", SHA)
     console = MODULE.build_plan(ROOT, "marty-console", SHA)
@@ -246,7 +258,7 @@ def test_frozen_server_plan_binds_runtime_assets_but_console_has_none(tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / relative).read_bytes())
     plan = MODULE.build_plan(root, "marty-server", SHA)
-    assert len(plan["runtime_files"]) == 27
+    assert len(plan["runtime_files"]) == 36
     target = root / "scripts/load-secrets-env.sh"
     target.write_bytes(target.read_bytes() + b"\n# changed local source\n")
     with pytest.raises(ValueError, match="runtime source inputs changed"):

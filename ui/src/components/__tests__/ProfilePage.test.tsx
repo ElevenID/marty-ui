@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@test/utils';
-import { fireEvent, within } from '@testing-library/react';
+import { fireEvent, waitFor, within } from '@testing-library/react';
 import { createElement, useEffect, useLayoutEffect, type PropsWithChildren } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 
 import ProfilePage from '../ProfilePage';
 import { formatOfficialReference } from '../../utils/officialReferences';
-import { updateProfilePicture } from '../../services/authApi';
+import { updateProfilePicture, startPasskeyEnrollment } from '../../services/authApi';
 
 const mockSetActiveOrganizationId = vi.fn();
 const mockSetActiveOrgId = vi.fn();
@@ -86,6 +86,7 @@ function selectPhoto(container: HTMLElement, name: string) {
 
 vi.mock('../../services/authApi', () => ({
   updateProfilePicture: vi.fn(),
+  startPasskeyEnrollment: vi.fn(),
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -106,11 +107,40 @@ describe('ProfilePage', () => {
     photoReads.length = 0;
     mockRefreshUser.mockReset().mockResolvedValue(undefined);
     vi.mocked(updateProfilePicture).mockReset().mockResolvedValue({ success: true });
+    vi.mocked(startPasskeyEnrollment).mockReset();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('opens the server-selected native console and explains the remaining-method safeguard', () => {
+    const managementUrl = 'https://identity.example/realms/11id/account/account-security/signing-in';
+    mockAuthState.user = { ...mockAuthState.user, passkey_enrollment_available: true, passkey_management_url: managementUrl };
+    render(<ProfilePage />);
+    expect(screen.getByRole('link', { name: 'Manage passkeys' })).toHaveAttribute('href', managementUrl);
+    expect(screen.getByText(/Keep another passkey or a working password/)).toBeInTheDocument();
+  });
+
+  it('shows email confirmation and prevents duplicate requests on the badge enrollment path', async () => {
+    mockAuthState.user = { ...mockAuthState.user, passkey_enrollment_available: true };
+    vi.mocked(startPasskeyEnrollment).mockResolvedValue({ email_sent: true });
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText(/Check your account email/)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Enrollment email sent' })).toBeDisabled();
+    expect(startPasskeyEnrollment).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers optional enrollment only when the authenticated server session supports it', async () => {
+    mockAuthState.user = { ...mockAuthState.user, passkey_enrollment_available: true };
+    vi.mocked(startPasskeyEnrollment).mockRejectedValue(new Error('Please sign in again'));
+    render(<ProfilePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Create a passkey' }));
+    await waitFor(() => expect(screen.getByText('Please sign in again')).toBeInTheDocument());
+    expect(startPasskeyEnrollment).toHaveBeenCalledWith(window.location.pathname);
+    expect(screen.getByRole('button', { name: 'Create a passkey' })).toBeEnabled();
   });
 
   it('applies the profile and membership layout without leaking obsolete DOM props', () => {
@@ -201,6 +231,7 @@ describe('ProfilePage', () => {
 
   it('surfaces the shared organizations hub and canonical discovery routes', () => {
     render(<ProfilePage />);
+    expect(screen.queryByTestId('profile-passkey-enrollment')).not.toBeInTheDocument();
 
     const membershipSection = screen.getByTestId('profile-organization-membership-section');
 

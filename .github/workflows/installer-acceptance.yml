@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.12'
       - name: Authenticate the original nightly build and current acceptance invocation
@@ -187,7 +187,7 @@ jobs:
           except (KeyError, ValueError, OSError):
               raise SystemExit('Installer grant API context refused') from None
           PY
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         if: inputs.phase == 'staged'
         with:
           artifact-ids: ${{ steps.context.outputs.artifact_id }}
@@ -224,7 +224,7 @@ jobs:
           PY
       - name: Preserve bounded published release observation
         if: always() && inputs.phase == 'published'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-published-release-observation-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-staged-grant/context/published-release-identity.json
@@ -396,7 +396,7 @@ jobs:
             --harness-source-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --controller-user-id "$CONTROLLER_USER_ID" --output "$base/grant/controller-transport.json"
       - name: Archive the signed authorization and controller transport descriptor
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-${{ inputs.phase }}-grant-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -469,7 +469,7 @@ jobs:
               base / 'grant' / 'candidate-authorization.json')), now=int(time.time()))
           PY
       - name: Archive the complete candidate execution grant package
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-candidate-execution-grant-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -543,7 +543,7 @@ jobs:
           PY
       - name: Archive incomplete checkpoint and authenticated transport evidence
         if: always() && inputs.execute && inputs.execution_result == 'incomplete-checkpoint'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-incomplete-checkpoint-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-staged-grant/checkpoint/
@@ -614,7 +614,7 @@ jobs:
           PY
       - name: Archive startup observation and authenticated transport evidence
         if: always() && inputs.execute && inputs.execution_result == 'startup-observation'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-startup-observation-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-staged-grant/startup/
@@ -627,7 +627,7 @@ jobs:
           printf '%s\n' 'The five installed startup observations passed for the exact signed candidate and configured public IP endpoint. The installation remains Provisioning and Ready=false. Functional/recovery qualification, root retirement, load characterization, admission and channel promotion remain closed. Final consumers must independently verify this exact invocation completed successfully and authenticate the returned signature and provenance.' >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve partial grant and transport evidence
         if: failure() || cancelled()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-candidate-transport-recovery-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-staged-grant/grant/

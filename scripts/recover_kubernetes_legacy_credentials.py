@@ -281,7 +281,7 @@ def validate_plan(raw: bytes, summary: dict, binding: dict, current: dict, candi
 
 def capture_patch(transport, name: str, patch: list, destination: Path, timeout: int) -> bytes:
     """Retain opaque success/failure/timeout bytes before interpreting a reply."""
-    command = [*transport.base, "patch", "secret", name, "--type=json", "--patch-file=-", "-o", "json"]
+    command = [*transport.base, "patch", "secret", name, "--type=json", "--patch-file=/dev/stdin", "-o", "json"]
     try:
         result = subprocess.run(command, input=bootstrap.encoded(patch), capture_output=True,
                                 check=False, timeout=timeout)

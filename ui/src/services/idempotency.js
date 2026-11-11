@@ -12,6 +12,9 @@ export function isNetworkAbortLikeError(error) {
   const message = String(error?.message || '');
   return error?.name === 'AbortError'
     || message.includes('Failed to fetch')
+    // Native Node fetch (used by MSW 3) reports the same interrupted transport
+    // as "fetch failed". Keep the existing same-key retry/readback behavior.
+    || message === 'fetch failed'
     || message.includes('NetworkError')
     || message.includes('ERR_ABORTED');
 }

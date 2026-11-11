@@ -6,7 +6,8 @@ use url::Url;
 
 use crate::{
     CredentialAccount, CredentialAccountResolver, ExchangedTokenValidator, OidcUserInfo,
-    OidcValidatedIdentity, PortError, ResolveCredentialAccount,
+    OidcValidatedIdentity, PasskeyEmailEnrollment, PasskeyEnrollmentEmail, PortError,
+    ResolveCredentialAccount,
 };
 
 pub const KEYCLOAK_ADMIN_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
@@ -103,6 +104,7 @@ pub enum KeycloakHttpMethod {
     Get,
     PostForm,
     PostJson,
+    PutJson,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +230,18 @@ impl KeycloakAdminTransport for ReqwestKeycloakAdminTransport {
                 .client
                 .post(&request.url)
                 .json(&request.json.unwrap_or(Value::Null)),
+            KeycloakHttpMethod::PutJson => {
+                let mut url = Url::parse(&request.url).map_err(|_| {
+                    PortError::new(
+                        "invalid_keycloak_request",
+                        "Keycloak request URL is invalid",
+                    )
+                })?;
+                url.query_pairs_mut().extend_pairs(request.query.iter());
+                self.client
+                    .put(url)
+                    .json(&request.json.unwrap_or(Value::Null))
+            }
             KeycloakHttpMethod::PostForm => {
                 let body = {
                     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
@@ -631,6 +645,70 @@ impl KeycloakAdminAdapter {
 }
 
 #[async_trait]
+impl PasskeyEmailEnrollment for KeycloakAdminAdapter {
+    async fn send_enrollment_email(
+        &self,
+        enrollment: &PasskeyEnrollmentEmail,
+    ) -> Result<(), PortError> {
+        let refused = || {
+            PortError::new(
+                "passkey_email_account_unavailable",
+                "The verified Keycloak account cannot receive enrollment email",
+            )
+        };
+        if enrollment.subject.is_empty()
+            || enrollment.subject.len() > 512
+            || enrollment.expected_email.is_empty()
+            || enrollment.expected_email.len() > 320
+            || enrollment.client_id.is_empty()
+            || enrollment.client_id.len() > 256
+        {
+            return Err(refused());
+        }
+        let mut url = Url::parse(&self.config.admin_base()).map_err(|_| refused())?;
+        url.path_segments_mut()
+            .map_err(|_| refused())?
+            .extend(["users", enrollment.subject.as_str()]);
+        let token = self.service_account_token().await?;
+        let profile = self
+            .get_admin_json(&token, url.to_string())
+            .await?
+            .require_success("Keycloak enrollment account verification")?
+            .body;
+        if profile["id"].as_str() != Some(enrollment.subject.as_str())
+            || profile["enabled"].as_bool() != Some(true)
+            || profile["emailVerified"].as_bool() != Some(true)
+            || !profile["email"]
+                .as_str()
+                .is_some_and(|email| email.eq_ignore_ascii_case(&enrollment.expected_email))
+        {
+            return Err(refused());
+        }
+        // The only permitted action, lifetime, account and client are selected by
+        // the server. Keycloak validates the client redirect and signs the link.
+        url.path_segments_mut()
+            .map_err(|_| refused())?
+            .push("execute-actions-email");
+        self.transport
+            .execute(KeycloakHttpRequest {
+                method: KeycloakHttpMethod::PutJson,
+                url: url.into(),
+                bearer_token: Some(token),
+                query: vec![
+                    ("client_id".into(), enrollment.client_id.clone()),
+                    ("redirect_uri".into(), enrollment.redirect_uri.clone()),
+                    ("lifespan".into(), "300".into()),
+                ],
+                form: Vec::new(),
+                json: Some(json!(["webauthn-register-passwordless"])),
+            })
+            .await?
+            .require_success("Keycloak passkey enrollment email")?;
+        Ok(())
+    }
+}
+
+#[async_trait]
 impl CredentialAccountResolver for KeycloakAdminAdapter {
     async fn resolve(
         &self,
@@ -654,6 +732,7 @@ impl CredentialAccountResolver for KeycloakAdminAdapter {
             return Ok(None);
         };
         let admin_user = self.get_user_info(&user_id).await?;
+        let keycloak_subject = admin_user.sub.clone();
         let exchange = self
             .exchange_token_for_user(&user_id, &self.config.client_id)
             .await?;
@@ -662,6 +741,7 @@ impl CredentialAccountResolver for KeycloakAdminAdapter {
             .map(|exchange| &exchange.identity.user_info);
         let user = merge_oidc_user_info(exchanged_user, Some(&admin_user));
         Ok(Some(CredentialAccount {
+            keycloak_subject: Some(keycloak_subject),
             user,
             id_token: exchange
                 .as_ref()

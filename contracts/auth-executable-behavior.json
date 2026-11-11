@@ -39,6 +39,7 @@
     "limited_paths": [
       "/v1/auth/login",
       "/v1/auth/register",
+      "/v1/auth/passkeys/enroll",
       "/v1/auth/callback",
       "/v1/auth/credential-login"
     ],

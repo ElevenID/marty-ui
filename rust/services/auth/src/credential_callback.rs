@@ -14,6 +14,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CredentialAccount {
+    pub keycloak_subject: Option<String>,
     pub user: Option<OidcUserInfo>,
     pub id_token: Option<String>,
     pub refresh_token: Option<String>,
@@ -168,6 +169,9 @@ impl CredentialCallbackApplication {
             None
         };
 
+        let keycloak_subject = account
+            .as_ref()
+            .and_then(|account| account.keycloak_subject.clone());
         let mut user = build_credential_login_user(
             &Value::Object(claims),
             self.provisioner.as_deref(),
@@ -191,6 +195,7 @@ impl CredentialCallbackApplication {
                 .and_then(|account| account.validated_claims)
                 .map(without_authentication_time),
         });
+        session.keycloak_subject = keycloak_subject;
         session.session_id = self
             .state
             .callback_session_id(&payload.flow_instance_id, &context.nonce)

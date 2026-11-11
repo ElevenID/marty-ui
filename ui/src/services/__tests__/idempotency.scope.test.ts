@@ -102,8 +102,8 @@ describe('idempotent POST action ownership', () => {
     expect(failure).not.toHaveProperty('operationStatusUnknown');
   });
 
-  it('keeps the existing automatic same-key retry for callers without an owner', async () => {
-    send.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created);
+  it.each(['Failed to fetch', 'fetch failed'])('keeps the automatic same-key retry for %s', async (message) => {
+    send.mockRejectedValueOnce(new TypeError(message)).mockResolvedValueOnce(created);
     await expect(postWithIdempotency(path, payload)).resolves.toEqual(created);
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0]).toEqual(send.mock.calls[1]);

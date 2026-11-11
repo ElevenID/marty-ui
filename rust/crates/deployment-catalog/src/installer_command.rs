@@ -399,7 +399,10 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(format!(".marty-install-{}", uuid::Uuid::new_v4().simple()))
     });
-    if !directory.is_absolute() || directory.starts_with(&o.tools) {
+    if !directory.is_absolute()
+        || directory.as_os_str().as_encoded_bytes().len() > 4096
+        || directory.starts_with(&o.tools)
+    {
         return Err(
             "installation must use persistent absolute storage outside bootstrap staging".into(),
         );
@@ -448,7 +451,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     } else {
         InstallerState::create_with_runtime(&directory, identity, runtime)?
     };
-    eprintln!("Marty installation state: {}", directory.display());
+    eprintln!("Marty installation state: {:?}", directory);
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
     if testing.is_none() {

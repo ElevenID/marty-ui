@@ -9,6 +9,8 @@
       "auth_oidc_nonce_missing",
       "auth_oidc_access_token_missing",
       "auth_oidc_id_token_missing",
+      "auth_passkey_enrollment_unavailable",
+      "auth_passkey_enrollment_account_mismatch",
       "auth_oidc_state_save_failed",
       "auth_oidc_authorization_url_failed",
       "auth_oidc_state_consume_failed",

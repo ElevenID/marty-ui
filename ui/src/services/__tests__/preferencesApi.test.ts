@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { server } from '@test/mocks/server'
 import { http, HttpResponse } from 'msw'
 
@@ -8,15 +8,14 @@ describe('preferencesApi', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
+  afterEach(() => vi.restoreAllMocks())
 
   it('disables caching when loading console preferences', async () => {
-    let requestCredentials: RequestCredentials | undefined
-    let requestCache: RequestCache | undefined
+    // MSW's HTTP transport cannot observe browser-only fetch cache/cookie options.
+    const fetchSpy = vi.spyOn(window, 'fetch')
 
     server.use(
-      http.get('/v1/me/preferences', ({ request }) => {
-        requestCredentials = request.credentials
-        requestCache = request.cache
+      http.get('/v1/me/preferences', () => {
         return HttpResponse.json({
           last_view_mode: 'applicant',
           last_active_org_id: null,
@@ -28,7 +27,9 @@ describe('preferencesApi', () => {
 
     expect(result.last_view_mode).toBe('applicant')
     expect(result.last_active_org_id).toBeNull()
-    expect(requestCredentials).toBe('include')
-    expect(requestCache).toBe('no-store')
+    expect(fetchSpy).toHaveBeenCalledWith('/v1/me/preferences', expect.objectContaining({
+      credentials: 'include',
+      cache: 'no-store',
+    }))
   })
 })
