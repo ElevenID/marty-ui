@@ -1115,7 +1115,6 @@ mod bounded_sd_jwt_query_evidence {
     const SUBJECT: &str = "issuer-local-prerequisite-subject-001";
     const EMAIL: &str = "private-selected-email@example.test";
     const VCT: &str = "urn:example:prerequisite-email";
-    const NONCE: &str = "prerequisite-nonce-123456789012345678901234567890";
     const AUDIENCE: &str = "did:web:prerequisite-verifier.example";
 
     fn issuer_key() -> SigningKey {
@@ -1212,6 +1211,7 @@ mod bounded_sd_jwt_query_evidence {
 
     fn generic_core_verification(
         token: &str,
+        nonce: &str,
     ) -> marty_oid4vci::formats::sd_jwt::AuthenticatedSdJwt {
         marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
             token,
@@ -1222,7 +1222,7 @@ mod bounded_sd_jwt_query_evidence {
                 holder_algorithms: vec![marty_oid4vci::types::SigningAlgorithm::EdDSA],
             },
             Some(AUDIENCE.into()),
-            Some(NONCE.into()),
+            Some(nonce.into()),
         )
         .expect("the generic Core verifier must accept genuine issuer and holder signatures")
     }
@@ -1246,6 +1246,7 @@ mod bounded_sd_jwt_query_evidence {
         request: EvaluatePresentationRequest,
         orchestrator: VerifiedFactsOrchestrator,
         claims: Value,
+        nonce: String,
         now: u64,
         query_id: String,
     }
@@ -1264,6 +1265,7 @@ mod bounded_sd_jwt_query_evidence {
             final_clock_advance: u64,
         ) -> Self {
             let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+            let nonce = Uuid::new_v4().to_string();
             let mut policy = policy();
             policy.credential_requirements[0].credential_payload_format = "SD_JWT_VC".into();
             let query_id = policy.credential_requirements[0].id.to_string();
@@ -1279,7 +1281,7 @@ mod bounded_sd_jwt_query_evidence {
                 "_sd": [],
                 "email": EMAIL,
             });
-            let token = presentation(&claims, NONCE, AUDIENCE, now);
+            let token = presentation(&claims, &nonce, AUDIENCE, now);
             let query = json!({"credentials": [{
                 "id": query_id,
                 "format": "dc+sd-jwt",
@@ -1294,13 +1296,13 @@ mod bounded_sd_jwt_query_evidence {
                 presentation_submission: None,
                 vp_token_raw: json!({(query_id.clone()): [token.clone()]}).to_string(),
                 verifier_client_id: AUDIENCE.into(),
-                request_nonce: NONCE.into(),
+                request_nonce: nonce.clone(),
             };
             transport.validate_transport().unwrap();
             let request = EvaluatePresentationRequest {
                 vp_token: json!(token),
                 trust_profile_id: None,
-                nonce: Some(NONCE.into()),
+                nonce: Some(nonce.clone()),
                 audience: Some(AUDIENCE.into()),
                 context: serde_json::Map::new(),
                 oid4vp_transport: Some(transport),
@@ -1355,8 +1357,18 @@ mod bounded_sd_jwt_query_evidence {
                 request,
                 orchestrator,
                 claims,
+                nonce,
                 now,
                 query_id,
+            }
+        }
+
+        fn different_nonce(&self) -> String {
+            loop {
+                let nonce = Uuid::new_v4().to_string();
+                if nonce != self.nonce {
+                    return nonce;
+                }
             }
         }
 
@@ -1452,7 +1464,10 @@ mod bounded_sd_jwt_query_evidence {
         assert_eq!(actual["vct"], VCT);
         assert_eq!(actual["issuer_algorithm"], "EdDSA");
         assert_eq!(actual["matched_claims"], json!(["email"]));
-        assert_eq!(actual["nonce_digest"], digest_nonce(NONCE).unwrap());
+        assert_eq!(
+            actual["nonce_digest"],
+            digest_nonce(&fixture.nonce).unwrap()
+        );
         assert_eq!(
             actual["audience_digest"],
             digest_audience(AUDIENCE).unwrap()
@@ -1464,7 +1479,7 @@ mod bounded_sd_jwt_query_evidence {
             EMAIL,
             fixture.request.vp_token.as_str().unwrap(),
             holder_x.as_str(),
-            NONCE,
+            &fixture.nonce,
             AUDIENCE,
         ] {
             assert!(
@@ -1483,7 +1498,7 @@ mod bounded_sd_jwt_query_evidence {
 
         let disclosed_identity = bind_disclosed_sd_jwt(
             &disclosed_sd_jwt(&fixture.claims, &["email", "sub", "iat"]),
-            NONCE,
+            &fixture.nonce,
             AUDIENCE,
             fixture.now,
         );
@@ -1525,7 +1540,7 @@ mod bounded_sd_jwt_query_evidence {
             URL_SAFE_NO_PAD.encode(
                 json!({
                     "aud": AUDIENCE,
-                    "nonce": NONCE,
+                    "nonce": &fixture.nonce,
                     "iat": fixture.now,
                     "sd_hash": URL_SAFE_NO_PAD.encode(Sha256::digest(disclosed.as_bytes())),
                 })
@@ -1560,13 +1575,18 @@ mod bounded_sd_jwt_query_evidence {
         let mut variants = vec![
             (
                 "wrong holder nonce",
-                presentation(&fixture.claims, "different-nonce", AUDIENCE, fixture.now),
+                presentation(
+                    &fixture.claims,
+                    &fixture.different_nonce(),
+                    AUDIENCE,
+                    fixture.now,
+                ),
             ),
             (
                 "wrong holder audience",
                 presentation(
                     &fixture.claims,
-                    NONCE,
+                    &fixture.nonce,
                     "did:web:other-verifier.example",
                     fixture.now,
                 ),
@@ -1575,7 +1595,7 @@ mod bounded_sd_jwt_query_evidence {
                 "tampered issuer signature with a valid holder hash",
                 bind_issuer_jwt(
                     &tamper_signature(&issuer_jwt(&fixture.claims)),
-                    NONCE,
+                    &fixture.nonce,
                     AUDIENCE,
                     fixture.now,
                 ),
@@ -1595,11 +1615,11 @@ mod bounded_sd_jwt_query_evidence {
                 header["typ"] = json!(protected_type);
             }
             let issuer = sign_jwt(&issuer_key(), header, &fixture.claims);
-            let token = bind_issuer_jwt(&issuer, NONCE, AUDIENCE, fixture.now);
+            let token = bind_issuer_jwt(&issuer, &fixture.nonce, AUDIENCE, fixture.now);
             // These are genuine issuer and holder signatures accepted by the
             // generic Core verifier. The selected DCQL VC profile must reject
             // them specifically because their protected type is not dc+sd-jwt.
-            generic_core_verification(&token);
+            generic_core_verification(&token, &fixture.nonce);
             variants.push((label, token));
         }
         for (label, field) in [
@@ -1613,11 +1633,11 @@ mod bounded_sd_jwt_query_evidence {
             }
             let token = bind_disclosed_sd_jwt(
                 &disclosed_sd_jwt(&claims, &["email", field]),
-                NONCE,
+                &fixture.nonce,
                 AUDIENCE,
                 fixture.now,
             );
-            let generic = generic_core_verification(&token);
+            let generic = generic_core_verification(&token, &fixture.nonce);
             assert_eq!(
                 generic.claims()[field],
                 claims[field],
@@ -1674,7 +1694,10 @@ mod bounded_sd_jwt_query_evidence {
             } else {
                 claims.as_object_mut().unwrap().remove(field);
             }
-            variants.push((label, presentation(&claims, NONCE, AUDIENCE, fixture.now)));
+            variants.push((
+                label,
+                presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now),
+            ));
         }
         for (label, token) in variants {
             fixture
@@ -1768,16 +1791,20 @@ mod bounded_sd_jwt_query_evidence {
 
         let mut other_claims = fixture.claims.clone();
         other_claims["sub"] = json!("another-authenticated-subject");
-        let another_token =
-            fixture.request_for_token(presentation(&other_claims, NONCE, AUDIENCE, fixture.now));
+        let another_token = fixture.request_for_token(presentation(
+            &other_claims,
+            &fixture.nonce,
+            AUDIENCE,
+            fixture.now,
+        ));
         let mut another_nonce = fixture.request.clone();
-        let changed_nonce = "another-nonce-123456789012345678901234567890";
-        another_nonce.nonce = Some(changed_nonce.into());
+        let changed_nonce = fixture.different_nonce();
+        another_nonce.nonce = Some(changed_nonce.clone());
         another_nonce
             .oid4vp_transport
             .as_mut()
             .unwrap()
-            .request_nonce = changed_nonce.into();
+            .request_nonce = changed_nonce;
         let mut another_audience = fixture.request.clone();
         let changed_audience = "did:web:another-verifier.example";
         another_audience.audience = Some(changed_audience.into());
@@ -1848,8 +1875,12 @@ mod bounded_sd_jwt_query_evidence {
         .expect("the same selected Trust Profile must retain genuine native evidence");
         let mut other_claims = fixture.claims.clone();
         other_claims["sub"] = json!("different-authenticated-subject");
-        let other_request =
-            fixture.request_for_token(presentation(&other_claims, NONCE, AUDIENCE, fixture.now));
+        let other_request = fixture.request_for_token(presentation(
+            &other_claims,
+            &fixture.nonce,
+            AUDIENCE,
+            fixture.now,
+        ));
         let result = fixture
             .orchestrator
             .verify_material(&fixture.policy, &other_request)
@@ -1923,7 +1954,7 @@ mod bounded_sd_jwt_query_evidence {
         long_lived_claims["exp"] = json!(stale_holder.now + 3_600);
         let request = stale_holder.request_for_token(presentation(
             &long_lived_claims,
-            NONCE,
+            &stale_holder.nonce,
             AUDIENCE,
             stale_holder.now,
         ));
@@ -1947,7 +1978,7 @@ mod bounded_sd_jwt_query_evidence {
             &disclosed_sd_jwt(&long_lived_claims, &["email"]),
             json!({
                 "aud": AUDIENCE,
-                "nonce": NONCE,
+                "nonce": &expired_holder.nonce,
                 "iat": expired_holder.now,
                 "exp": expired_holder.now + 1,
                 "nbf": expired_holder.now - 1,
@@ -1970,7 +2001,7 @@ mod bounded_sd_jwt_query_evidence {
             &disclosed_sd_jwt(&fresh.claims, &["email"]),
             json!({
                 "aud": AUDIENCE,
-                "nonce": NONCE,
+                "nonce": &fresh.nonce,
                 "iat": fresh.now,
                 "exp": fresh.now + 60,
                 "nbf": fresh.now - 1,
@@ -2009,7 +2040,7 @@ mod bounded_sd_jwt_query_evidence {
         let mut changed_token = fixture.request.clone();
         let mut other_claims = fixture.claims.clone();
         other_claims["sub"] = json!("another-authenticated-subject");
-        let other_token = presentation(&other_claims, NONCE, AUDIENCE, fixture.now);
+        let other_token = presentation(&other_claims, &fixture.nonce, AUDIENCE, fixture.now);
         changed_token
             .oid4vp_transport
             .as_mut()
@@ -2112,7 +2143,7 @@ mod bounded_sd_jwt_query_evidence {
             .oid4vp_transport
             .as_mut()
             .unwrap()
-            .request_nonce = "substituted-nonce-123456789012345678901234567890".into();
+            .request_nonce = fixture.different_nonce();
         for (label, request) in [
             ("untrusted transport context", untrusted),
             ("missing query transport", missing_transport),
@@ -2386,7 +2417,7 @@ mod bounded_sd_jwt_query_evidence {
             fixture.claims["nbf"] = json!(fixture.now - 60);
             fixture.request = fixture.request_for_token(presentation(
                 &fixture.claims,
-                NONCE,
+                &fixture.nonce,
                 AUDIENCE,
                 fixture.now,
             ));
@@ -2619,15 +2650,23 @@ mod bounded_sd_jwt_query_evidence {
                 .is_err());
             let mut claims = fixture.claims.clone();
             claims.as_object_mut().unwrap().remove("nbf");
-            let missing_not_before =
-                fixture.request_for_token(presentation(&claims, NONCE, AUDIENCE, fixture.now));
+            let missing_not_before = fixture.request_for_token(presentation(
+                &claims,
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ));
             fixture
                 .assert_no_evidence("configured not-before requirement", &missing_not_before)
                 .await;
             claims = fixture.claims.clone();
             claims.as_object_mut().unwrap().remove("jti");
-            let missing_id =
-                fixture.request_for_token(presentation(&claims, NONCE, AUDIENCE, fixture.now));
+            let missing_id = fixture.request_for_token(presentation(
+                &claims,
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ));
             assert!(fixture
                 .orchestrator
                 .verify_material(&fixture.policy, &missing_id)

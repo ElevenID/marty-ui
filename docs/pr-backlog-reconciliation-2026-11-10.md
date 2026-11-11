@@ -1,13 +1,13 @@
 # Marty UI pull-request reconciliation
 
-The review began with 44 open pull requests. PRs #1888 and #1889 were opened
-while reconciliation was in progress and are included in this disposition map.
+The review began with 44 open pull requests. PRs #1888, #1889 and #1890 were
+opened during reconciliation and are included in this disposition map.
 Original source branches and pull-request commit histories are retained.
 
 ## One candidate for the reviewed changes
 
 PR [#1881](https://github.com/ElevenID/marty-ui/pull/1881) is the integration
-candidate for the following 21 source PRs. It uses the existing human-authored
+candidate for the following 22 source PRs. It uses the existing human-authored
 branch so normal private-fork and protected-merge checks apply. The dependency
 bot security policy, required checks and merge queue are unchanged.
 
@@ -21,6 +21,7 @@ bot security policy, required checks and merge queue are unchanged.
 | #1881 | Authenticate prerequisite-owner responses through bounded, fixed-origin, operator-CA HTTPS and optional remote-key listeners. Repair the standalone Rust-probe lock for the added HTTPS dependencies. |
 | #1886, #1888 | Correct Kubernetes JSON-patch transport to `/dev/stdin`; retain the exact payload, preconditions, private evidence and single attempt. Raise only the existing release-contract job timeout from 35 to 45 minutes after the observed timeout, preserving every test and gate. |
 | #1889 | Refuse private Helm configuration values and nonboolean worker activation, stop on failed secret-file reads, validate UI startup metadata, refuse another tenant's retained default revocation profile transactionally, and resolve manual preflight environment values through the actual Compose model. |
+| #1890 | Finish Storybook's MSW 3 loader/worker migration, isolate the generated mock worker from production output, require a native `TypeError` for the new `fetch failed` retry case, and align the Bun graph with the existing canonical npm lock. This follow-up was merged into the integration branch. |
 
 The combined tree preserves the independently reviewed component changes.
 Overlapping workflow and authentication-test files were reconciled explicitly:
@@ -29,6 +30,13 @@ are asserted on the real fetch call under MSW 3. The review does not treat
 ancestor status alone as proof that a feature remains in the final tree.
 The concurrently opened installation hardening PR #1889 adds 18 distinct paths;
 its complete file changes merge without modifying the prior combined source.
+The subsequent nine-file #1890 follow-up retains the existing dependency
+declarations and npm lock while completing Storybook compatibility and the
+same-owner, same-key retry contract.
+Hosted CodeQL also identified fixed nonce values in the test-only presentation
+verification fixtures. Each fixture now owns a fresh nonce shared by its signed
+proof, request, transport and expected evidence. Deliberate mismatch cases use
+distinct valid nonces; all 31 test functions and their assertions are retained.
 
 All source heads are retained as commit ancestors of the published candidate.
 Closing an original PR means its work moved into this candidate; it does not
@@ -94,6 +102,11 @@ tests include dependency migrations, UI/authentication/profile/manifest
 interactions, installer contracts and the real Kubernetes subprocess transport.
 The original dependency full-suite run exposed three further MSW assertion
 differences; those were corrected and both complete affected test files passed.
+Hosted qualification subsequently passed all four UI shards, the credential
+lifecycle browser gate, production UI builds and Helm chart checks on the
+integrated source. The later #1890 follow-up also passed all four hosted UI
+shards and 121 independently run focused tests. Source changes still require
+the final protected checks and queue for their exact published commit.
 
 Local native Rust execution could not fetch the private SSI fork with the
 available terminal credentials. Browser/physical passkey and deployed-runtime
