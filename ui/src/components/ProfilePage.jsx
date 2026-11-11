@@ -38,6 +38,11 @@ import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
 import { updateProfilePicture, startPasskeyEnrollment } from '../services/authApi';
+import {
+  createProfilePictureBody,
+  MAX_PROFILE_PICTURE_FILE_BYTES,
+  PROFILE_PICTURE_SIZE_ERROR,
+} from '../services/profilePicturePayload';
 import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
 import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
 
@@ -141,8 +146,8 @@ function AccountProfile({ auth }) {
       setUploadError('Please select an image file (JPEG, PNG, GIF, WebP).');
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setUploadError('Image must be smaller than 2 MB.');
+    if (file.size > MAX_PROFILE_PICTURE_FILE_BYTES) {
+      setUploadError(PROFILE_PICTURE_SIZE_ERROR);
       return;
     }
 
@@ -164,6 +169,12 @@ function AccountProfile({ auth }) {
       }
       readerRef.current = null;
       setReadingPhoto(false);
+      try {
+        createProfilePictureBody(ev.target.result);
+      } catch {
+        setUploadError(PROFILE_PICTURE_SIZE_ERROR);
+        return;
+      }
       setPreviewUrl(ev.target.result);
     };
     reader.onerror = readFailed;
@@ -191,9 +202,11 @@ function AccountProfile({ auth }) {
         setUploadSuccess(true);
         setPreviewUrl(null);
         try {
-          await refreshUser();
-        } catch {
-          if (isCurrentSave()) setUploadError('Your picture was saved, but account details could not be refreshed. Reload the page to see it.');
+          await refreshUser({ background: true });
+        } catch (error) {
+          if (isCurrentSave() && error?.name !== 'AbortError') {
+            setUploadError('Your picture was saved, but account details could not be refreshed. Reload the page to see it.');
+          }
         }
       } else {
         setUploadError(result.error || 'Failed to update profile picture.');
@@ -280,6 +293,10 @@ function AccountProfile({ auth }) {
                   onChange={handleFileChange}
                 />
               </Box>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Images up to 1.5 MB.
+              </Typography>
 
               {(previewUrl || readingPhoto) && (
                 <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', mb: 2 }}>

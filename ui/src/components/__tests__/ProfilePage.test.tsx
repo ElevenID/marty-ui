@@ -245,6 +245,39 @@ describe('ProfilePage', () => {
     expect(within(membershipSection).getByRole('link', { name: 'Use Join Code' })).toHaveAttribute('href', '/console/organizations/join');
   });
 
+  it('shows a truthful decimal file limit and rejects a larger file before reading it', () => {
+    vi.stubGlobal('FileReader', ControlledFileReader);
+    const { container } = render(<ProfilePage />);
+    expect(screen.getByText('Images up to 1.5 MB.')).toBeVisible();
+    const input = container.querySelector('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array(1_500_001)], 'too-large.png', { type: 'image/png' })] } });
+    expect(screen.getByRole('alert')).toHaveTextContent('Image must be 1.5 MB or smaller.');
+    expect(photoReads).toHaveLength(0);
+    expect(updateProfilePicture).not.toHaveBeenCalled();
+  });
+
+  it('accepts a file at the advertised limit and validates its encoded result before previewing', async () => {
+    vi.stubGlobal('FileReader', ControlledFileReader);
+    const { container, user } = render(<ProfilePage />);
+    fireEvent.change(container.querySelector('input[type="file"]')!, {
+      target: { files: [new File([new Uint8Array(1_500_000)], 'at-limit.png', { type: 'image/png' })] },
+    });
+    expect(photoReads).toHaveLength(1);
+    const picture = `data:image/png;base64,${'A'.repeat(2_000_000)}`;
+    act(() => photoReads[0].finish(picture));
+    await user.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    expect(updateProfilePicture).toHaveBeenCalledExactlyOnceWith(picture);
+  });
+
+  it('rejects a file reader result whose JSON envelope exceeds the native request limit', () => {
+    vi.stubGlobal('FileReader', ControlledFileReader);
+    const { container } = render(<ProfilePage />);
+    act(() => selectPhoto(container, 'picture').finish(`data:image/png;base64,${'A'.repeat(2 * 1024 * 1024)}`));
+    expect(screen.getByRole('alert')).toHaveTextContent('Image must be 1.5 MB or smaller.');
+    expect(screen.queryByRole('button', { name: 'Save', exact: true })).not.toBeInTheDocument();
+    expect(updateProfilePicture).not.toHaveBeenCalled();
+  });
+
   it('saves the latest selected photo when file reads finish in reverse order', async () => {
     vi.stubGlobal('FileReader', ControlledFileReader);
     const view = render(<ProfilePage />);
@@ -256,7 +289,7 @@ describe('ProfilePage', () => {
     await view.user.click(screen.getByRole('button', { name: 'Save', exact: true }));
 
     expect(updateProfilePicture).toHaveBeenCalledExactlyOnceWith(secondPhoto);
-    expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+    expect(mockRefreshUser).toHaveBeenCalledExactlyOnceWith({ background: true });
   });
 
   it('keeps a cancelled photo draft closed when a pending read completes', async () => {
@@ -308,9 +341,7 @@ describe('ProfilePage', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Profile picture updated.');
   });
 
-  it('handles an unexpected refresh rejection without misreporting the completed upload', async () => {
-    // AuthContext normally owns refresh loading and errors. This covers only
-    // an unexpected rejection from the mocked provider, not its integrated UI.
+  it('reports a background readback failure without misreporting the completed upload', async () => {
     vi.stubGlobal('FileReader', ControlledFileReader);
     mockRefreshUser.mockRejectedValueOnce(new Error('Refresh unavailable'));
     const view = render(<ProfilePage />);
