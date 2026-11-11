@@ -19,7 +19,7 @@ complete.
 separate postcommit persistence record for the frozen request, submission,
 terminal result and nonce consumption. This does not promote either native
 record to canonical evidence or establish policy freshness at commit. Canonical
-composition, authenticated owner-channel provenance and an issuance-owned
+composition and an issuance-owned
 continuation remain required.
 
 ## Supported profile
@@ -220,12 +220,13 @@ bound to another request. Owner denial and revoked status may still carry
 authenticated query evidence, but deny the policy decision.
 
 These wire DTOs and their digests establish correspondence, not a signature.
-The implementation relies on the configured deployment-trusted owner channel;
-a service token authenticating the requester alone does not cryptographically
-authenticate a plaintext response. Stronger owner-response transport or signed
-authority receipts remain an activation consideration for a full canonical
-evidence producer. Flow-to-Policy transport retains its existing workload-mTLS
-requirement.
+The [authenticated owner-channel increment](authenticated-managed-owner-channels.md)
+now requires dedicated HTTPS origins, operator-CA-only server authentication,
+and opaque native acquisitions for snapshots and observations. Requester tokens
+alone cannot create this provenance, and legacy HTTP cannot substitute for it.
+The serialized projection still does not authenticate a later receiver. The full
+canonical producer must preserve that boundary when composing evidence.
+Flow-to-Policy transport retains its existing workload-mTLS requirement.
 
 An observation deadline is a freshness bound, not a promise that trust or status
 cannot change after the read. No cross-service atomic lock is claimed. Flow's
@@ -255,8 +256,9 @@ The managed extension also covers configured owner authentication, every
 response-scope field, digest-consistent substitutions, stale observations,
 revoked and suspended records, explicit VCT authorization, persisted key and
 grant changes, mandatory signed `nbf`, mutable public status-ID substitution,
-and Flow mode/revision changes. Loopback HTTP tests exercise the actual native
-client adapters and their distinct owner credentials. Registered PostgreSQL
+and Flow mode/revision changes. Loopback HTTP tests now prove that managed owner
+methods cannot use legacy endpoints. The direct keyless HTTPS contract exercises
+the authenticated adapter and its distinct owner credentials. Registered PostgreSQL
 tests cover the additive ledger, concurrent first observers, a reader blocked
 on the revision row observing the subsequently committed graph, and exact
 tenant/artifact status reads. Compiling these executables is recorded separately
@@ -284,8 +286,8 @@ separate gate from compilation and tests that return early without a database.
 
 ## Next implementation boundary
 
-Complete the canonical evidence producer with authenticated owner-channel
-provenance and the separately persisted Flow replay receipt. Policy
+Complete the canonical evidence producer by composing the authenticated owner
+acquisitions and the separately persisted Flow replay receipt. Policy
 observation time and Flow commit time must remain distinct; do not label a
 precommit timestamp as nonce consumption. Then bind
 that evidence to one tenant, issuing template and exact dataset through an

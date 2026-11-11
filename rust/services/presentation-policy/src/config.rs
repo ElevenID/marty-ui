@@ -46,6 +46,7 @@ pub struct PresentationPolicyServiceConfig {
     pub signing_registry_api_key: Option<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
+    pub managed_owner_channels: Option<crate::ManagedOwnerChannelConfig>,
     pub release_version: String,
     pub build_revision: String,
 }
@@ -235,6 +236,7 @@ impl PresentationPolicyServiceConfig {
                 5_u64,
             )?),
             workload_server_tls,
+            managed_owner_channels: crate::ManagedOwnerChannelConfig::from_values(&values)?,
             release_version: value(&values, "MARTY_RELEASE_VERSION")
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .to_owned(),

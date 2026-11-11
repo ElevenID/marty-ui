@@ -283,6 +283,9 @@ impl InitialRolloverPermit {
 
 pub(super) fn before_application(state: &LockedInspection) -> Result<()> {
     require(state.journal().phase() == Phase::Provisioning)?;
+    // Settings are selected while Verified, before application ownership. Only
+    // the journal-authenticated pair may cross this initial-order boundary.
+    let has_application_settings = crate::installer_settings::load(state)?.is_some();
     let directory = fs::open_child(
         state.installation_directory(),
         "evidence",
@@ -293,7 +296,12 @@ pub(super) fn before_application(state: &LockedInspection) -> Result<()> {
         require(
             !(entry.starts_with("generation-")
                 || (entry.starts_with("application-")
-                    && entry != crate::installer_creation_identity::APPLICATION_RECEIPT)
+                    && entry != crate::installer_creation_identity::APPLICATION_RECEIPT
+                    && !(has_application_settings
+                        && matches!(
+                            entry.as_str(),
+                            crate::installer_settings::SOURCE | crate::installer_settings::RECORD
+                        )))
                 || entry.starts_with("compose-generation-")
                 || entry.starts_with("compose-application-")
                 || entry.starts_with("lifecycle-")

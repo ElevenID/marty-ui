@@ -14,15 +14,18 @@ use marty_auth::{
     CanvasHttpApplication, CredentialCallbackContext, CredentialCallbackHeaders,
     CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
     CredentialLoginHttpService, CredentialLoginPoll, CredentialLoginStartResult,
-    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, PortError, Session,
-    SessionCookieConfig, SessionRepository, SessionSpec, UiOriginPolicy, UserType,
-    AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
+    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, InitiateLoginResult,
+    PasskeyEnrollmentStart, PortError, Session, SessionCookieConfig, SessionRepository,
+    SessionSpec, UiOriginPolicy, UserType, AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
 };
 use serde_json::Value;
 use tower::ServiceExt as _;
 
 #[derive(Default)]
 struct AppStub {
+    management_returns: Mutex<Vec<String>>,
+    email_enrollment: Mutex<bool>,
+    enrollments: Mutex<Vec<(String, String, String)>>,
     initiated: Mutex<Vec<(bool, String, String)>>,
     session: Mutex<Option<Session>>,
     callback_error: Mutex<Option<PortError>>,
@@ -30,6 +33,35 @@ struct AppStub {
 
 #[async_trait]
 impl AuthHttpApplication for AppStub {
+    fn passkey_management_url(&self, _session: &Session, return_uri: &str) -> Option<String> {
+        self.management_returns
+            .lock()
+            .unwrap()
+            .push(return_uri.to_owned());
+        Some("https://identity.example/realms/marty/account/account-security/signing-in".into())
+    }
+    fn passkey_enrollment_available(&self, _session: &Session) -> bool {
+        true
+    }
+    async fn enroll_passkey(
+        &self,
+        session_id: &str,
+        redirect_uri: String,
+        oidc_redirect_uri: String,
+    ) -> Result<PasskeyEnrollmentStart, PortError> {
+        self.enrollments
+            .lock()
+            .unwrap()
+            .push((session_id.into(), redirect_uri, oidc_redirect_uri));
+        if *self.email_enrollment.lock().unwrap() {
+            return Ok(PasskeyEnrollmentStart::EmailSent);
+        }
+        Ok(PasskeyEnrollmentStart::Authorization(InitiateLoginResult {
+            authorization_url:
+                "https://identity.example/authorize?kc_action=webauthn-register-passwordless".into(),
+            state: "synthetic-state".into(),
+        }))
+    }
     async fn initiate(
         &self,
         registration: bool,
@@ -262,7 +294,7 @@ async fn request(
 fn core_surface_is_the_exact_non_credential_route_subset() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
-    let expected = contract["http_routes"].as_array().unwrap()[..8]
+    let expected = contract["http_routes"].as_array().unwrap()[..9]
         .iter()
         .map(|route| {
             (
@@ -280,8 +312,99 @@ fn core_surface_is_the_exact_non_credential_route_subset() {
     );
 }
 
+#[tokio::test]
+async fn passkey_enrollment_requires_same_origin_and_authenticated_session() {
+    let (router, app, _) = harness();
+    for (origin, cookie, expected) in [
+        (None, Some("sessionId=session-1"), StatusCode::FORBIDDEN),
+        (
+            Some("https://foreign.example"),
+            Some("sessionId=session-1"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            Some("https://elevenidllc.com"),
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Some("https://elevenidllc.com"),
+            Some("sessionId=missing"),
+            StatusCode::UNAUTHORIZED,
+        ),
+    ] {
+        let mut headers = vec![("content-type", "application/json")];
+        if let Some(origin) = origin {
+            headers.push(("origin", origin));
+        }
+        if let Some(cookie) = cookie {
+            headers.push(("cookie", cookie));
+        }
+        let response = request(
+            &router,
+            Method::POST,
+            "/v1/auth/passkeys/enroll",
+            &headers,
+            "{}",
+        )
+        .await;
+        assert_eq!(response.status(), expected);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+    }
+    assert!(app.enrollments.lock().unwrap().is_empty());
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &[
+            ("content-type", "application/json"),
+            ("origin", "https://elevenidllc.com"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        r#"{"redirect_uri":"/console/profile"}"#,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        app.enrollments.lock().unwrap().as_slice(),
+        &[(
+            "session-1".into(),
+            "/console/profile".into(),
+            "https://elevenidllc.com/v1/auth/callback".into()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn enrollment_email_response_exposes_no_action_link_or_new_session() {
+    let (router, app, _) = harness();
+    *app.email_enrollment.lock().unwrap() = true;
+    let response = request(
+        &router,
+        Method::POST,
+        "/v1/auth/passkeys/enroll",
+        &[
+            ("content-type", "application/json"),
+            ("origin", "https://elevenidllc.com"),
+            ("cookie", "sessionId=session-1"),
+        ],
+        "{}",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(!response.headers().contains_key(header::SET_COOKIE));
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        serde_json::json!({"email_sent":true})
+    );
+}
+
 #[test]
-fn combined_surface_matches_all_fourteen_frozen_routes() {
+fn combined_surface_matches_declared_routes() {
     let contract: Value =
         serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
     let expected = contract["http_routes"]
@@ -573,6 +696,14 @@ async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
     )
     .unwrap();
     assert_eq!(authenticated_body["user"]["email"], "alice@example.com");
+    assert_eq!(
+        app.management_returns.lock().unwrap().last().unwrap(),
+        "https://elevenidllc.com/console/applicant/profile"
+    );
+    assert_eq!(
+        authenticated_body["user"]["passkey_management_url"],
+        "https://identity.example/realms/marty/account/account-security/signing-in"
+    );
     assert!(authenticated_body["user"].get("picture").is_none());
 
     let invalid_picture = request(

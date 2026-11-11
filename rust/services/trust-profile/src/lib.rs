@@ -39,7 +39,8 @@ pub use domain::{
     TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
 };
 pub use http_service::{
-    trust_profile_router, TrustProfileHttpState, TrustRegistrySyncError, TrustRegistrySynchronizer,
+    trust_credential_authority_router, trust_profile_router, TrustProfileHttpState,
+    TrustRegistrySyncError, TrustRegistrySynchronizer,
 };
 pub use issuer_keys::{
     IssuerKeyResolution, IssuerKeyResolutionError, IssuerKeyResolver, NativeIssuerKeyResolver,

@@ -7,6 +7,7 @@ pub mod grpc_security;
 pub mod grpc_service;
 pub mod http_service;
 pub mod native_kernel;
+mod owner_channel;
 pub mod persistence;
 mod policy_contract;
 pub mod policy_revision;
@@ -40,6 +41,7 @@ pub use http_service::{
     PresentationVerificationError, PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
 pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
+pub use owner_channel::{AuthenticatedOwnerResponse, ManagedOwnerChannelConfig};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
 pub use policy_revision::policy_revision;
 pub use postgres::{
@@ -90,3 +92,6 @@ pub const GRPC_METHODS: [&str; 10] = [
     "EvaluatePresentation",
     "HealthCheck",
 ];
+
+#[cfg(test)]
+mod verification_tests;

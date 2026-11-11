@@ -5,6 +5,7 @@ use sqlx::PgPool;
 use std::process::Command;
 
 const DEFAULT_DISPOSABLE_DATABASE: &str = "marty_revocation_migration_test";
+const CUSTOMER_ORGANIZATION_ID: &str = "750e8400-e29b-41d4-a716-446655440001";
 
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL for the named disposable database"]
@@ -29,7 +30,9 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
         .env("RP_MIGRATE_ONLY", "true")
         .env("ENVIRONMENT", "beta")
         .env("DATABASE_URL", &database_url)
+        .env("MARTY_ORG_ID", DEFAULT_ORGANIZATION_ID)
         .env("PUBLIC_API_URL", "https://issuer.test")
+        .env_remove("STATUS_LIST_BASE_URL")
         .env_remove("REDIS_URL")
         .env_remove("ORG_GRPC_TARGET")
         .env_remove("GRPC_SERVICE_TOKEN")
@@ -147,6 +150,43 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
     .await
     .unwrap();
 
+    // A configuration change must not silently adopt another tenant's retained
+    // fixed-ID profile, nor commit schema/backfill changes before refusing it.
+    let retained = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT to_jsonb(profile) FROM revocation_profile_service.revocation_profiles profile WHERE id=$1",
+    )
+    .bind(DEFAULT_REVOCATION_PROFILE_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let error = migrate_and_seed(&pool, CUSTOMER_ORGANIZATION_ID, "https://customer.test")
+        .await
+        .expect_err("retained default profile must keep its original tenant");
+    assert!(error
+        .to_string()
+        .contains("default revocation profile belongs to a different organization"));
+    let after_refusal = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT to_jsonb(profile) FROM revocation_profile_service.revocation_profiles profile WHERE id=$1",
+    )
+    .bind(DEFAULT_REVOCATION_PROFILE_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(after_refusal, retained);
+    for table in ["rust_schema_migrations", "status_list_allocations"] {
+        let present = sqlx::query_scalar::<_, bool>(
+            "SELECT to_regclass('revocation_profile_service.' || $1) IS NOT NULL",
+        )
+        .bind(table)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !present,
+            "{table} was committed despite the tenant conflict"
+        );
+    }
+
     migrate_and_seed(&pool, DEFAULT_ORGANIZATION_ID, "https://unused.test")
         .await
         .unwrap();
@@ -230,4 +270,51 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
         .unwrap();
         assert!(present, "{table} was not created");
     }
+
+    sqlx::raw_sql(
+        "DROP SCHEMA revocation_profile_service CASCADE; DROP SCHEMA issuance_service CASCADE",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    migrate_and_seed(
+        &pool,
+        CUSTOMER_ORGANIZATION_ID,
+        "https://customer.test:8443",
+    )
+    .await
+    .unwrap();
+    let customer_profile = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT to_jsonb(profile) FROM revocation_profile_service.revocation_profiles profile WHERE id=$1",
+    )
+    .bind(DEFAULT_REVOCATION_PROFILE_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        customer_profile["organization_id"],
+        CUSTOMER_ORGANIZATION_ID
+    );
+    assert_eq!(
+        customer_profile["issuer_config"]["status_list_base_url"],
+        format!(
+            "https://customer.test:8443/v1/organizations/{CUSTOMER_ORGANIZATION_ID}/revocation-profiles/{DEFAULT_REVOCATION_PROFILE_ID}/status-lists/{{mechanism}}/{{purpose}}"
+        )
+    );
+    migrate_and_seed(
+        &pool,
+        CUSTOMER_ORGANIZATION_ID,
+        "https://changed-customer.test",
+    )
+    .await
+    .unwrap();
+    let repeated_profile = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT to_jsonb(profile) FROM revocation_profile_service.revocation_profiles profile WHERE id=$1",
+    )
+    .bind(DEFAULT_REVOCATION_PROFILE_ID)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(repeated_profile, customer_profile);
+    pool.close().await;
 }

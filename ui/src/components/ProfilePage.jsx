@@ -37,7 +37,7 @@ import BusinessIcon from '@mui/icons-material/Business';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
-import { updateProfilePicture } from '../services/authApi';
+import { updateProfilePicture, startPasskeyEnrollment } from '../services/authApi';
 import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
 import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
 
@@ -67,6 +67,24 @@ function AccountProfile({ auth }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [enrollingPasskey, setEnrollingPasskey] = useState(false);
+  const [passkeyError, setPasskeyError] = useState(null);
+  const [passkeyEmailSent, setPasskeyEmailSent] = useState(false);
+
+  const handleCreatePasskey = async () => {
+    setEnrollingPasskey(true);
+    setPasskeyError(null);
+    try {
+      const result = await startPasskeyEnrollment(window.location.pathname);
+      if (result?.email_sent) {
+        setPasskeyEmailSent(true);
+        setEnrollingPasskey(false);
+      }
+    } catch (error) {
+      setPasskeyError(error.message);
+      setEnrollingPasskey(false);
+    }
+  };
 
   useLayoutEffect(() => () => {
     pictureGeneration.current += 1;
@@ -423,6 +441,31 @@ function AccountProfile({ auth }) {
               </List>
 
               {/* Roles */}
+              {user.passkey_enrollment_available && (
+                <Box sx={{ my: 2 }} data-testid="profile-passkey-enrollment">
+                  <Typography variant="h6" gutterBottom>Passkeys</Typography>
+                  <Typography variant="body2" sx={{ mb: 2 }}>
+                    Create a passkey for this account using your phone, computer, or security key.
+                    Your other sign-in options stay available. You will confirm your account before enrollment.
+                  </Typography>
+                  {passkeyError && <Alert severity="error" sx={{ mb: 2 }}>{passkeyError}</Alert>}
+                  {passkeyEmailSent && <Alert severity="success" sx={{ mb: 2 }}>
+                    Check your account email for a link to finish creating your passkey. The link expires in 5 minutes.
+                  </Alert>}
+                  <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey || passkeyEmailSent}>
+                    {passkeyEmailSent ? 'Enrollment email sent' : enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
+                  </Button>
+                  {user.passkey_management_url && (
+                    <Box sx={{ mt: 2 }}>
+                      <Button component="a" href={user.passkey_management_url}>Manage passkeys</Button>
+                      <Typography variant="body2" color="text.secondary">
+                        Confirm your account in the identity account console to rename or remove passkeys.
+                        Keep another passkey or a working password before removing your last passkey.
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
               {user.roles && user.roles.length > 0 && (
                 <>
                   <Divider sx={{ my: 2 }} />

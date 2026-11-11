@@ -35,6 +35,18 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
 
 
+@pytest.mark.parametrize("owner,key", [
+    ("auth", "KEYCLOAK_PASSKEYS_ENABLED"),
+    ("keycloak-configurator", "KEYCLOAK_PASSKEYS_ENABLED"),
+    ("keycloak-configurator", "KEYCLOAK_PASSKEY_RP_ID"),
+])
+def test_passkey_configuration_drift_remains_closed(rendered_models, owner, key):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"][key] = "unreviewed"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_customer_organization_name_reaches_managed_identity_and_runtime_owners():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     for owner in ("keycloak-configurator", "db-migrate", "organization", "auth",

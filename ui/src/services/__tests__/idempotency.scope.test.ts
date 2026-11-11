@@ -7,6 +7,7 @@ const send = vi.mocked(post);
 const path = '/v1/revocation-profiles';
 const payload = { organization_id: 'org-1', name: 'Requested profile' };
 const created = { id: 'created-profile', organization_id: 'org-1', status: 'DRAFT' };
+const networkMessages = ['Failed to fetch', 'fetch failed'];
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -24,14 +25,14 @@ describe('idempotent POST action ownership', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('does not retry when a network failure arrives after the owner ends', async () => {
+  it.each(networkMessages)('does not retry %s after the owner ends', async (message) => {
     let current = true;
     const first = deferred<unknown>();
     send.mockReturnValueOnce(first.promise).mockResolvedValueOnce(created);
     const outcome = postWithIdempotency(path, payload, { isCurrent: () => current }).catch(error => error);
     expect(send).toHaveBeenCalledTimes(1);
     current = false;
-    first.reject(new TypeError('Failed to fetch'));
+    first.reject(new TypeError(message));
     expect(await outcome).toMatchObject({ name: 'AbortError' });
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -70,9 +71,9 @@ describe('idempotent POST action ownership', () => {
     expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves the current same-key retry and excludes the callback from transport options', async () => {
+  it.each(networkMessages)('preserves the current same-key retry for %s and excludes the callback from transport options', async (message) => {
     const isCurrent = vi.fn(() => true);
-    send.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created);
+    send.mockRejectedValueOnce(new TypeError(message)).mockResolvedValueOnce(created);
     await expect(postWithIdempotency(path, payload, {
       isCurrent, idempotencyKey: 'same-operation', headers: { 'X-Request-Context': 'wizard' },
     })).resolves.toEqual(created);
@@ -85,33 +86,36 @@ describe('idempotent POST action ownership', () => {
     expect(isCurrent).toHaveBeenCalled();
   });
 
-  it('preserves unknown-operation evidence after a current retry fails', async () => {
+  it.each(networkMessages)('preserves unknown-operation evidence after retrying %s fails', async (message) => {
     const secondError = new Error('Retry failed');
-    send.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockRejectedValueOnce(secondError);
+    send.mockRejectedValueOnce(new TypeError(message)).mockRejectedValueOnce(secondError);
     await expect(postWithIdempotency(path, payload, {
       isCurrent: () => true, idempotencyKey: 'same-operation',
     })).rejects.toMatchObject({ message: 'Retry failed', idempotencyKey: 'same-operation', operationStatusUnknown: true });
     expect(send).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves a current ordinary failure without retrying it', async () => {
-    const failure = new Error('Name already exists');
+  it.each([
+    new Error('Name already exists'),
+    new Error('fetch failed'),
+    new TypeError('Invalid request URL'),
+  ])('preserves an ordinary failure without retrying it: %s', async (failure) => {
     send.mockRejectedValueOnce(failure);
     await expect(postWithIdempotency(path, payload, { isCurrent: () => true })).rejects.toBe(failure);
     expect(send).toHaveBeenCalledTimes(1);
     expect(failure).not.toHaveProperty('operationStatusUnknown');
   });
 
-  it('keeps the existing automatic same-key retry for callers without an owner', async () => {
-    send.mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created);
+  it.each(['Failed to fetch', 'fetch failed'])('keeps the automatic same-key retry for %s', async (message) => {
+    send.mockRejectedValueOnce(new TypeError(message)).mockResolvedValueOnce(created);
     await expect(postWithIdempotency(path, payload)).resolves.toEqual(created);
     expect(send).toHaveBeenCalledTimes(2);
     expect(send.mock.calls[0]).toEqual(send.mock.calls[1]);
     expect(send.mock.calls[0][2]?.headers).toMatchObject({ 'Idempotency-Key': expect.any(String) });
   });
 
-  it('keeps explicit retry opt-out behavior', async () => {
-    const failure = new TypeError('Failed to fetch');
+  it.each(networkMessages)('keeps explicit retry opt-out behavior for %s', async (message) => {
+    const failure = new TypeError(message);
     send.mockRejectedValueOnce(failure);
     await expect(postWithIdempotency(path, payload, {
       isCurrent: () => true, retryOnNetworkAbort: false,

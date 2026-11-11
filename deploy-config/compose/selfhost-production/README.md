@@ -23,6 +23,21 @@ token mount and cannot create KMS/DID keys.
 
 This stack should use elevenidllc.com domain values.
 
+After startup, run the full configuration and health check with the same
+environment and Compose selection used to launch the stack:
+
+```sh
+python scripts/check-selfhost-production.py --env-file .env.selfhost.production.local
+```
+
+The checker asks Docker Compose to resolve quotes, variable interpolation and
+host-environment overrides. It does not source the environment file as a shell
+script. Relative `SELFHOST_SECRET_DIR` paths are relative to the selected Compose
+file, including when the checker is invoked from another directory. Literal
+dollar signs in paths are preserved. Failure to resolve the selected environment
+is reported before runtime probes, without printing the expanded Compose model
+or its credentials.
+
 Redis listens only on a Unix socket in a Compose project-scoped volume. Only
 the services that use Redis mount that volume; no Redis TCP port or workload TLS
 private-key file is provisioned. Use a distinct Compose project for each

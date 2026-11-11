@@ -1002,7 +1002,7 @@ def test_ci_fetches_private_sources_before_host_canvas_catalog_compilation():
         'python3 ".github/scripts/private-forks.py" check'
     )
     assert steps[toolchain] == {
-        "uses": "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de",
+        "uses": "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
         "with": {"toolchain": "1.95.0"},
     }
     assert steps[fetch] == {

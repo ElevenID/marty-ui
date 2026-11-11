@@ -221,7 +221,7 @@ def recovery_flow(flow, monkeypatch):
             return SimpleNamespace(returncode=0, stdout=bootstrap.encoded(value), stderr=b"")
         if command[0] != "/synthetic/kubectl":
             return base_process(command, **kwargs)
-        assert command[5:7] == ["patch", "secret"] and command[-4:] == ["--type=json", "--patch-file=-", "-o", "json"]
+        assert command[5:7] == ["patch", "secret"] and command[-4:] == ["--type=json", "--patch-file=/dev/stdin", "-o", "json"]
         name, index = command[7], len(item.patch_calls)
         activation = item.args.operation_dir / "activation"
         assert (item.args.operation_dir / "native-qualified-evidence.tar").is_file()

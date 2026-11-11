@@ -31,6 +31,10 @@
             <script src="${url.resourcesPath}/${script}" type="text/javascript"></script>
         </#list>
     </#if>
+    <#-- Required by the inherited WebAuthn registration/authentication modules. -->
+    <script type="importmap">
+        {"imports":{"rfc4648":"${url.resourcesCommonPath}/vendor/rfc4648/rfc4648.js"}}
+    </script>
 </head>
 <body>
     <#-- ===== MUI-style AppBar — direct child of <body>, no wrappers ===== -->

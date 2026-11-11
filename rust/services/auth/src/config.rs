@@ -13,6 +13,7 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct AuthServiceConfig {
+    pub passkeys_enabled: bool,
     pub environment: String,
     pub release_version: String,
     pub build_revision: String,
@@ -215,6 +216,10 @@ impl AuthServiceConfig {
                     false,
                 )?
                 || boolean(get("CREDENTIAL_LOGIN_CREATE_USERS"), false)?
+                || boolean(
+                    get("KEYCLOAK_PASSKEYS_ENABLED").filter(|v| !v.is_empty()),
+                    false,
+                )?
             {
                 return Err(invalid(
                     "External OIDC cannot configure Keycloak Admin, account requirements, user creation, or token exchange",
@@ -229,6 +234,10 @@ impl AuthServiceConfig {
             "CREDENTIAL_LOGIN_ORGANIZATION_ID",
         )?;
         let config = Self {
+            passkeys_enabled: boolean(
+                get("KEYCLOAK_PASSKEYS_ENABLED").filter(|v| !v.is_empty()),
+                false,
+            )?,
             environment,
             release_version: get("MARTY_RELEASE_VERSION").unwrap_or("development").into(),
             build_revision: get("MARTY_UI_SHA").unwrap_or("unknown").into(),

@@ -8,7 +8,10 @@ use marty_oid4vp_contract::{
 };
 use serde::Serialize;
 
-use crate::{AuthenticatedSdJwtQueryEvidence, PresentationVerificationError};
+use crate::{
+    owner_channel::Owner, AuthenticatedOwnerResponse, AuthenticatedSdJwtQueryEvidence,
+    PresentationVerificationError,
+};
 
 /// Only the native orchestrator can associate these owner responses with a
 /// holder-bound credential. Serialized observations cannot construct this type.
@@ -18,13 +21,15 @@ use crate::{AuthenticatedSdJwtQueryEvidence, PresentationVerificationError};
 /// let _: marty_presentation_policy::VerifiedManagedCredentialAuthority =
 ///     serde_json::from_str("{}").unwrap();
 /// ```
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 pub struct VerifiedManagedCredentialAuthority {
     contract: &'static str,
     trust: CredentialTrustEvaluationResponseV1,
     status: ManagedStatusProjection,
     #[serde(skip)]
-    status_observation: ManagedCredentialStatusObservationV1,
+    status_observation: AuthenticatedOwnerResponse<ManagedCredentialStatusObservationV1>,
+    #[serde(skip)]
+    trust_observation: AuthenticatedOwnerResponse<CredentialTrustEvaluationResponseV1>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -41,22 +46,23 @@ struct ManagedStatusProjection {
 impl VerifiedManagedCredentialAuthority {
     pub(crate) fn from_owner_observations(
         query: &AuthenticatedSdJwtQueryEvidence,
-        trust: CredentialTrustEvaluationResponseV1,
-        status: ManagedCredentialStatusObservationV1,
+        trust: AuthenticatedOwnerResponse<CredentialTrustEvaluationResponseV1>,
+        status: AuthenticatedOwnerResponse<ManagedCredentialStatusObservationV1>,
     ) -> Result<Self, PresentationVerificationError> {
         let result = Self {
             contract: "marty.managed-sd-jwt-authority/v1",
-            trust,
+            trust: trust.response().clone(),
             status: ManagedStatusProjection {
-                authority: status.authority.clone(),
-                state: status.state,
-                request_binding_digest: status.request.request_binding_digest.clone(),
-                issuer_jwt_digest: status.request.issuer_jwt_digest.clone(),
-                checked_at_epoch_seconds: status.checked_at_epoch_seconds,
-                valid_until_epoch_seconds: status.valid_until_epoch_seconds,
-                evidence_digest: status.evidence_digest.clone(),
+                authority: status.response().authority.clone(),
+                state: status.response().state,
+                request_binding_digest: status.response().request.request_binding_digest.clone(),
+                issuer_jwt_digest: status.response().request.issuer_jwt_digest.clone(),
+                checked_at_epoch_seconds: status.response().checked_at_epoch_seconds,
+                valid_until_epoch_seconds: status.response().valid_until_epoch_seconds,
+                evidence_digest: status.response().evidence_digest.clone(),
             },
             status_observation: status,
+            trust_observation: trust,
         };
         if !result.matches_query(query) {
             return Err(PresentationVerificationError::Failed(
@@ -73,10 +79,21 @@ impl VerifiedManagedCredentialAuthority {
         let Ok(now) = i64::try_from(query.checked_at_epoch_seconds()) else {
             return false;
         };
-        self.trust.validate_for_request(&trust_request, now).is_ok()
+        self.trust_observation.is_owner(Owner::TrustProfile)
+            && self.status_observation.is_owner(Owner::Issuance)
+            && self.trust.validate_for_request(&trust_request, now).is_ok()
             && self
                 .status_observation
+                .response()
                 .validate_for_request(&status_request, now)
                 .is_ok()
+    }
+}
+
+impl std::fmt::Debug for VerifiedManagedCredentialAuthority {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifiedManagedCredentialAuthority")
+            .field("contract", &self.contract)
+            .finish_non_exhaustive()
     }
 }

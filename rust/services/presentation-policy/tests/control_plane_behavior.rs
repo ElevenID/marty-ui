@@ -700,7 +700,9 @@ async fn credential_dot_segments_never_change_the_configured_status_route() {
 mod managed_authority_http {
     use super::*;
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+    use std::{convert::Infallible, path::PathBuf};
 
+    use axum::body::{Body, Bytes};
     use chrono::Utc;
     use marty_oid4vp_contract::{
         digest_domain_json,
@@ -718,18 +720,34 @@ mod managed_authority_http {
         },
         EvidenceCheckOutcome,
     };
+    use marty_service_runtime::{
+        https::{BoundKeylessHttpsServer, ManagedAuthorityHttpsConfig},
+        RemoteTlsIdentityFiles, TlsIdentityNames,
+    };
     use serde_json::json;
+    use tokio::sync::watch;
 
     const TOKEN: &str = "loopback-authority-service-token";
     const API_KEY: &str = "loopback-issuance-management-key";
+    const EXACT: u8 = 0;
+    const REVISION_CONFLICT: u8 = 1;
+    const CROSSED_SCOPE: u8 = 2;
+    const EXPIRED: u8 = 3;
+    const FUTURE: u8 = 4;
+    const UNKNOWN_FIELD: u8 = 5;
+    const DUPLICATE_FIELD: u8 = 6;
+    const WRONG_CONTENT_TYPE: u8 = 7;
+    const REDIRECT: u8 = 8;
+    const OVERSIZED: u8 = 9;
+    const OVERSIZED_CHUNKED: u8 = 10;
 
     struct AuthorityFixture {
         snapshot: CredentialAuthoritySnapshotV1,
         selection: CredentialTrustEvaluationRequestV1,
         status_request: ManagedCredentialStatusRequestV1,
-        // 0: exact; 1: revision conflict; 2: valid but crossed scope; 3: expired.
         mode: AtomicU8,
         reads: AtomicUsize,
+        redirect_target: Option<String>,
     }
 
     impl AuthorityFixture {
@@ -799,17 +817,22 @@ mod managed_authority_http {
                 status_request,
                 mode: AtomicU8::new(0),
                 reads: AtomicUsize::new(0),
+                redirect_target: None,
             }
+        }
+
+        fn checked_at(&self) -> i64 {
+            Utc::now().timestamp()
+                + match self.mode.load(Ordering::SeqCst) {
+                    EXPIRED => -120,
+                    FUTURE => 120,
+                    _ => 0,
+                }
         }
 
         fn trust_response(&self) -> CredentialTrustEvaluationResponseV1 {
             let request = &self.selection;
-            let checked = Utc::now().timestamp()
-                - if self.mode.load(Ordering::SeqCst) == 3 {
-                    120
-                } else {
-                    0
-                };
+            let checked = self.checked_at();
             let mut response = CredentialTrustEvaluationResponseV1 {
                 contract: CREDENTIAL_TRUST_EVALUATION_CONTRACT.into(),
                 organization_id: request.organization_id.clone(),
@@ -829,7 +852,7 @@ mod managed_authority_http {
                 valid_until_epoch_seconds: checked + 60,
                 evidence_digest: String::new(),
             };
-            if self.mode.load(Ordering::SeqCst) == 2 {
+            if self.mode.load(Ordering::SeqCst) == CROSSED_SCOPE {
                 response.issuer_id = "https://issuer.example.test/tenant-a".into();
             }
             response.evidence_digest = credential_trust_evaluation_digest(&response).unwrap();
@@ -838,22 +861,79 @@ mod managed_authority_http {
         }
     }
 
-    fn request_headers(headers: &HeaderMap, fixture: &AuthorityFixture, trust: bool) {
-        assert_eq!(headers["accept"], "application/json");
-        assert_eq!(headers["content-type"], "application/json");
-        if trust {
-            assert_eq!(headers["x-service-token"], TOKEN);
-            assert!(!headers.contains_key("x-api-key"));
-            assert!(!headers.contains_key("x-organization-id"));
-        } else {
-            assert_eq!(headers["x-api-key"], API_KEY);
-            assert_eq!(
-                headers["x-organization-id"],
-                fixture.status_request.organization_id
-            );
-            assert!(!headers.contains_key("x-service-token"));
-        }
+    fn request_headers(
+        headers: &HeaderMap,
+        fixture: &AuthorityFixture,
+        trust: bool,
+    ) -> Result<(), StatusCode> {
         fixture.reads.fetch_add(1, Ordering::SeqCst);
+        let value = |name: &str| headers.get(name).and_then(|value| value.to_str().ok());
+        if value("accept") != Some("application/json")
+            || value("content-type") != Some("application/json")
+        {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        let authorized = if trust {
+            value("x-service-token") == Some(TOKEN)
+                && !headers.contains_key("x-api-key")
+                && !headers.contains_key("x-organization-id")
+        } else {
+            value("x-api-key") == Some(API_KEY)
+                && value("x-organization-id")
+                    == Some(fixture.status_request.organization_id.as_str())
+                && !headers.contains_key("x-service-token")
+        };
+        if !authorized {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        Ok(())
+    }
+
+    fn owner_response(fixture: &AuthorityFixture, mut value: Value, maximum: usize) -> Response {
+        let mode = fixture.mode.load(Ordering::SeqCst);
+        if mode == REVISION_CONFLICT {
+            return StatusCode::CONFLICT.into_response();
+        }
+        if mode == REDIRECT {
+            return Response::builder()
+                .status(StatusCode::TEMPORARY_REDIRECT)
+                .header("location", fixture.redirect_target.as_ref().unwrap())
+                .body(Body::empty())
+                .unwrap();
+        }
+        if mode == UNKNOWN_FIELD {
+            value["unrecognized_authority_override"] = json!(true);
+        }
+        let mut body = serde_json::to_string(&value).unwrap();
+        if mode == DUPLICATE_FIELD {
+            body = format!("{{\"contract\":{},{}", value["contract"], &body[1..]);
+        }
+        if matches!(mode, OVERSIZED | OVERSIZED_CHUNKED) {
+            // Whitespace preserves otherwise valid JSON: a rejection must not
+            // depend on malformed input or on the unknown-field check.
+            body.push_str(&" ".repeat(maximum + 1));
+        }
+        let body = if mode == OVERSIZED_CHUNKED {
+            Body::from_stream(tokio_stream::iter(
+                body.as_bytes()
+                    .chunks(4096)
+                    .map(|chunk| Ok::<_, Infallible>(Bytes::copy_from_slice(chunk)))
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            Body::from(body)
+        };
+        Response::builder()
+            .header(
+                "content-type",
+                if mode == WRONG_CONTENT_TYPE {
+                    "application/octet-stream"
+                } else {
+                    "application/json"
+                },
+            )
+            .body(body)
+            .unwrap()
     }
 
     async fn freeze(
@@ -861,15 +941,17 @@ mod managed_authority_http {
         Path(id): Path<String>,
         headers: HeaderMap,
         Json(body): Json<Value>,
-    ) -> Json<CredentialAuthoritySnapshotV1> {
-        request_headers(&headers, &fixture, true);
+    ) -> Response {
+        if let Err(status) = request_headers(&headers, &fixture, true) {
+            return status.into_response();
+        }
         assert_eq!(id, fixture.snapshot.profile.id);
         assert_eq!(
             body,
             json!({"organization_id":fixture.snapshot.organization_id})
         );
         let mut snapshot = fixture.snapshot.clone();
-        if fixture.mode.load(Ordering::SeqCst) == 2 {
+        if fixture.mode.load(Ordering::SeqCst) == CROSSED_SCOPE {
             snapshot.organization_id = Uuid::from_u128(999).to_string();
             snapshot
                 .basis
@@ -882,7 +964,11 @@ mod managed_authority_http {
             snapshot.response_digest = credential_authority_snapshot_digest(&snapshot).unwrap();
         }
         snapshot.validate().unwrap();
-        Json(snapshot)
+        owner_response(
+            &fixture,
+            json!(snapshot),
+            marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        )
     }
 
     async fn assess(
@@ -891,28 +977,24 @@ mod managed_authority_http {
         headers: HeaderMap,
         Json(body): Json<Value>,
     ) -> Response {
-        request_headers(&headers, &fixture, true);
+        if let Err(status) = request_headers(&headers, &fixture, true) {
+            return status.into_response();
+        }
         assert_eq!(id, fixture.selection.expected_profile.id);
         assert_eq!(body, json!(fixture.selection));
-        if fixture.mode.load(Ordering::SeqCst) == 1 {
-            return StatusCode::CONFLICT.into_response();
-        }
-        Json(fixture.trust_response()).into_response()
+        owner_response(&fixture, json!(fixture.trust_response()), 64 * 1024)
     }
 
     async fn status(
         State(fixture): State<Arc<AuthorityFixture>>,
         headers: HeaderMap,
         Json(body): Json<Value>,
-    ) -> Json<ManagedCredentialStatusObservationV1> {
-        request_headers(&headers, &fixture, false);
+    ) -> Response {
+        if let Err(status) = request_headers(&headers, &fixture, false) {
+            return status.into_response();
+        }
         assert_eq!(body, json!(fixture.status_request));
-        let checked = Utc::now().timestamp()
-            - if fixture.mode.load(Ordering::SeqCst) == 3 {
-                120
-            } else {
-                0
-            };
+        let checked = fixture.checked_at();
         let mut observation = ManagedCredentialStatusObservationV1 {
             contract: MANAGED_STATUS_CONTRACT.into(),
             authority: MANAGED_STATUS_AUTHORITY.into(),
@@ -924,19 +1006,18 @@ mod managed_authority_http {
             credential_expires_at_epoch_seconds: checked + 3600,
             evidence_digest: String::new(),
         };
-        if fixture.mode.load(Ordering::SeqCst) == 2 {
+        if fixture.mode.load(Ordering::SeqCst) == CROSSED_SCOPE {
             observation.request.credential_id = "urn:uuid:different-managed-credential".into();
         }
         observation.evidence_digest = digest_managed_status_observation(&observation).unwrap();
         observation
             .validate_for_request(&observation.request, checked)
             .unwrap();
-        Json(observation)
+        owner_response(&fixture, json!(observation), 64 * 1024)
     }
 
-    async fn serve() -> (Arc<AuthorityFixture>, String, tokio::task::JoinHandle<()>) {
-        let fixture = Arc::new(AuthorityFixture::new());
-        let app = Router::new()
+    fn trust_routes() -> Router<Arc<AuthorityFixture>> {
+        Router::new()
             .route(
                 "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
                 axum::routing::post(freeze),
@@ -945,7 +1026,22 @@ mod managed_authority_http {
                 "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
                 axum::routing::post(assess),
             )
-            .route(MANAGED_STATUS_OBSERVATION_PATH, axum::routing::post(status))
+    }
+
+    fn status_routes() -> Router<Arc<AuthorityFixture>> {
+        Router::new().route(MANAGED_STATUS_OBSERVATION_PATH, axum::routing::post(status))
+    }
+
+    async fn unexpected_legacy_read(State(fixture): State<Arc<AuthorityFixture>>) -> StatusCode {
+        fixture.reads.fetch_add(1, Ordering::SeqCst);
+        StatusCode::NOT_FOUND
+    }
+
+    async fn serve() -> (Arc<AuthorityFixture>, String, tokio::task::JoinHandle<()>) {
+        let fixture = Arc::new(AuthorityFixture::new());
+        let app = trust_routes()
+            .merge(status_routes())
+            .fallback(unexpected_legacy_read)
             .with_state(fixture.clone());
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -969,10 +1065,84 @@ mod managed_authority_http {
         .unwrap()
     }
 
-    #[tokio::test]
-    async fn authority_posts_preserve_owner_routes_credentials_and_exact_scoped_bodies() {
-        let (fixture, base, server) = serve().await;
-        let client = control(&base, Some(TOKEN), Some(API_KEY));
+    struct LiveOwnerServers {
+        config: marty_presentation_policy::ManagedOwnerChannelConfig,
+        servers: Vec<(watch::Sender<bool>, tokio::task::JoinHandle<()>)>,
+    }
+
+    impl LiveOwnerServers {
+        async fn start(
+            fixture: Arc<AuthorityFixture>,
+            identity: RemoteTlsIdentityFiles,
+            ca_certificate: PathBuf,
+        ) -> Self {
+            let mut origins = Vec::new();
+            let mut servers = Vec::new();
+            for routes in [trust_routes(), status_routes()] {
+                let server = BoundKeylessHttpsServer::bind(
+                    &ManagedAuthorityHttpsConfig {
+                        address: "127.0.0.1:0".parse().unwrap(),
+                        identity: identity.clone(),
+                    },
+                    routes.with_state(fixture.clone()),
+                )
+                .await
+                .expect("isolated owner must bind with its remote signer");
+                origins.push(format!("https://{}", server.local_addr().unwrap()));
+                let (shutdown, receiver) = watch::channel(false);
+                let task = tokio::spawn(async move { server.serve(receiver).await.unwrap() });
+                servers.push((shutdown, task));
+            }
+            assert_ne!(origins[0], origins[1]);
+            Self {
+                config: marty_presentation_policy::ManagedOwnerChannelConfig {
+                    trust_profile_url: origins.remove(0),
+                    issuance_url: origins.remove(0),
+                    ca_certificate,
+                },
+                servers,
+            }
+        }
+
+        async fn stop(self) {
+            for (shutdown, _) in &self.servers {
+                shutdown.send(true).unwrap();
+            }
+            for (_, server) in self.servers {
+                tokio::time::timeout(Duration::from_secs(20), server)
+                    .await
+                    .expect("owner HTTPS shutdown timed out")
+                    .unwrap();
+            }
+        }
+    }
+
+    fn fixture_identity(values: &BTreeMap<String, String>) -> RemoteTlsIdentityFiles {
+        RemoteTlsIdentityFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            TlsIdentityNames::files("MARTY_TEST_POLICY_OWNER_TLS"),
+            Duration::from_secs(5),
+            16,
+        )
+        .expect("isolated owner TLS configuration must be complete")
+        .expect("run this ignored contract with the isolated OpenBao fixture")
+    }
+
+    fn secure_control(
+        legacy: &str,
+        config: &marty_presentation_policy::ManagedOwnerChannelConfig,
+        token: Option<&str>,
+        api_key: Option<&str>,
+    ) -> NativePresentationControlPlane {
+        control(legacy, token, api_key)
+            .with_managed_owner_channels(Some(config))
+            .unwrap()
+    }
+
+    async fn accept_owner_responses(
+        client: &NativePresentationControlPlane,
+        fixture: &AuthorityFixture,
+    ) {
         let frozen = client
             .freeze_credential_authority(
                 fixture.snapshot.organization_id.parse().unwrap(),
@@ -980,97 +1150,268 @@ mod managed_authority_http {
             )
             .await
             .unwrap();
-        assert_eq!(frozen, fixture.snapshot);
+        frozen.response().validate().unwrap();
+        assert_eq!(frozen.response(), &fixture.snapshot);
         let trust = client
             .evaluate_credential_authority(&fixture.selection)
             .await
             .unwrap();
-        assert_eq!(trust.outcome, EvidenceCheckOutcome::Passed);
-        assert_eq!(trust.profile, frozen.profile);
-        assert_eq!(trust.trust_level, Some(80));
-        assert_eq!(trust.accreditations, ["example-accreditation"]);
-        let observed = client
+        trust
+            .response()
+            .validate_for_request(&fixture.selection, Utc::now().timestamp())
+            .unwrap();
+        assert_eq!(trust.response().outcome, EvidenceCheckOutcome::Passed);
+        let status = client
             .observe_managed_status(&fixture.status_request)
             .await
             .unwrap();
-        assert_eq!(observed.request, fixture.status_request);
-        assert_eq!(observed.state, ManagedCredentialStatusState::Active);
+        status
+            .response()
+            .validate_for_request(&fixture.status_request, Utc::now().timestamp())
+            .unwrap();
+        assert_eq!(
+            status.response().state,
+            ManagedCredentialStatusState::Active
+        );
+    }
+
+    async fn reject_owner_responses(
+        client: &NativePresentationControlPlane,
+        fixture: &AuthorityFixture,
+        label: &str,
+        reject_snapshot: bool,
+        revision_conflict: bool,
+    ) {
+        if reject_snapshot {
+            let result = client
+                .freeze_credential_authority(
+                    fixture.snapshot.organization_id.parse().unwrap(),
+                    fixture.snapshot.profile.id.parse().unwrap(),
+                )
+                .await;
+            if revision_conflict {
+                assert!(
+                    matches!(
+                        result,
+                        Err(PresentationVerificationError::CredentialAuthorityChanged)
+                    ),
+                    "{label}: snapshot revision conflict"
+                );
+            } else {
+                assert!(result.is_err(), "{label}: snapshot must fail closed");
+            }
+        }
+        let trust = client
+            .evaluate_credential_authority(&fixture.selection)
+            .await;
+        if revision_conflict {
+            assert!(
+                matches!(
+                    trust,
+                    Err(PresentationVerificationError::CredentialAuthorityChanged)
+                ),
+                "{label}: trust revision conflict"
+            );
+        } else {
+            assert!(trust.is_err(), "{label}: trust must fail closed");
+        }
+        assert!(
+            client
+                .observe_managed_status(&fixture.status_request)
+                .await
+                .is_err(),
+            "{label}: managed status must fail closed"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires isolated owner OpenBao fixture"]
+    async fn live_keyless_managed_owner_channels() {
+        let values: BTreeMap<String, String> = std::env::vars().collect();
+        let required = |name: &str| {
+            values
+                .get(name)
+                .unwrap_or_else(|| panic!("isolated fixture must supply {name}"))
+                .clone()
+        };
+        let ca = PathBuf::from(required("MARTY_TEST_POLICY_OWNER_CA_CERT"));
+        let (legacy_fixture, legacy, legacy_server) = serve().await;
+        let mut fixture = AuthorityFixture::new();
+        fixture.redirect_target = Some(format!("{legacy}/redirect-target"));
+        let fixture = Arc::new(fixture);
+        let owners =
+            LiveOwnerServers::start(fixture.clone(), fixture_identity(&values), ca.clone()).await;
+        let client = secure_control(&legacy, &owners.config, Some(TOKEN), Some(API_KEY));
+
+        accept_owner_responses(&client, &fixture).await;
         assert_eq!(fixture.reads.load(Ordering::SeqCst), 3);
+        assert_eq!(legacy_fixture.reads.load(Ordering::SeqCst), 0);
+
+        // Local absence must be rejected before sending a request, while an
+        // owner that receives incorrect credentials returns a real HTTP 401.
+        let before = fixture.reads.load(Ordering::SeqCst);
+        let missing = secure_control(&legacy, &owners.config, None, None);
+        reject_owner_responses(&missing, &fixture, "missing credentials", true, false).await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before);
+        let denied = secure_control(
+            &legacy,
+            &owners.config,
+            Some("wrong-service-token"),
+            Some("wrong-management-key"),
+        );
+        reject_owner_responses(&denied, &fixture, "owner denied credentials", true, false).await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before + 3);
+
+        for (mode, label) in [
+            (REVISION_CONFLICT, "revision conflict"),
+            (CROSSED_SCOPE, "crossed tenant or credential artifact"),
+            (EXPIRED, "expired observation"),
+            (FUTURE, "future observation"),
+            (UNKNOWN_FIELD, "unknown response field"),
+            (DUPLICATE_FIELD, "duplicate response field"),
+            (WRONG_CONTENT_TYPE, "wrong response content type"),
+            (REDIRECT, "redirect toward legacy HTTP"),
+            (OVERSIZED, "oversized declared response"),
+            (OVERSIZED_CHUNKED, "oversized chunked response"),
+        ] {
+            fixture.mode.store(mode, Ordering::SeqCst);
+            let snapshot = !matches!(mode, EXPIRED | FUTURE);
+            let before = fixture.reads.load(Ordering::SeqCst);
+            reject_owner_responses(
+                &client,
+                &fixture,
+                label,
+                snapshot,
+                mode == REVISION_CONFLICT,
+            )
+            .await;
+            assert_eq!(
+                fixture.reads.load(Ordering::SeqCst),
+                before + if snapshot { 3 } else { 2 },
+                "{label}: the authenticated owner must actually receive each request"
+            );
+            assert_eq!(
+                legacy_fixture.reads.load(Ordering::SeqCst),
+                0,
+                "{label}: no redirect or fallback may contact legacy HTTP"
+            );
+        }
+        fixture.mode.store(EXACT, Ordering::SeqCst);
+
+        let before = fixture.reads.load(Ordering::SeqCst);
+        let mut wrong_ca_config = owners.config.clone();
+        wrong_ca_config.ca_certificate =
+            required("MARTY_TEST_POLICY_OWNER_TLS_KMS_CA_CERT_FILE").into();
+        let wrong_ca = secure_control(&legacy, &wrong_ca_config, Some(TOKEN), Some(API_KEY));
+        reject_owner_responses(&wrong_ca, &fixture, "untrusted owner CA", true, false).await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before);
+
+        let mut wrong_dns_values = values.clone();
+        wrong_dns_values.insert(
+            "MARTY_TEST_POLICY_OWNER_TLS_CERT_FILE".into(),
+            required("MARTY_TEST_POLICY_OWNER_TLS_ALT_CERT_FILE"),
+        );
+        let wrong_dns_owners = LiveOwnerServers::start(
+            fixture.clone(),
+            fixture_identity(&wrong_dns_values),
+            ca.clone(),
+        )
+        .await;
+        let wrong_dns = secure_control(
+            &legacy,
+            &wrong_dns_owners.config,
+            Some(TOKEN),
+            Some(API_KEY),
+        );
+        reject_owner_responses(
+            &wrong_dns,
+            &fixture,
+            "wrong owner certificate name",
+            true,
+            false,
+        )
+        .await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before);
+        wrong_dns_owners.stop().await;
+
+        let mut rotated_values = values.clone();
+        rotated_values.insert(
+            "MARTY_TEST_POLICY_OWNER_TLS_CERT_FILE".into(),
+            required("MARTY_TEST_POLICY_OWNER_TLS_ROTATED_CERT_FILE"),
+        );
+        let rotated_version = required("MARTY_TEST_POLICY_OWNER_TLS_ROTATED_KEY_VERSION");
+        assert_eq!(rotated_version, "2");
+        rotated_values.insert(
+            "MARTY_TEST_POLICY_OWNER_TLS_KMS_KEY_VERSION".into(),
+            rotated_version,
+        );
+        let rotated_owners =
+            LiveOwnerServers::start(fixture.clone(), fixture_identity(&rotated_values), ca).await;
+        let rotated = secure_control(&legacy, &rotated_owners.config, Some(TOKEN), Some(API_KEY));
+        accept_owner_responses(&rotated, &fixture).await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before + 3);
+        rotated_owners.stop().await;
+
+        owners.stop().await;
+        let before = fixture.reads.load(Ordering::SeqCst);
+        reject_owner_responses(&client, &fixture, "owner unavailable", true, false).await;
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), before);
+        assert_eq!(legacy_fixture.reads.load(Ordering::SeqCst), 0);
+        legacy_server.abort();
+        let _ = legacy_server.await;
+    }
+
+    #[tokio::test]
+    async fn managed_owner_calls_cannot_use_legacy_http_or_public_dto_routes() {
+        let (fixture, base, server) = serve().await;
+        for mode in 0..=3 {
+            fixture.mode.store(mode, Ordering::SeqCst);
+            for (token, key) in [(Some(TOKEN), Some(API_KEY)), (None, None)] {
+                let client = control(&base, token, key);
+                assert!(client
+                    .freeze_credential_authority(
+                        fixture.snapshot.organization_id.parse().unwrap(),
+                        fixture.snapshot.profile.id.parse().unwrap(),
+                    )
+                    .await
+                    .is_err());
+                assert!(client
+                    .evaluate_credential_authority(&fixture.selection)
+                    .await
+                    .is_err());
+                assert!(client
+                    .observe_managed_status(&fixture.status_request)
+                    .await
+                    .is_err());
+            }
+        }
+        assert_eq!(
+            fixture.reads.load(Ordering::SeqCst),
+            0,
+            "legacy HTTP must never be contacted to acquire managed owner provenance"
+        );
         server.abort();
         let _ = server.await;
     }
 
     #[tokio::test]
-    async fn authority_posts_reject_conflicts_crossed_scope_expiry_and_missing_local_credentials() {
+    async fn invalid_explicit_owner_configuration_never_downgrades_to_legacy_http() {
         let (fixture, base, server) = serve().await;
-        let client = control(&base, Some(TOKEN), Some(API_KEY));
-        fixture.mode.store(1, Ordering::SeqCst);
-        assert!(matches!(
-            client
-                .evaluate_credential_authority(&fixture.selection)
-                .await,
-            Err(PresentationVerificationError::CredentialAuthorityChanged)
-        ));
-        fixture.mode.store(2, Ordering::SeqCst);
-        assert!(matches!(
-            client
-                .freeze_credential_authority(
-                    fixture.snapshot.organization_id.parse().unwrap(),
-                    fixture.snapshot.profile.id.parse().unwrap()
-                )
-                .await,
-            Err(PresentationVerificationError::Failed(_))
-        ));
-        assert!(matches!(
-            client
-                .evaluate_credential_authority(&fixture.selection)
-                .await,
-            Err(PresentationVerificationError::Failed(_))
-        ));
-        assert!(matches!(
-            client.observe_managed_status(&fixture.status_request).await,
-            Err(PresentationVerificationError::Failed(_))
-        ));
-        fixture.mode.store(3, Ordering::SeqCst);
-        assert!(matches!(
-            client
-                .evaluate_credential_authority(&fixture.selection)
-                .await,
-            Err(PresentationVerificationError::Failed(_))
-        ));
-        assert!(matches!(
-            client.observe_managed_status(&fixture.status_request).await,
-            Err(PresentationVerificationError::Failed(_))
-        ));
-        assert_eq!(fixture.reads.load(Ordering::SeqCst), 6);
-
-        let unconfigured = control(&base, None, None);
-        assert!(matches!(
-            unconfigured
-                .freeze_credential_authority(
-                    fixture.snapshot.organization_id.parse().unwrap(),
-                    fixture.snapshot.profile.id.parse().unwrap()
-                )
-                .await,
-            Err(PresentationVerificationError::Unavailable)
-        ));
-        assert!(matches!(
-            unconfigured
-                .evaluate_credential_authority(&fixture.selection)
-                .await,
-            Err(PresentationVerificationError::Unavailable)
-        ));
-        assert!(matches!(
-            unconfigured
-                .observe_managed_status(&fixture.status_request)
-                .await,
-            Err(PresentationVerificationError::Unavailable)
-        ));
-        assert_eq!(
-            fixture.reads.load(Ordering::SeqCst),
-            6,
-            "missing credentials must fail before owner reads"
-        );
+        for trust in [
+            base.as_str(),
+            "https://owner.example/path",
+            "https://owner.example",
+        ] {
+            let config = marty_presentation_policy::ManagedOwnerChannelConfig {
+                trust_profile_url: trust.into(),
+                issuance_url: "https://issuer.example".into(),
+                ca_certificate: "/nonexistent/policy-owner-public-ca.pem".into(),
+            };
+            assert!(control(&base, Some(TOKEN), Some(API_KEY))
+                .with_managed_owner_channels(Some(&config))
+                .is_err());
+        }
+        assert_eq!(fixture.reads.load(Ordering::SeqCst), 0);
         server.abort();
         let _ = server.await;
     }

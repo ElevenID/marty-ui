@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
 import { approveMembershipRequest, getPendingRequests } from '../membershipApi';
@@ -10,6 +10,7 @@ const member = (id: string, status = 'pending', organization_id = 'org-a') => ({
 
 describe('native membership review client', () => {
   beforeEach(() => vi.restoreAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   it('exhausts raw pages when an older runtime ignores the Pending filter', async () => {
     const pages: Array<{ offset: string | null; limit: string | null; status: string | null }> = [];
@@ -93,16 +94,18 @@ describe('native membership review client', () => {
 
   it('approves through the scoped native action with an empty body and cookie credentials', async () => {
     let body: string | undefined;
-    let credentials: RequestCredentials | undefined;
+    const fetchSpy = vi.spyOn(window, 'fetch');
     server.use(http.post('*/v1/organizations/:org/members/:id/approve', async ({ request, params }) => {
       expect(params).toMatchObject({ org: 'org-a', id: 'member-a' });
       body = await request.text();
-      credentials = request.credentials;
       return HttpResponse.json(member('member-a', 'active'));
     }));
     expect(await approveMembershipRequest('org-a', 'member-a')).toEqual(member('member-a', 'active'));
     expect(body).toBe('');
-    expect(credentials).toBe('include');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/organizations/org-a/members/member-a/approve'),
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
   });
 
   it.each([

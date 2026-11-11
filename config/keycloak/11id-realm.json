@@ -4,6 +4,7 @@
   "displayName": "11id",
   "displayNameHtml": "<div class=\"kc-logo-text\"><span>11id</span></div>",
   "loginTheme": "11id",
+  "accountTheme": "11id",
   "emailTheme": "11id",
   "registrationAllowed": true,
   "registrationEmailAsUsername": true,

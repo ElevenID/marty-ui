@@ -641,7 +641,7 @@ def admitted_pod(pod: dict, replica_set: dict, deployment_value: dict, request: 
 def captured_patch(transport: BudgetedTransport, name: str, patch: list, index: int,
                    remaining: Callable[[], int]) -> bytes:
     transport.evidence.recheck()
-    command = [*transport.base, "patch", "deployment", name, "--type=json", "--patch-file=-", "-o", "json"]
+    command = [*transport.base, "patch", "deployment", name, "--type=json", "--patch-file=/dev/stdin", "-o", "json"]
     payload = bootstrap.encoded(patch)
     # Scanning and serialization consume both clocks. Check the original
     # qualification and native plan again after that work, at actual dispatch.

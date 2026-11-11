@@ -36,6 +36,10 @@ if [ -n "$ga_measurement_id" ] && ! printf '%s' "$ga_measurement_id" | LC_ALL=C 
     echo 'GOOGLE_ANALYTICS_MEASUREMENT_ID must be a GA4 measurement identifier' >&2
     exit 1
 fi
+case "$site_verification" in
+    *'
+'*) echo 'GOOGLE_SITE_VERIFICATION must be a single-line value' >&2; exit 1 ;;
+esac
 
 case "${organization_creation_enabled}" in
     true|false) ;;

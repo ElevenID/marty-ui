@@ -185,6 +185,132 @@ def test_existing_secret_renames_cover_env_and_volumes(tmp_path: Path) -> None:
     assert not resources(rendered, "Secret")
 
 
+def private_config_keys() -> set[str]:
+    """Mirror the source contract, not a broad suffix guess such as *_KEY."""
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text())
+    private = {
+        item["env"] for item in catalog["secrets"].values()
+        if item.get("env") and item.get("no_log")
+    }
+    # Some integrations intentionally expose only a file input in the source
+    # catalog. Their scalar runtime alias is still private when supplied in
+    # config, including when env and file_env use different base names.
+    private.update(
+        item["file_env"].removesuffix("_FILE")
+        for item in catalog["secrets"].values()
+        if item.get("no_log") and item.get("file_env", "").endswith("_FILE")
+    )
+    kubernetes = json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_text())
+    private.update(kubernetes["required"])
+    for secret in kubernetes["secrets"]:
+        for name, item in secret["fields"].items():
+            if re.fullmatch(r"[A-Z][A-Z0-9_]*", name) and (
+                item.get("env") in private
+                or set(re.findall(r"\{([A-Z][A-Z0-9_]*)\}", item.get("template", ""))) & private
+            ):
+                private.add(name)
+    # These runtime aliases and private loader inputs are outside the source
+    # credential-store names. Verification's registry holds client API-key
+    # hashes and is deliberately redacted by the runtime.
+    private.update({
+        "BAO_TOKEN", "KC_DB_PASSWORD", "KC_BOOTSTRAP_ADMIN_PASSWORD",
+        "MARTY_ORG_ADMIN_PASSWORD", "KEYCLOAK_SMTP_PASSWORD",
+        "OIDC_CLIENT_SECRET", "VERIFICATION_GOVERNANCE_JSON",
+    })
+    workloads = yaml.safe_load((CHART / "files/workloads.yaml").read_text())
+    for workload in workloads.values():
+        for env in workload.get("env", []):
+            reference = env.get("valueFrom", {}).get("secretKeyRef", {})
+            if reference.get("key") in private:
+                private.add(env["name"])
+    return private
+
+
+def test_private_configuration_key_contract_tracks_the_source_catalog() -> None:
+    packaged = yaml.safe_load((CHART / "files/private-config-keys.yaml").read_text())
+    assert packaged == sorted(private_config_keys())
+
+
+def test_shared_loader_private_inputs_cannot_fall_outside_the_config_guard() -> None:
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text())
+    public = {
+        item["env"] for item in catalog["secrets"].values()
+        if item.get("env") and item.get("no_log") is False
+    }
+    loader = (ROOT / "scripts/load-secrets-env.sh").read_text()
+    loaded = set(re.findall(r"^\s*load_secret_var ([A-Z][A-Z0-9_]*)\s*$", loader, re.MULTILINE))
+    packaged = set(yaml.safe_load((CHART / "files/private-config-keys.yaml").read_text()))
+    assert loaded - public <= packaged
+    assert not public & packaged
+
+
+def test_every_rendered_private_secret_alias_is_guarded(rendered: list[dict]) -> None:
+    # A Secret can also carry nonsecret transport settings. Name these few
+    # exceptions explicitly so a newly added credential is never inferred
+    # public simply because it is absent from the source catalog.
+    public_references = {
+        ("marty-secrets", "KEYCLOAK_ADMIN"),
+        ("marty-secrets", "KEYCLOAK_DB_URL"),
+        ("marty-secrets", "SMTP_USERNAME"),
+    }
+    private_aliases = {
+        obj["name"] for obj in walk(rendered)
+        if (reference := obj.get("valueFrom", {}).get("secretKeyRef"))
+        and (reference["name"], reference["key"]) not in public_references
+    }
+    packaged = set(yaml.safe_load((CHART / "files/private-config-keys.yaml").read_text()))
+    assert {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"} <= private_aliases
+    assert private_aliases <= packaged
+
+
+@pytest.mark.parametrize("key", [
+    "POSTGRES_PASSWORD", "MARTY_DB_PASSWORD", "DATABASE_URL", "DATABASE_SYNC_URL",
+    "ISSUANCE_API_KEY", "TOKEN_HMAC_KEY", "MARTY_API_CLIENT_SECRET",
+    "KEYCLOAK_SIGNING_KMS_TOKEN", "BAO_TOKEN", "KC_DB_PASSWORD",
+    "KC_BOOTSTRAP_ADMIN_PASSWORD", "MARTY_ORG_ADMIN_PASSWORD",
+    "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "GOOGLE_CLIENT_SECRET",
+    "SIGNING_KEYS_INTERNAL_API_KEY", "FLOW_WEBHOOK_SECRET",
+    "OIDC_CLIENT_SECRET", "VERIFICATION_GOVERNANCE_JSON", "CANVAS_CREDENTIALS_API_TOKEN",
+    "PERSONALIZATION_BUREAU_API_KEY", "HAIP_KMS_TOKEN", "PASSPORT_TENANT_API_KEYS",
+    "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT", "NORTHSTAR_RUN_SECRET",
+])
+@pytest.mark.parametrize("configurator_enabled", [True, False])
+def test_private_config_values_are_refused_without_disclosing_them(
+    tmp_path: Path, key: str, configurator_enabled: bool,
+) -> None:
+    values = installation_values()
+    sentinel = "synthetic-private-setting-never-render-or-log"
+    values["config"] = {key: sentinel}
+    values["keycloak"] = {"configurator": {"enabled": configurator_enabled}}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert f"config.{key}" in result.stderr
+    assert "existingSecrets" in result.stderr
+    assert sentinel not in result.stdout + result.stderr
+    assert "kind:" not in result.stdout
+
+
+def test_nonsecret_key_names_and_private_file_paths_remain_configurable(tmp_path: Path) -> None:
+    values = installation_values()
+    settings = {
+        "MARTY_ORG_NAME": "Canyon Skills Academy",
+        "SMTP_USERNAME": "identity-mailer",
+        "SIGNING_KEYS_TLS_KMS_KEY_NAME": "workload-tls-signing-keys-server",
+        "SIGNING_KEYS_TLS_KMS_KEY_VERSION": "2",
+        "CANVAS_LTI_TOOL_ACTIVE_KID": "academy-lti-key-1",
+        "CANVAS_LTI_TOOL_PUBLIC_JWKS": '{"keys":[]}',
+        "FLOW_SIGN_GRANT_MINT_TOKEN_FILE": "/run/secrets/flow_sign_grant_mint_token",
+        "OIDC_CLIENT_SECRET_FILE": "/run/secrets/oidc_client_secret",
+        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "/run/secrets/canvas_credentials_api_token",
+        "HAIP_KMS_TOKEN_FILE": "/run/secrets/haip_kms_token",
+    }
+    values["config"] = settings
+    config = resources(render(tmp_path, values), "ConfigMap")["marty-config"]["data"]
+    assert all(config[name] == value for name, value in settings.items())
+
+
 def test_ordered_bounded_migrations_wait_for_seeded_catalog(rendered: list[dict]) -> None:
     job = resources(rendered, "Job")["marty-migrate-1"]
     assert "helm.sh/hook" not in job["metadata"].get("annotations", {})
@@ -243,6 +369,29 @@ def test_keycloak_configurator_rejects_a_string_boolean(tmp_path: Path) -> None:
     assert result.returncode != 0
     assert re.search(r"keycloak[./]configurator[./]enabled", result.stderr)
     assert "boolean" in result.stderr
+
+
+def test_disabling_canvas_worker_removes_only_its_deployment(
+    tmp_path: Path, rendered: list[dict],
+) -> None:
+    worker = resources(rendered, "Deployment")["canvas-sync-worker"]
+    values = installation_values()
+    values["canvasWorker"] = {"enabled": False}
+    assert render(tmp_path, values) == [doc for doc in rendered if doc is not worker]
+
+
+@pytest.mark.parametrize("enabled", ["false", "true", 0, 1, None, {}, []])
+def test_canvas_worker_requires_a_boolean_instead_of_a_truthy_string(
+    tmp_path: Path, enabled: object,
+) -> None:
+    values = installation_values()
+    values["canvasWorker"] = {"enabled": enabled}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "canvasWorker" in result.stderr and "enabled" in result.stderr
+    assert "kind:" not in result.stdout
 
 
 def test_existing_ui_replay_preserves_explicit_issuer_without_setup_jobs(tmp_path: Path) -> None:

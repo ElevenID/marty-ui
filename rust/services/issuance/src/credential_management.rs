@@ -1329,4 +1329,77 @@ mod tests {
             .mdoc_status_reference
             .is_none());
     }
+
+    #[tokio::test]
+    async fn managed_owner_router_is_narrow_authenticated_and_bounded() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+        let harness = Harness::new(ManagedCredentialStatus::Active);
+        let app = crate::http::managed_status_owner_router(
+            crate::credential_management_http::CredentialManagementHttpService::new(
+                harness.service(),
+                Some("managed-owner-test-key"),
+            ),
+        );
+        for uri in [
+            "/v1/issuance/credentials",
+            "/healthz",
+            "/.well-known/openid-credential-issuer",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 404, "{uri}");
+        }
+        let payload = json!({
+            "organization_id":"org-a", "issuer_id":"did:web:issuer.example",
+            "credential_id":"urn:example:credential", "credential_template_id":"template-a",
+            "issuer_jwt_digest":format!("sha256:{}", "a".repeat(64)),
+            "request_binding_digest":format!("sha256:{}", "b".repeat(64)),
+            "max_age_seconds":30,
+        });
+        for (key, organization, status) in [
+            (None, "org-a", 401),
+            (Some("incorrect"), "org-a", 401),
+            (Some("managed-owner-test-key"), "other-org", 404),
+            (Some("managed-owner-test-key"), "org-a", 404),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/internal/issuance/sd-jwt-status/observe")
+                .header("content-type", "application/json")
+                .header("x-organization-id", organization);
+            if let Some(key) = key {
+                request = request.header("x-api-key", key);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(payload.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), status);
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/issuance/sd-jwt-status/observe")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "managed-owner-test-key")
+                    .header("x-organization-id", "org-a")
+                    .body(Body::from(
+                        "x".repeat(marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES + 1),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 413);
+        assert!(
+            harness.calls.lock().unwrap().is_empty(),
+            "owner reads must not invoke signing/lifecycle paths"
+        );
+    }
 }

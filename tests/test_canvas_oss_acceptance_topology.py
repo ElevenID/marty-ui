@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -143,9 +144,40 @@ def test_contract_driver_base_and_compose_boundary_are_locked() -> None:
     driver = lock["contract_driver"]
     topology = lock["acceptance_topology"]
     assert driver["base_image"] == (
-        "mcr.microsoft.com/playwright:v1.63.0-noble@"
-        "sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+        "mcr.microsoft.com/playwright:v1.64.1-noble@"
+        "sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f"
     )
+    workflow = (ROOT / ".github/workflows/canvas-oss-portability.yml").read_text(encoding="utf-8")
+    image_guards = re.findall(
+        r'^\s*\[\[ "\$playwright_image" =~ (.+) \]\]\s*$', workflow, re.MULTILINE
+    )
+    assert len(image_guards) == 1, "The workflow must have one explicit Playwright image guard."
+    image = driver["base_image"]
+    tagged_image, digest = image.split("@", 1)
+    repository, tag = tagged_image.rsplit(":", 1)
+    version, distribution = tag.rsplit("-", 1)
+    # Exercise the workflow's own Bash regex, so the checked-in lock cannot
+    # silently drift from the guard used before the immutable image pull.
+    for reference, expected in (
+        (image, 0),
+        (tagged_image, 1),
+        (image[:-1], 1),
+        (image[:-1] + "z", 1),
+        (f"{repository}:v0.0.0-{distribution}@{digest}", 1),
+        (f"{repository}:{version}-unreviewed@{digest}", 1),
+        (image.replace("mcr.microsoft.com/", "example.invalid/", 1), 1),
+    ):
+        result = subprocess.run(
+            ["bash", "-c", '[[ "$1" =~ $2 ]]', "canvas-image-guard", reference, image_guards[0]],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode == expected, (
+            f"Workflow image guard returned {result.returncode}, expected {expected} "
+            f"for {reference}: {result.stderr}"
+        )
     assert driver["compose_service"] == "canvas-contract"
     assert driver["monitor_service"] == "canvas-continuity-monitor"
     assert driver["execution_boundary"] == "docker_compose_one_shot"

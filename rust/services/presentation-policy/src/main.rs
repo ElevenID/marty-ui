@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 config.dependency_timeout,
             )?
         }
-        .with_verification_sources(&config.credential_template_url, &config.organization_url)?,
+        .with_verification_sources(&config.credential_template_url, &config.organization_url)?
+        .with_managed_owner_channels(config.managed_owner_channels.as_ref())?,
     );
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 

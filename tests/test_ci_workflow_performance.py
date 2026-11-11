@@ -1463,9 +1463,15 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         step for step in job["steps"]
         if step.get("name") == "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody"
     )
-    assert "scripts/probe_keycloak_remote_rs256.py --require-browser" in keycloak_gate["run"]
-    assert "--keycloak-image marty-keycloak-openbao:ci" in keycloak_gate["run"]
-    assert "--openbao-image marty-openbao-didcomm:ci" in keycloak_gate["run"]
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_IMAGE"] == "marty-keycloak-openbao:ci"
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE"] == "marty-openbao-didcomm:ci"
+    assert "tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods" in keycloak_gate["run"]
+    assert "google-chrome --version" in keycloak_gate["run"]
+    # The composite proof must still invoke the complete prior custody/browser
+    # probe, and add qualification inside its live PostgreSQL/KMS lifetime.
+    packaged = (ROOT / "tests/test_keycloak_passkey_packaged.py").read_text()
+    assert "kms.probe(KEYCLOAK_IMAGE, OPENBAO_IMAGE" in packaged
+    assert "require_browser=True, qualify_ready=qualify_passkeys" in packaged
     storage_gate = next(
         step
         for step in job["steps"]
@@ -2094,7 +2100,7 @@ def test_native_operator_acquires_locked_targets_before_single_offline_execution
     fetch = next(step for step in steps if step.get("name") == "Fetch locked native operator dependencies")
     exercise = next(step for step in steps if step.get("name") == "Exercise the static native operator against real HTTPS")
     position = steps.index(fetch)
-    assert steps[position - 2]["uses"] == "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    assert steps[position - 2]["uses"] == "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"
     assert steps[position - 2]["with"] == {"toolchain": "1.95.0", "targets": "${{ matrix.target }}"}
     assert steps[position - 1] == {
         "name": "Fetch locked private fork dependencies",
@@ -4849,7 +4855,7 @@ def test_ui_timing_upload_retry_keeps_tests_and_artifact_required(
     assert (
         first["uses"]
         == second["uses"]
-        == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+        == ("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9")
     )
     for upload in (first, second):
         assert upload["with"]["name"] == "ui-vitest-timing-${{ matrix.shard }}"
@@ -5249,7 +5255,7 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         "public-protocol-contract",
         "test-release-contracts",
     )
-    setup_uv = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+    setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
     expected_inputs = {
         "version": "0.11.3",
         "enable-cache": True,

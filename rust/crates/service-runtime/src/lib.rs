@@ -9,6 +9,8 @@ pub mod forwarded_principal;
 pub mod config;
 mod crypto_provider;
 pub mod grpc_request;
+#[cfg(feature = "https")]
+pub mod https;
 mod secret_kms;
 pub mod startup;
 mod tls;

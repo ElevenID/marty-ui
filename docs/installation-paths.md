@@ -41,6 +41,11 @@ supplies a customer organization, canonical DNS origin and optional authenticate
 mail configuration. It exercises tenant bootstrap and refuses inconsistent
 aliases or incomplete mail prerequisites. The same display-name scenario is
 also checked through the native source package and Compose hosting models.
+The chart refuses known credential settings in `config` before producing a
+ConfigMap; provision them through the existing Secret contract. File paths,
+public settings and KMS key names remain ordinary configuration. Optional
+`canvasWorker.enabled` must be a YAML boolean, so `false` disables the worker
+without the ambiguity of a quoted string.
 
 ## Shared datastore behavior
 
@@ -62,6 +67,9 @@ The native Kubernetes publisher applies the same component encoding to the
 database and legacy AMQP URI fields while preserving their scalar Secret values.
 Existing secret-file handling still removes CR bytes and trailing LF bytes;
 it is not a mechanism for binary passwords or NUL bytes.
+If a selected file fails while being read, the loader stops before launching
+the service, including entrypoints that source the loader in an `&&` chain.
+Partial reader output is never accepted as a credential.
 
 Redis contains retained signing and identity configuration and short-lived
 one-use grant markers as well as cache-like data. The shared instance therefore
@@ -72,6 +80,14 @@ changing back to an eviction policy can lose identity or replay-protection state
 AOF persistence does not replace a backup or make Redis highly available.
 
 ## Diagnostics and recovery
+
+The manual Compose checker uses the selected Compose renderer to resolve
+environment-file quotes, interpolation and host-environment overrides. Relative
+secret roots use the selected Compose file's directory, and rendered paths with
+literal dollar signs are decoded for file inspection. An environment-resolution
+failure stops before runtime probes and keeps expanded values out of diagnostics.
+The self-host UI also rejects multiline site-verification values before
+replacing its retained assets.
 
 Use `status`, `doctor`, `trust-info` and `validate` on the retained signed
 installation after startup, then perform the documented browser and application

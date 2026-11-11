@@ -91,15 +91,53 @@ class CheckResult:
     detail: str
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    env: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        env[key.strip()] = value.strip()
-    return env
+def load_env_file(path: Path, compose_file: Path) -> dict[str, str]:
+    """Observe interpolation through the selected Compose model, without sourcing it.
+
+    Only discover variable names here. Compose owns quotes, comments, multiline
+    values, interpolation and host-environment precedence. Its --environment
+    output is line-oriented even with --format json, so it cannot represent
+    arbitrary values unambiguously. A temporary extension provides a JSON carrier
+    without adding a service or changing any deployment resource.
+    """
+    try:
+        source = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        raise CheckError("Could not read the selected self-host environment file.") from exc
+    names = set(re.findall(
+        r"(?m)^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*(?:=|:)", source,
+    ))
+    names.update(key for key in os.environ if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key))
+    extension = "x-marty-preflight-environment"
+    carrier = {extension: {
+        key: {"present": "${" + key + "+1}", "value": "${" + key + "-}"}
+        for key in sorted(names)
+    }}
+    result = run_compose_command(
+        path, compose_file, "-f", "-", "config", "--format", "json", input=json.dumps(carrier),
+    )
+    if result.returncode:
+        # Compose diagnostics may include an expanded setting or credential.
+        raise CheckError("Could not resolve the selected self-host environment with Docker Compose.")
+    try:
+        observed = json.loads(result.stdout)[extension]
+        if not isinstance(observed, dict) or not names.issubset(observed):
+            raise ValueError("missing environment carrier")
+        for key in names:
+            item = observed[key]
+            if (not isinstance(item, dict) or item.get("present") not in ("", "1")
+                    or not isinstance(item.get("value"), str)):
+                raise ValueError("invalid environment value")
+    except (ValueError, KeyError, TypeError) as exc:
+        raise CheckError("Docker Compose returned an invalid self-host environment model.") from exc
+    # Compose config doubles every dollar, including in JSON. Undo that output
+    # representation once; the selected files and runtime model stay unchanged.
+    # A name-shaped line inside a quoted multiline value is not an assignment.
+    # Preserve Compose's distinction between absent and explicitly empty values.
+    return {
+        key: observed[key]["value"].replace("$$", "$")
+        for key in names if observed[key]["present"] == "1"
+    }
 
 
 def read_required_secret(path: Path, label: str) -> str:
@@ -116,29 +154,34 @@ def read_required_secret(path: Path, label: str) -> str:
     return value
 
 
-def run_compose_command(env_file: Path, compose_file: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            str(env_file),
-            "-f",
-            str(compose_file),
-            *extra_args,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=REPO_ROOT,
-    )
+def run_compose_command(
+    env_file: Path, compose_file: Path, *extra_args: str, input: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(env_file),
+                "-f",
+                str(compose_file),
+                *extra_args,
+            ],
+            input=input,
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+    except OSError as exc:
+        raise CheckError("Docker Compose could not be started; check the local Docker CLI installation.") from exc
 
 
 def ensure_compose_config(env_file: Path, compose_file: Path) -> None:
-    result = run_compose_command(env_file, compose_file, "config")
+    result = run_compose_command(env_file, compose_file, "config", "--quiet")
     if result.returncode != 0:
-        error_output = (result.stderr or result.stdout).strip()
-        raise CheckError(f"{compose_file.name} config failed: {error_output}")
+        raise CheckError(f"{compose_file.name} config failed; check the selected Compose and environment files.")
 
 
 def parse_compose_ps_output(raw_output: str) -> list[dict[str, Any]]:
@@ -197,7 +240,7 @@ def rendered_secret_files(env_file: Path, compose_file: Path) -> dict[str, Path]
         if not isinstance(secrets, dict):
             raise ValueError("invalid secrets model")
         paths = {
-            name: Path(item["file"])
+            name: Path(item["file"].replace("$$", "$"))
             for name, item in secrets.items()
             if isinstance(name, str) and isinstance(item, dict)
             and not item.get("external") and isinstance(item.get("file"), str)
@@ -1357,7 +1400,6 @@ def main() -> int:
     if not env_file.exists():
         raise SystemExit(f"Self-host env file does not exist: {env_file}")
 
-    env_values = load_env_file(env_file)
     if args.required_secrets_only:
         try:
             paths = rendered_secret_files(env_file, prod_compose_file)
@@ -1369,10 +1411,18 @@ def main() -> int:
             return 1
         print(f"[OK] selfhost-required-secrets: {detail}")
         return 0
-    secret_dir_value = env_values.get("SELFHOST_SECRET_DIR", "").strip()
-    if not secret_dir_value:
+    try:
+        env_values = load_env_file(env_file, prod_compose_file)
+    except CheckError as exc:
+        print(f"[FAIL] selfhost-environment: {exc}")
+        return 1
+    secret_dir_value = env_values.get("SELFHOST_SECRET_DIR", "")
+    if not secret_dir_value.strip():
         raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
-    secret_dir = Path(secret_dir_value).expanduser().resolve()
+    secret_dir = Path(secret_dir_value).expanduser()
+    if not secret_dir.is_absolute():
+        secret_dir = prod_compose_file.parent / secret_dir
+    secret_dir = secret_dir.resolve()
     catalog_lines("validate")
 
     compose_config_results = [

@@ -285,6 +285,7 @@ def apply_foundation_reference_representation(model):
 def assert_models(
     approved, actual, *, interpolated=False, issuer_did="",
     ui_enabled_sections="public,console", bureau_api_key_file="", canvas_api_token_file="",
+    passkeys_enabled="", passkey_rp_id="",
 ):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
@@ -337,6 +338,19 @@ def assert_models(
     configurator_environment = expected["services"]["keycloak-configurator"]["environment"]
     assert "KEYCLOAK_SETUP_STRICT" not in configurator_environment
     configurator_environment["KEYCLOAK_SETUP_STRICT"] = "true"
+    # Admit only the new public passkey settings. Keep the frozen model/hash,
+    # provider credentials, all existing login controls and custody gates intact.
+    auth_environment = expected["services"]["auth"]["environment"]
+    assert "KEYCLOAK_PASSKEYS_ENABLED" not in auth_environment
+    auth_environment["KEYCLOAK_PASSKEYS_ENABLED"] = (
+        passkeys_enabled or "false" if interpolated else "${KEYCLOAK_PASSKEYS_ENABLED:-false}"
+    )
+    for key, value in (("KEYCLOAK_PASSKEYS_ENABLED", passkeys_enabled),
+                       ("KEYCLOAK_PASSKEY_RP_ID", passkey_rp_id)):
+        assert key not in configurator_environment
+        configurator_environment[key] = value if interpolated else "${" + key + ":-}"
+
+
     # Keep the frozen historical model; admit this exact policy change only.
     # Redis holds persistent identity records and replay markers, so cache-style
     # eviction is not an acceptable response to a full bounded shared store.
@@ -623,6 +637,7 @@ def interpolated_models():
             | set(SHARED_ADDITIONS)
             | set(NATIVE_ADDITIVE)
             | {"MARTY_ISSUER_DID"}
+            | {"KEYCLOAK_PASSKEYS_ENABLED", "KEYCLOAK_PASSKEY_RP_ID"}
             | {
                 key
                 for additions in PASSPORT_CONSUMER_ADDITIVE.values()
@@ -658,6 +673,7 @@ def interpolated_models():
 
         for mode, overrides in (
             ("default", {}),
+            ("passkeys", {"KEYCLOAK_PASSKEYS_ENABLED": "true", "KEYCLOAK_PASSKEY_RP_ID": "login.example.test"}),
             ("empty", dict.fromkeys(variables, "")),
             ("installer-dns-port", {
                 "MARTY_ISSUER_DID": "did:web:identity.example%3A8443:orgs:marty",
@@ -698,6 +714,8 @@ def interpolated_models():
                 ui_enabled_sections=values.get("UI_ENABLED_SECTIONS", "public,console"),
                 bureau_api_key_file=values.get("PERSONALIZATION_BUREAU_API_KEY_FILE") or "",
                 canvas_api_token_file=values.get("CANVAS_CREDENTIALS_API_TOKEN_FILE") or "",
+                passkeys_enabled=values.get("KEYCLOAK_PASSKEYS_ENABLED") or "",
+                passkey_rp_id=values.get("KEYCLOAK_PASSKEY_RP_ID") or "",
             )
             print(f"PASS: self-host {mode} interpolated whole model")
         for file, source_required in (

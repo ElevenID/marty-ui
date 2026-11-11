@@ -118,7 +118,7 @@ jobs:
             const expectedConfigFile = '$' + "{{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}";
             const expectedInit = [
               "        if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'",
-              '        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2',
+              '        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066',
               '        with:',
               '          languages: rust',
               '          build-mode: none',
@@ -194,7 +194,7 @@ jobs:
         run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Initialize production-focused analysis
         if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
-        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066
         with:
           languages: rust
           build-mode: none
@@ -204,7 +204,7 @@ jobs:
           config-file: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && './.github/codeql/codeql-full.yml' || './.github/codeql/codeql-production.yml' }}
       - name: Analyze Rust
         if: steps.scope.outputs.analyze == 'true' && steps.test_only.outputs.skip != 'true'
-        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066
         with:
           category: /language:rust
           upload-database: false

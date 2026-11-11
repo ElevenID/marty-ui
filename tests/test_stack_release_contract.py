@@ -659,7 +659,7 @@ def test_passport_publication_installs_pinned_chromium_before_verification() -> 
 
 
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
-    action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    action = "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"
     matched_steps: list[tuple[str, dict[str, object]]] = []
 
     for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):

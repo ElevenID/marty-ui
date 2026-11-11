@@ -46,6 +46,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["https"] }
 isomdl.workspace = true
 ed25519-dalek.workspace = true
 p256 = { workspace = true, features = ["ecdsa"] }

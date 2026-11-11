@@ -8,6 +8,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+axum = { workspace = true, optional = true }
+axum-server = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 marty-api-key-policy = { path = "../api-key-policy", optional = true }
 marty-crypto = { workspace = true, optional = true }
@@ -27,5 +29,6 @@ tokio = { workspace = true, features = ["test-util"] }
 tokio-rustls = { workspace = true, features = ["ring"] }
 
 [features]
+https = ["dep:axum", "dep:axum-server"]
 forwarded-principal = ["dep:http", "dep:marty-api-key-policy", "dep:mmf-security"]
 workload-identity = ["dep:marty-crypto", "dep:mmf-security"]

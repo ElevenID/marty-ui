@@ -247,7 +247,7 @@ jobs:
             timeout 20m docker pull "$dependency"
           done
           playwright_image="$(jq -r '.contract_driver.base_image' "$lock")"
-          [[ "$playwright_image" =~ ^mcr\.microsoft\.com/playwright:v1\.56\.0-jammy@sha256:[0-9a-f]{64}$ ]]
+          [[ "$playwright_image" =~ ^mcr\.microsoft\.com/playwright:v1\.64\.1-noble@sha256:[0-9a-f]{64}$ ]]
           echo "CANVAS_OSS_PLAYWRIGHT_IMAGE=$playwright_image" >> "$GITHUB_ENV"
           timeout 20m docker pull --platform linux/amd64 "$playwright_image"
 
@@ -504,7 +504,7 @@ jobs:
 
       - name: Upload sanitized portability evidence
         if: always() && steps.stage.outcome == 'success'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: canvas-oss-portability-${{ github.run_id }}
           path: tests/sanitized-artifacts/canvas-oss-portability/

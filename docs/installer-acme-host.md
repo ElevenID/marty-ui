@@ -86,6 +86,14 @@ installation lock:
 5. Persist and read back the complete preparation boundary. Revalidate the
    scoped account and CSR bindings before invoking the enrollment worker.
 
+Application settings, including the default policy, are selected in the earlier
+`Verified` phase. The initial-order ownership gate authenticates that selection
+through the existing settings reader before allowing its exact
+`application-settings-input.json` and `application-settings-selection.json`
+records. These policy records do not mean an application has started. Missing,
+changed or unbound settings remain refused, as do unrecognized `application-*`
+records and all generation, Compose application, lifecycle and uninstall markers.
+
 The completed renewal environment is an immutable input, including the public
 origin values, challenge port, and authority-plan digest. Each later setup phase
 derives a new environment file from those exact bytes. An already-present
@@ -330,6 +338,14 @@ admission after expiry, and refusal to reuse the old leaf or unchanged expiry as
 a replacement. Terminal retry cases cover retained CA deadlines, interrupted
 withdrawal, increased cooldown and evidence that cannot cross predecessors.
 
+Settings regressions run the real settings preparation and selection writers
+before the initial-order gate, using both default and explicit synthetic policy.
+They cover legacy absence, unbound or foreign selections, missing or changed
+records, links, unsafe modes, and later-ownership markers. Every accepted and
+refused gate call preserves the journal and evidence bytes, modes and link
+counts. These are local component checks, not evidence of a successful AWS
+installation or public certificate issuance.
+
 The complete preparation fixture runs the enrollment worker under the same
 installation lock, expires its actual temporary certificate, reopens the saved
 state and verifies reuse of the original replacement permit. It also checks
@@ -348,6 +364,8 @@ explicitly as a nonroot user under no-new-privileges; a default test run that
 skips them is not evidence that their admission or mutation cases passed:
 
 ```sh
+cargo test --locked -p marty-deployment-catalog --lib \
+  installer_acme_host::initial_rollover::tests
 cargo test --locked -p marty-deployment-catalog --lib \
   installer_acme_host::diagnostics::tests
 cargo test --locked -p marty-deployment-catalog --lib \
