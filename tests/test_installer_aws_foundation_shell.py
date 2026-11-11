@@ -9,14 +9,18 @@ def run_database_init(tmp_path, selected):
     commands = tmp_path / "commands"
     commands.mkdir()
     sql = tmp_path / "observed.sql"
+    databases = tmp_path / "databases"
     psql = commands / "psql"
-    psql.write_text('#!/bin/sh\ncat >> "$SQL_TRACE"\n')
+    psql.write_text('#!/bin/sh\ncat >> "$SQL_TRACE"\n'
+                    'if [ -n "${MARTY_INIT_DATABASE:-}" ]; then '
+                    'printf "%s\\n" "$MARTY_INIT_DATABASE" >> "$DATABASE_TRACE"; fi\n')
     psql.chmod(0o700)
     env = {
         "PATH": f"{commands}:/usr/bin:/bin",
         "POSTGRES_USER": "postgres", "POSTGRES_DB": "postgres",
         "MARTY_DB_PASSWORD": "synthetic-private-password",
         "SQL_TRACE": str(sql),
+        "DATABASE_TRACE": str(databases),
     }
     if selected is not None:
         env["MARTY_INITIALIZE_KEYCLOAK_DATABASE"] = selected
@@ -26,27 +30,31 @@ def run_database_init(tmp_path, selected):
         ["/bin/sh", str(ROOT / "docker/init-databases.sh")],
         env=env, text=True, capture_output=True, check=False, timeout=5,
     )
-    return result, sql.read_text() if sql.exists() else ""
+    return (result, sql.read_text() if sql.exists() else "",
+            databases.read_text().splitlines() if databases.exists() else [])
 
 
 def test_external_auth_database_bootstrap_has_no_keycloak_dependency(tmp_path):
-    result, sql = run_database_init(tmp_path, "false")
+    result, sql, databases = run_database_init(tmp_path, "false")
     assert result.returncode == 0
-    assert "CREATE USER marty" in sql and "marty_applicants" in sql
+    assert databases == ["marty"] and "marty_applicants" in sql
     assert "keycloak" not in sql
     assert "synthetic-private-password" not in result.stdout + result.stderr
 
 
 def test_managed_default_still_creates_keycloak_database(tmp_path):
-    result, sql = run_database_init(tmp_path, None)
+    result, sql, databases = run_database_init(tmp_path, None)
     assert result.returncode == 0
-    assert "CREATE USER keycloak" in sql and "CREATE DATABASE keycloak" in sql
+    assert databases == ["keycloak", "marty"]
+    assert "format('CREATE USER %I WITH PASSWORD %L'" in sql
+    assert "synthetic-private-password" not in sql
 
 
 def test_unknown_database_selection_refuses_before_sql(tmp_path):
-    result, sql = run_database_init(tmp_path, "invalid")
+    result, sql, databases = run_database_init(tmp_path, "invalid")
     assert result.returncode != 0
     assert sql == ""
+    assert databases == []
     assert "must be true or false" in result.stderr
 
 

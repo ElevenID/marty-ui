@@ -261,7 +261,9 @@ async fn physical_service_start_recovers_lost_provider_and_flow_finalize_respons
         DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;
         CREATE SCHEMA deployment_profile_service;
         CREATE TABLE deployment_profile_service.deployment_profiles(
-            id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb);
+            id text PRIMARY KEY,
+            organization_id text NOT NULL DEFAULT '00000000-0000-0000-0000-000000000001',
+            enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb);
         INSERT INTO deployment_profile_service.deployment_profiles(id)
             VALUES ('70000000-0000-0000-0000-000000000001');",
     )

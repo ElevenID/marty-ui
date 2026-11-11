@@ -1,8 +1,15 @@
 use sqlx::{PgPool, Row};
 use thiserror::Error;
+use uuid::Uuid;
 
 const MIGRATION_VERSION: &str = "rust_flow_0002";
 const ADVISORY_LOCK_ID: i64 = 718_431_211;
+const DEFAULT_ORGANIZATION_ID: Uuid = Uuid::from_u128(1);
+const BUILTIN_DEFINITION_IDS: &[&str] = &[
+    "71000000-0000-0000-0000-000000000001",
+    "72000000-0000-0000-0000-000000000010",
+    "72000000-0000-0000-0000-000000000040",
+];
 
 #[derive(Debug, Error)]
 pub enum FlowMigrationError {
@@ -12,7 +19,23 @@ pub enum FlowMigrationError {
     Incompatible(String),
 }
 
+/// Schema commands load the configured tenant without service or Redis secrets.
+pub fn flow_seed_organization_id(value: Option<&str>) -> Result<Uuid, FlowMigrationError> {
+    marty_service_runtime::config::trimmed_nonempty(value)
+        .map(str::parse)
+        .transpose()
+        .map_err(|_| incompatible("MARTY_ORG_ID is invalid"))
+        .map(|value| value.unwrap_or(DEFAULT_ORGANIZATION_ID))
+}
+
 pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError> {
+    migrate_flow_schema_for_organization(pool, DEFAULT_ORGANIZATION_ID).await
+}
+
+pub async fn migrate_flow_schema_for_organization(
+    pool: &PgPool,
+    organization_id: Uuid,
+) -> Result<(), FlowMigrationError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(ADVISORY_LOCK_ID)
@@ -21,7 +44,15 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     sqlx::raw_sql(include_str!("../migrations/0001_flow_schema.sql"))
         .execute(&mut *transaction)
         .await?;
-    sqlx::raw_sql(include_str!("../migrations/0002_builtin_flows.sql"))
+    // Preserve the historical seed file. Its fixed tenant slots become a
+    // transaction-local, bound value; no operator text is interpolated as SQL.
+    sqlx::query("SELECT set_config('marty.flow_seed_organization_id', $1, true)")
+        .bind(organization_id.to_string())
+        .execute(&mut *transaction)
+        .await?;
+    // Audited: this transformation accepts no arguments and only combines
+    // checked-in SQL with fixed SQL literals. The tenant remains a bind value.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(configured_builtin_seed_sql()?))
         .execute(&mut *transaction)
         .await?;
     sqlx::raw_sql(include_str!(
@@ -30,17 +61,93 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     .execute(&mut *transaction)
     .await?;
     validate_connection(&mut transaction).await?;
+    validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
     Ok(())
 }
 
 pub async fn validate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError> {
+    validate_flow_schema_for_organization(pool, DEFAULT_ORGANIZATION_ID).await
+}
+
+pub async fn validate_flow_schema_for_organization(
+    pool: &PgPool,
+    organization_id: Uuid,
+) -> Result<(), FlowMigrationError> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION READ ONLY")
         .execute(&mut *transaction)
         .await?;
     validate_connection(&mut transaction).await?;
+    validate_builtin_ownership(&mut transaction, organization_id).await?;
     transaction.commit().await?;
+    Ok(())
+}
+
+fn configured_builtin_seed_sql() -> Result<String, FlowMigrationError> {
+    let historical = include_str!("../migrations/0002_builtin_flows.sql");
+    let tenant = "'00000000-0000-0000-0000-000000000001'";
+    let deployment = "WHERE id = '70000000-0000-0000-0000-000000000001';";
+    if historical.matches(tenant).count() != 3 || historical.matches(deployment).count() != 1 {
+        return Err(incompatible("historical Flow seed parameter slots changed"));
+    }
+    Ok(historical
+        .replace(tenant, "current_setting('marty.flow_seed_organization_id')")
+        .replace(
+            deployment,
+            "WHERE id = '70000000-0000-0000-0000-000000000001'
+               AND organization_id = current_setting('marty.flow_seed_organization_id');",
+        ))
+}
+
+async fn validate_builtin_ownership(
+    connection: &mut sqlx::PgConnection,
+    organization_id: Uuid,
+) -> Result<(), FlowMigrationError> {
+    let organization_id = organization_id.to_string();
+    let owners: Vec<String> = sqlx::query_scalar(
+        "SELECT organization_id FROM flow_service.flow_definitions WHERE id=ANY($1::text[])",
+    )
+    .bind(BUILTIN_DEFINITION_IDS)
+    .fetch_all(&mut *connection)
+    .await?;
+    if owners.len() != BUILTIN_DEFINITION_IDS.len()
+        || owners.iter().any(|owner| owner != &organization_id)
+    {
+        return Err(incompatible(
+            "built-in Flow definition belongs to a different organization",
+        ));
+    }
+    let bootstrap_owner: String = sqlx::query_scalar(
+        "SELECT organization_id FROM flow_service.flow_instances
+         WHERE id='71000000-0000-0000-0000-000000000101'
+           AND flow_definition_id='71000000-0000-0000-0000-000000000001'",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if bootstrap_owner != organization_id {
+        return Err(incompatible(
+            "bootstrap Flow instance belongs to a different organization",
+        ));
+    }
+    let deployment_table_exists: bool = sqlx::query_scalar(
+        "SELECT to_regclass('deployment_profile_service.deployment_profiles') IS NOT NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if deployment_table_exists {
+        let deployment_owner: Option<String> = sqlx::query_scalar(
+            "SELECT organization_id FROM deployment_profile_service.deployment_profiles
+             WHERE id='70000000-0000-0000-0000-000000000001'",
+        )
+        .fetch_optional(&mut *connection)
+        .await?;
+        if deployment_owner.is_some_and(|owner| owner != organization_id) {
+            return Err(incompatible(
+                "login Flow deployment belongs to a different organization",
+            ));
+        }
+    }
     Ok(())
 }
 

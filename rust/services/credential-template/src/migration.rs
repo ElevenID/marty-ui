@@ -10,6 +10,7 @@ const ADVISORY_LOCK_ID: i64 = 718_431_214;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CredentialTemplateDataReconciliationConfig {
     pub marty_organization_id: String,
+    pub marty_issuer_did: String,
     pub public_api_origin: String,
     pub public_hostname: String,
     pub selfhost_production: bool,
@@ -79,7 +80,6 @@ pub async fn reconcile_credential_template_data(
         config.public_api_origin.trim_end_matches('/')
     );
     let badge_image_url = format!("{badge_vct}/image.svg");
-    let issuer_did = format!("did:web:{}:orgs:marty", config.public_hostname);
 
     sqlx::query(
         "UPDATE credential_template_service.credential_templates
@@ -237,7 +237,7 @@ pub async fn reconcile_credential_template_data(
            AND lower(status)='active'
            AND nullif(trim(issuer_did),'') IS NULL",
     )
-    .bind(&issuer_did)
+    .bind(&config.marty_issuer_did)
     .bind(&config.marty_organization_id)
     .execute(&mut *transaction)
     .await?
@@ -279,6 +279,7 @@ fn validate_reconciliation_config(
         || origin.query().is_some()
         || origin.fragment().is_some()
         || config.marty_organization_id.trim().is_empty()
+        || !config.marty_issuer_did.starts_with("did:")
     {
         return Err(incompatible("data reconciliation configuration is invalid"));
     }

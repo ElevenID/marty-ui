@@ -98,6 +98,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let startup = reconcile_organization_startup(
         application.store(),
         config.marty_organization_id,
+        &config.marty_organization_name,
+        &config.marty_organization_slug,
         config.marty_admin_email.as_deref(),
         config.marty_reviewer_email.as_deref(),
         chrono::Utc::now(),

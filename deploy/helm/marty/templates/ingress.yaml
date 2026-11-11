@@ -1,6 +1,5 @@
 {{- if .Values.ingress.enabled -}}
-{{- $isIp := or (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" .Values.publicHost) (contains ":" .Values.publicHost) -}}
-{{- $host := .Values.ingress.host | default (ternary "" .Values.publicHost $isIp) -}}
+{{- $host := include "marty.ingressHost" . -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

@@ -1,6 +1,6 @@
 Marty is installed in namespace {{ .Release.Namespace }}.
 
-Public origin: {{ .Values.publicOrigin | default (printf "https://%s" .Values.publicHost) }}
+Public origin: {{ include "marty.publicOrigin" . }}
 
 Check completion and evidence with standard tools:
   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}

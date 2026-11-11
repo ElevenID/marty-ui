@@ -337,6 +337,22 @@ def assert_models(
     configurator_environment = expected["services"]["keycloak-configurator"]["environment"]
     assert "KEYCLOAK_SETUP_STRICT" not in configurator_environment
     configurator_environment["KEYCLOAK_SETUP_STRICT"] = "true"
+    # Keep the frozen historical model; admit this exact policy change only.
+    # Redis holds persistent identity records and replay markers, so cache-style
+    # eviction is not an acceptable response to a full bounded shared store.
+    redis_command = expected["services"]["redis"]["command"]
+    historical_redis_command = (
+        "redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 "
+        "--appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru"
+    )
+    if isinstance(redis_command, str):
+        assert redis_command == historical_redis_command
+        expected["services"]["redis"]["command"] = historical_redis_command.replace(
+            "--maxmemory-policy allkeys-lru", "--maxmemory-policy noeviction"
+        )
+    else:
+        assert redis_command == historical_redis_command.split()
+        redis_command[-1] = "noeviction"
     gateway_environment = expected["services"]["gateway"]["environment"]
     assert "GATEWAY_OBSERVE_CLIENT_IP" not in gateway_environment
     gateway_environment["GATEWAY_OBSERVE_CLIENT_IP"] = (
@@ -392,6 +408,10 @@ def assert_models(
         environment["MARTY_ISSUER_DID"] = (
             issuer_did if interpolated else "${MARTY_ISSUER_DID:-}"
         )
+        # The same selected display name must reach native tenant/bootstrap
+        # owners and Auth, not only the existing managed Keycloak configurator.
+        assert "MARTY_ORG_NAME" not in environment
+        environment["MARTY_ORG_NAME"] = configurator_environment["MARTY_ORG_NAME"]
     for owner, setting in (
         ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
         ("flow", "OID4VP_ISSUER_DID"),

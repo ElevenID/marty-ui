@@ -5,6 +5,19 @@ single-node development path. Its runtime provenance comes from the existing
 signed installer inventory; it does not inherit the Compose installer's runtime
 qualification or admit a release to the consumer installation channel.
 
+Start with the [installation configuration guide](kubernetes-installation-configuration.md)
+to select the public origin, organization, login/mail policy and registry Secrets
+before bootstrap. Keep these nonsecret choices separate from signed image values
+and private credentials.
+
+**Plan the development lifetime before starting or resuming the node.** Workload
+identities expire after eight hours, and the initial migration token after two
+hours. Stopping EC2 does not pause those clocks. This profile does not install
+automatic application credential renewal; a successful reboot or a Helm
+`deployed` status does not establish current application readiness. Preserve the
+original state and use the documented staging/activation or applicable recovery
+path instead of rerunning fresh bootstrap against an existing OpenBao store.
+
 ## Ownership
 
 | Responsibility | Implementation |
@@ -198,6 +211,15 @@ references. Runtime source and chart source are recorded separately. The
 OpenBao override selects the signed plugin image using `tag@sha256`, as required
 by the official chart's image template; the digest determines the bytes.
 
+Bootstrap validates its Helm 3 executable before creating private state. Each
+selected `--image-pull-secret` must already exist in the target namespace with
+type `kubernetes.io/dockerconfigjson` or `kubernetes.io/dockercfg`; it is checked
+after runtime authentication and context selection but before cluster writes.
+The same selection produces `marty-pull-secrets.json` for the application chart
+and `openbao-pull-secrets.json` for OpenBao. These files contain Secret names
+only, including an empty list when no registry Secret is selected. Include the
+application file in the render and install commands below.
+
 Root and recovery material stay in the private operator directory. Applications
 receive public certificates, scoped KMS credentials, and distinct service
 credentials through Kubernetes Secrets. The initial application operator has a
@@ -368,17 +390,20 @@ Render and validate before installation:
 helm lint --strict deploy/helm/marty \
   -f deploy/helm/marty/values-k3s-dev.yaml \
   -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
   -f /root/marty-k3s/installation.yaml
 
 helm template marty deploy/helm/marty --namespace marty-dev \
   -f deploy/helm/marty/values-k3s-dev.yaml \
   -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
   -f /root/marty-k3s/installation.yaml \
   | kubectl apply --dry-run=server -f -
 
 helm upgrade --install marty deploy/helm/marty --namespace marty-dev \
   -f deploy/helm/marty/values-k3s-dev.yaml \
   -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
   -f /root/marty-k3s/installation.yaml \
   --wait --wait-for-jobs --timeout 35m
 ```

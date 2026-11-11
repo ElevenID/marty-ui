@@ -364,6 +364,8 @@ def bootstrap_flow(tmp_path, monkeypatch):
         helm=tmp_path / "helm", chart_package=tmp_path / "openbao.tgz",
     )
     write_private(args.kubeconfig, b"PRIVATE_INPUT_KUBECONFIG_CANARY")
+    write_private(args.helm, b"synthetic executable; never launched")
+    args.helm.chmod(0o700)
     write_private(args.chart_package, b"synthetic chart; never installed")
     upstream = tmp_path / "upstream.json"
     write_private(upstream, bootstrap.encoded({
@@ -383,6 +385,9 @@ def bootstrap_flow(tmp_path, monkeypatch):
     }
     flow = SimpleNamespace(
         args=args, values=values, fail_at=None, init_calls=0, cleanup_calls=0,
+        helm_version=b"v3.22.1+gfixture\n", helm_returncode=0, helm_exception=None,
+        namespace_exists=True,
+        pull_secret_summaries={"registry-pull": b"registry-pull\tkubernetes.io/dockerconfigjson"},
         namespace_reads=0, status_reads=0, publication_calls=0,
         publication_contract=expected_publication_contract(), contract_bytes=None,
         contract_returncode=0, contract_exception=None,
@@ -425,7 +430,13 @@ def bootstrap_flow(tmp_path, monkeypatch):
 
     def process(command, **kwargs):
         flow.processes.append(command)
-        if command == [str(args.state_dir / "marty-deploy"), "--build-identity"]:
+        if command == [str(args.helm.resolve()), "version", "--short"]:
+            assert kwargs["stdin"] == subprocess.DEVNULL and kwargs["timeout"] == 10
+            if flow.helm_exception:
+                raise flow.helm_exception
+            return SimpleNamespace(returncode=flow.helm_returncode, stdout=flow.helm_version,
+                                   stderr=b"PRIVATE_HELM_DIAGNOSTIC_CANARY")
+        elif command == [str(args.state_dir / "marty-deploy"), "--build-identity"]:
             flow.events.append("build-identity")
             stdout = (args.runtime_source_sha + ":" + args.release_tag).encode()
         elif command == [str(args.state_dir / "marty-deploy"), "kubernetes-secrets-contract"]:
@@ -480,6 +491,7 @@ def bootstrap_flow(tmp_path, monkeypatch):
         def run(self, operation, command, **kwargs):
             flow.cluster_operations.append(operation)
             if operation == "official OpenBao Helm installation":
+                assert command[0] == str(args.helm.resolve())
                 return b""
             assert operation == "native Kubernetes credential publication"
             flow.publication_calls += 1
@@ -499,7 +511,19 @@ def bootstrap_flow(tmp_path, monkeypatch):
 
         def kubectl(self, operation, *command, **kwargs):
             flow.cluster_operations.append(operation)
+            if operation == "image pull Secret preflight":
+                assert command[:2] == ("get", "secret")
+                assert command[3:] == ("--ignore-not-found", "--request-timeout=10s",
+                                      '-o=jsonpath={.metadata.name}{"\\t"}{.type}')
+                assert kwargs["timeout"] == 15
+                if flow.fail_at == "pull-secret-read":
+                    raise bootstrap.BootstrapError("image pull Secret preflight failed; private diagnostics retained")
+                return flow.pull_secret_summaries.get(command[2], b"")
             if operation == "namespace inspection":
+                return (bootstrap.encoded(flow.namespace_documents[0]) if flow.namespace_exists else b"")
+            if operation == "namespace workload inspection":
+                return b'{"items":[]}'
+            if operation == "namespace Secret inspection":
                 return b""
             if operation == "namespace identity":
                 assert command[:3] == ("get", "namespace", self.namespace)
@@ -640,6 +664,141 @@ def bootstrap_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(bootstrap, "verified_key_metadata", lambda output: {})
     monkeypatch.setattr(bootstrap, "accept_remote_tls", accept_tls)
     return flow
+
+
+@pytest.mark.parametrize("invalid", ["missing", "directory", "not-executable", "fails", "timeout", "os-error", "wrong-major", "malformed", "oversized"])
+def test_helm_preflight_refuses_before_state_and_cluster(bootstrap_flow, invalid, capsys):
+    flow = bootstrap_flow
+    if invalid == "missing":
+        flow.args.helm.unlink()
+    elif invalid == "directory":
+        flow.args.helm.unlink()
+        flow.args.helm.mkdir()
+    elif invalid == "not-executable":
+        flow.args.helm.chmod(0o600)
+    elif invalid == "fails":
+        flow.helm_returncode = 1
+    elif invalid == "timeout":
+        flow.helm_exception = subprocess.TimeoutExpired(
+            ["PRIVATE_HELM_COMMAND_CANARY"], 10, output=b"PRIVATE_HELM_OUTPUT_CANARY")
+    elif invalid == "os-error":
+        flow.helm_exception = OSError("PRIVATE_HELM_FAILURE_CANARY")
+    elif invalid == "wrong-major":
+        flow.helm_version = b"v4.0.0\n"
+    elif invalid == "malformed":
+        flow.helm_version = b"PRIVATE_HELM_OUTPUT_CANARY"
+    else:
+        flow.helm_version = b"v3.22.1+" + b"x" * 256
+    with pytest.raises(bootstrap.BootstrapError, match="Helm") as failure:
+        bootstrap.bootstrap(flow.args)
+    assert not flow.args.state_dir.exists()
+    assert flow.events == flow.cluster_operations == flow.resources == []
+    assert flow.init_calls == 0
+    captured = capsys.readouterr()
+    assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
+
+
+@pytest.mark.parametrize("names", [
+    [""], ["-registry"], ["registry-"], ["Registry"], ["registry..pull"],
+    ["registry/pull"], ["a" * 254], ["registry-pull", "registry-pull"],
+    ["registry-" + str(index) for index in range(17)],
+])
+def test_image_pull_secret_names_refused_before_state_and_processes(bootstrap_flow, names):
+    flow = bootstrap_flow
+    flow.args.image_pull_secret = names
+    with pytest.raises(bootstrap.BootstrapError, match="Secret"):
+        bootstrap.bootstrap(flow.args)
+    assert not flow.args.state_dir.exists()
+    assert flow.events == flow.processes == flow.cluster_operations == flow.resources == []
+
+
+@pytest.mark.parametrize("summary", [
+    b"", b"registry-pull\tOpaque", b"registry-pull\tkubernetes.io/tls",
+    b"wrong-name\tkubernetes.io/dockerconfigjson", b"PRIVATE_SECRET_RESPONSE_CANARY",
+])
+def test_image_pull_secret_preflight_refuses_before_namespace_or_seal_write(bootstrap_flow, summary, capsys):
+    flow = bootstrap_flow
+    flow.pull_secret_summaries["registry-pull"] = summary
+    with pytest.raises(bootstrap.BootstrapError, match="image pull Secret") as failure:
+        bootstrap.bootstrap(flow.args)
+    assert flow.cluster_operations == ["image pull Secret preflight"]
+    assert flow.resources == [] and flow.init_calls == flow.publication_calls == 0
+    for name in ("namespace.json", "static.key", "initialize-requested.json", "bootstrap-complete.json"):
+        assert not (flow.args.state_dir / name).exists()
+    assert (flow.args.state_dir / "kubernetes-secret-publication.json").exists()
+    captured = capsys.readouterr()
+    assert "PRIVATE_" not in str(failure.value) + captured.out + captured.err
+
+
+def test_image_pull_secret_read_failure_never_reaches_initialization(bootstrap_flow):
+    flow = bootstrap_flow
+    flow.fail_at = "pull-secret-read"
+    with pytest.raises(bootstrap.BootstrapError, match="image pull Secret preflight failed"):
+        bootstrap.bootstrap(flow.args)
+    assert flow.cluster_operations == ["image pull Secret preflight"]
+    assert flow.resources == [] and flow.init_calls == 0
+
+
+@pytest.mark.parametrize("kind", ["kubernetes.io/dockerconfigjson", "kubernetes.io/dockercfg"])
+def test_image_pull_secret_preflight_accepts_supported_registry_types(bootstrap_flow, kind):
+    flow = bootstrap_flow
+    flow.pull_secret_summaries["registry-pull"] = ("registry-pull\t" + kind).encode()
+    bootstrap.bootstrap(flow.args)
+    assert flow.cluster_operations[0] == "image pull Secret preflight"
+    assert flow.cluster_operations.index("image pull Secret preflight") < flow.cluster_operations.index("create")
+    assert flow.init_calls == 1
+    assert (flow.args.state_dir / "bootstrap-complete.json").is_file()
+
+
+def test_public_registry_bootstrap_does_not_require_pull_secrets(bootstrap_flow):
+    flow = bootstrap_flow
+    flow.args.image_pull_secret = []
+    flow.namespace_exists = False
+    bootstrap.bootstrap(flow.args)
+    assert "image pull Secret preflight" not in flow.cluster_operations
+    assert any(resource["kind"] == "Namespace" for resource in flow.resources)
+    assert flow.init_calls == 1
+
+
+@pytest.mark.parametrize("names", [[], ["registry-pull"], ["second-registry", "first-registry"]])
+def test_registry_selection_is_shared_with_application_and_openbao_values(bootstrap_flow, names):
+    flow = bootstrap_flow
+    flow.args.image_pull_secret = names
+    flow.pull_secret_summaries = {
+        name: (name + "\tkubernetes.io/dockerconfigjson").encode() for name in names
+    }
+    bootstrap.bootstrap(flow.args)
+    state = flow.args.state_dir
+    expected = [{"name": name} for name in names]
+    for filename, document in (
+        ("marty-pull-secrets.json", {"imagePullSecrets": expected}),
+        ("openbao-pull-secrets.json", {"global": {"imagePullSecrets": expected}}),
+    ):
+        path = state / filename
+        assert json.loads(path.read_bytes()) == document
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert b"PRIVATE_" not in path.read_bytes()
+    assert (state / "marty-images.json").read_bytes() == b"{}"
+    assert (state / "openbao-images.json").read_bytes() == b"{}"
+    producer = next(resource for resource in flow.resources if resource["kind"] == "Pod")
+    assert producer["spec"]["imagePullSecrets"] == expected
+    assert json.loads((state / "bootstrap-complete.json").read_bytes())["imagePullSecrets"] == names
+
+
+def test_selected_helm_relative_path_is_not_resolved_through_path(tmp_path, monkeypatch):
+    binary = tmp_path / "helm"
+    write_private(binary, b"synthetic executable; never launched")
+    binary.chmod(0o700)
+    monkeypatch.chdir(tmp_path)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=b"v3.22.1\n", stderr=b"")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", run)
+    assert bootstrap.helm_executable(Path("helm")) == binary
+    assert calls == [[str(binary), "version", "--short"]]
 
 
 @pytest.mark.parametrize("invalid", [

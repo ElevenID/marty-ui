@@ -177,7 +177,9 @@ spec:
         - --maxmemory
         - {{ .Values.redis.maxmemory | quote }}
         - --maxmemory-policy
-        - allkeys-lru
+        # This instance also owns signing identities and one-use grant markers.
+        # Memory pressure must refuse writes, never silently evict that state.
+        - noeviction
         ports:
         - containerPort: 6379
         resources:
