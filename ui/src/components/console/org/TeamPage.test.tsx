@@ -496,12 +496,9 @@ describe('TeamPage', () => {
     })
   })
 
-  it('keeps manual Invite disabled when the gate resolves before the page permission request', async () => {
+  it('keeps manual Invite unavailable until the page permissions and inventories are ready', async () => {
     const pagePermissions = { isLoading: true, can: () => false }
-    const gatePermissions = { isLoading: false, can: () => true }
-    // Each real hook consumer retains its own state. The page mounts before
-    // its child gate, whose independent permission request finishes first.
-    mockPermissionInstance.mockReturnValue(gatePermissions).mockReturnValueOnce(pagePermissions)
+    mockPermissionInstance.mockReturnValue(pagePermissions)
     const { user, rerender } = renderWithRouter(<TeamPage />, {
       initialEntries: ['/console/org/team'],
     })
@@ -509,14 +506,13 @@ describe('TeamPage', () => {
     await act(async () => {})
     expect(mockListMembers).not.toHaveBeenCalled()
     expect(mockListRoles).not.toHaveBeenCalled()
-    const invite = screen.getByRole('button', { name: 'org.team.members.actions.invite' })
-    expect(invite).toBeVisible()
-    expect(invite).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'org.team.members.actions.invite' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
     pagePermissions.isLoading = false
     pagePermissions.can = () => true
     rerender(<TeamPage />)
+    const invite = await screen.findByRole('button', { name: 'org.team.members.actions.invite' })
     await waitFor(() => expect(invite).toBeEnabled())
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await user.click(invite)
@@ -888,6 +884,61 @@ describe('TeamPage', () => {
 
     expect(mockListMembers).toHaveBeenCalledExactlyOnceWith('console-org', {}, { isCurrent: expect.any(Function) })
     expect(mockShowNotification).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { target: 'member', completion: 'resolve' },
+    { target: 'member', completion: 'reject' },
+    { target: 'invitation', completion: 'resolve' },
+    { target: 'invitation', completion: 'reject' },
+  ])('keeps a late $target removal $completion owned by the previous account in the same organization', async ({ target, completion }) => {
+    const request = deferred<unknown>()
+    mockRemoveMember.mockReturnValueOnce(request.promise)
+    const { user, rerender } = renderWithRouter(<TeamPage />)
+    await startRemoval(user, target)
+
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: true,
+      user: { user_id: 'user_3', id: 'legacy_user', email: 'current.owner@example.com' },
+    })
+    mockListMembers.mockResolvedValue([{
+      id: 'current_member', user_id: 'user_4', email: 'current@example.com',
+      roles: [], status: 'active', is_owner: false,
+    }])
+    rerender(<TeamPage />)
+    const row = (await screen.findAllByText('current@example.com'))[0].closest('tr') as HTMLElement
+    expect(within(row).getByRole('button')).toBeEnabled()
+
+    await act(async () => {
+      if (completion === 'resolve') request.resolve({ ok: true })
+      else request.reject(new Error('Previous account removal failed'))
+    })
+
+    expect(mockListMembers).toHaveBeenCalledTimes(2)
+    expect(mockListRoles).toHaveBeenCalledTimes(2)
+    expect(mockShowNotification).not.toHaveBeenCalled()
+    expect(within(row).getByRole('button')).toBeEnabled()
+    expect(mockRemoveMember).toHaveBeenCalledExactlyOnceWith('console-org', target === 'member' ? 'member_1' : 'member_invite_1')
+  })
+
+  it.each(['member', 'invitation'])('blocks repeated %s removal until settlement and enables retry after failure', async target => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const request = deferred<unknown>()
+    mockRemoveMember.mockReturnValueOnce(request.promise)
+    const { user } = renderWithRouter(<TeamPage />)
+    await startRemoval(user, target)
+    const email = target === 'member' ? 'alex@example.com' : 'pending@example.com'
+    const row = screen.getAllByText(email)[0].closest('tr') as HTMLElement
+    const action = within(row).getByRole('button')
+    expect(action).toBeDisabled()
+    fireEvent.click(action)
+    expect(mockRemoveMember).toHaveBeenCalledOnce()
+    expect(confirm).toHaveBeenCalledOnce()
+
+    await act(async () => request.reject(new Error('Removal temporarily unavailable')))
+    expect(action).toBeEnabled()
+    await startRemoval(user, target)
+    expect(mockRemoveMember).toHaveBeenCalledTimes(2)
   })
 
   it('blocks duplicate invitation submissions and dismissal while sending', async () => {

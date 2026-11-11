@@ -14,6 +14,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import { useTranslation } from 'react-i18next';
 import { ResourcePage } from '../../common';
+import ErrorState from '../../common/ErrorState';
 import { getPendingRequests, approveMembershipRequest } from '../../../services/membershipApi';
 
 function requestErrorMessage(error, fallback) {
@@ -24,7 +25,7 @@ function requestErrorMessage(error, fallback) {
 export default function MembershipRequestsPage() {
   const { activeOrgId } = useConsole();
   const { user, isAuthenticated } = useAuth();
-  const { can, isLoading } = usePermissions();
+  const { can, isLoading, error: permissionError, refresh: refreshPermissions } = usePermissions();
   const { t } = useTranslation('console');
   const principalId = user?.user_id || user?.sub || user?.id || null;
   const canView = !isLoading && can('team', 'view');
@@ -39,6 +40,7 @@ export default function MembershipRequestsPage() {
   if (!isAuthenticated) content = <Alert severity="info">{t('membershipReview.signIn')}</Alert>;
   else if (!activeOrgId) content = <Alert severity="info">{t('membershipReview.selectOrganization')}</Alert>;
   else if (isLoading) content = <CircularProgress aria-label={t('membershipReview.permissionsLoading')} />;
+  else if (permissionError) content = <ErrorState error={permissionError} onRetry={refreshPermissions} variant="compact" />;
   else if (!canView) content = <Alert severity="info">{t('membershipReview.readDenied')}</Alert>;
   else {
     content = (

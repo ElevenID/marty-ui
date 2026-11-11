@@ -11,6 +11,7 @@ import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
 import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
 import { exchangeAuthCallbackCode } from '../application/routing/authCallback';
+import { LOGOUT_STARTED_EVENT } from '../services/authEvents';
 import {
   createEnrichedUser,
   getAuthFlags,
@@ -83,6 +84,34 @@ function logAuthContextError(message, error) {
   }
 }
 
+function principalId(user) {
+  return user?.user_id || user?.sub || user?.id;
+}
+
+// Compare confirmed server authority with the prior raw response, not with
+// capabilities/organizations added by createEnrichedUser. Display-only changes
+// such as a new photo must not restart the console, while changed grants must.
+function authoritySnapshot(user) {
+  return JSON.stringify({
+    principal: principalId(user),
+    roles: user.roles,
+    capabilities: user.capabilities,
+    userType: user.user_type,
+    applicantId: user.applicant_id,
+    organization: user.organization,
+    organizations: user.organizations,
+    organizationId: user.organization_id,
+    defaultOrganizationId: user.default_organization_id,
+    impersonation: user.impersonation,
+  });
+}
+
+function obsoleteAuthRequest() {
+  const error = new Error('The authentication request changed.');
+  error.name = 'AbortError';
+  return error;
+}
+
 /**
  * Authentication Provider Component
  *
@@ -93,53 +122,116 @@ export function AuthProvider({ children }) {
   const [isLoading, setIsLoading] = useState(() => !getPublicEntryCanonicalOrigin());
   const authRequestGeneration = useRef(0);
   const callbackAttempt = useRef(null);
+  const currentUser = useRef(null);
+  const confirmedAuthority = useRef(null);
+  const identityRefreshPending = useRef(isLoading);
+  const mounted = useRef(true);
+  const logoutStarted = useRef(false);
 
   // Fetch current user on mount
-  const fetchUser = useCallback(async () => {
+  const fetchUser = useCallback(async function loadUser({ background = false } = {}) {
+    if (!mounted.current || logoutStarted.current) return undefined;
     const generation = ++authRequestGeneration.current;
-    const applies = () => authRequestGeneration.current === generation;
+    const applies = () => mounted.current && authRequestGeneration.current === generation;
+    const previousUser = currentUser.current;
+    let canRetainUser = background && Boolean(principalId(previousUser)) && !identityRefreshPending.current;
+    const updateUser = (nextUser) => {
+      currentUser.current = nextUser;
+      if (!nextUser) confirmedAuthority.current = null;
+      setUser(nextUser);
+    };
     if (getPublicEntryCanonicalOrigin()) {
-      setUser(null);
+      updateUser(null);
+      identityRefreshPending.current = false;
       setIsLoading(false);
       return null;
     }
     try {
-      setIsLoading(true);
+      // Photo readback can keep the current account mounted. Initial checks,
+      // explicit identity refreshes, and callback proof still invalidate grants.
+      if (!canRetainUser) {
+        identityRefreshPending.current = true;
+        setIsLoading(true);
+      }
       const result = await getCurrentUser();
       if (!applies()) return undefined;
 
       if (result.authenticated && result.user) {
         const rawUser = result.user;
+        const nextAuthority = authoritySnapshot(rawUser);
+        if (canRetainUser && nextAuthority !== confirmedAuthority.current) {
+          // A background read can discover an account or authority change. Drop
+          // the old console before awaiting the newly confirmed account's data.
+          canRetainUser = false;
+          identityRefreshPending.current = true;
+          updateUser(null);
+          setIsLoading(true);
+        }
         let userOrganizations = [];
 
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
-          if (applies()) logAuthContextError('Error fetching user organizations:', orgError);
+          if (!applies()) return undefined;
+          logAuthContextError('Error fetching user organizations:', orgError);
+          if (canRetainUser) {
+            // An unavailable read is not an empty membership response. Denied
+            // access must still invalidate grants, even if raw claims match.
+            if (orgError?.status === 401 || orgError?.status === 403) return loadUser();
+            throw orgError;
+          }
         }
         if (!applies()) return undefined;
 
         const storedOrgId = window.localStorage.getItem('activeOrgId');
         const enrichedUser = createEnrichedUser(rawUser, userOrganizations, storedOrgId);
+        if (canRetainUser) {
+          if (JSON.stringify(enrichedUser.organizations) !== JSON.stringify(previousUser.organizations)) {
+            // A changed membership can change permissions too. Restart through
+            // strict identity loading so old grants are invalidated first. The
+            // default request cannot recurse and supersedes this generation.
+            return loadUser();
+          }
+          enrichedUser.organizations = previousUser.organizations;
+        }
 
-        setUser(enrichedUser);
+        confirmedAuthority.current = nextAuthority;
+        updateUser(enrichedUser);
         return enrichedUser;
       } else {
-        setUser(null);
+        updateUser(null);
         return null;
       }
     } catch (error) {
       if (!applies()) return undefined;
       logAuthContextError('Error fetching user:', error);
-      setUser(null);
+      // Retain display state only for an explicitly requested readback of the
+      // same validated account. Never return it as fresh callback identity proof.
+      if (canRetainUser) throw error;
+      updateUser(null);
       return null;
     } finally {
-      if (applies()) setIsLoading(false);
+      if (applies()) {
+        identityRefreshPending.current = false;
+        setIsLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    const stopForLogout = () => {
+      logoutStarted.current = true;
+      authRequestGeneration.current += 1;
+      callbackAttempt.current = null;
+    };
+    window.addEventListener(LOGOUT_STARTED_EVENT, stopForLogout);
     fetchUser();
+    return () => {
+      mounted.current = false;
+      authRequestGeneration.current += 1;
+      window.removeEventListener(LOGOUT_STARTED_EVENT, stopForLogout);
+    };
   }, [fetchUser]);
 
   // Login handler - accepts optional redirect URI string
@@ -167,8 +259,9 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Refresh user info
-  const refreshUser = useCallback(async () => {
-    await fetchUser();
+  const refreshUser = useCallback(async (options) => {
+    const refreshedUser = await fetchUser(options);
+    if (options?.background && refreshedUser === undefined) throw obsoleteAuthRequest();
   }, [fetchUser]);
 
   // The console subtree remounts when authentication changes. Keep the one-use
@@ -181,7 +274,7 @@ export function AuthProvider({ children }) {
     const attempt = { key, promise: null };
     callbackAttempt.current = attempt;
     const assertCurrent = () => {
-      if (callbackAttempt.current !== attempt) {
+      if (!mounted.current || logoutStarted.current || callbackAttempt.current !== attempt) {
         const error = new Error('The authentication callback changed.');
         error.name = 'AbortError';
         throw error;
@@ -193,9 +286,7 @@ export function AuthProvider({ children }) {
       const refreshedUser = await fetchUser();
       assertCurrent();
       if (refreshedUser === undefined) {
-        const error = new Error('The authentication request changed.');
-        error.name = 'AbortError';
-        throw error;
+        throw obsoleteAuthRequest();
       }
       const principalId = refreshedUser?.user_id || refreshedUser?.sub || refreshedUser?.id;
       if (!principalId) throw new Error('Authentication could not be confirmed. Please sign in again.');

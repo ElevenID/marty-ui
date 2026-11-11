@@ -16,6 +16,7 @@ import {
   isAuthenticated,
   getUserOrganizations,
   startPasskeyEnrollment,
+  updateProfilePicture,
 } from '../authApi'
 import { redirectBrowser } from '../../application/routing/appHandoff'
 vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }))
@@ -85,16 +86,29 @@ describe('authApi', () => {
       expect(result.user).toBeNull()
     })
 
-    it('should handle network errors', async () => {
+    it('rejects a network failure without claiming the session is unauthenticated', async () => {
       server.use(
         http.get('/v1/auth/me', () => {
           return HttpResponse.error()
         })
       )
 
-      const result = await getCurrentUser()
+      await expect(getCurrentUser()).rejects.toThrow()
+    })
 
-      expect(result.authenticated).toBe(false)
+    it('recognizes an explicit signed-out session', async () => {
+      server.use(http.get('/v1/auth/me', () => HttpResponse.json({ authenticated: false, user: null })))
+      await expect(getCurrentUser()).resolves.toEqual({ authenticated: false, user: null })
+    })
+
+    it.each([403, 503])('rejects HTTP %s without claiming the session is unauthenticated', async status => {
+      server.use(http.get('/v1/auth/me', () => HttpResponse.json({ detail: 'Session unavailable' }, { status })))
+      await expect(getCurrentUser()).rejects.toThrow(`HTTP error! status: ${status}`)
+    })
+
+    it.each([null, {}, { authenticated: 'true', user: mockUsers.admin }, { authenticated: true, user: {} }])('rejects an unconfirmed identity response: %j', async payload => {
+      server.use(http.get('/v1/auth/me', () => HttpResponse.json(payload)))
+      await expect(getCurrentUser()).rejects.toThrow('The account response could not be read.')
     })
 
     it('should include credentials in request', async () => {
@@ -104,7 +118,7 @@ describe('authApi', () => {
 
       server.use(
         http.get('/v1/auth/me', () => {
-          return HttpResponse.json(mockUsers.admin)
+          return HttpResponse.json({ authenticated: true, user: mockUsers.admin })
         })
       )
 
@@ -114,6 +128,32 @@ describe('authApi', () => {
         credentials: 'include',
         cache: 'no-store',
       }))
+    })
+  })
+
+  describe('updateProfilePicture', () => {
+    it('sends the encoded picture in a cookie-bearing JSON PATCH', async () => {
+      const fetchSpy = vi.spyOn(window, 'fetch')
+      const picture = 'data:image/png;base64,bmV3IHBpY3R1cmU='
+      let payload: unknown
+      server.use(http.patch('/v1/auth/me', async ({ request }) => {
+        expect(request.headers.get('content-type')).toBe('application/json')
+        payload = await request.json()
+        return HttpResponse.json({ ok: true })
+      }))
+      await expect(updateProfilePicture(picture)).resolves.toEqual({ success: true })
+      expect(payload).toEqual({ picture })
+      expect(fetchSpy).toHaveBeenCalledWith('/v1/auth/me', expect.objectContaining({
+        method: 'PATCH', credentials: 'include', body: JSON.stringify({ picture }),
+      }))
+    })
+
+    it('refuses an oversized serialized picture before dispatching a PATCH', async () => {
+      const fetchSpy = vi.spyOn(window, 'fetch')
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(updateProfilePicture(`data:image/png;base64,${'A'.repeat(2 * 1024 * 1024)}`))
+        .resolves.toEqual({ success: false, error: 'Image must be 1.5 MB or smaller.' })
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
   })
 

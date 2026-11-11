@@ -26,6 +26,7 @@ import {
   ToggleButton,
   Alert,
   Button,
+  CircularProgress,
 } from '@mui/material';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
@@ -35,6 +36,7 @@ import StarIcon from '@mui/icons-material/Star';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
 import LogoutIcon from '@mui/icons-material/Logout';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
 import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
@@ -266,7 +268,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   // Track which parent items are expanded
   const [expandedItems, setExpandedItems] = useState({});
 
-  const { can } = usePermissions();
+  const { can, isLoading: permissionsLoading, error: permissionError, refresh: refreshPermissions } = usePermissions();
 
   const handleDestinationSelection = useCallback(() => {
     if (isMobile) onMobileClose();
@@ -296,7 +298,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         .filter((item) => {
           if (!item.requiredPermission) return true;
           const { resource, action } = item.requiredPermission;
-          return can(resource, action);
+          return !permissionsLoading && !permissionError && can(resource, action);
         })
         .map((item) => {
           if (!item.children) return item;
@@ -305,7 +307,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         });
 
     return filterByPermission(items);
-  }, [mode, can]);
+  }, [mode, can, permissionsLoading, permissionError]);
 
   // Find active item
   const activeItem = useMemo(() => {
@@ -430,6 +432,30 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             <MenuIcon />
           </IconButton>
         </Box>
+      )}
+
+      {mode === 'org' && permissionsLoading && (
+        <Box role="status" aria-label="Loading navigation permissions"
+          sx={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 1, px: 2, pb: 1 }}>
+          <CircularProgress size={18} aria-hidden="true" />
+          {!collapsed && <Typography variant="body2">Loading navigation...</Typography>}
+        </Box>
+      )}
+      {mode === 'org' && !permissionsLoading && permissionError && (
+        collapsed ? (
+          <Box role="alert" aria-label="Navigation permissions could not be loaded" sx={{ textAlign: 'center', pb: 1 }}>
+            <Tooltip title="Navigation permissions could not be loaded. Retry.">
+              <IconButton color="error" aria-label="Retry navigation permissions" onClick={refreshPermissions}>
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        ) : (
+          <Alert severity="error" icon={false} sx={{ mx: 2, mb: 1 }}
+            action={<Button color="inherit" size="small" aria-label="Retry navigation permissions" onClick={refreshPermissions}>Retry</Button>}>
+            Navigation permissions could not be loaded.
+          </Alert>
+        )
       )}
 
       {/* Section C - Navigation Items */}

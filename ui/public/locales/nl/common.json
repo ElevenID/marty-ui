@@ -165,6 +165,8 @@
   },
   "notifications": {
     "title": "Meldingen",
+    "loadError": "Meldingen konden niet worden geladen.",
+    "retry": "Meldingen opnieuw laden",
     "unreadCount": "{{count}} ongelezen meldingen",
     "unreadCount_one": "{{count}} ongelezen melding",
     "markAllRead": "Alles markeren als gelezen",
