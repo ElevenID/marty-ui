@@ -33,6 +33,7 @@ const getBreadcrumbs = (t) => [
 function OrganizationSettingsForm({ organizationId, organizationName }) {
   const { t } = useTranslation('console');
   const { can } = usePermissions();
+  const { reconcileOrganizationProfile } = useConsole();
   const canEdit = can('organization', 'edit');
   const [org, setOrg] = useState(null);
   const [savedOrg, setSavedOrg] = useState(null);
@@ -86,6 +87,12 @@ function OrganizationSettingsForm({ organizationId, organizationName }) {
     if (saveError) {
       setError(saveError);
     } else {
+      try {
+        reconcileOrganizationProfile(organizationId, updated);
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
+        throw error;
+      }
       setOrg(updated);
       setSavedOrg(updated);
       setSuccess(true);

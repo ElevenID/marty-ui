@@ -43,6 +43,8 @@ import {
  * @property {function(string, Array=, Object=): Promise<void>} setActiveOrgId - Set active organization; navigate=false leaves routing to the caller
  * @property {function(): void} clearActiveOrg - Clear active org (triggers setup flow)
  * @property {function(): Promise<void>} refreshMemberships - Reload memberships from backend
+ * @property {function(string, Object): void} reconcileOrganizationProfile - Apply a verified profile save to the current membership
+ * @property {function(string): void} reconcileMembershipRemoval - Remove the current user's verified deleted membership
  */
 
 const defaultContextValue = {
@@ -61,6 +63,8 @@ const defaultContextValue = {
   setActiveOrgId: async () => {},
   clearActiveOrg: () => {},
   refreshMemberships: async () => {},
+  reconcileOrganizationProfile: () => {},
+  reconcileMembershipRemoval: () => {},
   reloadConsoleState: async () => {},
 };
 
@@ -217,6 +221,9 @@ function ConsoleSessionProvider({ children }) {
   const [isLoading, setIsLoading] = useState(true);
   const selection = useRef({ mode, activeOrgId, memberships });
   selection.current = { mode, activeOrgId, memberships };
+  // A stale auth snapshot or stored preference cannot restore a membership
+  // that this session has successfully removed.
+  const removedFallbackMemberships = useRef(new Set());
   const fallbackMemberships = useMemo(
     () => getConsoleEligibleOrganizations(user?.organizations),
     [user?.organizations]
@@ -252,6 +259,7 @@ function ConsoleSessionProvider({ children }) {
     if (!active.current) return;
     const generation = ++operationGeneration.current;
     const applies = () => operationIsCurrent(generation);
+    const currentFallbacks = fallbackMemberships.filter(org => !removedFallbackMemberships.current.has(org.id));
     if (!sessionReady) {
       selection.current = { mode: 'applicant', activeOrgId: null, memberships: [] };
       setMembershipLoadError(null);
@@ -280,9 +288,9 @@ function ConsoleSessionProvider({ children }) {
 
       if (organizationsResult.status === 'rejected') {
         const normalizedError = normalizeMembershipLoadError(organizationsResult.reason);
-        selection.current = { mode: 'applicant', activeOrgId: null, memberships: fallbackMemberships };
+        selection.current = { mode: 'applicant', activeOrgId: null, memberships: currentFallbacks };
         setMembershipLoadError(normalizedError);
-        setMemberships(fallbackMemberships);
+        setMemberships(currentFallbacks);
         setMembershipsLoaded(false);
         setModeState('applicant');
         setActiveOrgIdState(null);
@@ -297,7 +305,7 @@ function ConsoleSessionProvider({ children }) {
       const preferredOrgId = localStoredOrgId || prefs?.last_active_org_id || null;
       const fetchedMemberships = getConsoleEligibleOrganizations(orgs);
       const resolvedMemberships = !isCanvasApplicantOnlyUser
-        ? mergePreferredFallbackMembership(fetchedMemberships, fallbackMemberships, preferredOrgId)
+        ? mergePreferredFallbackMembership(fetchedMemberships, currentFallbacks, preferredOrgId)
         : [];
       setMemberships(resolvedMemberships);
       setMembershipsLoaded(true);
@@ -332,12 +340,12 @@ function ConsoleSessionProvider({ children }) {
       }
     } catch (error) {
       if (!applies()) return;
-      selection.current = { mode: 'applicant', activeOrgId: null, memberships: fallbackMemberships };
+      selection.current = { mode: 'applicant', activeOrgId: null, memberships: currentFallbacks };
       logConsoleContextError('[ConsoleContext] Failed to load state:', error);
       setMembershipLoadError(normalizeMembershipLoadError(error));
       setModeState('applicant');
       setActiveOrgIdState(null);
-      setMemberships(fallbackMemberships);
+      setMemberships(currentFallbacks);
       setMembershipsLoaded(false);
     } finally {
       if (applies()) setIsLoading(false);
@@ -475,11 +483,51 @@ function ConsoleSessionProvider({ children }) {
     selection.current = { ...selection.current, activeOrgId: null };
     setIsLoading(false);
     setActiveOrgIdState(null);
-    window.localStorage.removeItem('activeOrgId');
+    try {
+      window.localStorage.removeItem('activeOrgId');
+    } catch (error) {
+      logConsoleContextWarning('[ConsoleContext] Failed to clear stored organization selection:', error);
+    }
     if (selection.current.mode === 'org') {
       transitionTo('/console/org/setup');
     }
   }, [sessionReady, transitionTo]);
+
+  const reconcileOrganizationProfile = useCallback((organizationId, profile) => {
+    assertSession();
+    const current = selection.current;
+    if (current.activeOrgId !== organizationId || !current.memberships.some(org => org.id === organizationId)) {
+      throw obsoleteConsoleOperation();
+    }
+    // Only profile fields come from this response; membership roles and grants
+    // remain the authoritative values already held by the console.
+    if (typeof profile?.name !== 'string' || !profile.name.trim()
+      || typeof profile?.displayName !== 'string' || !profile.displayName.trim()) return;
+    operationGeneration.current += 1;
+    const updatedMemberships = current.memberships.map(org => org.id === organizationId
+      ? { ...org, name: profile.name, display_name: profile.displayName } : org);
+    selection.current = { ...current, memberships: updatedMemberships };
+    setMemberships(updatedMemberships);
+    setMembershipsLoaded(true);
+    setMembershipLoadError(null);
+    setIsLoading(false);
+  }, [assertSession]);
+
+  const reconcileMembershipRemoval = useCallback((organizationId) => {
+    assertSession();
+    const current = selection.current;
+    if (current.activeOrgId !== organizationId || !current.memberships.some(org => org.id === organizationId)) {
+      throw obsoleteConsoleOperation();
+    }
+    operationGeneration.current += 1;
+    removedFallbackMemberships.current.add(organizationId);
+    const remainingMemberships = current.memberships.filter(org => org.id !== organizationId);
+    selection.current = { ...current, memberships: remainingMemberships };
+    setMemberships(remainingMemberships);
+    setMembershipsLoaded(true);
+    setMembershipLoadError(null);
+    clearActiveOrg();
+  }, [assertSession, clearActiveOrg]);
 
   /**
    * Refresh memberships from backend
@@ -559,6 +607,8 @@ function ConsoleSessionProvider({ children }) {
     setActiveOrgId,
     clearActiveOrg,
     refreshMemberships,
+    reconcileOrganizationProfile,
+    reconcileMembershipRemoval,
     reloadConsoleState: loadState,
   }), [
     mode,
@@ -575,6 +625,8 @@ function ConsoleSessionProvider({ children }) {
     setActiveOrgId,
     clearActiveOrg,
     refreshMemberships,
+    reconcileOrganizationProfile,
+    reconcileMembershipRemoval,
     loadState,
   ]);
 

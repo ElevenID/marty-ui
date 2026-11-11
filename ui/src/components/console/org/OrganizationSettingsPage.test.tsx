@@ -24,6 +24,7 @@ const profile = {
 const loaded = (org = profile) => ({ org, error: null });
 const selectOrganization = (id: string | null) => useConsole.mockReturnValue({
   activeOrgId: id, memberships: [{ id: 'selected-org', display_name: 'Selected membership' }, { id: 'second-org', display_name: 'Second membership' }],
+  reconcileOrganizationProfile: vi.fn(),
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;

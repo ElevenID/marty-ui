@@ -151,13 +151,15 @@ function RoleChips({ roles = [] }) {
   );
 }
 
-function TeamContent({ organizationId, currentUser }) {
+function TeamContent({ organizationId, currentUser, reconcileMembershipRemoval }) {
   const { t } = useTranslation('console');
   const [searchParams, setSearchParams] = useSearchParams();
   const inviteDialog = useDialog();
   const roleDialog = useDialog();
   const { showNotification } = useNotifications();
-  const { hasPermission, isLoading: permissionsLoading, refresh: refreshPermissions } = usePermissions();
+  const { hasPermission, isLoading: permissionsLoading, error: permissionError, refresh: refreshPermissions } = usePermissions();
+  const removalPending = useRef(false);
+  const [removing, setRemoving] = useState(false);
 
   const effectiveOrgId = organizationId;
   const currentOrgId = useRef(effectiveOrgId);
@@ -288,33 +290,46 @@ function TeamContent({ organizationId, currentUser }) {
   };
 
   const handleRemoveMember = async (memberId, memberEmail) => {
-    if (!canManage || !teamReady) return;
+    if (!canManage || !teamReady || removalPending.current) return;
     const removedOrgId = effectiveOrgId;
     const applies = () => active.current && currentOrgId.current === removedOrgId;
     if (!confirm(t('org.team.members.actions.confirmRemove', { email: memberEmail }))) {
       return;
     }
 
+    removalPending.current = true;
+    setRemoving(true);
     try {
       await teamApi.removeMember(removedOrgId, memberId);
       if (!applies()) return;
+      const principalId = currentUser?.user_id || currentUser?.sub || currentUser?.id;
+      if (principalId && teamMembers.some(member => member.id === memberId && member.user_id === principalId)) {
+        reconcileMembershipRemoval(removedOrgId);
+        showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
+        return;
+      }
       showNotification?.(t('org.team.dialog.removeSuccess'), 'success');
       await loadData();
     } catch (err) {
-      if (!applies()) return;
+      if (!applies() || err?.name === 'AbortError') return;
       console.error('Failed to remove member:', err);
       showNotification?.(t('org.team.dialog.removeError'), 'error');
+    } finally {
+      removalPending.current = false;
+      if (applies()) setRemoving(false);
     }
   };
 
   const handleRevokeInvite = async (memberId) => {
-    if (!canManage || !teamReady || !pendingInvites.some((invite) => invite.id === memberId)) return;
+    if (!canManage || !teamReady || removalPending.current || !pendingInvites.some((invite) => invite.id === memberId)) return;
     const revokedOrgId = effectiveOrgId;
     const applies = () => active.current && currentOrgId.current === revokedOrgId;
     if (!confirm(t('org.team.invites.actions.confirmRevoke'))) {
       return;
     }
 
+    removalPending.current = true;
+    setRemoving(true);
     try {
       await teamApi.removeMember(revokedOrgId, memberId);
       if (!applies()) return;
@@ -324,6 +339,9 @@ function TeamContent({ organizationId, currentUser }) {
       if (!applies()) return;
       console.error('Failed to revoke invite:', err);
       showNotification?.(t('org.team.dialog.revokeError'), 'error');
+    } finally {
+      removalPending.current = false;
+      if (applies()) setRemoving(false);
     }
   };
 
@@ -355,6 +373,8 @@ function TeamContent({ organizationId, currentUser }) {
         <Alert severity="info">{t('org.team.access.selectOrganization')}</Alert>
       ) : permissionsLoading ? (
         <TableSkeleton rows={5} columns={4} showActions />
+      ) : permissionError ? (
+        <ErrorState error={permissionError} onRetry={refreshPermissions} variant="compact" />
       ) : !canView ? (
         <Alert severity="info">{t('org.team.access.readDenied')}</Alert>
       ) : loading ? (
@@ -418,6 +438,7 @@ function TeamContent({ organizationId, currentUser }) {
                         <TableCell align="right">
                           {!member.is_owner && (canManage || (canAssignRoles && canViewRoles)) && teamReady && (
                             <MemberActionsMenu
+                              disabled={removing}
                               onChangeRole={canAssignRoles && canViewRoles ? () => roleDialog.open({ member, organizationId: effectiveOrgId }) : undefined}
                               roleDisabled={!rolesReady}
                               onRemove={canManage ? () => handleRemoveMember(member.id, member.email || getDisplayName(member)) : undefined}
@@ -468,6 +489,7 @@ function TeamContent({ organizationId, currentUser }) {
                           {canManage && teamReady && (
                             <IconButton
                               size="small"
+                              disabled={removing}
                               onClick={() => handleRevokeInvite(invite.id)}
                               title={t('org.team.invites.actions.revoke')}
                               aria-label={t('org.team.invites.actions.revoke')}
@@ -551,19 +573,19 @@ function TeamContent({ organizationId, currentUser }) {
   );
 }
 
-function MemberActionsMenu({ onChangeRole, roleDisabled, onRemove }) {
+function MemberActionsMenu({ onChangeRole, roleDisabled, onRemove, disabled = false }) {
   const { t } = useTranslation('console');
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
 
   return (
     <>
-      <IconButton size="small" aria-label={t('org.team.members.tableHeaders.actions')} onClick={(event) => setAnchorEl(event.currentTarget)}>
+      <IconButton size="small" disabled={disabled} aria-label={t('org.team.members.tableHeaders.actions')} onClick={(event) => setAnchorEl(event.currentTarget)}>
         <MoreVertIcon />
       </IconButton>
       <Menu anchorEl={anchorEl} open={open} onClose={() => setAnchorEl(null)}>
         {onChangeRole && <MenuItem
-          disabled={roleDisabled}
+          disabled={disabled || roleDisabled}
           onClick={() => {
             setAnchorEl(null);
             onChangeRole();
@@ -576,6 +598,7 @@ function MemberActionsMenu({ onChangeRole, roleDisabled, onRemove }) {
         </MenuItem>}
         {onChangeRole && onRemove && <Divider />}
         {onRemove && <MenuItem
+          disabled={disabled}
           onClick={() => {
             setAnchorEl(null);
             onRemove();
@@ -793,7 +816,7 @@ function ChangeRoleDialog({ open, member, availableRoles = [], onClose, onChange
 }
 
 export default function TeamPage() {
-  const { activeOrgId } = useConsole();
+  const { activeOrgId, reconcileMembershipRemoval } = useConsole();
   const { user, isAuthenticated } = useAuth();
   const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
   return (
@@ -801,6 +824,7 @@ export default function TeamPage() {
       key={`${activeOrgId || 'no-organization'}:${principalId}`}
       organizationId={activeOrgId}
       currentUser={isAuthenticated ? user : null}
+      reconcileMembershipRemoval={reconcileMembershipRemoval}
     />
   );
 }

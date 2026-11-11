@@ -529,3 +529,85 @@ describe('ConsoleContext session and request lifetime', () => {
     expect(updatePreferences).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ConsoleContext verified organization mutations', () => {
+  const nextOrg = { ...oldOrg, id: 'private-org-next', display_name: 'Next organization' };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    vi.mocked(getPreferences).mockReset().mockResolvedValue({ last_view_mode: 'org', last_active_org_id: oldOrg.id });
+    vi.mocked(updatePreferences).mockReset().mockResolvedValue({});
+    vi.mocked(getMyOrganizations).mockReset().mockResolvedValue([oldOrg, nextOrg]);
+  });
+
+  it('keeps verified profile fields and unchanged roles when an older membership refresh finishes', async () => {
+    renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
+    await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
+    let finishRead!: (value: any[]) => void;
+    vi.mocked(getMyOrganizations).mockReturnValueOnce(new Promise(resolve => { finishRead = resolve; }));
+    let refresh!: Promise<unknown>;
+    await act(async () => { refresh = currentConsole.refreshMemberships().catch((error: Error) => error); });
+    await act(async () => currentConsole.reconcileOrganizationProfile(oldOrg.id, {
+      name: 'renamed-organization', displayName: 'Renamed organization',
+      membership: { roles: [] },
+    }));
+    await act(async () => finishRead([oldOrg, nextOrg]));
+    expect(await refresh).toMatchObject({ name: 'AbortError' });
+    expect(currentConsole.memberships).toEqual([
+      { ...oldOrg, name: 'renamed-organization', display_name: 'Renamed organization' }, nextOrg,
+    ]);
+    expect(currentConsole.activeOrgId).toBe(oldOrg.id);
+    expect(currentConsole.membershipsLoaded).toBe(true);
+    expect(currentConsole.membershipLoadError).toBeNull();
+  });
+
+  it('does not resurrect a removed membership from an old request, auth snapshot, or stale preference', async () => {
+    const auth = { ...oldAuth, user: { ...oldAuth.user, organizations: [oldOrg, nextOrg] } };
+    renderWithRouter(<App auth={auth} />, { initialEntries: ['/console/org'] });
+    await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
+    let finishRead!: (value: any[]) => void;
+    vi.mocked(getMyOrganizations).mockReturnValueOnce(new Promise(resolve => { finishRead = resolve; }));
+    let refresh!: Promise<unknown>;
+    await act(async () => { refresh = currentConsole.refreshMemberships().catch((error: Error) => error); });
+    await act(async () => currentConsole.reconcileMembershipRemoval(oldOrg.id));
+    expect(currentConsole.memberships).toEqual([nextOrg]);
+    expect(currentConsole.activeOrgId).toBeNull();
+    expect(screen.getByTestId('path')).toHaveTextContent('/console/org/setup');
+    await act(async () => finishRead([oldOrg, nextOrg]));
+    expect(await refresh).toMatchObject({ name: 'AbortError' });
+    vi.mocked(getMyOrganizations).mockResolvedValue([nextOrg]);
+    vi.mocked(updatePreferences).mockRejectedValue(new Error('Preference persistence unavailable'));
+    await act(async () => currentConsole.reloadConsoleState());
+    expect(currentConsole.memberships).toEqual([nextOrg]);
+    expect(currentConsole.activeOrgId).toBe(nextOrg.id);
+    expect(currentConsole.membershipLoadError).toBeNull();
+  });
+
+  it.each(['profile', 'removal'])('rejects an old-account %s callback even when the new account selects the same organization', async mutation => {
+    const { rerender } = renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
+    await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
+    const prior = currentConsole;
+    const stale = () => mutation === 'profile'
+      ? prior.reconcileOrganizationProfile(oldOrg.id, { name: 'old-account-name', displayName: 'Old account name' })
+      : prior.reconcileMembershipRemoval(oldOrg.id);
+    rerender(<App auth={newAuth} />);
+    await waitFor(() => expect(getMyOrganizations).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
+    expect(stale).toThrowError('The console session or selection changed.');
+    expect(currentConsole.memberships).toEqual([oldOrg, nextOrg]);
+    expect(currentConsole.activeOrgId).toBe(oldOrg.id);
+  });
+
+  it.each(['profile', 'removal'])('rejects a previous-organization %s callback without changing the new selection', async mutation => {
+    renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
+    await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
+    const prior = currentConsole;
+    await act(async () => currentConsole.setActiveOrgId(nextOrg.id));
+    const stale = () => mutation === 'profile'
+      ? prior.reconcileOrganizationProfile(oldOrg.id, { name: 'old-organization-name', displayName: 'Old organization name' })
+      : prior.reconcileMembershipRemoval(oldOrg.id);
+    expect(stale).toThrowError('The console session or selection changed.');
+    expect(currentConsole.memberships).toEqual([oldOrg, nextOrg]);
+    expect(currentConsole.activeOrgId).toBe(nextOrg.id);
+  });
+});
