@@ -85,7 +85,7 @@ def _reviewed_cross_edges(plan):
 
 
 def preview(plan, before, compose_models):
-    selected_sources(plan)
+    selected_sources(plan, plan.get("rolloutProfile"))
     rows = exact_roles(before)
     require(set(plan["stopContracts"]) == RUNTIME_ROLES, "ALL_22_STOP_CONTRACTS_REQUIRED")
     for row in rows.values():

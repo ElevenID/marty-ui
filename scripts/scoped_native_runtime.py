@@ -85,15 +85,20 @@ def durable_barrier(proof):
 
 def selected_sources(plan, profile=None):
     if profile is None:
-        ui_revision, roles = UI_REVISION, ROLE_BINARIES
+        ui_revision, core_revision, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
+    elif profile == "d12-passport-canonical-subset":
+        from scoped_passport_successor import SOURCE, CORE, PROFILE
+        require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
+                "D12_ROLLOUT_IS_NOT_A_BUILD_PROFILE")
+        ui_revision, core_revision, roles = SOURCE, CORE, ROLE_BINARIES
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)
         require(plan.get("buildProfile") == selected.name
                 and plan.get("profileSourceSha256") == sha(Path(scoped_native_profiles.__file__)),
                 "EXACT_REVIEWED_PROFILE_SOURCE_REQUIRED")
-        ui_revision, roles = selected.ui_revision, dict(selected.roles)
-    require(plan.get("uiRevision") == ui_revision and plan.get("coreRevision") == CORE_REVISION, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
+        ui_revision, core_revision, roles = selected.ui_revision, selected.core_revision, dict(selected.roles)
+    require(plan.get("uiRevision") == ui_revision and plan.get("coreRevision") == core_revision, "REVIEWED_UI_AND_LOCKED_CORE_REQUIRED")
     require(plan.get("roleBinaries") == roles, "EXACT_THREE_ROLE_SCOPE_REQUIRED" if profile is None else "EXACT_SIGNING_CAS_ROLE_SCOPE_REQUIRED")
     require(plan.get("releaseQualified") is False and plan.get("recordingQualified") is False, "FUNCTIONAL_SCOPE_ONLY")
 

@@ -645,6 +645,7 @@ impl IssuanceProvider for GrpcIssuanceProvider {
             client
                 .initiate_issuance(self.auth.request(ProtoIssuance {
                     organization_id: request.organization_id.clone(),
+                    offer_ttl_seconds: request.offer_ttl_seconds,
                     credential_template_id: request.credential_template_id.clone(),
                     applicant_id: request.applicant_id.clone().unwrap_or_default(),
                     subject_did: request.subject_did.clone().unwrap_or_default(),

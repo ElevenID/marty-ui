@@ -27,7 +27,10 @@ pub struct HttpTemplateProvider {
 impl HttpTemplateProvider {
     pub fn new(base_url: String, api_key: Option<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("native issuer HTTP client"),
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
         }
@@ -36,6 +39,67 @@ impl HttpTemplateProvider {
 
 #[async_trait]
 impl TemplateProvider for HttpTemplateProvider {
+    async fn validate_offer_lifetime(
+        &self,
+        organization_id: &str,
+        seconds: u64,
+    ) -> Result<(), ProviderError> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Echo {
+            organization_id: String,
+            offer_ttl_seconds: u64,
+        }
+        if organization_id.trim().is_empty() {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime tenant is required".into(),
+            ));
+        }
+        let mut request = self
+            .client
+            .post(format!(
+                "{}/internal/compat/issuance/offer-lifetime/validate",
+                self.base_url
+            ))
+            .header("x-organization-id", organization_id)
+            .timeout(std::time::Duration::from_secs(15))
+            .json(&json!({"offer_ttl_seconds": seconds}));
+        if let Some(key) = &self.api_key {
+            request = request.header("x-api-key", key);
+        }
+        let mut response = request.send().await.map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime validation is unavailable".into())
+        })?;
+        if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            return Err(ProviderError::InvalidOfferLifetime);
+        }
+        if response.status() != StatusCode::OK {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime validation refused".into(),
+            ));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime response is unavailable".into())
+        })? {
+            if body.len() + chunk.len() > 1024 {
+                return Err(ProviderError::Unavailable(
+                    "issuer lifetime response is invalid".into(),
+                ));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        let echo: Echo = serde_json::from_slice(&body).map_err(|_| {
+            ProviderError::Unavailable("issuer lifetime response is invalid".into())
+        })?;
+        if echo.organization_id != organization_id || echo.offer_ttl_seconds != seconds {
+            return Err(ProviderError::Unavailable(
+                "issuer lifetime response binding changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn get(
         &self,
         organization_id: &str,
@@ -104,7 +168,7 @@ impl FlowProvider for HttpFlowProvider {
         attempt_id: Uuid,
     ) -> Result<IssuanceOffer, ProviderError> {
         let timestamp = chrono::Utc::now();
-        let payload = json!({
+        let mut payload = json!({
             "event_type": "application.approved",
             "aggregate_id": application.id,
             "aggregate_type": "application",
@@ -125,6 +189,14 @@ impl FlowProvider for HttpFlowProvider {
                 "claims": claims,
             }
         });
+        if let Some(seconds) = application
+            .system_data
+            .get("active_issuance_attempt")
+            .and_then(|value| value.get("offer_ttl_seconds"))
+            .and_then(Value::as_u64)
+        {
+            payload["data"]["offer_ttl_seconds"] = seconds.into();
+        }
         let headers = self
             .authenticator
             .sign_new(&payload, timestamp.timestamp())
@@ -400,5 +472,112 @@ mod tests {
         assert_eq!(stream.correlation_id, event.correlation_id);
         assert_eq!(notification["event_id"], "event-1");
         assert_eq!(notification["correlation_id"], event.correlation_id);
+    }
+    #[tokio::test]
+    async fn offer_lifetime_validation_requires_authenticated_exact_issuer_echo() {
+        use axum::{
+            body::Body,
+            response::Response,
+            routing::{any, post},
+        };
+        let redirected: Arc<Mutex<Vec<HeaderMap>>> = Arc::new(Mutex::new(Vec::new()));
+        let target_seen = redirected.clone();
+        let alternate = Router::new().route(
+            "/valid-echo",
+            any(move |headers: HeaderMap| {
+                let target_seen = target_seen.clone();
+                async move {
+                    target_seen.lock().unwrap().push(headers);
+                    Json(json!({"organization_id":"org-1","offer_ttl_seconds":60}))
+                }
+            }),
+        );
+        let alternate_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let alternate_url = format!(
+            "http://{}/valid-echo",
+            alternate_listener.local_addr().unwrap()
+        );
+        let alternate_server =
+            tokio::spawn(async move { axum::serve(alternate_listener, alternate).await.unwrap() });
+        // Positive reachability prevents a closed port from masking accidental redirect following.
+        let probe = Client::new().get(&alternate_url).send().await.unwrap();
+        assert_eq!(
+            probe.json::<Value>().await.unwrap(),
+            json!({"organization_id":"org-1","offer_ttl_seconds":60})
+        );
+        assert_eq!(redirected.lock().unwrap().len(), 1);
+        redirected.lock().unwrap().clear();
+        for (status, body, accepted) in [
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":60}"#,
+                true,
+            ),
+            (
+                200,
+                r#"{"organization_id":"foreign","offer_ttl_seconds":60}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":120}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","offer_ttl_seconds":60,"extra":true}"#,
+                false,
+            ),
+            (
+                200,
+                r#"{"organization_id":"org-1","organization_id":"org-1","offer_ttl_seconds":60}"#,
+                false,
+            ),
+            (200, "not json", false),
+            (422, "{}", false),
+            (403, "{}", false),
+            (503, "{}", false),
+            (302, "{}", false),
+        ] {
+            let captured = Arc::new(Mutex::new(None));
+            let sink = captured.clone();
+            let redirect_location = alternate_url.clone();
+            let app = Router::new().route(
+                "/internal/compat/issuance/offer-lifetime/validate",
+                post(move |headers: HeaderMap, Json(input): Json<Value>| {
+                    let sink = sink.clone();
+                    let redirect_location = redirect_location.clone();
+                    async move {
+                        *sink.lock().unwrap() = Some((headers, input));
+                        Response::builder()
+                            .status(status)
+                            .header("location", redirect_location)
+                            .body(Body::from(body))
+                            .unwrap()
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let provider = HttpTemplateProvider::new(
+                format!("http://{address}"),
+                Some("test-native-key".into()),
+            );
+            assert_eq!(
+                provider.validate_offer_lifetime("org-1", 60).await.is_ok(),
+                accepted
+            );
+            let (headers, input) = captured.lock().unwrap().take().unwrap();
+            assert_eq!(headers["x-api-key"], "test-native-key");
+            assert_eq!(headers["x-organization-id"], "org-1");
+            assert_eq!(input, json!({"offer_ttl_seconds":60}));
+            assert!(
+                redirected.lock().unwrap().is_empty(),
+                "issuer validation followed a redirect or forwarded credentials"
+            );
+            server.abort();
+        }
+        alternate_server.abort();
     }
 }

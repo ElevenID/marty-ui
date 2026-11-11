@@ -32,12 +32,9 @@ const {
   membershipLoginBehaviorAssertions,
   requireCompletedLoginNonce,
   loginNonceCompletionEvidence,
-  readLoginNonceStatusSnapshot,
-  isExactLoginNonceStatusUrl,
-  isExactLoginNonceFinalizeUrl,
-  loginFinalizeRedirectEvidence,
-  isTerminalLoginNonceStatus,
+  isCredentialLoginDestinationUrl,
 } = require('./beta-credential-contract');
+const {observeCredentialLoginBrowser} = require('./credential-login-browser-observation');
 const {
   installUiCandidateRoute,
   resolveUiCandidateDist,
@@ -355,35 +352,8 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       hasNonce: true,
       walletOptions: loginRequest.walletOptions,
     };
-    // The login page polls and can finalize (consume) a completed nonce before
-    // a second status request sees it. Capture that page's terminal response.
-    const nonceStatusObservation = { requestCount: 0, responseCount: 0,
-      pendingCount: 0, parseFailureCount: 0,
-      lastHttpStatus: null, lastStatus: null, lastReasonCode: null };
-    const isExactStatus = (url) => isExactLoginNonceStatusUrl(url, BETA_ORIGIN, loginRequest.nonce);
-    loginPage.on('request', (request) => {
-      if (request.method() === 'GET' && isExactStatus(request.url())) nonceStatusObservation.requestCount += 1;
-    });
-    let terminalStatusSnapshot = null;
-    const terminalStatusResponse = loginPage.waitForResponse(async (response) => {
-      if (!isExactStatus(response.url()) || response.request().method() !== 'GET') return false;
-      nonceStatusObservation.responseCount += 1;
-      nonceStatusObservation.lastHttpStatus = response.status();
-      if (response.status() !== 200) return false;
-      const safe = await readLoginNonceStatusSnapshot(response);
-      if (safe.status === 'pending') nonceStatusObservation.pendingCount += 1;
-      if (safe.status === 'invalid-response') nonceStatusObservation.parseFailureCount += 1;
-      nonceStatusObservation.lastStatus = safe.status;
-      nonceStatusObservation.lastReasonCode = safe.reasonCode || null;
-      if (isTerminalLoginNonceStatus(safe) && !terminalStatusSnapshot) terminalStatusSnapshot = safe;
-      return isTerminalLoginNonceStatus(safe);
-    }, { timeout: 60_000 }).catch(() => null);
-    const browserFinalizeResponse = loginPage.waitForResponse((response) =>
-      response.request().method() === 'GET'
-        && isExactLoginNonceFinalizeUrl(response.url(), BETA_ORIGIN, loginRequest.nonce),
-    { timeout: 60_000 }).then(async (response) => loginFinalizeRedirectEvidence({
-      url: response.url(), status: response.status(), headers: await response.allHeaders(),
-    }, BETA_ORIGIN, loginRequest.nonce)).catch(() => null);
+    // The browser owns the one-use finalize; bind its status and redirect before presentation.
+    const loginObservation = observeCredentialLoginBrowser(loginPage, BETA_ORIGIN, loginRequest.nonce);
     report.presentation = await presentBadge(walletPage, loginRequest.href);
     if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
@@ -394,24 +364,13 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
       'The browser wallet submitted the selected badge to the signed credential-login callback.',
     );
 
-    const first = await Promise.race([
-      terminalStatusResponse.then(response => ({ kind: 'status', response })),
-      browserFinalizeResponse.then(evidence => ({ kind: 'finalize', evidence })),
-    ]);
-    const terminal = first.kind === 'status' ? first.response : null;
-    const completion = terminal ? terminalStatusSnapshot
-      : { status: 'pending-timeout' };
-    const browserFinalize = first.kind === 'finalize' ? first.evidence
-      : completion.status === 'completed' ? await browserFinalizeResponse : null;
-    const nonceEvidence = browserFinalize?.verified
-      ? { status: 'completed', observedNonceStatus: nonceStatusObservation.lastStatus === 'completed'
-        ? 'completed' : 'not-observed' }
-      : loginNonceCompletionEvidence(completion);
+    const {nonceEvidence, statusObservation: nonceStatusObservation,
+      browserFinalize, terminalObserved} = await loginObservation.completion();
     report.completion = { ...nonceEvidence, authenticated: false,
       statusObservation: nonceStatusObservation,
       browserFinalizeVerified: browserFinalize?.verified === true,
       browserFinalize: browserFinalize || null };
-    if (!terminal && !browserFinalize) {
+    if (!terminalObserved && !browserFinalize) {
       let diagnosticTimer;
       const diagnostic = await Promise.race([
         loginPage.evaluate(async (nonce) => {
@@ -438,9 +397,7 @@ async function runCredentialLogin({ retainedFirstParty = false, evidence = null 
     }
     requireCompletedLoginNonce(nonceEvidence.status);
     if (!browserFinalize?.verified) throw new Error('Credential login browser finalize not verified');
-    await loginPage.waitForURL((url) => url.origin === new URL(BETA_ORIGIN).origin
-      && url.pathname === '/console/applicant/catalog'
-      && url.searchParams.size === 1 && url.searchParams.get('auth_method') === 'credential',
+    await loginPage.waitForURL((url) => isCredentialLoginDestinationUrl(url.href, BETA_ORIGIN),
     { timeout: 60_000 });
     report.completion.uiDestinationVerified = true;
     await waitFor(() => loginPage.evaluate(async () => {

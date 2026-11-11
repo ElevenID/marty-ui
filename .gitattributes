@@ -18,6 +18,7 @@ tests/scripts/audit-beta-canvas-capture.js text eol=lf
 tests/scripts/audit-beta-credential-lifecycle.js text eol=lf
 tests/scripts/audit-beta-employee-access.js text eol=lf
 tests/scripts/audit-beta-first-party-browser-wallet.js text eol=lf
+tests/scripts/audit-beta-first-party-dev-test-wallet.js text eol=lf
 tests/scripts/audit-beta-independent-wallet-interoperability.js text eol=lf
 tests/scripts/audit-beta-direct-vc-api.js text eol=lf
 docs/demo-audit/2026-10-20-canvas-adapter/focused-source-tests.log -text

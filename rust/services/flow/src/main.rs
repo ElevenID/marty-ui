@@ -14,6 +14,8 @@ use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
+mod schema_command;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
@@ -22,6 +24,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    if let Some(command) = schema_command::parse(std::env::args().skip(1))? {
+        schema_command::run(command).await?;
+        return Ok(());
+    }
 
     let config = FlowServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid Flow configuration");

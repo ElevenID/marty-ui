@@ -301,3 +301,171 @@ test('maintenance receipt rejects missing role, foreign profile and later proces
  const wrong=structuredClone(receipt);wrong.baseProfile=f.write('foreign-prior.json',{...f.profile,scope:'RELEASE'});assert.throws(()=>expectedRuntime(f.bind(wrong)));
  const profile=f.bind(receipt);f.mutateActual(actual=>{actual.hostPid++;});assert.throws(()=>verifyFunctionalRuntime(profile,{readDocker:f.readDocker}));
 });
+
+function scopedRowsFixture(t){
+ const f=issuanceFixture(t),expected=expectedRuntime(f.profile),before=verifyFunctionalRuntime(f.profile,{observe:f.observe});
+ const roles=['signing-keys','gateway'],hashes={'marty-signing-keys':H('6'),'marty-gateway':H('7')};
+ const deployed={roles:Object.fromEntries(roles.map((role,index)=>{const old=before.roles.find(row=>row.role===role),binary='marty-'+role;return [role,{
+  containerId:crypto.createHash('sha256').update('scoped:'+role).digest('hex'),imageId:old.imageId,startedAt:'2026-10-26T02:00:00Z',hostPid:400+index,
+  configuredRuntimeUid:old.configuredRuntimeUid,effectiveUid:old.effectiveUid,
+  binaryMount:{type:'bind',source:path.join(path.dirname(f.profile.baseProfile.path),'candidate-'+binary),destination:'/usr/local/bin/'+binary,writable:false},
+  processExecutablePath:'/usr/local/bin/'+binary,processExecutableSha256:hashes[binary],mountedBinarySha256:hashes[binary]}]}))};
+ const selection={roles,source:'3b862bebdd2cc0707d9a38f6df55db198b6be417',coreSource:'4320b5fa1c6f41231ee0aa2bc57d8008549f67ac',kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes};
+ return {f,expected,before,deployed,selection};
+}
+test('shared native overlay changes exactly signing/gateway and preserves actual other20 generations',t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const result=applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection);assert.equal(result.length,22);
+ assert.equal(result.filter(row=>row.kind==='SCOPED_NATIVE_FUNCTIONAL_OVERLAY').length,2);
+ for(const row of result){const old=x.before.roles.find(item=>item.role===row.role);
+  if(x.selection.roles.includes(row.role)){assert.equal(row.source,x.selection.source);assert.equal(row.coreSource,x.selection.coreSource);assert.equal(row.sha256,x.selection.hashes[row.binary]);assert.equal(row.requiredContainerId,x.deployed.roles[row.role].containerId);assert.equal(row.requiredObservation,undefined);}
+  else{assert.equal(row.source,old.source);assert.equal(row.sha256,old.sha256);assert.equal(row.coreSource,old.coreSource);for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(value,old[field]);}
+ }
+ assert.deepEqual(result.filter(row=>['issuance','issuance-native'].includes(row.role)).map(row=>row.coreSource),[require('./functional-debug-runtime').ISSUANCE_CORE,require('./functional-debug-runtime').ISSUANCE_CORE]);
+});
+
+test('a planned Canvas successor without its actual evidence chain cannot qualify',()=>{
+ assert.throws(()=>expectedRuntime({schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',
+  releaseQualified:false,recordingQualified:false,baseProfile:{path:'/not-read',sha256:H('0')},
+  nativeOverlay:{profile:'canvas-issuer-scoped-jobs'}}));
+});
+
+test('issuer-only row transition preserves separate issuance proxy and all21 other observations',t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const old=x.before.roles.find(row=>row.role==='issuance-native'),binary='marty-issuance-service',hash=H('9');
+ const replacement={containerId:crypto.createHash('sha256').update('canvas-issuer-successor').digest('hex'),imageId:old.imageId,startedAt:'2026-10-28T12:00:00Z',hostPid:9876,
+  configuredRuntimeUid:old.configuredRuntimeUid,effectiveUid:old.effectiveUid,
+  binaryMount:{type:'bind',source:path.join(path.dirname(x.f.profile.baseProfile.path),'candidate-issuer'),destination:'/usr/local/bin/'+binary,writable:false},
+  processExecutablePath:'/usr/local/bin/'+binary,processExecutableSha256:hash,mountedBinarySha256:hash};
+ const selection={roles:['issuance-native'],source:'fce109daf47a7712c1ff5779b0e33def57bbce20',
+  coreSource:'44040270000f93b7e7499cbec31b3bb3dd7e3df1',kind:'SCOPED_NATIVE_FUNCTIONAL_OVERLAY',hashes:{[binary]:hash}};
+ const deployed={roles:{'issuance-native':replacement}};
+ const result=applyNativeOverlayRows(x.expected,x.before,deployed,selection);
+ assert.equal(result.filter(row=>row.source===selection.source).length,1);
+ for(const row of result.filter(row=>row.role!=='issuance-native')){
+  const prior=x.before.roles.find(item=>item.role===row.role);
+  assert.equal(row.source,prior.source);assert.equal(row.sha256,prior.sha256);
+  for(const [field,value]of Object.entries(row.requiredObservation))assert.deepEqual(value,prior[field]);
+ }
+ assert.throws(()=>applyNativeOverlayRows(x.expected,x.before,{roles:{issuance:replacement}},selection));
+});
+
+test('identity-only validation retains unhealthy readiness and still rejects generation or mount drift',t=>{
+ const {validateRuntimeIdentity,validateRuntimeObservation}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ const row=x.expected.find(value=>value.role==='gateway'),actual=x.f.observe(row);
+ actual.health='unhealthy';
+ assert.equal(validateRuntimeIdentity(row,actual).health,'unhealthy');
+ assert.throws(()=>validateRuntimeObservation(row,actual));
+ assert.throws(()=>validateRuntimeIdentity(row,{...actual,hostPid:actual.hostPid+1}));
+ assert.throws(()=>validateRuntimeIdentity(row,{...actual,binaryMounts:actual.binaryMounts.map(m=>({...m,writable:true}))}));
+});
+for(const fault of ['wrongRole','extraRole','source','elf','mountedElf','generation','untouchedPid','coreSource'])test('shared native overlay rejects '+fault,t=>{
+ const {applyNativeOverlayRows}=require('./functional-debug-runtime'),x=scopedRowsFixture(t);
+ if(fault==='wrongRole'){x.deployed.roles.flow=x.deployed.roles.gateway;delete x.deployed.roles.gateway;}
+ if(fault==='extraRole')x.deployed.roles.flow=x.deployed.roles.gateway;
+ if(fault==='source')x.before.roles.find(row=>row.role==='signing-keys').source=R('0');
+ if(fault==='elf')x.deployed.roles.gateway.processExecutableSha256=H('0');
+ if(fault==='mountedElf')x.deployed.roles.gateway.mountedBinarySha256=H('0');
+ if(fault==='generation')x.deployed.roles.gateway.startedAt=x.before.roles.find(row=>row.role==='gateway').startedAt;
+ if(fault==='untouchedPid')x.before.roles.find(row=>row.role==='issuance').hostPid++;
+ if(fault==='coreSource')x.before.roles.find(row=>row.role==='issuance').coreSource=R('0');
+ assert.throws(()=>applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection));
+});
+test('native envelope rejects foreign base and supplied observation before any runtime read',t=>{
+ const f=issuanceFixture(t),profile={schema:'marty.functional-mixed-runtime/v2',scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false,baseProfile:f.write('foreign-v2.json',f.profile),nativeOverlay:{profile:'d02-signing-cas'}};
+ assert.throws(()=>expectedRuntime(profile),/Foreign native-overlay base/);
+ assert.throws(()=>verifyFunctionalRuntime(profile,{observe:()=>assert.fail('No supplied observations')}));
+});
+
+for(const kind of ['ISSUANCE_CORE_FUNCTIONAL_OVERLAY','SCOPED_NATIVE_FUNCTIONAL_OVERLAY']){
+ function liveOverlayContract(t){
+  const x=scopedRowsFixture(t),row=require('./functional-debug-runtime').applyNativeOverlayRows(x.expected,x.before,x.deployed,x.selection).find(item=>item.role==='gateway');
+  row.kind=kind;row.requiredEffectiveUid=10001;
+  const actual={...x.before.roles.find(item=>item.role==='gateway'),role:'gateway',service:'gateway',project:row.project,imageId:row.imageId,
+   containerId:row.requiredContainerId,startedAt:row.requiredStartedAt,hostPid:row.requiredHostPid,effectiveUid:10001,configuredRuntimeUid:10001,
+   running:true,status:'running',health:'healthy',binarySha256:row.sha256,processExecutableSha256:row.sha256,
+   executablePath:'/usr/local/bin/marty-gateway',binaryMounts:structuredClone(row.requiredBinaryMounts)};
+  return {row,actual};
+ }
+ test(kind+' live observation enforces UID and exact reviewed mount',t=>{
+  const {row,actual}=liveOverlayContract(t),validate=require('./functional-debug-runtime').validateRuntimeObservation;
+  assert.equal(validate(row,actual).effectiveUid,10001);
+  row.requiredBinaryMounts[0].source='C:/owned/runtime/marty-gateway';actual.binaryMounts[0].source='/run/desktop/mnt/host/c/owned/runtime/marty-gateway';
+  assert.equal(validate(row,actual).effectiveUid,10001);
+ });
+ for(const fault of ['uid0','configuredUid0','missingMount','writableMount','wrongSource','staleGeneration','wrongPid'])test(kind+' rejects actual '+fault,t=>{
+  const {row,actual}=liveOverlayContract(t),validate=require('./functional-debug-runtime').validateRuntimeObservation;
+  if(fault==='uid0')actual.effectiveUid=0;
+  if(fault==='configuredUid0')actual.configuredRuntimeUid=0;
+  if(fault==='missingMount')actual.binaryMounts=[];
+  if(fault==='writableMount')actual.binaryMounts[0].writable=true;
+  if(fault==='wrongSource')actual.binaryMounts[0].source='/foreign/marty-gateway';
+  if(fault==='staleGeneration')actual.startedAt='2026-10-26T00:00:00Z';
+  if(fault==='wrongPid')actual.hostPid++;
+  assert.throws(()=>validate(row,actual));
+ });
+}
+
+function unqualifiedPreimageFixture(t){
+ const x=scopedRowsFixture(t),raw={releaseQualified:false,rows:x.before.roles.map(row=>{
+  const actual=x.deployed.roles[row.role];
+  return {...row,role:row.role,service:row.role,running:true,status:'running',binarySha256:row.sha256,
+   ...(actual?{...actual,executablePath:actual.processExecutablePath,binarySha256:actual.mountedBinarySha256,binaryMounts:[actual.binaryMount]}:{})};
+ })};
+ const disposition={phase:'DEPLOYED_UNQUALIFIED_ETAG_GATE_FAILED',releaseQualified:false,recordingQualified:false,
+  headerGateFailure:{authOutcomeKnown:true,authCleanupComplete:true,runtimeRestartPerformed:false}};
+ return {...x,raw,disposition};
+}
+test('failed API gate yields only observed preimage rows; signer successor preserves gateway and other20',t=>{
+ const {expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeObservation}=require('./functional-debug-runtime');
+ const x=unqualifiedPreimageFixture(t),rows=expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection);
+ assert(Array.isArray(rows));assert.equal(rows.length,22);assert.equal(rows.schema,undefined);
+ const before={...x.before,roles:rows.map(row=>validateRuntimeObservation(row,x.raw.rows.find(actual=>actual.role===row.role)))};
+ const signer=structuredClone(x.deployed.roles['signing-keys']);signer.containerId=crypto.createHash('sha256').update('header-successor:signing-keys').digest('hex');signer.startedAt='2026-10-26T03:00:00Z';signer.hostPid++;
+ signer.processExecutableSha256=H('9');signer.mountedBinarySha256=H('9');signer.binaryMount.source+='-successor';
+ const result=applyNativeOverlayRows(rows,before,{roles:{'signing-keys':signer}},
+  {...x.selection,roles:['signing-keys'],source:'9b1efd21163dadeff7cf1ced5fe47c5e046d2121',hashes:{'marty-signing-keys':H('9')}});
+ assert.equal(result.find(row=>row.role==='signing-keys').sha256,H('9'));
+ for(const row of result.filter(row=>row.role!=='signing-keys')){
+  const prior=before.roles.find(old=>old.role===row.role);assert.equal(row.source,prior.source);
+  assert.equal(row.requiredObservation.containerId,prior.containerId);assert.equal(row.requiredObservation.hostPid,prior.hostPid);
+ }
+ assert.equal(result.find(row=>row.role==='gateway').source,x.selection.source);
+});
+for(const fault of ['promotedFailure','cleanup','missingRole','gatewayGeneration','other20Pid','writableMount'])test('unqualified preimage refuses '+fault,t=>{
+ const {expectedUnqualifiedNativePreimage}=require('./functional-debug-runtime'),x=unqualifiedPreimageFixture(t);
+ if(fault==='promotedFailure')x.disposition.phase='APPLIED_FUNCTIONAL_ONLY';
+ if(fault==='cleanup')x.disposition.headerGateFailure.authCleanupComplete=false;
+ if(fault==='missingRole')x.raw.rows.pop();
+ if(fault==='gatewayGeneration')x.raw.rows.find(row=>row.role==='gateway').startedAt=x.before.roles.find(row=>row.role==='gateway').startedAt;
+ if(fault==='other20Pid')x.raw.rows.find(row=>row.role==='auth').hostPid++;
+ if(fault==='writableMount')x.raw.rows.find(row=>row.role==='gateway').binaryMounts[0].writable=true;
+ assert.throws(()=>expectedUnqualifiedNativePreimage(x.expected,x.before,x.raw,x.disposition,x.selection));
+});
+
+
+function domainFixture(){
+ const org='org:00000000-0000-0000-0000-000000000001:',registry=Buffer.from('{"services":[]}').toString('hex');
+ const uuid='00000000-0000-4000-8000-000000000000',hash=crypto.createHash('sha256').update(Buffer.concat([Buffer.from('present\0'),Buffer.from(registry,'hex')])).digest('hex');
+ return {containerId:H('a'),image:'sha256:'+H('b'),networkId:H('c'),hostname:'redis',port:6379,database:2,configuredBy:'SIGNING_KEYS_REDIS_URL',credentialMatchesConfiguredUrl:true,redisWrites:false,complete:true,blockers:[],
+  rows:[{key:org+'signing-key-services',type:'string',valueHex:registry,dumpHex:'aabb',pttl:-1},
+   {key:org+'signing-key-services-revision',type:'string',valueHex:Buffer.from(uuid+':'+hash).toString('hex'),dumpHex:'ccdd',pttl:-1}]};
+}
+for(const fault of ['valid','planned','retirement','weakEtag','sidecar','extraGet','rawRegistry','foreignKey','revisionDigest','database'])test('signer successor gate '+fault,t=>{
+ const {validateHeaderSuccessorGate}=require('./functional-debug-runtime'),f=fixture(t),prior=domainFixture(),before=structuredClone(prior),after=structuredClone(prior);
+ const response=f.write('response.json',{services:[]});
+ const auth={state:'PASSED',scope:'D02_EXPLICIT_SIGNING_CONFIG_GET_WRITE_CAPABLE',httpStatus:200,explicitConfigGetCount:1,providerEditRequested:false,
+  strongOpaqueRevision:true,cacheControlNoStore:true,cacheControlNoTransform:true,etag:'"r-00000000-0000-4000-8000-000000000000"',sessionRetired:true,privateCookieRetired:true,browserClosed:true,
+  privateResponse:response,bodySha256:response.sha256,serviceCount:0};
+ const deployed={state:'APPLIED_FUNCTIONAL_ONLY',actualReadbackVerified:true,configGate:{registryUnchanged:true,revisionBindingVerified:true}};
+ if(fault==='planned')deployed.state='PLANNED';if(fault==='retirement')auth.sessionRetired=false;if(fault==='weakEtag')auth.etag='W/'+auth.etag;
+ if(fault==='sidecar')deployed.configGate.revisionBindingVerified=false;if(fault==='extraGet')auth.explicitConfigGetCount=2;
+ if(fault==='rawRegistry')after.rows[0].valueHex=Buffer.from('sensitive-must-not-print').toString('hex');
+ if(fault==='foreignKey')after.rows.push({...after.rows[0],key:'signing-service:global-rotation-fence'});
+ if(fault==='revisionDigest')after.rows[1].valueHex=Buffer.from('00000000-0000-4000-8000-000000000000:'+H('0')).toString('hex');
+ if(fault==='database')after.database=0;
+ deployed.configGate.signingDomainBefore=f.write('domain-before.json',before);deployed.configGate.signingDomainAfter=f.write('domain-after.json',after);
+ deployed.configGate.authResult=f.write('config-get.json',auth);
+ if(fault==='valid')assert.equal(validateHeaderSuccessorGate(deployed,prior),undefined);
+ else assert.throws(()=>validateHeaderSuccessorGate(deployed,prior),error=>{assert(!String(error).includes('sensitive-must-not-print'));assert(!String(error).includes(Buffer.from('sensitive-must-not-print').toString('hex')));return true;});
+});

@@ -14,6 +14,7 @@ type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "application Compose model differs from the reviewed installer contract";
 pub struct ApplicationModelParameters {
     pub installation: PathBuf,
+    pub applicant_state_gid: u32,
     pub bundle: PathBuf,
     pub compose_project: String,
     pub openbao_network_name: String,
@@ -173,6 +174,7 @@ pub fn prepare(
             && !p.bundle.starts_with(p.installation.join("state"))
             && !p.bundle.starts_with(p.installation.join("secrets")),
     )?;
+    require(p.applicant_state_gid != 0)?;
     let project = &p.compose_project;
     require(
         regex::Regex::new(r"\Amarty-install-[0-9a-f]{32}\z")
@@ -256,6 +258,7 @@ pub fn prepare(
                 "healthcheck",
                 "restart",
                 "user",
+                "group_add",
                 "volumes",
                 "secrets",
                 "depends_on",
@@ -270,6 +273,12 @@ pub fn prepare(
             ],
         )?;
         require(service["image"].as_str() == images.get(name).map(String::as_str))?;
+        if name == "applicant" {
+            require(service.get("user").is_none())?;
+            require(service["group_add"] == json!([p.applicant_state_gid.to_string()]))?;
+        } else {
+            require(service.get("group_add").is_none())?;
+        }
         require(service.get("pull_policy").is_none() || service["pull_policy"] == "always")?;
         require(service["networks"] == json!({"default":null}))?;
         require(array(&service["profiles"])? == array(&c["profiles"])?)?;
@@ -1110,6 +1119,7 @@ mod tests {
         let project = format!("marty-install-{}", "a".repeat(32));
         let p = ApplicationModelParameters {
             installation: installation.into(),
+            applicant_state_gid: 10001,
             bundle: Path::new(installation).join("bundle/selfhost-prepared"),
             compose_project: project.clone(),
             openbao_network_name: format!("{project}-bao_default"),
@@ -1148,6 +1158,7 @@ mod tests {
         ] {
             model["services"][name]["ports"] = json!([{"host_ip":"127.0.0.1","published":published,"target":target,"protocol":"tcp","mode":"ingress"}]);
         }
+        model["services"]["applicant"]["group_add"] = json!([p.applicant_state_gid.to_string()]);
         model["services"]["keycloak"]["environment"]["KC_HOSTNAME"] = json!(p.origin);
         model["services"]["keycloak-configurator"]["environment"]["MARTY_ORG_ADMIN_EMAIL"] =
             json!("operator@localhost");
@@ -1212,6 +1223,32 @@ mod tests {
         );
         // Cannot accidentally apply this plan twice or treat it as fresh input.
         assert!(prepare(&plan.model, &images, &p).is_err());
+    }
+
+    #[test]
+    fn applicant_requires_image_user_and_exact_nonroot_state_group() {
+        let (model, images, p) = fixture();
+        assert!(prepare(&model, &images, &p).is_ok());
+        let mut rootless_model = model.clone();
+        let mut rootless_parameters = fixture().2;
+        rootless_parameters.applicant_state_gid = 1000;
+        rootless_model["services"]["applicant"]["group_add"] = json!(["1000"]);
+        assert!(prepare(&rootless_model, &images, &rootless_parameters).is_ok());
+        let mut root_user = model.clone();
+        root_user["services"]["applicant"]["user"] = json!("0:0");
+        assert!(prepare(&root_user, &images, &p).is_err());
+        let mut root_group = model.clone();
+        root_group["services"]["applicant"]["group_add"] = json!(["0"]);
+        assert!(prepare(&root_group, &images, &p).is_err());
+        let mut missing_group = model.clone();
+        missing_group["services"]["applicant"]
+            .as_object_mut()
+            .unwrap()
+            .remove("group_add");
+        assert!(prepare(&missing_group, &images, &p).is_err());
+        let mut foreign_group = model.clone();
+        foreign_group["services"]["postgres"]["group_add"] = json!(["10001"]);
+        assert!(prepare(&foreign_group, &images, &p).is_err());
     }
     #[test]
     fn rejects_resource_and_privilege_drift() {

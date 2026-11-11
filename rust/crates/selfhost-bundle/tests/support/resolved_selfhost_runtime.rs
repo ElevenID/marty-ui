@@ -806,6 +806,7 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     let env_file = owned.path().join("synthetic.env");
     let mut inputs: BTreeMap<String, String> = [
         ("SELFHOST_IMAGE_TAG", "synthetic-immutable-v1"),
+        ("APPLICANT_STATE_GID", "10001"),
         ("PUBLIC_DOMAIN", "issuer.example"),
         ("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001"),
         ("BAO_ADDR", "https://openbao.invalid:8200"),

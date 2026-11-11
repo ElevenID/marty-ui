@@ -38,6 +38,7 @@ const {
   validateReadinessSnapshot,
   verifyCompactJws,
   rosterJobBaseline,
+  readCompleteScopedJobInventory,
   waitForLatestRosterJob,
   activatedRosterJobTimestamp,
   reconcileCanvasPrelaunchApplicationAbsence,
@@ -77,6 +78,24 @@ test('roster baseline rejects a foreign organization and an incomplete inventory
   const full = Array.from({ length: 500 }, (_, id) => ({ id: String(id), organization_id: 'org-1', binding_id: 'foreign' }));
   await assert.rejects(rosterJobBaseline({ get: async () => full }, 'org-1', 'binding-1'),
     error => error.code === 'canvas_roster_job_inventory_incomplete');
+});
+
+test('scoped inventory proves the exact binding, bounded completeness and unique IDs',async()=>{
+  let rows=[{id:'job-1',organization_id:'org-1',binding_id:'binding-1'}],seen;
+  const marty={get:async route=>{seen=route;return rows}};
+  assert.equal((await readCompleteScopedJobInventory(marty,'org-1','binding-1')).length,1);
+  assert.match(seen,/organization_id=org-1&binding_id=binding-1&limit=500$/);
+  for(const bad of [[{...rows[0],organization_id:'foreign'}],[{...rows[0],binding_id:'foreign'}],
+    [rows[0],rows[0]],Array.from({length:500},(_,i)=>({...rows[0],id:String(i)}))]){
+    rows=bad;await assert.rejects(readCompleteScopedJobInventory(marty,'org-1','binding-1'),
+      error=>error.code==='canvas_roster_job_inventory_incomplete');
+  }
+});
+
+test('caller completeness booleans cannot bypass the old backend organization-window guard',async()=>{
+  const marty={scopedJobInventory:true,jobInventoryComplete:true,get:async()=>Array.from({length:500},(_,i)=>({
+    id:String(i),organization_id:'org-1',binding_id:'foreign'}))};
+  await assert.rejects(rosterJobBaseline(marty,'org-1','binding-1'),error=>error.code==='canvas_roster_job_inventory_incomplete');
 });
 
 test('prelaunch cleanup accepts only terminal owned roster with no application or claim', async () => {

@@ -1,7 +1,8 @@
 use crate::{
     issuance::{
-        apply_offer, mark_no_active_flow, matches_active_attempt, matches_completed_offer,
-        reconcile_transaction, reserve_attempt, IssuanceError, IssuanceOffer,
+        apply_offer, has_matching_reserved_lifetime, mark_no_active_flow, matches_active_attempt,
+        matches_completed_offer, reconcile_transaction, reserve_attempt_with_lifetime,
+        IssuanceError, IssuanceOffer,
     },
     store::StoreDocument,
     validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
@@ -15,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -109,6 +111,17 @@ pub struct ReviewRequestContext<'a> {
 
 #[async_trait]
 pub trait TemplateProvider: Send + Sync {
+    /// Authoritative, read-only issuer validation; never mirror its configured default.
+    async fn validate_offer_lifetime(
+        &self,
+        _organization_id: &str,
+        _seconds: u64,
+    ) -> Result<(), ProviderError> {
+        Err(ProviderError::Unavailable(
+            "issuer lifetime validation is unavailable".into(),
+        ))
+    }
+
     async fn get(
         &self,
         organization_id: &str,
@@ -213,8 +226,17 @@ impl FilePersistence {
 
     pub fn load(path: impl AsRef<Path>) -> Result<StoreDocument, ProviderError> {
         let path = path.as_ref();
-        if !path.exists() {
-            return Ok(StoreDocument::default());
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(StoreDocument::default());
+            }
+            Err(error) => return Err(ProviderError::Persistence(error.to_string())),
+        };
+        if !metadata.is_file() {
+            return Err(ProviderError::Persistence(
+                "applicant store must be an ordinary file".into(),
+            ));
         }
         let bytes =
             fs::read(path).map_err(|error| ProviderError::Persistence(error.to_string()))?;
@@ -222,20 +244,95 @@ impl FilePersistence {
     }
 }
 
+fn store_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
 impl StorePersistence for FilePersistence {
     fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        }
-        let temporary = self.path.with_extension("tmp");
+        let parent = store_parent(&self.path);
+        fs::create_dir_all(parent)
+            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        let temporary = self.path.with_extension(format!("{}.tmp", Uuid::new_v4()));
         let bytes = store
             .encode()
             .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        fs::write(&temporary, bytes)
-            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
-        fs::rename(&temporary, &self.path)
-            .map_err(|error| ProviderError::Persistence(error.to_string()))
+        let result = (|| -> std::io::Result<()> {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o660);
+            }
+            let mut file = options.open(&temporary)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(fs::Permissions::from_mode(0o660))?;
+            }
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temporary, &self.path)?;
+            #[cfg(unix)]
+            fs::File::open(parent)?.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        result.map_err(|error| ProviderError::Persistence(error.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod file_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn replaces_existing_store_atomically_and_reloads_after_restart() {
+        let root = std::env::temp_dir().join(format!("marty-applicant-store-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("store.json");
+        fs::write(&path, b"old state").unwrap();
+        let store = StoreDocument::default();
+        FilePersistence::new(&path).persist(&store).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), store.encode().unwrap());
+        assert_eq!(
+            FilePersistence::load(&path).unwrap().encode().unwrap(),
+            store.encode().unwrap()
+        );
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o660
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bare_relative_filename_uses_current_directory_as_parent() {
+        assert_eq!(store_parent(Path::new("store.json")), Path::new("."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_symlink_store_without_following_target() {
+        let root = std::env::temp_dir().join(format!("marty-applicant-link-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("target.json");
+        fs::write(&target, b"unchanged").unwrap();
+        let link = root.join("store.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(FilePersistence::load(&link).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"unchanged");
+        fs::remove_dir_all(root).unwrap();
     }
 }
 
@@ -1326,6 +1423,15 @@ impl ApplicantService {
         application_id: &str,
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
+        self.issue_with_lifetime(application_id, now, None).await
+    }
+
+    pub async fn issue_with_lifetime(
+        &self,
+        application_id: &str,
+        now: DateTime<Utc>,
+        offer_ttl_seconds: Option<u64>,
+    ) -> Result<Application, ServiceError> {
         let (application_snapshot, applicant_snapshot) = {
             let store = self.store.read().await;
             let application = store
@@ -1344,6 +1450,13 @@ impl ApplicantService {
                 &application_snapshot.application_template_id,
             )
             .await?;
+        if !has_matching_reserved_lifetime(&application_snapshot, offer_ttl_seconds)? {
+            if let Some(seconds) = offer_ttl_seconds {
+                self.templates
+                    .validate_offer_lifetime(&application_snapshot.organization_id, seconds)
+                    .await?;
+            }
+        }
         let claims = build_claims(&application_snapshot, &applicant_snapshot, &template, now);
 
         let (application, applicant, attempt_id, reserved_claims) = {
@@ -1367,7 +1480,8 @@ impl ApplicantService {
                 .applicant(&application.applicant_id)
                 .cloned()
                 .ok_or(ServiceError::ApplicantNotFound)?;
-            let (attempt_id, reserved_claims) = reserve_attempt(&mut application, claims, now)?;
+            let (attempt_id, reserved_claims) =
+                reserve_attempt_with_lifetime(&mut application, claims, now, offer_ttl_seconds)?;
             store.applications[index] = application.clone();
             self.persistence.persist(&store)?;
             (application, applicant, attempt_id, reserved_claims)
@@ -1680,6 +1794,8 @@ fn build_claims(
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
+    #[error("requested offer lifetime is outside issuer policy")]
+    InvalidOfferLifetime,
     #[error("provider unavailable: {0}")]
     Unavailable(String),
     #[error("no active issuance flow")]
