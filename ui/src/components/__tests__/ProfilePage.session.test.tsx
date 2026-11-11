@@ -267,7 +267,7 @@ describe('profile photo readback with the real session providers', () => {
     expect(screen.getByTestId('team-grant')).toHaveTextContent('false');
   });
 
-  it('uses one strict identity refresh when changed membership authority is discovered after readback', async () => {
+  it.each(['changed role', 'removed membership'])('uses one strict identity refresh when readback confirms %s', async change => {
     const strictRead = deferred();
     const organization = { id: 'private-org', name: 'Private Organization', membership: { roles: [{ name: 'owner' }], has_org_console_access: true } };
     const replacementOrganization = { ...organization, membership: { roles: [{ name: 'viewer' }], has_org_console_access: true } };
@@ -279,7 +279,9 @@ describe('profile photo readback with the real session providers', () => {
         if (reads === 3) await strictRead.promise;
         return HttpResponse.json({ authenticated: true, user: principal });
       }),
-      http.get('*/v1/organizations/mine', () => HttpResponse.json([saved ? replacementOrganization : organization])),
+      http.get('*/v1/organizations/mine', () => HttpResponse.json(!saved
+        ? [organization]
+        : change === 'removed membership' ? [] : [replacementOrganization])),
       http.get('*/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org', last_active_org_id: organization.id })),
       http.get('*/v1/organizations/private-org/members/me/permissions', () => HttpResponse.json({ permissions: saved ? [] : ['team:manage'], roles: [] })),
       http.patch('*/v1/auth/me', () => {
@@ -299,6 +301,168 @@ describe('profile photo readback with the real session providers', () => {
     expect(await screen.findByRole('heading', { name: 'Profile Owner' })).toBeVisible();
     expect(screen.getByTestId('team-grant')).toHaveTextContent('false');
     expect(reads).toBe(3);
+  });
+
+  it.each(['503', 'network'])('preserves the saved-photo feedback when unchanged account enrichment fails with %s', async failure => {
+    const strictRead = deferred();
+    const organization = { id: 'private-org', name: 'Private Organization', membership: { roles: [{ name: 'owner' }], has_org_console_access: true } };
+    const warning = 'Your picture was saved, but account details could not be refreshed. Reload the page to see it.';
+    let picture: string | undefined;
+    let reads = 0;
+    let writes = 0;
+    let failedOrganizationReads = 0;
+    server.use(
+      http.get('*/v1/auth/me', async () => {
+        reads += 1;
+        if (reads > 2) await strictRead.promise;
+        return HttpResponse.json({ authenticated: true, user: { ...principal, picture } });
+      }),
+      http.get('*/v1/organizations/mine', () => {
+        if (!picture) return HttpResponse.json([organization]);
+        failedOrganizationReads += 1;
+        return failure === '503'
+          ? HttpResponse.json({ detail: 'Temporarily unavailable' }, { status: 503 })
+          : HttpResponse.error();
+      }),
+      http.get('*/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org', last_active_org_id: organization.id })),
+      http.get('*/v1/organizations/private-org/members/me/permissions', () => HttpResponse.json({ permissions: ['team:manage'], roles: [] })),
+      http.patch('*/v1/auth/me', async ({ request }) => {
+        writes += 1;
+        picture = (await request.json() as { picture: string }).picture;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const { container, user, unmount } = renderWithRouter(<ProfileApplication />, { initialEntries: ['/console/applicant/profile'] });
+    try {
+      await waitFor(() => expect(screen.getByTestId('team-grant')).toHaveTextContent('true'));
+      await savePicture(container, user);
+      // Both outcomes settle the background request: either the truthful warning
+      // appears, or the bug starts an unrelated strict identity refresh.
+      await waitFor(() => expect(reads > 2 || screen.queryByText(warning) !== null).toBe(true), { timeout: 20000 });
+      expect(reads, `Organization failure started an extra identity read after ${failedOrganizationReads} failed membership requests`).toBe(2);
+      expect(screen.getByText(warning)).toBeVisible();
+      expect(screen.getByText('Profile picture updated.')).toBeVisible();
+      expect(screen.getByRole('heading', { name: 'Profile Owner' })).toBeVisible();
+      expect(screen.getByTestId('auth-loading')).toHaveTextContent('false');
+      expect(screen.getByTestId('memberships')).toHaveTextContent(organization.id);
+      expect(screen.getByTestId('team-grant')).toHaveTextContent('true');
+      expect(screen.getByTestId('path')).toHaveTextContent('/console/applicant/profile');
+      expect(writes).toBe(1);
+    } finally {
+      unmount();
+      await act(async () => strictRead.resolve());
+    }
+  });
+
+  it.each([
+    { status: 401, claimed: false },
+    { status: 403, claimed: false },
+    { status: 401, claimed: true },
+    { status: 403, claimed: true },
+  ])('withholds old membership grants when organization enrichment is denied with $status (raw claim fallback: $claimed)', async ({ status, claimed }) => {
+    const strictRead = deferred();
+    const organization = { id: 'private-org', name: 'Private Organization', display_name: 'Private Organization', membership: { roles: [{ name: 'owner' }], has_org_console_access: true } };
+    const currentPrincipal = claimed ? { ...principal, organizations: [organization] } : principal;
+    let saved = false;
+    let reads = 0;
+    server.use(
+      http.get('*/v1/auth/me', async () => {
+        reads += 1;
+        if (reads === 3) await strictRead.promise;
+        return HttpResponse.json({ authenticated: true, user: currentPrincipal });
+      }),
+      http.get('*/v1/organizations/mine', () => saved
+        ? HttpResponse.json({ detail: 'Organization access denied' }, { status })
+        : HttpResponse.json([organization])),
+      http.get('*/v1/me/preferences', () => HttpResponse.json({ last_view_mode: 'org', last_active_org_id: organization.id })),
+      http.get('*/v1/organizations/private-org/members/me/permissions', () => HttpResponse.json({ permissions: ['team:manage'], roles: [] })),
+      http.patch('*/v1/auth/me', () => {
+        saved = true;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const { container, user, unmount } = renderWithRouter(<ProfileApplication />, { initialEntries: ['/console/applicant/profile'] });
+    try {
+      await waitFor(() => expect(screen.getByTestId('team-grant')).toHaveTextContent('true'));
+      await savePicture(container, user);
+      await waitFor(() => expect(reads).toBe(3));
+      expect(screen.getByTestId('auth-loading')).toHaveTextContent('true');
+      expect(screen.getByTestId('memberships')).toBeEmptyDOMElement();
+      expect(screen.getByTestId('team-grant')).toHaveTextContent('false');
+      expect(screen.queryByRole('heading', { name: 'Profile Owner' })).not.toBeInTheDocument();
+      expect(screen.queryByText(/account details could not be refreshed/)).not.toBeInTheDocument();
+      await act(async () => strictRead.resolve());
+      if (claimed) {
+        expect(await screen.findByText('Organization access denied')).toBeVisible();
+        expect(screen.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
+        expect(screen.queryByRole('heading', { name: 'Profile Owner' })).not.toBeInTheDocument();
+      } else {
+        expect(await screen.findByRole('heading', { name: 'Profile Owner' })).toBeVisible();
+      }
+      expect(screen.getByTestId('principal')).toHaveTextContent('profile-owner');
+      expect(screen.getByTestId('auth-loading')).toHaveTextContent('false');
+      expect(screen.getByTestId('team-grant')).toHaveTextContent('false');
+      expect(reads).toBe(3);
+    } finally {
+      unmount();
+      await act(async () => strictRead.resolve());
+    }
+  });
+
+  it.each([401, 403])('ignores a late organization %s after a replacement account wins', async status => {
+    const oldEnrichment = deferred();
+    const organization = { id: 'private-old-org', name: 'Old Organization', membership: { roles: [{ name: 'owner' }], has_org_console_access: true } };
+    const replacement = { ...principal, user_id: 'replacement-owner', name: 'Replacement Owner' };
+    let saved = false;
+    let replaced = false;
+    let enrichmentStarted = false;
+    let enrichmentResponded = false;
+    let reads = 0;
+    server.use(
+      http.get('*/v1/auth/me', () => {
+        reads += 1;
+        if (reads >= 3) replaced = true;
+        return HttpResponse.json({ authenticated: true, user: replaced ? replacement : principal });
+      }),
+      http.get('*/v1/organizations/mine', async () => {
+        if (replaced) return HttpResponse.json([]);
+        if (!saved) return HttpResponse.json([organization]);
+        enrichmentStarted = true;
+        await oldEnrichment.promise;
+        enrichmentResponded = true;
+        return HttpResponse.json({ detail: 'Old organization request denied' }, { status });
+      }),
+      http.get('*/v1/me/preferences', () => HttpResponse.json(replaced
+        ? { last_view_mode: 'applicant', last_active_org_id: null }
+        : { last_view_mode: 'org', last_active_org_id: organization.id })),
+      http.get('*/v1/organizations/private-old-org/members/me/permissions', () => HttpResponse.json({ permissions: ['team:manage'], roles: [] })),
+      http.patch('*/v1/auth/me', () => {
+        saved = true;
+        return HttpResponse.json({ ok: true });
+      }),
+    );
+    const { container, user, unmount } = renderWithRouter(<ProfileApplication />, { initialEntries: ['/console/applicant/profile'] });
+    try {
+      await waitFor(() => expect(screen.getByTestId('team-grant')).toHaveTextContent('true'));
+      await savePicture(container, user);
+      await waitFor(() => expect(enrichmentStarted).toBe(true));
+      await user.click(screen.getByRole('button', { name: 'Refresh identity' }));
+      expect(await screen.findByRole('heading', { name: 'Replacement Owner' })).toBeVisible();
+      await act(async () => oldEnrichment.resolve());
+      await waitFor(() => expect(enrichmentResponded).toBe(true));
+
+      expect(screen.getByTestId('principal')).toHaveTextContent('replacement-owner');
+      expect(screen.getByTestId('auth-loading')).toHaveTextContent('false');
+      expect(screen.getByTestId('memberships')).toBeEmptyDOMElement();
+      expect(screen.getByTestId('team-grant')).toHaveTextContent('false');
+      expect(screen.getByRole('heading', { name: 'Replacement Owner' })).toBeVisible();
+      expect(screen.queryByText('Profile picture updated.')).not.toBeInTheDocument();
+      expect(screen.queryByText(/account details could not be refreshed/)).not.toBeInTheDocument();
+      expect(reads).toBe(3);
+    } finally {
+      unmount();
+      await act(async () => oldEnrichment.resolve());
+    }
   });
 
   it('ignores readback completed after logout starts without redirecting before the logout form is submitted', async () => {

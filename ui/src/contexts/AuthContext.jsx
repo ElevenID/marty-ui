@@ -172,7 +172,14 @@ export function AuthProvider({ children }) {
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
-          if (applies()) logAuthContextError('Error fetching user organizations:', orgError);
+          if (!applies()) return undefined;
+          logAuthContextError('Error fetching user organizations:', orgError);
+          if (canRetainUser) {
+            // An unavailable read is not an empty membership response. Denied
+            // access must still invalidate grants, even if raw claims match.
+            if (orgError?.status === 401 || orgError?.status === 403) return loadUser();
+            throw orgError;
+          }
         }
         if (!applies()) return undefined;
 
