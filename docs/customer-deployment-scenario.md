@@ -133,6 +133,10 @@ cannot test. This audit identified the following release requirements:
   the login-flow reference only when it has the same owner. Retained fixed-ID
   policies, flows, instances and deployment profiles keep their existing
   owner; conflicting configuration must stop rather than reassign them.
+- The fixed default revocation profile must belong to the configured customer.
+  Native startup checks the retained owner in its migration transaction. A
+  conflict rolls back pending schema and status-list URL migrations; a
+  same-owner restart preserves the customer's profile settings and timestamps.
 - The chart must reject conflicting identity aliases and invalid mail-dependent
   login configuration before Kubernetes changes are applied.
 

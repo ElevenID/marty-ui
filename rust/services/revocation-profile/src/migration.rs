@@ -345,6 +345,21 @@ async fn ensure_default_profile(
     .bind(now)
     .execute(&mut **transaction)
     .await?;
+    // Bootstrap is not a tenant migration. Keep every retained field unchanged,
+    // but refuse startup if this stable ID belongs to another organization.
+    // Check after the conflict-safe insert and hold the row until commit so a
+    // concurrent writer cannot change its owner between this check and success.
+    let retained_organization_id = sqlx::query_scalar::<_, String>(
+        "SELECT organization_id FROM revocation_profile_service.revocation_profiles WHERE id=$1 FOR UPDATE",
+    )
+    .bind(DEFAULT_REVOCATION_PROFILE_ID)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if retained_organization_id != organization_id {
+        return Err(sqlx::Error::Protocol(
+            "default revocation profile belongs to a different organization".into(),
+        ));
+    }
     Ok(())
 }
 
