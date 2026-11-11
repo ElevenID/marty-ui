@@ -43,7 +43,6 @@ import { ResourcePage } from '../../common';
 import { TableSkeleton } from '../../common/skeletons';
 import EmptyState from '../../common/EmptyState';
 import ErrorState from '../../common/ErrorState';
-import { PermissionGate } from '../../common/PermissionGate';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useAuth } from '../../../hooks/useAuth';
 import { useDialog } from '../../../hooks/useDialog';
@@ -354,7 +353,7 @@ function TeamContent({ organizationId, currentUser, reconcileMembershipRemoval }
       breadcrumbs={getBreadcrumbs(t)}
       pageTestId="org.team.page"
       actions={
-        <PermissionGate resource="team" action="invite">
+        canInvite && (
           <Button
             variant="contained"
             startIcon={<AddIcon />}
@@ -364,7 +363,7 @@ function TeamContent({ organizationId, currentUser, reconcileMembershipRemoval }
           >
             {t('org.team.members.actions.invite')}
           </Button>
-        </PermissionGate>
+        )
       }
     >
       {!currentUser ? (

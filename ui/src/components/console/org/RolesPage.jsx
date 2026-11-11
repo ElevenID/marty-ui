@@ -579,11 +579,12 @@ function RolesPageContent({ effectiveOrgId, canCreateRoles, canEditRoles, canDel
 
 function RolesPage() {
   const { activeOrgId } = useConsole();
-  const { can, isLoading, refresh } = usePermissions();
+  const { can, isLoading, error, refresh } = usePermissions();
   if (!activeOrgId) {
     return <EmptyState title="Select an organization" description="Choose an organization to manage its roles." />;
   }
   if (isLoading) return <CircularProgress aria-label="Checking role permissions" />;
+  if (error) return <ErrorState error={error} onRetry={refresh} variant="compact" />;
   if (!can('role', 'view')) {
     return <ErrorState title="Access denied" message="You do not have permission to view roles in this organization." showSupport={false} />;
   }

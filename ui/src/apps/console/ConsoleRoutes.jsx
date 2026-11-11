@@ -11,6 +11,7 @@ import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
+import ErrorState from '../../components/common/ErrorState';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
@@ -105,8 +106,9 @@ function GuardLoadingState({ message }) {
 
 // Gate the page before mounting its data loaders, including direct and legacy URLs.
 function OperatorRoute({ action = 'view', children }) {
-  const { can, isLoading } = usePermissions();
+  const { can, isLoading, error, refresh } = usePermissions();
   if (isLoading) return <GuardLoadingState message="Checking operator permissions..." />;
+  if (error) return <ErrorState error={error} onRetry={refresh} variant="compact" />;
   if (!can('signing-key', action)) {
     return <Alert severity="error">You do not have permission to {action === 'create' ? 'configure' : 'view'} key management for this organization.</Alert>;
   }

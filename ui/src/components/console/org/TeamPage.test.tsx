@@ -496,12 +496,9 @@ describe('TeamPage', () => {
     })
   })
 
-  it('keeps manual Invite disabled when the gate resolves before the page permission request', async () => {
+  it('keeps manual Invite unavailable until the page permissions and inventories are ready', async () => {
     const pagePermissions = { isLoading: true, can: () => false }
-    const gatePermissions = { isLoading: false, can: () => true }
-    // Each real hook consumer retains its own state. The page mounts before
-    // its child gate, whose independent permission request finishes first.
-    mockPermissionInstance.mockReturnValue(gatePermissions).mockReturnValueOnce(pagePermissions)
+    mockPermissionInstance.mockReturnValue(pagePermissions)
     const { user, rerender } = renderWithRouter(<TeamPage />, {
       initialEntries: ['/console/org/team'],
     })
@@ -509,14 +506,13 @@ describe('TeamPage', () => {
     await act(async () => {})
     expect(mockListMembers).not.toHaveBeenCalled()
     expect(mockListRoles).not.toHaveBeenCalled()
-    const invite = screen.getByRole('button', { name: 'org.team.members.actions.invite' })
-    expect(invite).toBeVisible()
-    expect(invite).toBeDisabled()
+    expect(screen.queryByRole('button', { name: 'org.team.members.actions.invite' })).not.toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
 
     pagePermissions.isLoading = false
     pagePermissions.can = () => true
     rerender(<TeamPage />)
+    const invite = await screen.findByRole('button', { name: 'org.team.members.actions.invite' })
     await waitFor(() => expect(invite).toBeEnabled())
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await user.click(invite)
