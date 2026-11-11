@@ -138,40 +138,49 @@ function CheckRow({ check, index, onChange, onRemove }) {
 
 export default function CheckConfigurationDialog({ open, template, onClose, onSaved }) {
   const [checks, setChecks] = useState([]);
+  const [checksEdited, setChecksEdited] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     if (open && template) {
-      setChecks((template.required_checks || []).map((c, i) => ({ order: i, ...c })));
+      const existing = template.required_checks || [];
+      const validOrder = existing.every((check) => Number.isInteger(check.order) && check.order > 0);
+      setChecks(validOrder ? [...existing].sort((left, right) => left.order - right.order)
+        : existing.map((check, index) => ({ ...check, order: index + 1 })));
+      // Invalid legacy orders can be repaired without changing their array sequence.
+      setChecksEdited(!validOrder);
       setError(null);
     }
   }, [open, template]);
 
   const handleAdd = () => {
+    setChecksEdited(true);
     setChecks((prev) => [
       ...prev,
       {
         check_type: 'identity_verification',
         is_required: true,
-        order: prev.length,
+        order: prev.length + 1,
       },
     ]);
   };
 
   const handleChange = (index, updated) => {
+    setChecksEdited(true);
     setChecks((prev) => prev.map((c, i) => (i === index ? { ...c, ...updated } : c)));
   };
 
   const handleRemove = (index) => {
-    setChecks((prev) => prev.filter((_, i) => i !== index).map((c, i) => ({ ...c, order: i })));
+    setChecksEdited(true);
+    setChecks((prev) => prev.filter((_, i) => i !== index).map((c, i) => ({ ...c, order: i + 1 })));
   };
 
   const handleSave = async () => {
     setSaving(true);
     setError(null);
     try {
-      const normalised = checks.map((c, i) => ({ ...c, order: i }));
+      const normalised = checksEdited ? checks.map((c, i) => ({ ...c, order: i + 1 })) : template.required_checks || [];
       const saved = await updateTemplateRequiredChecks(template.id, normalised);
       onSaved?.(saved);
       onClose();

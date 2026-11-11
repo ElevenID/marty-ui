@@ -1,7 +1,7 @@
 /** Select active profiles and a DID compatible with the API-derived template context. */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Box, Typography, FormControl, InputLabel, Select, MenuItem, FormHelperText, Alert, CircularProgress, Button, Stack, TextField } from '@mui/material';
-import { useNavigate } from 'react-router';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import { useTranslation } from 'react-i18next';
 import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 import { listComplianceProfiles } from '../../../../services/complianceProfilesApi';
@@ -22,7 +22,6 @@ const profilesFrom = (response) => {
 
 const TrustComplianceStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
-  const navigate = useNavigate();
   const { activeOrgId } = useConsole();
   const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
   const trustInitialized = useRef(false);
@@ -194,8 +193,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
       {currentOptions?.requirements?.doctype && <TextField fullWidth required label="Document type (doctype)" value={data.doctype || ''}
         onChange={(event) => onChange({ doctype: event.target.value })} helperText="Required by the selected credential format." sx={{ mt: 2 }} />}
       <Stack direction="row" spacing={1} sx={{ mt: 2 }}>
-        <Button onClick={() => navigate('/console/org/trust/profiles/new')}>Create Trust Profile</Button>
-        <Button onClick={() => navigate('/console/org/deploy/issuer-identity/new')}>Create issuer identity</Button>
+        <Button component="a" href="/console/org/trust/profiles/new" target="_blank" rel="noopener noreferrer"
+          aria-label="Create Trust Profile (opens in a new tab)" endIcon={<OpenInNewIcon />}>Create Trust Profile</Button>
+        <Button component="a" href="/console/org/deploy/issuer-identity/new" target="_blank" rel="noopener noreferrer"
+          aria-label="Create issuer identity (opens in a new tab)" endIcon={<OpenInNewIcon />}>Create issuer identity</Button>
       </Stack>
     </Box>
   );
