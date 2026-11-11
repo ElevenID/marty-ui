@@ -247,7 +247,7 @@ jobs:
             timeout 20m docker pull "$dependency"
           done
           playwright_image="$(jq -r '.contract_driver.base_image' "$lock")"
-          [[ "$playwright_image" =~ ^mcr\.microsoft\.com/playwright:v1\.56\.0-jammy@sha256:[0-9a-f]{64}$ ]]
+          [[ "$playwright_image" =~ ^mcr\.microsoft\.com/playwright:v1\.64\.1-noble@sha256:[0-9a-f]{64}$ ]]
           echo "CANVAS_OSS_PLAYWRIGHT_IMAGE=$playwright_image" >> "$GITHUB_ENV"
           timeout 20m docker pull --platform linux/amd64 "$playwright_image"
 
