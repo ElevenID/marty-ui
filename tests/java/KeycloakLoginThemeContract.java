@@ -86,7 +86,8 @@ public final class KeycloakLoginThemeContract {
                 "loginResetCredentialsUrl", "/realms/fixture/reset-credentials",
                 "loginUrl", "/realms/fixture/login",
                 "loginRestartFlowUrl", "/realms/fixture/restart",
-                "resourcesPath", "/resources/fixture/login/11id"));
+                "resourcesPath", "/resources/fixture/login/11id",
+                "resourcesCommonPath", "/resources/fixture/common/keycloak"));
         data.put("auth", Map.of("attemptedUsername", USERNAME));
         data.put("social", Map.of("providers", List.of()));
         data.put("login", Map.of("username", USERNAME));

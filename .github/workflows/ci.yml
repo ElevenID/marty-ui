@@ -1486,7 +1486,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
           # Use the real upstream Rust schema owners. The former hand-made

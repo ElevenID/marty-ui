@@ -38,6 +38,15 @@ verification fixtures. Each fixture now owns a fresh nonce shared by its signed
 proof, request, transport and expected evidence. Deliberate mismatch cases use
 distinct valid nonces; all 31 test functions and their assertions are retained.
 
+The complete hosted run then exposed three integration mismatches. Destructive
+revocation migration tests now use their own named database, and ordinary
+storage/runtime fixtures use one explicit bootstrap owner while preserving
+random tenant profiles and the production cross-tenant refusal. The Keycloak
+rendering fixture supplies the shared-resource URL required by the shipped
+passkey-ready template. Canvas's reviewed browser image and strict portability
+checks follow the retained Playwright package version. Existing behavior checks
+and activation controls remain in place.
+
 All source heads are retained as commit ancestors of the published candidate.
 Closing an original PR means its work moved into this candidate; it does not
 mean a passing local component check independently established a main merge.
@@ -107,6 +116,17 @@ lifecycle browser gate, production UI builds and Helm chart checks on the
 integrated source. The later #1890 follow-up also passed all four hosted UI
 shards and 121 independently run focused tests. Source changes still require
 the final protected checks and queue for their exact published commit.
+
+The subsequent complete run passed CodeQL, the four UI shards, native KMS,
+self-hosted services, runtime images, Helm and the other checks; its two failed
+jobs identified only the three mismatches described above. The correction keeps
+every database assertion and browser scenario, with independent reviews of the
+immutable fixes. Focused local checks include 18 Python deployment/workflow checks and
+all 42 real Java/FreeMarker page-and-locale renders, plus 45 Canvas portability
+cases and 76 nonbrowser Node contract cases. The official Canvas browser-image
+manifest digest was independently checked against the registry response bytes.
+Local browser cases lack their matching Chromium executable; full native
+database and browser execution remain subject to the corrected hosted run.
 
 Local native Rust execution could not fetch the private SSI fork with the
 available terminal credentials. Browser/physical passkey and deployed-runtime

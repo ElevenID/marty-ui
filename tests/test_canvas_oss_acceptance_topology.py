@@ -143,8 +143,8 @@ def test_contract_driver_base_and_compose_boundary_are_locked() -> None:
     driver = lock["contract_driver"]
     topology = lock["acceptance_topology"]
     assert driver["base_image"] == (
-        "mcr.microsoft.com/playwright:v1.63.0-noble@"
-        "sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7"
+        "mcr.microsoft.com/playwright:v1.64.1-noble@"
+        "sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f"
     )
     assert driver["compose_service"] == "canvas-contract"
     assert driver["monitor_service"] == "canvas-continuity-monitor"
