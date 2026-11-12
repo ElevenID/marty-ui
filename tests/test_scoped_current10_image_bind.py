@@ -95,3 +95,29 @@ def test_new_bind_cannot_change_unrelated_environment_or_mounts_and_old_three_st
     old={role:binaries[role] for role,_ in D12_PASSPORT_CURRENT.roles}
     with pytest.raises(ValueError,match="EXISTING_READ_ONLY_EXECUTABLE_BIND_REQUIRED"):
         binary_overlay(old,"d12-passport-current-functional",before=model,native_preimage=preimage)
+
+
+def test_real_retained_current10_repo_digest_links_exact_actual_image_id(tmp_path):
+    # Image fields projected from the retained619246d7 model, a1b4bfa1 binding
+    # and1155a4d2 inspection receipt. No private environment is a test input.
+    before,model,actual,binaries,preimage,freeze=source_fixture(tmp_path)
+    reference='ghcr.io/elevenid/marty-ui-oss/services@sha256:166c1c1bcbb2d952c354c4fa59268c23367687fbb96caa3dff374a9d1df4108d'
+    image_id='sha256:166c1c1bcbb2d952c354c4fa59268c23367687fbb96caa3dff374a9d1df4108d'
+    for row in before["roles"]:
+        if row["role"] in SIX:row["imageId"]=image_id
+    for row in actual:
+        if row["role"] in SIX:row["Image"]=image_id
+    for role in SIX:model["services"][role]["image"]=reference
+    preimage={"binding":freeze("retained-reference-before.json",before),
+              "inspections":freeze("retained-reference-inspections.json",actual)}
+    patch=binary_overlay(binaries,CURRENT10,before=model,native_preimage=preimage)
+    validate_delta(model,merge(model,patch),binaries,CURRENT10,native_preimage=preimage)
+    from scoped_beta_binary_overlay import _current10_configured_image_matches
+    assert all(_current10_configured_image_matches(model["services"][r]["image"],image_id) for r in SIX)
+    assert _current10_configured_image_matches(image_id,image_id)
+    for wrong in (reference.rsplit(":",1)[0]+":"+"f"*64,
+                  "ghcr.io/elevenid/marty-ui-oss/services:nightly",
+                  "unapproved.invalid/services@"+image_id,reference+"-suffix"):
+        changed=deepcopy(model);changed["services"]["flow"]["image"]=wrong
+        with pytest.raises(ValueError):binary_overlay(binaries,CURRENT10,before=changed,native_preimage=preimage)
+    assert not _current10_configured_image_matches(reference,"sha256:"+"d"*64)

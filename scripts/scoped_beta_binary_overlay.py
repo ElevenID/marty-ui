@@ -88,11 +88,23 @@ def image_owned_baseline(role, binary, native_preimage, bound=None):
     return row
 
 
+def _current10_configured_image_matches(reference, image_id):
+    """Exact current10 Desktop immutable-reference/image-ID representation."""
+    if not (isinstance(reference,str) and isinstance(image_id,str)
+            and re.fullmatch(r"sha256:[a-f0-9]{64}",image_id)):
+        return False
+    if reference==image_id:
+        return True
+    configured=re.fullmatch(r"ghcr\.io/elevenid/marty-ui-oss/services@(sha256:[a-f0-9]{64})",reference)
+    # A manifest/config-ID split is unsupported here, not resolved by fallback.
+    return configured is not None and configured.group(1)==image_id
+
+
 def _image_owned_model(role,binary,service,native_preimage):
     row=image_owned_baseline(role,binary,native_preimage)
     target="/usr/local/bin/"+binary
     mounts=service.get("volumes",[])
-    require(service.get("image")==row["imageId"]
+    require(_current10_configured_image_matches(service.get("image"),row["imageId"])
             and len({x["target"] for x in mounts})==len(mounts)
             and not any(_overlaps_executable(x["target"],target) for x in mounts),
             "CURRENT10_IMAGE_MODEL_MOUNT_AMBIGUOUS")
