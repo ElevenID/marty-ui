@@ -107,6 +107,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 marty-signing-keys = { path = "../signing-keys" }
 tokio = { workspace = true, features = ["test-util"] }
 axum-server.workspace = true

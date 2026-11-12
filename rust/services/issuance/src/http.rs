@@ -3873,52 +3873,12 @@ impl IntoResponse for CredentialManagementHttpError {
                     "Credential lifecycle service is temporarily unavailable",
                 ),
             },
-            Self::Lifecycle(error) => match error {
-                CredentialManagementError::NotFound => {
-                    (StatusCode::NOT_FOUND, "Credential not found")
-                }
-                CredentialManagementError::ResourceNotFound => {
-                    (StatusCode::NOT_FOUND, "Resource not found")
-                }
-                CredentialManagementError::AlreadyRevoked => {
-                    (StatusCode::BAD_REQUEST, "Credential already revoked")
-                }
-                CredentialManagementError::CannotSuspendRevoked => {
-                    (StatusCode::BAD_REQUEST, "Cannot suspend revoked credential")
-                }
-                CredentialManagementError::CannotReinstateRevoked => (
-                    StatusCode::BAD_REQUEST,
-                    "Cannot reinstate revoked credential",
-                ),
-                CredentialManagementError::NotSuspended => (
-                    StatusCode::BAD_REQUEST,
-                    "Only suspended credentials can be reinstated",
-                ),
-                CredentialManagementError::ReasonTooLong => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "Credential lifecycle reason exceeds 2000 characters",
-                ),
-                CredentialManagementError::CommentsTooLong => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "Credential lifecycle comments exceed 4000 characters",
-                ),
-                CredentialManagementError::RepositoryUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Credential repository is temporarily unavailable",
-                ),
-                CredentialManagementError::PublicationUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Revocation service unavailable",
-                ),
-                CredentialManagementError::CanvasRetryUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Canvas lifecycle retry could not be recorded",
-                ),
-                CredentialManagementError::CanvasTextEncoding => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
-                        .into_response()
-                }
-            },
+            Self::Lifecycle(error) => {
+                return crate::management_http::lifecycle_error(
+                    error,
+                    crate::management_http::LifecycleSurface::Transaction,
+                )
+            }
         };
         (status, Json(json!({"detail": detail}))).into_response()
     }

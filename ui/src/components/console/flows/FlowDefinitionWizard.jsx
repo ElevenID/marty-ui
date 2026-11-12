@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
@@ -80,11 +81,7 @@ const FlowDefinitionWizardContent = ({ browserEntry }) => {
   const [templateError, setTemplateError] = useState('');
   const startAction = useAsyncActionScope();
   const completedActionIsCurrent = useRef(null);
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.href
-      && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.route.key
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined;
     // Invalidate the old action before a Back event can restore its URL and
@@ -281,26 +278,7 @@ const FlowDefinitionWizardContent = ({ browserEntry }) => {
 export default function FlowDefinitionWizard() {
   const { activeOrgId: organizationId } = useConsole();
   const location = useLocation();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  // Keep ownership in the outer route. An organization change must not adopt
-  // the browser URL of a destination whose navigation is still suspended.
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    route: location,
-    generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    // Back can cancel a suspended navigation without changing useLocation.
-    const handlePopState = () => {
-      if ((window.history.state?.key || 'default') === location.key) {
-        setReturnedEntry((value) => value + 1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location]);
+  const browserEntry = useBrowserEntry(location, { matchReturnByRouteKey: true });
   return <FlowDefinitionWizardContent browserEntry={browserEntry} key={JSON.stringify([organizationId, location.key,
     location.pathname, location.search, location.hash, browserEntry.generation])} />;
 }

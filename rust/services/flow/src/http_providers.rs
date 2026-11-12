@@ -936,7 +936,6 @@ fn http_status(provider: &'static str, status: StatusCode) -> FlowProviderError 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marty_signing_grant::{GrantClaims, GrantEnvelope, GrantError};
     use std::sync::Mutex;
 
     use axum::{
@@ -951,33 +950,7 @@ mod tests {
 
     // This contract test checks Flow's authorized request binding and HTTP
     // shape. Transit HMAC minting is covered by the connected OpenBao tests.
-    struct ContractGrantMinter;
-
-    #[async_trait]
-    impl GrantMinting for ContractGrantMinter {
-        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
-            let now = chrono::Utc::now().timestamp();
-            Ok(GrantEnvelope {
-                claims: GrantClaims {
-                    version: 1,
-                    origin: binding.origin,
-                    operation_id: binding.operation_id.to_owned(),
-                    organization_id: binding.organization_id.to_owned(),
-                    route: binding.route.to_owned(),
-                    service_id: binding.service_id.map(str::to_owned),
-                    issuer_did: binding.issuer_did.map(str::to_owned),
-                    key_reference: binding.key_reference.map(str::to_owned),
-                    key_purpose: binding.key_purpose.to_owned(),
-                    algorithm: binding.algorithm.to_owned(),
-                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
-                    issued_at: now,
-                    expires_at: now + 30,
-                    nonce: "contract-only-nonce".into(),
-                },
-                hmac: "not-a-production-hmac".into(),
-            })
-        }
-    }
+    use marty_signing_grant_test_support::AnyOriginGrantMinter as ContractGrantMinter;
 
     async fn signing_resolver(
         State(captured): State<CapturedRequest>,

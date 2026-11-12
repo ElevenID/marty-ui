@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -252,11 +253,7 @@ const KeyManagementServiceWizardContent = ({ browserEntry }) => {
   const pending = useRef(false);
   const startAction = useAsyncActionScope();
   const startClipboardAction = useAsyncActionScope();
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.href
-      && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.routeKey
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
   const canEdit = useCallback(() => !pending.current && isCurrentBrowserEntry(), [isCurrentBrowserEntry]);
 
   const {
@@ -1128,28 +1125,7 @@ export default function KeyManagementServiceWizard() {
   const { user, isAuthenticated } = useAuth();
   const { can, isLoading } = usePermissions();
   const location = useLocation();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  // A replacement organization or grant scope must retain the committed route
-  // entry while the browser has already moved to a suspended destination.
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    routeKey: location.key,
-    generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const entry = { href: window.location.href, key: window.history.state?.key };
-    // Back can cancel a suspended navigation without changing useLocation.
-    // Give the returned entry a fresh form and invalidate its abandoned work.
-    const handlePopState = () => {
-      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
-        setReturnedEntry((value) => value + 1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location.key, location.pathname, location.search, location.hash]);
+  const browserEntry = useBrowserEntry(location);
   const principalId = user?.user_id || user?.sub || user?.id || null;
   const canView = can('signing-key', 'view');
   const canCreate = can('signing-key', 'create');
