@@ -269,8 +269,16 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
               "inputs": ref(inp), "authority": ref(authority), "resourceProfile": ref(profile)}
     permit_path.write_text(json.dumps(permit))
     lease = D12HeldCanonicalLock.__new__(D12HeldCanonicalLock)
-    live = {"held": change != "lock"}
-    lease.held = lambda: live["held"]
+    live = {"held": change != "lock", "lockChecks": 0, "sourceChecks": 0}
+    def held():
+        live["lockChecks"] += 1
+        return live["held"]
+    lease.held = held
+    original_recheck = binding.host._recheck_source
+    def recheck():
+        live["sourceChecks"] += 1
+        return original_recheck()
+    binding.host._recheck_source = recheck
     config = tmp_path / "docker-config"
     meta = config / "contexts" / "meta" / ("a" * 64) / "meta.json"
     plugin = tmp_path / "cli-plugins" / "docker-compose.exe"
@@ -309,7 +317,7 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
     calls = []
     def run(*args, **kwargs):
         calls.append(args)
-        if len(calls) == 1:
+        if args[0][3:6] == ["compose", "version", "--short"]:
             return ComposeResult()
         if change == "lock_lost":
             live["held"] = False
@@ -319,8 +327,25 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         assert owner.context()["authorization_verified"](ref(authority)) is True
         assert len(calls) == 2
         assert calls[0][0][3:6] == ["compose", "version", "--short"]
-        assert (private / "run" / "d12-compose-version-terminal.private.json").is_file()
-        assert (private / "run" / "d12-resource28-bound.private.json").is_file()
+        assert (private / "run" / "d12-authorization-0001-d12-compose-version-terminal.private.json").is_file()
+        assert (private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").is_file()
+        first_files = {p.name: p.read_bytes() for p in (private / "run").glob("d12-authorization-0001-*")}
+        checks = (live["lockChecks"], live["sourceChecks"])
+        assert owner.authorization_verified(ref(authority)) is True
+        assert len(calls) == 4
+        assert [args[0][3:6] for args in calls[::2]] == [["compose", "version", "--short"]] * 2
+        assert live["lockChecks"] > checks[0] and live["sourceChecks"] > checks[1]
+        assert first_files == {p.name: p.read_bytes() for p in (private / "run").glob("d12-authorization-0001-*")}
+        for number in (1, 2):
+            receipt = json.loads((private / "run" / f"d12-authorization-{number:04d}-d12-resource28-bound.private.json").read_bytes())
+            assert receipt["authorizationAttempt"] == number
+            assert len(receipt["observations"]) == 7
+            for bound in receipt["observations"].values():
+                assert ref(Path(bound["path"])) == bound
+        live["held"] = False
+        with pytest.raises(ValueError, match="D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED"):
+            owner.authorization_verified(ref(authority))
+        assert len(calls) == 4
     elif change == "lock":
         with pytest.raises(ValueError, match="D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED"):
             owner.context()["authorization_verified"](ref(authority))
@@ -328,13 +353,13 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
     elif change == "lock_lost":
         with pytest.raises(ValueError, match="D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ"):
             owner.context()["authorization_verified"](ref(authority))
-        assert not (private / "run" / "d12-resource28-bound.private.json").exists()
+        assert not (private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").exists()
     elif change == "compose_fail":
         with pytest.raises(ValueError, match="D12_PINNED_COMPOSE_DISCOVERY_FAILED"):
             owner.context()["authorization_verified"](ref(authority))
         assert len(calls) == 1
-        assert not (private / "run" / "d12-resource28-request.private.json").exists()
+        assert not (private / "run" / "d12-authorization-0001-d12-resource28-request.private.json").exists()
     else:
         with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE28_VERIFIER_FAILED|D12_RESOURCE28_AND_NATIVE22_DIVERGED"):
             owner.context()["authorization_verified"](ref(authority))
-        assert not (private / "run" / "d12-resource28-bound.private.json").exists()
+        assert not (private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").exists()

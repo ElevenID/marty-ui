@@ -20,7 +20,7 @@ from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
 from scoped_passport_maintenance import exact_roles, observed_role_state
 from scoped_passport_successor import CURRENT_PROFILE
-from scoped_native_profiles import D12_PASSPORT_CURRENT
+from scoped_native_profiles import D12_PASSPORT_CURRENT, current_rollout_build
 
 LOCK_OWNER_SHA = "c4531f96157232ea4adc2a28e8822e3daa364d394e609a734820610c45760d89"
 COMPOSE_PLUGIN_SHA = "7ab786491f8445d22c0779678a562116f09a7efe3a7a1c56f157c1fd6c4085f0"
@@ -102,7 +102,10 @@ class D12HeldCanonicalLock:
 class D12CurrentEffectObserver:
     """Fresh exact-CID reads, with one durable selected-create transition."""
 
-    def __init__(self, host, selection_ref, store, save):
+    def __init__(self, host, selection_ref, store, save, profile=CURRENT_PROFILE, *, native_preimage=None):
+        self.native_preimage=native_preimage
+        self.profile = profile
+        self.build_profile = current_rollout_build(profile)
         require(type(host) is D12ReadOnlyHost and type(store) is LinuxBuildJournal,
                 "D12_REVIEWED_OBSERVER_REQUIRED")
         self.host, self.selection_ref, self.store, self.save = host, selection_ref, store, save
@@ -136,6 +139,12 @@ class D12CurrentEffectObserver:
                 and labels.get("com.docker.compose.project") == bound["project"]
                 and labels.get("com.docker.compose.service") == role,
                 "D12_OWNED_ROLE_IDENTITY_CHANGED:" + role)
+        if self.profile=="d05-membership-current-functional" and role in dict(self.build_profile.roles) and bound["containerId"]!=self.original[role]["containerId"] and not self.original[role]["binaryMounts"]:
+            from scoped_beta_binary_overlay import _overlaps_executable
+            target="/usr/local/bin/"+dict(self.build_profile.roles)[role]
+            affected=[m for m in actual["Mounts"] if _overlaps_executable(m["Destination"],target)]
+            require(len(affected)==1 and affected[0]["Destination"]==target and affected[0]["Type"]=="bind" and affected[0]["RW"] is False,
+                    "CURRENT10_CREATED_EXECUTABLE_MOUNT_AMBIGUOUS")
         return observed_role_state(bound, actual)
 
     def inspect_role(self, role):
@@ -151,7 +160,7 @@ class D12CurrentEffectObserver:
         snapshot = {"scope": "D12_STATE_PROJECTION_ONLY", "roles": rows,
                     "sourceFactsBoundToPriorReceiptNotNewElfProbe": True,
                     "releaseQualified": False, "recordingQualified": False}
-        exact_roles(snapshot, CURRENT_PROFILE)
+        exact_roles(snapshot, self.profile)
         return snapshot
 
     def database_snapshot(self, database_ref):
@@ -203,10 +212,10 @@ class D12CurrentEffectObserver:
                 and durable.get("runId") == state["runId"],
                 "D12_DURABLE_CREATE_ACK_REQUIRED")
         selection = json.loads(read_ref(self.selection_ref).read_bytes())
-        roles = dict(D12_PASSPORT_CURRENT.roles)
+        roles = dict(self.build_profile.roles)
         require(set(selection.get("binaries", {})) == set(roles)
-                and selection.get("sourceRevision") == D12_PASSPORT_CURRENT.ui_revision
-                and selection.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision,
+                and selection.get("sourceRevision") == self.build_profile.ui_revision
+                and selection.get("coreRevision") == self.build_profile.core_revision,
                 "D12_EXACT_SELECTED_BUILD_REQUIRED")
         self._engine()
         newly = {}
@@ -229,10 +238,15 @@ class D12CurrentEffectObserver:
             target = "/usr/local/bin/" + roles[role]
             mounts = proposed[role]["binaryMounts"]
             matches = [row for row in mounts if row["destination"] == target]
-            require(len(matches) == 1 and matches[0]["type"] == "bind"
-                    and matches[0]["writable"] is False and binary.get("path"),
-                    "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
-            matches[0]["source"] = daemon_source(binary["path"])
+            if self.profile=="d05-membership-current-functional" and not matches:
+                from scoped_beta_binary_overlay import image_owned_baseline
+                image_owned_baseline(role,roles[role],self.native_preimage,self.original[role])
+                mounts.append({"type":"bind","source":daemon_source(binary["path"]),"destination":target,"writable":False})
+            else:
+                require(len(matches) == 1 and matches[0]["type"] == "bind"
+                        and matches[0]["writable"] is False and binary.get("path"),
+                        "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
+                matches[0]["source"] = daemon_source(binary["path"])
             proposed[role]["containerId"] = cid
         # Inspect every role against the proposed immutable lineage before
         # switching the observer. A foreign same-image CID or mount is refused.
@@ -240,7 +254,7 @@ class D12CurrentEffectObserver:
         self.current = proposed
         try:
             snapshot = self.inspect_all22()
-            by_role = exact_roles(snapshot, CURRENT_PROFILE)
+            by_role = exact_roles(snapshot, self.profile)
             require(all(by_role[role]["state"] == "created" and by_role[role]["hostPid"] == 0
                         and by_role[role]["oomKilled"] is False for role in roles),
                     "D12_SELECTED_CREATED_STATE_REQUIRED")
@@ -277,6 +291,18 @@ class D12CurrentHostBindings:
         self.effect_source_ref = ref(effect_source)
         self.inputs_ref = inputs_ref
         self.inputs = json.loads(read_ref(inputs_ref).read_bytes())
+        self.profile = self.inputs.get("rolloutProfile", CURRENT_PROFILE)
+        self.build_profile = current_rollout_build(self.profile)
+        if self.profile == "d05-membership-current-functional":
+            client_source=Path(LinuxBuildJournal.invoke.__code__.co_filename).resolve()
+            require(client_source==host._root/"scripts/scoped_linux_journal.py"
+                    and sha(client_source)==host._source_files.get("scripts/scoped_linux_journal.py",{}).get("sha256"),
+                    "CURRENT_TEN_REVIEWED_JOURNAL_CLIENT_REQUIRED")
+            frozen_refs=self.inputs.get("journalSourceFiles")
+            require(isinstance(frozen_refs,dict) and set(frozen_refs)=={"operation","build"},"CURRENT_TEN_FROZEN_JOURNAL_REFS_REQUIRED")
+            for role,store in (("operation",operation_journal),("build",build_journal)):
+                require(store.source_files is not None and store.source_files==frozen_refs[role],"CURRENT_TEN_FROZEN_JOURNAL_REFS_REQUIRED")
+                store.verified_source_files()
         self.root = Path(private_root).resolve()
         require(self.root.is_dir() and not self.root.is_symlink()
                 and self.root.is_relative_to(Path.home() / ".codex/private")
@@ -286,7 +312,12 @@ class D12CurrentHostBindings:
         self.host, self.store, self.build_journal = host, operation_journal, build_journal
         selection_ref = self.inputs.get("selection")
         require(isinstance(selection_ref, dict), "D12_SELECTION_REF_REQUIRED")
-        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save)
+        native_preimage=None
+        if self.profile=="d05-membership-current-functional":
+            abi_plan=json.loads(read_ref(self.inputs["compatibility"]["plan"]).read_bytes())
+            require(abi_plan["beforeBinding"]["sha256"]==self.inputs["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
+            native_preimage={"binding":self.inputs["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
+        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save, self.profile,native_preimage=native_preimage)
         self.node = read_executable_ref(node_executable)
         self.docker = read_executable_ref(docker_executable)
         self.node_ref, self.docker_ref = node_executable, docker_executable
@@ -350,14 +381,14 @@ class D12CurrentHostBindings:
                 "D12_PINNED_DESKTOP_CONTEXT_META_REQUIRED")
         return True
 
-    def _probe_compose_discovery(self):
+    def _probe_compose_discovery(self, observation_prefix=""):
         self.assert_inputs()
         result = bounded_run([str(self.docker), "--context", "desktop-linux",
                               "compose", "version", "--short"], env=self.environment,
                              timeout=30, stdout_limit=1024, stderr_limit=8192)
-        self.save_bytes("d12-compose-version-stdout.private", result.stdout)
-        self.save_bytes("d12-compose-version-stderr.private", result.stderr)
-        self.save("d12-compose-version-terminal.private.json", {"exitCode": result.returncode,
+        self.save_bytes(observation_prefix + "d12-compose-version-stdout.private", result.stdout)
+        self.save_bytes(observation_prefix + "d12-compose-version-stderr.private", result.stderr)
+        self.save(observation_prefix + "d12-compose-version-terminal.private.json", {"exitCode": result.returncode,
             "observation": result.observation})
         require(type(result.returncode) is int and result.returncode == 0
                 and result.observation["timedOut"] is False
@@ -410,7 +441,10 @@ class D12CurrentHostBindings:
                 and authority_ref == self.inputs.get("d12Authority")
                 and self.dispatch_permit["authority"] == authority_ref,
                 "D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED")
-        self._probe_compose_discovery()
+        self._authorization_attempt = getattr(self, "_authorization_attempt", 0) + 1
+        attempt = self._authorization_attempt
+        observation_prefix = f"d12-authorization-{attempt:04d}-"
+        self._probe_compose_discovery(observation_prefix)
         profile_ref = self.dispatch_permit["resourceProfile"]
         profile = json.loads(read_ref(profile_ref, 2 * 1024 * 1024).read_bytes())
         require(profile.get("schema") == "marty.functional-mixed-runtime/v2"
@@ -427,16 +461,16 @@ class D12CurrentHostBindings:
                 "D12_RESOURCE_VERIFIER_SOURCE_REQUIRED")
         require(read_ref(authority_ref, 65536).is_file(), "D12_EXACT_REVIEWED_AUTHORITY_REQUIRED")
         frozen = json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes())
-        self.save("d12-resource28-request.private.json", {"runId": self.inputs["runId"],
+        self.save(observation_prefix + "d12-resource28-request.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
             "runtimeBefore": self.inputs["runtimeBefore"], "scope": "FUNCTIONAL_ONLY"})
         result = bounded_run([str(self.node), "-e", RESOURCE_VERIFY_JS,
             source_ref["path"], source_ref["sha256"], profile_ref["path"],
             profile_ref["sha256"], str(self.docker)], env=self.environment,
             timeout=600, stdout_limit=1024 * 1024, stderr_limit=65536)
-        self.save_bytes("d12-resource28-stdout.private", result.stdout)
-        self.save_bytes("d12-resource28-stderr.private", result.stderr)
-        self.save("d12-resource28-terminal.private.json", {"exitCode": result.returncode,
+        self.save_bytes(observation_prefix + "d12-resource28-stdout.private", result.stdout)
+        self.save_bytes(observation_prefix + "d12-resource28-stderr.private", result.stderr)
+        self.save(observation_prefix + "d12-resource28-terminal.private.json", {"exitCode": result.returncode,
             "observation": result.observation})
         require(type(result.returncode) is int and result.returncode == 0
                 and result.observation["timedOut"] is False
@@ -447,11 +481,17 @@ class D12CurrentHostBindings:
         self.assert_inputs()
         require(self.lock.held(), "D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ")
         read_ref(profile_ref, 2 * 1024 * 1024)
-        self.save("d12-resource28-bound.private.json", {"runId": self.inputs["runId"],
+        self.save(observation_prefix + "d12-resource28-bound.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
             "runtimeBefore": self.inputs["runtimeBefore"],
             "full28AncillaryVerifiedByReviewedRuntime": True,
-            "actualRoleCount": len(actual["roles"]), "releaseQualified": False})
+            "actualRoleCount": len(actual["roles"]), "releaseQualified": False,
+            "authorizationAttempt": attempt,
+            "observations": {name: ref(self.root / (observation_prefix + name)) for name in (
+                "d12-compose-version-stdout.private", "d12-compose-version-stderr.private",
+                "d12-compose-version-terminal.private.json", "d12-resource28-request.private.json",
+                "d12-resource28-stdout.private", "d12-resource28-stderr.private",
+                "d12-resource28-terminal.private.json")}})
         return True
 
     def save_bytes(self, name, data):
@@ -472,7 +512,7 @@ class D12CurrentHostBindings:
     def verify_all22_quiescent(self, bound):
         self.assert_inputs()
         frozen = json.loads(read_ref(bound).read_bytes())
-        rows = exact_roles(frozen, CURRENT_PROFILE)
+        rows = exact_roles(frozen, self.profile)
         state = self.store.read("build-state.json")
         require(state.get("phase") == "ALL22_QUIESCENT"
                 and state.get("quiescenceSha256") == bound["sha256"],
@@ -492,7 +532,7 @@ class D12CurrentHostBindings:
         expected = self.host.before
         deadline = time.monotonic() + seconds
         while True:
-            rows = exact_roles(self.observer.inspect_all22(), CURRENT_PROFILE)
+            rows = exact_roles(self.observer.inspect_all22(), self.profile)
             if all(row.get("running") is True and row.get("paused") is False
                    and row.get("oomKilled") is False and type(row.get("hostPid")) is int
                    and row["hostPid"] > 0 and row.get("state") == "running"

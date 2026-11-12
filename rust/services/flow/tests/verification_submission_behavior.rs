@@ -1700,3 +1700,195 @@ async fn rejected_mdoc_wrong_binding_and_generic_auth_failure_cannot_inherit_fin
         .is_none());
     assert_eq!(cleared.instance.status, FlowInstanceStatus::AwaitingWallet);
 }
+
+fn decline_instance(mode: &str) -> FlowInstanceRecord {
+    let mut current = instance(false);
+    current.context["oid4vp_expected_state"] = json!(current.id);
+    current.context["oid4vp_response_uri"] = json!("https://verifier.example/submit");
+    let message = &mut current.context["mip_messages"]["presentation_request"];
+    message["correlation_id"] = json!(current.id);
+    message["payload"]["mip_flow_instance_id"] = json!(current.id);
+    message["payload"]["response_type"] = json!("vp_token");
+    message["payload"]["response_mode"] = json!(mode);
+    message["payload"]["response_uri"] = json!("https://verifier.example/submit");
+    current
+}
+
+#[test]
+fn wallet_access_denied_cancels_only_fresh_bound_pending_verification() {
+    for mode in ["direct_post", "direct_post.jwt"] {
+        let current = decline_instance(mode);
+        let declined = marty_flow::prepare_verification_decline(
+            current,
+            Some("abcdefghijklmnop"),
+            false,
+            now(),
+        )
+        .unwrap();
+        assert_eq!(declined.status, FlowInstanceStatus::Cancelled);
+        assert_eq!(declined.error.as_deref(), Some("access_denied"));
+        assert_eq!(declined.completed_at, Some(now()));
+        assert!(declined.result.is_none());
+        assert!(declined.subject_id.is_none());
+        assert_eq!(
+            declined.state_history.last().unwrap()["event"],
+            "wallet_access_denied"
+        );
+        assert!(marty_flow::prepare_verification_decline(
+            declined,
+            Some("abcdefghijklmnop"),
+            false,
+            now()
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn encrypted_decline_requires_the_emitted_encrypted_mode() {
+    assert!(marty_flow::prepare_verification_decline(
+        decline_instance("direct_post.jwt"),
+        Some("abcdefghijklmnop"),
+        true,
+        now()
+    )
+    .is_ok());
+    assert!(matches!(
+        marty_flow::prepare_verification_decline(
+            decline_instance("direct_post"),
+            Some("abcdefghijklmnop"),
+            true,
+            now()
+        ),
+        Err(FlowVerificationSubmissionError::ResponseModeMismatch)
+    ));
+    let mut current = decline_instance("direct_post");
+    current.status = FlowInstanceStatus::InProgress;
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_ok());
+    let mut current = decline_instance("direct_post");
+    current.expires_at = None;
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_err());
+}
+
+#[test]
+fn wallet_decline_rejects_invalid_state_expiry_terminal_and_other_modes() {
+    for state in [None, Some(""), Some("other-flow-state")] {
+        assert!(matches!(
+            marty_flow::prepare_verification_decline(
+                decline_instance("direct_post"),
+                state,
+                false,
+                now()
+            ),
+            Err(FlowVerificationSubmissionError::StateMismatch)
+        ));
+    }
+    for mode in ["dc_api", "dc_api.jwt", "query", ""] {
+        assert!(matches!(
+            marty_flow::prepare_verification_decline(
+                decline_instance(mode),
+                Some("abcdefghijklmnop"),
+                false,
+                now()
+            ),
+            Err(FlowVerificationSubmissionError::ResponseModeMismatch)
+        ));
+    }
+    for status in [
+        FlowInstanceStatus::Created,
+        FlowInstanceStatus::Pending,
+        FlowInstanceStatus::AwaitingApproval,
+        FlowInstanceStatus::Completed,
+        FlowInstanceStatus::Failed,
+        FlowInstanceStatus::Expired,
+        FlowInstanceStatus::Cancelled,
+    ] {
+        let mut current = decline_instance("direct_post");
+        current.status = status;
+        assert!(matches!(
+            marty_flow::prepare_verification_decline(
+                current,
+                Some("abcdefghijklmnop"),
+                false,
+                now()
+            ),
+            Err(FlowVerificationSubmissionError::InvalidState)
+        ));
+    }
+    let mut current = decline_instance("direct_post");
+    current.expires_at = Some(now());
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_err());
+    let mut current = decline_instance("direct_post");
+    current.context["mip_messages"]["presentation_request"]["payload"]["mip_flow_instance_id"] =
+        json!("other-instance");
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_err());
+}
+
+#[test]
+fn wallet_decline_refuses_drifted_emitted_state_and_prior_finalization_markers() {
+    let mut current = decline_instance("direct_post");
+    current.context["oid4vp_expected_state"] = json!("drifted-state");
+    assert!(matches!(
+        marty_flow::prepare_verification_decline(current, Some("drifted-state"), false, now()),
+        Err(FlowVerificationSubmissionError::StateMismatch)
+    ));
+    for result in [
+        json!({"evaluation_result":"passed", "decision":"allow"}),
+        json!({"submission_digest":"old-attempt"}),
+        json!({"verification_receipt":{}}),
+    ] {
+        let mut current = decline_instance("direct_post");
+        current.result = Some(result);
+        assert!(matches!(
+            marty_flow::prepare_verification_decline(
+                current,
+                Some("abcdefghijklmnop"),
+                false,
+                now()
+            ),
+            Err(FlowVerificationSubmissionError::InvalidState)
+        ));
+    }
+    let mut current = decline_instance("direct_post");
+    current.completed_at = Some(now());
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_err());
+    let mut current = decline_instance("direct_post");
+    current.subject_id = Some("existing-subject".into());
+    assert!(marty_flow::prepare_verification_decline(
+        current,
+        Some("abcdefghijklmnop"),
+        false,
+        now()
+    )
+    .is_err());
+}

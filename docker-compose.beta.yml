@@ -138,6 +138,14 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/secrets/trust_profile_workload_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: ${TRUST_PROFILE_TLS_KMS_ADDR:?TRUST_PROFILE_TLS_KMS_ADDR must be set for beta}
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/secrets/trust_profile_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: ${TRUST_PROFILE_TLS_KMS_KEY_NAME:?TRUST_PROFILE_TLS_KMS_KEY_NAME must be set for beta}
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: ${TRUST_PROFILE_TLS_KMS_KEY_VERSION:?TRUST_PROFILE_TLS_KMS_KEY_VERSION must be set for beta}
       ORG_GRPC_TARGET: https://organization:9002
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
@@ -147,6 +155,9 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
     secrets:
       - workload_identity_ca_cert
+      - trust_profile_workload_server_cert
+      - trust_profile_tls_kms_token
+      - openbao_tls_ca_cert
 
   applicant:
     environment:
@@ -187,6 +198,9 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ORG_GRPC_TARGET: https://organization:9002
+      PREREQUISITE_TRUST_OWNER_URL: https://trust-profile:8443
+      PREREQUISITE_ISSUANCE_OWNER_URL: https://issuance-native:8443
+      PREREQUISITE_OWNER_CA_CERT: /run/secrets/workload_identity_ca_cert
       ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       # This is the five-field internal status contract. The public
       # /v1/issued-credentials lifecycle wrappers retain their full-record
@@ -349,6 +363,14 @@ services:
       file: docker-compose.service.issuance-native.yml
       service: issuance-native
     environment:
+      MANAGED_AUTHORITY_HTTPS_ADDR: 0.0.0.0:8443
+      MANAGED_AUTHORITY_TLS_CERT_FILE: /run/secrets/issuance_workload_server_cert
+      MANAGED_AUTHORITY_TLS_KMS_PROVIDER: openbao-transit
+      MANAGED_AUTHORITY_TLS_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be set for beta}
+      MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
+      MANAGED_AUTHORITY_TLS_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set for beta}
+      MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set for beta}
       ORG_GRPC_TARGET: https://organization:9002
       CT_GRPC_TARGET: https://credential-template:9003
       RP_GRPC_TARGET: https://revocation-profile:9013
@@ -415,6 +437,10 @@ secrets:
     file: ${CT_WORKLOAD_SERVER_CERT_FILE:?CT_WORKLOAD_SERVER_CERT_FILE must be set for beta}
   ct_tls_kms_token:
     file: ${CT_TLS_KMS_TOKEN_FILE:?CT_TLS_KMS_TOKEN_FILE must be set for beta}
+  trust_profile_workload_server_cert:
+    file: ${TRUST_PROFILE_WORKLOAD_SERVER_CERT_FILE:?TRUST_PROFILE_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  trust_profile_tls_kms_token:
+    file: ${TRUST_PROFILE_TLS_KMS_TOKEN_FILE:?TRUST_PROFILE_TLS_KMS_TOKEN_FILE must be set for beta}
   pp_workload_server_cert:
     file: ${PP_WORKLOAD_SERVER_CERT_FILE:?PP_WORKLOAD_SERVER_CERT_FILE must be set for beta}
   openbao_tls_ca_cert:

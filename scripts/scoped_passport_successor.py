@@ -84,15 +84,26 @@ def _actual_build_journal(prepared, receipt, receipt_ref, journal):
             "ORIGINAL_SHARED_BUILD_JOURNAL_REQUIRED")
     method = type(journal).invoke
     worker = Path(method.__code__.co_filename)
-    require(sha(worker) == spec["workerSha256"]
-            and sha(worker.with_name("scoped_native_runtime.py")) == spec["sharedSha256"],
-            "ORIGINAL_JOURNAL_SOURCE_CHANGED")
+    if getattr(journal,"source_files",None) is None:
+        require(sha(worker) == spec["workerSha256"]
+                and sha(worker.with_name("scoped_native_runtime.py")) == spec["sharedSha256"],
+                "ORIGINAL_JOURNAL_SOURCE_CHANGED")
+    else:
+        from scoped_linux_journal import LinuxBuildJournal
+        require(type(journal) is LinuxBuildJournal and worker.resolve()==Path(__file__).with_name("scoped_linux_journal.py").resolve(),
+                "EXACT_MAINTAINED_JOURNAL_CLIENT_REQUIRED")
+        frozen_worker,frozen_shared,_=journal.verified_source_files()
+        require(sha(frozen_worker)==spec["workerSha256"] and sha(frozen_shared)==spec["sharedSha256"],
+                "ORIGINAL_JOURNAL_SOURCE_CHANGED")
     actual = journal.invoke("read", "build-receipt.json")
     require(actual.get("ok") is True and actual.get("name") == "build-receipt.json"
             and actual.get("rootProof") == spec["rootProof"]
             and actual.get("sha256") == receipt_ref["sha256"]
             and actual.get("value") == receipt, "ACTUAL_CANONICAL_JOURNAL_RECEIPT_REQUIRED")
-    require(sha(worker) == spec["workerSha256"], "ORIGINAL_JOURNAL_SOURCE_CHANGED")
+    if getattr(journal,"source_files",None) is None:
+        require(sha(worker) == spec["workerSha256"], "ORIGINAL_JOURNAL_SOURCE_CHANGED")
+    else:
+        journal.verified_source_files()
     return spec
 
 
@@ -112,21 +123,23 @@ def select_canonical_binaries(prepared_ref, receipt_ref, journal):
 CURRENT_PROFILE = "d12-passport-current-functional"
 
 
-def terminal_current_build(receipt, prepared, prepared_sha):
+def terminal_current_build(receipt, prepared, prepared_sha, profile=CURRENT_PROFILE):
+    from scoped_native_profiles import current_rollout_build
+    build_profile = current_rollout_build(profile)
     """The selected three-role build cannot masquerade as an old all-29 receipt."""
-    roles = dict(D12_PASSPORT_CURRENT.roles)
-    require(prepared.get("buildProfile") == D12_PASSPORT_CURRENT.name
-            and prepared.get("uiRevision") == D12_PASSPORT_CURRENT.ui_revision
-            and prepared.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision
+    roles = dict(build_profile.roles)
+    require(prepared.get("buildProfile") == build_profile.name
+            and prepared.get("uiRevision") == build_profile.ui_revision
+            and prepared.get("coreRevision") == build_profile.core_revision
             and prepared.get("roleBinaries") == roles,
             "EXACT_CURRENT_D12_SOURCE_REQUIRED")
     require(receipt.get("state") == "BUILD_SUCCEEDED" and type(receipt.get("exitCode")) is int
             and receipt["exitCode"] == 0
             and receipt.get("oomKilled") is False
-            and receipt.get("uiRevision") == D12_PASSPORT_CURRENT.ui_revision
-            and receipt.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision
+            and receipt.get("uiRevision") == build_profile.ui_revision
+            and receipt.get("coreRevision") == build_profile.core_revision
             and receipt.get("roleBinaries") == roles
-            and receipt.get("buildProfile") == D12_PASSPORT_CURRENT.name
+            and receipt.get("buildProfile") == build_profile.name
             and receipt.get("preparationSha256") == prepared_sha
             and receipt.get("runId") == prepared["runId"]
             and set(receipt.get("binaries", {})) == set(roles.values())
@@ -138,18 +151,21 @@ def terminal_current_build(receipt, prepared, prepared_sha):
     return roles
 
 
-def select_current_binaries(prepared_ref, receipt_ref, journal):
+def select_current_binaries(prepared_ref, receipt_ref, journal, profile=CURRENT_PROFILE):
+    from scoped_native_profiles import current_rollout_build
+    build_profile = current_rollout_build(profile)
     """Bind a newly built three-role source; never reinterpret the old all-29 receipt."""
     prepared = json.loads(read_ref(prepared_ref).read_bytes())
     receipt = json.loads(read_ref(receipt_ref, 256 * 1024).read_bytes())
-    roles = terminal_current_build(receipt, prepared, prepared_ref["sha256"])
+    roles = terminal_current_build(receipt, prepared, prepared_ref["sha256"], profile)
     spec = _actual_build_journal(prepared, receipt, receipt_ref, journal)
     read_ref(receipt["coreCompilerArtifacts"], 64 * 1024 * 1024)
     binaries = {role: receipt["binaries"][binary] for role, binary in roles.items()}
     _selected_elfs(binaries)
-    return {"schema": "marty.passport-current-three-role/v1", "profile": CURRENT_PROFILE,
-            "state": "SELECTED_NOT_DEPLOYED", "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
-            "coreRevision": D12_PASSPORT_CURRENT.core_revision, "roleBinaries": roles,
+    return {"schema": ("marty.passport-current-three-role/v1" if profile == CURRENT_PROFILE
+                        else "marty.membership-current-ten-role/v1"), "profile": profile,
+            "state": "SELECTED_NOT_DEPLOYED", "sourceRevision": build_profile.ui_revision,
+            "coreRevision": build_profile.core_revision, "roleBinaries": roles,
             "binaries": binaries, "canonicalBuildReceipt": receipt_ref, "preparedSource": prepared_ref,
             "journal": {"runId": prepared["runId"], "specification": spec},
             "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False}

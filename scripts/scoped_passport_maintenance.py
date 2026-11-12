@@ -163,7 +163,7 @@ def preview(plan, before, compose_models):
         "phaseGates": ["actual22_and_retained_D12_D05_readonly_baseline", "all22_owned_stops_terminal_pid0_noOom",
             "consistent_current_database_backup", "existing_fully_fenced_source_bound_SQL_and_zero_app_connections",
             "version_checked_additive_migrations_and_0009_ledger", "existing_ACL_finalizer_denials_and_owner_receipt",
-            "reviewed_exact4_binary_and_applicant_user_state_transition" if len(selected) == 4 else "reviewed_exact3_binary_overlay", "all22_start_pass_before_any_health_wait",
+            "reviewed_exact4_binary_and_applicant_user_state_transition" if len(selected) == 4 else f"reviewed_exact{len(selected)}_binary_overlay", "all22_start_pass_before_any_health_wait",
             "all22_health_source_uid_mounts_and_retained_data_proof", "new_explicit_runtime_generation_profile"],
         "noHistoricalJobMutation": True, "noAutomaticRollback": True, "noApplyAuthority": True,
         "releaseQualified": False, "recordingQualified": False}
