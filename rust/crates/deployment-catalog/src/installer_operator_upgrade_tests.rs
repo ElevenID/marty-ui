@@ -82,7 +82,9 @@ impl Fixture {
             inventory_sha256: format!("sha256:{}", old.inventory_sha256),
         };
         let runtime = RuntimeBinding {
-            docker_host: "unix:///run/user/1000/docker.sock".into(),
+            docker_host: format!("unix:///run/user/{}/docker.sock", unsafe {
+                libc::geteuid()
+            }),
             engine_id: "fixture-engine".into(),
             openbao_port: 18443,
             profile: RuntimeProfile::Rootless,
