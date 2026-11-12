@@ -1,6 +1,20 @@
 use super::*;
 
 #[test]
+fn recovery_tokens_reject_normalized_reuse_and_cross_role_duplicates() {
+    let old = vec![b"old-a".to_vec(), b"old-b\n".to_vec()];
+    assert!(recovery_tokens_are_new(&old, &[b"new-a".to_vec(), b"new-b".to_vec()]).is_ok());
+    for new in [
+        vec![b"old-a\n".to_vec(), b"new-b".to_vec()],
+        vec![b"new-a".to_vec(), b" old-b \r\n".to_vec()],
+        vec![b"new-a".to_vec(), b"new-a\n".to_vec()],
+        vec![b"new-a".to_vec(), b" \n".to_vec()],
+    ] {
+        assert!(recovery_tokens_are_new(&old, &new).is_err());
+    }
+}
+
+#[test]
 fn recovery_candidate_requires_distinct_generations_and_closed_admission() {
     let valid = json!({"token":"PUBLIC_SYNTHETIC","old":"/proof/old","new":"/proof/new","minimum_ttl":3600});
     assert!(recovery_candidate_context(&valid).is_ok());

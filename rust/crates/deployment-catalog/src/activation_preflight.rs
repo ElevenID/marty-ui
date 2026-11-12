@@ -377,6 +377,14 @@ fn replacement_mount(mount: &str, kind: &str) -> bool {
     (2..=8).any(|v| mount == format!("{kind}-pki-v{v}"))
 }
 pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    certificates_bound(bao, context, None).await
+}
+
+async fn certificates_bound(
+    bao: &OpenBaoHttp,
+    context: &Value,
+    expected_issuers: Option<&[String; 2]>,
+) -> Result<()> {
     let token = text(context, "token")?;
     let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
     let old = Path::new(text(context, "old")?);
@@ -390,6 +398,9 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
         issuer(bao, token, "workload-pki").await?,
         issuer(bao, token, "keycloak-pki").await?,
     ];
+    if expected_issuers.is_some_and(|expected| expected != &issuers) {
+        return Err(REFUSAL);
+    }
     let next = if let Some(replacement) = replacement {
         let workload = text(replacement, "workload_mount")?;
         let keycloak = text(replacement, "keycloak_mount")?;
@@ -516,6 +527,10 @@ fn retained_certificate_context(context: &Value) -> Result<(&str, &Path, u64)> {
 /// Read-only retained certificate evidence. This grants no TLS, token,
 /// activation, rollback, or credential-production admission.
 pub async fn retained_certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    retained_certificate_issuers(bao, context).await.map(|_| ())
+}
+
+async fn retained_certificate_issuers(bao: &OpenBaoHttp, context: &Value) -> Result<[String; 2]> {
     let (token, root, ttl) = retained_certificate_context(context)?;
     authority(bao, token, false).await?;
     let issuers = [
@@ -571,7 +586,7 @@ pub async fn retained_certificates(bao: &OpenBaoHttp, context: &Value) -> Result
             return Err(REFUSAL);
         }
     }
-    Ok(())
+    Ok(issuers)
 }
 
 fn recovery_candidate_context(context: &Value) -> Result<(&str, &str, &str, u64)> {
@@ -598,7 +613,17 @@ fn recovery_candidate_context(context: &Value) -> Result<(&str, &str, &str, u64)
 pub async fn recovery_candidate(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
     let (token, old, new, ttl) = recovery_candidate_context(context)?;
     generation::verify(Path::new(old), Path::new(new), false, false)?;
-    retained_certificates(
+    let (_, _, token_files) = generation::inventories();
+    let before = token_files
+        .iter()
+        .map(|name| read(&Path::new(old).join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    let after = token_files
+        .iter()
+        .map(|name| read(&Path::new(new).join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    recovery_tokens_are_new(&before, &after)?;
+    let issuers = retained_certificate_issuers(
         bao,
         &json!({"token":token,"generation":old,"minimum_ttl":ttl}),
     )
@@ -606,8 +631,34 @@ pub async fn recovery_candidate(bao: &OpenBaoHttp, context: &Value) -> Result<()
     let fresh = json!({"token":token,"old":new,"new":new,"minimum_ttl":ttl,
         "require_orphan_old":true,"require_orphan_new":true,
         "require_closed_new_metadata":true,"replacement":null,"retiring":false});
-    certificates(bao, &fresh).await?;
+    certificates_bound(bao, &fresh, Some(&issuers)).await?;
     tokens(bao, &fresh).await?;
+    Ok(())
+}
+
+fn recovery_tokens_are_new(old: &[Vec<u8>], new: &[Vec<u8>]) -> Result<()> {
+    use std::collections::BTreeSet;
+    let normalize = |values: &[Vec<u8>]| -> Result<BTreeSet<String>> {
+        values
+            .iter()
+            .map(|raw| {
+                let value = std::str::from_utf8(raw).map_err(|_| REFUSAL)?.trim();
+                if value.is_empty() || !value.is_ascii() {
+                    return Err(REFUSAL);
+                }
+                Ok(value.to_owned())
+            })
+            .collect()
+    };
+    let before = normalize(old)?;
+    let after = normalize(new)?;
+    if old.is_empty()
+        || old.len() != new.len()
+        || after.len() != new.len()
+        || !before.is_disjoint(&after)
+    {
+        return Err(REFUSAL);
+    }
     Ok(())
 }
 

@@ -186,6 +186,10 @@ def preflight_server(tmp_path):
         if path.endswith("/cert/ca"):
             mount = path.removesuffix("/cert/ca")
             value = state.issuers[mount]
+            if mount == "keycloak-pki" and getattr(state, 'next_keycloak_issuer', None):
+                state.keycloak_reads = getattr(state, 'keycloak_reads', 0) + 1
+                if state.keycloak_reads > 1:
+                    value = state.next_keycloak_issuer
             if state.fault == "same-keycloak" and mount == "keycloak-pki-v5":
                 value = state.issuers["keycloak-pki"]
             return 200, {"data": {"certificate": value}}
