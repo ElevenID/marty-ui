@@ -58,7 +58,7 @@ def test_keeps_candidate_immutable_while_application_and_version_advance(reposit
                                   "release/revocation.json", "requirements-services.txt", ".gitattributes",
                                   "rust/Cargo.lock", "rust/Cargo.toml", "rust/.cargo/config.toml",
                                   "rust-toolchain.toml", "rust/crates/release-evidence/src/official_cli.rs",
-                                  "rust/crates/oid4vp-contract/src/lib.rs"])
+                                  "rust/crates/oid4vp-contract/src/lib.rs", "config/envoy/proto_descriptor.pb"])
 def test_rejects_release_program_policy_or_dependency_drift(repository, name) -> None:
     root, source = repository
     write(root, name, b"changed\n")

@@ -34,7 +34,7 @@ PATHS = (".github", "scripts", "release", ".gitattributes",
          ".cargo", "rust/.cargo", "rust-toolchain", "rust-toolchain.toml",
          "rust/rust-toolchain", "rust/rust-toolchain.toml", "Cargo.toml", "Cargo.lock",
          "rust/Cargo.toml", "rust/Cargo.lock", "rust/crates/release-evidence",
-         "rust/crates/oid4vp-contract")
+         "rust/crates/oid4vp-contract", "config/envoy")
 EXCLUDED = frozenset({"release/stack-lock.json"})
 MAX_FILES = 4096
 MAX_BYTES = 24 * 1024 * 1024
