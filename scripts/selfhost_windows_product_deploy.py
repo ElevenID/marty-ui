@@ -104,6 +104,7 @@ def start(config, choice, values, record, raw, source, assets, *, gh, cosign, re
     ids = qualified_images(docker, old, new, owned)
     edge = predicted_edge(owned, old, new, admitted, ids, config['project'])
     require(edge['before_sha256'] == record['data_sha256'])
+    probe.refuse_pending_product_migrations(docker, owned, config['project'], admitted)
     schema_before = selection.packed(probe.schema_snapshot(docker, owned, config['project']))
     provider_before = selection.packed(probe.provider_snapshot(docker, owned, config['project'], config['native']['ca_file']))
     cycle = uuid.uuid4().hex;parent = Path(config['current_secrets']).parent

@@ -92,6 +92,42 @@ def test_wrong_container_or_database_identity_refuses_before_exec(fault):
     assert not docker.calls
 
 
+@pytest.mark.parametrize('missing', ['credential_template', 'issuance', 'trust_profile', 'authority_relation'])
+def test_known_product_source_refuses_each_missing_migration_before_admission(missing):
+    class Presence:
+        def json(self, args):
+            assert args[:5] == ['exec', '--user', 'postgres', '--env', probe.PG_OPTIONS]
+            assert args[args.index('--dbname')+1] == 'marty'
+            assert '--no-password' in args and '--no-psqlrc' in args
+            assert args[-1].lstrip().startswith('SELECT jsonb_build_object(')
+            return {name: name != missing for name in (
+                'credential_template', 'issuance', 'trust_profile', 'authority_relation')}
+    with pytest.raises(ValueError, match='qualify a schema transition before recreation'):
+        probe.refuse_pending_product_migrations(Presence(), [item('postgres')], PROJECT,
+            {'backend': {'source_sha': 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34'}})
+
+
+@pytest.mark.parametrize('observation', [None, [], {}, {'unexpected': True},
+    dict(credential_template=1, issuance=True, trust_profile=True, authority_relation=True)])
+def test_migration_presence_never_accepts_missing_or_nonboolean_evidence(observation):
+    class Presence:
+        def json(self, _args):return observation
+    with pytest.raises(ValueError):
+        probe.refuse_pending_product_migrations(Presence(), [item('postgres')], PROJECT,
+            {'backend': {'source_sha': 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34'}})
+
+
+def test_present_migrations_return_no_admission_and_other_sources_keep_existing_schema_checks():
+    class Presence:
+        def json(self, _args):
+            return dict(credential_template=True, issuance=True, trust_profile=True, authority_relation=True)
+    assert probe.refuse_pending_product_migrations(Presence(), [item('postgres')], PROJECT,
+        {'backend': {'source_sha': 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34'}}) is None
+    # No source outside this reviewed negative check gains a migration permit.
+    assert probe.refuse_pending_product_migrations(None, [], PROJECT,
+        {'backend': {'source_sha': 'a'*40}}) is None
+
+
 def provider(monkeypatch, fault=None):
     calls = [];ca = b'PUBLIC_SYNTHETIC_CA'
     @contextmanager

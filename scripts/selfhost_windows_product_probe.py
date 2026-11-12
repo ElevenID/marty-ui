@@ -156,6 +156,43 @@ def _database_snapshot(docker, base, database, expected):
     return {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
 
 
+def _postgres_base(items, project):
+    postgres = owned_role(items, project, 'postgres')
+    environment = postgres['Config'].get('Env', [])
+    require(type(environment) is list and all(isinstance(row, str) for row in environment))
+    users = [row[len('POSTGRES_USER='):] for row in environment if row.startswith('POSTGRES_USER=')]
+    require(len(users) == 1 and NAME.fullmatch(users[0]))
+    return ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
+            '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
+
+
+def refuse_pending_product_migrations(docker, items, project, admitted, *, profile=LedgerProfile()):
+    """Refuse one known schema-changing source before any product intent/write.
+
+    Presence is not migration qualification: the full catalog/ledger equality,
+    native custody and runtime checks remain mandatory. This is an early
+    negative check, not a migration executor or an authorization to preapply SQL.
+    """
+    if admitted.get('backend', {}).get('source_sha') != 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34':
+        return
+    require(type(profile) is LedgerProfile)
+    sql = """SELECT jsonb_build_object(
+        'credential_template', EXISTS (SELECT 1 FROM credential_template_service.rust_schema_versions
+            WHERE version='rust_credential_template_0003'),
+        'issuance', EXISTS (SELECT 1 FROM issuance_service.rust_schema_migrations
+            WHERE version='0012_membership_achievement_criteria'),
+        'trust_profile', EXISTS (SELECT 1 FROM trust_profile_service.native_migrations
+            WHERE version='trust-profile-credential-authority-v1'),
+        'authority_relation', to_regclass('trust_profile_service.credential_authority_revisions') IS NOT NULL
+    )"""
+    observed = docker.json([*_postgres_base(items, project), '--dbname', profile.application, '--command', sql])
+    require(type(observed) is dict and set(observed) == {
+        'credential_template', 'issuance', 'trust_profile', 'authority_relation'}
+        and all(type(value) is bool for value in observed.values()), 'Migration presence observation malformed')
+    require(all(observed.values()),
+            'Product requires unapplied schema migrations; qualify a schema transition before recreation')
+
+
 def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
     """Coherent per-DB transactions, bracketed by equal full observations.
 
@@ -165,13 +202,7 @@ def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
     """
     require(type(profile) is LedgerProfile)
     deadline = time.monotonic()+60
-    postgres = owned_role(items, project, 'postgres')
-    environment = postgres['Config'].get('Env', [])
-    require(type(environment) is list and all(isinstance(row, str) for row in environment))
-    users = [row[len('POSTGRES_USER='):] for row in environment if row.startswith('POSTGRES_USER=')]
-    require(len(users) == 1 and NAME.fullmatch(users[0]))
-    base = ['exec', '--user', 'postgres', '--env', PG_OPTIONS, postgres['Id'], 'psql', '--no-psqlrc',
-            '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
+    base = _postgres_base(items, project)
     def observe():
         require(time.monotonic() < deadline)
         databases = docker.json([*base, '--dbname', 'postgres', '--command', DATABASES_SQL])
