@@ -27,6 +27,7 @@ import selfhost_windows_product_schema as membership  # noqa: E402
 import selfhost_windows_product_ledger as ledger  # noqa: E402
 import selfhost_windows_product_catalog as catalog  # noqa: E402
 import selfhost_windows_product_startup as startup  # noqa: E402
+import selfhost_windows_product as product  # noqa: E402
 
 
 @pytest.mark.skipif(
@@ -48,6 +49,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
     OPS.mkdir()
     NET = PROJECT + "-network"
     PG = PROJECT + "-postgres"
+    REDIS = PROJECT + "-redis"
     ENGINE = os.environ.get("MARTY_PRODUCT_SCHEMA_TEST_ENGINE_ID")
     require_engine = bool(ENGINE) and not os.environ.get("DOCKER_HOST")
     if not require_engine:
@@ -159,6 +161,8 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "--label",
             "com.docker.compose.service=" + role,
         ]
+        if role == "redis":
+            options += ["--tmpfs", "/data:rw,noexec,nosuid,size=16777216"]
         env = {
             "DATABASE_URL": "postgresql://postgres@" + PG + "/marty_schema_test",
             "ENVIRONMENT": "test",
@@ -172,6 +176,11 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "RP_GRPC_TARGET": "unavailable-revocation:9013",
             "CREDENTIAL_TEMPLATE_DATABASE_MAX_CONNECTIONS": "2",
             "TRUST_PROFILE_DATABASE_MAX_CONNECTIONS": "2",
+            "ORGANIZATION_DATABASE_MAX_CONNECTIONS": "2",
+            "REDIS_URL": "redis://" + REDIS + ":6379",
+            "ES_GRPC_TARGET": "http://unavailable-events:9010",
+            "ES_GRPC_TIMEOUT_SECONDS": "1",
+            "MARTY_ORG_ADMIN_EMAIL": "startup-admin@startup-qa.invalid",
         }
         for k, v in env.items():
             options += ["--env", k + "=" + v]
@@ -299,6 +308,23 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         pg_image = json.loads(
             (ROOT / "release/external-images.json").read_text(encoding="utf-8")
         )["postgres"]
+        redis_image = json.loads(
+            (ROOT / "release/external-images.json").read_text(encoding="utf-8")
+        )["redis"]
+        require(
+            re.fullmatch(r"docker.io/library/redis@sha256:[0-9a-f]{64}", redis_image)
+        )
+        redis_info = json.loads(cmd(["image", "inspect", redis_image]))[0]
+        require(
+            any(
+                product.image_identity(reference) == product.image_identity(redis_image)
+                for reference in redis_info["RepoDigests"]
+            )
+            and redis_info.get("Os") == "linux"
+            and redis_info.get("Architecture") == "amd64"
+            and set(redis_info["Config"].get("Volumes") or {}) <= {"/data"}
+        )
+        IMAGE_IDS[redis_image] = redis_info["Id"]
         require("@sha256:" in pg_image)
         pg_info = json.loads(cmd(["image", "inspect", pg_image]))[0]
         IMAGE_IDS[pg_image] = pg_info["Id"]
@@ -416,6 +442,23 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             time.sleep(0.5)
         else:
             raise RuntimeError("Owned PostgreSQL did not become ready")
+        redis = run(
+            redis_image,
+            "redis",
+            "redis-server",
+            ["--save", "", "--appendonly", "no", "--dir", "/tmp"],
+        )
+        for _ in range(30):
+            ping = subprocess.run(
+                [*DOCKER, "exec", redis, "redis-cli", "ping"],
+                capture_output=True,
+                timeout=5,
+            )
+            if ping.returncode == 0 and ping.stdout.strip() == b"PONG":
+                break
+            time.sleep(0.2)
+        else:
+            raise RuntimeError("Owned Redis did not become ready")
         migration = run(
             OLD,
             "old-organization-migrate",
@@ -425,6 +468,38 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         )
         remove(migration)
         REPORT["checks"].append("old organization native schema prerequisite")
+        organization = run(OLD, "old-organization", "/usr/local/bin/marty-organization")
+        ready(organization, 8002)
+        remove(organization)
+        REPORT["checks"].append(
+            "old organization full startup with reserved administrator"
+        )
+        assert (
+            sql(
+                "SELECT count(*) FROM organization_service.members WHERE "
+                "email='startup-admin@startup-qa.invalid' AND user_id='' AND status='active';"
+            ).strip()
+            == "1"
+        )
+        inserted_member = sql(
+            "WITH inserted AS (INSERT INTO organization_service.members SELECT (jsonb_populate_record("
+            "NULL::organization_service.members,to_jsonb(candidate)||"
+            '\'{"id":"81000000-0000-0000-0000-000000000001",'
+            '"user_id":"synthetic-retained-user",'
+            '"email":"retained-member@startup-qa.invalid"}\'::jsonb)).* '
+            "FROM organization_service.members candidate "
+            "WHERE email='startup-admin@startup-qa.invalid' RETURNING id) "
+            "SELECT count(*) FROM inserted;"
+        )
+        assert inserted_member.strip() == "1"
+        retained_member_sql = (
+            "SELECT count(*) FROM organization_service.members WHERE "
+            "id='81000000-0000-0000-0000-000000000001' "
+            "AND organization_id='00000000-0000-0000-0000-000000000001' "
+            "AND user_id='synthetic-retained-user' "
+            "AND email='retained-member@startup-qa.invalid' AND status='active';"
+        )
+        assert sql(retained_member_sql).strip() == "1"
         for role, entry, port in [
             ("old-credential-template", "marty-credential-template", 8003),
             ("old-trust-profile", "marty-trust-profile", 8004),
@@ -497,6 +572,36 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "CREATE SCHEMA synthetic_retained; CREATE TABLE synthetic_retained.accounts(id text PRIMARY KEY,email text NOT NULL,payload jsonb NOT NULL); INSERT INTO synthetic_retained.accounts VALUES('synthetic-account','qa-account@startup-qa.invalid','{\"keep\":true}');"
         )
         before_all = all_table_fingerprints()
+        role_ids = [
+            str(uuid.uuid5(uuid.UUID("00000000-0000-0000-0000-000000000001"), name))
+            for name in (
+                "owner",
+                "admin",
+                "access_admin",
+                "catalog_admin",
+                "reviewer",
+                "operator",
+                "viewer",
+                "applicant",
+            )
+        ]
+        role_cohort = (
+            "id IN (" + ",".join("'" + key + "'" for key in role_ids) + ") "
+            "AND organization_id='00000000-0000-0000-0000-000000000001' AND is_system"
+        )
+        role_payload_sql = (
+            "SELECT jsonb_build_object('rows',count(*),'sha256',encode(sha256(convert_to("
+            "coalesce(jsonb_agg(CASE WHEN "
+            + role_cohort
+            + " THEN to_jsonb(t)-'updated_at' "
+            "ELSE to_jsonb(t) END ORDER BY id),'[]'::jsonb)::text,'UTF8')),'hex')) "
+            "FROM organization_service.roles t;"
+        )
+        roles_before = json.loads(sql(role_payload_sql))
+        assert roles_before["rows"] == len(role_ids)
+        assert sql(
+            "SELECT count(*) FROM organization_service.roles WHERE " + role_cohort
+        ).strip() == str(len(role_ids))
         before_columns = json.loads(sql(COLUMN_HASHES))
         items = [owned(cid)]
         prior = {
@@ -514,6 +619,23 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         }
         (OPS / "synthetic-before-witnesses.json").write_text(
             json.dumps(prior, indent=2), encoding="utf-8"
+        )
+        role_clock = json.loads(sql("SELECT to_json(clock_timestamp());"))
+        organization = run(NEW, "new-organization", "/usr/local/bin/marty-organization")
+        ready(organization, 8002)
+        remove(organization)
+        REPORT["checks"].append("new organization full startup with retained members")
+        assert sql(retained_member_sql).strip() == "1"
+        assert (
+            json.loads(
+                sql(
+                    "SELECT to_json(count(*)=8 AND bool_and(updated_at >= '"
+                    + role_clock.replace("'", "''")
+                    + "'::timestamptz AND updated_at <= clock_timestamp())) FROM "
+                    "organization_service.roles WHERE " + role_cohort
+                )
+            )
+            is True
         )
         for role, entry, port in [
             ("new-credential-template", "marty-credential-template", 8003),
@@ -555,6 +677,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "trust_profile_service.credential_authority_revisions"
         }
         mutable = {
+            "organization_service.roles",
             "credential_template_service.credential_templates",
             "credential_template_service.wallet_registry",
             "credential_template_service.delivery_destinations",
@@ -569,6 +692,10 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             table for table in after_all if before_all.get(table) != after_all[table]
         }
         assert changed == mutable
+        assert json.loads(sql(role_payload_sql)) == roles_before
+        REPORT["checks"].append(
+            "organization role payloads retained except system-role updated_at"
+        )
         assert (
             after_all["trust_profile_service.credential_authority_revisions"]["rows"]
             == 0

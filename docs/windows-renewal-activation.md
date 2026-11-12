@@ -440,6 +440,16 @@ Images must already be cached immutable services references; source values must
 match their revision labels. Run only with disposable test state. This test
 never selects or deploys those images in production.
 
+The fixture also starts the old and new Organization servers against its own
+Redis instance, using the cached immutable Redis pin from
+`release/external-images.json`. Redis uses only tmpfs storage on the same
+internal test network. A reserved synthetic administrator and an explicitly
+asserted active synthetic member must survive startup. All eight exact default
+system-role IDs retain their payloads; only their `updated_at` timestamps may
+change, within the observed database-clock window. Other exercised table rows
+remain in the full opaque comparison. This is retained synthetic data evidence,
+not authenticated console or production transition admission.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured
