@@ -2909,7 +2909,7 @@ mod real_mdoc_dcql_projection {
             &response,
             &transcript,
             &[],
-            &[certificate.clone()],
+            std::slice::from_ref(&certificate),
         );
         assert!(
             authenticated.issuer_signature_valid
@@ -2982,6 +2982,29 @@ mod real_mdoc_dcql_projection {
 
     #[tokio::test]
     async fn signed_mdoc_dcql_reaches_flow_credential_authentication_projection() {
+        // Tracing callsite interest is process-wide. Run this capture in a
+        // fresh test process so parallel no-subscriber tests cannot race it.
+        const CHILD: &str = "MARTY_MDOC_AUDIT_CAPTURE_CHILD";
+        let child = std::env::var_os(CHILD);
+        if child.is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "verification_tests::real_mdoc_dcql_projection::signed_mdoc_dcql_reaches_flow_credential_authentication_projection",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            assert!(stdout.contains("PINNED_MDOC_AUDIT_EVENT="), "{stdout}");
+            print!("{stdout}");
+            return;
+        }
+        assert_eq!(child.unwrap(), "1", "unexpected audit capture child marker");
         let output = Arc::new(Mutex::new(Vec::new()));
         let writer = Capture(output.clone());
         let subscriber = tracing_subscriber::fmt()
