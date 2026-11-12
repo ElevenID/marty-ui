@@ -23,8 +23,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    policy_revision, EvaluatePresentationRequest, PolicyStatus, PresentationPolicy,
-    PresentationVerificationError, ResolvedIssuerKey,
+    normalize_credential_format, policy_revision, EvaluatePresentationRequest, PolicyStatus,
+    PresentationPolicy, PresentationVerificationError, ResolvedIssuerKey,
 };
 
 const PROFILE_ERROR: &str = "PRESENTATION_POLICY.UNSUPPORTED_SD_JWT_DCQL_PROFILE";
@@ -332,10 +332,9 @@ impl SdJwtDcqlRequest {
             return Ok(None);
         }
         let selected_profile = format == DetectedCredentialFormat::SdJwt
-            || policy
-                .credential_requirements
-                .iter()
-                .any(|requirement| requirement.credential_payload_format == "SD_JWT_VC")
+            || policy.credential_requirements.iter().any(|requirement| {
+                normalize_credential_format(&requirement.credential_payload_format) == "SD_JWT_VC"
+            })
             || transport.query_document["credentials"]
                 .as_array()
                 .is_some_and(|credentials| {
@@ -391,7 +390,7 @@ impl SdJwtDcqlRequest {
         }
         let requirement = &policy.credential_requirements[0];
         if !requirement.required
-            || requirement.credential_payload_format != "SD_JWT_VC"
+            || normalize_credential_format(&requirement.credential_payload_format) != "SD_JWT_VC"
             || requirement
                 .requested_claims
                 .iter()

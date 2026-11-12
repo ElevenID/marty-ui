@@ -1755,6 +1755,56 @@ mod bounded_sd_jwt_query_evidence {
     }
 
     #[tokio::test]
+    async fn public_sd_jwt_format_aliases_preserve_native_query_authentication() {
+        for alias in [
+            "SD_JWT_VC",
+            "w3c_vcdm_v2_sd_jwt",
+            "ietf_sd_jwt",
+            "dc+sd-jwt",
+            "vc+sd-jwt",
+            "spruce-vc+sd-jwt",
+            "sd_jwt",
+            "sd_jwt_vc",
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.policy.credential_requirements[0].credential_payload_format = alias.into();
+            let material = fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &fixture.request)
+                .await
+                .unwrap_or_else(|error| panic!("public format alias {alias} refused: {error}"));
+            assert!(material.authenticated_sd_jwt_query().is_some(), "{alias}");
+            let projected =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            let credentials = projected["credential_results"].as_array().unwrap();
+            assert_eq!(credentials.len(), 1, "{alias}");
+            assert_eq!(credentials[0]["signature_valid"], true, "{alias}");
+            assert_eq!(credentials[0]["issuer_did"], ISSUER, "{alias}");
+            assert!(
+                credentials[0].get("authenticated_sd_jwt_query").is_some(),
+                "{alias}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn different_credential_formats_cannot_enter_the_sd_jwt_query_profile() {
+        for format in ["MDOC", "VC_JWT", "ldp_vc", "not-a-format", ""] {
+            let mut fixture = Fixture::new();
+            fixture.policy.credential_requirements[0].credential_payload_format = format.into();
+            assert!(
+                fixture
+                    .orchestrator
+                    .verify_material(&fixture.policy, &fixture.request)
+                    .await
+                    .is_err(),
+                "{format} must not authenticate the SD-JWT/DCQL profile",
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn production_projection_rejects_material_from_another_policy_or_request() {
         let fixture = Fixture::new();
         let mut foreign_policy = fixture.policy.clone();
