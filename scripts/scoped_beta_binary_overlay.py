@@ -45,7 +45,61 @@ def overlay_roles(profile=None, selected_roles=None):
     return {role: binary for role, binary in roles.items() if role in selected}
 
 
-def binary_overlay(binaries, profile=None, selected_roles=None, before=None):
+CURRENT10 = "d05-membership-current-functional"
+
+def _overlaps_executable(destination, target):
+    require(isinstance(destination,str) and destination.startswith("/") and "\x00" not in destination,
+            "INVALID_EXECUTABLE_MOUNT_DESTINATION")
+    value=destination.rstrip("/") or "/"
+    return value==target or target.startswith(value.rstrip("/")+"/") or value.startswith(target+"/")
+
+
+def image_owned_baseline(role, binary, native_preimage, bound=None):
+    """Admit only a closed current10 image-owned executable from bound actual inspections."""
+    import json
+    roles=overlay_roles(CURRENT10)
+    require(role in roles and roles[role]==binary and isinstance(native_preimage,dict)
+            and set(native_preimage)=={"binding","inspections"},"CURRENT10_IMAGE_PREIMAGE_REQUIRED")
+    binding=json.loads(read_ref(native_preimage["binding"]).read_bytes())
+    rows=binding.get("roles",[])
+    require(len(rows)==len({x["role"] for x in rows})==22
+            and {x["role"] for x in rows}==runtime_roles(CURRENT10),"EXACT_CURRENT10_IMAGE_COHORT_REQUIRED")
+    row=next(x for x in rows if x["role"]==role)
+    target="/usr/local/bin/"+binary
+    require((bound is None or row==bound) and row.get("binary")==binary
+            and row.get("project")=="elevenid-beta" and row.get("kind")=="SIGNED_NIGHTLY_IMAGE"
+            and isinstance(row.get("source"),str) and re.fullmatch(r"[a-f0-9]{40}",row["source"])
+            and row.get("executablePath")==target
+            and isinstance(row.get("sha256"),str) and re.fullmatch(r"[a-f0-9]{64}",row["sha256"])
+            and row.get("processExecutableSha256")==row["sha256"]
+            and row.get("effectiveUid")==row.get("configuredRuntimeUid")==10001
+            and row.get("binaryMounts")==[],"CURRENT10_IMAGE_OWNED_EXECUTABLE_REQUIRED")
+    inspected=json.loads(read_ref(native_preimage["inspections"]).read_bytes())
+    require(isinstance(inspected,list) and len(inspected)==len({x["Id"] for x in inspected})==22,
+            "EXACT_CURRENT10_IMAGE_INSPECTIONS_REQUIRED")
+    actual=next((x for x in inspected if x["Id"]==row["containerId"]),None)
+    require(actual is not None and actual.get("role")==role and actual["Image"]==row["imageId"]
+            and actual["State"]["StartedAt"]==row["startedAt"] and actual["State"]["Pid"]==row["hostPid"]
+            and actual["State"]["Running"] is True,"CURRENT10_IMAGE_GENERATION_CHANGED")
+    mounts=actual["Mounts"]
+    require(len({x["Destination"] for x in mounts})==len(mounts)
+            and not any(_overlaps_executable(x["Destination"],target) for x in mounts),
+            "CURRENT10_IMAGE_EXECUTABLE_MOUNT_AMBIGUOUS")
+    return row
+
+
+def _image_owned_model(role,binary,service,native_preimage):
+    row=image_owned_baseline(role,binary,native_preimage)
+    target="/usr/local/bin/"+binary
+    mounts=service.get("volumes",[])
+    require(service.get("image")==row["imageId"]
+            and len({x["target"] for x in mounts})==len(mounts)
+            and not any(_overlaps_executable(x["target"],target) for x in mounts),
+            "CURRENT10_IMAGE_MODEL_MOUNT_AMBIGUOUS")
+    return row
+
+
+def binary_overlay(binaries, profile=None, selected_roles=None, before=None, *, native_preimage=None):
     roles = overlay_roles(profile, selected_roles)
     require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
     if profile is not None:
@@ -55,8 +109,12 @@ def binary_overlay(binaries, profile=None, selected_roles=None, before=None):
             mounts = before.get("services", {}).get(role, {}).get("volumes", [])
             require(len({m["target"] for m in mounts}) == len(mounts), "DUPLICATE_MOUNT_TARGET")
             matches = [m for m in mounts if m["target"] == "/usr/local/bin/" + binary]
-            require(len(matches) == 1 and matches[0]["type"] == "bind" and matches[0].get("read_only") is True, "EXISTING_READ_ONLY_EXECUTABLE_BIND_REQUIRED")
-            mount = deepcopy(matches[0])
+            if profile==CURRENT10 and not matches:
+                _image_owned_model(role,binary,before["services"][role],native_preimage)
+                mount={"type":"bind","target":"/usr/local/bin/"+binary,"read_only":True,"bind":{"create_host_path":False}}
+            else:
+                require(len(matches) == 1 and matches[0]["type"] == "bind" and matches[0].get("read_only") is True, "EXISTING_READ_ONLY_EXECUTABLE_BIND_REQUIRED")
+                mount = deepcopy(matches[0])
             mount["source"] = str(read_ref(binaries[role], 512 * 1024 * 1024))
             services[role] = {"volumes": [mount]}
             if profile == "native-devtest-passport-four-role" and role == "applicant":
@@ -69,7 +127,7 @@ def binary_overlay(binaries, profile=None, selected_roles=None, before=None):
         for role, binary in roles.items()}}
 
 
-def validate_delta(before, after, binaries, profile=None, selected_roles=None):
+def validate_delta(before, after, binaries, profile=None, selected_roles=None, *, native_preimage=None):
     roles = overlay_roles(profile, selected_roles)
     require(set(binaries) == set(overlay_roles(profile)), "EXACT_PROFILE_BINARIES_REQUIRED")
     require({k: v for k, v in before.items() if k != "services"} == {k: v for k, v in after.items() if k != "services"}, "PROJECT_SETTINGS_CHANGED")
@@ -82,13 +140,20 @@ def validate_delta(before, after, binaries, profile=None, selected_roles=None):
             a, b = old.pop("volumes", []), new.pop("volumes", [])
             require(len({v["target"] for v in a}) == len(a) and len({v["target"] for v in b}) == len(b), "DUPLICATE_MOUNT_TARGET")
             a, b = {v["target"]: v for v in a}, {v["target"]: v for v in b}
-            require(set(a) == set(b) and target in a, "EXISTING_EXECUTABLE_BIND_REQUIRED")
-            require(all(a[k] == b[k] for k in a if k != target), "UNRELATED_MOUNT_CHANGED")
-            x, y = dict(a[target]), dict(b[target])
-            require(x["type"] == y["type"] == "bind" and x.get("read_only") is True and y.get("read_only") is True, "READ_ONLY_EXECUTABLE_REQUIRED")
-            x.pop("source")
-            source = y.pop("source")
-            require(daemon_source(source) == daemon_source(binaries[role]["path"]) and x == y, "EXECUTABLE_BIND_CHANGED_OUTSIDE_SOURCE")
+            if profile==CURRENT10 and target not in a:
+                _image_owned_model(role,roles[role],service,native_preimage)
+                require(set(b)==set(a)|{target} and all(a[k]==b[k] for k in a),"UNRELATED_MOUNT_CHANGED")
+                added=dict(b[target]);source=added.pop("source")
+                require(added=={"type":"bind","target":target,"read_only":True,"bind":{"create_host_path":False}}
+                        and daemon_source(source)==daemon_source(binaries[role]["path"]),"CURRENT10_SELECTED_BIND_REQUIRED")
+            else:
+                require(set(a) == set(b) and target in a, "EXISTING_EXECUTABLE_BIND_REQUIRED")
+                require(all(a[k] == b[k] for k in a if k != target), "UNRELATED_MOUNT_CHANGED")
+                x, y = dict(a[target]), dict(b[target])
+                require(x["type"] == y["type"] == "bind" and x.get("read_only") is True and y.get("read_only") is True, "READ_ONLY_EXECUTABLE_REQUIRED")
+                x.pop("source")
+                source = y.pop("source")
+                require(daemon_source(source) == daemon_source(binaries[role]["path"]) and x == y, "EXECUTABLE_BIND_CHANGED_OUTSIDE_SOURCE")
         if profile == "native-devtest-passport-four-role" and role == "applicant":
             require(old.pop("user", None) == "0:0" and new.pop("user", None) == "10001:10001",
                     "EXACT_APPLICANT_USER_TRANSITION_REQUIRED")
@@ -123,7 +188,7 @@ def validate_fenced_observation(observed, expected):
     require(set(observed.get("flowIntentUpdateColumns", [])) == FLOW_MUTABLE_COLUMNS, "FLOW_IMMUTABLE_FIELDS_NOT_PROTECTED")
     require(observed.get("appSchemaCreateDenied") is True and observed.get("cancellationHistoryMutationsDenied") is True, "REQUIRED_ACL_DENIALS_UNPROVEN")
 
-def validate_runtime_after(before, after, binaries, maintenance_restart_roles, profile=None):
+def validate_runtime_after(before, after, binaries, maintenance_restart_roles, profile=None, *, native_preimage=None):
     require(profile in (None, "d12-passport-current-functional", "d05-membership-current-functional"), "UNREVIEWED_D12_RUNTIME_PROFILE")
     if profile is None:
         source, core, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
@@ -172,7 +237,12 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
         target = "/usr/local/bin/" + roles[role]
         a = {m["destination"]: m for m in prior["binaryMounts"]}
         b = {m["destination"]: m for m in actual["binaryMounts"]}
-        require(len(a) == len(prior["binaryMounts"]) and len(b) == len(actual["binaryMounts"]) and set(a) == set(b) and target in a, "RUNTIME_MOUNT_SET_CHANGED")
+        if profile==CURRENT10 and target not in a:
+            image_owned_baseline(role,roles[role],native_preimage,prior)
+            require(len(a)==len(prior["binaryMounts"]) and len(b)==len(actual["binaryMounts"])
+                    and set(b)==set(a)|{target},"RUNTIME_MOUNT_SET_CHANGED")
+        else:
+            require(len(a) == len(prior["binaryMounts"]) and len(b) == len(actual["binaryMounts"]) and set(a) == set(b) and target in a, "RUNTIME_MOUNT_SET_CHANGED")
         require(all(a[k] == b[k] for k in a if k != target), "UNRELATED_RUNTIME_MOUNT_CHANGED")
         require(b[target]["type"] == "bind" and b[target]["writable"] is False and daemon_source(b[target]["source"]) == daemon_source(binaries[role]["path"]), "RUNTIME_EXECUTABLE_BIND_CHANGED")
         require(actual["executablePath"] == target, "RUNNING_EXECUTABLE_PATH_CHANGED")

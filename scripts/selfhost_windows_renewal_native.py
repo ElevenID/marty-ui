@@ -232,7 +232,7 @@ print(encoded)
 '''
 
 
-def export_generation(config, mirror):
+def export_generation(config, mirror, *, purpose="selfhost-renewal"):
     """Return private leaf bytes through bounded read-only chunks, never stdout.
 
     The generation owner must hold its project lease and run native admission
@@ -242,7 +242,7 @@ def export_generation(config, mirror):
     from selfhost_windows_renewal import UncertainComposeMutation
     uncertain=False;owned_processes_zero=False
     try:
-        return _export_generation(config,mirror)
+        return _export_generation(config,mirror,purpose=purpose)
     except UncertainComposeMutation as error:
         uncertain=True
         owned_processes_zero=getattr(error,'owned_processes_zero',False) is True
@@ -258,15 +258,138 @@ def export_generation(config, mirror):
     raise ValueError('Windows generation export refused')
 
 
-def _export_generation(config, mirror):
+def _repair_admission_execution(config,model,docker,native):
+    """Reopen actual execution evidence; a readiness field alone admits nothing."""
+    from contextlib import ExitStack, contextmanager
+    with ExitStack() as inputs:
+        @contextmanager
+        def held_input(path, *, max_bytes):
+            # Keep the verified handle open through the bind/source inspection.
+            yield inputs.enter_context(hold_private_input(path,max_bytes=max_bytes))
+        from selfhost_windows_selection import decode
+        from selfhost_windows_renewal import windows_mount_path_equal
+        def require(value):
+            if not value:raise ValueError('Windows generation export refused')
+        def held_record(reference):
+            require(isinstance(reference,dict) and set(reference)=={'path','sha256','bytes'})
+            with held_input(Path(reference['path']),max_bytes=2*1024*1024) as raw:
+                require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
+                return decode(raw)
+        proof=held_record(config['repair_admission_execution'])
+        require(proof.get('schema')=='marty.passport-role-repair-execution/v1'
+                and proof.get('project')==config['project'] and proof.get('resultSha256')==config['repair_admission_sha256']
+                and proof.get('custodySources')==config['custody_sources']
+                and proof.get('nativeOperator')==model['nativeOperator']
+                and proof.get('volumeIdentity')==native['control_volume_identity'])
+        worker=config['admission_worker']
+        with held_input(Path(worker['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==worker['bytes'] and hashlib.sha256(raw).hexdigest()==worker['sha256']
+                    and proof.get('workerSha256')==worker['sha256'])
+        armed=held_record(config['admission_armed_proposal'])
+        require(proof['armedProposalSha256']==config['admission_armed_proposal']['sha256']
+                and armed.get('executeAuthorized') is True
+                and armed.get('custodyOwner',{}).get('acceptedRevision')==config['custody_sources']['revision']
+                and armed.get('utilities',{}).get('deploy',{}).get('sha256')==native['binary_sha256']
+                and armed.get('utilities',{}).get('bootstrap',{}).get('sha256')==native['bootstrap_sha256'])
+        request=held_record(proof['jobRequest']);job=held_record(proof['jobResult'])
+        actor=config['admission_actor'];actor_plan_ref=config['admission_actor_plan']
+        with held_input(Path(actor['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==actor['bytes'] and hashlib.sha256(raw).hexdigest()==actor['sha256'])
+        actor_plan=held_record(actor_plan_ref)
+        require(actor_plan.get('schema')=='marty.beta-trust-admission/v1' and actor_plan.get('executeAuthorized') is True
+                and actor_plan.get('actor')==actor and actor_plan.get('worker')==worker
+                and actor_plan.get('armedProposal')==config['admission_armed_proposal']
+                and actor_plan.get('actorResultFile')==proof['actorResult']['path']
+                and actor_plan.get('jobMembershipFile')==proof['jobMembership']['path'])
+        require(isinstance(request.get('command'),list) and len(request['command'])==6
+                and request['command']==[actor_plan['interpreter']['path'],'-B',actor['path'],actor_plan_ref['path'],actor_plan_ref['sha256'],'--run']
+                and request.get('executableSha256')==actor_plan['interpreter']['sha256']
+                and request.get('cwd')==str(Path(actor['path']).parent)
+                and request.get('receiptFile')==proof['jobResult']['path']
+                and request.get('environment',{}).get('PYTHONDONTWRITEBYTECODE')=='1')
+        controller=held_record(proof['actorResult']);membership=held_record(proof['jobMembership'])
+        require(controller.get('schema')=='marty.passport-role-repair-controller/v1'
+                and controller.get('state')=='ADMISSION_AND_RESULT_CAPTURE_PASS'
+                and controller.get('actorSha256')==actor['sha256'] and controller.get('actorPlanSha256')==actor_plan_ref['sha256']
+                and controller.get('jobRequestSha256')==proof['jobRequest']['sha256']
+                and controller.get('membershipSha256')==proof['jobMembership']['sha256']
+                and controller.get('workerCid')==proof['workerCid'] and controller.get('resultSha256')==config['repair_admission_sha256']
+                and type(controller.get('controllerPid')) is int and controller['controllerPid']>0
+                and controller['controllerPid']==job.get('controllerPid')==membership.get('controllerPid')
+                and membership.get('schema')=='marty.windows-job-observation/v1'
+                and membership.get('controllerMemberVerified') is True and membership.get('inspectorMemberVerified') is True
+                and membership.get('queryHandleClosed') is True and membership.get('controllerQueryHandleClosed') is True
+                and membership.get('jobMemoryBytes')==request.get('memoryBytes')
+                and membership.get('activeProcessLimit')==request.get('processLimit') and membership.get('limitFlags')==0x2208)
+        require(request.get('schema')=='marty.windows-job-request/v1' and job.get('schema')=='marty.windows-job-result/v1'
+                and isinstance(request.get('executableSha256'),str) and re.fullmatch('[a-f0-9]{64}',request['executableSha256'])
+                and type(request.get('memoryBytes')) is int and request['memoryBytes']>0
+                and job.get('state')=='COMPLETE' and job.get('exitCode')==0 and job.get('jobClosed') is True
+                and job.get('terminalActiveProcesses')==0 and job.get('assignedBeforeResume') is True and job.get('processCreatedSuspended') is True
+                and job.get('executableSha256')==request.get('executableSha256')
+                and job.get('jobMemoryBytes')==request.get('memoryBytes')
+                and all(job.get(k) is False for k in ['forcedTermination','timedOut','cancelled','hostMarginBreached']))
+        cid=proof.get('workerCid');require(isinstance(cid,str) and re.fullmatch('[a-f0-9]{64}',cid))
+        rows=docker.json(['inspect',cid]);require(isinstance(rows,list) and len(rows)==1)
+        item=rows[0];state=item['State'];settings=item['Config'];host=item['HostConfig']
+        require(item['Id']==cid and item['Created']==proof['workerCreated'] and item['Image']==proof['workerImageId']==config['admission_image_id']
+                and item['Name']=='/'+config['project']+'-admission'
+                and state['Status']=='exited' and state['ExitCode']==0 and state['Pid']==0 and state['Running'] is False
+                and state['OOMKilled'] is False and not state['StartedAt'].startswith('0001-')
+                and state['StartedAt']==proof['workerStartedAt'] and state['FinishedAt']==proof['workerFinishedAt']
+                and item['RestartCount']==0 and settings['User']=='0:0'
+                and settings['Entrypoint']==['python3'] and settings['Cmd']==['-B','/work/admit-linux.py','/work/proposal.armed.private.json',proof['armedProposalSha256']]
+                and settings['Labels'].get('elevenid.trust-role.project')==config['project']
+                and settings['Labels'].get('elevenid.trust-role.phase')=='admission'
+                and host['NetworkMode']=='none' and host['Privileged'] is False
+                and 'ALL' in host['CapDrop'] and 'no-new-privileges' in host['SecurityOpt'])
+        mounts=sorted(item['Mounts'],key=lambda m:m['Destination'])
+        require(mounts==proof['workerMounts']==config['admission_mounts'] and len({m['Destination'] for m in mounts})==len(mounts))
+        control=[m for m in mounts if m['Destination']=='/control']
+        require(len(control)==1 and control[0]['Type']=='volume' and control[0]['Name']==native['control_volume'] and control[0]['RW'] is True
+                and all(m['Type']=='bind' and m['RW'] is False for m in mounts if m['Destination']!='/control'))
+        # These are exact file binds, not a host-authored agreement about a broad /work directory.
+        expected={'/work/admit-linux.py':worker,'/work/proposal.armed.private.json':config['admission_armed_proposal'],
+                  '/tools/marty-deploy':armed['utilities']['deploy'],
+                  '/tools/marty-passport-tls-bootstrap':armed['utilities']['bootstrap'],
+                  '/input/workload-ca.pem':armed['publicInputs']['workload_identity_ca_cert']}
+        custody=armed['custodyOwner']['candidateSourceRefs']
+        require(custody['passport_remote_tls.py']['sha256']==config['custody_sources']['admissionOwnerSha256']
+                and custody['selfhost_windows_renewal_native.py']['sha256']==config['custody_sources']['exportOwnerSha256'])
+        for name in ['passport_remote_tls.py','selfhost_windows_renewal_native.py']:
+            expected['/work/candidate/scripts/'+name]=custody[name]
+        sources=config['admission_native_sources']
+        require(set(sources)=={'selfhost_native_operator.py','source_matched_native.py'} and actor_plan.get('nativeSources')==sources)
+        for name,reference in sources.items():expected['/work/owner/'+name]=reference
+        require(set(m['Destination'] for m in mounts)==set(expected)|{'/control','/input/root.token'})
+        for destination,reference in expected.items():
+            matches=[m for m in mounts if m['Destination']==destination]
+            require(len(matches)==1 and matches[0]['Type']=='bind' and matches[0]['RW'] is False
+                    and windows_mount_path_equal(matches[0]['Source'],reference['path']))
+            with held_input(Path(reference['path']),max_bytes=128*1024*1024) as raw:
+                require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
+        # Bind the authority path without reopening or exporting its bytes here.
+        authority=[m for m in mounts if m['Destination']=='/input/root.token'][0]
+        require(windows_mount_path_equal(authority['Source'],armed['authorityReference']['path']))
+        return proof
+
+
+def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
     from selfhost_windows_renewal import Docker, run_owned_mutation
     from selfhost_windows_selection import decode
 
     def require(value):
         if not value:raise ValueError('Windows generation export refused')
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
-    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
-    require(native['control_volume']==project+'-renewal-control')
+    require(purpose in {'selfhost-renewal','passport-role-repair'})
+    repair=purpose=='passport-role-repair'
+    if repair:
+        match=re.fullmatch(r'marty-passport-acceptance-trust-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})',project)
+        require(match is not None and native['control_volume']==project+'-tls-custody')
+        require(mirror=='/control/trust-role-'+match.group(1)+'/generation')
+    else:
+        require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
+        require(native['control_volume']==project+'-renewal-control')
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(isinstance(mirror,str))
     path=PurePosixPath(mirror)
@@ -274,16 +397,36 @@ def _export_generation(config, mirror):
             and '..' not in path.parts and path.name in {'generation','application-generation','application-mail-generation'})
     require(all(re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,127}',name) for name in path.parts[2:]))
     deadline=time.monotonic()+600
-    with hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024) as raw:
-        require(hashlib.sha256(raw).hexdigest()==config['compose_sha256'])
+    input_file=config['repair_admission_file'] if repair else config['compose_file']
+    input_digest=config['repair_admission_sha256'] if repair else config['compose_sha256']
+    with hold_private_input(Path(input_file),max_bytes=2*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==input_digest)
         model=decode(raw)
-        require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
-        names=sorted(model['secrets'])
+        if repair:
+            names=sorted(['workload_identity_ca_cert','trust_profile_workload_server_cert','trust_profile_workload_server_kms_token'])
+            require(isinstance(model,dict) and model.get('schema')=='marty.passport-role-repair-admission/v1'
+                    and model.get('project')==project and model.get('role')=='trust-profile-server'
+                    and model.get('profile')=='passport-role-repair' and model.get('nativeAdmissionComplete') is True
+                    and isinstance(model.get('files'),dict) and sorted(model['files'])==names)
+        else:
+            require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
+            names=sorted(model['secrets'])
         require(0<len(names)<=512 and all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}',name) for name in names))
         docker=Docker(config['docker_host'],config['engine_id'])
         volumes=docker.json(['volume','inspect',native['control_volume']])
         require(isinstance(volumes,list) and len(volumes)==1 and volumes[0]['Name']==native['control_volume']
                 and volumes[0]['Driver']=='local' and volumes[0].get('Options') in (None,{}))
+        if repair:
+            require(volumes[0]==native['control_volume_identity'])
+            require(model.get('nativeOperator')=={'sha256':native['binary_sha256'],'sourceSha':native['source_sha'],'releaseTag':native['release_tag']}
+                    and model.get('custodySources')==config['custody_sources']
+                    and config['custody_sources']['exportOwnerSha256']==hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+                    and set(config['custody_sources'])=={'revision','exportOwnerSha256','admissionOwnerSha256'}
+                    and re.fullmatch(r'[0-9a-f]{64}',config['custody_sources']['admissionOwnerSha256'])
+                    and re.fullmatch(r'[0-9a-f]{40}',config['custody_sources']['revision'])
+                    and model.get('nativeProducerSha256')==native['bootstrap_sha256']
+                    and model.get('pinnedIssuerInputSha256')==config['workload_ca_sha256'])
+            execution=_repair_admission_execution(config,model,docker,native)
         def fetch(part=None,digest=None):
             remaining=deadline-time.monotonic();require(remaining>0)
             request={'mirror':mirror,'names':names,'part':part,'sha256':digest}
@@ -322,6 +465,14 @@ def _export_generation(config, mirror):
             require(len(value)<=65536 and base64.b64encode(value).decode('ascii')==encoded[name]
                     and b'\0' not in value and b'PRIVATE KEY' not in value)
             value.decode('utf-8');values[name]=value
+            if repair:
+                expected=model['files'][name]
+                require(isinstance(expected,dict) and set(expected)=={'bytes','sha256'}
+                        and type(expected['bytes']) is int and 0<expected['bytes']<=65536
+                        and isinstance(expected['sha256'],str) and re.fullmatch(r'[0-9a-f]{64}',expected['sha256'])
+                        and len(value)==expected['bytes'] and hashlib.sha256(value).hexdigest()==expected['sha256'])
+        if repair:
+            require(_repair_admission_execution(config,model,docker,native)==execution)
     require(time.monotonic()<deadline)
     return values
 

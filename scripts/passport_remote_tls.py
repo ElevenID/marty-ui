@@ -128,7 +128,7 @@ def accept_remote_tls(
             entries[name].rename(secret_dir / name)
             moved.append(name)
             if os.name == "posix":
-                os.chmod(secret_dir / name, 0o644)
+                os.chmod(secret_dir / name, 0o600 if repair else 0o644)
     except OSError as error:
         rollback_failed = False
         for name in reversed(moved):

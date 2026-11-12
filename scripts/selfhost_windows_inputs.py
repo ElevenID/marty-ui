@@ -37,9 +37,12 @@ def checked_acl(owner: str, user: str, aces: list[tuple[str, int, int, int]]) ->
     for sid, kind, flags, rights in aces:
         # Only ordinary effective ALLOW ACEs. Object/conditional/deny ACEs and
         # inherit-only ACEs are not interpreted as a private-file capability.
-        require(sid in allowed and sid not in seen and kind == 0
+        # MS-DTYP OWNER_RIGHTS denotes this object's owner, already proven
+        # equal to the current user above. Treat both spellings as one principal.
+        principal = user if sid == "S-1-3-4" else sid
+        require(principal in allowed and principal not in seen and kind == 0
                 and flags & ~0x13 == 0 and rights == FULL_CONTROL)
-        seen.add(sid)
+        seen.add(principal)
     require(user in seen)
 
 

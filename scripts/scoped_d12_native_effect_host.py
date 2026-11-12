@@ -102,7 +102,8 @@ class D12HeldCanonicalLock:
 class D12CurrentEffectObserver:
     """Fresh exact-CID reads, with one durable selected-create transition."""
 
-    def __init__(self, host, selection_ref, store, save, profile=CURRENT_PROFILE):
+    def __init__(self, host, selection_ref, store, save, profile=CURRENT_PROFILE, *, native_preimage=None):
+        self.native_preimage=native_preimage
         self.profile = profile
         self.build_profile = current_rollout_build(profile)
         require(type(host) is D12ReadOnlyHost and type(store) is LinuxBuildJournal,
@@ -138,6 +139,12 @@ class D12CurrentEffectObserver:
                 and labels.get("com.docker.compose.project") == bound["project"]
                 and labels.get("com.docker.compose.service") == role,
                 "D12_OWNED_ROLE_IDENTITY_CHANGED:" + role)
+        if self.profile=="d05-membership-current-functional" and role in dict(self.build_profile.roles) and bound["containerId"]!=self.original[role]["containerId"] and not self.original[role]["binaryMounts"]:
+            from scoped_beta_binary_overlay import _overlaps_executable
+            target="/usr/local/bin/"+dict(self.build_profile.roles)[role]
+            affected=[m for m in actual["Mounts"] if _overlaps_executable(m["Destination"],target)]
+            require(len(affected)==1 and affected[0]["Destination"]==target and affected[0]["Type"]=="bind" and affected[0]["RW"] is False,
+                    "CURRENT10_CREATED_EXECUTABLE_MOUNT_AMBIGUOUS")
         return observed_role_state(bound, actual)
 
     def inspect_role(self, role):
@@ -231,10 +238,15 @@ class D12CurrentEffectObserver:
             target = "/usr/local/bin/" + roles[role]
             mounts = proposed[role]["binaryMounts"]
             matches = [row for row in mounts if row["destination"] == target]
-            require(len(matches) == 1 and matches[0]["type"] == "bind"
-                    and matches[0]["writable"] is False and binary.get("path"),
-                    "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
-            matches[0]["source"] = daemon_source(binary["path"])
+            if self.profile=="d05-membership-current-functional" and not matches:
+                from scoped_beta_binary_overlay import image_owned_baseline
+                image_owned_baseline(role,roles[role],self.native_preimage,self.original[role])
+                mounts.append({"type":"bind","source":daemon_source(binary["path"]),"destination":target,"writable":False})
+            else:
+                require(len(matches) == 1 and matches[0]["type"] == "bind"
+                        and matches[0]["writable"] is False and binary.get("path"),
+                        "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
+                matches[0]["source"] = daemon_source(binary["path"])
             proposed[role]["containerId"] = cid
         # Inspect every role against the proposed immutable lineage before
         # switching the observer. A foreign same-image CID or mount is refused.
@@ -300,7 +312,12 @@ class D12CurrentHostBindings:
         self.host, self.store, self.build_journal = host, operation_journal, build_journal
         selection_ref = self.inputs.get("selection")
         require(isinstance(selection_ref, dict), "D12_SELECTION_REF_REQUIRED")
-        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save, self.profile)
+        native_preimage=None
+        if self.profile=="d05-membership-current-functional":
+            abi_plan=json.loads(read_ref(self.inputs["compatibility"]["plan"]).read_bytes())
+            require(abi_plan["beforeBinding"]["sha256"]==self.inputs["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
+            native_preimage={"binding":self.inputs["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
+        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save, self.profile,native_preimage=native_preimage)
         self.node = read_executable_ref(node_executable)
         self.docker = read_executable_ref(docker_executable)
         self.node_ref, self.docker_ref = node_executable, docker_executable

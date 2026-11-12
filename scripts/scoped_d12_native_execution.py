@@ -66,6 +66,7 @@ class D12CurrentExecution:
         self.profile = inputs.get("rolloutProfile", CURRENT_PROFILE)
         self.build_profile = current_rollout_build(self.profile)
         self.roles = dict(self.build_profile.roles)
+        self.native_preimage = None
         self.state = {"schema": "marty.d12-current-native-operation/v1", "phase": "NOT_STARTED",
                       "runId": inputs["runId"], "scope": "FUNCTIONAL_ONLY",
                       "sourceRevision": self.build_profile.ui_revision,
@@ -136,6 +137,10 @@ class D12CurrentExecution:
         require(selection == json.loads(read_ref(i["selection"]).read_bytes())
                 and authority.get("approvedSelectionSha256") == i["selection"]["sha256"],
                 "D12_EXACT_SELECTED_BUILD_REQUIRED")
+        if self.profile == "d05-membership-current-functional":
+            abi_plan=json.loads(read_ref(i["compatibility"]["plan"]).read_bytes())
+            require(abi_plan["beforeBinding"]["sha256"]==i["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
+            self.native_preimage={"binding":i["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
         before = g["observe22"]()
         require(before == json.loads(read_ref(i["runtimeBefore"]).read_bytes())
                 and authority.get("approvedRuntimeBeforeSha256") == i["runtimeBefore"]["sha256"],
@@ -169,10 +174,10 @@ class D12CurrentExecution:
                 require(base["services"][role].get("environment",{}).get(key)==tenant,"CURRENT_TEN_COMPOSE_TENANT_CHANGED:"+role)
         require(g["compose_model"](i["composeArguments"], None) == base,
                 "D12_FRESH_COMPOSE_MODEL_REQUIRED")
-        replacement = overlay.binary_overlay(selection["binaries"], self.profile, before=base)
+        replacement = overlay.binary_overlay(selection["binaries"], self.profile, before=base,native_preimage=self.native_preimage)
         overlay_ref = g["save"]("d12-current-overlay.private.json", replacement)
         after_model = g["compose_model"](i["composeArguments"], overlay_ref)
-        overlay.validate_delta(base, after_model, selection["binaries"], self.profile)
+        overlay.validate_delta(base, after_model, selection["binaries"], self.profile,native_preimage=self.native_preimage)
         overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
                                            self.profile, list(self.roles), no_start=True)
         database = D12CurrentDatabasePhase(g, i, self.store)
@@ -246,9 +251,12 @@ class D12CurrentExecution:
             target = "/usr/local/bin/" + self.roles[role]
             prior_mounts = {row["destination"]: row for row in old["binaryMounts"]}
             mounts = {row["destination"]: row for row in new["binaryMounts"]}
+            image_owned=self.profile=="d05-membership-current-functional" and target not in prior_mounts
+            if image_owned:
+                overlay.image_owned_baseline(role,self.roles[role],self.native_preimage,old)
             require(len(prior_mounts) == len(old["binaryMounts"])
                     and len(mounts) == len(new["binaryMounts"])
-                    and set(mounts) == set(prior_mounts) and target in mounts
+                    and set(mounts) == (set(prior_mounts)|{target} if image_owned else set(prior_mounts)) and target in mounts
                     and all(mounts[key] == prior_mounts[key] for key in mounts if key != target)
                     and mounts[target]["type"] == "bind" and mounts[target]["writable"] is False
                     and daemon_source(mounts[target]["source"])
@@ -290,7 +298,7 @@ class D12CurrentExecution:
                     "created": created_ref, "startAcks": acks_ref,
                     "runId": i["runId"], "engineId": database.engine_id})
         proof = overlay.validate_runtime_after(before, after, database.selection["binaries"],
-                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), self.profile)
+                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), self.profile,native_preimage=self.native_preimage)
         require(g["database_snapshot"]()["databaseIdentity"] == database.identity,
                 "D12_DATABASE_POSTFLIGHT_REQUIRED")
         startup_schema = None
