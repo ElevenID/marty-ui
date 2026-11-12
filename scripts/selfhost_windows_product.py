@@ -291,7 +291,7 @@ class ProductContext(renewal.ForeignContext):
                 'Unsupported helper privilege or PID namespace')
         self._issuance_helper = {
             'stage': 'prepared', 'cid': None, 'name': prepared['name'], 'cycle': cycle,
-            'execution': None, 'terminal': None, 'running_pid': None,
+            'execution': None, 'terminal': None, 'running_pid': None, 'completion_proved': False,
             'image': prepared['image'], 'image_id': image['Id'], 'environment': environment,
             'mounts': deepcopy(original['Mounts']), 'host': {key: deepcopy(host.get(key)) for key in host_keys},
             'networks': {key: value['NetworkID'] for key, value in original['NetworkSettings']['Networks'].items()},
@@ -387,6 +387,7 @@ class ProductContext(renewal.ForeignContext):
         if completed:
             require(item['State']['Status'] == 'exited' and type(item['State'].get('ExitCode')) is int
                     and item['State']['ExitCode'] == 0, 'Migration helper did not complete successfully')
+            plan['completion_proved'] = True
         return {'name': plan['name'], 'id': plan['cid'], 'image': plan['image'],
                 'image_id': plan['image_id'], 'cycle': plan['cycle'],
                 'status': item['State']['Status'], 'exit_code': item['State'].get('ExitCode'),
@@ -396,7 +397,9 @@ class ProductContext(renewal.ForeignContext):
     def issuance_helper_removed(self, cid):
         """After one successful normal rm acknowledgement; never retry removal."""
         plan = self._issuance_helper
-        require(plan is not None and plan['stage'] == 'present' and cid == plan['cid'])
+        require(plan is not None and plan['stage'] == 'present' and cid == plan['cid']
+                and plan['completion_proved'] is True and plan['terminal'] is not None
+                and plan['terminal']['exit_code'] == 0, 'Successful completion proof must precede removal acknowledgement')
         plan['stage'] = 'absent'
         self.check()
 

@@ -506,8 +506,9 @@ settings. Only the producer's definite full container ID may be acknowledged;
 name-based adoption is refused. The exact fixed command, nonce label, image,
 environment and storage must match before excluding that helper from the
 ordinary workload role closure. Its observations still reach the inherited
-foreign-storage checks. Completion requires exited/zero, and acknowledged
-removal must be followed by absence. Creation/start identity, running PID and
+foreign-storage checks. An explicit fresh completed/zero witness must precede
+removal acknowledgement, which must be followed by absence. A generic
+observation grants no cleanup phase. Creation/start identity, running PID and
 terminal outcome are retained to reject same-CID manual restarts even when
 Docker's restart counter stays zero. The helper observation digest is included
 in its witness. Shape tests replace the full storage transport; they do not

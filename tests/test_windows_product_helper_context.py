@@ -444,3 +444,26 @@ def test_helper_that_exits_before_first_observation_remains_terminal(tmp_path):
     )
     with pytest.raises(ValueError):
         context.check()
+
+
+@pytest.mark.parametrize("exit_code", [None, 1, 0])
+def test_removal_acknowledgement_cannot_skip_successful_completion_proof(
+    tmp_path, exit_code
+):
+    context, docker, original = fixture(tmp_path)
+    prepare(context, tmp_path)
+    row = helper(context, original)
+    docker.items.append(row)
+    context.acknowledge_issuance_helper(CID)
+    if exit_code is not None:
+        row["State"].update(
+            Status="exited",
+            Running=False,
+            Pid=0,
+            ExitCode=exit_code,
+            FinishedAt="2026-11-12T00:00:02Z",
+        )
+        context.issuance_helper_witness()  # Generic observation grants no cleanup phase.
+    docker.items.remove(row)
+    with pytest.raises(ValueError):
+        context.issuance_helper_removed(CID)
