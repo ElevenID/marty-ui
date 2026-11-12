@@ -7,6 +7,7 @@ not a release claim. Release entry points explicitly require eligibility.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -23,6 +24,34 @@ from localize_marty_core_dependencies import (
 )
 from product_package_plan import PRODUCTS, build_plan
 from stack_tag_gate import require_release_eligible, version_from_tag
+
+
+def _reviewed_kms_core_revision(root: Path) -> str:
+    policy = root / "scripts/ci/check_marty_core_kms_boundary.py"
+    try:
+        document = ast.parse(policy.read_text(encoding="utf-8"), filename=str(policy))
+    except SyntaxError:
+        raise ValueError(f"Reviewed KMS boundary is not valid Python: {policy}") from None
+    # Read the existing fixed declaration only. Never import or execute policy
+    # code, and never derive the reviewed policy value from Cargo declarations.
+    declarations = [
+        node for node in document.body
+        if isinstance(node, ast.Assign) and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "CORE_REVISION"
+    ]
+    bindings = [
+        node for node in ast.walk(document)
+        if isinstance(node, ast.Name) and node.id == "CORE_REVISION"
+        and isinstance(node.ctx, ast.Store)
+    ]
+    if len(declarations) != 1 or len(bindings) != 1:
+        raise ValueError(f"Reviewed KMS boundary needs one literal CORE_REVISION: {policy}")
+    value = declarations[0].value
+    if (not isinstance(value, ast.Constant) or not isinstance(value.value, str)
+            or re.fullmatch(r"[0-9a-f]{40}", value.value) is None):
+        raise ValueError(f"Reviewed KMS boundary needs one literal CORE_REVISION: {policy}")
+    return value.value
 
 
 def _release_core_entries(documents: dict[Path, dict]):
@@ -96,6 +125,8 @@ def validate_release_core_sources(root: Path) -> None:
 
     for manifest in (production_manifest, probe_manifest):
         _validate_release_core_lock(manifest.with_name("Cargo.lock"), revision)
+    if revision != _reviewed_kms_core_revision(root):
+        raise ValueError("Core release revision differs from reviewed KMS boundary")
 
 
 def check(root: Path, source_sha: str, *, require_eligible: bool = False) -> dict:

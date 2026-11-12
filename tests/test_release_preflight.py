@@ -148,6 +148,7 @@ OTHER_CORE_REVISION = "2" * 40
 PRIVATE_REVISION = "3" * 40
 CORE_REPOSITORY = "https://github.com/ElevenID/marty-core"
 CORE_PROBE = ".github/feature-regression/rust-probe"
+CORE_POLICY = "scripts/ci/check_marty_core_kms_boundary.py"
 
 
 def _write_core_source(root: Path, name: str, content: str) -> Path:
@@ -197,6 +198,9 @@ def core_source(tmp_path: Path) -> Path:
     )
     for name in ("rust/Cargo.lock", f"{CORE_PROBE}/Cargo.lock"):
         _write_core_source(tmp_path, name, lock)
+    _write_core_source(tmp_path, CORE_POLICY,
+                      f'CORE_REVISION = "{CORE_REVISION}"\n'
+                      'raise AssertionError("policy must never be executed")\n')
     # This separate workspace is outside both governed roots. Its source
     # choices are not adopted into the production or probe graph.
     _write_core_source(tmp_path, "docker/canvas-localhost-bridge/Cargo.toml",
@@ -215,14 +219,16 @@ def _replace_core_source(root: Path, name: str, before: str, after: str) -> None
 
 @pytest.mark.parametrize("revision", [CORE_REVISION, "d" * 40])
 def test_release_core_sources_accept_consistent_graph_without_changing_inputs(core_source: Path, revision: str) -> None:
-    for path in core_source.rglob("Cargo*"):
-        if path.is_file():
-            path.write_text(path.read_text().replace(CORE_REVISION, revision), encoding="utf-8")
+    paths = [path for path in core_source.rglob("Cargo*") if path.is_file()]
+    paths.append(core_source / CORE_POLICY)
+    for path in paths:
+        path.write_text(path.read_text().replace(CORE_REVISION, revision), encoding="utf-8")
     before = {path: (path.read_bytes(), path.stat().st_mode)
-              for path in core_source.rglob("Cargo*") if path.is_file()}
+              for path in core_source.rglob("*") if path.is_file()}
+    # The fixture's top-level raise proves policy is parsed, never executed.
     preflight.validate_release_core_sources(core_source)
     assert {path: (path.read_bytes(), path.stat().st_mode)
-            for path in core_source.rglob("Cargo*") if path.is_file()} == before
+            for path in core_source.rglob("*") if path.is_file()} == before
 
 
 @pytest.mark.parametrize("manifest", [
@@ -297,3 +303,41 @@ def test_core_release_requires_governed_probe_source_inputs(core_source: Path, m
     (core_source / CORE_PROBE / missing).unlink()
     with pytest.raises((ValueError, FileNotFoundError), match="Cargo"):
         preflight.validate_release_core_sources(core_source)
+
+
+def test_coherent_cargo_graph_cannot_bless_an_unreviewed_kms_revision(core_source: Path) -> None:
+    for path in core_source.rglob("Cargo*"):
+        if path.is_file():
+            path.write_text(path.read_text().replace(CORE_REVISION, OTHER_CORE_REVISION), encoding="utf-8")
+    before = {path: (path.read_bytes(), path.stat().st_mode)
+              for path in core_source.rglob("*") if path.is_file()}
+    with pytest.raises(ValueError, match="differs from reviewed KMS boundary"):
+        preflight.check(core_source, SOURCE)
+    assert {path: (path.read_bytes(), path.stat().st_mode)
+            for path in core_source.rglob("*") if path.is_file()} == before
+
+
+@pytest.mark.parametrize("policy_source", [
+    "",
+    "CORE_REVISION = 7\n",
+    'CORE_REVISION = "short"\n',
+    'CORE_REVISION = "' + "A" * 40 + '"\n',
+    'CORE_REVISION = "1" * 40\n',
+    "CORE_REVISION = load_manifest_revision()\n",
+    f'CORE_REVISION = "{CORE_REVISION}"\nCORE_REVISION = "{CORE_REVISION}"\n',
+    f'other = CORE_REVISION = "{CORE_REVISION}"\n',
+    f'if True:\n    CORE_REVISION = "{CORE_REVISION}"\n',
+    f'CORE_REVISION = "{CORE_REVISION}"\nif True:\n    CORE_REVISION = "{OTHER_CORE_REVISION}"\n',
+    "CORE_REVISION = (\n",
+    f'CORE_REVISION = "{CORE_REVISION}"\nCORE_REVISION += ""\n',
+])
+def test_reviewed_kms_revision_requires_one_module_level_literal(core_source: Path, policy_source: str) -> None:
+    (core_source / CORE_POLICY).write_text(policy_source, encoding="utf-8")
+    with pytest.raises(ValueError, match="Reviewed KMS boundary"):
+        preflight.validate_release_core_sources(core_source)
+
+
+def test_core_release_requires_existing_reviewed_kms_policy_source(core_source: Path) -> None:
+    (core_source / CORE_POLICY).unlink()
+    with pytest.raises(FileNotFoundError, match="check_marty_core_kms_boundary"):
+        preflight.check(core_source, SOURCE)
