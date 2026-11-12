@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn retained_certificate_evidence_refuses_activation_options_and_weak_ttl() {
+    let valid =
+        json!({"token":"PUBLIC_SYNTHETIC", "generation":"/proof/retained", "minimum_ttl":3600});
+    assert!(retained_certificate_context(&valid).is_ok());
+    for ttl in [0, 3599, 28801] {
+        let mut changed = valid.clone();
+        changed["minimum_ttl"] = json!(ttl);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+    for field in ["replacement", "retiring", "old", "new", "allow_expired"] {
+        let mut changed = valid.clone();
+        changed[field] = json!(false);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+    for field in ["token", "generation", "minimum_ttl"] {
+        let mut changed = valid.clone();
+        changed.as_object_mut().unwrap().remove(field);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+}
+
+#[test]
 fn closed_new_leaf_metadata_rejects_identity_grants_and_lifetime_expansion() {
     let original = json!({"type":"service","policies":["one-exact-policy"],"num_uses":0,
         "identity_policies":[],"period":0,"token_period":0,"ttl":28000,

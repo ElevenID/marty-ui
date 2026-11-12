@@ -493,6 +493,87 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
     Ok(())
 }
 
+fn retained_certificate_context(context: &Value) -> Result<(&str, &Path, u64)> {
+    let fields = context.as_object().ok_or(REFUSAL)?;
+    if fields.len() != 3
+        || !["token", "generation", "minimum_ttl"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+    {
+        return Err(REFUSAL);
+    }
+    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
+    if !(3600..=28800).contains(&ttl) {
+        return Err(REFUSAL);
+    }
+    Ok((
+        text(context, "token")?,
+        Path::new(text(context, "generation")?),
+        ttl,
+    ))
+}
+
+/// Read-only retained certificate evidence. This grants no TLS, token,
+/// activation, rollback, or credential-production admission.
+pub async fn retained_certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    let (token, root, ttl) = retained_certificate_context(context)?;
+    authority(bao, token, false).await?;
+    let issuers = [
+        issuer(bao, token, "workload-pki").await?,
+        issuer(bao, token, "keycloak-pki").await?,
+    ];
+    for cert in &issuers {
+        lifetime(cert.as_bytes(), ttl)?;
+    }
+    if certificate_file(&root.join("workload_identity_ca_cert"))? != issuers[0].as_bytes() {
+        return Err(REFUSAL);
+    }
+    let roles = SELFHOST_ROLES
+        .iter()
+        .map(|role| {
+            (
+                role.key_name.to_owned(),
+                role.cert_file.to_owned(),
+                "ecdsa-p256",
+                0,
+            )
+        })
+        .chain(keycloak::REALMS.iter().map(|realm| {
+            (
+                format!("keycloak-{realm}-rs256"),
+                format!("keycloak_{realm}_rs256_cert"),
+                "rsa-2048",
+                1,
+            )
+        }));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| REFUSAL)?;
+    for (key, file, kind, issuer) in roles {
+        let response = request(
+            bao,
+            Method::GET,
+            &format!("transit/keys/{key}"),
+            None,
+            Some(token),
+        )
+        .await?;
+        let metadata = &response["data"];
+        crate::operator::version_one_custody(metadata, kind)?;
+        let public = text(&metadata["keys"]["1"], "public_key")?;
+        let certificate = certificate_file(&root.join(file))?;
+        crate::operator_certificates::retained_leaf_signature(
+            &certificate,
+            issuers[issuer].as_bytes(),
+            now,
+        )?;
+        if public_spki(&certificate, true)? != public_spki(public.as_bytes(), false)? {
+            return Err(REFUSAL);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "activation_preflight_tests.rs"]
 mod tests;

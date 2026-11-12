@@ -940,6 +940,7 @@ fn run() -> Result<(), String> {
             Some(
                 "ca-issuer"
                 | "activation-certificates"
+                | "retained-certificates"
                 | "activation-tokens"
                 | "authority-check"
                 | "renewal-inventory"
@@ -980,6 +981,11 @@ fn run() -> Result<(), String> {
                             "activation-certificates" => preflight::certificates(&bao, &context)
                                 .await
                                 .map(|_| Value::Null),
+                            "retained-certificates" => {
+                                preflight::retained_certificates(&bao, &context)
+                                    .await
+                                    .map(|_| Value::Null)
+                            }
                             "activation-tokens" => {
                                 preflight::tokens(&bao, &context).await.map(|_| Value::Null)
                             }
