@@ -35,6 +35,25 @@ enum Operation {
     ReadKeyAsNewToken,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TokenResponse {
+    http_status: u16,
+    exact_bad_token_lookup: bool,
+}
+
+// OpenBao 2.5.5 handleLookup returns 403/errors:["bad token"] for no target.
+// Only the exact authority lookup operation may carry that absence evidence.
+fn token_response(operation: Operation, status: u16, body: &Value) -> TokenResponse {
+    let exact_bad_token_lookup = operation == Operation::LookupExactAsAuthority
+        && status == 403
+        && matches!(body.get("errors").and_then(Value::as_array),
+            Some(errors) if errors.len() == 1 && errors[0].as_str() == Some("bad token"));
+    TokenResponse {
+        http_status: status,
+        exact_bad_token_lookup,
+    }
+}
+
 // A closed four-operation port inside this producer permits focused fault tests.
 // It cannot select an endpoint, arbitrary path, policy or other credential.
 trait TokenAuthority {
@@ -43,7 +62,7 @@ trait TokenAuthority {
         operation: Operation,
         token: &NewToken,
         key: &str,
-    ) -> Result<u16, Box<dyn Error>>;
+    ) -> Result<TokenResponse, Box<dyn Error>>;
 }
 
 impl TokenAuthority for Bao {
@@ -52,7 +71,7 @@ impl TokenAuthority for Bao {
         operation: Operation,
         token: &NewToken,
         key: &str,
-    ) -> Result<u16, Box<dyn Error>> {
+    ) -> Result<TokenResponse, Box<dyn Error>> {
         let (method, path, body, auth) = match operation {
             Operation::RevokeSelfAsNewToken => (
                 Method::POST,
@@ -79,25 +98,29 @@ impl TokenAuthority for Bao {
                 Some(token.value()),
             ),
         };
-        Ok(self.request(method, &path, body, auth).await?.0.as_u16())
+        let (status, body) = self.request(method, &path, body, auth).await?;
+        Ok(token_response(operation, status.as_u16(), &body))
     }
 }
 
 #[derive(Debug, Serialize)]
 pub(super) struct Attempt {
     pub http_status: Option<u16>,
+    pub exact_bad_token_lookup: bool,
     pub error_sha256: Option<String>,
 }
 
 impl Attempt {
-    fn result(result: Result<u16, Box<dyn Error>>) -> Self {
+    fn result(result: Result<TokenResponse, Box<dyn Error>>) -> Self {
         match result {
-            Ok(status) => Self {
-                http_status: Some(status),
+            Ok(response) => Self {
+                http_status: Some(response.http_status),
+                exact_bad_token_lookup: response.exact_bad_token_lookup,
                 error_sha256: None,
             },
             Err(error) => Self {
                 http_status: None,
+                exact_bad_token_lookup: false,
                 error_sha256: Some(format!(
                     "{:x}",
                     Sha256::digest(error.to_string().as_bytes())
@@ -143,7 +166,9 @@ async fn contain(api: &impl TokenAuthority, token: &NewToken, key: &str) -> Cont
             .as_ref()
             .is_some_and(Attempt::acknowledged);
     let confirmed = action_acknowledged
-        && matches!(authority_lookup.http_status, Some(400 | 404))
+        && (matches!(authority_lookup.http_status, Some(400 | 404))
+            || authority_lookup.http_status == Some(403)
+                && authority_lookup.exact_bad_token_lookup)
         && new_token_key_read.http_status == Some(403);
     Containment {
         revoke_self_as_new_token,
@@ -163,7 +188,7 @@ mod tests {
     use super::*;
     use std::{collections::VecDeque, sync::Mutex};
     struct Script {
-        replies: Mutex<VecDeque<Result<u16, &'static str>>>,
+        replies: Mutex<VecDeque<Result<(u16, Value), &'static str>>>,
         calls: Mutex<Vec<Operation>>,
     }
     impl TokenAuthority for Script {
@@ -172,13 +197,14 @@ mod tests {
             operation: Operation,
             _: &NewToken,
             _: &str,
-        ) -> Result<u16, Box<dyn Error>> {
+        ) -> Result<TokenResponse, Box<dyn Error>> {
             self.calls.lock().unwrap().push(operation);
             self.replies
                 .lock()
                 .unwrap()
                 .pop_front()
                 .unwrap()
+                .map(|(status, body)| token_response(operation, status, &body))
                 .map_err(Into::into)
         }
     }
@@ -190,6 +216,14 @@ mod tests {
         .unwrap()
     }
     fn script(replies: Vec<Result<u16, &'static str>>) -> Script {
+        response_script(
+            replies
+                .into_iter()
+                .map(|r| r.map(|s| (s, json!({}))))
+                .collect(),
+        )
+    }
+    fn response_script(replies: Vec<Result<(u16, Value), &'static str>>) -> Script {
         Script {
             replies: Mutex::new(replies.into()),
             calls: Mutex::new(vec![]),
@@ -242,5 +276,51 @@ mod tests {
         let root = "synthetic-root-token-xxxxxxxx";
         assert!(NewToken::capture(&json!({"auth":{"client_token":root}}), root).is_err());
         assert!(NewToken::capture(&json!({"auth":{}}), root).is_err());
+    }
+    #[tokio::test]
+    async fn existing_key_renew_fault_exact_bad_token_lookup403_is_absent_but_generic403_is_not() {
+        // Actual OpenBao 2.5.5 expired-target response; no server or credentials.
+        for (body, absent) in [
+            (json!({"errors":["bad token"]}), true),
+            (json!({"errors":["permission denied"]}), false),
+            (json!({"errors":["bad token","permission denied"]}), false),
+            (json!({"errors":"bad token"}), false),
+            (json!({}), false),
+        ] {
+            let api = response_script(vec![
+                Ok((403, json!({}))),
+                Ok((204, json!({}))),
+                Ok((403, body)),
+                Ok((403, json!({}))),
+            ]);
+            let result = contain(&api, &token(), "owned-key").await;
+            assert_eq!(result.confirmed, absent);
+            assert_eq!(result.authority_lookup.exact_bad_token_lookup, absent);
+            let safe = serde_json::to_string(&result).unwrap();
+            assert!(!safe.contains("bad token") && !safe.contains("permission denied"));
+        }
+        // Exact absence cannot replace an acknowledged revoke action.
+        let api = response_script(vec![
+            Ok((403, json!({}))),
+            Ok((500, json!({}))),
+            Ok((403, json!({"errors":["bad token"]}))),
+            Ok((403, json!({}))),
+        ]);
+        assert!(!contain(&api, &token(), "owned-key").await.confirmed);
+    }
+
+    #[test]
+    fn existing_key_renew_fault_bad_token_evidence_is_exact_authority_lookup_only() {
+        let body = json!({"errors":["bad token"]});
+        for operation in [
+            Operation::RevokeSelfAsNewToken,
+            Operation::RevokeExactAsAuthority,
+            Operation::ReadKeyAsNewToken,
+        ] {
+            assert!(!token_response(operation, 403, &body).exact_bad_token_lookup);
+        }
+        assert!(
+            !token_response(Operation::LookupExactAsAuthority, 500, &body).exact_bad_token_lookup
+        );
     }
 }
