@@ -499,6 +499,21 @@ rechecks exact container/image/project/service/nonce identity, removes only the
 acknowledged helper, then verifies its owned network is empty before removal.
 This is flags/lifecycle evidence, not end-to-end migration or product admission.
 
+The product context can now qualify one acknowledged transient Issuance helper.
+Preparation rechecks candidate role configuration hashes and the cached image,
+then binds the resolved environment, selected mounts, networks and security
+settings. Only the producer's definite full container ID may be acknowledged;
+name-based adoption is refused. The exact fixed command, nonce label, image,
+environment and storage must match before excluding that helper from the
+ordinary workload role closure. Its observations still reach the inherited
+foreign-storage checks. Completion requires exited/zero, and acknowledged
+removal must be followed by absence. Creation/start identity, running PID and
+terminal outcome are retained to reject same-CID manual restarts even when
+Docker's restart counter stays zero. The helper observation digest is included
+in its witness. Shape tests replace the full storage transport; they do not
+qualify quiescence, journal receipts or a complete mutation owner. No production
+call site invokes this helper support yet.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured

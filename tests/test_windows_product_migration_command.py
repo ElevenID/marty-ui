@@ -81,6 +81,10 @@ def test_explicit_native_cli_replaces_the_argument_ignoring_entrypoint(
     )
     assert command[command.index("--pull") + 1] == "never"
     assert (
+        command[command.index("--label") + 1]
+        == "marty.windows.product-migration=" + "b" * 32
+    )
+    assert (
         command[command.index("--name") + 1]
         == result["name"]
         == project + "-issuance-migrate-" + "b" * 32
@@ -300,6 +304,7 @@ def test_real_compose_oneoff_does_not_restart_or_start_dependencies(tmp_path):
         require(actual_labels.get("com.docker.compose.project") == project)
         require(actual_labels.get("com.docker.compose.service") == "issuance-native")
         require(actual_labels.get("com.docker.compose.oneoff") == "True")
+        require(actual_labels.get("marty.windows.product-migration") == nonce)
         require(
             not row["HostConfig"]["Binds"] and not row["HostConfig"]["PortBindings"]
         )

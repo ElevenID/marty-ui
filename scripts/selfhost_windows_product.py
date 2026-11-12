@@ -6,6 +6,7 @@ retain its inputs, prove native custody and commit real transition evidence.
 Ordinary credential continuation and Applicant repair remain distinct operations.
 """
 from copy import deepcopy
+import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -223,6 +224,7 @@ class ProductContext(renewal.ForeignContext):
 
     def __init__(self, docker, project, baseline, volumes, helper_image, *, old_model,
                  new_model, admitted, image_ids, configuration_hashes):
+        self._issuance_helper = None
         self.old_model = deepcopy(old_model)
         self.new_model = deepcopy(new_model)
         self.admitted = deepcopy(admitted)
@@ -237,7 +239,169 @@ class ProductContext(renewal.ForeignContext):
         super().__init__(docker, project, set(change['mutable_roles']), baseline, volumes, helper_image)
         self._candidate(baseline, before_intent=True)
 
+    @staticmethod
+    def _environment(values):
+        require(type(values) is list and all(type(value) is str and '=' in value for value in values),
+                'Helper environment is malformed')
+        result = {}
+        for value in values:
+            key, body = value.split('=', 1)
+            require(key and key not in result, 'Helper environment is ambiguous')
+            result[key] = body
+        return result
+
+    def prepare_issuance_helper(self, env, source, cycle):
+        """Arm one exact transient shape, not SQL execution or admission.
+
+        Caller must hold the verified model/files and durable schema intent.
+        This fresh source/hash proof cannot substitute for that authorization.
+        Unknown creation outcomes must never be adopted by container name.
+        """
+        from selfhost_windows_product_deploy import issuance_migration_command
+        require(self._issuance_helper is None, 'Migration helper cannot be replayed')
+        self.check()
+        base = self.docker.compose(self.project, env, source)
+        hashes = self.docker.hashes(base)
+        require(all(hashes.get(role) == value for role, value in self.configuration_hashes['new'].items()),
+                'Migration source differs from the held product')
+        normalized = self.docker.json(base[len(self.docker.prefix):]+['--profile', '*', 'config', '--format', 'json'])
+        prepared = issuance_migration_command(self.docker, self.project, env, source, normalized, cycle)
+        role = normalized['services']['issuance-native']
+        require(prepared['image'] == self.new_model['services']['issuance-native']['image'])
+        images = self.docker.json(['image', 'inspect', prepared['image']])
+        require(type(images) is list and len(images) == 1)
+        image = images[0]
+        require(image.get('Id') == self.image_ids['issuance-native'] and image.get('Os') == 'linux'
+                and image.get('Architecture') == 'amd64' and prepared['image'] in image.get('RepoDigests', []))
+        environment = self._environment(image.get('Config', {}).get('Env') or [])
+        require(all(type(key) is str and type(value) is str for key, value in role['environment'].items()))
+        environment.update(role['environment'])
+        original = [item for item in self.owned if renewal._service(item) == 'issuance-native']
+        require(len(original) == 1)
+        original = original[0]
+        require(type(original.get('NetworkSettings', {}).get('Networks')) is dict
+                and original['NetworkSettings']['Networks'], 'Migration network closure missing')
+        # Image-declared volumes may not create new anonymous storage.
+        volumes = image.get('Config', {}).get('Volumes') or {}
+        require(type(volumes) is dict and set(volumes) <= {mount['Destination'] for mount in original['Mounts']})
+        host_keys = ('Privileged', 'ReadonlyRootfs', 'CapAdd', 'CapDrop', 'SecurityOpt', 'PidMode',
+                     'IpcMode', 'UTSMode', 'UsernsMode', 'NetworkMode', 'Devices', 'DeviceRequests', 'GroupAdd', 'Tmpfs')
+        host = original.get('HostConfig', {})
+        require(host.get('Privileged') is False and host.get('PidMode', '') == '',
+                'Unsupported helper privilege or PID namespace')
+        self._issuance_helper = {
+            'stage': 'prepared', 'cid': None, 'name': prepared['name'], 'cycle': cycle,
+            'execution': None, 'terminal': None, 'running_pid': None,
+            'image': prepared['image'], 'image_id': image['Id'], 'environment': environment,
+            'mounts': deepcopy(original['Mounts']), 'host': {key: deepcopy(host.get(key)) for key in host_keys},
+            'networks': {key: value['NetworkID'] for key, value in original['NetworkSettings']['Networks'].items()},
+            'user': role.get('user', image.get('Config', {}).get('User') or ''),
+            'workdir': role.get('working_dir', image.get('Config', {}).get('WorkingDir') or ''),
+        }
+        self.check()
+        return prepared
+
+    def acknowledge_issuance_helper(self, cid):
+        """Only the producer's definite full CID can enter the live context."""
+        plan = self._issuance_helper
+        require(plan is not None and plan['stage'] == 'prepared' and type(cid) is str
+                and re.fullmatch(r'[0-9a-f]{64}', cid) and cid not in self.initial,
+                'Migration creation acknowledgement is invalid')
+        plan.update(stage='present', cid=cid)
+        self.check()
+
+    @staticmethod
+    def _helper_time(value):
+        valid = False
+        if type(value) is str:
+            try:
+                parsed = datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+                valid = parsed.year > 1 and parsed.tzinfo is not None
+            except ValueError:
+                pass
+        require(valid, 'Helper execution timestamp is invalid')
+        return value
+
+    def _without_issuance_helper(self, items, before_intent):
+        plan = self._issuance_helper
+        if plan is None:
+            return items
+        require(len({item['Id'] for item in items}) == len(items), 'Duplicate helper context identity')
+        require(not before_intent, 'Transient helper cannot precede product intent')
+        named = [item for item in items if item.get('Name') == '/'+plan['name']]
+        if plan['stage'] != 'present':
+            require(not named and not any(item['Id'] == plan['cid'] for item in items),
+                    'Unexpected or unacknowledged migration helper')
+            return items
+        require(len(named) == 1 and named[0]['Id'] == plan['cid'], 'Acknowledged helper missing or replaced')
+        item = named[0]
+        config = item.get('Config', {});host = item.get('HostConfig', {});state = item.get('State', {})
+        labels = config.get('Labels') or {}
+        from selfhost_windows_product_deploy import ISSUANCE_MIGRATION_SHELL
+        require(item['Image'] == plan['image_id'] and config.get('Image') == plan['image']
+                and config.get('Entrypoint') == ['/bin/sh'] and config.get('Cmd') == ['-c', ISSUANCE_MIGRATION_SHELL]
+                and renewal._project(item) == self.project and renewal._service(item) == 'issuance-native'
+                and labels.get('com.docker.compose.oneoff') == 'True'
+                and labels.get('marty.windows.product-migration') == plan['cycle']
+                and config.get('Tty') is False and config.get('OpenStdin') is False, 'Helper command or identity differs')
+        require(self._environment(config.get('Env')) == plan['environment'] and config.get('User', '') == plan['user']
+                and config.get('WorkingDir', '') == plan['workdir'], 'Helper execution environment differs')
+        require(sorted(item['Mounts'], key=lambda mount: mount['Destination']) ==
+                sorted(plan['mounts'], key=lambda mount: mount['Destination']), 'Helper storage differs')
+        networks = item.get('NetworkSettings', {}).get('Networks')
+        require(type(networks) is dict and {key: value.get('NetworkID') for key, value in networks.items()} == plan['networks'],
+                'Helper network closure differs')
+        require(all(host.get(key) == value for key, value in plan['host'].items())
+                and not host.get('PortBindings') and not host.get('PublishAllPorts') and host.get('AutoRemove') is False
+                and host.get('RestartPolicy') == {'Name': 'no', 'MaximumRetryCount': 0}, 'Helper security or lifecycle differs')
+        require(type(item.get('RestartCount')) is int and item['RestartCount'] == 0
+                and state.get('Status') in {'running', 'exited'} and state.get('OOMKilled') is False
+                and state.get('Running') is (state['Status'] == 'running')
+                and state.get('Paused') is False and state.get('Dead') is False and not state.get('Error')
+                and type(state.get('Pid')) is int and ((state['Status'] == 'running' and state['Pid'] > 0)
+                    or (state['Status'] == 'exited' and state['Pid'] == 0)), 'Helper runtime is unsafe')
+        execution = {'created': self._helper_time(item.get('Created')),
+                     'started_at': self._helper_time(state.get('StartedAt'))}
+        if plan['execution'] is None:
+            plan['execution'] = execution
+        require(execution == plan['execution'], 'Migration helper was started again or replaced')
+        if state['Status'] == 'running':
+            require(plan['terminal'] is None, 'Terminal migration helper returned to running')
+            if plan['running_pid'] is None:
+                plan['running_pid'] = state['Pid']
+            require(state['Pid'] == plan['running_pid'], 'Migration process identity changed')
+        else:
+            terminal = {'finished_at': self._helper_time(state.get('FinishedAt')), 'exit_code': state.get('ExitCode')}
+            require(type(terminal['exit_code']) is int, 'Helper exit code is malformed')
+            if plan['terminal'] is None:
+                plan['terminal'] = terminal
+            require(terminal == plan['terminal'], 'Terminal helper outcome changed')
+        return [row for row in items if row['Id'] != plan['cid']]
+
+    def issuance_helper_witness(self, *, completed=False):
+        """Full fresh context proof precedes any receipt or known-helper cleanup."""
+        plan = self._issuance_helper
+        require(plan is not None and plan['stage'] == 'present')
+        rows = self.check()
+        item = next(row for row in rows if row['Id'] == plan['cid'])
+        if completed:
+            require(item['State']['Status'] == 'exited' and type(item['State'].get('ExitCode')) is int
+                    and item['State']['ExitCode'] == 0, 'Migration helper did not complete successfully')
+        return {'name': plan['name'], 'id': plan['cid'], 'image': plan['image'],
+                'image_id': plan['image_id'], 'cycle': plan['cycle'],
+                'status': item['State']['Status'], 'exit_code': item['State'].get('ExitCode'),
+                'observation_sha256': digest(item), 'execution': deepcopy(plan['execution']),
+                'terminal': deepcopy(plan['terminal'])}
+
+    def issuance_helper_removed(self, cid):
+        """After one successful normal rm acknowledgement; never retry removal."""
+        plan = self._issuance_helper
+        require(plan is not None and plan['stage'] == 'present' and cid == plan['cid'])
+        plan['stage'] = 'absent'
+        self.check()
+
     def _candidate(self, items, *, before_intent):
+        items = self._without_issuance_helper(items, before_intent)
         owned = [item for item in items if renewal._project(item) == self.project]
         _checked_runtime_change(self.owned, owned, self.old_model, self.new_model,
                                 self.admitted, self.image_ids, expected_project=self.project, allow_pending=True)

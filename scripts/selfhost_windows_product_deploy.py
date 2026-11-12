@@ -48,6 +48,7 @@ def issuance_migration_command(docker, project, env, source, model, cycle):
     require(type(command) is list and command and all(type(part) is str and part for part in command))
     return {'name': name, 'image': service['image'], 'command': [*command, 'run', '--pull', 'never',
         '--detach', '--no-deps', '--no-tty', '--interactive=false', '--name', name,
+        '--label', 'marty.windows.product-migration='+cycle,
         '--entrypoint', '/bin/sh', 'issuance-native', '-c', ISSUANCE_MIGRATION_SHELL]}
 
 
