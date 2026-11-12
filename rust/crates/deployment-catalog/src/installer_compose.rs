@@ -367,6 +367,7 @@ mod tests {
             "2.24.4",
             "5.6.0",
             "5.6.2",
+            "5.7.1",
             "5.6.1-rc.1",
             "5.6.1+",
             "5.6.1+bad/path",
@@ -374,6 +375,10 @@ mod tests {
         ] {
             assert!(!version_supported(value), "{value}");
         }
+        let newer = require_version("5.7.1").unwrap_err();
+        assert!(newer.contains(COMPOSE_VERSION));
+        assert!(newer.contains("--check-compatibility"));
+        assert!(newer.contains("newer version is not automatically compatible"));
     }
 
     #[test]
@@ -1612,7 +1617,7 @@ pub(crate) fn require_version(version: &str) -> Result<()> {
         Ok(())
     } else {
         Err(format!(
-            "This installer requires Docker Compose {COMPOSE_VERSION}; install that supported plugin and retry preflight before creating an installation"
+            "This installer requires Docker Compose {COMPOSE_VERSION}; install that exact supported plugin (a newer version is not automatically compatible), then rerun the same release selector with --check-compatibility before creating an installation"
         ))
     }
 }
