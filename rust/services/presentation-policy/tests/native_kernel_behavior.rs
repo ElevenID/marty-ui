@@ -280,7 +280,11 @@ async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
         .try_into()
         .unwrap();
     let public_key: [u8; 32] = URL_SAFE_NO_PAD
-        .decode(fixture["governed_method"]["public_jwk"]["x"].as_str().unwrap())
+        .decode(
+            fixture["governed_method"]["public_jwk"]["x"]
+                .as_str()
+                .unwrap(),
+        )
         .unwrap()
         .try_into()
         .unwrap();
