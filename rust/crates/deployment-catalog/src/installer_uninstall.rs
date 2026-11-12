@@ -362,6 +362,10 @@ pub fn uninstall(args: &[String]) -> Result<String> {
 fn execute(args: &[String], action: &str) -> Result<String> {
     let args = arguments(args)?;
     let mut state = LockedMaintenance::open(&args.installation)?;
+    crate::installer_operator_upgrade::require_selected_caller(
+        state.inspection(),
+        &args.installation,
+    )?;
     crate::installer_lifecycle::record_manual_intent_if_configured(
         &mut state,
         &args.installation,
@@ -458,6 +462,7 @@ fn execute_selection_locked(
 ) -> Result<String> {
     require(["start", "stop", "down"].contains(&action))?;
     require(selected.is_none() || action == "start")?;
+    crate::installer_operator_upgrade::require_selected_caller(state.inspection(), installation)?;
     let (saved, session) =
         installer_doctor::open_session(state.inspection(), installation, docker)?;
     if action != "down" {

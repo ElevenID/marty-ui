@@ -186,7 +186,14 @@ struct Loaded {
 }
 
 fn unit_names(id: uuid::Uuid) -> [String; 5] {
-    let prefix = format!("lifecycle-marty-{id}");
+    operator_unit_names(id, None)
+}
+
+pub(crate) fn operator_unit_names(id: uuid::Uuid, sequence: Option<u64>) -> [String; 5] {
+    let prefix = sequence.map_or_else(
+        || format!("lifecycle-marty-{id}"),
+        |sequence| format!("lifecycle-marty-{id}-operator-{sequence:04}"),
+    );
     [
         format!("{prefix}.service"),
         format!("{prefix}-check.service"),
@@ -215,10 +222,18 @@ fn systemd_argument(value: &str) -> Result<String> {
 }
 
 fn command(configuration: &Configuration, action: &str) -> Result<String> {
-    installation_text(&configuration.installation)?;
     let operator = configuration.installation.join("marty-deploy");
+    command_for_operator(configuration, action, &operator)
+}
+
+fn command_for_operator(
+    configuration: &Configuration,
+    action: &str,
+    operator: &Path,
+) -> Result<String> {
+    installation_text(&configuration.installation)?;
     let argv = [
-        path_text(&operator)?,
+        path_text(operator)?,
         "lifecycle",
         action,
         "--install-dir",
@@ -236,8 +251,27 @@ fn command(configuration: &Configuration, action: &str) -> Result<String> {
 }
 
 fn render_units(configuration: &Configuration) -> Result<BTreeMap<String, String>> {
+    render_operator_units(
+        configuration,
+        &configuration.installation.join("marty-deploy"),
+        None,
+    )
+}
+
+fn render_operator_units(
+    configuration: &Configuration,
+    operator: &Path,
+    sequence: Option<u64>,
+) -> Result<BTreeMap<String, String>> {
     let id = configuration.installation_id;
-    let [boot, check, timer, maintenance, maintenance_timer] = unit_names(id);
+    let [boot, check, timer, maintenance, maintenance_timer] = operator_unit_names(id, sequence);
+    let selected_command = |action| {
+        if sequence.is_some() {
+            command_for_operator(configuration, action, operator)
+        } else {
+            command(configuration, action)
+        }
+    };
     let boot_text = format!(
         "# Generated for Marty installation {id}; customer enables this user unit.\n\
 [Unit]\nDescription=Marty installation {id}\nWants=docker.service\nAfter=docker.service\n\
@@ -245,14 +279,14 @@ StartLimitIntervalSec=900\nStartLimitBurst=3\n\n\
 [Service]\nType=oneshot\nRemainAfterExit=yes\nNoNewPrivileges=yes\nUMask=0077\n\
 TimeoutStartSec=1800\nTimeoutStopSec=900\nRestart=on-failure\nRestartSec=15\n\
 ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
-        command(configuration, "boot")?,
-        command(configuration, "shutdown")?
+        selected_command("boot")?,
+        selected_command("shutdown")?
     );
     let check_text = format!(
         "# Read-only validation; no renewal, restart or recovery action.\n\
 [Unit]\nDescription=Marty deployment check {id}\nAfter=docker.service {boot}\n\n\
 [Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=180\nExecStart={} \"--scheduled\"\n",
-        command(configuration, "check")?
+        selected_command("check")?
     );
     let timer_text = format!(
         "[Unit]\nDescription=Marty deployment check schedule {id}\n\n\
@@ -263,7 +297,7 @@ ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
         "# Bounded operator reconciliation under the installation lock.\n\
 [Unit]\nDescription=Marty maintenance {id}\nWants=docker.service\nAfter=docker.service {boot}\n\n\
 [Service]\nType=oneshot\nNoNewPrivileges=yes\nUMask=0077\nTimeoutStartSec=1830\nExecStart={} \"--scheduled\"\n",
-        command(configuration, "maintain")?
+        selected_command("maintain")?
     );
     let maintenance_timer_text = format!(
         "[Unit]\nDescription=Marty maintenance schedule {id}\n\n\
@@ -278,6 +312,20 @@ ExecStart={}\nExecStop={}\n\n[Install]\nWantedBy=default.target\n",
         (maintenance_timer, maintenance_timer_text),
     ]
     .into())
+}
+
+/// Successor exports have distinct unit names and explicit executable paths.
+/// The original configuration and pause/security-seal intent remain authoritative.
+pub(crate) fn successor_unit_exports(
+    state: &LockedInspection,
+    installation: &Path,
+    docker: &Path,
+    operator: &Path,
+    sequence: u64,
+) -> Result<BTreeMap<String, String>> {
+    require((1..=32).contains(&sequence) && operator.starts_with(installation.join("operators")))?;
+    let loaded = configured(state, installation, docker)?.ok_or(REFUSED)?;
+    render_operator_units(&loaded.configuration, operator, Some(sequence))
 }
 
 fn prepare(state: &LockedInspection, installation: &Path, docker: &Path) -> Result<Configuration> {
@@ -1098,6 +1146,23 @@ fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<Strin
     } else {
         LockedMaintenance::open(&args.installation)?
     };
+    let operator_owner =
+        crate::installer_operator_upgrade::status_locked(state.inspection(), &args.installation)?;
+    if !matches!(args.action, Action::Status | Action::Export) {
+        crate::installer_operator_upgrade::require_selected_caller(
+            state.inspection(),
+            &args.installation,
+        )?;
+    } else if !operator_owner["pending_sequence"].is_null() {
+        if args.action == Action::Status {
+            return serde_json::to_string(&json!({"schema":"elevenid.installer-lifecycle/v2", "operation":"status",
+                "operator_owner":operator_owner, "runtime_observed":false, "installation_ready":false}))
+                .map_err(|_| REFUSED.into());
+        }
+        return Err(
+            "Reconcile the pending operator successor before exporting lifecycle units".into(),
+        );
+    }
     let prerequisites = installer_runtime::observe_user_systemd_prerequisites(&args.installation);
     let mut report = json!({"schema":"elevenid.installer-lifecycle/v2", "installation_id":state.journal().installation_id(),
         "systemd_controlled":false, "systemd_enablement_observed":false, "installation_ready":false,
@@ -1202,6 +1267,20 @@ fn run_with_lock_wait(args: &[String], scheduled_wait: Duration) -> Result<Strin
             }
         } else if args.action != Action::Status {
             return Err("Lifecycle is not configured; use lifecycle install and review the returned customer enablement commands".into());
+        }
+    }
+    report["operator_owner"] = operator_owner;
+    if !report["operator_owner"]["selected_operator"].is_null() {
+        let owner = &report["operator_owner"]["selected_operator"];
+        report["next_actions"] = json!({"manual_recovery_command":[owner["entrypoint"], "lifecycle", "resume", "--install-dir", args.installation, "--docker-bin", args.docker],
+            "successor_unit_directory":owner["unit_directory"], "successor_unit_sha256":owner["units"],
+            "customer_action":"Link the distinct successor unit exports in the installation owner's user manager; keep every predecessor unit masked. Enablement and boot qualification require separate observation.",
+            "systemd_controlled":false, "scheduler_activation":"not_assessed"});
+        if args.action == Action::Export {
+            report["units"] = json!(crate::installer_operator_upgrade::selected_unit_exports(
+                state.inspection(),
+                &args.installation
+            )?);
         }
     }
     state.require_unchanged()?;
