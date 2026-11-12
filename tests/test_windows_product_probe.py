@@ -53,6 +53,8 @@ class Postgres:
             inventory.append({'schema': 'public', 'name': 'alembic_version' if self.fault == 'alembic' else 'flyway_schema_history'})
         rows = [{'kind': 'catalog', 'sha256': catalog, 'supported': self.fault not in {'foreign-table', 'event-trigger'}},
                 {'kind': 'inventory', 'tables': inventory}]
+        if "'row_inventory'" in script:
+            rows[0]['row_inventory'] = {schema+'.'+name:['version'] for schema, name in expected}
         for schema, name in sorted(expected):
             assert 'FROM "'+schema+'"."'+name+'" m;' in script
             rows.append({'kind': 'ledger', 'schema': schema, 'name': name,
@@ -74,7 +76,7 @@ def test_catalog_and_ledger_rows_are_hashed_in_repeatable_read_observations(monk
 def test_detailed_snapshot_retains_exact_maps_without_changing_legacy(monkeypatch):
     docker = Postgres();monkeypatch.setattr(probe, '_text', docker.text)
     detailed = probe.detailed_schema_snapshot(docker, [item('postgres')], PROJECT)
-    assert detailed['schema'] == 'marty.windows-postgres-schema/v3'
+    assert detailed['schema'] == 'marty.windows-postgres-schema/v4'
     for database, tables in probe.LedgerProfile().tables.items():
         row = detailed['databases'][database]
         assert row['migration_ledgers'] == {schema+'.'+name: 'c'*64 for schema, name in tables}
@@ -83,12 +85,24 @@ def test_detailed_snapshot_retains_exact_maps_without_changing_legacy(monkeypatc
     legacy = probe.schema_snapshot(docker, [item('postgres')], PROJECT)
     assert legacy['schema'] == probe.SCHEMA
     for database, row in legacy['databases'].items():
-        assert row == {key: value for key, value in detailed['databases'][database].items() if key != 'migration_ledgers'}
+        assert row == {key: value for key, value in detailed['databases'][database].items() if key not in {'migration_ledgers','row_inventory'}}
 
 
 def test_detailed_snapshot_still_refuses_inter_observation_drift(monkeypatch):
     docker = Postgres('snapshot-drift');monkeypatch.setattr(probe, '_text', docker.text)
     with pytest.raises(ValueError):probe.detailed_schema_snapshot(docker, [item('postgres')], PROJECT)
+
+
+@pytest.mark.parametrize('value', [[], {'bad.name.extra':['id']}, {'public.t':['id','id']},
+    {'public.t':[True]}, {'public.t':['']}, {'public.t':['x'*64]}, {'public.t':['nul\0name']},
+    {'public.t':[str(i) for i in range(1601)]}, {('schema','tuple'):['id']}])
+def test_catalog_row_inventory_refuses_malformed_or_unbounded_metadata(value):
+    with pytest.raises(ValueError):probe.validate_row_inventory(value, frozenset())
+
+
+def test_inventory_keeps_quoted_column_names_and_requires_known_ledgers():
+    probe.validate_row_inventory({'public.t':['id','quote"column','unknown array']}, {('public','t')})
+    with pytest.raises(ValueError):probe.validate_row_inventory({}, {('public','t')})
 
 
 def quiescent():

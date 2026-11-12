@@ -33,6 +33,85 @@ def sha(value):
     return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
 
 
+def validate_application_schema_evidence(before, after):
+    """Join mandatory application migration proofs, never release admission.
+
+    The full execution owner must collect coherent held evidence under stopped
+    writers and fresh database quiescence, and verify source/images/native
+    custody. Other-database ordinary account data is outside this fingerprint;
+    their full catalog/ledger profiles must remain unchanged here.
+    """
+    import hashlib
+    import json
+    import selfhost_windows_product_probe as probe
+    import selfhost_windows_product_schema as membership
+    import selfhost_windows_product_startup as startup
+    import selfhost_windows_product_ledger as ledger
+    import selfhost_windows_product_catalog as catalog
+    names = {'schema', 'rows', 'membership', 'startup', 'ledger', 'catalog', 'mutable_rows'}
+    for value, side in ((before, 'before'), (after, 'after')):
+        require(type(value) is dict and set(value) == {'schema', 'side', 'parts'}
+                and value['schema'] == 'marty.windows-application-schema-evidence/v1' and value['side'] == side
+                and type(value['parts']) is dict and set(value['parts']) == names)
+    old, new = before['parts'], after['parts']
+    membership.validate_delta(old['membership'], new['membership'])
+    startup.validate_delta(old['startup'], new['startup'])
+    ledger.validate_profile_delta(old['schema'], new['schema'], old['ledger'], new['ledger'])
+    catalog.validate_delta(old['catalog'], new['catalog'])
+    database = old['schema']['database_roles']['application']
+    for parts in (old, new):
+        require(parts['schema']['databases'][database]['catalog_sha256'] == parts['catalog']['source_catalog_sha256'])
+        rows = parts['rows']
+        require(type(rows) is dict and set(rows) == {'schema', 'database', 'tables'}
+                and rows['schema'] == 'marty.windows-retained-application-rows/v1' and rows['database'] == database
+                and type(rows['tables']) is dict and 0 < len(rows['tables']) <= probe.RELATION_LIMIT
+                and set(rows['tables']) == set(parts['schema']['databases'][database]['row_inventory']))
+        for table, row in rows['tables'].items():
+            require(type(table) is str and len(table.split('.')) == 2
+                    and all(probe.NAME.fullmatch(part) for part in table.split('.'))
+                    and type(row) is dict and set(row) == {'rows', 'sha256'}
+                    and type(row['rows']) is int and 0 <= row['rows'] <= probe.ROW_LIMIT
+                    and type(row['sha256']) is str and probe.SHA.fullmatch(row['sha256']))
+    expected_scope = probe._mutable_scope(old['membership'], old['startup'])
+    scope_sha = hashlib.sha256(json.dumps(expected_scope, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    for parts in (old, new):
+        retained = parts['mutable_rows']
+        require(type(retained) is dict and set(retained) == {'schema', 'database', 'scope_sha256', 'tables'}
+                and retained['schema'] == 'marty.windows-retained-mutable-rows/v1' and retained['database'] == database
+                and retained['scope_sha256'] == scope_sha and type(retained['tables']) is dict
+                and set(retained['tables']) == {value['table'] for value in expected_scope.values()})
+        for entry in expected_scope.values():
+            row = retained['tables'][entry['table']]
+            require(type(row) is dict and set(row) == {'rows', 'masked', 'columns', 'sha256'}
+                    and type(row['rows']) is int and row['rows'] == entry['rows']
+                    and type(row['masked']) is int and row['masked'] == len(entry['keys'])
+                    and type(row['columns']) is list and row['columns'] and 'id' in row['columns']
+                    and all(type(column) is str and column for column in row['columns'])
+                    and len(row['columns']) == len(set(row['columns']))
+                    and not set(row['columns']) & set(entry['excluded']) and type(row['sha256']) is str
+                    and probe.SHA.fullmatch(row['sha256'])
+                    and row['columns'] == [column for column in parts['schema']['databases'][database]['row_inventory'][entry['table']]
+                                           if column not in entry['excluded']]
+                    and parts['rows']['tables'].get(entry['table'], {}).get('rows') == entry['rows'])
+    require(old['mutable_rows'] == new['mutable_rows'])
+    mutable = {table for table, _columns in probe.MUTABLE_TABLES.values()}
+    ledgers = set(ledger.BASELINES)
+    original, changed = old['rows']['tables'], new['rows']['tables']
+    added = 'trust_profile_service.credential_authority_revisions'
+    require(added not in original and set(changed) == set(original) | {added}
+            and mutable | ledgers | set(old['schema']['databases'][database]['migration_ledgers']) <= set(original))
+    for table, row in original.items():
+        if table not in mutable | ledgers:require(row == changed[table])
+    for table in ledgers:
+        require(original[table]['rows'] == old['ledger']['ledgers'][table]['row_count']
+                and changed[table]['rows'] == new['ledger']['ledgers'][table]['row_count'])
+    require(changed[added] == {'rows': 0, 'sha256': hashlib.sha256(b'[]').hexdigest()})
+    return {'schema': 'marty.windows-application-schema-evidence-delta/v1',
+            'before_sha256': selection.digest(selection.packed(before)),
+            'after_sha256': selection.digest(selection.packed(after)),
+            'native_admission': False, 'product_transition_admission': False}
+
+
 def successor_configuration(config, model, root):
     """A new product binding with empty credential-operation outputs, not a rotation."""
     from selfhost_windows_model import MODEL_KEYS

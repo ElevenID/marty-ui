@@ -558,8 +558,10 @@ the execution owner must qualify quiescence rather than infer it from transactio
 isolation. The deployment owner still
 needs to bind and validate the narrow migration witnesses with this inventory.
 
-The schema probe has a separate v3 detailed form retaining every reviewed
-ledger digest and its aggregate from the same database transaction. The existing
+The schema probe has a separate v4 detailed form retaining every reviewed
+ledger digest and its aggregate, plus the exact physical relation inventory and
+ordered non-dropped column names, from the same database transaction. Older v3
+detailed receipts lack that inventory and are refused. The existing
 v2 snapshot and image-only journal keep their original shape. The membership
 ledger witness is now v2: it uses the complete probe's canonical full-row order
 and refuses old v1 receipts instead of reinterpreting their hashes. Its profile
@@ -606,3 +608,18 @@ transaction; only metadata and hashes leave PostgreSQL. Compare both snapshots
 using the same before scope, alongside the semantic changed-field witnesses,
 complete unaffected-row inventory and catalog/type proof. This projection alone
 does not qualify any migration, quiescence or product activation.
+
+`validate_application_schema_evidence` joins all seven migration evidence parts
+in the existing journal module. Complete row-map keys must equal the detailed
+schema inventory, and mutable projections must retain its exact ordered columns
+except the fixed modified fields. This rejects omission of a customer table or
+unknown column from both row snapshots. Catalog witness v2 includes the standard
+catalog fingerprint to bind the stronger dependency/storage catalog proof to
+that detailed snapshot; older v1 receipts are not reinterpreted. Exactly the
+three ledger additions, seven qualified mutable tables and empty new authority
+table may differ. All other application rows must remain unchanged. The full
+owner must collect and hold coherent evidence under stopped writers/quiescence,
+then verify source, image and native custody. This validator authenticates no
+declared JSON, grants no runtime admission and does not fingerprint ordinary
+account rows in the other databases. The image-only journal keeps its original
+behavior; it does not consume these new evidence bundles.

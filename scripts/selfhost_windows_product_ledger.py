@@ -116,8 +116,8 @@ def validate_profile_delta(before, after, ledger_before, ledger_after):
     for value in (before, after):
         require(type(value) is dict and set(value) == {'schema', 'probe', 'profile', 'consistency',
             'database_roles', 'databases'})
-        require(value['schema'] == 'marty.windows-postgres-schema/v3'
-                and value['probe'] == 'catalog-and-source-ledger-profile/v3'
+        require(value['schema'] == 'marty.windows-postgres-schema/v4'
+                and value['probe'] == 'catalog-and-source-ledger-profile/v4'
                 and value['profile'] == probe.PROFILE_ID and value['consistency'] == probe.CONSISTENCY)
         roles = value['database_roles']
         require(type(roles) is dict and set(roles) == {'application', 'keycloak', 'applicants'})
@@ -125,7 +125,8 @@ def validate_profile_delta(before, after, ledger_before, ledger_after):
         require(type(value['databases']) is dict and set(value['databases']) == set(profile.tables))
         for database, tables in profile.tables.items():
             row = value['databases'][database]
-            require(type(row) is dict and set(row) == {'catalog_sha256', 'migration_sha256', 'migration_ledgers'})
+            require(type(row) is dict and set(row) == {'catalog_sha256', 'migration_sha256', 'migration_ledgers', 'row_inventory'})
+            probe.validate_row_inventory(row['row_inventory'], tables)
             require(all(type(row[key]) is str and probe.SHA.fullmatch(row[key])
                         for key in ('catalog_sha256', 'migration_sha256')))
             values = row['migration_ledgers']

@@ -10,12 +10,13 @@ import selfhost_windows_product_catalog as catalog
 
 
 def pair(bootstrap=False, triggered=False):
-    before=dict(schema=catalog.SCHEMA,side='before',parent_oid=17001,parent_has_triggers=triggered,
+    before=dict(schema=catalog.SCHEMA,side='before',source_catalog_sha256='2'*64,parent_oid=17001,parent_has_triggers=triggered,
         parent_owner_oid=10 if bootstrap else 16500,parent_owner_bootstrap=bootstrap,
         catalog_sha256='a'*64,dependencies_sha256='b'*64,shared_dependencies_sha256='c'*64,annotations_sha256='0'*64,
         new_objects_absent=True,parent_key_valid=True,owner_defaults_empty=True,supported=True)
     after={k:v for k,v in before.items() if k not in ['new_objects_absent','parent_key_valid','owner_defaults_empty','supported']}
     after.update(side='after',parent_has_triggers=True,shape_sha256=catalog.SHAPE_SHA256[bootstrap],
+        source_catalog_sha256='3'*64,
         raw_catalog_sha256='d'*64,raw_dependencies_sha256='e'*64,raw_shared_dependencies_sha256='f'*64,raw_annotations_sha256='1'*64,
         new_row_count=0,unsupported_objects=False,storage_distinct=True)
     return before,after
@@ -47,6 +48,7 @@ def test_invalid_before_cannot_inject_or_weaken_exclusion(field,value):
     ('shape_sha256','e'*64),('raw_catalog_sha256','not-a-digest'),('parent_oid',17002),
     ('raw_dependencies_sha256','not-a-digest'),('raw_shared_dependencies_sha256','not-a-digest'),
     ('annotations_sha256','e'*64),('raw_annotations_sha256','not-a-digest'),
+    ('source_catalog_sha256','not-a-digest'),
     ('parent_owner_oid',16501),('parent_owner_bootstrap',True),('parent_has_triggers',False),
     ('new_row_count',True),('new_row_count',1),('unsupported_objects',True),('storage_distinct',False)])
 def test_wrong_closure_retained_metadata_or_new_storage_never_passes(field,value):

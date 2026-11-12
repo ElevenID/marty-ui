@@ -699,12 +699,17 @@ UPDATE credential_template_service.credential_templates SET synthetic_array='[0:
                 membership.probe._postgres_base(items, PROJECT), profile.application,
                 fixture_ledgers, detailed=True)
         profile_before = detailed_fixture_ledgers()
+        assert profile_before['catalog_sha256'] == prior['catalog']['source_catalog_sha256']
+        assert set(profile_before['row_inventory']) == set(before_all)
         for name, witness in prior['ledger']['ledgers'].items():
             assert profile_before['migration_ledgers'][name] == witness['rows_sha256']
         def mutable_physical():
             return membership.probe.retained_mutable_rows_snapshot(Docker(), items, PROJECT,
                 prior['membership'], prior['startup'], profile=profile)
         mutable_before = mutable_physical()
+        for table, row in mutable_before['tables'].items():
+            excluded = next(columns for name, columns in membership.probe.MUTABLE_TABLES.values() if name == table)
+            assert row['columns'] == [column for column in profile_before['row_inventory'][table] if column not in excluded]
         stock = " FROM credential_template_service.credential_templates t WHERE id='"+membership.STOCK_ID+"'"
         stock_shape = sql('SELECT to_jsonb(t)::text'+stock)
         for mutation, restore in [
@@ -819,6 +824,7 @@ UPDATE credential_template_service.credential_templates SET synthetic_array='[0:
             ]
         }
         profile_after = detailed_fixture_ledgers()
+        assert profile_after['catalog_sha256'] == after['catalog']['source_catalog_sha256']
         assert (mutable_physical() == mutable_before) is old_reconciled
         REPORT['checks'].append('typed retention of seven mutable tables agrees only for reconciled startup')
         quiet_after = membership.probe.quiescence_snapshot(Docker(), items, PROJECT, profile=profile)

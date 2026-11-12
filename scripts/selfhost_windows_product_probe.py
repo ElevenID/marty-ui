@@ -132,9 +132,27 @@ class LedgerProfile:
         return {self.application: APPLICATION_LEDGERS, self.keycloak: KEYCLOAK_LEDGERS, self.applicants: frozenset()}
 
 
-def _database_script(expected):
+def validate_row_inventory(value, expected):
+    require(type(value) is dict and len(value) <= RELATION_LIMIT
+            and {schema+'.'+name for schema, name in expected} <= set(value))
+    for table, columns in value.items():
+        require(type(table) is str and len(table.split('.')) == 2
+                and all(NAME.fullmatch(part) for part in table.split('.'))
+                and type(columns) is list and len(columns) <= 1600
+                and all(type(column) is str and column and '\0' not in column
+                        and len(column.encode('utf-8')) <= 63 for column in columns)
+                and len(columns) == len(set(columns)))
+
+
+def _database_script(expected, *, detailed=False):
+    fields = "'kind','catalog','sha256',witness,'supported',NOT(EXISTS(SELECT 1 FROM pg_foreign_table) OR EXISTS(SELECT 1 FROM pg_event_trigger))"
+    if detailed:
+        fields += ", 'row_inventory',(SELECT coalesce(jsonb_object_agg(r.nspname||'.'||r.relname,"
+        fields += "(SELECT coalesce(jsonb_agg(attname ORDER BY attnum),'[]'::jsonb) FROM pg_attribute "
+        fields += "WHERE attrelid=r.oid AND attnum>0 AND NOT attisdropped)),'{}'::jsonb) FROM ("
+        fields += "SELECT c.oid,n.nspname,c.relname "+ROW_RELATIONS+" ORDER BY n.nspname,c.relname LIMIT "+str(RELATION_LIMIT+1)+") r)"
     statements = [r'\set ON_ERROR_STOP on', 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
-        "SELECT jsonb_build_object('kind','catalog','sha256',witness,'supported',NOT(EXISTS(SELECT 1 FROM pg_foreign_table) OR EXISTS(SELECT 1 FROM pg_event_trigger))) FROM ("+CATALOG_SQL+") AS c(witness);",
+        "SELECT jsonb_build_object("+fields+") FROM ("+CATALOG_SQL+") AS c(witness);",
         "SELECT jsonb_build_object('kind','inventory','tables',witness) FROM ("+LEDGERS_SQL+") AS i(witness);"]
     for schema, name in sorted(expected):
         require(NAME.fullmatch(schema) and NAME.fullmatch(name))
@@ -147,11 +165,12 @@ def _database_script(expected):
 
 def _database_snapshot(docker, base, database, expected, *, detailed=False):
     args = ['exec', '--interactive', *base[1:], '--dbname', database, '--file=-']
-    output = _text(docker, args, stdin_bytes=_database_script(expected))
+    output = _text(docker, args, stdin_bytes=_database_script(expected, detailed=detailed))
     records = [json.loads(line) for line in output.splitlines()]
     require(len(records) == 2+len(expected) and all(type(row) is dict for row in records))
     catalog, inventory, *ledgers = records
-    require(set(catalog) == {'kind', 'sha256', 'supported'} and catalog['kind'] == 'catalog' and catalog['supported'] is True
+    require(set(catalog) == {'kind', 'sha256', 'supported'} | ({'row_inventory'} if detailed else set())
+            and catalog['kind'] == 'catalog' and catalog['supported'] is True
             and isinstance(catalog['sha256'], str) and SHA.fullmatch(catalog['sha256']))
     require(set(inventory) == {'kind', 'tables'} and inventory['kind'] == 'inventory' and type(inventory['tables']) is list)
     names = []
@@ -168,7 +187,9 @@ def _database_snapshot(docker, base, database, expected, *, detailed=False):
     require(len(values) == len(expected))
     raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
     result = {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
-    if detailed:result['migration_ledgers'] = values
+    if detailed:
+        validate_row_inventory(catalog['row_inventory'], expected)
+        result.update(migration_ledgers=values, row_inventory=catalog['row_inventory'])
     return result
 
 
@@ -375,7 +396,9 @@ def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
 def detailed_schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
     """Retain each ledger's digest alongside its existing aggregate.
 
-    This v3 witness is for a full schema owner, not the v1 image-only journal.
+    This v4 witness is for a full schema owner, not the v1 image-only journal.
+    Its same-transaction ordered relation/column inventory must bind retained
+    row proofs. Older v3 receipts lack that inventory and are not reinterpreted.
     Both forms use the same transactions and drift refusal. Legacy snapshots
     keep exactly their former shape and meaning.
     """
@@ -446,8 +469,8 @@ def _schema_snapshot(docker, items, project, *, profile, detailed):
         return result
     first = observe();second = observe()
     require(first == second, 'Schema changed during compatibility observation')
-    return {'schema': 'marty.windows-postgres-schema/v3' if detailed else SCHEMA,
-            'probe': 'catalog-and-source-ledger-profile/v3' if detailed else PROBE,
+    return {'schema': 'marty.windows-postgres-schema/v4' if detailed else SCHEMA,
+            'probe': 'catalog-and-source-ledger-profile/v4' if detailed else PROBE,
             'profile': PROFILE_ID, 'consistency': CONSISTENCY,
             'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
             'databases': second}

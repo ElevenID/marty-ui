@@ -75,13 +75,14 @@ def test_fragment_queries_read_only_and_never_grant_admission():
 def profiles():
     narrow_before, narrow_after = pair()
     profile = ledger.probe.LedgerProfile()
-    before = {'schema': 'marty.windows-postgres-schema/v3', 'probe': 'catalog-and-source-ledger-profile/v3',
+    before = {'schema': 'marty.windows-postgres-schema/v4', 'probe': 'catalog-and-source-ledger-profile/v4',
               'profile': ledger.probe.PROFILE_ID, 'consistency': ledger.probe.CONSISTENCY,
               'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
               'databases': {}}
     for database, names in profile.tables.items():
         before['databases'][database] = {'catalog_sha256': 'c'*64,
-            'migration_ledgers': {schema+'.'+name: 'a'*64 for schema, name in names}}
+            'migration_ledgers': {schema+'.'+name: 'a'*64 for schema, name in names},
+            'row_inventory': {schema+'.'+name: ['version'] for schema,name in names}}
     after = deepcopy(before)
     after['databases'][profile.application]['migration_ledgers'].update({name:'b'*64 for name in ledger.BASELINES})
     after['databases'][profile.application]['catalog_sha256'] = 'd'*64

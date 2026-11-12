@@ -9,7 +9,7 @@ import json
 
 import selfhost_windows_product_probe as probe
 
-SCHEMA = 'marty.windows-authority-catalog/v1'
+SCHEMA = 'marty.windows-authority-catalog/v2'
 SHAPE_SHA256 = {
     True: '326bbb519f028d1c826aef867d0d12f17b657b7d44732c43e386dcf8dbaf191b',
     False: '8900c9d99b08714f9ffbeb87e70fe178a7bace331db544eeb930af3d87ae18a7',
@@ -128,6 +128,7 @@ def statement(before=None, *, debug_shape=False):
     catalog=_catalog(protected,before)
     full=_catalog(False,None)
     fields=["'schema','"+SCHEMA+"'","'side','"+('after' if protected else 'before')+"'",
+            "'source_catalog_sha256',("+probe.CATALOG_SQL+")",
             "'parent_oid',(SELECT oid::bigint FROM parent)","'parent_has_triggers',(SELECT relhastriggers FROM parent)",
             "'parent_owner_oid',(SELECT relowner::bigint FROM parent)","'parent_owner_bootstrap',(SELECT relowner=10 FROM parent)",
             "'catalog_sha256',("+catalog+")","'dependencies_sha256',"+_dependency_hash(False,protected),
@@ -150,20 +151,20 @@ def statement(before=None, *, debug_shape=False):
 
 
 def validate_before(value):
-    require(type(value) is dict and set(value)=={'schema','side','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
+    require(type(value) is dict and set(value)=={'schema','side','source_catalog_sha256','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
         'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256','new_objects_absent','parent_key_valid','owner_defaults_empty','supported'})
     require(value['schema']==SCHEMA and value['side']=='before' and value['new_objects_absent'] is True and value['parent_key_valid'] is True
             and value['owner_defaults_empty'] is True and value['supported'] is True)
     require(type(value['parent_oid']) is int and 0<value['parent_oid']<2**32 and type(value['parent_has_triggers']) is bool)
     require(type(value['parent_owner_oid']) is int and (value['parent_owner_oid']==10 or 16384<=value['parent_owner_oid']<2**32)
             and type(value['parent_owner_bootstrap']) is bool and value['parent_owner_bootstrap']==(value['parent_owner_oid']==10))
-    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256'):
+    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256','source_catalog_sha256'):
         require(type(value[key]) is str and probe.SHA.fullmatch(value[key]))
 
 
 def validate_delta(before, after):
     validate_before(before)
-    require(type(after) is dict and set(after)=={'schema','side','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
+    require(type(after) is dict and set(after)=={'schema','side','source_catalog_sha256','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
         'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256','shape_sha256',
         'raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256','raw_annotations_sha256','new_row_count','unsupported_objects','storage_distinct'})
     require(after['schema']==SCHEMA and after['side']=='after' and type(after['parent_oid']) is int
@@ -175,6 +176,7 @@ def validate_delta(before, after):
     expected=SHAPE_SHA256[before['parent_owner_bootstrap']]
     require(expected!='0'*64 and type(after['shape_sha256']) is str and after['shape_sha256']==expected)
     raw={}
+    require(type(after['source_catalog_sha256']) is str and probe.SHA.fullmatch(after['source_catalog_sha256']))
     for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256'):
         value=after['raw_'+key]
         require(type(value) is str and probe.SHA.fullmatch(value));raw[key]=value
