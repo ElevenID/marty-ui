@@ -166,6 +166,73 @@ def _postgres_base(items, project):
             '--no-password', '--quiet', '--tuples-only', '--no-align', '--username', users[0]]
 
 
+ROW_LIMIT = 2048
+RELATION_LIMIT = 256
+ROW_RELATIONS = """FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+AND c.relkind IN ('r','p','m','S')"""
+ROW_UNSUPPORTED = """EXISTS(SELECT 1 FROM pg_foreign_table)
+OR EXISTS(SELECT 1 FROM pg_largeobject_metadata)
+OR EXISTS(SELECT 1 FROM pg_attribute a JOIN pg_type t ON t.oid=a.atttypid
+JOIN pg_namespace tn ON tn.oid=t.typnamespace WHERE a.attnum>0 AND NOT a.attisdropped
+AND a.attrelid IN (SELECT c.oid """ + ROW_RELATIONS + ") AND tn.nspname <> 'pg_catalog')"
+
+
+def _retained_rows_script():
+    # PostgreSQL quotes catalog identifiers with %I and values with %L. No
+    # caller/artifact text becomes SQL. One read-only MVCC transaction retains
+    # every SQL column. Composite text preserves array bounds and raw JSON text
+    # that to_jsonb(row) loses. Custom output types and large objects are refused;
+    # canonical session settings bind built-in output. Values stay in PostgreSQL.
+    inventory = "SELECT n.nspname AS schema,c.relname AS name " + ROW_RELATIONS
+    return (r'\set ON_ERROR_STOP on' + '\n'
+        'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\n'
+        "SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,YMD'; SET LOCAL IntervalStyle='postgres';\n"
+        "SET LOCAL bytea_output='hex'; SET LOCAL extra_float_digits=3; SET LOCAL lc_monetary='C';\n"
+        "SELECT jsonb_build_object('kind','inventory','supported',NOT(" + ROW_UNSUPPORTED + "),"
+        "'tables',coalesce(jsonb_agg(to_jsonb(t) ORDER BY schema,name),'[]'::jsonb)) FROM ("
+        + inventory + ' LIMIT ' + str(RELATION_LIMIT+1) + ') t;\n'
+        "SELECT format($owned$SELECT jsonb_build_object('kind','rows','schema',%L,'name',%L,"
+        "'rows',count(*),'sha256',encode(sha256(convert_to(coalesce("
+        "jsonb_agg(t::text ORDER BY t::text COLLATE \"C\"),'[]'::jsonb)::text,'UTF8')),'hex')) "
+        'FROM (SELECT * FROM %I.%I LIMIT ' + str(ROW_LIMIT+1) + ') t;$owned$,'
+        'n.nspname,c.relname,n.nspname,c.relname) ' + ROW_RELATIONS + ' AND NOT(' + ROW_UNSUPPORTED + ')'
+        + ' ORDER BY n.nspname,c.relname LIMIT ' + str(RELATION_LIMIT+1)
+        + '\n' + r'\gexec' + '\nCOMMIT;\n').encode()
+
+
+def retained_rows_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    """Bounded application rows/sequences, not permission to change any row.
+
+    Full transition admission must compare this complete inventory alongside
+    the separately qualified narrow migration/startup witnesses and catalog.
+    This probe cannot choose exclusions or execute migrations.
+    """
+    require(type(profile) is LedgerProfile)
+    base = _postgres_base(items, project)
+    output = _text(docker, [base[0], '--interactive', *base[1:], '--dbname',
+        profile.application, '--file=-'], stdin_bytes=_retained_rows_script())
+    records = [json.loads(line) for line in output.splitlines()]
+    require(2 <= len(records) <= RELATION_LIMIT+1 and all(type(row) is dict for row in records))
+    inventory, *rows = records
+    require(set(inventory) == {'kind', 'supported', 'tables'} and inventory['kind'] == 'inventory'
+            and inventory['supported'] is True and type(inventory['tables']) is list)
+    names = []
+    for entry in inventory['tables']:
+        require(type(entry) is dict and set(entry) == {'schema', 'name'}
+                and all(type(value) is str and NAME.fullmatch(value) for value in entry.values()))
+        names.append((entry['schema'], entry['name']))
+    require(0 < len(names) <= RELATION_LIMIT and names == sorted(set(names)) and len(rows) == len(names))
+    result = {}
+    for row, expected in zip(rows, names):
+        require(set(row) == {'kind', 'schema', 'name', 'rows', 'sha256'} and row['kind'] == 'rows'
+                and (row['schema'], row['name']) == expected and type(row['rows']) is int
+                and 0 <= row['rows'] <= ROW_LIMIT and type(row['sha256']) is str and SHA.fullmatch(row['sha256']))
+        result['.'.join(expected)] = {key: row[key] for key in ('rows', 'sha256')}
+    return {'schema': 'marty.windows-retained-application-rows/v1',
+            'database': profile.application, 'tables': result}
+
+
 def refuse_pending_product_migrations(docker, items, project, admitted, *, profile=LedgerProfile()):
     """Refuse one known schema-changing source before any product intent/write.
 

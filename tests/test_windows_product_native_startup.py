@@ -282,30 +282,10 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
     def all_table_fingerprints():
         # All native fixture processes are stopped at each observation. Ordinary
         # row values remain inside this synthetic PostgreSQL instance.
-        tables = json.loads(
-            sql(
-                "SELECT coalesce(jsonb_agg(jsonb_build_object('schema',schemaname,'table',tablename) ORDER BY schemaname,tablename),'[]') FROM pg_tables WHERE schemaname IN ('credential_template_service','issuance_service','trust_profile_service','organization_service','flow_service','deployment_profile_service','synthetic_retained');"
-            )
-        )
-        require(len(tables) <= 256)
-        result = {}
-        for entry in tables:
-            require(
-                all(
-                    re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", entry[k])
-                    for k in ["schema", "table"]
-                )
-            )
-            table = '"' + entry["schema"] + '"."' + entry["table"] + '"'
-            query = (
-                "SELECT jsonb_build_object('rows',count(*),'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text,'UTF8')),'hex')) FROM "
-                + table
-                + " t;"
-            )
-            value = json.loads(sql(query))
-            require(value["rows"] <= 2048)
-            result[entry["schema"] + "." + entry["table"]] = value
-        return result
+        items = [owned(cid) for cid in CONTAINERS]
+        return membership.probe.retained_rows_snapshot(
+            Docker(), items, PROJECT, profile=profile
+        )["tables"]
 
     class Docker:
         prefix = ["docker"]
@@ -608,7 +588,33 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         sql(
             "CREATE SCHEMA synthetic_retained; CREATE TABLE synthetic_retained.accounts(id text PRIMARY KEY,email text NOT NULL,payload jsonb NOT NULL); INSERT INTO synthetic_retained.accounts VALUES('synthetic-account','qa-account@startup-qa.invalid','{\"keep\":true}');"
         )
+        sql("""CREATE TABLE synthetic_retained.value_shapes(id text PRIMARY KEY,bounded int[] NOT NULL,raw json NOT NULL);
+INSERT INTO synthetic_retained.value_shapes VALUES('shape','[0:1]={1,2}'::int[],'{"key":1,"key":2}'::json);
+CREATE SEQUENCE synthetic_retained.positions;
+CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) AS total FROM synthetic_retained.accounts;""")
         before_all = all_table_fingerprints()
+        json_shape = sql("SELECT to_jsonb(t)::text FROM synthetic_retained.value_shapes t;")
+        for mutation, restore in [
+            ("bounded=ARRAY[1,2]", "bounded='[0:1]={1,2}'::int[]"),
+            ("raw='{\"key\":2}'::json", "raw='{\"key\":1,\"key\":2}'::json"),
+        ]:
+            sql("UPDATE synthetic_retained.value_shapes SET " + mutation + ";")
+            assert sql("SELECT to_jsonb(t)::text FROM synthetic_retained.value_shapes t;") == json_shape
+            assert all_table_fingerprints()["synthetic_retained.value_shapes"] != before_all["synthetic_retained.value_shapes"]
+            sql("UPDATE synthetic_retained.value_shapes SET " + restore + ";")
+        sql("SELECT nextval('synthetic_retained.positions');")
+        assert all_table_fingerprints()["synthetic_retained.positions"] != before_all["synthetic_retained.positions"]
+        sql("SELECT setval('synthetic_retained.positions',1,false);")
+        lo = int(sql("SELECT lo_create(0);").strip())
+        with pytest.raises(ValueError):
+            all_table_fingerprints()
+        sql("SELECT lo_unlink(" + str(lo) + ");")
+        sql("CREATE TYPE synthetic_retained.custom_value AS ENUM('one'); CREATE TABLE synthetic_retained.custom_values(value synthetic_retained.custom_value);")
+        with pytest.raises(ValueError):
+            all_table_fingerprints()
+        sql("DROP TABLE synthetic_retained.custom_values; DROP TYPE synthetic_retained.custom_value;")
+        assert all_table_fingerprints() == before_all
+        REPORT["checks"].append("array bounds, raw JSON and sequence changes detected; large objects and custom output types refused")
         role_ids = [
             str(uuid.uuid5(uuid.UUID("00000000-0000-0000-0000-000000000001"), name))
             for name in (

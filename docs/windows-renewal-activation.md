@@ -487,3 +487,19 @@ also fingerprints all tables in its exercised schemas and tests customer-data
 tampering. This remains evidence for the full startup transition, not permission
 to run migrations or bypass product admission; the deployment owner does not
 consume this fragment yet.
+
+`retained_rows_snapshot` in the existing product probe now inventories all user
+tables, partitions, materialized views and sequences in the application database.
+One repeatable-read, read-only PostgreSQL transaction computes complete physical
+row hashes and counts, returning no ordinary values. Composite SQL text under
+canonical output settings preserves array bounds and raw JSON representation;
+JSON conversion alone would lose those distinctions. It has no caller-controlled
+exclusions and refuses foreign tables, large objects, custom column output
+types, more than 256 relations, more than 2048
+rows per relation, or incomplete/ambiguous output. The native fixture uses this
+same probe for its complete retained-row comparison. This supplies inventory
+evidence; it does not select permissible changes, cover other databases, stop
+application writers, or admit a product transition. Sequence state is not MVCC;
+the execution owner must qualify quiescence rather than infer it from transaction
+isolation. The deployment owner still
+needs to bind and validate the narrow migration witnesses with this inventory.
