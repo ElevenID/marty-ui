@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 import uuid
 
 import selfhost_windows_product as product
@@ -50,6 +51,60 @@ def issuance_migration_command(docker, project, env, source, model, cycle):
         '--detach', '--no-deps', '--no-tty', '--interactive=false', '--name', name,
         '--label', 'marty.windows.product-migration='+cycle,
         '--entrypoint', '/bin/sh', 'issuance-native', '-c', ISSUANCE_MIGRATION_SHELL]}
+
+
+def _run_issuance_migration(context, env, source, cycle, *, write):
+    """Run once under the existing owner's lease and private durable writer.
+
+    This internal component is not product admission. The enclosing full-schema
+    owner must qualify quiescence, hold verified inputs and a guarded intent,
+    and preallocate private phase files. There is no retry, adoption by name or
+    cleanup on error. Unknown daemon outcomes retain the enclosing guard.
+    """
+    prepared = context.prepare_issuance_helper(env, source, cycle)
+    deadline = time.monotonic() + 900
+    base = {'schema': 'marty.windows.product-issuance-migration/v1',
+            'project': context.project, 'cycle': cycle, 'name': prepared['name'],
+            'image': prepared['image'], 'command_sha256': selection.digest(selection.packed(prepared['command']))}
+
+    def receipt(phase, **facts):
+        write('issuance-migration.'+phase+'.json', selection.packed(dict(base, phase=phase, **facts)))
+
+    def mutate(command):
+        remaining = deadline - time.monotonic()
+        renewal.require(remaining > 0, 'Migration command budget expired; retain guard')
+        result = renewal.run_owned_mutation(command, timeout=min(240, remaining))
+        if result.returncode != 0:
+            raise renewal.UncertainComposeMutation('Migration CLI outcome requires operator reconciliation')
+        return result.stdout
+
+    receipt('started')  # Durable before the single create producer.
+    context.check()
+    output = mutate(prepared['command'])
+    if type(output) is not bytes or re.fullmatch(rb'[0-9a-f]{64}\r?\n?', output) is None:
+        raise renewal.UncertainComposeMutation('Migration creation acknowledgement is not a definite full ID')
+    cid = output.decode('ascii').strip()
+    # Retain the definite producer acknowledgement before either fallible
+    # context proof. This is recovery evidence, never helper admission.
+    receipt('create-returned', id=cid, admitted=False)
+    context.acknowledge_issuance_helper(cid)
+    receipt('acknowledged', witness=context.issuance_helper_witness())
+    context.check()
+    output = mutate([*context.docker.prefix, 'wait', cid])
+    renewal.require(output in (b'0\n', b'0\r\n', b'0'), 'Native migration failed; retain helper and guard')
+    witness, observation = context.issuance_helper_observation(completed=True)
+    # Both writes must succeed before any removal. The full inspection stays
+    # private and is bound by the minimal completed witness's observation hash.
+    write('issuance-migration.observation.json', selection.packed(observation))
+    receipt('completed', witness=witness)
+    receipt('cleanup.started', id=cid, completed_sha256=selection.digest(selection.packed(witness)))
+    context.issuance_helper_witness(completed=True)
+    output = mutate([*context.docker.prefix, 'rm', cid])
+    if output not in (cid.encode(), (cid+'\n').encode(), (cid+'\r\n').encode()):
+        raise renewal.UncertainComposeMutation('Migration removal acknowledgement requires operator reconciliation')
+    context.issuance_helper_removed(cid)
+    receipt('cleanup.completed', id=cid)
+    return witness
 
 
 def qualified_images(docker, before, after, owned):

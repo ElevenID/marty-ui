@@ -380,6 +380,15 @@ class ProductContext(renewal.ForeignContext):
 
     def issuance_helper_witness(self, *, completed=False):
         """Full fresh context proof precedes any receipt or known-helper cleanup."""
+        witness, _observation = self.issuance_helper_observation(completed=completed)
+        return witness
+
+    def issuance_helper_observation(self, *, completed=False):
+        """Return a private inspection and witness from the same fresh proof.
+
+        The inspection contains resolved environment values. Only the private
+        journal owner may retain it; callers must never print it.
+        """
         plan = self._issuance_helper
         require(plan is not None and plan['stage'] == 'present')
         rows = self.check()
@@ -388,11 +397,12 @@ class ProductContext(renewal.ForeignContext):
             require(item['State']['Status'] == 'exited' and type(item['State'].get('ExitCode')) is int
                     and item['State']['ExitCode'] == 0, 'Migration helper did not complete successfully')
             plan['completion_proved'] = True
-        return {'name': plan['name'], 'id': plan['cid'], 'image': plan['image'],
+        witness = {'name': plan['name'], 'id': plan['cid'], 'image': plan['image'],
                 'image_id': plan['image_id'], 'cycle': plan['cycle'],
                 'status': item['State']['Status'], 'exit_code': item['State'].get('ExitCode'),
                 'observation_sha256': digest(item), 'execution': deepcopy(plan['execution']),
                 'terminal': deepcopy(plan['terminal'])}
+        return witness, deepcopy(item)
 
     def issuance_helper_removed(self, cid):
         """After one successful normal rm acknowledgement; never retry removal."""

@@ -515,6 +515,18 @@ in its witness. Shape tests replace the full storage transport; they do not
 qualify quiescence, journal receipts or a complete mutation owner. No production
 call site invokes this helper support yet.
 
+The existing deploy module also contains an internal, bounded helper producer.
+It writes private creation intent before sending the one Compose command, accepts
+only its definite full container ID, waits for that exact helper and retains the
+same fresh inspection that proves a zero exit. The full inspection can contain
+resolved secrets and stays in the private journal; the minimal completed receipt
+binds its digest. Cleanup intent and a fresh completed proof precede normal
+removal by ID. An uncertain create, wait, removal or failed receipt write never
+causes retry, name adoption or error-path cleanup. The existing Windows owned
+CLI containment applies to every mutation, with a fixed total command budget.
+This component has no CLI or production call site: the full schema owner must
+still supply its guarded, versioned journal, held inputs and writer quiescence.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured
