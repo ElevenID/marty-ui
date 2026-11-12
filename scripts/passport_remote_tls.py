@@ -56,12 +56,12 @@ def accept_remote_tls(
     output: Path, secret_dir: Path, root_token: str, *,
     expected_files: frozenset[str] = PUBLIC_TLS_FILES,
     certificate_files: frozenset[str] = PASSPORT_CERT_FILES,
-    profile: Literal["passport", "passport-role-repair"] = "passport",
+    profile: Literal["passport", "passport-role-repair", "passport-role-renew"] = "passport",
     role: str | None = None,
     expected_workload_ca: Path | None = None,
 ) -> None:
     """Move an exact admitted output set through the existing custody owner."""
-    repair = profile == "passport-role-repair"
+    repair = profile in {"passport-role-repair", "passport-role-renew"}
     if repair:
         if (role != "trust-profile-server" or expected_workload_ca is None
                 or expected_files != PUBLIC_TLS_FILES or certificate_files != PASSPORT_CERT_FILES):

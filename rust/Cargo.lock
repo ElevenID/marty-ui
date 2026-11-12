@@ -4931,6 +4931,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "marty-crypto",
  "marty-openbao-http",
  "marty-selfhost-identity",
  "marty-service-runtime",
@@ -4938,6 +4939,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
 ]

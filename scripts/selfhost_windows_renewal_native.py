@@ -460,6 +460,19 @@ def _repair_exporter_source(config,model):
             require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
 
 
+def _role_generation_mirror(project, purpose, cycle_id=None):
+    """Keep the original generation and admit only one closed renewal namespace."""
+    match=re.fullmatch(r'marty-passport-acceptance-trust-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})',project)
+    if match is None:
+        raise ValueError('Windows generation export refused')
+    root='/control/trust-role-'+match.group(1)
+    if purpose=='passport-role-repair' and cycle_id is None:
+        return root+'/generation'
+    if purpose=='passport-role-renew' and isinstance(cycle_id,str) and re.fullmatch('[0-9a-f]{32}',cycle_id):
+        return root+'/renewal-'+cycle_id+'/generation'
+    raise ValueError('Windows generation export refused')
+
+
 def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
     from selfhost_windows_renewal import Docker, run_owned_mutation
     from selfhost_windows_selection import decode
@@ -467,13 +480,12 @@ def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
     def require(value):
         if not value:raise ValueError('Windows generation export refused')
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
-    require(purpose in {'selfhost-renewal','passport-role-repair'})
-    repair=purpose=='passport-role-repair'
+    require(purpose in {'selfhost-renewal','passport-role-repair','passport-role-renew'})
+    repair=purpose in {'passport-role-repair','passport-role-renew'}
     require(repair or 'public_ca_read_recovery' not in config)
     if repair:
-        match=re.fullmatch(r'marty-passport-acceptance-trust-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})',project)
-        require(match is not None and native['control_volume']==project+'-tls-custody')
-        require(mirror=='/control/trust-role-'+match.group(1)+'/generation')
+        require(native['control_volume']==project+'-tls-custody')
+        require(mirror==_role_generation_mirror(project,purpose,config.get('renewal_cycle_id')))
     else:
         require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
         require(native['control_volume']==project+'-renewal-control')
@@ -494,8 +506,9 @@ def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
             names=sorted(['workload_identity_ca_cert','trust_profile_workload_server_cert','trust_profile_workload_server_kms_token'])
             require(isinstance(model,dict) and model.get('schema')=='marty.passport-role-repair-admission/v1'
                     and model.get('project')==project and model.get('role')=='trust-profile-server'
-                    and model.get('profile')=='passport-role-repair' and model.get('nativeAdmissionComplete') is True
+                    and model.get('profile')==purpose and model.get('nativeAdmissionComplete') is True
                     and isinstance(model.get('files'),dict) and sorted(model['files'])==names)
+            require(purpose!='passport-role-renew' or model.get('renewalCycleId')==config['renewal_cycle_id'])
         else:
             require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
             names=sorted(model['secrets'])

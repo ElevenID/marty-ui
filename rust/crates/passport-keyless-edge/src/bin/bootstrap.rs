@@ -22,12 +22,18 @@ use serde_json::{json, Value};
 
 const MAX_RESPONSE: usize = 1024 * 1024;
 
+#[path = "bootstrap/role_renewal.rs"]
+mod role_renewal;
+#[path = "bootstrap/token_recovery.rs"]
+mod token_recovery;
+
 use marty_selfhost_identity::tls::{TlsRole as Role, WORKLOAD_TLS_ROLES as ROLES};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Profile {
     Passport,
     PassportRoleRepair,
+    PassportRoleRenew,
     Selfhost,
     SelfhostRenew,
 }
@@ -54,7 +60,10 @@ impl PassportRoleRepair {
         let role = get("MARTY_TLS_REPAIR_ROLE");
         let mount = get("MARTY_TLS_REPAIR_PKI_MOUNT");
         let ca = get("MARTY_TLS_REPAIR_CA_FILE");
-        if profile != Profile::PassportRoleRepair {
+        if !matches!(
+            profile,
+            Profile::PassportRoleRepair | Profile::PassportRoleRenew
+        ) {
             if role.is_some() || mount.is_some() || ca.is_some() {
                 return Err("selective TLS repair inputs require the repair profile".into());
             }
@@ -186,10 +195,44 @@ fn selfhost_role(name: &str) -> Option<&'static SelfhostRole> {
     SELFHOST_ROLES.iter().find(|role| role.name == name)
 }
 
+fn checked_selective_signer(
+    lookup: &Value,
+    policy_name: &str,
+    renewal: bool,
+) -> Result<(), Box<dyn Error>> {
+    let scopes = data(lookup, "policies")?
+        .as_array()
+        .ok_or("repair signer policies invalid")?;
+    let ttl = data(lookup, "ttl")?
+        .as_u64()
+        .ok_or("repair signer TTL invalid")?;
+    if renewal
+        && (!(1800..=3600).contains(&ttl)
+            || data(lookup, "creation_ttl")?.as_u64() != Some(3600)
+            || value(lookup, "type")? != "service"
+            || value(lookup, "path")? != "auth/token/create-orphan")
+    {
+        return Err("existing-key renewal token lifetime or origin changed".into());
+    }
+    if scopes.len() != 1
+        || scopes[0] != policy_name
+        || ttl == 0
+        || ttl > 3600
+        || data(lookup, "explicit_max_ttl")?.as_u64() != Some(3600)
+        || data(lookup, "renewable")? != false
+        || data(lookup, "orphan")? != true
+    {
+        return Err("selective TLS repair signer authority changed".into());
+    }
+    Ok(())
+}
+
 fn selected_roles(profile: Profile) -> impl Iterator<Item = &'static Role> {
     ROLES.iter().filter(move |role| match profile {
         Profile::Passport => !matches!(role.name, "verification-client" | "notification-server"),
-        Profile::PassportRoleRepair => role.name == "trust-profile-server",
+        Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
+            role.name == "trust-profile-server"
+        }
         Profile::Selfhost | Profile::SelfhostRenew => selfhost_role(role.name).is_some(),
     })
 }
@@ -291,6 +334,30 @@ struct ProvisioningProfile<'a> {
     profile: Profile,
     renewal_pki_mount: &'a str,
     repair: Option<&'a PassportRoleRepair>,
+    renewal: Option<&'a role_renewal::ExistingTrustRole>,
+}
+
+async fn verify_managed_identity(
+    output: &Path,
+    cert_file: &str,
+    token_file: &str,
+    ca_file: &Path,
+    endpoint: &str,
+    key: &str,
+) -> Result<(), Box<dyn Error>> {
+    OpenBaoTlsIdentityFiles {
+        certificate_chain_file: output.join(&cert_file),
+        kms_ca_cert_file: ca_file.to_owned(),
+        kms_endpoint: endpoint.to_owned(),
+        kms_token_file: output.join(&token_file),
+        kms_key_name: key.to_owned(),
+        kms_key_version: 1,
+        request_timeout: Duration::from_secs(5),
+        max_concurrent_signs: 1,
+    }
+    .connect()
+    .await?;
+    Ok(())
 }
 
 async fn provision(
@@ -305,8 +372,14 @@ async fn provision(
         profile,
         renewal_pki_mount,
         repair,
+        renewal,
     } = context;
-    if (profile == Profile::PassportRoleRepair) != repair.is_some() {
+    if matches!(
+        profile,
+        Profile::PassportRoleRepair | Profile::PassportRoleRenew
+    ) != repair.is_some()
+        || (profile == Profile::PassportRoleRenew) != renewal.is_some()
+    {
         return Err("selective TLS repair context mismatch".into());
     }
     if profile == Profile::SelfhostRenew {
@@ -334,7 +407,7 @@ async fn provision(
         }
     }
     let pki_mount = match profile {
-        Profile::PassportRoleRepair => {
+        Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
             bao.checked(Method::GET, "sys/mounts/transit", None, None)
                 .await?;
             let mount = &repair.ok_or("repair context missing")?.pki_mount;
@@ -382,7 +455,7 @@ async fn provision(
     };
     if !matches!(
         profile,
-        Profile::SelfhostRenew | Profile::PassportRoleRepair
+        Profile::SelfhostRenew | Profile::PassportRoleRepair | Profile::PassportRoleRenew
     ) {
         let mount_config = if profile == Profile::Selfhost {
             json!({"type":"pki", "config":{"max_lease_ttl":"8760h"}})
@@ -400,11 +473,11 @@ async fn provision(
     let ca_name = match profile {
         Profile::Passport => "Marty disposable passport workload CA",
         Profile::Selfhost => "Marty disposable self-host workload CA",
-        Profile::SelfhostRenew | Profile::PassportRoleRepair => "",
+        Profile::SelfhostRenew | Profile::PassportRoleRepair | Profile::PassportRoleRenew => "",
     };
     let ca = if matches!(
         profile,
-        Profile::SelfhostRenew | Profile::PassportRoleRepair
+        Profile::SelfhostRenew | Profile::PassportRoleRepair | Profile::PassportRoleRenew
     ) {
         // Read the exact issuer selected by the validated renewal ceremony.
         // This producer neither creates a CA nor activates a new trust anchor.
@@ -434,7 +507,12 @@ async fn provision(
     if !ca_pem.contains("BEGIN CERTIFICATE") {
         return Err("OpenBao CA certificate is invalid".into());
     }
-    if let Some(repair) = repair {
+    if let Some(renewal) = renewal {
+        renewal.issuer(
+            &repair.ok_or("renewal issuer pin missing")?.expected_ca_file,
+            ca_pem,
+        )?;
+    } else if let Some(repair) = repair {
         let metadata = fs::symlink_metadata(&repair.expected_ca_file)?;
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
@@ -446,18 +524,33 @@ async fn provision(
     }
     write_new(&output.join("workload_identity_ca_cert"), ca_pem)?;
 
+    let previous_spki = renewal
+        .map(role_renewal::ExistingTrustRole::previous_spki)
+        .transpose()?;
     let mut first_token = None;
     let mut last_key = None;
     for role in selected_roles(profile) {
         let selfhost = selfhost_role(role.name);
         let key = match profile {
-            Profile::Passport | Profile::PassportRoleRepair => format!("{project}-{}", role.name),
+            Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
+                format!("{project}-{}", role.name)
+            }
             Profile::Selfhost | Profile::SelfhostRenew => selfhost
                 .ok_or("self-host TLS role is unmapped")?
                 .key_name
                 .to_owned(),
         };
-        if repair.is_some() {
+        let policy_name = match profile {
+            Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
+                key.clone()
+            }
+            Profile::Selfhost | Profile::SelfhostRenew => format!("{project}-{key}"),
+        };
+        let policy = format!(
+            "path \"transit/keys/{key}\" {{ capabilities = [\"read\"] }}\n\
+             path \"transit/sign/{key}\" {{ capabilities = [\"update\"] }}"
+        );
+        if profile == Profile::PassportRoleRepair {
             // All collision reads precede remote mutations. Never replace an existing resource.
             for path in [
                 format!("transit/keys/{key}"),
@@ -472,7 +565,7 @@ async fn provision(
                 }
             }
         }
-        if profile != Profile::SelfhostRenew {
+        if !matches!(profile, Profile::SelfhostRenew | Profile::PassportRoleRenew) {
             bao.checked(
                 Method::POST,
                 &format!("transit/keys/{key}"),
@@ -493,7 +586,15 @@ async fn provision(
                 return Err("selective TLS repair key permits deletion".into());
             }
         }
-        if profile == Profile::SelfhostRenew && pki_mount == "workload-pki" {
+        if let Some(renewal) = renewal {
+            renewal.key(
+                &metadata,
+                previous_spki.as_deref().ok_or("retained SPKI missing")?,
+            )?;
+        }
+        if profile == Profile::PassportRoleRenew
+            || (profile == Profile::SelfhostRenew && pki_mount == "workload-pki")
+        {
             let existing_role = bao
                 .checked(
                     Method::GET,
@@ -502,7 +603,11 @@ async fn provision(
                     None,
                 )
                 .await?;
-            checked_existing_role(&existing_role, role)?;
+            if let Some(renewal) = renewal {
+                renewal.role(&existing_role, role)?;
+            } else {
+                checked_existing_role(&existing_role, role)?;
+            }
         } else {
             bao.checked(
                 Method::POST,
@@ -531,6 +636,29 @@ async fn provision(
                 checked_existing_role(&configured, role)?;
             }
         }
+        // Existing key/issuer/role and policy pins are checked before CSR/sign/token mutations.
+        let policy_action = if let Some(renewal) = renewal {
+            let (status, metadata) = bao
+                .request(
+                    Method::GET,
+                    &format!("sys/policies/acl/{policy_name}"),
+                    None,
+                    None,
+                )
+                .await?;
+            Some(renewal.policy(status.as_u16(), &metadata, &policy)?)
+        } else {
+            None
+        };
+        if let Some(renewal) = renewal {
+            renewal.prepare_recovery(
+                output,
+                project,
+                &key,
+                pki_mount,
+                policy_action == Some(role_renewal::SignerPolicy::Restore),
+            )?;
+        }
         let csr = bao
             .checked(
                 Method::POST,
@@ -540,7 +668,7 @@ async fn provision(
             )
             .await?;
         let ttl = match profile {
-            Profile::Passport | Profile::PassportRoleRepair => "1h",
+            Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => "1h",
             Profile::Selfhost | Profile::SelfhostRenew => "8h",
         };
         let mut request = json!({"csr":value(&csr, "csr")?,
@@ -570,22 +698,56 @@ async fn provision(
             return Err("OpenBao leaf certificate is invalid".into());
         }
         let cert_file = match profile {
-            Profile::Passport | Profile::PassportRoleRepair => format!("{}_cert", role.file_prefix),
+            Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
+                format!("{}_cert", role.file_prefix)
+            }
             Profile::Selfhost | Profile::SelfhostRenew => selfhost
                 .ok_or("self-host TLS role is unmapped")?
                 .cert_file
                 .to_owned(),
         };
+        if let Some(renewal) = renewal {
+            renewal.leaf(
+                cert,
+                previous_spki.as_deref().ok_or("retained SPKI missing")?,
+            )?;
+        }
         write_new(&output.join(&cert_file), cert)?;
-        let policy_name = match profile {
-            Profile::Passport | Profile::PassportRoleRepair => key.clone(),
-            Profile::Selfhost | Profile::SelfhostRenew => format!("{project}-{key}"),
-        };
-        let policy = format!(
-            "path \"transit/keys/{key}\" {{ capabilities = [\"read\"] }}\n\
-             path \"transit/sign/{key}\" {{ capabilities = [\"update\"] }}"
-        );
-        if profile == Profile::SelfhostRenew {
+        if let Some(renewal) = renewal {
+            if policy_action == Some(role_renewal::SignerPolicy::Restore) {
+                let (status, current) = bao
+                    .request(
+                        Method::GET,
+                        &format!("sys/policies/acl/{policy_name}"),
+                        None,
+                        None,
+                    )
+                    .await?;
+                if renewal.policy(status.as_u16(), &current, &policy)?
+                    != role_renewal::SignerPolicy::Restore
+                {
+                    return Err("owned signer policy appeared before restoration".into());
+                }
+                bao.checked(
+                    Method::PUT,
+                    &format!("sys/policies/acl/{policy_name}"),
+                    Some(json!({"policy":policy})),
+                    None,
+                )
+                .await?;
+            }
+            let current = bao
+                .checked(
+                    Method::GET,
+                    &format!("sys/policies/acl/{policy_name}"),
+                    None,
+                    None,
+                )
+                .await?;
+            if renewal.policy(200, &current, &policy)? != role_renewal::SignerPolicy::Reuse {
+                return Err("restored signer policy differs".into());
+            }
+        } else if profile == Profile::SelfhostRenew {
             let current = bao
                 .checked(
                     Method::GET,
@@ -605,6 +767,54 @@ async fn provision(
                 None,
             )
             .await?;
+        }
+        if let Some(renewal) = renewal {
+            renewal.note("mint-intent.safe.json", &json!({"cycleId":renewal.cycle_id(),"project":project,"keyName":key,"policy":policy_name,"path":"auth/token/create-orphan","maxTtlSeconds":3600,"automaticRetry":false}))?;
+            let request = json!({"policies":[policy_name],"no_default_policy":true,"ttl":"1h","explicit_max_ttl":"1h","renewable":false,"meta":{"marty_tls_role_renewal_cycle":renewal.cycle_id(),"project":project,"role":role.name}});
+            let issued = match bao
+                .checked(
+                    Method::POST,
+                    "auth/token/create-orphan",
+                    Some(request),
+                    None,
+                )
+                .await
+            {
+                Ok(issued) => issued,
+                Err(error) => {
+                    return Err(renewal.failed("MINT_OUTCOME_UNKNOWN", error.as_ref(), None))
+                }
+            };
+            let token = match token_recovery::NewToken::capture(&issued, &bao.authority_token) {
+                Ok(token) => token,
+                Err(error) => {
+                    return Err(renewal.failed("MINT_OUTCOME_UNKNOWN", error.as_ref(), None))
+                }
+            };
+            let token_file = format!("{}_kms_token", role.file_prefix);
+            let validation:Result<(),Box<dyn Error>>=async {
+                renewal.capture_token(&token,&issued)?;
+                write_new(&output.join(&token_file),token.value())?;
+                let lookup=bao.checked(Method::POST,"auth/token/lookup",Some(json!({"token":token.value()})),None).await?;
+                checked_selective_signer(&lookup,&policy_name,true)?;
+                renewal.signer_cycle(&lookup,project,role.name)?;
+                verify_managed_identity(output,&cert_file,&token_file,ca_file,endpoint,&key).await?;
+                let (status,_)=bao.request(Method::POST,&format!("transit/sign/{project}-passport-edge"),Some(json!({"input":STANDARD.encode(b"cross-scope-denial")})),Some(token.value())).await?;
+                if status!=StatusCode::FORBIDDEN {return Err("disposable TLS signer token crossed key scope".into());}
+                renewal.note("completion.safe.json",&json!({"cycleId":renewal.cycle_id(),"keyName":key,"keyVersion":1,"tokenMaxSeconds":3600,"nativeIdentityVerified":true,"crossKeyDenied":true,"automaticRetry":false}))?;
+                Ok(())
+            }.await;
+            if let Err(error) = validation {
+                let containment = token_recovery::contain_new_token(bao, &token, &key).await;
+                return Err(renewal.failed(
+                    "POST_MINT_VALIDATION",
+                    error.as_ref(),
+                    Some(&containment),
+                ));
+            }
+            // This closed profile has one role. Its last fallible check and receipt
+            // are inside the containment boundary above, unlike legacy repair.
+            return Ok(());
         }
         let create_path = if profile == Profile::SelfhostRenew {
             "auth/token/create/selfhost-renew-leaf"
@@ -630,7 +840,7 @@ async fn provision(
             return Err("OpenBao scoped token is invalid".into());
         }
         let token_file = match profile {
-            Profile::Passport | Profile::PassportRoleRepair => {
+            Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => {
                 format!("{}_kms_token", role.file_prefix)
             }
             Profile::Selfhost | Profile::SelfhostRenew => selfhost
@@ -687,36 +897,11 @@ async fn provision(
                     None,
                 )
                 .await?;
-            let scopes = data(&lookup, "policies")?
-                .as_array()
-                .ok_or("repair signer policies invalid")?;
-            let ttl = data(&lookup, "ttl")?
-                .as_u64()
-                .ok_or("repair signer TTL invalid")?;
-            if scopes.len() != 1
-                || scopes[0] != policy_name
-                || ttl == 0
-                || ttl > 3600
-                || data(&lookup, "explicit_max_ttl")?.as_u64() != Some(3600)
-                || data(&lookup, "renewable")? != false
-                || data(&lookup, "orphan")? != true
-            {
-                return Err("selective TLS repair signer authority changed".into());
-            }
+            checked_selective_signer(&lookup, &policy_name, renewal.is_some())?;
         }
         if profile == Profile::SelfhostRenew || repair.is_some() {
-            OpenBaoTlsIdentityFiles {
-                certificate_chain_file: output.join(&cert_file),
-                kms_ca_cert_file: ca_file.to_owned(),
-                kms_endpoint: endpoint.to_owned(),
-                kms_token_file: output.join(&token_file),
-                kms_key_name: key.clone(),
-                kms_key_version: 1,
-                request_timeout: Duration::from_secs(5),
-                max_concurrent_signs: 1,
-            }
-            .connect()
-            .await?;
+            verify_managed_identity(output, &cert_file, &token_file, ca_file, endpoint, &key)
+                .await?;
         }
         if first_token.is_none() {
             first_token = Some(token.to_owned());
@@ -756,6 +941,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Ok("selfhost-renew") => Profile::SelfhostRenew,
         Ok("passport") | Err(_) => Profile::Passport,
         Ok("passport-role-repair") => Profile::PassportRoleRepair,
+        Ok("passport-role-renew") => Profile::PassportRoleRenew,
         Ok(_) => return Err("unknown TLS bootstrap profile".into()),
     };
     let repair_values: std::collections::BTreeMap<String, String> = env::vars()
@@ -772,6 +958,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let repair = PassportRoleRepair::from_values(profile, |name| {
         repair_values.get(name).map(String::as_str)
     })?;
+    let renewal_values: std::collections::BTreeMap<String, String> = env::vars()
+        .filter(|(name, _)| name.starts_with("MARTY_TLS_RENEW_"))
+        .collect();
+    if renewal_values
+        .keys()
+        .any(|name| !role_renewal::INPUTS.contains(&name.as_str()))
+    {
+        return Err("unknown existing-key renewal input".into());
+    }
+    let renewal = role_renewal::ExistingTrustRole::from_values(
+        profile == Profile::PassportRoleRenew,
+        |name| renewal_values.get(name).map(String::as_str),
+    )?;
     let requested_mount = match env::var("MARTY_SELFHOST_WORKLOAD_PKI_MOUNT") {
         Ok(mount) => Some(mount),
         Err(env::VarError::NotPresent) => None,
@@ -785,7 +984,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     let endpoint = required("BAO_ADDR")?;
     let (project_name, output_name, project_prefix) = match profile {
-        Profile::Passport | Profile::PassportRoleRepair => (
+        Profile::Passport | Profile::PassportRoleRepair | Profile::PassportRoleRenew => (
             "PASSPORT_ACCEPTANCE_PROJECT",
             "PASSPORT_TLS_OUTPUT_DIR",
             "marty-passport-acceptance-",
@@ -829,9 +1028,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ca_file = required("BAO_CACERT")?;
     let token_variable = match profile {
         Profile::SelfhostRenew => renewal_authority(renewal_pki_mount).2,
-        Profile::Passport | Profile::PassportRoleRepair | Profile::Selfhost => {
-            "BAO_ROOT_TOKEN_FILE"
-        }
+        Profile::Passport
+        | Profile::PassportRoleRepair
+        | Profile::PassportRoleRenew
+        | Profile::Selfhost => "BAO_ROOT_TOKEN_FILE",
     };
     let authority_token = fs::read_to_string(required(token_variable)?)?;
     let authority_token = authority_token.trim().to_owned();
@@ -840,7 +1040,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             authority_token.len() == 64
                 && authority_token.bytes().all(|byte| byte.is_ascii_hexdigit())
         }
-        Profile::PassportRoleRepair | Profile::Selfhost | Profile::SelfhostRenew => {
+        Profile::PassportRoleRepair
+        | Profile::PassportRoleRenew
+        | Profile::Selfhost
+        | Profile::SelfhostRenew => {
             authority_token.len() >= 20
                 && authority_token.len() <= 256
                 && authority_token.bytes().all(|byte| byte.is_ascii_graphic())
@@ -865,6 +1068,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             profile,
             renewal_pki_mount,
             repair: repair.as_ref(),
+            renewal: renewal.as_ref(),
         },
         &endpoint,
         Path::new(&ca_file),
