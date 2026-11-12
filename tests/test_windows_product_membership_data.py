@@ -201,7 +201,7 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         shape=json.loads(sql(catalog.statement(original,debug_shape=True)))
         (tmp_path/'native-authority-shape.json').write_text(json.dumps(shape,indent=2),encoding='utf-8')
         print('NATIVE_AUTHORITY_SHAPE_SHA256='+changed['shape_sha256'])
-        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256']:
+        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256']:
             assert changed[field]==original[field],field
         assert changed['parent_has_triggers']is True and changed['storage_distinct']is True
         assert changed['new_row_count']==0 and changed['unsupported_objects']is False
@@ -210,7 +210,7 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         native=(ROOT/'rust/services/trust-profile/migrations/0002_credential_authority_revisions.sql').read_text(encoding='utf-8')
         sql(native)
         repeat=catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
-        for key in ['raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256']:
+        for key in ['raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256','raw_annotations_sha256']:
             assert repeat[key]==changed[key]
         # New OIDs are allowed only for the exact independently qualified shape.
         def fresh_native():
@@ -236,11 +236,26 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
         sql('ALTER TABLE '+catalog.PARENT+' RESET (fillfactor);')
         catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        for target in ['TABLE '+catalog.PARENT,'COLUMN '+catalog.PARENT+'.id']:
+            sql('COMMENT ON '+target+" IS 'unexpected retained comment';")
+            with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+            sql('COMMENT ON '+target+' IS NULL;')
+            catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        # Synthetic label metadata tests the fingerprint, not a security-label
+        # provider. This direct catalog write exists only in the owned tmpfs DB.
+        sql("INSERT INTO pg_seclabel(objoid,classoid,objsubid,provider,label) VALUES('"+catalog.PARENT+"'::regclass,'pg_class'::regclass,0,'fixture-only','unexpected');")
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        sql("DELETE FROM pg_seclabel WHERE objoid='"+catalog.PARENT+"'::regclass AND classoid='pg_class'::regclass AND provider='fixture-only';")
+        catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
         # User-trigger identity survives both false->true and already-true flag paths.
         sql('DROP TABLE '+catalog.TABLE+' CASCADE; CREATE FUNCTION trust_profile_service.fixture_keep_trigger() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; CREATE TRIGGER fixture_retained BEFORE INSERT ON '+catalog.PARENT+' FOR EACH ROW EXECUTE FUNCTION trust_profile_service.fixture_keep_trigger();')
         already_triggered=catalog.capture(Docker(),[owned()],project,profile=profile)
         assert already_triggered['parent_has_triggers']is True
         sql(native)
+        catalog.capture(Docker(),[owned()],project,before=already_triggered,profile=profile)
+        sql("COMMENT ON FUNCTION trust_profile_service.fixture_keep_trigger() IS 'unexpected function comment';")
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=already_triggered,profile=profile)
+        sql('COMMENT ON FUNCTION trust_profile_service.fixture_keep_trigger() IS NULL;')
         catalog.capture(Docker(),[owned()],project,before=already_triggered,profile=profile)
         # A native non-bootstrap owner has explicit shared owner dependencies.
         sql('DROP TABLE '+catalog.TABLE+' CASCADE; CREATE ROLE fixture_runtime_owner NOLOGIN; ALTER SCHEMA trust_profile_service OWNER TO fixture_runtime_owner; ALTER TABLE '+catalog.PARENT+' OWNER TO fixture_runtime_owner;')
@@ -249,7 +264,7 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         sql('SET ROLE fixture_runtime_owner;'+native+'RESET ROLE;')
         custom_changed=catalog.capture(Docker(),[owned()],project,before=custom_owner,profile=profile)
         print('NATIVE_NON_BOOTSTRAP_AUTHORITY_SHAPE_SHA256='+custom_changed['shape_sha256'])
-        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256']:
+        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256']:
             assert custom_changed[field]==custom_owner[field],field
         # Wrong ownership cannot exploit the bootstrap shared-dependency exception.
         sql('ALTER TABLE '+catalog.TABLE+' OWNER TO postgres;')

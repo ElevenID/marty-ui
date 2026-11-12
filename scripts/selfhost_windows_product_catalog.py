@@ -86,6 +86,14 @@ def _dependency_hash(shared, protected):
     return _hash('(SELECT jsonb_agg(to_jsonb(d) ORDER BY to_jsonb(d)::text) FROM '+table+' d WHERE '+' AND '.join(conditions)+')')
 
 
+def _annotation_hash(protected):
+    parts=[]
+    for table in ('pg_description','pg_seclabel'):
+        condition='NOT EXISTS(SELECT 1 FROM nodes n WHERE n.classid=d.classoid AND n.oid=d.objoid)' if protected else 'true'
+        parts += ["'"+table+"',(SELECT jsonb_agg(to_jsonb(d) ORDER BY to_jsonb(d)::text) FROM "+table+' d WHERE '+condition+')']
+    return _hash('jsonb_build_object('+','.join(parts)+')')
+
+
 def shape():
     """All values here are public schema metadata; no ordinary rows or secrets."""
     rel=_ref('pg_class','c.oid')
@@ -123,11 +131,13 @@ def statement(before=None, *, debug_shape=False):
             "'parent_oid',(SELECT oid::bigint FROM parent)","'parent_has_triggers',(SELECT relhastriggers FROM parent)",
             "'parent_owner_oid',(SELECT relowner::bigint FROM parent)","'parent_owner_bootstrap',(SELECT relowner=10 FROM parent)",
             "'catalog_sha256',("+catalog+")","'dependencies_sha256',"+_dependency_hash(False,protected),
-            "'shared_dependencies_sha256',"+_dependency_hash(True,protected)]
+            "'shared_dependencies_sha256',"+_dependency_hash(True,protected),
+            "'annotations_sha256',"+_annotation_hash(protected)]
     if protected:
         fields += ["'shape_sha256',"+_hash(shape()),"'raw_catalog_sha256',("+full+")",
                    "'raw_dependencies_sha256',"+_dependency_hash(False,False),
                    "'raw_shared_dependencies_sha256',"+_dependency_hash(True,False),
+                   "'raw_annotations_sha256',"+_annotation_hash(False),
                    "'new_row_count',(SELECT count(*) FROM "+TABLE+")",
                    "'unsupported_objects',EXISTS(SELECT 1 FROM pg_inherits WHERE inhrelid IN (SELECT oid FROM xr) OR inhparent IN (SELECT oid FROM xr)) OR EXISTS(SELECT 1 FROM pg_partitioned_table WHERE partrelid IN (SELECT oid FROM xr)) OR EXISTS(SELECT 1 FROM pg_policy WHERE polrelid IN (SELECT oid FROM xr)) OR EXISTS(SELECT 1 FROM pg_rewrite WHERE ev_class IN (SELECT oid FROM xr)) OR EXISTS(SELECT 1 FROM pg_sequence WHERE seqrelid IN (SELECT oid FROM xr)) OR EXISTS(SELECT 1 FROM pg_description d JOIN nodes n ON n.classid=d.classoid AND n.oid=d.objoid) OR EXISTS(SELECT 1 FROM pg_seclabel d JOIN nodes n ON n.classid=d.classoid AND n.oid=d.objoid)",
                    "'storage_distinct',(SELECT count(DISTINCT relfilenode)=count(*) AND bool_and(relfilenode>0 AND reltablespace=0) FROM pg_class WHERE oid IN (SELECT oid FROM xr)) AND NOT EXISTS(SELECT 1 FROM pg_class x JOIN pg_class retained ON x.relfilenode=retained.relfilenode AND x.reltablespace=retained.reltablespace WHERE x.oid IN (SELECT oid FROM xr) AND retained.oid NOT IN (SELECT oid FROM xr))"]
@@ -141,31 +151,31 @@ def statement(before=None, *, debug_shape=False):
 
 def validate_before(value):
     require(type(value) is dict and set(value)=={'schema','side','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
-        'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','new_objects_absent','parent_key_valid','owner_defaults_empty','supported'})
+        'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256','new_objects_absent','parent_key_valid','owner_defaults_empty','supported'})
     require(value['schema']==SCHEMA and value['side']=='before' and value['new_objects_absent'] is True and value['parent_key_valid'] is True
             and value['owner_defaults_empty'] is True and value['supported'] is True)
     require(type(value['parent_oid']) is int and 0<value['parent_oid']<2**32 and type(value['parent_has_triggers']) is bool)
     require(type(value['parent_owner_oid']) is int and (value['parent_owner_oid']==10 or 16384<=value['parent_owner_oid']<2**32)
             and type(value['parent_owner_bootstrap']) is bool and value['parent_owner_bootstrap']==(value['parent_owner_oid']==10))
-    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256'):
+    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256'):
         require(type(value[key]) is str and probe.SHA.fullmatch(value[key]))
 
 
 def validate_delta(before, after):
     validate_before(before)
     require(type(after) is dict and set(after)=={'schema','side','parent_oid','parent_has_triggers','parent_owner_oid','parent_owner_bootstrap',
-        'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','shape_sha256',
-        'raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256','new_row_count','unsupported_objects','storage_distinct'})
+        'catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256','shape_sha256',
+        'raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256','raw_annotations_sha256','new_row_count','unsupported_objects','storage_distinct'})
     require(after['schema']==SCHEMA and after['side']=='after' and type(after['parent_oid']) is int
         and after['parent_oid']==before['parent_oid'] and after['parent_has_triggers'] is True)
     require(type(after['parent_owner_oid']) is int and after['parent_owner_oid']==before['parent_owner_oid']
             and type(after['parent_owner_bootstrap']) is bool and after['parent_owner_bootstrap']==before['parent_owner_bootstrap'])
-    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256'):
+    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256'):
         require(type(after[key]) is str and after[key]==before[key])
     expected=SHAPE_SHA256[before['parent_owner_bootstrap']]
     require(expected!='0'*64 and type(after['shape_sha256']) is str and after['shape_sha256']==expected)
     raw={}
-    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256'):
+    for key in ('catalog_sha256','dependencies_sha256','shared_dependencies_sha256','annotations_sha256'):
         value=after['raw_'+key]
         require(type(value) is str and probe.SHA.fullmatch(value));raw[key]=value
     require(type(after['new_row_count']) is int and after['new_row_count']==0
