@@ -157,6 +157,7 @@ def stage_recovery_generation(config_path, output_dir, logical_project):
         stack.enter_context(renewal.hold_storage_namespace(root))
         stack.enter_context(selection._held_private_input(root, directory=True, mutable_directory=True))
         require(not list(root.iterdir()))
+        native.require_recovery_capability(cfg['native'], observed['docker'].prefix)
         layers = renewal.dependency_layers(observed['model'], observed['services'],
                                            renewal.owned_roles(observed['model'], observed['services']))
         config = selection._stage_configuration(cfg, record['choice'], record, root, layers)

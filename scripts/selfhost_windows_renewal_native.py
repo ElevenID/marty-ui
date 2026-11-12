@@ -20,6 +20,38 @@ from selfhost_windows_inputs import hold_private_input
 EXPORT_CHUNK_BYTES = 12000
 EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
 
+RECOVERY_CONTRACT = {'schema':'marty.windows-recovery-operator/v1',
+    'retained_certificates':True,'recovery_candidate':True,
+    'expired_rollback':False,'automatic_activation':False}
+
+def require_recovery_capability(config, docker_prefix):
+    """Refuse unsupported pinned operators before authority or credential writes.
+
+    This checks compatibility only. Signed successor admission remains the
+    caller's separate responsibility; this never changes a historical binding.
+    """
+    from selfhost_windows_renewal import require, run_owned_mutation
+    with hold_private_input(Path(config['binary']), max_bytes=256*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==config['binary_sha256'])
+        worker = r'''
+import hashlib,json,pathlib,subprocess,sys
+d=json.load(sys.stdin);binary='/operator/tool'
+assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['sha256']
+p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
+assert p.returncode==0 and p.stdout.decode().strip()==d['identity']
+p=subprocess.run([binary,'operator','recovery-contract'],capture_output=True,timeout=20)
+assert p.returncode==0 and json.loads(p.stdout)==d['contract']
+print(json.dumps({'recovery_capable':True}))
+'''
+        args=[*docker_prefix,'run','--rm','--pull','never','-i','--read-only','--network','none',
+              '--memory','128m','--cpus','1','--cap-drop','ALL','--security-opt','no-new-privileges',
+              '--mount',f'type=bind,src={config["binary"]},dst=/operator/tool,readonly',
+              '--entrypoint','python',config['helper_image'],'-c',worker]
+        request={'sha256':config['binary_sha256'],'identity':config['source_sha']+':'+config['release_tag'],
+                 'contract':RECOVERY_CONTRACT}
+        result=run_owned_mutation(args,stdin_bytes=json.dumps(request).encode(),timeout=90)
+        require(result.returncode==0 and json.loads(result.stdout)=={'recovery_capable':True})
+
 PRODUCER_PREPARE = r'''
 import base64,json,os,pathlib,sys
 d=json.load(sys.stdin);os.umask(0o077);root=pathlib.Path(d['root'])

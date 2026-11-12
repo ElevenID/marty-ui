@@ -16,6 +16,9 @@ def test_guarded_recovery_staging_never_activates_or_admits_retry(monkeypatch, f
         output = root/('windows-renewal-'+'e'*32)
         output.mkdir()
         original = {p.relative_to(failed):p.read_bytes() for p in failed.rglob('*') if p.is_file()}
+        def capability(*args):
+            assert not selection.renewal.recovery_guard(cfg).exists()
+        monkeypatch.setattr(native, 'require_recovery_capability', capability)
         def produce(config, current, logical, cycle, image, checkpoint):
             assert selection.renewal.recovery_guard(cfg).exists()
             assert selection.renewal.renewal_staging_guard(cfg).exists()
@@ -41,3 +44,16 @@ def test_guarded_recovery_staging_never_activates_or_admits_retry(monkeypatch, f
         assert not (output/'result.json').exists()
         with pytest.raises(ValueError):inspect_failed_current(path)
         assert not any('activate' in str(event) for event in events)
+
+
+def test_unsupported_operator_refuses_before_new_guard_or_authority(monkeypatch):
+    with failed_current(monkeypatch) as (root, path, cfg, _, events):
+        output=root/('windows-renewal-'+'f'*32)
+        output.mkdir()
+        def refuse(*args):raise ValueError('SYNTHETIC_UNSUPPORTED_OPERATOR')
+        monkeypatch.setattr(native, 'require_recovery_capability', refuse)
+        with pytest.raises(ValueError):
+            stage_recovery_generation(path, output, 'marty-selfhost-synthetic')
+        assert not list(output.iterdir())
+        assert not selection.renewal.recovery_guard(cfg).exists()
+        assert events == ['authority']  # Original failed attempt only.
