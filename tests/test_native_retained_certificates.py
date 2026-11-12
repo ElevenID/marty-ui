@@ -58,17 +58,17 @@ def test_retained_certificate_evidence_over_https(tmp_path, fault):
     with https_json_server(tmp_path, dispatch, errors) as transport:
         context = {'token': 'synthetic-renewal-token', 'generation': str(generation), 'minimum_ttl': 3600}
         def invoke(operation, body):
-            return operator_bytes(ROOT, 'operator', operation, transport.endpoint, str(transport.ca),
-                                  input=json.dumps(body).encode())
+            return json.loads(operator_bytes(ROOT, 'operator', operation, transport.endpoint, str(transport.ca),
+                                             input=json.dumps(body).encode()))
         if fault:
-            with pytest.raises(RuntimeError, match='Rust operator validation failed'):
-                invoke('retained-certificates', context)
+            refused = invoke('retained-certificates', context)
+            assert set(refused) == {'error'} and isinstance(refused['error'], str) and refused['error']
         else:
-            assert json.loads(invoke('retained-certificates', context)) == {'value': None}
+            assert invoke('retained-certificates', context) == {'value': None}
             # The same expired leaves remain unusable for normal activation.
-            with pytest.raises(RuntimeError, match='Rust operator validation failed'):
-                invoke('activation-certificates', {'token': context['token'], 'old': str(generation),
+            refused = invoke('activation-certificates', {'token': context['token'], 'old': str(generation),
                        'new': str(generation), 'minimum_ttl': 3600, 'replacement': None, 'retiring': False})
+            assert set(refused) == {'error'} and refused['error']
     assert seen and all(method == 'GET' or path == 'auth/token/lookup' for method, path in seen)
 
     if fault is None:
