@@ -165,18 +165,24 @@ def test_cleanup_refuses_extra_network_and_binds_created_default(tmp_path):
     value.cleanup_network(row)
 
 
-@pytest.mark.parametrize("stdout,code,expected", [(b"4000000000", 0, "PHYSICAL_4GIB_REQUIRED"), (b"unknown", 1, "PHYSICAL_CAPACITY_UNKNOWN")])
-def test_capacity_persists_actual_sample_before_refusal(monkeypatch, stdout, code, expected):
-    from types import SimpleNamespace
-    result = SimpleNamespace(stdout=stdout, stderr=b"bounded diagnostic", returncode=code,
-        observation={"failures": [], "timedOut": False})
-    monkeypatch.setattr(rehearsal, "bounded_run", lambda *args, **kwargs: result)
+@pytest.mark.parametrize("sample,expected", [(4000000000, "PHYSICAL_4GIB_REQUIRED"), (OSError("unavailable"), "PHYSICAL_CAPACITY_UNKNOWN")])
+def test_capacity_persists_actual_sample_before_refusal(monkeypatch, sample, expected):
+    def read():
+        if isinstance(sample, OSError):
+            raise sample
+        return sample
+    monkeypatch.setattr(rehearsal, "available_physical_memory_bytes", read)
+    monkeypatch.setattr(rehearsal, "bounded_run", lambda *args, **kwargs: pytest.fail("No memory subprocess"))
     saved = []
     context = {"env": {}, "save": lambda name, value: saved.append((name, value)) or {"sha256": "actual"}}
     with pytest.raises(ValueError, match=expected):
-        rehearsal.capacity(context, {"executables": {"powershell": {"path": "not-executed"}}})
-    assert len(saved) == 1 and saved[0][1]["stdout"] == stdout.decode()
-    assert saved[0][1]["exitCode"] == code and saved[0][1]["requiredPhysicalBytes"] == 4294967296
+        rehearsal.capacity(context, {})
+    assert len(saved) == 1
+    observed = saved[0][1]
+    assert observed["api"] == "GlobalMemoryStatusEx" and observed["requiredPhysicalBytes"] == 4294967296
+    assert observed["freePhysicalBytes"] == (None if isinstance(sample, OSError) else sample)
+    assert observed["errorClass"] == ("OSError" if isinstance(sample, OSError) else None)
+    assert "stdout" not in observed and "exitCode" not in observed
     assert context["capacityObservation"] == {"sha256": "actual"}
 
 

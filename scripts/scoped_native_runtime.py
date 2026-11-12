@@ -70,6 +70,33 @@ def require(value, code):
     if not value:
         raise ValueError(code)
 
+def available_physical_memory_bytes():
+    """Sample Windows physical headroom without starting an observer process.
+
+    Use the same Win32 counter as the Recorder Windows Job reserve guard.
+    The value is volatile: every admission phase must obtain a fresh sample.
+    """
+    if os.name != "nt":
+        raise OSError("Windows physical memory observation requires Windows")
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32)] + [
+            (name, ctypes.c_uint64) for name in (
+                "ullTotalPhys", "ullAvailPhys", "ullTotalPageFile", "ullAvailPageFile",
+                "ullTotalVirtual", "ullAvailVirtual", "ullAvailExtendedVirtual")]
+
+    read = ctypes.WinDLL("kernel32", use_last_error=True).GlobalMemoryStatusEx
+    read.argtypes = [ctypes.POINTER(MemoryStatus)]
+    read.restype = ctypes.c_int32
+    status = MemoryStatus(dwLength=ctypes.sizeof(MemoryStatus))
+    if not read(ctypes.byref(status)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if status.ullTotalPhys == 0 or status.ullAvailPhys > status.ullTotalPhys:
+        raise OSError("Windows physical memory observation is invalid")
+    return status.ullAvailPhys
+
+
 def sha(file):
     with Path(file).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()

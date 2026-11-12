@@ -20,7 +20,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-from scoped_native_runtime import daemon_source, save_exclusive
+from scoped_native_runtime import available_physical_memory_bytes, daemon_source, save_exclusive
 
 SOURCE = Path.home() / ".codex/builds/marty-demo-native-cache-20261021/target"
 VOLUME = "marty-oid4vc-native-d2de-target-20261028"
@@ -397,10 +397,7 @@ def writer_census(client) -> None:
 def copy_capacity(source_bytes: int, output_parent: Path) -> tuple[int, int]:
     free = min(shutil.disk_usage(output_parent).free, shutil.disk_usage(Path("C:/")).free)
     require(free >= source_bytes + 3 * 1024**3, "TARGET_COPY_DISK_HEADROOM")
-    available = int(subprocess.check_output(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-         "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory"],
-        text=True, timeout=30).strip())
+    available = available_physical_memory_bytes() // 1024
     require(available >= 2 * 1024**2, "TARGET_COPY_HOST_MEMORY")
     return free, available
 
