@@ -1755,6 +1755,56 @@ mod bounded_sd_jwt_query_evidence {
     }
 
     #[tokio::test]
+    async fn public_sd_jwt_format_aliases_preserve_native_query_authentication() {
+        for alias in [
+            "SD_JWT_VC",
+            "w3c_vcdm_v2_sd_jwt",
+            "ietf_sd_jwt",
+            "dc+sd-jwt",
+            "vc+sd-jwt",
+            "spruce-vc+sd-jwt",
+            "sd_jwt",
+            "sd_jwt_vc",
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.policy.credential_requirements[0].credential_payload_format = alias.into();
+            let material = fixture
+                .orchestrator
+                .verify_material(&fixture.policy, &fixture.request)
+                .await
+                .unwrap_or_else(|error| panic!("public format alias {alias} refused: {error}"));
+            assert!(material.authenticated_sd_jwt_query().is_some(), "{alias}");
+            let projected =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            let credentials = projected["credential_results"].as_array().unwrap();
+            assert_eq!(credentials.len(), 1, "{alias}");
+            assert_eq!(credentials[0]["signature_valid"], true, "{alias}");
+            assert_eq!(credentials[0]["issuer_did"], ISSUER, "{alias}");
+            assert!(
+                credentials[0].get("authenticated_sd_jwt_query").is_some(),
+                "{alias}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn different_credential_formats_cannot_enter_the_sd_jwt_query_profile() {
+        for format in ["MDOC", "VC_JWT", "ldp_vc", "not-a-format", ""] {
+            let mut fixture = Fixture::new();
+            fixture.policy.credential_requirements[0].credential_payload_format = format.into();
+            assert!(
+                fixture
+                    .orchestrator
+                    .verify_material(&fixture.policy, &fixture.request)
+                    .await
+                    .is_err(),
+                "{format} must not authenticate the SD-JWT/DCQL profile",
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn production_projection_rejects_material_from_another_policy_or_request() {
         let fixture = Fixture::new();
         let mut foreign_policy = fixture.policy.clone();
@@ -2745,6 +2795,349 @@ mod bounded_sd_jwt_query_evidence {
                 }
                 assert!(policy.validate().is_err(), "mutation {mutation}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod real_mdoc_dcql_projection {
+    // Real crypto/query/Core projection; catalog, trust and status ports are
+    // synthetic. The pre-signed fixture supplies its verifier-owned transcript.
+    // This does not qualify the HTTP/gRPC deployment or an Official module.
+    use super::*;
+    use crate::EvaluatePresentationRequest;
+    use base64::{
+        engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+        Engine as _,
+    };
+    use marty_oid4vp_contract::{digest_query_document, Oid4vpEvaluationTransportV1, QueryKind};
+
+    const DOCTYPE: &str = "org.iso.18013.5.1.mDL";
+    const NAMESPACE: &str = "org.iso.18013.5.1";
+    const TEMPLATE: &str = "mdoc-template";
+
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct MdocTrust {
+        certificate: String,
+        issuer: String,
+    }
+
+    #[async_trait]
+    impl PresentationTrustResolver for MdocTrust {
+        async fn load_profile(
+            &self,
+            id: Uuid,
+            organization_id: Uuid,
+        ) -> Result<ResolvedTrustProfile, PresentationVerificationError> {
+            assert_eq!((id, organization_id), (POLICY_PROFILE_ID, ORGANIZATION_ID));
+            Ok(ResolvedTrustProfile {
+                id,
+                organization_id,
+                document: json!({
+                    "allowed_algorithms": ["ES256"],
+                    "trust_sources": [{"source_type":"PINNED_ISSUER", "certificate_pem":self.certificate}],
+                }),
+            })
+        }
+        async fn evaluate_issuer(
+            &self,
+            _: &ResolvedTrustProfile,
+            issuer: &str,
+            format: DetectedCredentialFormat,
+        ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
+            Ok(IssuerTrustEvidence {
+                verified: issuer == self.issuer && format == DetectedCredentialFormat::Mdoc,
+                trust_level: Some(90),
+                ..Default::default()
+            })
+        }
+        async fn load_credential_template(
+            &self,
+            id: &str,
+            organization_id: Uuid,
+        ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+            assert_eq!((id, organization_id), (TEMPLATE, ORGANIZATION_ID));
+            Ok(ResolvedCredentialTemplate {
+                id: id.into(),
+                organization_id,
+                credential_type: DOCTYPE.into(),
+                vct: None,
+                doctype: Some(DOCTYPE.into()),
+                status: "ACTIVE".into(),
+            })
+        }
+    }
+
+    fn native_fixture() -> (
+        PresentationPolicy,
+        EvaluatePresentationRequest,
+        VerifiedFactsOrchestrator,
+    ) {
+        native_fixture_with_anchor(None)
+    }
+
+    fn native_fixture_with_anchor(
+        anchor: Option<String>,
+    ) -> (
+        PresentationPolicy,
+        EvaluatePresentationRequest,
+        VerifiedFactsOrchestrator,
+    ) {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/mdoc_presentation_signed_public.json"
+        ))
+        .unwrap();
+        let response = STANDARD
+            .decode(fixture["response_b64"].as_str().unwrap())
+            .unwrap();
+        let transcript = STANDARD
+            .decode(fixture["transcript_b64"].as_str().unwrap())
+            .unwrap();
+        let certificate = fixture["certificate_pem"].as_str().unwrap().to_owned();
+        let authenticated = marty_verification::mdoc::verify_mdoc_presentation(
+            &response,
+            &transcript,
+            &[],
+            std::slice::from_ref(&certificate),
+        );
+        assert!(
+            authenticated.issuer_signature_valid
+                && authenticated.issuer_trusted
+                && authenticated.device_authentication_valid
+        );
+        let issuer = format!(
+            "x509-sha256:{}",
+            authenticated.document_evidence[0].issuer_certificate_sha256
+        );
+        let now = u64::try_from(chrono::Utc::now().timestamp()).unwrap();
+        let orchestrator = VerifiedFactsOrchestrator::with_clock(
+            Arc::new(RustCredentialKernel),
+            Arc::new(MdocTrust {
+                certificate: anchor.unwrap_or(certificate),
+                issuer,
+            }),
+            Arc::new(Status {
+                evidence: CredentialStatusEvidence {
+                    checked_at_epoch_seconds: Some(now),
+                    not_revoked: Some(true),
+                    credential_status: Some("active".into()),
+                    warnings: vec![],
+                },
+                calls: Mutex::new(vec![]),
+            }),
+            Arc::new(move || now),
+        )
+        .unwrap();
+        let mut policy = policy();
+        let requirement = &mut policy.credential_requirements[0];
+        requirement.credential_template_id = TEMPLATE.into();
+        requirement.credential_payload_format = "MDOC".into();
+        requirement.requested_claims[0].claim_name = "given_name".into();
+        requirement.requested_claims[0].constraints.clear();
+        let id = requirement.id.to_string();
+        let query = json!({"credentials":[{"id":id,"format":"mso_mdoc","meta":{"doctype_value":DOCTYPE},"claims":[{"path":[NAMESPACE,"given_name"],"intent_to_retain":false}]}]});
+        let token = URL_SAFE_NO_PAD.encode(response);
+        let request = EvaluatePresentationRequest {
+            vp_token: json!(token),
+            trust_profile_id: None,
+            nonce: Some("fixture-nonce".into()),
+            audience: Some("https://fixture-verifier.invalid".into()),
+            context: serde_json::Map::from_iter([
+                ("oid4vp_verifier_context".into(), json!(true)),
+                ("replay_check_verified".into(), json!(true)),
+                (
+                    "oid4vp_client_id".into(),
+                    json!("https://fixture-verifier.invalid"),
+                ),
+                (
+                    "mdoc_session_transcript_b64url".into(),
+                    json!(URL_SAFE_NO_PAD.encode(transcript)),
+                ),
+            ]),
+            oid4vp_transport: Some(Oid4vpEvaluationTransportV1 {
+                credential_authority: None,
+                query_kind: QueryKind::Dcql,
+                query_digest: digest_query_document(&query).unwrap(),
+                query_document: query,
+                presentation_submission: None,
+                vp_token_raw: json!({(id):[token]}).to_string(),
+                verifier_client_id: "https://fixture-verifier.invalid".into(),
+                request_nonce: "fixture-nonce".into(),
+            }),
+            trusted_internal_context: true,
+        };
+        (policy, request, orchestrator)
+    }
+
+    #[tokio::test]
+    async fn signed_mdoc_dcql_reaches_flow_credential_authentication_projection() {
+        // Tracing callsite interest is process-wide. Run this capture in a
+        // fresh test process so parallel no-subscriber tests cannot race it.
+        const CHILD: &str = "MARTY_MDOC_AUDIT_CAPTURE_CHILD";
+        let child = std::env::var_os(CHILD);
+        if child.is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "verification_tests::real_mdoc_dcql_projection::signed_mdoc_dcql_reaches_flow_credential_authentication_projection",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "{stdout}\n{stderr}");
+            assert!(stdout.contains("PINNED_MDOC_AUDIT_EVENT="), "{stdout}");
+            print!("{stdout}");
+            return;
+        }
+        assert_eq!(child.unwrap(), "1", "unexpected audit capture child marker");
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = Capture(output.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        let (policy, request, verifier) = native_fixture();
+        let material = verifier.verify_material(&policy, &request).await.unwrap();
+        assert_eq!(
+            material.policy_facts()["credentials"][0]["signature_verified"],
+            true
+        );
+        let projected =
+            crate::evaluate_verified_material_for_policy(material, &policy, &request).unwrap();
+        assert_eq!(projected["result"], "passed", "{projected}");
+        assert_eq!(projected["decision"], "allow", "{projected}");
+        let credentials = projected["credential_results"].as_array().unwrap();
+        assert!(!credentials.is_empty());
+        assert!(
+            credentials
+                .iter()
+                .all(|result| result["signature_valid"] == true),
+            "{projected}"
+        );
+        assert_eq!(projected["verified_claims"]["given_name"], "Ada");
+        let captured = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let events = captured
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| {
+                event["fields"]["message"]
+                    .as_str()
+                    .is_some_and(|message| message.starts_with("mDoc verification binding "))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 1);
+        let message = events[0]["fields"]["message"].as_str().unwrap();
+        assert!(message.contains(
+            "issuer_signature_valid=True issuer_trusted=True device_authentication_valid=True"
+        ));
+        for private in [
+            request.vp_token.as_str().unwrap(),
+            "Ada",
+            NAMESPACE,
+            "fixture-nonce",
+        ] {
+            assert!(!message.contains(private));
+        }
+        // Consumed by the cross-language compatibility check against the
+        // existing, unchanged Official harness audit parser.
+        println!("PINNED_MDOC_AUDIT_EVENT={}", events[0]);
+    }
+
+    #[tokio::test]
+    async fn mdoc_query_crypto_and_trust_mutations_cannot_project_authentication() {
+        for mutation in [
+            "doctype",
+            "namespace",
+            "undisclosed",
+            "transcript",
+            "signature",
+            "anchor",
+        ] {
+            let foreign: Value = serde_json::from_str(include_str!(
+                "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
+            ))
+            .unwrap();
+            let anchor = (mutation == "anchor")
+                .then(|| foreign["certificate_pem"].as_str().unwrap().to_owned());
+            let (policy, mut request, verifier) = native_fixture_with_anchor(anchor);
+            match mutation {
+                "doctype" => {
+                    request.oid4vp_transport.as_mut().unwrap().query_document["credentials"][0]
+                        ["meta"]["doctype_value"] = json!("other.document")
+                }
+                "namespace" => {
+                    request.oid4vp_transport.as_mut().unwrap().query_document["credentials"][0]
+                        ["claims"][0]["path"][0] = json!("other.namespace")
+                }
+                "undisclosed" => {
+                    request.oid4vp_transport.as_mut().unwrap().query_document["credentials"][0]
+                        ["claims"][0]["path"][1] = json!("undisclosed")
+                }
+                "transcript" => {
+                    let mut bytes = URL_SAFE_NO_PAD
+                        .decode(
+                            request.context["mdoc_session_transcript_b64url"]
+                                .as_str()
+                                .unwrap(),
+                        )
+                        .unwrap();
+                    *bytes.last_mut().unwrap() ^= 1;
+                    request.context["mdoc_session_transcript_b64url"] =
+                        json!(URL_SAFE_NO_PAD.encode(bytes));
+                }
+                "signature" => {
+                    let bytes = URL_SAFE_NO_PAD
+                        .decode(request.vp_token.as_str().unwrap())
+                        .unwrap();
+                    let mut response: isomdl::definitions::device_response::DeviceResponse =
+                        isomdl::cbor::from_slice(&bytes).unwrap();
+                    let mut documents = response.documents.take().unwrap().into_inner();
+                    documents[0].issuer_signed.issuer_auth.signature[0] ^= 1;
+                    response.documents = Some(documents.try_into().unwrap());
+                    let token = URL_SAFE_NO_PAD.encode(isomdl::cbor::to_vec(&response).unwrap());
+                    request.vp_token = json!(token);
+                    request.oid4vp_transport.as_mut().unwrap().vp_token_raw =
+                        json!({(policy.credential_requirements[0].id.to_string()):[token]})
+                            .to_string();
+                }
+                "anchor" => {}
+                _ => unreachable!(),
+            }
+            let transport = request.oid4vp_transport.as_mut().unwrap();
+            transport.query_digest = digest_query_document(&transport.query_document).unwrap();
+            let material = verifier.verify_material(&policy, &request).await.unwrap();
+            assert_ne!(
+                material.policy_facts()["credentials"][0]["signature_verified"],
+                true,
+                "{mutation}"
+            );
+            let projected =
+                crate::evaluate_verified_material_for_policy(material, &policy, &request).unwrap();
+            assert_ne!(projected["decision"], "allow", "{mutation}");
+            let credentials = projected["credential_results"].as_array().unwrap();
+            assert!(
+                !credentials
+                    .iter()
+                    .any(|result| result["signature_valid"] == true),
+                "{mutation}"
+            );
         }
     }
 }

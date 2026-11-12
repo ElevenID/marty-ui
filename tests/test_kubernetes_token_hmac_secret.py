@@ -1150,10 +1150,19 @@ def test_harness_timeout_stops_native_client_descendants(harness, tmp_path):
         harness({"TOKEN_HMAC_KEY": TOKEN, "TEST_REAL_KUBECTL": str(client),
                  "TEST_API_SERVER": "http://127.0.0.1:1",
                  "TEST_KUBECONFIG": str(tmp_path / "unused-kubeconfig")}, timeout=5)
-    assert time.monotonic() - started < 15, "timed-out descendants were not stopped promptly"
     assert (tmp_path / "client-ready").read_text() == "ready"
     with (tmp_path / "client.lock").open() as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # SIGKILL delivery to the descendant is asynchronous even after its
+        # parent has exited. Require release within the original total budget;
+        # a surviving client still fails instead of extending or retrying it.
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert time.monotonic() - started < 15, "timed-out descendants were not stopped promptly"
+                time.sleep(0.01)
+    assert time.monotonic() - started < 15, "timed-out descendants were not stopped promptly"
     assert len((tmp_path / "native-manifest.json").read_text().splitlines()) == 1
 
 
