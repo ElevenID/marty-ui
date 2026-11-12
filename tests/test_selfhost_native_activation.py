@@ -196,6 +196,11 @@ def preflight_server(tmp_path):
         if path.startswith("transit/keys/"):
             remote = path.removeprefix("transit/keys/")
             data = dict(state.metadata[remote])
+            if remote in getattr(state, 'next_metadata', {}):
+                state.key_reads = getattr(state, 'key_reads', {})
+                state.key_reads[remote] = state.key_reads.get(remote, 0) + 1
+                if state.key_reads[remote] > 1:
+                    data = state.next_metadata[remote]
             if state.fault == "key-export":
                 data["exportable"] = True
             if state.fault == "key-backup":
@@ -383,6 +388,7 @@ def prepare_certificates(state, mode="ordinary", fault=None):
             )
             roots[name] = signer, issuer
     state.issuers = {name: pem(cert).decode() for name, (_, cert) in roots.items()}
+    state.fixture_roots = roots  # Synthetic in-memory issuer keys for recovery fault cases.
     state.metadata = {}
     roles = [
         (remote, TLS_CERT_BY_ROLE[role], "workload")

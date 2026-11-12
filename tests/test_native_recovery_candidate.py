@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from cryptography import x509
+from cryptography.hazmat.primitives import serialization
 
 from scripts.selfhost_native_operator import operator_bytes
 from tests.test_selfhost_native_activation import preflight_server, prepare_certificates, OPERATOR
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Native generation ow
 @pytest.mark.parametrize('fault', [None, 'new-root-child', 'ttl-short', 'policy-drift',
                                    'sign-version', 'key-export', 'new-short-leaf', 'static-drift',
                                    'missing-closed-metadata', 'normalized-old-token', 'normalized-duplicate-token',
-                                   'issuer-switch'])
+                                   'issuer-switch', 'signer-switch'])
 def test_recovery_candidate_admits_only_fresh_complete_scoped_generation(preflight_server, fault):
     state = preflight_server
     state.closed_metadata = fault != 'missing-closed-metadata'
@@ -31,6 +32,15 @@ def test_recovery_candidate_admits_only_fresh_complete_scoped_generation(preflig
             path = state.new/f'keycloak_{realm}_rs256_cert'
             public = x509.load_pem_x509_certificate(path.read_bytes()).public_key()
             path.write_bytes(pem(certificate('synthetic successor leaf', public, issuer, signer)))
+    if fault == 'signer-switch':
+        signer = key()
+        issuer_key, issuer = state.fixture_roots['workload-pki']
+        remote, filename = 'workload-tls-auth-server', 'auth_workload_server_cert'
+        (state.new/filename).write_bytes(pem(certificate(remote, signer.public_key(), issuer, issuer_key)))
+        metadata = dict(state.metadata[remote])
+        metadata['keys'] = {'1': {'public_key': signer.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()}}
+        state.next_metadata = {remote: metadata}
     for root in (state.old, state.new):
         root.chmod(0o700)
         (root/'static-preserved').write_text('PUBLIC_PRESERVED')
