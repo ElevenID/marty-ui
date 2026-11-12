@@ -11,6 +11,9 @@ const { createRequire } = require('node:module');
 const MAXIMUM_STATE_FILE_BYTES = 1024 * 1024;
 const MAXIMUM_DIAGNOSTIC_BYTES = 64 * 1024;
 const MAXIMUM_SCENARIO_FILE_BYTES = 8192;
+const SYNTHETIC_CRITERIA = {
+  narrative: 'Synthetic deployment acceptance credential issued by the authorized operator; no real learner attainment.',
+};
 const SCENARIO_FIELDS = {
   given_name: 128, family_name: 128, organization_name: 256,
   achievement_name: 256, achievement_description: 1024,
@@ -279,6 +282,7 @@ async function main(argv) {
           organization_id: cfg['organization-id'], organization_name: 'Marty', role: 'applicant',
           achievement_name: 'Kubernetes milestone acceptance',
           achievement_description: 'Synthetic operator credential for deployment acceptance',
+          achievement_criteria: SYNTHETIC_CRITERIA,
           ...(descriptiveClaims || {}),
           issued_at: new Date().toISOString(),
         } };
@@ -291,6 +295,8 @@ async function main(argv) {
       privateWrite('offer-private.json', offer);
       stage = 'oid4vci-redeem-and-verify';
       const received = await helpers.receiveAndVerifyCredential(offer.credential_offer_uri, identity, cfg.origin);
+      check(JSON.stringify(received.payload?.vc?.credentialSubject?.achievement?.criteria)
+        === JSON.stringify(SYNTHETIC_CRITERIA), 'synthetic_achievement_criteria_changed');
       privateWrite('credential-private.json', received);
       const credentialId = received.payload?.jti;
       check(typeof credentialId === 'string' && credentialId, 'signed_credential_id_missing');
@@ -322,6 +328,8 @@ async function main(argv) {
       check(verified.payload.jti === original.credentialId, 'credential_id_readback_changed');
       requireSignedCredentialBinding(verified.payload, { vct: original.vct,
         issuer_did: original.issuerDid, credential_payload_format: 'VC_JWT', credential_type: 'OpenBadgeCredential' });
+      check(JSON.stringify(verified.payload?.vc?.credentialSubject?.achievement?.criteria)
+        === JSON.stringify(SYNTHETIC_CRITERIA), 'synthetic_achievement_criteria_changed');
       receipt = { ...original, phase: 'resume', at: new Date().toISOString() };
     }
 

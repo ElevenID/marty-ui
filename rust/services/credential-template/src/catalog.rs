@@ -452,6 +452,18 @@ pub fn marty_login_badge(
             false,
             None,
         ),
+        ClaimDefinition {
+            claim_type: ClaimType::Object,
+            ..claim(
+                "marty-ob-achievement-criteria",
+                "achievement_criteria",
+                "Badge Criteria",
+                "Issuer-configured criteria for the membership achievement",
+                true,
+                false,
+                None,
+            )
+        },
         date_claim(
             "marty-ob-issued-at",
             "issued_at",
@@ -506,7 +518,7 @@ pub fn marty_login_badge(
         issuer_algorithm: Some("ES256".to_owned()),
         issuer_did: Some(issuer_did.to_owned()),
         issuance_protocol: "OID4VCI_PRE_AUTH".to_owned(),
-        version: 4,
+        version: 5,
         created_at: now,
         updated_at: now,
     }

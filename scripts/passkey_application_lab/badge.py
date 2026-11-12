@@ -198,6 +198,9 @@ class BadgeLab(workload.WorkloadMixin, app.LoginLab):
                     "achievement_description": "Synthetic membership issued only in the disposable test stack",
                     "role": "applicant",
                     "achievement_name": "Isolated verified membership",
+                    "achievement_criteria": {
+                        "narrative": "An authenticated test applicant account is selected by an authorized administrator in the disposable test stack."
+                    },
                     "issued_at": datetime.now(timezone.utc)
                     .isoformat()
                     .replace("+00:00", "Z"),

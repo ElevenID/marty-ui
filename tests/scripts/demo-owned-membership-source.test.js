@@ -11,7 +11,7 @@ test('D05 refuses an approval-time offer and dispatches explicit issue once',asy
  const appTemplate='0ab66d45-0d84-5fbd-837f-25788d32279e',appId='c0b66d45-0d84-5fbd-837f-25788d32279e';
  const flow={id:DEFAULT_LOGIN_BADGE_FLOW_ID,organization_id:org,credential_template_id:template,status:'ACTIVE',flow_type:'custom',extension:{extends_flow_type:'oid4vci_pre_authorized'},trigger:{trigger_type:'WEBHOOK',config:{event_type:'APPLICATION_APPROVED'}}};
  const credential={id:template,organization_id:org,status:'ACTIVE',credential_type:'open_badge',vct:'https://example.invalid/member'};
- const application={id:appTemplate,organization_id:org,credential_template_id:template,status:'ACTIVE',description:'Governed membership badge',form_fields:[],claim_collection_rules:['name','description'].map(name=>({claim_name:`achievement_${name}`,source:'SYSTEM',source_config:{system_field:`template.${name}`}}))};
+ const application={id:appTemplate,organization_id:org,credential_template_id:template,status:'ACTIVE',description:'Governed membership badge',form_fields:[],claim_collection_rules:[...['name','description'].map(name=>({claim_name:`achievement_${name}`,source:'SYSTEM',source_config:{system_field:`template.${name}`}})),{claim_name:'achievement_criteria',source:'SYSTEM',source_config:{system_field:'constant',value:{narrative:'Membership application approved under the configured policy.'}}}]};
  let transaction=null,issueCalls=0,profileCalls=0;
  const source=fs.readFileSync(path.join(__dirname,'demo-owned-membership.js'),'utf8'),module={exports:{}};
  vm.runInNewContext(source,{module,require:name=>{
@@ -51,7 +51,7 @@ test('D05 owns only application configuration and retires it even if application
  const org='00000000-0000-0000-0000-000000000001',template='50000000-0000-0000-0000-000000000040',sourceApplication='0ab66d45-0d84-5fbd-837f-25788d32279e';
  const created=[],source=fs.readFileSync(path.join(__dirname,'demo-owned-membership.js'),'utf8'),module={exports:{}};
  const credential={id:template,organization_id:org,status:'ACTIVE',credential_type:'open_badge',vct:'https://example.invalid/member'};
- const application={id:sourceApplication,organization_id:org,status:'ACTIVE',credential_template_id:template,description:'Governed membership badge',form_fields:[],claim_collection_rules:['name','description'].map(name=>({claim_name:`achievement_${name}`,source:'SYSTEM',source_config:{system_field:`template.${name}`}}))};
+ const application={id:sourceApplication,organization_id:org,status:'ACTIVE',credential_template_id:template,description:'Governed membership badge',form_fields:[],claim_collection_rules:[...['name','description'].map(name=>({claim_name:`achievement_${name}`,source:'SYSTEM',source_config:{system_field:`template.${name}`}})),{claim_name:'achievement_criteria',source:'SYSTEM',source_config:{system_field:'constant',value:{narrative:'Membership application approved under the configured policy.'}}}]};
  const flow={id:DEFAULT_LOGIN_BADGE_FLOW_ID,organization_id:org,credential_template_id:template,status:'ACTIVE',flow_type:'custom',extension:{extends_flow_type:'oid4vci_pre_authorized'},trigger:{trigger_type:'WEBHOOK',config:{event_type:'APPLICATION_APPROVED'}}};
  let observedCredential=credential,retired=0,applicationThrows=true,definitions=[flow];
  vm.runInNewContext(source,{module,require:name=>{

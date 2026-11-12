@@ -69,7 +69,7 @@ def expected_scope(name):
 
 @pytest.fixture
 def preflight_server(tmp_path):
-    state = SimpleNamespace(fault=None, errors=[], seen=[], rotation=False)
+    state = SimpleNamespace(fault=None, errors=[], seen=[], rotation=False, closed_metadata=False)
     names = sorted(
         SELFHOST_TOKEN_FILES
         | {
@@ -123,6 +123,10 @@ def preflight_server(tmp_path):
                 "orphan": state.fault != generation + "-root-child",
                 "path": "auth/token/create/selfhost-renew-leaf",
             }
+            if state.closed_metadata:
+                data.update(type="service", num_uses=0, identity_policies=[], period=0,
+                            token_period=0, creation_ttl=28800, explicit_max_ttl=28800,
+                            renewable=True)
             if state.fault == "duplicate-policy" and name == "keycloak_master_cookie_token":
                 data["policies"] = ["scope-keycloak-11id-cookie-token"]
             if state.fault == "policy-reference":
@@ -182,12 +186,21 @@ def preflight_server(tmp_path):
         if path.endswith("/cert/ca"):
             mount = path.removesuffix("/cert/ca")
             value = state.issuers[mount]
+            if mount == "keycloak-pki" and getattr(state, 'next_keycloak_issuer', None):
+                state.keycloak_reads = getattr(state, 'keycloak_reads', 0) + 1
+                if state.keycloak_reads > 1:
+                    value = state.next_keycloak_issuer
             if state.fault == "same-keycloak" and mount == "keycloak-pki-v5":
                 value = state.issuers["keycloak-pki"]
             return 200, {"data": {"certificate": value}}
         if path.startswith("transit/keys/"):
             remote = path.removeprefix("transit/keys/")
             data = dict(state.metadata[remote])
+            if remote in getattr(state, 'next_metadata', {}):
+                state.key_reads = getattr(state, 'key_reads', {})
+                state.key_reads[remote] = state.key_reads.get(remote, 0) + 1
+                if state.key_reads[remote] > 1:
+                    data = state.next_metadata[remote]
             if state.fault == "key-export":
                 data["exportable"] = True
             if state.fault == "key-backup":
@@ -370,11 +383,12 @@ def prepare_certificates(state, mode="ordinary", fault=None):
                 signer.public_key(),
                 signer=signer,
                 ca=True,
-                before=-7200,
+                before=-7200 if mode in ("recovery", "retire") else -60,
                 after=-3600 if mode == "retire" and not replacement else 365 * 86400,
             )
             roots[name] = signer, issuer
     state.issuers = {name: pem(cert).decode() for name, (_, cert) in roots.items()}
+    state.fixture_roots = roots  # Synthetic in-memory issuer keys for recovery fault cases.
     state.metadata = {}
     roles = [
         (remote, TLS_CERT_BY_ROLE[role], "workload")
@@ -415,7 +429,9 @@ def prepare_certificates(state, mode="ordinary", fault=None):
                 signer.public_key(),
                 issuer,
                 issuer_signer,
-                after=1800 if fault == "short-leaf" else 8 * 3600,
+                before=-7200,
+                after=-60 if mode == "recovery" and directory == state.old else
+                      1800 if fault == "short-leaf" else 8 * 3600,
             )
             (directory / filename).write_bytes(pem(leaf))
     before, after = state.issuers["workload-pki"], state.issuers["workload-pki-v5"]

@@ -21,6 +21,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import time
 
@@ -363,10 +364,9 @@ def recover_locked(args: argparse.Namespace) -> None:
     }))
     uid = None
     remote_ready = root_uploaded = operator_uploaded = native_inflight = exported = False
-    phase_name = "producer-creation"
+    phase_name = "workload-preflight" if reload_requested else "producer-creation"
     progress = {"stageAttempted": False, "stageCompleted": False, "qualificationCompleted": False,
                 "activationAttempted": False, "verifiedSecrets": []}
-    producer_deadline = time.monotonic() + 1200
     completed = False
     retained_outputs = {operation / "kubeconfig": (config, 0o600), operation / "marty-deploy": (operator_bytes, 0o700),
                         operation / "current-snapshot.tar": (archive, 0o600),
@@ -374,6 +374,21 @@ def recover_locked(args: argparse.Namespace) -> None:
     retained_candidate = None
     verified_postimages = {}
     try:
+        if reload_requested:
+            from reload_kubernetes_legacy_workloads import preflight_workloads
+
+            preflight = bootstrap.encoded(preflight_workloads(original, bound, transport))
+            preflight_path = operation / "reload-preflight.json"
+            bootstrap.write_new(preflight_path, preflight)
+            retained_outputs[preflight_path] = (preflight, 0o600)
+            inspection.sources.recheck(source_binding)
+            inspection.namespace_identity(transport, binding)
+            inspection.same(inspection.openbao_identity(transport, original["images"]["openbao_didcomm"],
+                                                        uid=openbao["uid"]), openbao,
+                            "retained OpenBao pod changed during workload preflight")
+        phase_name = "producer-creation"
+        # Read-only admission must not consume the producer's bounded lifetime.
+        producer_deadline = time.monotonic() + 1200
         created = transport.kubectl("legacy producer creation", "create", "-f", "-", "-o", "json", data=bootstrap.encoded(expected))
         bootstrap.require(0 < len(created) <= 1024 * 1024, "created producer response exceeds private bounds")
         bootstrap.write_new(operation / "producer-created.json", created)
@@ -652,6 +667,8 @@ def recover_locked(args: argparse.Namespace) -> None:
                 "credentialActivationComplete": True, "workloadReloadCompletionAccepted": False,
                 "status": "incomplete-preserve-private-evidence", "automaticReplay": False,
             }))
+            print("Verified 34 existing Secret updates; workload reload is incomplete. "
+                  "Preserve private evidence; do not replay the attempt.", file=sys.stderr)
             raise
         print("Verified 34 existing Secret updates and 16 new Ready Pods with matching credential projections. "
               "Full-environment health and end-to-end checks remain separate.")

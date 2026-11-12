@@ -366,43 +366,7 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
     };
   }
 
-  const loadError = firstResourceError(trustDependencies.resourceErrors, ['policies']);
-  if (loadError) {
-    return buildLoadErrorReadiness('Presentation policies', loadError.error);
-  }
-
-  if (policies.length === 0) {
-    return {
-      state: ReadinessState.MISSING,
-      message: 'No Presentation Policies configured',
-      action: 'Create',
-      path: '/console/org/policies/presentation/new',
-      blockReason: null,
-    };
-  }
-
-  const blocked = policies.filter((p) =>
-    !p.required_claims ||
-    p.required_claims.length === 0
-  );
-
-  if (blocked.length > 0) {
-    return {
-      state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
-      action: 'Fix',
-      path: '/console/org/policies/presentation',
-      blockReason: 'Presentation Policy exists but has no required claims',
-    };
-  }
-
-  return {
-    state: ReadinessState.READY,
-    message: `${policies.length} policy(ies) configured`,
-    action: null,
-    path: null,
-    blockReason: null,
-  };
+  return evaluatePolicyContents(policies, trustDependencies);
 }
 
 function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDependencies = {}) {
@@ -420,6 +384,11 @@ function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDepen
     };
   }
 
+  return evaluatePolicyContents(policies, trustDependencies);
+}
+
+// Shared policy checks run only after each journey has admitted its own prerequisites.
+function evaluatePolicyContents(policies, trustDependencies) {
   const loadError = firstResourceError(trustDependencies.resourceErrors, ['policies']);
   if (loadError) {
     return buildLoadErrorReadiness('Presentation policies', loadError.error);

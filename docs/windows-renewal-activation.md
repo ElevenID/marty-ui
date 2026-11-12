@@ -371,3 +371,46 @@ before adoption. Older operator code cannot read the product records. No task,
 logon hook, release publication, public route or reboot is installed or performed
 by this command. Installed-runtime/recovery and end-to-end application acceptance
 remain separate requirements.
+
+## Expired current proof before credential production
+
+The existing Python recovery owner exposes explicit `--expired-current` phases
+for one narrow stopped renewal: authority completed, current proof started but
+not completed, every producer/activation receipt empty. Inspection preserves the
+failed attempt and its guard. It does not admit retry, expired TLS, or rollback.
+
+Use `scripts/selfhost_windows_recovery.py --configuration <managed.json>` with:
+
+| Phase | Additional arguments | Effect |
+| --- | --- | --- |
+| `--expired-current inspect` | none | Read-only failed-attempt evidence |
+| `--expired-current stage` | `--attempt-directory <empty-private-windows-renewal-uuid> --logical-project <marty-selfhost-name>` | Guarded fresh credentials through existing producers |
+| `--expired-current publish` | `--attempt-directory <attempt>` | Fresh candidate proof and metadata publication |
+| `--expired-current activate` | `--attempt-directory <attempt>` | Recreate the existing owned dependency layers once; no expired rollback |
+| `--expired-current select` | `--attempt-directory <attempt> --source-journal <predecessor>` | Fresh running-generation proof, sealed successor selection; guards retained |
+| `--expired-current finalize` | `--attempt-directory <attempt> --source-journal <predecessor>` | Repeat complete-chain/operator/current proof, archive exact guards without deleting evidence |
+
+These explicit phases cannot be combined with ordinary renewal, check-only or
+engine-wait arguments. They do not install a task or alter public routing.
+The pinned operator must implement `operator recovery-contract`. When a separately
+published successor is needed, supply `--operator-successor-file <private.json>`
+on each mutation phase. That file identifies `assets`, `expected` (source SHA,
+release tag, run ID/attempt, binary SHA256), `gh`, `cosign`, and trusted
+`verifier_sha256` pins. The owner repeats release/run, signature/provenance,
+binary identity and capability verification; local metadata is insufficient.
+Historical runtime, model, images, CA and storage bindings stay unchanged.
+
+The next ordinary renewal uses a newly staged configuration with the selected
+operator. Resolution replays the complete stored-owner chain before admitting
+that caller identity. Older entrypoints must match a recorded historical
+configuration; newly staged transactions must match the selected owner. Neither
+an uncommitted recovery marker nor a stale operator grants mutation authority.
+
+Never replay an interrupted producer or activation. Preserve its receipts for
+operator reconciliation. Selection can complete missing or exactly empty target
+seed files after fresh proof; partial/empty source intent or decision files
+remain refused. Finalization can resume after one guard was archived, repeating
+all proofs and checking the exact archived bytes. A failed check after a rename
+is an uncertain outcome, not an undone rename. Normal later operations still
+perform their own native current admission. Local tests or a signed binary alone
+do not replace protected source integration and release/deployment approval.

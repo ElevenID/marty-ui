@@ -937,9 +937,20 @@ fn run() -> Result<(), String> {
                 Ok(())
             }
 
+            Some("recovery-contract") if args.len() == 2 => serde_json::to_writer(
+                std::io::stdout(),
+                &serde_json::json!({
+                    "schema":"marty.windows-recovery-operator/v1",
+                    "retained_certificates":true,"recovery_candidate":true,
+                    "expired_rollback":false,"automatic_activation":false
+                }),
+            )
+            .map_err(|_| "KMS operator input refused"),
             Some(
                 "ca-issuer"
                 | "activation-certificates"
+                | "retained-certificates"
+                | "recovery-candidate"
                 | "activation-tokens"
                 | "authority-check"
                 | "renewal-inventory"
@@ -978,6 +989,14 @@ fn run() -> Result<(), String> {
                                     .map(|_| Value::Null)
                             }
                             "activation-certificates" => preflight::certificates(&bao, &context)
+                                .await
+                                .map(|_| Value::Null),
+                            "retained-certificates" => {
+                                preflight::retained_certificates(&bao, &context)
+                                    .await
+                                    .map(|_| Value::Null)
+                            }
+                            "recovery-candidate" => preflight::recovery_candidate(&bao, &context)
                                 .await
                                 .map(|_| Value::Null),
                             "activation-tokens" => {

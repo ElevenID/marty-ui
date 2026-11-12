@@ -28,7 +28,8 @@ def checkpoint(raw):
     require(type(value) is dict and set(value) == {'schema', 'source_dir', 'intent_sha256', 'sequence_offset', 'generation_model',
                                                   'first_intent', 'first_selection'})
     from selfhost_windows_product_journal import SCHEMA as product_schema
-    require(value['schema'] in {SCHEMA, product_schema} and Path(value['source_dir']).is_absolute()
+    from selfhost_windows_recovery_journal import SCHEMA as recovery_schema
+    require(value['schema'] in {SCHEMA, product_schema, recovery_schema} and Path(value['source_dir']).is_absolute()
             and re.fullmatch(r'[0-9a-f]{64}', value['intent_sha256'])
             and type(value['sequence_offset']) is int and value['sequence_offset'] >= 0)
     require(value['first_intent'] == selection.decode(raw['000001.intent.json'])
@@ -84,7 +85,41 @@ def decision(marker, initial):
             'candidate_only': True}
 
 
-def resolve(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None):
+def resolve(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None, pending_recovery_sha256=None):
+    """Replay stored owners, then admit the caller's actual operator identity.
+
+    A completed recovery can change four operator fields. A new transaction
+    must match the selected owner; an older entrypoint must match a recorded
+    historical configuration in the verified predecessor chain. Uncommitted
+    markers and unselected operator identities grant no caller authority.
+    """
+    from selfhost_windows_model import immutable_binding, model_binding
+    from selfhost_windows_recovery_journal import OPERATOR_FIELDS
+    ancestry=[] if ancestry is None else ancestry
+    start=len(ancestry)
+    replay=deepcopy(config)
+    if raw:
+        stored=selection.decode(raw['owner.json'])['binding']
+        for field in OPERATOR_FIELDS:replay['native'][field]=stored['native'][field]
+    expected,active,entries,accepted=_resolve_chain(replay,root,raw,stack,
+        pending_model=pending_model,pending_continuation_sha256=pending_continuation_sha256,
+        ancestry=ancestry,discover_pending=discover_pending,pending_product_sha256=pending_product_sha256,
+        pending_recovery_sha256=pending_recovery_sha256)
+    supplied=immutable_binding(selection.binding(config))
+    historical=False
+    if supplied!=immutable_binding(expected):
+        for _prior_root,prior_raw in ancestry[start:]:
+            owner=selection.decode(prior_raw['owner.json'])['binding']
+            if immutable_binding(owner)!=supplied:continue
+            for name,body in prior_raw.items():
+                if selection.ENTRY.fullmatch(name) and name.endswith('.intent.json'):
+                    historical |= selection.decode(body)['config_sha256']==selection.config_digest(config)
+    require(supplied==immutable_binding(expected) or historical)
+    require(model_binding(config) in accepted)
+    return expected,active,entries,accepted
+
+
+def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None, pending_recovery_sha256=None):
     """Called under the shared project lock, including activation's existing lock.
 
     All sealed predecessor records/directories remain held through the caller's
@@ -94,6 +129,7 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
     from selfhost_windows_model import hold_history, model_binding, owner_binding
     import selfhost_windows_renewal as renewal
     import selfhost_windows_product_journal as product
+    import selfhost_windows_recovery_journal as recovery
     accepted = [];visited = set();expected_seed = None
     while True:
         require(root not in visited);visited.add(root)
@@ -102,21 +138,45 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
             require(all(raw.get(name) == body for name, body in expected_seed.items()))
         expected = owner_binding(raw, config)
         if not raw or set(raw) == {'owner.json'}:
-            require(expected_seed is None and pending_continuation_sha256 is None and pending_product_sha256 is None)
+            require(expected_seed is None and pending_continuation_sha256 is None and pending_product_sha256 is None
+                    and pending_recovery_sha256 is None)
             return expected, root, raw, [model_binding(expected)]
         has_link = INTENT in raw
         has_product = product.INTENT in raw
-        require(not (has_link and has_product) and (product.DECISION not in raw or has_product))
+        has_recovery = recovery.INTENT in raw
+        require(sum((has_link,has_product,has_recovery))<=1 and (product.DECISION not in raw or has_product)
+                and (recovery.DECISION not in raw or has_recovery))
+        require(recovery.PENDING not in raw or (has_recovery and recovery.DECISION not in raw))
         require(DECISION not in raw or has_link)
         intents, records = selection._parse(raw, expected, allow_pending_model=pending_model and not (has_link or has_product))
         current_model, models = hold_history(raw, expected, records, stack,
                                              allow_pending=pending_model and not (has_link or has_product))
         accepted.extend(models)
-        if not has_link and not has_product:
-            require(pending_continuation_sha256 is None and pending_product_sha256 is None)
+        if not has_link and not has_product and not has_recovery:
+            require(pending_continuation_sha256 is None and pending_product_sha256 is None and pending_recovery_sha256 is None)
             require(model_binding(config) in accepted)
             return expected, root, raw, accepted
         require(len(intents) == len(records))
+        if has_recovery:
+            require(not pending_model and pending_continuation_sha256 is None and pending_product_sha256 is None)
+            marker=recovery.validate_marker(raw,expected,current_model,root)
+            if pending_recovery_sha256 is not None:
+                require(type(pending_recovery_sha256) is str and re.fullmatch(r'[0-9a-f]{64}',pending_recovery_sha256)
+                        and selection.digest(raw[recovery.INTENT])==pending_recovery_sha256)
+                return expected,root,raw,accepted
+            require(recovery.DECISION in raw)
+            initial=recovery.seed(raw,expected,current_model,marker,stack)
+            require(selection.decode(raw[recovery.DECISION])==recovery.decision(marker,initial))
+            if ancestry is not None:ancestry.append((root,dict(raw)))
+            stack.enter_context(_held_private_input(root,directory=True))
+            config=selection.decode(initial['000001.intent.json'])
+            config=selection.decode(stack.enter_context(renewal.hold_private_input(Path(config['config_path']))))
+            root=Path(marker['target_dir'])
+            require(root not in visited)
+            stack.enter_context(renewal.hold_storage_namespace(root))
+            with _held_private_input(root,directory=True):pass
+            raw=selection._read(root,stack);expected_seed=initial
+            continue
         if has_product:
             marker = product.validate_marker(raw, expected, current_model, root)
             if pending_product_sha256 == selection.digest(raw[product.INTENT]):

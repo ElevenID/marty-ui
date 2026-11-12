@@ -177,6 +177,32 @@ fn verify_reconciliation(
     )
 }
 
+/// A partial runtime start must retain the authenticated complete model: the
+/// ingress binding and every existing setup/runtime identity still need to be
+/// visible even when only infrastructure is being started. Ordinary full starts
+/// keep their historical runtime-only model and profile selection.
+fn start_session(
+    docker: &Path,
+    binding: &crate::installer_state::RuntimeBinding,
+    saved: &SavedSession,
+    selected: Vec<String>,
+    complete_model: bool,
+) -> Result<ComposeSession> {
+    let mut inputs = saved.inputs.clone();
+    inputs.services = selected;
+    if complete_model {
+        let session = ComposeSession::new_runtime_recovery(docker, binding, inputs)?;
+        require(
+            session.model() == &saved.model
+                && session.configuration_sha256() == saved.configuration_sha256,
+        )?;
+        Ok(session)
+    } else {
+        inputs.profiles.clear();
+        ComposeSession::new(docker, binding, inputs)
+    }
+}
+
 /// A lost start/stop response does not make those idempotent operations unsafe
 /// forever. Reconstruct the exact original selection, reobserve every retained
 /// identity and completed setup job, and retire only that uncertain attempt.
@@ -206,13 +232,23 @@ fn reconcile_pending(
             (action == "start" && !selected.is_empty())
                 || (action == "stop" && selected.is_empty()),
         )?;
-        let mut inputs = saved.inputs.clone();
-        if action == "start" {
-            inputs.profiles.clear();
-        }
-        inputs.services = selected.clone();
-        let session =
-            ComposeSession::new(docker, state.journal().runtime().ok_or(REFUSED)?, inputs)?;
+        let binding = state.journal().runtime().ok_or(REFUSED)?;
+        let session = if action == "start" {
+            // The immutable intent identifies which exact model was used.
+            // Preserve legacy runtime-only intents; a new partial start binds
+            // the saved complete model and its full retained-resource census.
+            start_session(
+                docker,
+                binding,
+                saved,
+                selected.clone(),
+                intent["configuration_sha256"] == saved.configuration_sha256,
+            )?
+        } else {
+            let mut inputs = saved.inputs.clone();
+            inputs.services = selected.clone();
+            ComposeSession::new(docker, binding, inputs)?
+        };
         if action == "start" {
             session.require_runtime_selection()?;
         }
@@ -446,9 +482,7 @@ fn execute_selection_locked(
         "stop" => session.stop(state, &operation, STOP_GRACE)?,
         "start" => {
             require(saved.schema != installer_doctor::FAILED_RUNTIME_SESSION_SCHEMA)?;
-            let mut inputs = saved.inputs.clone();
-            inputs.profiles.clear();
-            inputs.services = selected.map(<[String]>::to_vec).unwrap_or_else(|| {
+            let services = selected.map(<[String]>::to_vec).unwrap_or_else(|| {
                 resources
                     .containers
                     .values()
@@ -456,9 +490,9 @@ fn execute_selection_locked(
                     .map(|c| c.service.clone())
                     .collect()
             });
-            require(!inputs.services.is_empty())?;
+            require(!services.is_empty())?;
             let binding = state.journal().runtime().ok_or(REFUSED)?.clone();
-            let runtime = ComposeSession::new(docker, &binding, inputs)?;
+            let runtime = start_session(docker, &binding, &saved, services, selected.is_some())?;
             runtime.start_existing(state, &operation, START_WAIT)?
         }
         _ => return Err(REFUSED.into()),
@@ -843,6 +877,43 @@ mod tests {
         assert!(runtime_satisfied(&retained, &rows, "stop", None));
         rows[1]["ID"] = json!("foreign");
         assert!(!runtime_satisfied(&retained, &rows, "stop", None));
+    }
+
+    #[test]
+    fn infrastructure_start_can_observe_stopped_application_without_hiding_it() {
+        let mut retained = resources();
+        let mut rows = vec![json!({"Service":"job","ID":"a".repeat(64),"State":"exited"})];
+        for (role, id, status) in [("openbao", "d", "running"), ("app", "e", "exited")] {
+            let mut runtime = retained.containers["job"].clone();
+            runtime.id = id.repeat(64);
+            runtime.service = role.into();
+            runtime.setup = false;
+            runtime.setup_execution = None;
+            runtime.health_required = true;
+            retained.containers.insert(role.into(), runtime);
+            rows.push(json!({"Service":role,"ID":id.repeat(64),"State":status,"Health":"healthy"}));
+        }
+        let selected = ["openbao".into()];
+        assert!(runtime_satisfied(
+            &retained,
+            &rows,
+            "start",
+            Some(&selected)
+        ));
+        assert!(!runtime_satisfied(&retained, &rows, "start", None));
+        assert!(!runtime_satisfied(
+            &retained,
+            &rows[..2],
+            "start",
+            Some(&selected)
+        ));
+        rows[2]["ID"] = json!("f".repeat(64));
+        assert!(!runtime_satisfied(
+            &retained,
+            &rows,
+            "start",
+            Some(&selected)
+        ));
     }
 
     #[test]

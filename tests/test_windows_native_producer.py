@@ -58,6 +58,7 @@ def producer(monkeypatch):
         if command in {'start','rm'}:return CompletedProcess(args,0,b'',b'')
         assert command=='run'
         request=json.loads(kw['stdin_bytes'])
+        state.setdefault('requests', []).append(request)
         if args[-1]==native.PRODUCER_PREPARE:
             assert request['root']=='/control/windows-renewal-'+cycle
             assert args[args.index('--network')+1]=='none'
@@ -65,6 +66,7 @@ def producer(monkeypatch):
         else:
             assert args[-1]==native.PRODUCER_ASSEMBLE and request['files']==40
             value={'files':40,'changed_files':39,'native_verified':True}
+            if request.get('recovery') and state['fault']!='missing-recovery-receipt':value['recovery']=True
         return CompletedProcess(args,0,json.dumps(value).encode(),b'')
     monkeypatch.setattr(renewal,'run_owned_mutation',run)
     monkeypatch.setattr(native,'export_generation',lambda *_a:changed)
@@ -83,6 +85,23 @@ def test_fixed_producers_have_named_custody_and_complete_only_after_removal(prod
     assert [phase for phase,event,_ in events if event=='completed']==['prepare','tls','keycloak','export']
     assert sum(args[3]=='rm' for args in calls)==3
     assert [event for phase,event,_ in events if phase=='tls']==['started','created','helper','completed']
+
+
+@pytest.mark.parametrize('fault', [None, 'missing-recovery-receipt', 'short-ttl'])
+def test_recovery_producer_requires_explicit_admission_receipt(producer, fault):
+    cfg,current,cycle,image,checkpoint,events,calls,state=producer
+    state['fault']=fault
+    if fault=='short-ttl':cfg['native']['minimum_ttl']=3599
+    def recover():
+        return native.produce_recovery_generation(cfg,current,'marty-selfhost-synthetic',cycle,image,checkpoint)
+    if fault:
+        with pytest.raises(ValueError):recover()
+        assert not any(phase=='export' for phase,_,_ in events)
+        if fault=='short-ttl':assert not calls
+    else:
+        assert len(recover())==40
+        assert state['requests'][-1]['recovery'] is True
+        assert [phase for phase,event,_ in events if event=='completed']==['prepare','tls','keycloak','export']
 
 
 @pytest.mark.parametrize('fault',['uncertain','tls-exit','foreign-helper','rebound-tls'])

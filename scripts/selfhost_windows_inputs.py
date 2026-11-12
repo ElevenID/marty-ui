@@ -190,18 +190,24 @@ def hold_private_generation(root: Path, names: list[str]):
         raise ValueError(REFUSAL) from None
 
 
-def write_empty_private_file(path: Path, value: str) -> None:
+def write_empty_private_file(path: Path, value: str, *, expected_identities=None) -> None:
     """Initialize an existing empty private file through one verified writer.
 
     Never creates a file or changes its ACL. A failure after writing can leave
     partial material: preserve it for operator inspection, never retry blindly.
+    Optional expected identities bind the whole path to an earlier held output
+    allocation; a replacement is refused before the verified handle is written.
     """
     try:
         require(os.name == "nt")
         require(isinstance(value, str))
         payload = value.encode("utf-8")
         require(0 < len(payload) <= MAX_BYTES and b"\0" not in payload)
-        _private_file_bytes(path, payload)
+        if expected_identities is None:
+            _private_file_bytes(path, payload)
+        else:
+            with _held_private_input(path,payload,_expected_identities=expected_identities):
+                pass
     except (OSError, UnicodeError, ValueError, TypeError):
         raise ValueError(WRITE_REFUSAL) from None
 
@@ -213,15 +219,24 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
 @contextmanager
 def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
-                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, public_file=False):
+                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, public_file=False,
+                        mutable_directory=False, _rename_to=None, _expected_identities=None):
     from ctypes import wintypes as w
 
     path = Path(path)
+    if _rename_to is not None:
+        _rename_to=Path(_rename_to)
+        require(not directory and not ancestor and write_value is None and not exclusive
+                and _rename_to.is_absolute() and _rename_to.parent==path.parent and _rename_to!=path)
+    require(type(mutable_directory) is bool and (not mutable_directory or
+            (directory and not ancestor and write_value is None and not exclusive)))
     before = _path_identities(path, directory=directory)
+    if _expected_identities is not None:require(before==_expected_identities)
     require(not directory or write_value is None)
     require(not ancestor or write_value is None)
     require(type(public_file) is bool and (not public_file or
-            (not directory and not ancestor and write_value is None and exclusive is False)))
+            (not directory and not ancestor and write_value is None and exclusive is False
+             and not mutable_directory and _rename_to is None)))
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     security = ctypes.WinDLL("advapi32", use_last_error=True)
     pointer = ctypes.c_void_p
@@ -299,6 +314,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
     # issuing a data read for them. RW sharing still permits application writes.
     access = 0x80000080 if ancestor else 0x80020080 | (
         0x40000000 if write_value is not None or exclusive else 0)
+    if _rename_to is not None:access |= 0x00010000  # DELETE for rename of this verified handle.
     handle = create(str(path), access, 3 if ancestor else 1, None, 3,
                     0x00200000 | (0x02000000 if directory else 0), None)
     require(handle not in (None, ctypes.c_void_p(-1).value))
@@ -379,7 +395,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                     and count.value == first.size_low)
         last = file_info()
         def stable(value):
-            if ancestor:
+            if ancestor or mutable_directory:
                 return (value.attributes, bytes(value.created), value.volume,
                         value.index_high, value.index_low)
             return (value.attributes, bytes(value.created), bytes(value.written),
@@ -390,8 +406,10 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                 and _path_identities(path, directory=directory) == before)
         if write_value is not None:
             require(data.raw[:count.value] == write_value)
+        completed=False
         try:
             yield data.raw[:count.value]
+            completed=True
         finally:
             # Recheck even if the bounded caller action raises. Ordinary
             # write/delete sharing was never granted in the interim.
@@ -399,5 +417,17 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
             require(stable(first) == stable(last) and file_identity(last) == identity
                     and (ancestor or public_file or prove_acl() == initial_acl)
                     and _path_identities(path, directory=directory) == before)
+            if completed and _rename_to is not None:
+                destination=str(_rename_to)
+                class RenameInfo(ctypes.Structure):
+                    _fields_=[('replace',w.BOOL),('root',w.HANDLE),('length',w.DWORD),
+                              ('name',ctypes.c_wchar*(len(destination)+1))]
+                request=RenameInfo()
+                request.replace=False;request.root=None
+                request.length=len(destination.encode('utf-16-le'));request.name=destination
+                rename=bind(kernel,'SetFileInformationByHandle',[w.HANDLE,ctypes.c_int,pointer,w.DWORD],w.BOOL)
+                require(bool(rename(handle,3,ctypes.byref(request),ctypes.sizeof(request))))
+                require(file_identity(file_info())==identity and prove_acl()==initial_acl
+                        and _path_identities(_rename_to)==before)
     finally:
         close(handle)
