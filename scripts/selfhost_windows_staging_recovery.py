@@ -11,12 +11,14 @@ from pathlib import Path
 from selfhost_windows_selection import _stage_names, packed, require
 
 RECOVERY_PHASES = ('authority','prepare','tls','keycloak','export','materialize','candidate')
+RECOVERY_RECEIPTS = frozenset({f'{phase}.{event}.json' for phase in RECOVERY_PHASES
+                              for event in ('started','completed')} |
+    {'prepare.helper.json','tls.created.json','tls.helper.json','keycloak.helper.json'})
 
 
 def recovery_phase_receipts(raws, project, cycle, helper_image, services_image):
     """Require complete canonical phases and exact named helper identities."""
-    expected = {f'{phase}.{event}.json' for phase in RECOVERY_PHASES for event in ('started','completed')}
-    expected |= {'prepare.helper.json','tls.created.json','tls.helper.json','keycloak.helper.json'}
+    expected = RECOVERY_RECEIPTS
     require(type(raws) is dict and set(raws)==expected)
     require(re.fullmatch(r'[0-9a-f]{32}', cycle))
     import selfhost_windows_selection as selection
@@ -69,7 +71,7 @@ def inspect_failed_current(config_path):
 
 
 @contextmanager
-def _failed_current_inputs(config_path):
+def _failed_current_inputs(config_path, *, recovery_guard_sha256=None):
     """Read-only held proof of the stopped phase, never credential admission.
 
     The result is published to the caller only after all input/namespace exit
@@ -80,8 +82,14 @@ def _failed_current_inputs(config_path):
     from selfhost_windows_continuation import CHECKPOINT, checkpoint
     renewal = selection.renewal
     with selection._session(config_path) as (base, _, expected, _, raw, stack):
+        if recovery_guard_sha256 is None:
+            require(not renewal.namespace_entry_exists(renewal.recovery_guard(base)))
+        else:
+            require(type(recovery_guard_sha256) is str and re.fullmatch(r'[0-9a-f]{64}',recovery_guard_sha256))
+            require(selection.digest(stack.enter_context(renewal.hold_private_input(
+                renewal.recovery_guard(base))))==recovery_guard_sha256)
         require(not any(renewal.namespace_entry_exists(getter(base)) for getter in (
-            renewal.recovery_guard, renewal.recovery_preparation_guard,
+            renewal.recovery_preparation_guard,
             renewal.model_repair_guard, renewal.continuation_guard)))
         intents, records = selection._parse(raw, expected)
         require(len(intents) == len(records) and len(records) > 0)
@@ -271,3 +279,85 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
                        'receipt_sha256': hashes,
                        'credential_admission': False, 'guards_retained': True}
     return provisional
+
+
+@contextmanager
+def _recovery_candidate_inputs(config_path, output_dir, operator_successor):
+    """Fresh candidate proof under both guards; never consumes a prior dict."""
+    import selfhost_windows_selection as selection
+    import selfhost_windows_renewal_native as native
+    renewal = selection.renewal
+    base = selection.decode(renewal.read_private_bytes(Path(config_path)))
+    guard_raw = renewal.read_private_bytes(renewal.recovery_guard(base))
+    guard_sha = selection.digest(guard_raw)
+    with _failed_current_inputs(config_path, recovery_guard_sha256=guard_sha) as lease:
+        cfg, record, observed, stack = (lease[name] for name in ('config','record','observed','stack'))
+        intent = selection.decode(guard_raw)
+        root = Path(output_dir)
+        require(root.parent==Path(cfg['current_secrets']).parent and root!=lease['failed_root']
+                and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name)
+                and intent['root']==str(root) and intent['failed_proof']==lease['proof'])
+        require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',intent['logical_project']))
+        stack.enter_context(renewal.hold_storage_namespace(root))
+        stack.enter_context(selection._held_private_input(root,directory=True,mutable_directory=True))
+        names=set(RECOVERY_RECEIPTS)|{'intent.json','config.private.json'}
+        markers=[name for name in ('publication.pending.json','publication.json') if renewal.namespace_entry_exists(root/name)]
+        require(len(markers)<=1)
+        names.update(markers)
+        def membership():require({path.name for path in root.iterdir()}==names)
+        membership();stack.callback(membership)
+        require(stack.enter_context(renewal.hold_private_input(root/'intent.json'))==guard_raw==packed(intent))
+        layers=renewal.dependency_layers(observed['model'],observed['services'],
+            renewal.owned_roles(observed['model'],observed['services']))
+        config=selection._stage_configuration(cfg,record['choice'],record,root,layers)
+        admission=None
+        if operator_successor is not None:
+            from selfhost_windows_recovery_operator import admitted_operator
+            require(set(operator_successor)=={'assets','expected','gh','cosign','verifier_sha256'})
+            successor,admission=stack.enter_context(admitted_operator(cfg['native'],operator_successor['assets'],
+                operator_successor['expected'],gh=operator_successor['gh'],cosign=operator_successor['cosign'],
+                verifier_sha256=operator_successor['verifier_sha256'],docker_prefix=observed['docker'].prefix))
+            for field in ('binary','binary_sha256','source_sha','release_tag'):
+                config['native'][field]=successor[field]
+        else:
+            native.require_recovery_capability(config['native'],observed['docker'].prefix)
+        require(intent=={'schema':'marty.windows-expired-renewal-staging/v1','failed_proof':lease['proof'],
+            'root':str(root),'logical_project':intent['logical_project'],'config_sha256':selection.digest(packed(config)),
+            'operator_admission':admission,'credential_admission':False,'rollback_to_expired':False})
+        require(stack.enter_context(renewal.hold_private_input(root/'config.private.json'))==packed(config))
+        receipts={name:stack.enter_context(renewal.hold_private_input(root/name)) for name in RECOVERY_RECEIPTS}
+        cycle=root.name.removeprefix('windows-renewal-')
+        hashes,helpers=recovery_phase_receipts(receipts,cfg['project'],cycle,config['native']['helper_image'],
+            observed['model']['services']['signing-keys']['image'])
+        held=stack.enter_context(renewal.hold_private_generation(Path(config['renewed_secrets']),
+            sorted(lease['values'][record['choice']])))
+        native.preflight_recovery(config['native'],cfg['project'],lease['values'][record['choice']],held,
+            observed['docker'].prefix)
+        selection._retired_stage_helpers(observed['context'].check(before_intent=True),helpers,cycle)
+        proof={'schema':'marty.windows-recovery-candidate-publication/v1','guard_sha256':guard_sha,
+            'config_sha256':selection.digest(packed(config)),'receipt_sha256':hashes,
+            'generation_sha256':selection.fingerprint(held),'sequence':record['sequence'],
+            'data_sha256':record['data_sha256'],'credential_admission':False,'guards_retained':True}
+        for name in markers:
+            require(stack.enter_context(renewal.hold_private_input(root/name))==packed(proof))
+        yield {'proof':proof,'root':root,'names':names,'markers':markers}
+
+
+def publish_recovery_candidate(config_path, output_dir, *, operator_successor=None):
+    """Publish checked metadata only; retain both guards and forbid activation.
+
+    A failed exit leaves only the pending filename, which is never admission.
+    Existing publication is freshly reverified; no phase or mint is replayed.
+    """
+    import selfhost_windows_selection as selection
+    with _recovery_candidate_inputs(config_path,output_dir,operator_successor) as lease:
+        proof=lease['proof'];root=lease['root']
+        published='publication.json' in lease['markers']
+        if not lease['markers']:
+            selection._new_private(root/'publication.pending.json',packed(proof))
+            lease['names'].add('publication.pending.json')
+    if not published:
+        with _recovery_candidate_inputs(config_path,output_dir,operator_successor) as lease:
+            require(lease['proof']==proof and lease['markers']==['publication.pending.json'])
+        (root/'publication.pending.json').rename(root/'publication.json')
+    return proof
