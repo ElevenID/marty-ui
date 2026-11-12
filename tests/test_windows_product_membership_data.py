@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import selfhost_windows_product_schema as witness
+import selfhost_windows_product_ledger as ledger
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -156,6 +157,39 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         sql(reset+initial)
         sql("DELETE FROM credential_template_service.credential_templates WHERE id='50000000-0000-0000-0000-000000000040';")
         with pytest.raises(ValueError):witness.capture(Docker(),[owned()],project,profile=profile)
+        # Synthetic ledger observations qualify only the read-only witness,
+        # not native migration execution or the complete startup transition.
+        sql("DROP TABLE credential_template_service.rust_schema_versions; CREATE SCHEMA trust_profile_service;")
+        for table,versions in ledger.BASELINES.items():
+            sql('CREATE TABLE '+table+'(version text PRIMARY KEY,applied_at timestamptz NOT NULL DEFAULT clock_timestamp());')
+            sql('INSERT INTO '+table+"(version,applied_at) VALUES "+','.join("('"+v+"','2000-01-01')"for v in versions)+';')
+        baseline=ledger.capture(Docker(),[owned()],project,profile=profile)
+        for table,version in ledger.ADDITIONS.items():
+            sql('INSERT INTO '+table+"(version) VALUES ('"+version+"');")
+            with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,profile=profile)
+        final=ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+        assert ledger.validate_delta(baseline,final)['product_transition_admission']is False
+        # A partially/already upgraded baseline is not retry authority.
+        with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,profile=profile)
+        for table,versions in ledger.BASELINES.items():
+            sql('UPDATE '+table+" SET applied_at='1999-01-01' WHERE version='"+versions[0]+"';")
+            with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+            sql('UPDATE '+table+" SET applied_at='2000-01-01' WHERE version='"+versions[0]+"';")
+            sql('UPDATE '+table+" SET applied_at='1999-01-01' WHERE version='"+ledger.ADDITIONS[table]+"';")
+            with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+            sql('UPDATE '+table+" SET applied_at=clock_timestamp()+interval '1 hour' WHERE version='"+ledger.ADDITIONS[table]+"';")
+            with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+            sql('UPDATE '+table+" SET applied_at=clock_timestamp() WHERE version='"+ledger.ADDITIONS[table]+"';")
+            sql('INSERT INTO '+table+"(version) VALUES ('unexpected');")
+            with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+            sql('DELETE FROM '+table+" WHERE version='unexpected';")
+        ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+        table='issuance_service.rust_schema_migrations'
+        sql('ALTER TABLE '+table+' ALTER COLUMN applied_at DROP NOT NULL; UPDATE '+table+" SET applied_at=NULL WHERE version='"+ledger.ADDITIONS[table]+"';")
+        with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+        sql('UPDATE '+table+" SET applied_at=clock_timestamp() WHERE version='"+ledger.ADDITIONS[table]+"'; ALTER TABLE "+table+' ALTER COLUMN applied_at SET NOT NULL;')
+        sql('ALTER TABLE '+table+' ADD COLUMN customer_metadata text;')
+        with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
     finally:
         if cid is None:
             remaining=command(['ps','-aq','--filter','label=com.docker.compose.project='+project]).decode().split()
