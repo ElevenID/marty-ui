@@ -22,12 +22,31 @@ bootstrap. The remote Compose excludes the browser/contract/monitor workloads;
 existing synthetic-fixture adapters run separately and keep their ownership,
 OAuth/LTI, cleanup, recording and editorial requirements.
 
+Redis is an ephemeral cache in this profile: `cache_store.yml` uses
+`redis_cache_store`, sessions use encrypted cookies, and the stock delayed-job
+worker uses the PostgreSQL application database. A 64 MiB `tmpfs` at `/data`
+covers the stock Redis image's declared volume, so Docker does not create an
+anonymous disk volume. Its pages count against the unchanged Redis 128 MiB
+RAM cap; this is not extra memory capacity. Redis cache/RDB contents disappear
+when its container is replaced. Uploads, logs and PostgreSQL remain the exact
+three named persistent volumes. No Redis command/image or Canvas source changes.
+Actual cold-cache/reconnect/health/workload checks remain required.
+
+For an existing deployment, review a Redis-only recreation against its exact
+old container/image/mount and unchanged other-five generation proofs. Preserve
+the old anonymous Redis volume until the replacement is healthy with the exact
+bounded `/data` tmpfs, the other five remain unchanged and the old volume has
+zero consumers (including stopped containers). After those checks, remove only
+that exact observed anonymous volume through the reviewed cleanup step; never use prune, `down --volumes`,
+`--remove-orphans`, or broad volume deletion. If replacement fails, preserve the
+old volume and failure evidence for an explicitly reviewed rollback/recovery.
+
 All six steady services restart unless explicitly stopped; the lifecycle
 one-shot is excluded. Actual bootstrap and workload checks must still account
 for OOM/restart/generation observations rather than treating a restart as a pass.
 
 The pilot applies **real** RAM hard caps: web3GiB, one jobs process1GiB,
-Postgres512MiB, Redis128MiB, mail64MiB, edge64MiB; steady total4.75GiB.
+Postgres512MiB, Redis 128 MiB, mail64MiB, edge64MiB; steady total4.75GiB.
 The separate lifecycle cap is4GiB, run before web/jobs start; bootstrap total
 4.6875GiB. Passenger min/max workers are1 using the base image's documented
 environment controls; the stock delayed-job configuration has one worker.

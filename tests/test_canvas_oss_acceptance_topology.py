@@ -317,3 +317,20 @@ def test_stack_cd_uses_released_credentials_and_public_migration_contract() -> N
     assert "scripts/extract_verified_source.py" in workflow
     assert "pytest tests/oss_stack" in workflow
     assert "repository: ElevenID/marty-credentials" not in workflow
+
+
+def test_remote_redis_cache_data_is_bounded_ephemeral_without_anonymous_volume() -> None:
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "docker-compose.canvas-oss-remote.yml").read_text(encoding="utf-8"))
+    redis = compose["services"]["canvas-redis"]
+    assert redis["tmpfs"] == ["/data:rw,noexec,nosuid,size=67108864,mode=1777"]
+    assert "volumes" not in redis and "command" not in redis
+    assert redis["mem_limit"] == "128m" and redis["memswap_limit"] == "256m"
+    assert set(compose["volumes"]) == {"canvas_oss_files", "canvas_oss_log", "canvas_oss_postgres"}
+    assert compose["services"]["canvas-postgres"]["volumes"] == ["canvas_oss_postgres:/var/lib/postgresql/data"]
+    assert compose["services"]["canvas-jobs"]["command"] == ["bundle", "exec", "script/delayed_job", "run"]
+    configuration = (ROOT / "scripts/canvas-oss/runtime-config-contract.mjs").read_text(encoding="utf-8")
+    assert "cache_store: redis_cache_store" in configuration
+    assert "session_store: encrypted_cookie_store" in configuration
+    assert "adapter: postgresql" in configuration
