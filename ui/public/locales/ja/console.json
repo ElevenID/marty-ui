@@ -175,22 +175,27 @@
 			"noCriticalEvents": "過去24時間に重大なイベントは報告されていません。"
 		},
 		"runtimeReadiness": {
+			"title": "資格情報操作の設定",
+			"description": "設定済みのリソースの概要です。サービスの稼働状態は「システムステータス」、残りの要件は「セットアップの準備状況」で確認してください。",
+			"ready": "設定済み",
+			"degraded": "確認が必要",
+			"notReady": "未設定",
 			"issuance": {
 				"noDeployments": "有効なデプロイメントがありません",
 				"deploymentsReason": "資格情報を発行するには、有効なデプロイメントプロファイルが必要です。",
 				"configureDeployment": "デプロイメントを設定",
-				"notReady": "資格情報の発行準備ができていません",
+				"notReady": "資格情報の発行設定が完了していません",
 				"readinessReason": "発行フローと必要なリソースを確認してから、資格情報を発行してください。",
 				"reviewFlows": "発行フローを確認",
-				"operational": "資格情報の発行準備ができています",
+				"operational": "資格情報の発行に使用する有効なリソースが設定されています。",
 				"issuerConfigurationRequired": "発行者設定の確認が必要です",
 				"issuerConfigurationReason": "資格情報を発行する前に、発行者の識別情報と、有効な資格情報テンプレートが参照する発行者DIDを確認してください。"
 			},
 			"verification": {
-				"notReady": "資格情報の検証準備ができていません",
+				"notReady": "資格情報の検証設定が完了していません",
 				"readinessReason": "セッションを開始する前に、検証設定を確認してください。",
 				"reviewSetup": "検証設定を確認",
-				"operational": "資格情報の検証準備ができています",
+				"operational": "検証に使用する有効なポリシーとデプロイメントのリソースが設定されています。",
 				"policyUnreachable": "有効な提示ポリシーがありません",
 				"policyReason": "資格情報を検証するには、少なくとも1つの有効な提示ポリシーが必要です。"
 			},

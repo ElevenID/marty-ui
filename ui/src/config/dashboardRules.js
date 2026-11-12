@@ -350,6 +350,15 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
   };
 }
 
+// The native policy contract accepts either inline claims, structured
+// credential/alternative requirements, or a required holder proof. A policy
+// can be valid without duplicating structured claims in required_claims.
+function hasPresentationPolicyRequirements(policy) {
+  return ['required_claims', 'credential_requirements', 'alternative_requirements']
+    .some((field) => Array.isArray(policy?.[field]) && policy[field].length > 0)
+    || policy?.holder_binding?.required === true;
+}
+
 /**
  * Compute Presentation Policy readiness
  */
@@ -381,18 +390,15 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
     };
   }
 
-  const blocked = policies.filter((p) =>
-    !p.required_claims ||
-    p.required_claims.length === 0
-  );
+  const blocked = policies.filter((policy) => !hasPresentationPolicyRequirements(policy));
 
   if (blocked.length > 0) {
     return {
       state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
+      message: `${blocked.length} of ${policies.length} policy(ies) missing verification requirements`,
       action: 'Fix',
       path: '/console/org/policies/presentation',
-      blockReason: 'Presentation Policy exists but has no required claims',
+      blockReason: 'Presentation Policy has no credential, claim, alternative, or holder proof requirements',
     };
   }
 
@@ -435,18 +441,15 @@ function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDepen
     };
   }
 
-  const blocked = policies.filter((p) =>
-    !p.required_claims ||
-    p.required_claims.length === 0
-  );
+  const blocked = policies.filter((policy) => !hasPresentationPolicyRequirements(policy));
 
   if (blocked.length > 0) {
     return {
       state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
+      message: `${blocked.length} of ${policies.length} policy(ies) missing verification requirements`,
       action: 'Fix',
       path: '/console/org/policies/presentation',
-      blockReason: 'Presentation Policy exists but has no required claims',
+      blockReason: 'Presentation Policy has no credential, claim, alternative, or holder proof requirements',
     };
   }
 

@@ -175,22 +175,27 @@
 			"noCriticalEvents": "No se han notificado eventos críticos en las últimas 24 horas."
 		},
 		"runtimeReadiness": {
+			"title": "Configuración de operaciones de credenciales",
+			"description": "Este resumen muestra los recursos configurados. Consulte el estado del sistema para conocer la salud de los servicios y la preparación de la configuración para ver los requisitos pendientes.",
+			"ready": "Configurado",
+			"degraded": "Requiere revisión",
+			"notReady": "No configurado",
 			"issuance": {
 				"noDeployments": "No hay despliegues activos",
 				"deploymentsReason": "Se requiere un perfil de despliegue activo para emitir credenciales.",
 				"configureDeployment": "Configurar despliegue",
-				"notReady": "La emisión de credenciales no está lista",
+				"notReady": "La configuración de emisión de credenciales está incompleta",
 				"readinessReason": "Revise el flujo de emisión y sus recursos necesarios antes de emitir credenciales.",
 				"reviewFlows": "Revisar flujos de emisión",
-				"operational": "La emisión de credenciales está lista",
+				"operational": "Hay recursos activos configurados para emitir credenciales.",
 				"issuerConfigurationRequired": "La configuración del emisor necesita revisión",
 				"issuerConfigurationReason": "Revise la identidad del emisor y el DID del emisor al que hace referencia la plantilla de credencial activa antes de emitir credenciales."
 			},
 			"verification": {
-				"notReady": "La verificación de credenciales no está lista",
+				"notReady": "La configuración de verificación de credenciales está incompleta",
 				"readinessReason": "Revise la configuración de verificación antes de iniciar una sesión.",
 				"reviewSetup": "Revisar configuración de verificación",
-				"operational": "La verificación de credenciales está lista",
+				"operational": "Hay recursos activos de políticas y despliegue configurados para la verificación.",
 				"policyUnreachable": "No hay políticas de presentación activas",
 				"policyReason": "Se requiere al menos una política de presentación activa para verificar credenciales."
 			},

@@ -131,6 +131,15 @@ revision, then set up its real `ui/node_modules` mountpoint as described above.
 Switch `ui.development.checkoutPath` to it in a separate, reviewed source replay;
 do not reset, clean or switch branches in another session's mounted checkout.
 
+Keep private evidence under a restrictive `umask 077`, but run Git and source
+checkout operations in a separate subshell with `umask 022`. Otherwise new
+root-owned source files can become unreadable to the UID 1000 watcher and crash
+its checkers. Before reload, verify that UID 1000 can traverse and read `ui/`
+and `contracts/`. If repair is needed, correct only tracked public source files
+to `0644` (or `0755` for tracked executables) and their source directories to
+`0755`; do not recursively change ownership or permissions on the installation,
+private evidence, or credential directories.
+
 For an origin-only replay with unchanged backend images and schemas, retain
 private backups of the installed Helm values, manifest and certificate resource.
 Use the exact chart contents from the installed release, including its existing
@@ -160,6 +169,17 @@ match the resource and its current SAN before editing. Update that existing
 Certificate's IP SAN, preserving its issuer and Secret reference. Wait for
 `Ready=True` for the new generation and verify the served certificate's new
 SAN; an earlier generation's Ready condition is insufficient.
+
+For the public-IP profile, keep the existing automated Let's Encrypt production
+issuer, ACME account and `shortlived` profile shown in
+[`ip-certificate.yaml.example`](../deploy/k3s/ip-certificate.yaml.example).
+Retain its HTTP-01 challenge route and certificate renewal configuration.
+Check the issued leaf's validity dates and the Certificate's next renewal time,
+then verify HTTPS with normal certificate validation. When an IP client does
+not send SNI, the ingress controller's default TLSStore must reference that
+same issued Secret. Reconcile the certificate owned by this installation;
+running a different retained single-installer installation does not update
+the K3s ingress certificate.
 
 For this same-chart origin-only update, reuse the installed values and apply
 only the reviewed origin overrides, including the two disabled Jobs:

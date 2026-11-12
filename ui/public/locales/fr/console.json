@@ -175,22 +175,27 @@
 			"noCriticalEvents": "Aucun événement critique n'a été signalé au cours des dernières 24 heures."
 		},
 		"runtimeReadiness": {
+			"title": "Configuration des opérations d’identifiants",
+			"description": "Ce résumé présente les ressources configurées. Consultez l’état du système pour la santé des services et la préparation de la configuration pour les exigences restantes.",
+			"ready": "Configuré",
+			"degraded": "À vérifier",
+			"notReady": "Non configuré",
 			"issuance": {
 				"noDeployments": "Aucun déploiement actif",
 				"deploymentsReason": "Un profil de déploiement actif est requis avant de pouvoir émettre des identifiants.",
 				"configureDeployment": "Configurer le déploiement",
-				"notReady": "L'émission d'identifiants n'est pas prête",
+				"notReady": "La configuration de l’émission d’identifiants est incomplète",
 				"readinessReason": "Vérifiez le flux d'émission et ses ressources requises avant d'émettre des identifiants.",
 				"reviewFlows": "Vérifier les flux d'émission",
-				"operational": "L'émission d'identifiants est prête",
+				"operational": "Des ressources actives sont configurées pour l’émission d’identifiants.",
 				"issuerConfigurationRequired": "La configuration de l'émetteur doit être vérifiée",
 				"issuerConfigurationReason": "Vérifiez l'identité de l'émetteur et le DID d'émetteur référencé par le modèle d'identifiant actif avant d'émettre des identifiants."
 			},
 			"verification": {
-				"notReady": "La vérification des identifiants n'est pas prête",
+				"notReady": "La configuration de la vérification des identifiants est incomplète",
 				"readinessReason": "Vérifiez la configuration de vérification avant de démarrer une session.",
 				"reviewSetup": "Vérifier la configuration de vérification",
-				"operational": "La vérification des identifiants est prête",
+				"operational": "Des ressources actives de politique et de déploiement sont configurées pour la vérification.",
 				"policyUnreachable": "Aucune politique de présentation active",
 				"policyReason": "Au moins une politique de présentation active est requise pour vérifier des identifiants."
 			},

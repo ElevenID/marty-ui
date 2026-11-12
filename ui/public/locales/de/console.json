@@ -175,22 +175,27 @@
 			"noCriticalEvents": "In den letzten 24 Stunden wurden keine kritischen Ereignisse gemeldet."
 		},
 		"runtimeReadiness": {
+			"title": "Konfiguration der Nachweisvorgänge",
+			"description": "Diese Übersicht zeigt konfigurierte Ressourcen. Prüfen Sie den Systemstatus für den Dienstzustand und die Einrichtungsbereitschaft für noch offene Anforderungen.",
+			"ready": "Konfiguriert",
+			"degraded": "Prüfung erforderlich",
+			"notReady": "Nicht konfiguriert",
 			"issuance": {
 				"noDeployments": "Keine aktiven Bereitstellungen",
 				"deploymentsReason": "Für die Ausstellung von Nachweisen ist ein aktives Bereitstellungsprofil erforderlich.",
 				"configureDeployment": "Bereitstellung konfigurieren",
-				"notReady": "Die Nachweisausstellung ist noch nicht bereit",
+				"notReady": "Die Konfiguration der Nachweisausstellung ist unvollständig",
 				"readinessReason": "Prüfen Sie den Ausstellungsablauf und die erforderlichen Ressourcen, bevor Sie Nachweise ausstellen.",
 				"reviewFlows": "Ausstellungsabläufe prüfen",
-				"operational": "Die Nachweisausstellung ist bereit",
+				"operational": "Aktive Ressourcen sind für die Ausstellung von Nachweisen konfiguriert.",
 				"issuerConfigurationRequired": "Ausstellerkonfiguration muss geprüft werden",
 				"issuerConfigurationReason": "Prüfen Sie vor der Ausstellung von Nachweisen die Ausstelleridentität und die Aussteller-DID, auf die die aktive Nachweisvorlage verweist."
 			},
 			"verification": {
-				"notReady": "Die Nachweisprüfung ist noch nicht bereit",
+				"notReady": "Die Konfiguration der Nachweisprüfung ist unvollständig",
 				"readinessReason": "Prüfen Sie die Verifizierungskonfiguration, bevor Sie eine Sitzung starten.",
 				"reviewSetup": "Verifizierungseinrichtung prüfen",
-				"operational": "Die Nachweisprüfung ist bereit",
+				"operational": "Aktive Richtlinien- und Bereitstellungsressourcen sind für die Verifizierung konfiguriert.",
 				"policyUnreachable": "Keine aktiven Präsentationsrichtlinien",
 				"policyReason": "Für die Verifizierung von Nachweisen ist mindestens eine aktive Präsentationsrichtlinie erforderlich."
 			},

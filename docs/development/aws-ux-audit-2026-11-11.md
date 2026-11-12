@@ -25,23 +25,43 @@ fields were reconciled; PKCE remained S256. Verified TLS requests from the node
 returned **HTTP 200** from `/health/ready`. The browser's public egress matched
 the existing single-address ingress rule, which remained unchanged.
 
-An isolated checkout of `00ec770` was mounted for live development, preserving
-the previous dirty source tree. Its locked `npm ci` completed, and the UI pod
-reported both containers Ready. The absolute automatic-stop guard remained in
-place. The repeatable maintenance procedure is recorded in the
+An isolated checkout was mounted for live development, preserving the previous
+dirty source tree. It was advanced to `408a0f1`, including the policy fixes below,
+without moving the PR branch and triggering another CI run. Its locked `npm ci`
+completed. Source permissions were repaired for the UID 1000 watcher after a
+restrictive administrative umask made newly written files unreadable. The
+absolute automatic-stop guard remained in place, with an enabled systemd timer
+scheduled for **2026-11-12 10:00 UTC**. The maintenance procedure is recorded in the
 [live reload guide](../kubernetes-ui-live-reload.md).
 
-**Authenticated browser replay has not yet succeeded.** At the current
-checkpoint, Chrome rejected navigation with `ERR_BLOCKED_BY_CLIENT` and a
-security error before the application could be attached. Google's primary
-[Safe Browsing site-status report](https://transparencyreport.google.com/safe-browsing/search)
-also marked the temporary endpoint unsafe and warned about deceptive collection
-of personal information. The browser warning was not bypassed, and the serving
-origin was not changed to evade it. The existing single-installer secure-IP and
-automated Let's Encrypt path is being checked for endpoint or configuration
-mismatches before another browser attempt. Successful TLS, service readiness,
-and a running Vite container do not establish an authenticated manual
-walkthrough or visible HMR in the browser; neither is claimed here.
+An earlier temporary address triggered Chrome's security warning. That warning
+was not bypassed. A separate session subsequently stopped the existing instance;
+the authorized restart assigned a new address. The retained K3s certificate
+controller then issued a production Let's Encrypt IP certificate using its
+existing ACME account and `shortlived` profile. The current-generation Ready
+condition, served IP SAN, TLS 1.3 connection and HTTP readiness response were
+verified. The issued certificate expires **2026-11-18 20:42 UTC**, with automatic
+renewal scheduled for **2026-11-16 20:42 UTC**. No new instance or account plan
+upgrade was used.
+
+**Authenticated sign-in and the organization dashboard succeeded** in the
+connected Chrome session, without a security warning. The dashboard and expanded
+Design navigation were inspected. This established application access, but did
+not yet exercise the device, template or policy forms.
+
+At approximately **06:00 UTC**, the Browser connector lost the originating
+browser context and could no longer access either the application or the
+authenticated AWS CloudShell. A separate cloud browser reported
+`ERR_CERT_COMMON_NAME_INVALID`; it did not provide certificate details and its
+warning was not bypassed. This later observation remains unresolved and is not
+represented as a successful cross-browser TLS check. It does not replace the
+earlier served-certificate and connected-Chrome observations.
+
+A temporary dashboard-label edit had just been requested for visible HMR
+verification when that connection was lost. Its command acknowledgement,
+visible result and restoration have not been observed. Before resuming, inspect
+the isolated checkout, restore the exact backed-up label if the edit completed,
+and repeat the edit/restore round trip. No visible HMR success is claimed.
 
 The product defects below were confirmed by tracing frontend and native API
 contracts and exercising controlled-response component tests. Private hosts,
@@ -55,6 +75,7 @@ excluded from this report.
 | Organization devices | The first render called `filter` on the hook's initial `null` data | Loading is explicit; errors, Retry, successful empty inventory, and filtered results have separate states |
 | Organization device contract | The page treated native device registrations as lane summaries and linked to unregistered Add/View/Configure routes | The page displays the signed-in user's registrations in the selected organization, with a labeled search; unsupported lane actions and health claims are removed |
 | Applicant devices | The native bare-array response was read as `data.devices`, making populated inventories appear empty | Real registrations, including inactive history, are displayed |
+| Applicant navigation | The registered Devices route had no internal navigation entry | Devices is available in the shared applicant desktop and mobile sidebar |
 | Unregister device | The request used the client `device_id` instead of the registration `id` | The correct record is deactivated; its inactive history remains visible, matching native soft-deactivation |
 | Device confirmation | Pending or failed actions could be dismissed, repeated, or settle into a replacement account | Pending submissions are guarded, failures retain the dialog with Retry, and former account completions are discarded |
 | Device labels | The UI inferred public-key security and connection health from fields absent from the native record | Only native registration status is shown; the explanation distinguishes active registration from being online |
@@ -72,8 +93,8 @@ Japanese, and Dutch.
 
 Further local source review identified controls and duration handling that did
 not agree with the native policy request. These locally validated corrections
-are not part of the `00ec770` checkout mounted on AWS at this checkpoint; their
-browser behavior has not yet been exercised there.
+are included in the `408a0f1` checkout mounted on AWS; their browser behavior has
+not yet been exercised there.
 
 | Area | Defect | Result |
 | --- | --- | --- |
@@ -84,6 +105,28 @@ browser behavior has not yet been exercised there.
 
 The six console locales were updated for the supported controls and precise
 duration guidance. Native policy enforcement and authorization are unchanged.
+
+### Dashboard follow-up
+
+The authenticated dashboard showed configuration marked Ready while its setup
+summary reported every presentation policy missing required claims. Source
+review found two distinct causes:
+
+- Both policy readiness evaluators considered only `required_claims`. The
+  native contract also accepts structured credential requirements, alternative
+  requirements and required holder binding. A shared predicate now recognizes
+  each supported obligation while still blocking policies with none.
+- The gateway's runtime flags summarize active resources; they do not probe
+  verifier availability or prove complete setup. The panel now says
+  **Credential Operation Configuration**, uses **Configured** for those flags,
+  and directs users to System Status and Setup Readiness for their respective
+  information. The explanation is updated in all six console locales.
+
+The observed Verifier Unknown health label was accurate: the installed
+readiness response does not report that service. No service-health result was
+invented to replace it. An independent reviewer checked the policy predicate
+against the native create/response contract and the runtime labels against
+the gateway's actual resource-based calculation.
 
 ## Contract boundaries
 
@@ -127,13 +170,35 @@ separate native API change.
 - Production TypeScript, targeted ESLint, locale validation, and whitespace
   checks passed. The application build also passed after all source changes.
 
+### Navigation and dashboard follow-up
+
+- All **22 existing navigation tests** passed across the configuration,
+  applicant sidebar and general sidebar suites. Targeted ESLint passed.
+- All **117 dashboard tests** passed across three suites: 51 readiness-rule
+  tests, 14 runtime-panel tests and 52 dashboard integration tests. These cover
+  the four native obligation forms, empty policies, both setup paths and
+  downstream flow prerequisites.
+- The six locale files parse, with semantic changes limited to the relevant
+  runtime panel keys. Targeted source ESLint reports no errors; the existing
+  unused `evaluateDeliveryReadiness` warning remains. Whitespace checks pass.
+- Independent review accepted the final predicate, native contract alignment,
+  resource-status copy and test fixtures. No browser result is inferred from
+  these source and component checks.
+- The final TypeScript/Vite application build passed with all navigation and
+  dashboard changes present. Its existing large-chunk warning is unchanged.
+
 ## Remaining browser verification
 
-Current-origin TLS, application readiness, and the isolated development source
-mount are restored. The installer endpoint investigation is continuing;
-authenticated AWS replay and the visible edit/restore HMR check remain pending.
-Replay should cover Devices loading/search/refresh, applicant unregister with a
-disposable registration, Application Templates failure/retry and enrichment,
+The earlier certificate, readiness and sign-in checks succeeded. Further live
+work requires reconnecting to the originating Chrome session, then checking the
+current served certificate, source tree and automatic-stop deadline again.
+Visible HMR and the temporary-label cleanup are pending. The navigation and
+dashboard follow-up changes made after the connection loss also require source
+replay onto the AWS checkout.
+
+Replay should cover Devices loading/search/refresh, applicant unregister with
+a disposable registration, Application Templates failure/retry and enrichment,
 account/organization switching, phone-width table behavior, and the policy
-wizard's Freshness and Review steps. These outcomes must be recorded separately
-from the source, test, and infrastructure checks above.
+wizard's Freshness and Review steps. Record these outcomes separately from the
+source, test, infrastructure and successful sign-in checks above. Keep the PR
+in draft until this remaining live verification is completed.

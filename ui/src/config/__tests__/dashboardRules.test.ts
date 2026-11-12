@@ -23,6 +23,18 @@ const templateIssuerFields = {
   issuer_did: activeIssuerIdentity.issuer_did,
 }
 
+const nativeCredentialRequirement = {
+  credential_template_id: 'template-1',
+  display_name: 'Age proof',
+  required: true,
+  credential_payload_format: 'SD_JWT_VC',
+  require_fresh_issuance: false,
+  requested_claims: [{
+    claim_name: 'age_over_21', display_name: 'Over 21', required: true,
+    selective_disclosure: true, accept_derived: false, constraints: [],
+  }],
+}
+
 const readyTrustDependencies = {
   complianceProfiles: [{ id: 'compliance-1', status: 'ACTIVE' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
@@ -577,7 +589,7 @@ describe('dashboardRules', () => {
       expect(result.template.state).toBe(ReadinessState.READY)
     })
 
-    it('should mark policy as BLOCKED when missing required claims', () => {
+    it('should mark policy as BLOCKED when missing all verification requirements', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         issuerIdentities: [activeIssuerIdentity],
@@ -604,8 +616,72 @@ describe('dashboardRules', () => {
       const result = computeSetupReadiness(data)
 
       expect(result.policy.state).toBe(ReadinessState.BLOCKED)
-      expect(result.policy.message).toContain('missing required claims')
+      expect(result.policy.message).toContain('missing verification requirements')
       expect(result.policy.blockReason).toBeTruthy()
+    })
+
+    it.each([
+      ['structured credential requirements', {
+        credential_requirements: [nativeCredentialRequirement],
+      }],
+      ['alternative credential requirements', {
+        alternative_requirements: [{
+          name: 'Age proof alternative',
+          min_satisfied: 1,
+          credential_requirements: [nativeCredentialRequirement],
+        }],
+      }],
+      ['required holder proof', { holder_binding: {
+        required: true,
+        binding_methods: ['DEVICE_KEY'],
+        proof_profiles: ['OID4VP_VERIFIABLE_PRESENTATION'],
+        proof_freshness: {
+          challenge_required: true, audience_binding_required: true, replay_detection_required: true,
+        },
+      } }],
+    ])('accepts native %s without duplicate inline claims in either setup path', (_name, requirements) => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies,
+        setupIntent: 'verify',
+        trustProfiles: [{ id: 'trust-1', status: 'active' }],
+        templates: [{
+          id: 'template-1', status: 'active', trust_profile_id: 'trust-1', ...templateIssuerFields,
+        }],
+        policies: [{ id: 'policy-1', status: 'active', required_claims: [], ...requirements }],
+        deployments: [], flows: [], apiKeys: [],
+      })
+
+      expect(result.policy.state).toBe(ReadinessState.READY)
+      expect(result.intents.verify.steps.policy.state).toBe(ReadinessState.READY)
+      expect(result.intents.verify.steps.flow.dependencyBlocked).toBeUndefined()
+      expect(result.intents.verify.steps.flow.message).toBe('No Verification Flows configured')
+      expect(computeBlockers(result).some((blocker) => blocker.id === 'policy')).toBe(false)
+    })
+
+    it.each([
+      ['optional holder binding', { holder_binding: { required: false } }],
+      ['malformed requirement collections', {
+        required_claims: 'age_over_21', credential_requirements: {}, alternative_requirements: 'age',
+      }],
+    ])('does not treat %s as verification requirements', (_name, requirements) => {
+      const result = computeSetupReadiness({
+        ...readyTrustDependencies,
+        setupIntent: 'verify',
+        trustProfiles: [{ id: 'trust-1', status: 'active' }],
+        templates: [{
+          id: 'template-1', status: 'active', trust_profile_id: 'trust-1', ...templateIssuerFields,
+        }],
+        policies: [{
+          id: 'policy-1', status: 'active', required_claims: [],
+          credential_requirements: [], alternative_requirements: [], ...requirements,
+        }],
+        deployments: [], flows: [], apiKeys: [],
+      })
+
+      expect(result.policy.state).toBe(ReadinessState.BLOCKED)
+      expect(result.intents.verify.steps.policy.state).toBe(ReadinessState.BLOCKED)
+      expect(result.intents.verify.steps.policy.message).toContain('missing verification requirements')
+      expect(result.intents.verify.steps.flow.dependencyBlocked).toBe(true)
     })
 
     it('should mark policy as READY when configured with required claims', () => {
