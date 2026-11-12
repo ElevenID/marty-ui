@@ -239,7 +239,7 @@ def test_owned_create_ack_rebinds_only_exact_three_cids_and_refuses_foreign_same
         observer.inspect_role("flow")
 
 
-@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost", "compose_fail"])
+@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost", "compose_fail", "recovery"])
 def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_path, monkeypatch, change):
     binding, rows, _, inp, _ = setup_context(tmp_path, monkeypatch)
     for row in rows["roles"]:
@@ -251,6 +251,23 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
     runtime.write_text(json.dumps(rows))
     authority = tmp_path / "authority.json"
     authority.write_text("{}")
+    recovery_ref = None
+    stopped = None
+    if change == "recovery":
+        stopped = deepcopy(rows)
+        for row in stopped["roles"]:
+            row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
+        quiescence = private / "stopped.json"
+        quiescence.write_text(json.dumps(stopped))
+        resource_recovery = private / "maintenance-resource.json"
+        resource_recovery.write_text("{}")
+        recovery = private / "recovery.json"
+        recovery.write_text(json.dumps({"schema": "marty.d12-fence-install-recovery/v1",
+            "operation": "RESUME_AFTER_TERMINAL_FENCE_INSTALL", "dispatchAuthorized": True, "draftOnly": False,
+            "runId": binding.inputs["runId"], "quiescence": ref(quiescence),
+            "maintenanceResourceRecovery": ref(resource_recovery)}))
+        recovery_ref = ref(recovery)
+        authority.write_text(json.dumps({"approvedRecoveryAuthoritySha256": recovery_ref["sha256"]}))
     profile = private / "resource-profile.json"
     profile.write_text(json.dumps({"schema": "marty.functional-mixed-runtime/v2",
         "scope": "FUNCTIONAL_ONLY", "releaseQualified": False,
@@ -296,7 +313,7 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         lock_lease=lease, dispatch_permit_ref=ref(permit_path),
         compose_plugin_ref=ref(plugin))
     assert owner.context()["dispatch_enabled"] is True
-    actual = deepcopy(rows)
+    actual = deepcopy(stopped if change == "recovery" else rows)
     if change == "cid":
         actual["roles"][0]["containerId"] = "f" * 64
     if change == "image":
@@ -305,7 +322,7 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         actual["roles"][0]["startedAt"] = "2026-11-08T01:00:00Z"
     class Result:
         returncode = False if change == "bool_exit" else 1 if change == "failed" else 0
-        stdout = json.dumps({**actual, "scope": "FUNCTIONAL_ONLY",
+        stdout = json.dumps({**actual, "scope": "MAINTENANCE_RECOVERY_ONLY" if change == "recovery" else "FUNCTIONAL_ONLY",
             "releaseQualified": False, "recordingQualified": False}).encode()
         stderr = b""
         observation = {"timedOut": False, "failures": []}
@@ -323,7 +340,17 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
             live["held"] = False
         return Result()
     monkeypatch.setattr(effect, "bounded_run", run)
-    if change is None:
+    if change == "recovery":
+        assert owner.context()["recovery_authorization_verified"](ref(authority), recovery_ref) is True
+        assert len(calls) == 2 and "verifyMaintenanceRuntime" in calls[1][0][2]
+        receipt = json.loads((private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").read_bytes())
+        assert receipt["scope"] == "MAINTENANCE_RECOVERY_ONLY" and receipt["functionalQualification"] is False
+        assert receipt["recoveryAuthority"] == recovery_ref
+        request = json.loads((private / "run" / "d12-authorization-0001-d12-resource28-request.private.json").read_bytes())
+        assert request["scope"] == "MAINTENANCE_RECOVERY_ONLY"
+        with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE_RESULT_REQUIRED"):
+            owner.authorization_verified(ref(authority))
+    elif change is None:
         assert owner.context()["authorization_verified"](ref(authority)) is True
         assert len(calls) == 2
         assert calls[0][0][3:6] == ["compose", "version", "--short"]
@@ -339,6 +366,8 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         for number in (1, 2):
             receipt = json.loads((private / "run" / f"d12-authorization-{number:04d}-d12-resource28-bound.private.json").read_bytes())
             assert receipt["authorizationAttempt"] == number
+            request = json.loads((private / "run" / f"d12-authorization-{number:04d}-d12-resource28-request.private.json").read_bytes())
+            assert request["scope"] == "FUNCTIONAL_ONLY"
             assert len(receipt["observations"]) == 7
             for bound in receipt["observations"].values():
                 assert ref(Path(bound["path"])) == bound

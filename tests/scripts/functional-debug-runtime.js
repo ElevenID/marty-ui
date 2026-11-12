@@ -888,7 +888,41 @@ function verifyFunctionalRuntime(profile,{qualification='FUNCTIONAL_ONLY',observ
 }
 
 // Separate stopped-window observation. It cannot qualify a running stack.
-function validateMaintenanceResourceRows(a,generations,before,inspections,resourceBefore){
+
+function maintenanceProxyEvidence(reference){
+ const evidence=boundJson(reference);
+ assert.deepEqual(Object.keys(evidence).sort(),['schema','proxyObservation','selectedUpstream','routeTemplate','entrypoint'].sort(),'MAINTENANCE_PROXY_EVIDENCE_SCHEMA');
+ assert.equal(evidence.schema,'marty.maintenance-proxy-dependency/v1');
+ const observation=boundJson(evidence.proxyObservation),upstream=boundJson(evidence.selectedUpstream);
+ assert.equal(observation.Health?.Status,'unhealthy','MAINTENANCE_PROXY_OBSERVED_CAUSE_REQUIRED');assert(Array.isArray(observation.Health?.Log)&&observation.Health.Log.length>=5);for(const log of observation.Health.Log.slice(-5)){assert.equal(log.ExitCode,1);assert.equal(String(log.Output).trim(),'wget: server returned error: HTTP/1.1 502 Bad Gateway','MAINTENANCE_PROXY_OBSERVED_CAUSE_CHANGED');}
+ const template=boundBytes(evidence.routeTemplate).toString('utf8').replaceAll('\r\n','\n');
+ const entrypoint=boundBytes(evidence.entrypoint).toString('utf8').replaceAll('\r\n','\n');
+ assert(/location\s*=\s*\/ready\s*\{\s*set \$backend_api \$\{GATEWAY_UPSTREAM\};\s*proxy_pass http:\/\/\$backend_api\/ready;/.test(template),'MAINTENANCE_PROXY_READY_ROUTE_CHANGED');
+ assert(entrypoint.includes('GATEWAY_UPSTREAM=${GATEWAY_UPSTREAM:-gateway:8000}')&&entrypoint.includes("envsubst '${PUBLIC_DOMAIN} ${UI_DEV_PORT} ${DOCS_DOMAIN} ${GATEWAY_UPSTREAM}")&&entrypoint.includes('< /etc/nginx/conf.d/default.conf.template'),'MAINTENANCE_PROXY_SUBSTITUTION_CHANGED');
+ return {reference,evidence,observation,upstream};
+}
+function maintenanceProxyHealth(binding,proxy,gateway,managed){
+ assert(binding&&managed.has('gateway'),'MAINTENANCE_PROXY_CAUSE_REQUIRED');
+ const {reference,evidence,observation,upstream}=binding;
+ assert.equal(observation.Id,proxy.Id);assert.equal(observation.Image,proxy.Image);
+ assert.equal(upstream.containerId,proxy.Id);assert.equal(upstream.selectedVariable,'GATEWAY_UPSTREAM');assert.equal(upstream.present,true);assert.equal(upstream.otherEnvironmentValuesReported,false);assert.equal(upstream.value,'gateway:8000');
+ assert.equal(mdocEnvironment(proxy.Config?.Env||[]).GATEWAY_UPSTREAM,upstream.value,'MAINTENANCE_PROXY_UPSTREAM_CHANGED');
+ assert.deepEqual(proxy.Config?.Healthcheck,observation.Healthcheck,'MAINTENANCE_PROXY_HEALTHCHECK_CHANGED');
+ assert.deepEqual(proxy.Config.Healthcheck.Test,['CMD-SHELL','wget --quiet --tries=1 --spider http://127.0.0.1/ready || exit 1'],'MAINTENANCE_PROXY_PROBE_CHANGED');
+ for(const [destination,source]of [['/etc/nginx/conf.d/default.conf.template',evidence.routeTemplate],['/docker-entrypoint.d/40-substitute-env.sh',evidence.entrypoint]]){
+  const mounts=proxy.Mounts.filter(row=>row.Destination===destination);assert.equal(mounts.length,1,'MAINTENANCE_PROXY_SOURCE_MOUNT_MISSING');
+  assert.equal(mounts[0].Type,'bind');assert.equal(mounts[0].RW,false);assert.equal(mdocSource(mounts[0].Source),mdocSource(source.path),'MAINTENANCE_PROXY_SOURCE_CHANGED');
+ }
+ const frozen=managed.get('gateway');assert(gateway&&gateway.Id===frozen.containerId,'MAINTENANCE_PROXY_DEPENDENCY_ID_CHANGED');
+ assert.equal(gateway.Image,frozen.imageId);assert.equal(gateway.State.Status,'exited');assert.equal(gateway.State.Running,false);assert.equal(gateway.State.Pid,0);assert.equal(gateway.State.ExitCode,0);assert.equal(gateway.State.OOMKilled,false);
+ const logs=proxy.State.Health?.Log?.slice(-5);assert(Array.isArray(logs)&&logs.length===5,'MAINTENANCE_PROXY_FAILURE_EVIDENCE_REQUIRED');
+ for(const log of logs){assert.equal(log.ExitCode,1);assert.equal(String(log.Output).trim(),'wget: server returned error: HTTP/1.1 502 Bad Gateway','MAINTENANCE_PROXY_FAILURE_CAUSE_CHANGED');}
+ const last=logs.at(-1),age=Date.now()-Date.parse(last.End);assert(Number.isFinite(age)&&age>=0&&age<=120000,'MAINTENANCE_PROXY_FAILURE_NOT_FRESH');
+ return {classification:{state:'EXPECTED_MAINTENANCE_UPSTREAM_STOPPED',role:'nginx-proxy',observedHealth:'unhealthy',dependencyRole:'gateway',dependencyContainerId:gateway.Id,probePath:'/ready',upstream:'gateway:8000',functionalReadiness:false,evidenceSha256:reference.sha256},
+  observation:{role:'nginx-proxy',lastHealthEnd:last.End,lastExitCode:1,failureOutputSha256:digest(last.Output),healthcheckSha256:digest(JSON.stringify(proxy.Config.Healthcheck)),evidenceSha256:reference.sha256}};
+}
+const MAINTENANCE_CAP_FIELDS=Object.freeze(['Memory','MemorySwap','NanoCpus','PidsLimit','RestartPolicy']);
+function validateMaintenanceResourceRows(a,generations,before,inspections,resourceBefore,dependencyHealth=null){
  const managed=new Map(before.roles.map(row=>[row.role,row]));
  assert.equal(managed.size,22,'MAINTENANCE_EXACT22_REQUIRED');
  assert.deepEqual([...managed.keys()].sort(),a.rows.map(row=>row.role).sort(),'MAINTENANCE_MANAGED_SET_CHANGED');
@@ -902,13 +936,15 @@ function validateMaintenanceResourceRows(a,generations,before,inspections,resour
  assert(Array.isArray(resourceBefore)&&resourceBefore.length===28,'MAINTENANCE_FULL28_BASELINE_REQUIRED');
  const baseline=new Map(resourceBefore.map(row=>[row.Id,row]));assert.equal(baseline.size,28,'MAINTENANCE_DUPLICATE_BASELINE_CID');assert.deepEqual([...baseline.keys()].sort(),[...live.keys()].sort(),'MAINTENANCE_BASELINE_SET_CHANGED');
  const configs=new Map(a.configs.rows.map(row=>[row.cid,row]));assert.equal(configs.size,28,'MAINTENANCE_CONFIG_SET_CHANGED');
- const owner=require('./beta-resource-runtime'),resources=[],roles=[];
+ const owner=require('./beta-resource-runtime'),resources=[],roles=[],dependencyObservations=[];
  for(const role of allRoles){
   const generation=generations.get(role),cid=role==='ui-prod'?a.ui.newCid:role==='keycloak'?a.kc.newCid:a.cap.allRunningRoles[role].id;
   assert(generation&&generation.cid===cid,'MAINTENANCE_GENERATION_ID_CHANGED:'+role);
   const row=live.get(cid),proof=configs.get(cid);assert(row&&proof,'MAINTENANCE_ROLE_MISSING:'+role);
   const previous=baseline.get(cid);assert.equal(previous.Image,row.Image);assert.equal(previous.StartedAt,row.State?.StartedAt);
-  assert.deepEqual(row.HostConfig,previous.HostConfig,'MAINTENANCE_FULL_CAPS_CHANGED:'+role);
+  assert.deepEqual(Object.keys(previous.HostConfig).sort(),[...MAINTENANCE_CAP_FIELDS].sort(),'MAINTENANCE_CAPS_PROJECTION_SCHEMA:'+role);
+  const projectedCaps=Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>{assert(Object.hasOwn(row.HostConfig,key),'MAINTENANCE_LIVE_CAP_MISSING:'+role);return [key,row.HostConfig[key]];}));
+  assert.deepEqual(projectedCaps,previous.HostConfig,'MAINTENANCE_RECORDED_CAPS_CHANGED:'+role);
   assert.deepEqual(row.Config?.Labels||{},previous.Labels||{},'MAINTENANCE_LABELS_CHANGED:'+role);
   const canonicalMounts=rows=>[...mdocMounts(rows,'Destination').values()].sort((a,b)=>a.Destination<b.Destination?-1:a.Destination>b.Destination?1:0);
   assert.deepEqual(canonicalMounts(row.Mounts),canonicalMounts(previous.Mounts),'MAINTENANCE_FULL_MOUNTS_CHANGED:'+role);
@@ -924,7 +960,7 @@ function validateMaintenanceResourceRows(a,generations,before,inspections,resour
   assert.equal(envSha,proof.envSha256,'MAINTENANCE_ENV_CHANGED:'+role);
   assert.equal(owner.mountDigest(row),proof.mountsSha256,'MAINTENANCE_MOUNT_CHANGED:'+role);
   assert.equal(row.Config?.Labels?.['com.docker.compose.project.config_files']||null,proof.modelPath||null,'MAINTENANCE_MODEL_CHANGED:'+role);
-  const frozen=managed.get(role);
+  const frozen=managed.get(role);let dependencyClassification=null;
   if(frozen){
    assert.equal(frozen.containerId,cid);assert.equal(frozen.imageId,image);assert.equal(frozen.startedAt,generation.startedAt);
    assert.equal(row.State?.Status,'exited','MAINTENANCE_MANAGED_NOT_EXITED:'+role);
@@ -935,18 +971,20 @@ function validateMaintenanceResourceRows(a,generations,before,inspections,resour
    assert.equal(row.State?.Status,'running','MAINTENANCE_ANCILLARY_NOT_RUNNING:'+role);
    assert.equal(row.State?.Running,true);assert.equal(row.State?.Pid,generation.pid);
    assert(Number.isSafeInteger(generation.pid)&&generation.pid>0);
-   assert.equal(row.State?.Health?.Status||null,a.cap.allRunningRoles[role].health,'MAINTENANCE_ANCILLARY_HEALTH_CHANGED:'+role);
+   if(role==='nginx-proxy'&&row.State?.Health?.Status==='unhealthy'&&dependencyHealth){
+    const checked=maintenanceProxyHealth(dependencyHealth,row,live.get(managed.get('gateway')?.containerId),managed);dependencyClassification=checked.classification;dependencyObservations.push(checked.observation);
+   }else assert.equal(row.State?.Health?.Status||null,a.cap.allRunningRoles[role].health,'MAINTENANCE_ANCILLARY_HEALTH_CHANGED:'+role);
   }
   resources.push({role,containerId:cid,imageId:image,startedAt:row.State.StartedAt,hostPid:row.State.Pid,running:row.State.Running,status:row.State.Status,
-   health:row.State.Health?.Status||null,configSha256:digest(JSON.stringify(row.Config)),hostConfigSha256:digest(JSON.stringify(row.HostConfig)),mountsSha256:owner.mountDigest(row),environmentSha256:envSha});
+   health:row.State.Health?.Status||null,configSha256:digest(JSON.stringify(row.Config)),hostConfigSha256:digest(JSON.stringify(row.HostConfig)),mountsSha256:owner.mountDigest(row),environmentSha256:envSha,...(dependencyClassification?{maintenanceHealthClassification:dependencyClassification}:{})});
  }
- return {roles,resources};
+ return {roles,resources,dependencyObservations};
 }
 function verifyMaintenanceRuntime(profile,{qualification='MAINTENANCE_RECOVERY_ONLY',readDocker,recoveryRef}={}){
  assert.equal(qualification,'MAINTENANCE_RECOVERY_ONLY');assert.equal(typeof readDocker,'function','MAINTENANCE_ACTUAL_DOCKER_REQUIRED');
  assert(profile.resourceRestart&&!profile.resourceRecreation,'MAINTENANCE_RESOURCE_RESTART_PROFILE_REQUIRED');
  const recovery=boundJson(recoveryRef);
- assert.deepEqual(Object.keys(recovery).sort(),['schema','runId','runtimeBefore','operationJournal','journalRead','reconciliationJob','failedCutoverJob','resourceBefore','resourceBeforeJob'].sort(),'MAINTENANCE_RECOVERY_SCHEMA');
+ assert.deepEqual(Object.keys(recovery).filter(key=>key!=='proxyDependencyHealth').sort(),['schema','runId','runtimeBefore','operationJournal','journalRead','reconciliationJob','failedCutoverJob','resourceBefore','resourceBeforeJob'].sort(),'MAINTENANCE_RECOVERY_SCHEMA');
  assert.equal(recovery.schema,'marty.d12-maintenance-resource-recovery/v1');assert.match(recovery.runId,/^[a-f0-9-]{36}$/);
  const closed=boundJson(recovery.reconciliationJob),failed=boundJson(recovery.failedCutoverJob);
  assert.equal(closed.state,'COMPLETE');assert.equal(closed.exitCode,0);assert.equal(closed.jobClosed,true);assert.equal(closed.terminalActiveProcesses,0);
@@ -968,12 +1006,14 @@ function verifyMaintenanceRuntime(profile,{qualification='MAINTENANCE_RECOVERY_O
  assert.equal(before.roles.length,22);assert.deepEqual(before.roles.map(row=>row.role).sort(),restart.rows.map(row=>row.role).sort());
  const ids=[...restart.generations.values()].map(row=>row.cid).sort();assert.equal(new Set(ids).size,28);
  const readAll=()=>{assert.equal(JSON.parse(readDocker(['info','--format','{{json .}}'])).ID,restart.a.engineId);return ids.map(id=>{const rows=JSON.parse(readDocker(['inspect',id]));assert(rows.length===1&&rows[0].Id===id);return rows[0];});};
- const first=validateMaintenanceResourceRows(restart.a,restart.generations,before,readAll(),boundJson(recovery.resourceBefore));
- const second=validateMaintenanceResourceRows(restart.a,restart.generations,before,readAll(),boundJson(recovery.resourceBefore));
- assert.deepEqual(second,first,'MAINTENANCE_RESOURCE28_CHANGED_DURING_READ');
+ const dependency=recovery.proxyDependencyHealth?maintenanceProxyEvidence(recovery.proxyDependencyHealth):null;
+ const first=validateMaintenanceResourceRows(restart.a,restart.generations,before,readAll(),boundJson(recovery.resourceBefore),dependency);
+ const second=validateMaintenanceResourceRows(restart.a,restart.generations,before,readAll(),boundJson(recovery.resourceBefore),dependency);
+ assert.deepEqual({roles:second.roles,resources:second.resources},{roles:first.roles,resources:first.resources},'MAINTENANCE_RESOURCE28_CHANGED_DURING_READ');
+ if(dependency)maintenanceProxyEvidence(recovery.proxyDependencyHealth);
  boundJson(recoveryRef);owner.restartAuthority(profile,context);
- return {schema:'marty.maintenance-resource-binding/v1',scope:'MAINTENANCE_RECOVERY_ONLY',releaseQualified:false,recordingQualified:false,functionalRuntimeQualified:false,runningProcessQualification:false,sourceFactsBoundToPriorReceiptNotNewElfProbe:true,
-  runId:recovery.runId,roles:second.roles,resources:second.resources,recoverySha256:recoveryRef.sha256,receiptDigests:receiptDigests(profile)};
+ return {schema:'marty.maintenance-resource-binding/v1',scope:'MAINTENANCE_RECOVERY_ONLY',releaseQualified:false,recordingQualified:false,functionalRuntimeQualified:false,runningProcessQualification:false,sourceFactsBoundToPriorReceiptNotNewElfProbe:true,historicalFullHostConfigKnown:false,historicalHostConfigProjectionFields:[...MAINTENANCE_CAP_FIELDS],currentFullHostConfigStableDuringRead:true,
+  runId:recovery.runId,roles:second.roles,resources:second.resources,dependencyHealthObservations:second.dependencyObservations,recoverySha256:recoveryRef.sha256,receiptDigests:receiptDigests(profile)};
 }
 function resourceRecreationSuccessor(previousRef,profile){
  return require('./beta-resource-runtime').resourceSuccessor(previousRef,profile,{boundJson,expectedRuntime,receiptDigests});
@@ -996,4 +1036,4 @@ function retainedBetaOffAuthority(profile){
  return {snapshot:plan.sources.retainedAfter,rows:rows.map(row=>({role:row.role,cid:row.cid}))};
 }
 
-module.exports={verifyMaintenanceRuntime,validateMaintenanceResourceRows,produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,freshExactAncillaryRead,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={maintenanceProxyEvidence,verifyMaintenanceRuntime,validateMaintenanceResourceRows,produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,freshExactAncillaryRead,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

@@ -115,6 +115,12 @@ class D12CurrentExecution:
         return snapshot
 
     def preflight(self):
+        return self._preflight()
+
+    def recovery_preflight(self, recovery_ref):
+        return self._preflight(recovery_ref)
+
+    def _preflight(self, recovery_ref=None):
         i, g = self.i, self.g
         require(g["dispatch_enabled"] is True and g["operation_lock_held"]() is True
                 and g["recording_lock_held"]() is True,
@@ -125,7 +131,8 @@ class D12CurrentExecution:
                 "D12_CURRENT_FUNCTIONAL_SCOPE_REQUIRED")
         require("quiescence" not in i, "D12_PREEXISTING_QUIESCENCE_FORBIDDEN")
         authority = json.loads(read_ref(i["d12Authority"], 65536).read_bytes())
-        require(g["authorization_verified"](i["d12Authority"]) is True
+        require((g["authorization_verified"](i["d12Authority"]) if recovery_ref is None
+                 else g["recovery_authorization_verified"](i["d12Authority"], recovery_ref)) is True
                 and authority.get("dispatchAuthorized") is True
                 and authority.get("runId") == i["runId"]
                 and read_ref(i["executionSource"]).resolve() == Path(__file__).resolve()
@@ -152,10 +159,18 @@ class D12CurrentExecution:
             abi_plan=json.loads(read_ref(i["compatibility"]["plan"]).read_bytes())
             require(abi_plan["beforeBinding"]["sha256"]==i["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
             self.native_preimage={"binding":i["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
-        before = g["observe22"]()
-        require(maintenance.same_full_role_snapshot(
-                    before, json.loads(read_ref(i["runtimeBefore"]).read_bytes()), self.profile)
-                and authority.get("approvedRuntimeBeforeSha256") == i["runtimeBefore"]["sha256"],
+        if recovery_ref is None:
+            before = g["observe22"]()
+            require(maintenance.same_full_role_snapshot(
+                        before, json.loads(read_ref(i["runtimeBefore"]).read_bytes()), self.profile),
+                    "D12_FRESH_ACTUAL22_PREIMAGE_REQUIRED")
+        else:
+            require(g["verify_recovery_quiescent"](recovery_ref) is True,
+                    "D12_FRESH_RECOVERY_QUIESCENCE_REQUIRED")
+            # The original running preimage is historical input to the same
+            # plan/overlay validators; the fresh state is explicitly stopped.
+            before = json.loads(read_ref(i["runtimeBefore"]).read_bytes())
+        require(authority.get("approvedRuntimeBeforeSha256") == i["runtimeBefore"]["sha256"],
                 "D12_FRESH_ACTUAL22_PREIMAGE_REQUIRED")
         require(g["database_snapshot"]() == json.loads(read_ref(i["databaseBefore"]).read_bytes())
                 and authority.get("approvedDatabaseBeforeSha256") == i["databaseBefore"]["sha256"],
@@ -193,7 +208,8 @@ class D12CurrentExecution:
         overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
                                            self.profile, list(self.roles), no_start=True)
         database = (D12CurrentDatabasePhase(g, i, self.store, read_only_preflight=True)
-                    if self.read_only_preflight else D12CurrentDatabasePhase(g, i, self.store))
+                    if self.read_only_preflight else D12CurrentDatabasePhase(g, i, self.store)
+                    if recovery_ref is None else D12CurrentDatabasePhase(g, i, self.store, recovery_ref=recovery_ref))
         database._check_current_compatibility(selection, i["compatibility"]["plan"],
                                                i["compatibility"]["result"])
         if self.profile == "d05-membership-current-functional":
@@ -235,6 +251,21 @@ class D12CurrentExecution:
                 "quiescenceSha256": quiescence["sha256"]})), "D12_DURABLE_QUIESCENCE_REQUIRED")
         database.i = {**i, "quiescence": quiescence}
         database_proof = database.run()
+        return self._finish_after_database(database, before, preview, overlay_ref, database_proof)
+
+    def resume_after_fence_install(self, recovery_ref):
+        require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
+        database, before, preview, overlay_ref = self.recovery_preflight(recovery_ref)
+        recovery = json.loads(read_ref(recovery_ref).read_bytes())
+        database.i = {**self.i, "quiescence": recovery["quiescence"]}
+        database_proof = database.resume_after_fence_install(recovery_ref)
+        self.state["recoveryAuthority"] = recovery_ref
+        return self._finish_after_database(database, before, preview, overlay_ref, database_proof)
+
+    def _finish_after_database(self, database, before, preview, overlay_ref, database_proof):
+        i, g = self.i, self.g
+        stopped = json.loads(read_ref(database.i["quiescence"]).read_bytes())
+        stopped_rows = maintenance.exact_roles(stopped, self.profile)
         verified_database = database.node("verify", proof=database_proof,
             commands=database.commands, context={"runId": i["runId"],
                 "selectionSha256": i["selection"]["sha256"],
@@ -277,7 +308,7 @@ class D12CurrentExecution:
                     == daemon_source(database.selection["binaries"][role]["path"]),
                     "D12_CREATED_EXECUTABLE_BIND_CHANGED:" + role)
         for role in D12_CURRENT_RUNTIME_ROLES - set(self.roles):
-            require(new_rows[role] == maintenance.exact_roles(stopped, self.profile)[role],
+            require(new_rows[role] == stopped_rows[role],
                     "D12_UNSELECTED_CREATE_CHANGED:" + role)
         created_ref = g["save"]("d12-created.private.json", {"runId": i["runId"], "roles": created["roles"]})
         self.record("SELECTED_CREATED", pendingStep=None, created=created_ref)

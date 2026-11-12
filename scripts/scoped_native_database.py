@@ -52,6 +52,129 @@ def require_bound_quiescence(state, inputs, bound):
             and type(operations[-1].get("exitCode")) is int and operations[-1]["exitCode"] == 0,
             "D12_DURABLE_QUIESCENCE_NOT_BOUND")
 
+
+RECOVERY_SOURCE_FIELDS = frozenset(("executorSource", "executionSource", "metadataModule",
+    "functionalRuntimeModule", "d12RuntimeModule", "sourceClosure", "operatorRevision"))
+
+
+RECOVERY_TRUST_FIELDS = frozenset(("composeArguments", "composeSources", "plannedModels",
+    "privateEnvironmentAliasProof", "composeProductBinding", "maintenancePlan",
+    "runScopedTrustLeaseProof", "composeEffectReadOnlyProof", "composeEffectReadOnlyJob"))
+
+
+
+def _recovery_trust_models(original, inputs):
+    # Only the two new credential paths may differ; the retained signer address,
+    # key and version and every other model field remain unchanged.
+    old_refs, new_refs = original["plannedModels"], inputs["plannedModels"]
+    require(set(old_refs) == set(new_refs) == {"elevenid-beta", "elevenid-beta-ui"},
+            "D12_RECOVERY_TARGET_MODEL_DRIFT")
+    for project in old_refs:
+        before = json.loads(read_ref(old_refs[project]).read_bytes())
+        after = json.loads(read_ref(new_refs[project]).read_bytes())
+        if project == "elevenid-beta":
+            lease = json.loads(read_ref(inputs["runScopedTrustLeaseProof"]).read_bytes())
+            generation = Path(lease["generationDirectory"])
+            require(generation.is_absolute(), "D12_RECOVERY_TRUST_GENERATION_REQUIRED")
+            for secret, name in (("trust_profile_workload_server_cert", "trust_profile_workload_server_cert"),
+                                 ("trust_profile_tls_kms_token", "trust_profile_workload_server_kms_token")):
+                require(after["secrets"][secret]["file"] == str(generation / name),
+                        "D12_RECOVERY_TRUST_GENERATION_REQUIRED")
+                after["secrets"][secret]["file"] = before["secrets"][secret]["file"]
+        require(before == after, "D12_RECOVERY_TARGET_MODEL_DRIFT")
+
+def fence_install_recovery_checkpoint(inputs, state, intent, recovery):
+    """Admit only a Root-bound original terminal first step, never a pending replay."""
+    require(recovery.get("schema") == "marty.d12-fence-install-recovery/v1"
+            and recovery.get("operation") == "RESUME_AFTER_TERMINAL_FENCE_INSTALL"
+            and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
+            and recovery.get("runId") == inputs["runId"], "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
+    original = json.loads(read_ref(recovery["originalInputs"]).read_bytes())
+    original_state = json.loads(read_ref(recovery["originalDatabaseState"]).read_bytes())
+    original_intent = json.loads(read_ref(recovery["originalApplyIntent"]).read_bytes())
+    resource = json.loads(read_ref(recovery["maintenanceResourceRecovery"]).read_bytes())
+    observation = json.loads(read_ref(resource["journalRead"]).read_bytes())
+    require(isinstance(observation, list) and len(observation) == 1
+            and observation[0].get("state") == "EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE"
+            and observation[0].get("mountReadOnly") is True, "D12_AUTHORITATIVE_RECOVERY_JOURNAL_REQUIRED")
+    files = observation[0]["files"]
+    require(files["build-state.json"]["present"] is True
+            and files["build-apply-intent.json"]["present"] is True
+            and files["build-state.json"]["document"] == state == original_state
+            and files["build-apply-intent.json"]["document"] == intent == original_intent
+            and files["build-receipt.json"]["present"] is False
+            and files["configuration-receipt.json"]["present"] is False,
+            "D12_EXACT_ORIGINAL_RECOVERY_CHECKPOINT_REQUIRED")
+    mapping = recovery.get("sourceMap")
+    require(isinstance(mapping, dict) and set(mapping) == RECOVERY_SOURCE_FIELDS
+            and all(mapping[key] == {"original": original[key], "recovery": inputs[key]}
+                    for key in RECOVERY_SOURCE_FIELDS), "D12_EXPLICIT_RECOVERY_SOURCE_MAP_REQUIRED")
+    data_map = recovery.get("trustDataMap")
+    require(isinstance(data_map, dict) and set(data_map) == RECOVERY_TRUST_FIELDS
+            and all(data_map[key] == {"original": original.get(key), "recovery": inputs.get(key)}
+                    for key in RECOVERY_TRUST_FIELDS), "D12_EXPLICIT_RECOVERY_TRUST_MAP_REQUIRED")
+    ignored = RECOVERY_SOURCE_FIELDS | RECOVERY_TRUST_FIELDS | {"d12Authority", "quiescence"}
+    require({key:value for key,value in original.items() if key not in ignored}
+            == {key:value for key,value in inputs.items() if key not in ignored},
+            "D12_RECOVERY_DATA_DRIFT_REFUSED")
+    _recovery_trust_models(original, inputs)
+    require(intent.get("schema") == "marty.d12-current-apply-intent/v1"
+            and intent.get("runId") == original["runId"] == inputs["runId"]
+            and intent.get("selectionSha256") == inputs["selection"]["sha256"]
+            and intent.get("executorSource") == original["executorSource"]
+            and intent.get("runtimeBefore") == inputs["runtimeBefore"]
+            and intent.get("databaseBefore") == inputs["databaseBefore"]
+            and intent.get("authority") == original["d12Authority"],
+            "D12_ORIGINAL_RECOVERY_INTENT_CHANGED")
+    require(state.get("schema") == "marty.native-d12-current-operation-state/v1"
+            and state.get("phase") == "DATABASE_OPERATION_TERMINAL"
+            and state.get("pendingStep") is None and state.get("pendingRequest") is None
+            and state.get("runId") == inputs["runId"]
+            and state.get("selectionSha256") == inputs["selection"]["sha256"]
+            and state.get("sourceRevision") == inputs["uiRevision"]
+            and state.get("coreRevision") == inputs["coreRevision"]
+            and state.get("executorSource") == original["executorSource"]
+            and state.get("databaseIdentity") == json.loads(read_ref(inputs["databaseBefore"]).read_bytes())["databaseIdentity"],
+            "D12_RECOVERY_DATABASE_STATE_CHANGED")
+    operations = state.get("operations")
+    require(isinstance(operations, list) and len(operations) == 1,
+            "D12_ONLY_TERMINAL_FENCE_INSTALL_RECOVERABLE")
+    step = operations[0]
+    require(step.get("stepId") == "FENCE_INSTALL" and step.get("state") == "SUCCEEDED"
+            and step.get("unknownOutcome") is False and type(step.get("exitCode")) is int and step["exitCode"] == 0
+            and step.get("sequence") == step.get("intentSequence") == 1 and step.get("terminalSequence") == 2
+            and isinstance(step.get("intentDurability"), dict) and durable_barrier(step["intentDurability"])
+            and step.get("receipt") == recovery["fenceInstallReceipt"],
+            "D12_ONLY_TERMINAL_FENCE_INSTALL_RECOVERABLE")
+    receipt = json.loads(read_ref(step["receipt"]).read_bytes())
+    request = step.get("request")
+    require(isinstance(request, dict) and request.get("kind") == "PSQL"
+            and receipt.get("runId") == inputs["runId"] and receipt.get("state") == "exited"
+            and type(receipt.get("exitCode")) is int and receipt["exitCode"] == 0
+            and receipt.get("oomKilled") is False and receipt.get("databaseIdentity") == state["databaseIdentity"]
+            and receipt.get("source") == request.get("source") == inputs["sqlSources"]["passport-beta-fence-install.sql"]
+            and receipt.get("stdin") == request.get("stdin")
+            and receipt.get("transportArgv") == request.get("transportArgv")
+            and receipt.get("pgOptions") == request.get("pgOptions"),
+            "D12_ORIGINAL_FENCE_INSTALL_RECEIPT_CHANGED")
+    require(recovery["quiescence"] == inputs["quiescence"]
+            and resource.get("runId") == inputs["runId"]
+            and resource.get("runtimeBefore") == inputs["runtimeBefore"],
+            "D12_RECOVERY_QUIESCENCE_CHANGED")
+    terminal = json.loads(read_ref(recovery["originalTerminalWrite"]).read_bytes())
+    response = json.loads(terminal["stdout"])
+    retired = json.loads(read_ref(recovery["originalTerminalRetirement"]).read_bytes())
+    backend = json.loads(read_ref(resource["operationJournal"]).read_bytes())
+    require(terminal.get("exitCode") == 0 and terminal.get("oomKilled") is False
+            and terminal.get("logsCommandExitCode") == 0 and not terminal.get("stderr")
+            and response.get("ok") is True and response.get("name") == "build-state.json"
+            and response.get("sha256") == files["build-state.json"]["sha256"]
+            and response.get("value") == state and response.get("rootProof") == backend["rootProof"]
+            and isinstance(response.get("barrier"), dict) and durable_barrier(response["barrier"])
+            and retired.get("containerId") == terminal.get("containerId") and retired.get("removed") is True
+            and retired.get("consumersAfter") == [], "D12_ORIGINAL_TERMINAL_DURABILITY_REQUIRED")
+    return step, response["barrier"]
+
 def schema_steps(current_ten, command):
     require(command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
     suffix = "MIGRATE" if command == "migrate" else "VERIFY"
@@ -491,9 +614,47 @@ class NativeDatabasePhase:
         # The single journal slot becomes a DB checkpoint after the first step.
         # Keep its original quiescence binding through every durable transition.
         self.state["quiescenceSha256"] = prior["quiescenceSha256"]
+        return self._run_database_sequence()
+
+    def resume_after_fence_install(self, recovery_ref):
+        require(self.operation_schema == "marty.native-d12-current-operation-state/v1"
+                and self.g["dispatch_enabled"] is True, "D12_RECOVERY_DISPATCH_DISABLED")
+        recovery = json.loads(read_ref(recovery_ref).read_bytes())
+        require(self.g["recovery_authorization_verified"](self.authority, recovery_ref) is True,
+                "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
+        prior = self.store.read("build-state.json")
+        step, terminal_barrier = fence_install_recovery_checkpoint(self.i, prior,
+            self.store.read("build-apply-intent.json"), recovery)
+        require(self.g["verify_recovery_quiescent"](recovery_ref) is True,
+                "D12_FRESH_RECOVERY_QUIESCENCE_REQUIRED")
+        require(self.select_binaries(self.selection["preparedSource"], self.selection["canonicalBuildReceipt"], self.g["build_journal"]) == self.selection,
+                "ORIGINAL_SELECTED_BUILD_CHANGED")
+        self.check_compatibility(self.selection, self.i["compatibility"]["plan"], self.i["compatibility"]["result"])
+        admin = read_ref(self.i["databaseAdminUrl"], 8192).read_text()
+        for command in ("migrate", "verify-owned-schema"):
+            schema_url(admin, command)
+        require(self.node("digest", sources=self.i["migrationSources"]) == self.i["migrationSetSha256"],
+                "EXACT_MIGRATION_SET_DIGEST_REQUIRED")
+        # Preserve first-step receipt and original intent; record the explicit
+        # source transition and authoritative pre-recovery state in this slot.
+        self.state = json.loads(json.dumps(prior))
+        # The original serializer returns this barrier after storing the step;
+        # recover it from that actual write response, not from a later read.
+        self.state["operations"][0]["terminalDurability"] = terminal_barrier
+        self.state.update(executorSource=self.i["executorSource"],
+            quiescenceSha256=self.i["quiescence"]["sha256"], recoveryAuthority=recovery_ref,
+            originalDatabaseState=recovery["originalDatabaseState"])
+        self.sql_receipts["passport-beta-fence-install.sql"] = step["receipt"]
+        self.persist()
+        return self._run_database_sequence(after_fence_install=True)
+
+    def _run_database_sequence(self, *, after_fence_install=False):
+        require(not after_fence_install or (self.state.get("recoveryAuthority") is not None
+                and len(self.state["operations"]) == 1 and self.state["operations"][0]["stepId"] == "FENCE_INSTALL"),
+                "D12_RECOVERY_CHECKPOINT_REQUIRED")
         order = [("FENCE_INSTALL", "passport-beta-fence-install.sql"), ("FENCE_VERIFY", "passport-beta-fence-verify.sql"),
             ("MAINTENANCE_START", "passport-beta-db-maintenance-start.sql")]
-        for step_id, name in order:
+        for step_id, name in order[1:] if after_fence_install else order:
             reference, row = self.step(step_id, lambda name=name: self.sql(name))
             self.sql_receipts[name] = reference
             if step_id == "FENCE_VERIFY":
@@ -551,7 +712,7 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
     scope_error = "CLOSED_D12_CURRENT_DATABASE_SCOPE_REQUIRED"
     selection_error = "EXACT_D12_CURRENT_SELECTION_REQUIRED"
 
-    def __init__(self, context, inputs, store, *, read_only_preflight=False):
+    def __init__(self, context, inputs, store, *, read_only_preflight=False, recovery_ref=None):
         require(type(read_only_preflight) is bool, "D12_PREFLIGHT_MODE_REQUIRED")
         self.read_only_preflight = read_only_preflight
         require(not read_only_preflight or getattr(store, "read_only", False) is True,
@@ -570,7 +731,8 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
         require(authority.get("schema") == "marty.d12-current-native-authority/v1"
                 and context["operation_lock_held"]() is True
                 and context["recording_lock_held"]() is True
-                and context["authorization_verified"](inputs["d12Authority"]) is True
+                and (context["authorization_verified"](inputs["d12Authority"]) if recovery_ref is None
+                     else context["recovery_authorization_verified"](inputs["d12Authority"], recovery_ref)) is True
                 and authority.get("sourceRevision") == self.source_revision
                 and authority.get("coreRevision") == self.core_revision
                 and authority.get("scope") == "FUNCTIONAL_ONLY"

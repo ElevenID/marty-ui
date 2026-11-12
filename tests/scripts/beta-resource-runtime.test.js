@@ -234,6 +234,7 @@ function maintenanceFixture(){
  const f=fixture(),a=authority(f.profile,f.context),generations=new Map(),before={roles:[]};
  for(const [cid,row]of Object.entries(f.live)){
   const role=cid===a.ui.newCid?'ui-prod':cid===a.kc.newCid?'keycloak':Object.entries(a.cap.allRunningRoles).find(([,v])=>v.id===cid)[0];
+  Object.assign(row.HostConfig,{NanoCpus:1000000000,PidsLimit:128,RestartPolicy:{Name:'no',MaximumRetryCount:0}});
   Object.assign(row.State,{Status:'running',Running:true,Paused:false,OOMKilled:false,ExitCode:0});generations.set(role,{role,cid,startedAt:row.State.StartedAt,pid:row.State.Pid});
   if(a.rows.some(v=>v.role===role)){
    before.roles.push({role,containerId:cid,imageId:row.Image,startedAt:row.State.StartedAt,hostPid:row.State.Pid,running:true,state:'running'});
@@ -262,4 +263,63 @@ for(const kind of ['runningManaged','stoppedAncillary','changedGeneration','chan
 });
 test('maintenance recovery does not weaken normal running ancillary verifier',()=>{
  const f=maintenanceFixture();assert.throws(()=>verifyAncillary(f.profile,f.read,f.context));
+});
+
+test('maintenance recovery actual recorded nginx five-field projection permits unknown historical defaults',()=>{
+ const f=maintenanceFixture(),row=f.live[f.a.cap.allRunningRoles['nginx-proxy'].id],old=f.resourceBefore.find(v=>v.Id===row.Id);
+ // Actual selected resource28 baseline shape and nonsecret nginx values.
+ old.HostConfig={Memory:268435456,MemorySwap:536870912,NanoCpus:0,PidsLimit:null,RestartPolicy:{MaximumRetryCount:0,Name:'unless-stopped'}};
+ row.HostConfig={...structuredClone(old.HostConfig),Privileged:false,ReadonlyRootfs:false,AutoRemove:false,ShmSize:67108864,NetworkMode:'elevenid-beta-network'};
+ const result=require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,f.inspect(),f.resourceBefore);
+ assert.equal(result.resources.length,28);assert(result.resources.find(v=>v.role==='nginx-proxy').hostConfigSha256);
+});
+test('maintenance recovery baseline cap projection is closed rather than arbitrary keys',()=>{
+ const f=maintenanceFixture();delete f.resourceBefore[0].HostConfig.PidsLimit;
+ assert.throws(()=>require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,f.inspect(),f.resourceBefore),/MAINTENANCE_CAPS_PROJECTION_SCHEMA/);
+});
+test('maintenance recovery unrecorded full live caps remain visible to the two-read stability guard',()=>{
+ const f=maintenanceFixture(),check=require('./functional-debug-runtime').validateMaintenanceResourceRows;
+ const first=check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore);
+ Object.values(f.live)[0].HostConfig.ShmSize=12345;
+ const second=check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore);
+ assert.notDeepEqual(second,first);
+});
+
+function dependencyHealthFixture(){
+ const f=maintenanceFixture(),runtime=require('./functional-debug-runtime'),path=require('node:path'),os=require('node:os');
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'marty-maintenance-health-')),created=[];
+ const file=(name,value,json=true)=>{const target=path.join(root,name),raw=Buffer.from(json?JSON.stringify(value):value);fs.writeFileSync(target,raw,{flag:'wx'});created.push(target);return {path:target,sha256:crypto.createHash('sha256').update(raw).digest('hex'),bytes:raw.length};};
+ const template=file('route.txt','location = /ready {\n set $backend_api ${GATEWAY_UPSTREAM};\n proxy_pass http://$backend_api/ready;\n}',false);
+ const entrypoint=file('entrypoint.txt',"GATEWAY_UPSTREAM=${GATEWAY_UPSTREAM:-gateway:8000}\nenvsubst '${PUBLIC_DOMAIN} ${UI_DEV_PORT} ${DOCS_DOMAIN} ${GATEWAY_UPSTREAM}' < /etc/nginx/conf.d/default.conf.template",false);
+ const proxy=f.live[f.a.cap.allRunningRoles['nginx-proxy'].id],gateway=f.live[f.before.roles.find(row=>row.role==='functional-0').containerId];
+ // The fixture's managed role names are synthetic; select one as the real closed gateway dependency.
+ const managed=f.before.roles.find(row=>row.role==='functional-0');managed.role='gateway';f.a.rows.find(row=>row.role==='functional-0').role='gateway';
+ const old=f.generations.get('functional-0');f.generations.delete('functional-0');f.generations.set('gateway',{...old,role:'gateway'});f.a.cap.allRunningRoles.gateway=f.a.cap.allRunningRoles['functional-0'];delete f.a.cap.allRunningRoles['functional-0'];f.a.input.before.gateway=f.a.input.before['functional-0'];f.a.input.targets.gateway=f.a.input.targets['functional-0'];
+ proxy.Config.Env.push('GATEWAY_UPSTREAM=gateway:8000');proxy.Config.Healthcheck={Test:['CMD-SHELL','wget --quiet --tries=1 --spider http://127.0.0.1/ready || exit 1'],Interval:10000000000,Timeout:5000000000,Retries:12,StartPeriod:15000000000};
+ proxy.Mounts=[{Type:'bind',Source:template.path,Destination:'/etc/nginx/conf.d/default.conf.template',RW:false},{Type:'bind',Source:entrypoint.path,Destination:'/docker-entrypoint.d/40-substitute-env.sh',RW:false}];
+ proxy.State.Health={Status:'unhealthy',Log:Array.from({length:5},()=>({ExitCode:1,Output:'wget: server returned error: HTTP/1.1 502 Bad Gateway\n',End:new Date(Date.now()-1000).toISOString()}))};
+ f.resourceBefore.find(row=>row.Id===proxy.Id).Mounts=structuredClone(proxy.Mounts);
+ const proof=f.a.configs.rows.find(row=>row.cid===proxy.Id);proof.mountsSha256=mountDigest(proxy);proof.envSha256=sha(Object.entries(Object.fromEntries(proxy.Config.Env.map(v=>v.split(/=(.*)/s).slice(0,2)))).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0));
+ const observation=file('observation.json',{Id:proxy.Id,Image:proxy.Image,Healthcheck:proxy.Config.Healthcheck,Health:proxy.State.Health,Mounts:proxy.Mounts});
+ const selected=file('upstream.json',{containerId:proxy.Id,selectedVariable:'GATEWAY_UPSTREAM',present:true,value:'gateway:8000',otherEnvironmentValuesReported:false});
+ const evidence=file('evidence.json',{schema:'marty.maintenance-proxy-dependency/v1',proxyObservation:observation,selectedUpstream:selected,routeTemplate:template,entrypoint});
+ return {...f,proxy,gateway,binding:()=>runtime.maintenanceProxyEvidence(evidence),cleanup:()=>{for(const item of created)fs.unlinkSync(item);fs.rmdirSync(root);}};
+}
+test('maintenance recovery exact proxy502 with bound source and stopped gateway is classified unready',()=>{
+ const f=dependencyHealthFixture();try{
+  const result=require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,f.inspect(),f.resourceBefore,f.binding());
+  const row=result.resources.find(row=>row.role==='nginx-proxy');assert.equal(row.health,'unhealthy');assert.equal(row.maintenanceHealthClassification.state,'EXPECTED_MAINTENANCE_UPSTREAM_STOPPED');assert.equal(row.maintenanceHealthClassification.functionalReadiness,false);assert.equal(result.dependencyObservations.length,1);
+ }finally{f.cleanup();}
+});
+for(const kind of ['differentUpstream','runningGateway','differentProbe','differentFailure','staleFailure','writableSource'])test('maintenance recovery proxy cause refuses '+kind,()=>{
+ const f=dependencyHealthFixture();try{
+  const binding=f.binding();
+  if(kind==='differentUpstream')f.proxy.Config.Env[f.proxy.Config.Env.length-1]='GATEWAY_UPSTREAM=other:8000';
+  if(kind==='runningGateway')Object.assign(f.gateway.State,{Status:'running',Running:true,Pid:123});
+  if(kind==='differentProbe')f.proxy.Config.Healthcheck.Test=['CMD','false'];
+  if(kind==='differentFailure')f.proxy.State.Health.Log[4].Output='connection refused';
+  if(kind==='staleFailure')f.proxy.State.Health.Log[4].End='2020-01-01T00:00:00Z';
+  if(kind==='writableSource')f.proxy.Mounts[0].RW=true;
+  assert.throws(()=>require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,f.inspect(),f.resourceBefore,binding));
+ }finally{f.cleanup();}
 });

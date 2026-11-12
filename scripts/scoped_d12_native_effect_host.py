@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from scoped_d12_native_host import D12ReadOnlyHost
-from scoped_native_database import bounded_run, require_bound_quiescence
+from scoped_native_database import bounded_run, require_bound_quiescence, fence_install_recovery_checkpoint
 from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
 from scoped_passport_maintenance import exact_roles, observed_role_state, same_full_role_snapshot
@@ -35,6 +35,17 @@ const readDocker=argv=>cp.execFileSync(dockerPath,['--context','desktop-linux',.
 const result=runtime.verifyFunctionalRuntime(profile,{qualification:'FUNCTIONAL_ONLY',readDocker});
 if(digest(modulePath)!==moduleHash||digest(profilePath)!==profileHash)throw Error('D12_RESOURCE_SOURCE_CHANGED');
 process.stdout.write(JSON.stringify(result));"""
+
+
+MAINTENANCE_RESOURCE_VERIFY_JS = RESOURCE_VERIFY_JS.replace(
+    "const [modulePath,moduleHash,profilePath,profileHash,dockerPath]=process.argv.slice(1);",
+    "const [modulePath,moduleHash,profilePath,profileHash,dockerPath,recoveryJson]=process.argv.slice(1);"
+).replace(
+    "const result=runtime.verifyFunctionalRuntime(profile,{qualification:'FUNCTIONAL_ONLY',readDocker});",
+    "const recoveryRef=JSON.parse(recoveryJson);"
+    "if(digest(recoveryRef.path)!==recoveryRef.sha256)throw Error('RECOVERY_RESOURCE_CHANGED');"
+    "const result=runtime.verifyMaintenanceRuntime(profile,{qualification:'MAINTENANCE_RECOVERY_ONLY',readDocker,recoveryRef});"
+)
 
 
 class D12HeldCanonicalLock:
@@ -421,8 +432,8 @@ class D12CurrentHostBindings:
         return True
 
     @staticmethod
-    def _bind_resource_rows(result, frozen):
-        require(isinstance(result, dict) and result.get("scope") == "FUNCTIONAL_ONLY"
+    def _bind_resource_rows(result, frozen, *, scope="FUNCTIONAL_ONLY"):
+        require(isinstance(result, dict) and result.get("scope") == scope
                 and result.get("releaseQualified") is False
                 and result.get("recordingQualified") is False
                 and isinstance(result.get("roles"), list),
@@ -438,6 +449,20 @@ class D12CurrentHostBindings:
         return True
 
     def authorization_verified(self, authority_ref):
+        return self._authorization_verified(authority_ref)
+
+    def recovery_authorization_verified(self, authority_ref, recovery_ref):
+        authority = json.loads(read_ref(authority_ref, 65536).read_bytes())
+        recovery = json.loads(read_ref(recovery_ref, 2 * 1024 * 1024).read_bytes())
+        require(authority.get("approvedRecoveryAuthoritySha256") == recovery_ref["sha256"]
+                and recovery.get("schema") == "marty.d12-fence-install-recovery/v1"
+                and recovery.get("operation") == "RESUME_AFTER_TERMINAL_FENCE_INSTALL"
+                and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
+                and recovery.get("runId") == self.inputs["runId"],
+                "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
+        return self._authorization_verified(authority_ref, recovery_ref)
+
+    def _authorization_verified(self, authority_ref, recovery_ref=None):
         if self.dispatch_permit is None:
             return False
         self.assert_inputs()
@@ -464,13 +489,24 @@ class D12CurrentHostBindings:
                     "tests/scripts/functional-debug-runtime.js", {}).get("sha256"),
                 "D12_RESOURCE_VERIFIER_SOURCE_REQUIRED")
         require(read_ref(authority_ref, 65536).is_file(), "D12_EXACT_REVIEWED_AUTHORITY_REQUIRED")
-        frozen = json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes())
+        resource_recovery_ref = None
+        frozen_ref = self.inputs["runtimeBefore"]
+        if recovery_ref is not None:
+            recovery = json.loads(read_ref(recovery_ref).read_bytes())
+            frozen_ref = recovery["quiescence"]
+            resource_recovery_ref = recovery["maintenanceResourceRecovery"]
+            read_ref(resource_recovery_ref, 2 * 1024 * 1024)
+        frozen = json.loads(read_ref(frozen_ref).read_bytes())
         self.save(observation_prefix + "d12-resource28-request.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
-            "runtimeBefore": self.inputs["runtimeBefore"], "scope": "FUNCTIONAL_ONLY"})
-        result = bounded_run([str(self.node), "-e", RESOURCE_VERIFY_JS,
-            source_ref["path"], source_ref["sha256"], profile_ref["path"],
-            profile_ref["sha256"], str(self.docker)], env=self.environment,
+            "runtimeBefore": self.inputs["runtimeBefore"],
+            "scope": "FUNCTIONAL_ONLY" if recovery_ref is None else "MAINTENANCE_RECOVERY_ONLY"})
+        script = RESOURCE_VERIFY_JS if recovery_ref is None else MAINTENANCE_RESOURCE_VERIFY_JS
+        arguments = [str(self.node), "-e", script, source_ref["path"], source_ref["sha256"],
+                     profile_ref["path"], profile_ref["sha256"], str(self.docker)]
+        if resource_recovery_ref is not None:
+            arguments.append(json.dumps(resource_recovery_ref))
+        result = bounded_run(arguments, env=self.environment,
             timeout=600, stdout_limit=1024 * 1024, stderr_limit=65536)
         self.save_bytes(observation_prefix + "d12-resource28-stdout.private", result.stdout)
         self.save_bytes(observation_prefix + "d12-resource28-stderr.private", result.stderr)
@@ -481,7 +517,7 @@ class D12CurrentHostBindings:
                 and not result.observation["failures"],
                 "D12_ACTUAL_RESOURCE28_VERIFIER_FAILED")
         actual = json.loads(result.stdout)
-        self._bind_resource_rows(actual, frozen)
+        self._bind_resource_rows(actual, frozen, scope=("FUNCTIONAL_ONLY" if recovery_ref is None else "MAINTENANCE_RECOVERY_ONLY"))
         self.assert_inputs()
         require(self.lock.held(), "D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ")
         read_ref(profile_ref, 2 * 1024 * 1024)
@@ -491,6 +527,9 @@ class D12CurrentHostBindings:
             "full28AncillaryVerifiedByReviewedRuntime": True,
             "actualRoleCount": len(actual["roles"]), "releaseQualified": False,
             "authorizationAttempt": attempt,
+            **({"scope": "MAINTENANCE_RECOVERY_ONLY", "recoveryAuthority": recovery_ref,
+                "maintenanceResourceRecovery": resource_recovery_ref, "functionalQualification": False}
+               if recovery_ref is not None else {}),
             "observations": {name: ref(self.root / (observation_prefix + name)) for name in (
                 "d12-compose-version-stdout.private", "d12-compose-version-stderr.private",
                 "d12-compose-version-terminal.private.json", "d12-resource28-request.private.json",
@@ -519,6 +558,19 @@ class D12CurrentHostBindings:
         rows = exact_roles(frozen, self.profile)
         state = self.store.read("build-state.json")
         require_bound_quiescence(state, self.inputs, bound)
+        return self._verify_quiescent_snapshot(frozen, rows)
+
+    def verify_recovery_quiescent(self, recovery_ref):
+        self.assert_inputs()
+        recovery = json.loads(read_ref(recovery_ref).read_bytes())
+        bound = recovery["quiescence"]
+        inputs = {**self.inputs, "quiescence": bound}
+        fence_install_recovery_checkpoint(inputs, self.store.read("build-state.json"),
+            self.store.read("build-apply-intent.json"), recovery)
+        frozen = json.loads(read_ref(bound).read_bytes())
+        return self._verify_quiescent_snapshot(frozen, exact_roles(frozen, self.profile))
+
+    def _verify_quiescent_snapshot(self, frozen, rows):
         fresh = self.observer.inspect_all22()
         require(same_full_role_snapshot(fresh, frozen, self.profile),
                 "D12_QUIESCENCE_CHANGED_BEFORE_DATABASE")
@@ -561,6 +613,8 @@ class D12CurrentHostBindings:
                 "compose_model": self.host.compose_model,
                 "database_snapshot": self.database_snapshot,
                 "verify_all22_quiescent": self.verify_all22_quiescent,
+                "verify_recovery_quiescent": self.verify_recovery_quiescent,
+                "recovery_authorization_verified": self.recovery_authorization_verified,
                 "wait_all22_healthy": self.wait_all22_healthy,
                 "save": self.save, "save_bytes": self.save_bytes, "ref": ref,
                 "assert_inputs": self.assert_inputs, "root": self.root,
