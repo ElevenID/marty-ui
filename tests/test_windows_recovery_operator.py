@@ -10,11 +10,14 @@ from test_selfhost_windows_inputs import private_fixture
 import selfhost_windows_recovery_operator as recovery
 
 
-@pytest.mark.parametrize('fault',[None,'draft','failed-run','source','unsigned','capability','digest','published-digest'])
+@pytest.mark.parametrize('fault',[None,'draft','failed-run','source','unsigned','capability','digest','published-digest','verifier'])
 def test_operator_admission_preserves_history_and_requires_fresh_proofs(monkeypatch,fault):
     with private_fixture() as (root, _):
         binary=root/'marty-deploy-linux-amd64'
         binary.write_bytes(b'PUBLIC_SYNTHETIC_OPERATOR')
+        for name in ('gh','cosign'):(root/name).write_bytes(b'PUBLIC_SYNTHETIC_VERIFIER')
+        verifiers={name:hashlib.sha256((root/name).read_bytes()).hexdigest() for name in ('gh','cosign')}
+        if fault=='verifier':verifiers['gh']='0'*64
         for suffix in ('.provenance.jsonl','.sigstore.json'):
             (root/(binary.name+suffix)).write_bytes(b'PUBLIC_SYNTHETIC_PROOF')
         expected={'source_sha':'1'*40,'release_tag':'v1.2.3','run_id':42,'run_attempt':2,
@@ -45,7 +48,7 @@ def test_operator_admission_preserves_history_and_requires_fresh_proofs(monkeypa
         monkeypatch.setattr(recovery.native,'require_recovery_capability',capability)
         def admit():
             with recovery.admitted_operator(original,root,expected,gh=root/'gh',cosign=root/'cosign',
-                                             docker_prefix=[],runner=runner) as (successor,proof):
+                                             verifier_sha256=verifiers,docker_prefix=[],runner=runner) as (successor,proof):
                 assert successor['release_tag']=='v1.2.3'
                 assert proof['historical_operator_sha256']=='a'*64
         if fault:

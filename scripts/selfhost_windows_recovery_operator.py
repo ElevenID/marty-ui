@@ -12,7 +12,7 @@ import verify_installer_provenance as provenance
 
 
 @contextmanager
-def admitted_operator(config, assets, expected, *, gh, cosign, docker_prefix,
+def admitted_operator(config, assets, expected, *, gh, cosign, verifier_sha256, docker_prefix,
                       runner=provenance.command):
     """Hold a separately published stable operator through its consumer action.
 
@@ -27,8 +27,13 @@ def admitted_operator(config, assets, expected, *, gh, cosign, docker_prefix,
     require(all(type(expected[key]) is int and expected[key] > 0 for key in ('run_id','run_attempt')))
     assets, gh, cosign = Path(assets), Path(gh), Path(cosign)
     require(assets.is_absolute() and gh.is_absolute() and cosign.is_absolute())
+    require(set(verifier_sha256)=={'gh','cosign'} and all(
+        type(value) is str and re.fullmatch(r'[0-9a-f]{64}',value) for value in verifier_sha256.values()))
     binary = assets/'marty-deploy-linux-amd64'
     with ExitStack() as stack:
+        for name, path in (('gh',gh),('cosign',cosign)):
+            verifier = stack.enter_context(renewal.hold_private_input(path, max_bytes=256*1024*1024))
+            require(hashlib.sha256(verifier).hexdigest()==verifier_sha256[name])
         stack.enter_context(renewal.hold_storage_namespace(assets))
         from selfhost_windows_inputs import _held_private_input
         stack.enter_context(_held_private_input(assets, directory=True))
@@ -55,4 +60,5 @@ def admitted_operator(config, assets, expected, *, gh, cosign, docker_prefix,
                          source_sha=expected['source_sha'],release_tag=expected['release_tag'])
         native.require_recovery_capability(successor, docker_prefix)
         yield successor, {'schema':'marty.windows-recovery-operator-admission/v1', **expected,
+                          'verifier_sha256':dict(verifier_sha256),
                           'historical_operator_sha256':config['binary_sha256']}

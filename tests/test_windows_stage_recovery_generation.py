@@ -42,6 +42,15 @@ def test_guarded_recovery_staging_never_activates_or_admits_retry(monkeypatch, f
             assert config['native']['token_file']=='/control/recovery-session-'+cycle+'/token'
             checkpoint('prepare', 'started', {})
             if fault == 'producer':raise RuntimeError('SYNTHETIC_PRODUCER_FAILURE')
+            for phase in ('prepare','tls','keycloak','export'):
+                if phase!='prepare':checkpoint(phase,'started',{})
+                if phase in ('prepare','tls','keycloak'):
+                    metadata={'id':{'prepare':'b','tls':'c','keycloak':'d'}[phase]*64,
+                        'name':cfg['project']+'-renew-'+phase+'-'+cycle,
+                        'image':image if phase=='tls' else config['native']['helper_image']}
+                    if phase=='tls':checkpoint(phase,'created',metadata)
+                    checkpoint(phase,'helper',metadata)
+                checkpoint(phase,'completed',{})
             return {name: (b'' if value == b'' else b'PUBLIC_RECOVERED_'+name.encode()) for name,value in current.items()}
         def prove(*args):
             events.append('recovery-candidate')
@@ -50,7 +59,8 @@ def test_guarded_recovery_staging_never_activates_or_admits_retry(monkeypatch, f
         monkeypatch.setattr(native, 'preflight_recovery', prove)
         def stage():
             return stage_recovery_generation(path, output, 'marty-selfhost-synthetic',
-                operator_successor={'assets':'PUBLIC_ASSETS','expected':{},'gh':'PUBLIC_GH','cosign':'PUBLIC_COSIGN'} if successor else None)
+                operator_successor={'assets':'PUBLIC_ASSETS','expected':{},'gh':'PUBLIC_GH','cosign':'PUBLIC_COSIGN',
+                                    'verifier_sha256':{}} if successor else None)
         if fault:
             with pytest.raises((ValueError, RuntimeError)):
                 stage()

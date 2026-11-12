@@ -10,6 +10,35 @@ from pathlib import Path
 
 from selfhost_windows_selection import _stage_names, packed, require
 
+RECOVERY_PHASES = ('authority','prepare','tls','keycloak','export','materialize','candidate')
+
+
+def recovery_phase_receipts(raws, project, cycle, helper_image, services_image):
+    """Require complete canonical phases and exact named helper identities."""
+    expected = {f'{phase}.{event}.json' for phase in RECOVERY_PHASES for event in ('started','completed')}
+    expected |= {'prepare.helper.json','tls.created.json','tls.helper.json','keycloak.helper.json'}
+    require(type(raws) is dict and set(raws)==expected)
+    require(re.fullmatch(r'[0-9a-f]{32}', cycle))
+    import selfhost_windows_selection as selection
+    helpers = {}
+    for name, raw in raws.items():
+        phase, event, _ = name.split('.')
+        item = selection.decode(raw)
+        require(raw==packed(item) and set(item)=={'phase','event','metadata'}
+                and item['phase']==phase and item['event']==event)
+        metadata = item['metadata']
+        if event in ('started','completed'):
+            require(metadata=={})
+        else:
+            require(type(metadata) is dict and set(metadata)=={'id','name','image'}
+                    and type(metadata['id']) is str and re.fullmatch(r'[0-9a-f]{64}',metadata['id'])
+                    and metadata['name']==project+'-renew-'+phase+'-'+cycle
+                    and metadata['image']==(services_image if phase=='tls' else helper_image))
+            helpers[name]=metadata
+    require(helpers['tls.created.json']==helpers['tls.helper.json'])
+    require(len({item['id'] for item in helpers.values()})==3)
+    return {name:hashlib.sha256(raw).hexdigest() for name,raw in sorted(raws.items())}, helpers
+
 
 def failed_current_receipts(raws):
     """Bind the exact pre-producer phase; reject absent or ambiguous evidence.
@@ -161,10 +190,11 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
         operator_admission = None
         if operator_successor is not None:
             from selfhost_windows_recovery_operator import admitted_operator
-            require(set(operator_successor)=={'assets','expected','gh','cosign'})
+            require(set(operator_successor)=={'assets','expected','gh','cosign','verifier_sha256'})
             admitted_native, operator_admission = stack.enter_context(admitted_operator(
                 cfg['native'], operator_successor['assets'], operator_successor['expected'],
                 gh=operator_successor['gh'], cosign=operator_successor['cosign'],
+                verifier_sha256=operator_successor['verifier_sha256'],
                 docker_prefix=observed['docker'].prefix))
         else:
             native.require_recovery_capability(admitted_native, observed['docker'].prefix)
@@ -186,7 +216,7 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
         stack.enter_context(renewal.hold_private_input(guard))
         selection._new_private(root/'intent.json', packed(intent))
         stack.enter_context(renewal.hold_private_input(root/'intent.json'))
-        for phase in ('authority', 'prepare', 'tls', 'keycloak', 'export', 'materialize', 'candidate'):
+        for phase in RECOVERY_PHASES:
             for event in ('started', 'completed'):
                 selection._new_private(root/f'{phase}.{event}.json', b'')
         for name in ('prepare.helper.json', 'tls.created.json', 'tls.helper.json', 'keycloak.helper.json'):
@@ -194,7 +224,7 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
         selection._new_private(root/'config.private.json', packed(config))
         stack.enter_context(renewal.hold_private_input(root/'config.private.json'))
         expected_names = {'intent.json', 'config.private.json',
-            *(f'{phase}.{event}.json' for phase in ('authority','prepare','tls','keycloak','export','materialize','candidate')
+            *(f'{phase}.{event}.json' for phase in RECOVERY_PHASES
               for event in ('started','completed')),
             'prepare.helper.json', 'tls.created.json', 'tls.helper.json', 'keycloak.helper.json'}
         def output_membership():
@@ -230,8 +260,14 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
                                   held, observed['docker'].prefix)
         observed['context'].check(before_intent=True)
         checkpoint('candidate', 'completed', {})
+        receipts = {name:renewal.read_private_bytes(root/name) for name in expected_names
+                    if name not in ('intent.json','config.private.json')}
+        hashes, helpers = recovery_phase_receipts(receipts, cfg['project'], cycle,
+            config['native']['helper_image'], observed['model']['services']['signing-keys']['image'])
+        selection._retired_stage_helpers(observed['context'].check(before_intent=True), helpers, cycle)
         provisional = {'schema': intent['schema'], 'result': 'provisional-candidate',
                        'root': str(root), 'guard_sha256': selection.digest(packed(intent)),
                        'generation_sha256': selection.fingerprint(held),
+                       'receipt_sha256': hashes,
                        'credential_admission': False, 'guards_retained': True}
     return provisional
