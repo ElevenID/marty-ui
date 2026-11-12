@@ -574,6 +574,43 @@ pub async fn retained_certificates(bao: &OpenBaoHttp, context: &Value) -> Result
     Ok(())
 }
 
+fn recovery_candidate_context(context: &Value) -> Result<(&str, &str, &str, u64)> {
+    let fields = context.as_object().ok_or(REFUSAL)?;
+    if fields.len() != 4
+        || !["token", "old", "new", "minimum_ttl"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+    {
+        return Err(REFUSAL);
+    }
+    let old = text(context, "old")?;
+    let new = text(context, "new")?;
+    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
+    if old == new || !(3600..=28800).contains(&ttl) {
+        return Err(REFUSAL);
+    }
+    Ok((text(context, "token")?, old, new, ttl))
+}
+
+/// Recovery candidate proof; does not mint credentials or activate containers.
+/// Performs the existing versioned-signature probes using fresh leaf tokens.
+/// Expired old tokens are never used or admitted for rollback.
+pub async fn recovery_candidate(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    let (token, old, new, ttl) = recovery_candidate_context(context)?;
+    generation::verify(Path::new(old), Path::new(new), false, false)?;
+    retained_certificates(
+        bao,
+        &json!({"token":token,"generation":old,"minimum_ttl":ttl}),
+    )
+    .await?;
+    let fresh = json!({"token":token,"old":new,"new":new,"minimum_ttl":ttl,
+        "require_orphan_old":true,"require_orphan_new":true,
+        "require_closed_new_metadata":true,"replacement":null,"retiring":false});
+    certificates(bao, &fresh).await?;
+    tokens(bao, &fresh).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "activation_preflight_tests.rs"]
 mod tests;
