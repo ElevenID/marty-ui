@@ -324,8 +324,13 @@ def test_remote_redis_cache_data_is_bounded_ephemeral_without_anonymous_volume()
 
     compose = yaml.safe_load((ROOT / "docker-compose.canvas-oss-remote.yml").read_text(encoding="utf-8"))
     redis = compose["services"]["canvas-redis"]
-    assert redis["tmpfs"] == ["/data:rw,noexec,nosuid,size=67108864,mode=1777"]
-    assert "volumes" not in redis and "command" not in redis
+    assert "tmpfs" not in redis and "command" not in redis
+    assert redis["volumes"] == [{"type": "tmpfs", "target": "/data", "tmpfs": {"size": 67108864, "mode": 1023}}]
+    # Mode is decimal1023 (=octal01777), never decimal1777. This is the effective
+    # Compose->Moby TmpfsOptions numeric contract, not a daemon qualification.
+    tmpfs = redis["volumes"][0]["tmpfs"]
+    assert type(tmpfs["mode"]) is int and tmpfs["mode"] == 0o1777
+    assert type(tmpfs["size"]) is int and tmpfs["size"] == 64 * 1024 * 1024
     assert redis["mem_limit"] == "128m" and redis["memswap_limit"] == "256m"
     assert set(compose["volumes"]) == {"canvas_oss_files", "canvas_oss_log", "canvas_oss_postgres"}
     assert compose["services"]["canvas-postgres"]["volumes"] == ["canvas_oss_postgres:/var/lib/postgresql/data"]

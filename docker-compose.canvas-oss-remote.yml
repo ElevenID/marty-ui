@@ -56,9 +56,13 @@ services:
     image: ${CANVAS_OSS_REDIS_IMAGE:?CANVAS_OSS_REDIS_IMAGE must be an immutable digest
       reference}
     container_name: marty-canvas-oss-redis
-    # Cache only: cover the stock Redis VOLUME without creating an anonymous disk volume.
-    tmpfs:
-    - /data:rw,noexec,nosuid,size=67108864,mode=1777
+    # Explicit Mount API: bounded cache only; never an inherited anonymous disk volume.
+    volumes:
+    - type: tmpfs
+      target: /data
+      tmpfs:
+        size: 67108864
+        mode: 1023 # decimal 01777
     networks:
     - canvas-oss-private
     mem_limit: 128m

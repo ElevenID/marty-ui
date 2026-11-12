@@ -24,22 +24,34 @@ OAuth/LTI, cleanup, recording and editorial requirements.
 
 Redis is an ephemeral cache in this profile: `cache_store.yml` uses
 `redis_cache_store`, sessions use encrypted cookies, and the stock delayed-job
-worker uses the PostgreSQL application database. A 64 MiB `tmpfs` at `/data`
-covers the stock Redis image's declared volume, so Docker does not create an
-anonymous disk volume. Its pages count against the unchanged Redis 128 MiB
-RAM cap; this is not extra memory capacity. Redis cache/RDB contents disappear
-when its container is replaced. Uploads, logs and PostgreSQL remain the exact
-three named persistent volumes. No Redis command/image or Canvas source changes.
-Actual cold-cache/reconnect/health/workload checks remain required.
+worker uses the PostgreSQL application database. Its `/data` mount uses explicit
+long-syntax `type: tmpfs`, size 67108864 and mode 1023 (decimal for octal 01777).
+This selects the Docker Mount API with `TmpfsOptions.SizeBytes=67108864` and
+`Mode=1023`; Docker applies its default noexec/nosuid/nodev tmpfs protections.
+Its pages count against the unchanged Redis 128 MiB RAM cap, not extra capacity.
+Cache/RDB contents disappear when Redis is replaced. Uploads, logs and PostgreSQL
+remain the exact three named persistent volumes. No Redis image/command or
+Canvas source changes. Actual cold-cache/reconnect/workload checks remain required.
 
-For an existing deployment, review a Redis-only recreation against its exact
-old container/image/mount and unchanged other-five generation proofs. Preserve
-the old anonymous Redis volume until the replacement is healthy with the exact
-bounded `/data` tmpfs, the other five remain unchanged and the old volume has
-zero consumers (including stopped containers). After those checks, remove only
-that exact observed anonymous volume through the reviewed cleanup step; never use prune, `down --volumes`,
-`--remove-orphans`, or broad volume deletion. If replacement fails, preserve the
-old volume and failure evidence for an explicitly reviewed rollback/recovery.
+For an existing deployment, the reviewed Redis-only recreation must also use
+`--renew-anon-volumes` with `--no-deps --no-build --pull never --force-recreate
+canvas-redis`. Compose 5.4 otherwise inherits the image's old anonymous `/data`
+volume and can discard even an explicit empty-source tmpfs declaration while
+processing that inheritance. Renew disables inheritance only for the selected
+Redis recreation. The explicit tmpfs mount then suppresses the image's anonymous
+volume allocation; this does not renew or remove any of the three durable volumes.
+A legacy `tmpfs:` map alone is insufficient evidence: `HostConfig.Tmpfs` may be
+present while `Mounts` still contains the inherited disk volume.
+
+Before any old-volume retirement, verify the actual new Redis `/data` entry is
+`Type=tmpfs`, its `HostConfig.Mounts` has the exact size/mode options, no
+`HostConfig.Tmpfs` legacy map or inherited volume/bind remains, and Redis is
+healthy under UID 999. Verify public health/web reconnect and the other five
+unchanged generations. Preserve the exact old anonymous volume until it has
+zero consumers, including stopped containers. Then retire only that exact
+unchanged volume through the reviewed owner; never prune, use `down --volumes`,
+`--remove-orphans`, or broad volume deletion. Preserve failures and use the
+explicit recovery review; never automatically retry or roll back.
 
 All six steady services restart unless explicitly stopped; the lifecycle
 one-shot is excluded. Actual bootstrap and workload checks must still account
