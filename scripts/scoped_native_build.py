@@ -490,12 +490,28 @@ def membership_consumers(helper, plan, expected=None, owned_cid=None, owned_stat
     return rows
 
 
-def membership_capacity(helper, private):
+def membership_required_free_bytes(*, before_parent=False):
+    """Strict free-memory guard, plus startup allowance before the Job starts.
+
+    Keep the complete Windows budget in the in-parent guard: Job commit/peak
+    counters do not establish its current physical residency. Admission before
+    spawning the parent adds another Windows-budget-sized allowance so its
+    startup clients do not immediately consume the in-parent headroom. This is
+    conservative admission, not a reservation; each dispatch still rechecks.
+    """
+    require(type(before_parent) is bool, "D05_CAPACITY_PHASE_INVALID")
+    return 4 * 1024 ** 3 + 64 * 1024 ** 2 + (1024 ** 3 if before_parent else 0)
+
+
+def membership_capacity(helper, private, *, before_parent=False):
+    required_bytes = membership_required_free_bytes(before_parent=before_parent)
     host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
     # Linux 2 GiB + Windows controller 1 GiB + unchanged host reserve 1 GiB + 64 MiB.
-    require(host_kib * 1024 >= 4 * 1024 ** 3 + 64 * 1024 ** 2,
-            "D05_HOST_HEADROOM_REQUIRED")
+    require(host_kib * 1024 >= required_bytes,
+            "D05_HOST_HEADROOM_REQUIRED "
+            f"phase={'before-parent' if before_parent else 'in-parent'} "
+            f"freeBytes={host_kib * 1024} requiredBytes={required_bytes}")
     require(shutil.disk_usage(private).free >= 8 * 1024 ** 3, "D05_DISK_HEADROOM_REQUIRED")
     return host_kib
 

@@ -45,6 +45,20 @@ class Helper:
 
 
 class MembershipBuildTests(unittest.TestCase):
+    def test_strict_capacity_and_before_parent_startup_allowance(self):
+        required = 4 * 1024 ** 3 + 64 * 1024 ** 2
+        for before_parent, threshold in ((False, required), (True, required + 1024 ** 3)):
+            self.assertEqual(build.membership_required_free_bytes(before_parent=before_parent), threshold)
+            for free, accepted in ((threshold, True), (threshold - 1024, False)):
+                helper = SimpleNamespace(run=lambda *args: SimpleNamespace(stdout=str(free // 1024)))
+                with self.subTest(before_parent=before_parent, free=free), \
+                     patch.object(build.shutil, 'disk_usage', return_value=SimpleNamespace(free=8 * 1024 ** 3)):
+                    if accepted:
+                        build.membership_capacity(helper, Path('.'), before_parent=before_parent)
+                    else:
+                        with self.assertRaisesRegex(ValueError, f'freeBytes={free} requiredBytes={threshold}'):
+                            build.membership_capacity(helper, Path('.'), before_parent=before_parent)
+
     def test_r5_terminal_mount_order_is_not_identity(self):
         row = terminal()
         expected = build.membership_terminal_cache_projection(row)
