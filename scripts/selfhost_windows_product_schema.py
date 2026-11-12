@@ -193,14 +193,14 @@ def _hash(expression):
 
 
 def _raw(alias, *, eligible):
-    removed="-'_cohort_eligible'" if eligible else ""
-    return "(to_jsonb("+alias+")-'_cohort_id_sha256'"+removed+")"
+    # Keep the complete physical row nested; projection names may also be real columns.
+    return alias+"._cohort_row"
 
 
 def _before_table(alias, change):
     payload = _raw(alias,eligible=True)
     expected = "CASE WHEN _cohort_eligible THEN ("+payload+"-'updated_at') || "+change+" ELSE "+payload+" END"
-    return "jsonb_build_object('row_count',count(*),'eligible_id_sha256',COALESCE(jsonb_agg(_cohort_id_sha256 ORDER BY _cohort_id_sha256) FILTER (WHERE _cohort_eligible),'[]'::jsonb),'observed_sha256',"+_hash('jsonb_agg('+payload+' ORDER BY id)')+",'expected_after_sha256',"+_hash('jsonb_agg(('+expected+') ORDER BY id)')+")"
+    return "jsonb_build_object('row_count',count(*),'eligible_id_sha256',COALESCE(jsonb_agg(_cohort_id_sha256 ORDER BY _cohort_id_sha256) FILTER (WHERE _cohort_eligible),'[]'::jsonb),'observed_sha256',"+_hash('jsonb_agg('+payload+' ORDER BY _cohort_order_id)')+",'expected_after_sha256',"+_hash('jsonb_agg(('+expected+') ORDER BY _cohort_order_id)')+")"
 
 
 def before_sql():
@@ -208,11 +208,11 @@ def before_sql():
     template_change = "jsonb_build_object('claims',("+claims+"),'version',coalesce(version,0)+1)"
     application_change = "jsonb_build_object('claim_collection_rules',("+rules+"),'management_version',management_version+1)"
     return """WITH template_rows AS (
-        SELECT candidate.*, encode(sha256(convert_to(id::text,'UTF8')),'hex') AS _cohort_id_sha256,
+        SELECT to_jsonb(candidate) AS _cohort_row, candidate.id AS _cohort_order_id, candidate.claims, candidate.version, encode(sha256(convert_to(candidate.id::text,'UTF8')),'hex') AS _cohort_id_sha256,
             coalesce(("""+template_where+"""),false) AS _cohort_eligible
         FROM credential_template_service.credential_templates candidate LIMIT """+str(MAX_ROWS+1)+"""
     ), application_rows AS (
-        SELECT application.*, encode(sha256(convert_to(application.id::text,'UTF8')),'hex') AS _cohort_id_sha256,
+        SELECT to_jsonb(application) AS _cohort_row, application.id AS _cohort_order_id, application.claim_collection_rules, application.management_version, encode(sha256(convert_to(application.id::text,'UTF8')),'hex') AS _cohort_id_sha256,
             EXISTS (SELECT 1 FROM credential_template_service.credential_templates credential WHERE """+application_where+""") AS _cohort_eligible
         FROM issuance_service.application_templates application LIMIT """+str(MAX_ROWS+1)+"""
     ) SELECT jsonb_build_object('schema','"""+SCHEMA+"""','side','before','database_clock',clock_timestamp(),
@@ -251,17 +251,17 @@ def _after_table(alias, keys, floor):
     selected="_cohort_id_sha256 = ANY(ARRAY["+','.join("'"+key+"'" for key in keys)+"]::text[])"
     payload=_raw(alias,eligible=False)
     normalized="CASE WHEN "+selected+" THEN "+payload+"-'updated_at' ELSE "+payload+" END"
-    return "jsonb_build_object('row_count',count(*),'masked_rows',count(*) FILTER (WHERE "+selected+"),'updated_at_in_window',coalesce(bool_and(CASE WHEN "+selected+" THEN coalesce(updated_at >= '"+floor+"'::timestamptz AND updated_at <= clock_timestamp(),false) ELSE true END),true),'observed_sha256',"+_hash('jsonb_agg(('+normalized+') ORDER BY id)')+")"
+    return "jsonb_build_object('row_count',count(*),'masked_rows',count(*) FILTER (WHERE "+selected+"),'updated_at_in_window',coalesce(bool_and(CASE WHEN "+selected+" THEN coalesce(updated_at >= '"+floor+"'::timestamptz AND updated_at <= clock_timestamp(),false) ELSE true END),true),'observed_sha256',"+_hash('jsonb_agg(('+normalized+') ORDER BY _cohort_order_id)')+")"
 
 
 def after_sql(before):
     validate_before(before)
     floor=_clock(before['database_clock']).isoformat()
     return """WITH template_rows AS (
-        SELECT candidate.*,encode(sha256(convert_to(id::text,'UTF8')),'hex') AS _cohort_id_sha256
+        SELECT to_jsonb(candidate) AS _cohort_row, candidate.id AS _cohort_order_id, candidate.updated_at, encode(sha256(convert_to(candidate.id::text,'UTF8')),'hex') AS _cohort_id_sha256
         FROM credential_template_service.credential_templates candidate LIMIT """+str(MAX_ROWS+1)+"""
     ), application_rows AS (
-        SELECT candidate.*,encode(sha256(convert_to(id::text,'UTF8')),'hex') AS _cohort_id_sha256
+        SELECT to_jsonb(candidate) AS _cohort_row, candidate.id AS _cohort_order_id, candidate.updated_at, encode(sha256(convert_to(candidate.id::text,'UTF8')),'hex') AS _cohort_id_sha256
         FROM issuance_service.application_templates candidate LIMIT """+str(MAX_ROWS+1)+"""
     ) SELECT jsonb_build_object('schema','"""+SCHEMA+"""','side','after','database_clock',clock_timestamp(),
         'credential_template',(SELECT """+_after_table('template_rows',before['credential_template']['eligible_id_sha256'],floor)+""" FROM template_rows),

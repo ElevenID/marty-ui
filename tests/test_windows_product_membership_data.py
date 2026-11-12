@@ -127,6 +127,16 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         with pytest.raises(ValueError):witness.capture(Docker(),[owned()],project,before=prior,profile=profile)
         sql("UPDATE credential_template_service.credential_templates SET updated_at=NULL WHERE id='50000000-0000-0000-0000-000000000040';")
         with pytest.raises(ValueError):witness.capture(Docker(),[owned()],project,before=prior,profile=profile)
+        # Existing physical columns with projection names remain part of the payload.
+        sql("TRUNCATE credential_template_service.credential_templates,credential_template_service.rust_schema_versions,issuance_service.application_templates;")
+        sql(initial)
+        sql("ALTER TABLE issuance_service.application_templates ADD COLUMN _cohort_id_sha256 text DEFAULT 'retained'; ALTER TABLE issuance_service.application_templates ADD COLUMN _cohort_row text DEFAULT 'retained';")
+        collision=witness.capture(Docker(),[owned()],project,profile=profile)
+        sql(witness.CREDENTIAL_REPAIR+witness.APPLICATION_REPAIR)
+        witness.capture(Docker(),[owned()],project,before=collision,profile=profile)
+        sql("UPDATE issuance_service.application_templates SET _cohort_id_sha256='unexpected' WHERE id='customer';")
+        with pytest.raises(ValueError):witness.capture(Docker(),[owned()],project,before=collision,profile=profile)
+        sql("ALTER TABLE issuance_service.application_templates DROP COLUMN _cohort_id_sha256; ALTER TABLE issuance_service.application_templates DROP COLUMN _cohort_row;")
         # Both service startup orders must agree with the same retained-state witness.
         reset="TRUNCATE credential_template_service.credential_templates,credential_template_service.rust_schema_versions,issuance_service.application_templates;"
         sql(reset+initial)
