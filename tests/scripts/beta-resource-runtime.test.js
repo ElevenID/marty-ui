@@ -229,3 +229,37 @@ test('resource successor refuses base/composition/role/target/reused-ID ambiguit
   assert.throws(()=>resourceSuccessor(previous,f.profile,f.context),undefined,kind);
  }
 });
+
+function maintenanceFixture(){
+ const f=fixture(),a=authority(f.profile,f.context),generations=new Map(),before={roles:[]};
+ for(const [cid,row]of Object.entries(f.live)){
+  const role=cid===a.ui.newCid?'ui-prod':cid===a.kc.newCid?'keycloak':Object.entries(a.cap.allRunningRoles).find(([,v])=>v.id===cid)[0];
+  Object.assign(row.State,{Status:'running',Running:true,Paused:false,OOMKilled:false,ExitCode:0});generations.set(role,{role,cid,startedAt:row.State.StartedAt,pid:row.State.Pid});
+  if(a.rows.some(v=>v.role===role)){
+   before.roles.push({role,containerId:cid,imageId:row.Image,startedAt:row.State.StartedAt,hostPid:row.State.Pid,running:true,state:'running'});
+   Object.assign(row.State,{Status:'exited',Running:false,Pid:0,ExitCode:0});
+  }
+ }
+ const resourceBefore=Object.values(f.live).map(row=>({Id:row.Id,Image:row.Image,StartedAt:row.State.StartedAt,Labels:structuredClone(row.Config.Labels),Mounts:structuredClone(row.Mounts),HostConfig:structuredClone(row.HostConfig)}));
+ return {...f,a,generations,before,resourceBefore,inspect:()=>Object.values(f.live)};
+}
+test('maintenance recovery exact22stopped and6running retains structural/source checks',()=>{
+ const f=maintenanceFixture(),check=require('./functional-debug-runtime').validateMaintenanceResourceRows;
+ const result=check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore);assert.equal(result.roles.length,22);assert.equal(result.resources.length,28);assert(result.roles.every(row=>row.state==='exited'&&row.hostPid===0&&!row.running));
+});
+for(const kind of ['runningManaged','stoppedAncillary','changedGeneration','changedEnv','changedMount','changedCap','changedOtherCap','changedFullMountField','duplicateCID'])test('maintenance recovery refuses '+kind,()=>{
+ const f=maintenanceFixture(),rows=f.inspect(),managed=rows.find(row=>row.State.Status==='exited'),ancillary=rows.find(row=>row.State.Status==='running');
+ if(kind==='runningManaged')Object.assign(managed.State,{Status:'running',Running:true,Pid:1});
+ if(kind==='stoppedAncillary')Object.assign(ancillary.State,{Status:'exited',Running:false,Pid:0});
+ if(kind==='changedGeneration')managed.State.StartedAt='2026-11-11T00:00:00Z';
+ if(kind==='changedEnv')managed.Config.Env.push('DRIFT=1');
+ if(kind==='changedMount')managed.Mounts.push({Type:'bind',Source:'/unexpected',Destination:'/unexpected',RW:false});
+ if(kind==='changedCap')managed.HostConfig.Memory++;
+ if(kind==='changedOtherCap')managed.HostConfig.PidsLimit=999;
+ if(kind==='changedFullMountField'){const mount={Type:'volume',Source:'/owned',Destination:'/owned',RW:true,Name:'owned',Propagation:''};managed.Mounts.push(mount);const base=f.resourceBefore.find(row=>row.Id===managed.Id);base.Mounts.push({...mount,Propagation:'different'});}
+ if(kind==='duplicateCID')rows[1]=rows[0];
+ assert.throws(()=>require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,rows,f.resourceBefore));
+});
+test('maintenance recovery does not weaken normal running ancillary verifier',()=>{
+ const f=maintenanceFixture();assert.throws(()=>verifyAncillary(f.profile,f.read,f.context));
+});
