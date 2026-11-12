@@ -345,6 +345,13 @@ def test_remote_redis_cache_real_compose_render_contract(tmp_path: Path) -> None
     """Normal interpolated Compose serialization: public values, no daemon/services."""
     import os
 
+    renderer = os.environ.get("MARTY_COMPOSE_RENDERER")
+    if renderer is not None:
+        assert Path(renderer).is_file(), "selected Compose renderer is missing"
+        command = [renderer]
+    else:
+        command = ["docker", "compose"]
+
     empty_env = tmp_path / "empty.env"
     empty_env.write_text("", encoding="utf-8")
     docker_config = tmp_path / "docker-config"
@@ -367,7 +374,7 @@ def test_remote_redis_cache_real_compose_render_contract(tmp_path: Path) -> None
         CANVAS_OSS_ACME_DIR="/render-only/acme",
     )
     rendered = subprocess.run(
-        ["docker", "compose", "--project-name", "canvas-oss-remote",
+        [*command, "--project-name", "canvas-oss-remote",
          "--project-directory", str(ROOT), "--env-file", str(empty_env),
          "--file", str(ROOT / "docker-compose.canvas-oss-remote.yml"),
          "config", "--no-path-resolution", "--format", "json"],
