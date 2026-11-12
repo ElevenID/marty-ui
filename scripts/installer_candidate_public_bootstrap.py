@@ -690,7 +690,7 @@ def authenticated_operator_fd(args, base_fd, operator):
                 and auth.get("run_id") == args.run_id
                 and auth.get("run_attempt") == args.run_attempt
                 and auth.get("issued_at", 0) <= int(time.time()) < auth.get("expires_at", 0))
-        fd = os.open(operator.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        fd = os.open(operator.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                      dir_fd=output_fd)
         try:
             info = os.fstat(fd)
@@ -709,6 +709,14 @@ def authenticated_operator_fd(args, base_fd, operator):
                     require(total <= expected_size)
                     hashed.update(chunk)
             require(total == expected_size and hashed.hexdigest() == args.operator_sha256)
+            # Keep the hashed inode and its complete custody binding through exec;
+            # reopening the pathname would allow a different executable to run.
+            fields = ("st_dev", "st_ino", "st_uid", "st_gid", "st_mode", "st_nlink",
+                      "st_size", "st_mtime_ns", "st_ctime_ns")
+            binding = tuple(getattr(info, key) for key in fields)
+            require(all(tuple(getattr(current, key) for key in fields) == binding
+                        for current in (os.fstat(fd), operator.lstat())))
+            require(auth["issued_at"] <= int(time.time()) < auth["expires_at"])
             same_directory(output_fd, output)
             same_directory(base_fd, args.base)
             return fd
@@ -728,6 +736,9 @@ def main(argv=None):
         parser.add_argument("--" + key, required=True)
     for key in ("run-id", "run-attempt", "build-run-id", "build-run-attempt"):
         parser.add_argument("--" + key, type=int, required=True)
+    parser.add_argument("--observe-acquisition", action="store_true")
+    parser.add_argument("--observation-id")
+    parser.add_argument("--challenge")
     args = parser.parse_args(argv)
     try:
         for key in ("source_sha", "harness_source_sha"):
@@ -738,8 +749,32 @@ def main(argv=None):
             positive(getattr(args, key))
         require(re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-nightly\.20[0-9]{6}\.[1-9][0-9]*)?",
                              args.release_tag) is not None)
+        if args.observe_acquisition:
+            require(os.geteuid() != 0 and type(args.observation_id) is str
+                    and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+                                     args.observation_id) is not None)
+            sha(args.challenge)
+            require(args.base == args.base.parent / (".marty-installer-dispatch-" + args.installation_id)
+                    and args.install_dir == args.base.parent / ("marty-install-" + args.installation_id)
+                    and args.grants == args.base / "grants" and args.tools == args.base / "tools"
+                    and args.inputs == args.base / "inputs")
+        else:
+            require(args.observation_id is None and args.challenge is None)
         base_fd = private_directory(args.base)
         try:
+            env = {"HOME": str(args.base.parent), "PATH": "/usr/bin:/bin"}
+            if args.observe_acquisition:
+                # This branch only rebinds existing evidence. It never downloads,
+                # fetches, installs, chmods, retries or renews the original grant.
+                operator = args.base / "bootstrap/marty-deploy-linux-amd64"
+                operator_fd = authenticated_operator_fd(args, base_fd, operator)
+                try:
+                    os.execve(operator_fd, [str(operator), "published-acquisition-observe",
+                        "--install-dir", str(args.install_dir), "--observation-id", args.observation_id,
+                        "--challenge", args.challenge], env)
+                    return
+                finally:
+                    os.close(operator_fd)
             operator = bootstrap(args)
             operator_fd = authenticated_operator_fd(args, base_fd, operator)
             try:
@@ -751,7 +786,6 @@ def main(argv=None):
                           "--harness-source-sha", args.harness_source_sha, "--phase", "published",
                           "--run-id", str(args.run_id), "--run-attempt", str(args.run_attempt),
                           "--nonce", args.nonce]
-                env = {"HOME": str(args.base.parent), "PATH": "/usr/bin:/bin"}
                 bounded_command([str(operator), "fetch-published-candidate", *native],
                                 executable_fd=operator_fd, env=env, cwd=args.base.parent,
                                 timeout=1800)

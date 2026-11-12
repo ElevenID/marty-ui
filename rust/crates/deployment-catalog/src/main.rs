@@ -573,6 +573,18 @@ fn run() -> Result<(), String> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "published-acquisition-observe")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::observe_acquisition(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("published acquisition observation requires Linux amd64".into());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "fetch-published-candidate")
     {
         #[cfg(target_os = "linux")]

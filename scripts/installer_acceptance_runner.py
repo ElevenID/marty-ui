@@ -533,7 +533,7 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         ssh, scp, key, known_hosts, host, port, user, home,
         clock=time.time, verifier=provenance.command, execute=command,
         candidate_dispatch=dispatch.dispatch, resource_profile=ROOTLESS_STARTUP_PROFILE,
-        browser_runtime=None, startup_client=None):
+        browser_runtime=None, startup_client=None, observe_published_acquisition=False):
     r.require(os.name=='posix','Linux controller required')
     dispatch.executable(ssh);dispatch.executable(scp)
     r.require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}',host) is not None
@@ -542,6 +542,9 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
     originals={path:read_record(path) for path in (context_file,target_file,ledger)}
     custody={path:dispatch.private_file(path,65536) for path in (key,known_hosts)}
     context=r.decode(originals[context_file]);target=r.decode(originals[target_file])
+    if observe_published_acquisition:
+        r.require(context.get('phase')=='published' and resource_profile in ROOTLESS_PROFILES,
+                  'published guest acquisition observation requires a rootless published candidate')
     artifact_started_at=int(clock())
     authorization,receipt,inventory,files=dispatch.verify(assets=assets,grants=grants,context=context,target=target,
         ledger=ledger,gh=gh,cosign=cosign,now=int(clock()),runner=verifier)
@@ -645,6 +648,17 @@ def run(*, output, assets, grants, context_file, target_file, ledger, gh, cosign
         ssh=ssh, key=key, known_hosts=known_hosts, port=port, host=host, user=user,
         home=home, bootstrap_source=bootstrap_source, tls_source=tls_source,
         unchanged=unchanged, guarded_execute=guarded_execute, clock=clock)
+    if observe_published_acquisition:
+        import installer_acceptance_acquisition as acquisition
+        import installer_candidate_rendezvous as transport
+        r.require(dispatched is not None and dispatched.get('command_returned_zero') is True,
+                  'guest acquisition needs the original returned signed dispatch')
+        acquisition.collect(output=output,assets=assets,files=files,context=context,target=target,
+            authorization=authorization,receipt=receipt,inventory=inventory,
+            pins=checkpoint['authenticated_evidence_sha256'],ssh=ssh,key=key,known_hosts=known_hosts,
+            port=port,host=host,user=user,home=home,bootstrap_source=bootstrap_source,
+            unchanged=unchanged,guarded_execute=guarded_execute,
+            client=startup_client or transport.Client(os.environ.get('GH_TOKEN')),clock=clock)
     if browser_runtime is None:
         return checkpoint
     import installer_acceptance_startup as startup
@@ -670,6 +684,8 @@ def main(argv=None):
     parser.add_argument('--port',type=int,required=True)
     parser.add_argument('--resource-profile',choices=RESOURCE_PROFILES,default=ROOTLESS_STARTUP_PROFILE)
     parser.add_argument('--browser-runtime',type=Path)
+    parser.add_argument('--observe-published-acquisition',action='store_true',
+        help='Retain a separate challenged guest download component; does not grant full acceptance')
     try:result=run(**vars(parser.parse_args(argv)))
     except (ValueError,OSError,KeyError,TypeError):parser.exit(1,'Installed probe refused or uncertain; preserve all controller and guest state.\n')
     if result.get('schema')==qualification.SCHEMA and result.get('profile')==qualification.STARTUP_PROFILE:

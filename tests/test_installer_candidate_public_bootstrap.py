@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="Linux guest custody 
 
 
 @pytest.fixture
-def candidate(tmp_path, monkeypatch):
+def candidate(tmp_path, monkeypatch, request):
     tmp_path.chmod(0o700)
     base = tmp_path / "dispatch"
     base.mkdir(mode=0o700)
@@ -26,6 +26,10 @@ def candidate(tmp_path, monkeypatch):
     assets.mkdir(mode=0o700)
     for name in release.ARTIFACTS:
         (assets / name).write_bytes(b"synthetic " + name.encode())
+    if getattr(request, "param", None) == "native-executable":
+        # Real harmless ELF bytes exercise descriptor execution, while release
+        # signatures/provenance remain explicitly synthetic in this fixture.
+        (assets / "marty-deploy-linux-amd64").write_bytes(Path("/usr/bin/readlink").read_bytes())
     (assets / "prepared-selfhost-images.json").write_bytes(release.encode(dict(
         schema="marty.selfhost-image-lock/v1", release="marty-ui@1.2.3",
         services={"gateway": "ghcr.io/elevenid/services@sha256:" + "a" * 64},
@@ -218,6 +222,144 @@ def test_native_fetch_must_finish_before_candidate_install(candidate, monkeypatc
     monkeypatch.setattr(b, "bounded_command", success)
     b.main(arguments)
     assert calls[-2:] == ["fetch-published-candidate", "install-candidate"]
+
+
+def observation_arguments(options):
+    base = options.base.parent / (".marty-installer-dispatch-" + options.installation_id)
+    options.base.rename(base)
+    options.base = base
+    for name in ("grants", "tools", "inputs"):
+        setattr(options, name, base / name)
+    options.install_dir = base.parent / ("marty-install-" + options.installation_id)
+    arguments = []
+    for key, value in vars(options).items():
+        arguments.extend(["--" + key.replace("_", "-"), str(value)])
+    return arguments + ["--observe-acquisition", "--observation-id",
+                        "44444444-4444-4444-8444-444444444444", "--challenge", "4" * 64]
+
+
+@pytest.mark.parametrize("failure", [None, "challenge", "orphan", "installation", "grants", "expired", "operator", "fifo", "symlink", "hardlink"])
+def test_readonly_observer_rebinds_existing_operator_without_bootstrap_or_install(candidate, monkeypatch, failure):
+    options, _, _ = candidate
+    arguments = observation_arguments(options)
+    operator = b.bootstrap(options)
+    if failure == "challenge":
+        arguments[arguments.index("--challenge") + 1] = "bad"
+    elif failure == "orphan":
+        arguments.remove("--observe-acquisition")
+    elif failure == "installation":
+        arguments[arguments.index("--install-dir") + 1] = str(options.base.parent / "other")
+    elif failure == "grants":
+        arguments[arguments.index("--grants") + 1] = str(options.base.parent / "other")
+    elif failure == "expired":
+        auth = release.decode((options.grants / "candidate-authorization.json").read_bytes())
+        monkeypatch.setattr(b.time, "time", lambda: auth["expires_at"])
+    elif failure == "operator":
+        operator.write_bytes(b"changed after original verification")
+    elif failure == "fifo":
+        operator.unlink()
+        os.mkfifo(operator, 0o700)
+    elif failure == "symlink":
+        operator.unlink()
+        operator.symlink_to("/usr/bin/true")
+    elif failure == "hardlink":
+        os.link(operator, operator.with_name("unexpected-alias"))
+    def forbidden(*args, **kwargs):
+        pytest.fail("read-only observation invoked bootstrap, fetch or install")
+    monkeypatch.setattr(b, "bootstrap", forbidden)
+    monkeypatch.setattr(b, "bounded_command", forbidden)
+    executions = []
+    def execute(fd, argv, env):
+        assert type(fd) is int
+        os.lseek(fd, 0, os.SEEK_SET)
+        assert b.digest(os.read(fd, 536870912)) == options.operator_sha256
+        assert argv == [str(operator), "published-acquisition-observe", "--install-dir", str(options.install_dir),
+                        "--observation-id", "44444444-4444-4444-8444-444444444444", "--challenge", "4" * 64]
+        assert env == {"HOME": str(options.base.parent), "PATH": "/usr/bin:/bin"}
+        executions.append(argv)
+    monkeypatch.setattr(b.os, "execve", execute)
+    if failure:
+        with pytest.raises(SystemExit) as refused:
+            b.main(arguments)
+        assert refused.value.code == 1 and executions == []
+    else:
+        b.main(arguments)
+        assert len(executions) == 1
+
+
+@pytest.mark.parametrize("candidate", ["native-executable"], indirect=True)
+@pytest.mark.parametrize("replace_path", [False, True])
+def test_authenticated_descriptor_executes_hashed_bytes_and_keeps_native_executable_identity(candidate, replace_path):
+    options, _, _ = candidate
+    operator = b.bootstrap(options)
+    base_fd = b.private_directory(options.base)
+    operator_fd = b.authenticated_operator_fd(options, base_fd, operator)
+    read_fd, write_fd = os.pipe()
+    try:
+        expected = operator
+        if replace_path:
+            expected = operator.with_name("held-original")
+            operator.rename(expected)
+            operator.write_bytes(Path("/usr/bin/false").read_bytes())
+            operator.chmod(0o700)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.close(read_fd)
+                os.dup2(write_fd, 1)
+                os.close(write_fd)
+                # No pathname reopen: the held readlink ELF executes even when
+                # the original name now contains the false ELF. Without a swap,
+                # /proc/self/exe is exactly the native owner's required path.
+                os.execve(operator_fd, [str(operator), "/proc/self/exe"], {"PATH": "/usr/bin:/bin"})
+            except BaseException:
+                os._exit(125)
+        os.close(write_fd)
+        write_fd = None
+        observed = os.read(read_fd, 65536)
+        _, status = os.waitpid(pid, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert observed == str(expected).encode() + b"\n"
+    finally:
+        for fd in (read_fd, write_fd, operator_fd, base_fd):
+            if fd is not None:
+                os.close(fd)
+
+
+@pytest.mark.parametrize("mutation", ["in-place", "replacement", "mode-cycle", "expired"])
+def test_executable_custody_is_rechecked_after_hashing(candidate, monkeypatch, mutation):
+    options, _, _ = candidate
+    operator = b.bootstrap(options)
+    original = b.hashlib.sha256
+    class ControlledHash:
+        def __init__(self):
+            self.inner = original()
+        def update(self, raw):
+            self.inner.update(raw)
+        def hexdigest(self):
+            result = self.inner.hexdigest()
+            if mutation == "in-place":
+                raw = operator.read_bytes()
+                operator.write_bytes(raw[:-1] + bytes([raw[-1] ^ 1]))
+            elif mutation == "replacement":
+                raw = operator.read_bytes()
+                operator.unlink()
+                operator.write_bytes(raw)
+                operator.chmod(0o700)
+            elif mutation == "mode-cycle":
+                operator.chmod(0o600)
+                operator.chmod(0o700)
+            else:
+                auth = release.decode((options.grants / "candidate-authorization.json").read_bytes())
+                monkeypatch.setattr(b.time, "time", lambda: auth["expires_at"])
+            return result
+    monkeypatch.setattr(b.hashlib, "sha256", lambda *args: original(*args) if args else ControlledHash())
+    fd = b.private_directory(options.base)
+    try:
+        with pytest.raises(ValueError):
+            b.authenticated_operator_fd(options, fd, operator)
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.parametrize("url", [
