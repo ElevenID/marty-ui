@@ -137,7 +137,7 @@ def _failed_current_inputs(config_path):
                'observed': observed, 'stack': stack, 'failed_root': root}
 
 
-def stage_recovery_generation(config_path, output_dir, logical_project):
+def stage_recovery_generation(config_path, output_dir, logical_project, *, operator_successor=None):
     """Produce one guarded candidate; never publish, select, activate or retry.
 
     Both the failed staging guard and a new recovery guard remain on success
@@ -157,15 +157,28 @@ def stage_recovery_generation(config_path, output_dir, logical_project):
         stack.enter_context(renewal.hold_storage_namespace(root))
         stack.enter_context(selection._held_private_input(root, directory=True, mutable_directory=True))
         require(not list(root.iterdir()))
-        native.require_recovery_capability(cfg['native'], observed['docker'].prefix)
+        admitted_native = cfg['native']
+        operator_admission = None
+        if operator_successor is not None:
+            from selfhost_windows_recovery_operator import admitted_operator
+            require(set(operator_successor)=={'assets','expected','gh','cosign'})
+            admitted_native, operator_admission = stack.enter_context(admitted_operator(
+                cfg['native'], operator_successor['assets'], operator_successor['expected'],
+                gh=operator_successor['gh'], cosign=operator_successor['cosign'],
+                docker_prefix=observed['docker'].prefix))
+        else:
+            native.require_recovery_capability(admitted_native, observed['docker'].prefix)
         layers = renewal.dependency_layers(observed['model'], observed['services'],
                                            renewal.owned_roles(observed['model'], observed['services']))
         config = selection._stage_configuration(cfg, record['choice'], record, root, layers)
+        for field in ('binary','binary_sha256','source_sha','release_tag'):
+            config['native'][field] = admitted_native[field]
         cycle = root.name.removeprefix('windows-renewal-')
         guard = renewal.recovery_guard(cfg)
         intent = {'schema': 'marty.windows-expired-renewal-staging/v1',
                   'failed_proof': lease['proof'], 'root': str(root),
                   'logical_project': logical_project, 'config_sha256': selection.digest(packed(config)),
+                  'operator_admission': operator_admission,
                   'credential_admission': False, 'rollback_to_expired': False}
         # Durable exclusion precedes directory allocation, reauthentication,
         # credential producers, or any operation with an uncertain outcome.
