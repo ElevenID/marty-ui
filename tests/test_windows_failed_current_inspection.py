@@ -1,6 +1,7 @@
 """Real NTFS failed-current evidence; Docker and native authority are substituted."""
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 
 import pytest
@@ -67,3 +68,43 @@ def test_inspection_refuses_changed_attempt(monkeypatch, fault):
         assert events == ['authority']
         assert selection.renewal.renewal_staging_guard(cfg).exists()
         assert not (output/'publication.json').exists()
+
+
+@pytest.mark.parametrize('target', ['attempt', 'activation', 'candidate'])
+def test_late_directory_proof_failure_prevents_result(monkeypatch, target):
+    with failed_current(monkeypatch) as (_, path, cfg, output, events):
+        stage = selection.decode((output/'intent.json').read_bytes())
+        next_config = selection.decode(Path(stage['config_path']).read_bytes())
+        selected = {'attempt': output, 'activation': output/'activation',
+                    'candidate': Path(next_config['renewed_secrets'])}[target]
+        original = selection._held_private_input
+        active = []
+        checked = []
+        original_inspect = selection._inspect
+        def observe(*args, **kwargs):
+            observed = dict(original_inspect(*args, **kwargs))
+            check = observed['context'].check
+            def verify(**options):
+                checked.append(bool(active))
+                return check(**options)
+            observed['context'] = SimpleNamespace(check=verify)
+            return observed
+        @contextmanager
+        def held(asset, **kwargs):
+            with original(asset, **kwargs) as value:
+                if Path(asset) == selected and kwargs.get('directory'):
+                    active.append(True)
+                    try:
+                        yield value
+                    finally:
+                        active.pop()
+                        raise ValueError('PUBLIC_LATE_DIRECTORY_PROOF_FAILURE')
+                else:
+                    yield value
+        monkeypatch.setattr(selection, '_held_private_input', held)
+        monkeypatch.setattr(selection, '_inspect', observe)
+        with pytest.raises(ValueError):
+            inspect_failed_current(path)
+        assert checked == [True]
+        assert not active and events == ['authority']
+        assert selection.renewal.renewal_staging_guard(cfg).exists()

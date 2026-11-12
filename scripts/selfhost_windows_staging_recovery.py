@@ -74,10 +74,8 @@ def inspect_failed_current(config_path):
         require(root.parent == Path(config['current_secrets']).parent
                 and re.fullmatch(r'windows-renewal-[0-9a-f]{32}', root.name))
         stack.enter_context(renewal.hold_storage_namespace(root))
-        with selection._held_private_input(root, directory=True):
-            pass
-        with selection._held_private_input(root/'activation', directory=True):
-            pass
+        stack.enter_context(selection._held_private_input(root, directory=True))
+        stack.enter_context(selection._held_private_input(root/'activation', directory=True))
         names = set(_stage_names()) | {'result.json', 'publication.pending.json', 'renewed.env', 'activation'}
         def membership(path, expected_names):
             require(set(p.name for p in path.iterdir()) == expected_names)
@@ -114,8 +112,7 @@ def inspect_failed_current(config_path):
             require(stack.enter_context(renewal.hold_private_input(path)) == b'')
         candidate = Path(next_config['renewed_secrets'])
         stack.enter_context(renewal.hold_storage_namespace(candidate))
-        with selection._held_private_input(candidate, directory=True):
-            pass
+        stack.enter_context(selection._held_private_input(candidate, directory=True))
         membership(candidate, set())
         stack.callback(membership, candidate, set())
         env = stack.enter_context(renewal.hold_private_input(root/'renewed.env'))
