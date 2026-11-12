@@ -488,7 +488,10 @@ jobs:
     needs: [changes, release-preflight]
     if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Cold image/browser setup plus the eight Rust preparation phases can use
+    # 35 minutes before the coordinated restore proof starts. Keep time for
+    # that complete proof and evidence cleanup, without skipping any gate.
+    timeout-minutes: 60
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
