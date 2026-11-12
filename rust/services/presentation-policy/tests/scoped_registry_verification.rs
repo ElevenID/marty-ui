@@ -374,8 +374,12 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
 async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verifier_selects() {
     use marty_presentation_policy::RustCredentialKernel;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
-    let issuer = fixture["credential"]["issuer"].as_str().unwrap().to_owned();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
+    let issuer = fixture["credential"]["issuer"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let method = fixture["governed_method"]["id"]
         .as_str()
         .unwrap()
@@ -537,8 +541,9 @@ async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
         }
     }
 
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
-    let issuer = fixture["credential"]["issuer"].as_str().unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
+    let issuer = fixture["credential"]["issuer"]["id"].as_str().unwrap();
     let method = fixture["governed_method"]["id"].as_str().unwrap();
     let mut context = CredentialVerificationContext {
         resolved_issuer_key: None,

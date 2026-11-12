@@ -4,6 +4,7 @@ use thiserror::Error;
 const MIGRATION_VERSIONS: &[&str] = &[
     "rust_credential_template_0001",
     "rust_credential_template_0002",
+    "rust_credential_template_0003",
 ];
 const ADVISORY_LOCK_ID: i64 = 718_431_214;
 
@@ -48,6 +49,11 @@ pub async fn migrate_credential_template_schema(
     .await?;
     sqlx::raw_sql(include_str!(
         "../migrations/0002_legacy_data_reconciliation.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0003_membership_achievement_criteria.sql"
     ))
     .execute(&mut *transaction)
     .await?;

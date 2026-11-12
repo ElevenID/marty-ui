@@ -50,6 +50,9 @@ def test_nightly_guide_has_one_unedited_rootless_boundary_command():
     assert "application_started=false" in guide
     assert "even when the command exits zero" in guide
     assert "paused lifecycle units" in guide
+    assert "--check-compatibility" in guide
+    assert "latest package can be newer and unsupported" in guide
+    assert "without creating an installation" in guide
     assert "before this command is advertised" not in guide
     assert "--install-dir" not in guide
     assert "stage_selfhost_disposable_preview" not in guide

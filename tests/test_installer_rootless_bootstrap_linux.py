@@ -68,7 +68,8 @@ def test_rootless_bootstrap_requires_nnp_before_external_commands(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
                     reason="Linux process-status boundary")
-def test_host_check_does_not_bypass_root_refusal(tmp_path):
+@pytest.mark.parametrize("check", ["--check-host", "--check-compatibility"])
+def test_host_check_does_not_bypass_root_refusal(tmp_path, check):
     if os.getuid() != 0:
         pytest.skip("requires a root process to exercise the root refusal")
     tools = tmp_path / "bin"
@@ -77,7 +78,7 @@ def test_host_check_does_not_bypass_root_refusal(tmp_path):
         executable = tools / name
         executable.write_text("#!/bin/sh\necho UNEXPECTED_TOOL_EXECUTION >&2\nexit 91\n")
         executable.chmod(0o700)
-    result = subprocess.run(["/bin/sh", str(SCRIPT), "--check-host"],
+    result = subprocess.run(["/bin/sh", str(SCRIPT), check],
                             env={"PATH": str(tools)}, capture_output=True, text=True, timeout=15)
     assert result.returncode != 0
     assert "regular non-root login without sudo" in result.stderr
@@ -86,8 +87,8 @@ def test_host_check_does_not_bypass_root_refusal(tmp_path):
 
 @pytest.mark.skipif(os.name != "posix" or not Path("/proc/self/status").exists(),
                     reason="Linux process-status boundary")
-@pytest.mark.parametrize("check_host", [False, True])
-def test_rootless_bootstrap_pins_user_socket_and_isolates_docker_config(tmp_path, check_host):
+@pytest.mark.parametrize("check", [None, "--check-host", "--check-compatibility"])
+def test_rootless_bootstrap_pins_user_socket_and_isolates_docker_config(tmp_path, check):
     if os.getuid() == 0:
         pytest.skip("requires a non-root Linux process to exercise the real rootless preflight")
     setpriv = shutil.which("setpriv")
@@ -122,11 +123,11 @@ esac
     command = [setpriv, "--no-new-privs", "--inh-caps=-all",
                "--ambient-caps=-all", "--", "/bin/sh", str(SCRIPT),
                "--candidate-test", TAG]
-    if check_host:
-        command += ["--check-host"]
+    if check:
+        command += [check]
     result = subprocess.run(command, env=env, capture_output=True,
                             text=True, timeout=15)
-    if check_host:
+    if check == "--check-host":
         assert result.returncode == 0, result.stderr
         assert "bootstrap host checks passed" in result.stdout
         assert "Compose, resources, images, release availability, and installation readiness were not checked" in result.stdout

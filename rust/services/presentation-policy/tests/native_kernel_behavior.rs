@@ -232,7 +232,8 @@ async fn retired_ob2_is_rejected_before_every_native_route_and_key_resolution() 
 
 #[tokio::test]
 async fn retired_assertion_wrapper_cannot_redirect_to_ob3() {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
     for format in [
         DetectedCredentialFormat::Unknown,
         DetectedCredentialFormat::OpenbadgeV3,
@@ -251,7 +252,8 @@ async fn retired_assertion_wrapper_cannot_redirect_to_ob3() {
 
 #[tokio::test]
 async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
     let mut input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV3, &fixture);
     assert!(RustCredentialKernel.verify(&input).await.unwrap().verified);
 
@@ -261,4 +263,34 @@ async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
 
     input.trust_profile.as_mut().unwrap().document["resolved_verification_methods"] = json!([]);
     assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
+}
+
+#[tokio::test]
+async fn historical_signed_ob3_without_criteria_is_denied_after_proof_authentication() {
+    // Preserve the historical signed bytes. E701 is the post-proof criteria
+    // failure; a signature failure would also report OPEN_BADGES_PROOF_INVALID.
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let raw = marty_verification::open_badges::verify_ob3_json_async(
+        &json!({"credential": fixture["credential"],
+            "document_store": fixture["document_store"]})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let verified: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(verified["valid"], false);
+    assert_eq!(
+        verified["error_codes"],
+        json!([marty_verification::error::codes::OPEN_BADGES_INVALID])
+    );
+    assert!(verified["errors"].as_array().unwrap().iter().any(|error| {
+        error
+            .as_str()
+            .is_some_and(|error| error.contains("achievement criteria"))
+    }));
+    let input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV3, &fixture);
+    let evidence = RustCredentialKernel.verify(&input).await.unwrap();
+    assert!(!evidence.verified);
+    assert!(evidence.claims.is_empty());
+    assert!(evidence.issuer_id.is_none());
 }

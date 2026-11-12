@@ -51,6 +51,8 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     assert "--settings-file PATH" in result.stdout
     assert "--acme-staging-roots PATH" in result.stdout
     assert "--check-host" in result.stdout
+    assert "--check-compatibility" in result.stdout
+    assert "downloads and authenticates the selected operator" in result.stdout
 
 
 @pytest.mark.parametrize("args,reason", [
@@ -76,6 +78,12 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--acme-staging-roots", "--yes"], "Missing value"),
     (["--acme-staging-roots", "/one", "--acme-staging-roots", "/two"], "Repeated ACME staging roots"),
     (["--skip-verification"], "Unknown option"),
+    (["--check-compatibility", "--check-compatibility"], "Repeated compatibility check"),
+    (["--check-compatibility", "--check-host"], "cannot be combined"),
+    (["--check-compatibility", "--yes"], "cannot be combined"),
+    *[(["--check-compatibility", option, "/private/input"], "cannot be combined")
+      for option in ("--install-dir", "--foundation-file", "--hosting-file",
+                     "--settings-file", "--acme-staging-roots")],
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
     # Keep argument-policy checks independent of the test runner's actual OS.
@@ -206,6 +214,7 @@ curl() { printf 'UNEXPECTED_DOWNLOAD\\n' >&2; return 91; }
     assert result.returncode == 0, result.stderr
     assert "bootstrap host checks passed" in result.stdout
     assert "release availability, and installation readiness were not checked" in result.stdout
+    assert "--check-compatibility" in result.stdout
     assert "UNEXPECTED" not in result.stdout + result.stderr
     staging = [line.removeprefix("STAGING:") for line in result.stderr.splitlines()
                if line.startswith("STAGING:")]
@@ -242,6 +251,7 @@ curl() {{ printf '%s' {shlex.quote(status)}; return 22; }}
     ([], "No public installer channel is available"),
     (["--version", "v1.2.3"], "No public signed installer admission is available"),
     (["--candidate-test", "v1.2.3-nightly.20261103.42"], "Required public release asset is unavailable"),
+    (["--candidate-test", "v1.2.3-nightly.20261103.42", "--check-compatibility"], "Required public release asset is unavailable"),
 ])
 def test_missing_metadata_does_not_download_large_verifiers_or_dispatch(args, reason):
     # Synthetic transport/digest observations exercise actual shell routing;
@@ -342,7 +352,7 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
                  docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
                  docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting, settings_file="",
-                 acme_staging_roots="", yes="false", channel="nightly")
+                 acme_staging_roots="", yes="false", check_compatibility="false", channel="nightly")
     script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
     result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
     assert result.returncode == 0, result.stderr
@@ -350,6 +360,35 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     assert arguments[0] == verb
     assert arguments.count("--hosting-file") == 1
     assert arguments[arguments.index("--hosting-file") + 1] == hosting
+
+
+@pytest.mark.parametrize("verb", ["install", "candidate-test"])
+@pytest.mark.parametrize("check_only", [False, True])
+def test_compatibility_check_handoff_preserves_explicit_mode(tmp_path, monkeypatch, verb, check_only):
+    source = SCRIPT.read_text()
+    parser_start = source.index("    channel=nightly\n")
+    parser_end = source.index("    require_rootless_process\n", parser_start)
+    handoff_start = source.index(f"set -- {verb} --version")
+    handoff_end = source.index('"$stage/marty-deploy" "$@"', handoff_start)
+    setup = dict(stage=str(tmp_path), gh="/private/gh",
+                 docker_endpoint="unix:///run/user/1000/docker.sock",
+                 docker_engine_id="engine-1234", docker_bin="/usr/bin/docker")
+    script = "fail() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+    script += "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items()) + "\n"
+    script += source[parser_start:parser_end] + source[handoff_start:handoff_end]
+    script += "\nprintf '%s\\0' \"$@\"\n"
+    args = ["--candidate-test" if verb == "candidate-test" else "--version",
+            "v1.2.3-nightly.20261027.42"]
+    if check_only:
+        args.append("--check-compatibility")
+    monkeypatch.setenv("check_compatibility", "true")
+    result = run(args + ["--bootstrap-complete"], source=script)
+    assert result.returncode == 0, result.stderr
+    arguments = result.stdout.rstrip("\0").split("\0")
+    assert arguments[0] == verb
+    assert arguments.count("--check-compatibility") == int(check_only)
+    assert "--yes" not in arguments
+    assert "--install-dir" not in arguments
 
 
 @pytest.mark.parametrize("verb", ["install", "candidate-test"])

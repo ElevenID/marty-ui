@@ -33,6 +33,7 @@ struct Options {
     channel: Option<(String, PathBuf)>,
     profile: RuntimeProfile,
     yes: bool,
+    check_compatibility: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstallMode {
@@ -100,6 +101,7 @@ fn report_host_impact(hosting: &crate::installer_hosting::Prepared) {
 fn options(args: &[String]) -> Result<Options> {
     let mut values = BTreeMap::new();
     let mut yes = false;
+    let mut check_compatibility = false;
     let mut index = 0;
     while index < args.len() {
         let key = args[index].as_str();
@@ -108,6 +110,14 @@ fn options(args: &[String]) -> Result<Options> {
                 return Err("repeated --yes".into());
             }
             yes = true;
+            index += 1;
+            continue;
+        }
+        if key == "--check-compatibility" {
+            if check_compatibility {
+                return Err("repeated --check-compatibility".into());
+            }
+            check_compatibility = true;
             index += 1;
             continue;
         }
@@ -163,6 +173,19 @@ fn options(args: &[String]) -> Result<Options> {
     let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
     let settings_file = values.remove("--settings-file").map(PathBuf::from);
     let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
+    if check_compatibility
+        && (yes
+            || directory.is_some()
+            || foundation_file.is_some()
+            || hosting_file.is_some()
+            || settings_file.is_some()
+            || acme_staging_roots.is_some())
+    {
+        return Err(
+            "compatibility checking cannot be combined with --yes or installation input paths"
+                .into(),
+        );
+    }
     let channel = match (
         values.remove("--channel"),
         values.remove("--verified-channel"),
@@ -210,6 +233,7 @@ fn options(args: &[String]) -> Result<Options> {
         channel,
         profile,
         yes,
+        check_compatibility,
     })
 }
 fn candidate_test_options(args: &[String]) -> Result<Options> {
@@ -395,6 +419,32 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     } else {
         None
     };
+    // Use the same isolated, custody-checked runtime path for both the check
+    // and installation. The catalog remains the sole Compose version policy.
+    let docker = o.docker.as_path();
+    let observed = crate::installer_runtime::DockerRunner::new_for_profile(
+        docker, &o.host, &o.engine, &o.tools, o.profile,
+    )?
+    .preflight()?;
+    crate::installer_compose::require_version(&observed.compose_version)?;
+    if o.check_compatibility {
+        println!(
+            "{}",
+            serde_json::json!({
+                "scope":"installation-host-compatibility",
+                "source_sha":source,
+                "release_tag":version,
+                "docker":observed,
+                "required_compose_version":crate::installer_compose::COMPOSE_VERSION,
+                "compatibility_checks_passed":true,
+                "installation_created":false,
+                "docker_mutated":false,
+                "installation_ready":false,
+                "not_checked":["resources", "release_payloads", "images", "application_readiness"],
+            })
+        );
+        return Ok(());
+    }
     let directory = o.directory.unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(format!(".marty-install-{}", uuid::Uuid::new_v4().simple()))
@@ -418,11 +468,6 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             .port(),
         profile: o.profile,
     };
-    let docker = o.docker.as_path();
-    let observed =
-        crate::installer_runtime::DockerRunner::from_binding(docker, &runtime, &o.tools)?
-            .preflight()?;
-    crate::installer_compose::require_version(&observed.compose_version)?;
     report_host_impact(&hosting);
     if !o.yes {
         confirm(&directory)?;
@@ -1312,6 +1357,7 @@ mod tests {
         for args in [
             vec!["--skip-verification"],
             vec!["--yes", "--yes"],
+            vec!["--check-compatibility", "--check-compatibility"],
             vec!["--version"],
             vec!["--version", "../../bad"],
         ] {
@@ -1344,6 +1390,33 @@ mod tests {
         });
         assert!(candidate_test_options(&args).is_ok());
         assert!(options(&args).is_err());
+        let mut compatibility_args = args.clone();
+        compatibility_args.push("--check-compatibility".into());
+        assert!(
+            candidate_test_options(&compatibility_args)
+                .unwrap()
+                .check_compatibility
+        );
+        let mut admitted_compatibility_args = compatibility_args.clone();
+        admitted_compatibility_args[2] = "--verified-admission".into();
+        assert!(
+            options(&admitted_compatibility_args)
+                .unwrap()
+                .check_compatibility
+        );
+        for extra in [
+            vec!["--yes"],
+            vec!["--check-compatibility"],
+            vec!["--install-dir", "/private/installation"],
+            vec!["--foundation-file", "/private/foundation.json"],
+            vec!["--hosting-file", "/private/hosting.json"],
+            vec!["--settings-file", "/private/settings.json"],
+            vec!["--acme-staging-roots", "/private/roots.pem"],
+        ] {
+            let mut invalid = compatibility_args.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
         let mut hosting_args = args.clone();
         hosting_args.extend(["--hosting-file".into(), "/private/hosting.json".into()]);
         assert_eq!(

@@ -864,8 +864,10 @@ impl PresentationTrustResolver for NativeForeignTrust {
 
 #[tokio::test]
 async fn resolved_foreign_signature_does_not_establish_policy_trust() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../tests/fixtures/foreign_ob3_jwt.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/foreign_ob3_with_criteria_jwt.json"
+    ))
+    .unwrap();
     let raw = marty_verification::vcdm::verify_open_badge_v3_jwt_json_async(
         &json!({"token":fixture["token"],"issuer_public_jwk":fixture["public_jwk"]}).to_string(),
     )
@@ -941,9 +943,31 @@ async fn resolved_foreign_signature_does_not_establish_policy_trust() {
 }
 
 #[tokio::test]
-async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
+async fn historical_foreign_ob3_signature_remains_authentic_but_missing_criteria_is_denied() {
     let fixture: Value =
         serde_json::from_str(include_str!("../tests/fixtures/foreign_ob3_jwt.json")).unwrap();
+    let request =
+        json!({"token":fixture["token"],"issuer_public_jwk":fixture["public_jwk"]}).to_string();
+    let generic = marty_verification::vcdm::verify_vcdm_jwt_json_async(&request).await;
+    let generic: Value = serde_json::from_str(&generic).unwrap();
+    assert_eq!(generic["valid"], true, "{}", generic["errors"]);
+
+    let profile = marty_verification::vcdm::verify_open_badge_v3_jwt_json_async(&request).await;
+    let profile: Value = serde_json::from_str(&profile).unwrap();
+    assert_eq!(profile["valid"], false);
+    assert!(profile["errors"].as_array().unwrap().iter().any(|error| {
+        error
+            .as_str()
+            .is_some_and(|error| error.contains("achievement criteria"))
+    }));
+}
+
+#[tokio::test]
+async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/foreign_ob3_with_criteria_jwt.json"
+    ))
+    .unwrap();
     let mut private = fixture["public_jwk"].clone();
     private["d"] = json!("prohibited");
     let mut wrong_kid = fixture["public_jwk"].clone();
@@ -1024,8 +1048,10 @@ impl marty_issuer_key_resolution::IssuerKeyResolver for MustNotResolve {
 
 #[tokio::test]
 async fn existing_governed_key_remains_authoritative_without_resolution() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../tests/fixtures/foreign_ob3_jwt.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/foreign_ob3_with_criteria_jwt.json"
+    ))
+    .unwrap();
     let context = CredentialVerificationContext {
         presentation_only: false,
         sd_jwt_dcql: None,
@@ -1049,8 +1075,10 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
 
 #[tokio::test]
 async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
-    let fixture: Value =
-        serde_json::from_str(include_str!("../tests/fixtures/foreign_ob3_jwt.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/foreign_ob3_with_criteria_jwt.json"
+    ))
+    .unwrap();
     let issuer = fixture["issuer"].as_str().unwrap();
     let mut mismatched_key = fixture["public_jwk"].clone();
     mismatched_key["kid"] = json!(format!("{issuer}#different-pinned-key"));

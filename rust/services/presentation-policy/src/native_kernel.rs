@@ -1870,10 +1870,20 @@ mod tests {
                 marty_oid4vci::formats::jwt_vc::OPEN_BADGES_V3_CONTEXT
             ]);
             credential["type"] = json!(["VerifiableCredential", "OpenBadgeCredential"]);
+            credential["issuer"] = json!({
+                "id": issuer, "type": ["Profile"], "name": "Synthetic Freshness Issuer"
+            });
+            credential["validFrom"] = json!(chrono::DateTime::from_timestamp(now - 3600, 0)
+                .unwrap()
+                .to_rfc3339());
+            credential["validUntil"] = json!(chrono::DateTime::from_timestamp(now + 3600, 0)
+                .unwrap()
+                .to_rfc3339());
             credential["credentialSubject"]["type"] = json!(["AchievementSubject"]);
             credential["credentialSubject"]["achievement"] = json!({
                 "id": "https://issuer.example/member", "type": ["Achievement"],
-                "name": "Member", "description": "Governed membership"
+                "name": "Member", "description": "Governed membership",
+                "criteria": {"narrative": "Complete the synthetic membership verification exercise."}
             });
         }
         let inner = sign_freshness_fixture_jwt(
