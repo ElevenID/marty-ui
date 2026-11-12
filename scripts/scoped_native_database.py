@@ -31,7 +31,7 @@ NODE = r"""const fs=require('node:fs'),cp=require('node:child_process'),crypto=r
 const [file,sha,request,docker]=process.argv.slice(1);
 if(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==sha)throw Error('METADATA_SOURCE_CHANGED');
 const r=JSON.parse(fs.readFileSync(request));
-if(r.profile==='d12-passport-current-functional'){
+if(['d12-passport-current-functional','d05-membership-current-functional'].includes(r.profile)){
  const shared=file.replace('native-maintenance-metadata.js','functional-debug-runtime.js');
  if(!r.functionalRuntimeModule||r.functionalRuntimeModule.path!==shared||
     crypto.createHash('sha256').update(fs.readFileSync(shared)).digest('hex')!==r.functionalRuntimeModule.sha256)
@@ -41,7 +41,7 @@ const m=require(file);let out;
 if(r.mode==='render')out={argv:['psql','-X','-U','postgres','-d','marty','-At','-v','ON_ERROR_STOP=1','-f','-'],pgOptions:m.sessionOptions(r.settings),stdin: m.operationalSql(r.name,r.sqlSources).toString('base64')};
 else if(r.mode==='json')out=m.sqlOutput(require(file.replace('native-maintenance-metadata.js','functional-debug-runtime.js')).boundBytes(r.stdout),r.schema);
 else if(r.mode==='digest')out=m.migrationDigest(r.sources);
-else if(r.mode==='baseline')out=m.currentDatabaseBaseline(r.refs,r.approvedBefore,r.approvedEngine);
+else if(r.mode==='baseline')out=m.currentDatabaseBaseline(r.refs,r.approvedBefore,r.approvedEngine,r.profile);
 else if(r.mode==='catalog')out=m.observeCatalog(r.inputs,{readDocker:a=>cp.execFileSync(docker,['--context','desktop-linux',...a],{encoding:'utf8',env:process.env,timeout:150000,maxBuffer:1048576})});
 else if(r.mode==='verify')out=m.validateProof(r.proof,r.commands,r.context);
 else if(r.mode==='runtime'){
@@ -143,6 +143,26 @@ def schema_url(raw, command):
     return urlunsplit((value.scheme, value.netloc, value.path, urlencode({"options[role]": role}), ""))
 
 
+def schema_environment_bytes(url, tenant=None):
+    if tenant is not None:
+        import uuid
+        require(isinstance(tenant,str) and str(uuid.UUID(tenant))==tenant and uuid.UUID(tenant).int>0,
+                "CURRENT_TEN_TENANT_REQUIRED")
+    return ("DATABASE_URL="+url+"\n"+("MARTY_ORG_ID="+tenant+"\n" if tenant is not None else "")).encode()
+
+
+def current_tenant(inputs, authority):
+    import uuid
+    value=inputs.get("tenantId")
+    require(isinstance(value,str),"CURRENT_TEN_TENANT_REQUIRED")
+    try: canonical=str(uuid.UUID(value))
+    except (ValueError,AttributeError):raise ValueError("CURRENT_TEN_TENANT_REQUIRED")
+    require(canonical==value and uuid.UUID(value).int>0 and authority.get("approvedTenantId")==value
+            and authority.get("approvedStartupSchemaRoles")==["auth"],
+            "CURRENT_TEN_TENANT_AND_AUTH_STARTUP_AUTHORITY_REQUIRED")
+    return value
+
+
 class NativeDatabasePhase:
     SCHEMA_BINARIES = {role: ROLE_BINARIES[role] for role in SCHEMA_ROLES}
     role_binaries = ROLE_BINARIES
@@ -206,7 +226,7 @@ class NativeDatabasePhase:
         request = self.g["save"]("metadata-request-" + mode + "-" + str(len(self.state["operations"])) + ".json",
             {"mode": mode, "profile": self.rollout_profile,
              **({"functionalRuntimeModule": self.i["functionalRuntimeModule"]}
-                if self.rollout_profile == "d12-passport-current-functional" else {}), **payload})
+                if self.rollout_profile in ("d12-passport-current-functional", "d05-membership-current-functional") else {}), **payload})
         module = self.i["metadataModule"]
         read_ref(module)
         result = bounded_run([self.g["nodeExecutable"], "-e", NODE, module["path"], module["sha256"],
@@ -258,7 +278,7 @@ class NativeDatabasePhase:
         self.state["operations"].append(entry)
         self.state.update(phase="DATABASE_OPERATION_TERMINAL", pendingStep=None, pendingRequest=None)
         entry["terminalDurability"] = self.persist()
-        if row.get("role") in SCHEMA_ROLES:
+        if row.get("role") in self.SCHEMA_BINARIES:
             self.retire_schema_helper(row["containerId"])
         return reference, row
 
@@ -331,7 +351,7 @@ class NativeDatabasePhase:
         path = read_ref(bound, 512 * 1024 * 1024)
         url = self.database_url(command)
         url_ref = self.g["save_bytes"](role + "-" + command + ".url.private", url.encode())
-        env_ref = self.g["save_bytes"](role + "-" + command + ".env.private", ("DATABASE_URL=" + url + "\n").encode())
+        env_ref = self.g["save_bytes"](role + "-" + command + ".env.private", schema_environment_bytes(url,getattr(self,"tenant_id",None)))
         name = "marty-native-schema-" + self.i["runId"] + "-" + role + "-" + command
         args = ["docker", "create", "--pull=never", "--name", name, "--network", self.i["databaseNetwork"],
             "--user", "10001:10001", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
@@ -346,7 +366,7 @@ class NativeDatabasePhase:
         require(re.fullmatch(r"[a-f0-9]{64}", cid), "SCHEMA_CREATE_OUTCOME_UNKNOWN")
         self.state["pendingContainerId"] = cid
         self.persist()
-        self.schema_records[cid] = {"name": name, "binary": binary, "command": command, "url": url, "bound": bound}
+        self.schema_records[cid] = {"name": name, "binary": binary, "command": command, "url": url, "bound": bound, **({"tenantId":self.tenant_id} if hasattr(self,"tenant_id") else {})}
         self.validate_schema(cid, created=True)
         read_ref(bound, 512 * 1024 * 1024)
         result = self.result(["docker", "start", "--attach", cid])
@@ -354,7 +374,7 @@ class NativeDatabasePhase:
         require(actual["Id"] == cid and actual["State"]["Status"] == "exited" and actual["State"]["ExitCode"] == 0
                 and not actual["State"]["OOMKilled"] and actual["State"]["Pid"] == 0, "SCHEMA_COMMAND_NOT_TERMINAL_SUCCESS")
         return {"runId": self.i["runId"], "selectionSha256": self.i["selection"]["sha256"],
-            "role": role, "command": command, "sourceRevision": self.source_revision, "coreRevision": self.core_revision,
+            "role": role, "command": command, **({"tenantId":self.tenant_id} if hasattr(self,"tenant_id") else {}), "sourceRevision": self.source_revision, "coreRevision": self.core_revision,
             "databaseIdentity": self.identity, "databaseRole": parse_qs(urlsplit(url).query)["options[role]"][0],
             "databaseLoginRole": "postgres", "databaseUrl": url_ref,
             "imageId": self.helper_image, "elfSha256": bound["sha256"], "containerId": cid,
@@ -375,6 +395,8 @@ class NativeDatabasePhase:
         image = json.loads(self.command(["docker", "image", "inspect", self.helper_image]))[0]
         wanted = environment(image["Config"].get("Env") or [])
         wanted["DATABASE_URL"] = expected["url"]
+        if "tenantId" in expected:
+            wanted["MARTY_ORG_ID"] = expected["tenantId"]
         require(environment(config["Env"]) == wanted, "SCHEMA_HELPER_ENVIRONMENT_CHANGED")
         require(host["ReadonlyRootfs"] and not host["Privileged"] and host["Memory"] == 268435456
                 and host["MemorySwap"] == 268435456 and host["NanoCpus"] == 250000000
@@ -437,11 +459,11 @@ class NativeDatabasePhase:
                 self.epoch = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-fence-verification/v1")["epoch"]
         self.projections["beforeCatalog"], _ = self.step("CATALOG_BEFORE_SCHEMA", self.catalog)
         backup, _ = self.step("DATABASE_BACKUP", self.backup)
-        for step_id, role in (("FLOW_MIGRATE", "flow"), ("ISSUER_MIGRATE", "issuance-native")):
+        for step_id, role in ((("ORGANIZATION_MIGRATE","organization"),) if hasattr(self,"tenant_id") else ()) + (("FLOW_MIGRATE", "flow"), ("ISSUER_MIGRATE", "issuance-native")):
             _, row = self.step(step_id, lambda role=role: self.schema(role, "migrate"))
             self.commands.append(row)
         self.sql_receipts["passport-beta-batch-acl-finalize.sql"], _ = self.step("ACL_FINALIZE", lambda: self.sql("passport-beta-batch-acl-finalize.sql"))
-        for step_id, role in (("FLOW_VERIFY", "flow"), ("ISSUER_VERIFY", "issuance-native")):
+        for step_id, role in ((("ORGANIZATION_VERIFY","organization"),) if hasattr(self,"tenant_id") else ()) + (("FLOW_VERIFY", "flow"), ("ISSUER_VERIFY", "issuance-native")):
             _, row = self.step(step_id, lambda role=role: self.schema(role, "verify-owned-schema"))
             self.commands.append(row)
         transition = None
@@ -489,14 +511,15 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
     selection_error = "EXACT_D12_CURRENT_SELECTION_REQUIRED"
 
     def __init__(self, context, inputs, store):
-        from scoped_native_profiles import D12_PASSPORT_CURRENT
+        from scoped_native_profiles import current_rollout_build
         from scoped_passport_successor import CURRENT_PROFILE, select_current_binaries
-        self.source_revision = D12_PASSPORT_CURRENT.ui_revision
-        self.core_revision = D12_PASSPORT_CURRENT.core_revision
-        self.rollout_profile = CURRENT_PROFILE
-        self.role_binaries = dict(D12_PASSPORT_CURRENT.roles)
+        self.rollout_profile = inputs.get("rolloutProfile", CURRENT_PROFILE)
+        build = current_rollout_build(self.rollout_profile)
+        self.source_revision = build.ui_revision
+        self.core_revision = build.core_revision
+        self.role_binaries = dict(build.roles)
         self.SCHEMA_BINARIES = {role: self.role_binaries[role] for role in SCHEMA_ROLES}
-        self.select_binaries = select_current_binaries
+        self.select_binaries = lambda prepared, receipt, journal: select_current_binaries(prepared, receipt, journal, self.rollout_profile)
         self.check_compatibility = self._check_current_compatibility
         authority = json.loads(read_ref(inputs["d12Authority"], 65536).read_bytes())
         require(authority.get("schema") == "marty.d12-current-native-authority/v1"
@@ -532,6 +555,9 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
         self.engine_id = authority["engineId"]
         self.runtime_before = inputs["runtimeBefore"]
         self.authority = inputs["d12Authority"]
+        if self.rollout_profile == "d05-membership-current-functional":
+            self.tenant_id = current_tenant(inputs, authority)
+            self.SCHEMA_BINARIES = {role: self.role_binaries[role] for role in ("organization", *SCHEMA_ROLES)}
         super().__init__(context, inputs, store)
         self.current_database_target = consume_current_database_target(self.node("baseline",
             refs=self.baseline_refs, approvedBefore=self.expected_database_before,
@@ -556,3 +582,44 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
             require(row.get("imageId") == prior[role]["imageId"],
                     "D12_RUNTIME_IMAGE_COMPATIBILITY_REQUIRED")
         return proof
+
+
+def current_ten_startup_schema_observation(database):
+    """Observe owned ledgers after the real native startup validators and health succeed."""
+    require(database.rollout_profile=="d05-membership-current-functional", "CURRENT_TEN_PROFILE_REQUIRED")
+    tenant=database.tenant_id
+    database.guard()
+    sql=b"""BEGIN READ ONLY;
+SELECT json_build_object('schema','marty.current-ten-startup-schema/v1',
+ 'tenantId', :'tenant',
+ 'authLedger', EXISTS(SELECT 1 FROM auth_service.rust_schema_versions WHERE version='rust_auth_0001'),
+ 'organizationLedger', EXISTS(SELECT 1 FROM organization_service.rust_schema_versions WHERE version='rust_organization_0001'),
+ 'organizationExists', EXISTS(SELECT 1 FROM organization_service.organizations WHERE id=:'tenant'::uuid),
+ 'flowTenantOwned', (SELECT count(*)=3 AND bool_and(organization_id=:'tenant') FROM flow_service.flow_definitions WHERE id IN ('71000000-0000-0000-0000-000000000001','72000000-0000-0000-0000-000000000010','72000000-0000-0000-0000-000000000040')),
+ 'bootstrapTenantOwned', EXISTS(SELECT 1 FROM flow_service.flow_instances WHERE id='71000000-0000-0000-0000-000000000101' AND organization_id=:'tenant'));
+ROLLBACK;
+"""
+    source=database.g["save_bytes"]("current-ten-startup-schema.sql",sql)
+    result=database.result(["docker","exec","-i",database.identity["containerId"],"psql","-X","-qAt","-U","postgres","-d","marty","-v","ON_ERROR_STOP=1","-v","tenant="+tenant,"-f","-"],input=sql)
+    database.guard()
+    value=json.loads(result.stdout)
+    require(value.get("schema")=="marty.current-ten-startup-schema/v1" and value.get("tenantId")==tenant
+            and all(value.get(k) is True for k in ("authLedger","organizationLedger","organizationExists","flowTenantOwned","bootstrapTenantOwned")),
+            "CURRENT_TEN_NATIVE_STARTUP_SCHEMA_NOT_PROVEN")
+    return {"schema":"marty.current-ten-startup-schema-observation/v1","tenantId":tenant,
+            "databaseIdentity":database.identity,"sql":source,"stdout":database.g["save_bytes"]("current-ten-startup-schema.stdout",result.stdout),
+            "stderr":database.g["save_bytes"]("current-ten-startup-schema.stderr",result.stderr),"projection":value}
+
+
+def current_ten_tenant_observation(database):
+    """Refuse a missing selected tenant before the first mutation; no bootstrap inference."""
+    require(database.rollout_profile=="d05-membership-current-functional", "CURRENT_TEN_PROFILE_REQUIRED")
+    database.guard()
+    sql=b"BEGIN READ ONLY; SELECT json_build_object('tenantId', :'tenant', 'exists', EXISTS(SELECT 1 FROM organization_service.organizations WHERE id=:'tenant'::uuid)); ROLLBACK;\n"
+    source=database.g["save_bytes"]("current-ten-tenant-preflight.sql",sql)
+    result=database.result(["docker","exec","-i",database.identity["containerId"],"psql","-X","-qAt","-U","postgres","-d","marty","-v","ON_ERROR_STOP=1","-v","tenant="+database.tenant_id,"-f","-"],input=sql)
+    database.guard()
+    value=json.loads(result.stdout)
+    require(value=={"tenantId":database.tenant_id,"exists":True},"CURRENT_TEN_EXISTING_TENANT_NOT_PROVEN")
+    return {"tenantId":database.tenant_id,"databaseIdentity":database.identity,"sql":source,
+            "stdout":database.g["save_bytes"]("current-ten-tenant-preflight.stdout",result.stdout),"projection":value}

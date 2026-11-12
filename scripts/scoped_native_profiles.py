@@ -168,3 +168,15 @@ def reviewed_profile(name):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
+
+
+D12_CURRENT_ROLLOUT = "d12-passport-current-functional"
+D05_CURRENT_ROLLOUT = "d05-membership-current-functional"
+
+def current_rollout_build(profile):
+    """Only these complete source-bound cohorts may use the current observer/overlay."""
+    if profile == D12_CURRENT_ROLLOUT:
+        return D12_PASSPORT_CURRENT
+    if profile == D05_CURRENT_ROLLOUT:
+        return D05_MEMBERSHIP_LATEST
+    raise ValueError("UNREVIEWED_CURRENT_ROLLOUT_PROFILE")

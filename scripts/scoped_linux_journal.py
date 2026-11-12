@@ -136,7 +136,7 @@ def client_path(file):
 
 
 class LinuxBuildJournal:
-    def __init__(self, private, run_id, specification, *, initializing=False):
+    def __init__(self, private, run_id, specification, *, initializing=False, sourceFiles=None):
         require(os.name == "nt", "JOURNAL_WINDOWS_CONTROLLER_REQUIRED")
         self.private = Path(private).resolve()
         require(self.private.is_relative_to(Path.home() / ".codex/private") and self.private.is_dir() and not self.private.is_symlink()
@@ -147,15 +147,18 @@ class LinuxBuildJournal:
         require(set(specification) == keys | ({"desktop"} if desktop else set()) and specification["schema"] == 1
                 and specification["backend"] in {"UBUNTU_PRIVATE_JOURNAL_V1", "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1"}, "JOURNAL_BACKEND_SCHEMA")
         self.desktop_transport = None
+        self.source_files = json.loads(json.dumps(sourceFiles)) if sourceFiles is not None else None
+        require(sourceFiles is None or desktop, "FROZEN_SOURCE_FILES_REQUIRE_DESKTOP")
+        worker_file, shared_file, transport_file = self.verified_source_files()
         if desktop:
-            transport = Path(__file__).with_name("desktop_journal_transport.py")
+            transport = transport_file
             require(sha(transport) == specification["desktop"]["transportSha256"], "JOURNAL_DESKTOP_TRANSPORT_CHANGED")
             module = types.ModuleType("reviewed_desktop_journal_transport")
             module.__file__ = str(transport)
             exec(compile(transport.read_bytes(), str(transport), "exec"), module.__dict__)
             self.desktop_transport = module.DesktopPrivateJournalTransport(self.private, run_id, specification["desktop"])
-        require(specification["workerSha256"] == sha(Path(__file__)) and
-                specification["sharedSha256"] == sha(Path(__file__).with_name("scoped_native_runtime.py")), "JOURNAL_BACKEND_SOURCE_CHANGED")
+        require(specification["workerSha256"] == sha(worker_file) and
+                specification["sharedSha256"] == sha(shared_file), "JOURNAL_BACKEND_SOURCE_CHANGED")
         if initializing:
             require(specification["rootProof"] is None and specification["bootstrapParent"] is None,
                     "JOURNAL_INITIALIZATION_SCHEMA")
@@ -166,9 +169,38 @@ class LinuxBuildJournal:
             require(specification["bootstrapParent"].get("supported") is True and specification["bootstrapParent"].get("synced") is True, "JOURNAL_BOOTSTRAP_REQUIRED")
             validate_root(specification["rootProof"], run_id)
 
+    def verified_source_files(self):
+        """Explicit frozen worker refs; the current client retains its class identity."""
+        if getattr(self,"source_files",None) is None:
+            worker = Path(__file__)
+            return worker, worker.with_name("scoped_native_runtime.py"), worker.with_name("desktop_journal_transport.py")
+        require(isinstance(self.source_files,dict) and set(self.source_files)=={"worker","shared","transport"},
+                "EXACT_FROZEN_JOURNAL_SOURCE_FILES_REQUIRED")
+        expected={"worker":("scoped_linux_journal.py",self.specification["workerSha256"]),
+                  "shared":("scoped_native_runtime.py",self.specification["sharedSha256"]),
+                  "transport":("desktop_journal_transport.py",self.specification["desktop"]["transportSha256"])}
+        paths=[]
+        for role,(name,pin) in expected.items():
+            bound=self.source_files[role]
+            require(isinstance(bound,dict) and set(bound)=={"path","sha256","bytes"},"FROZEN_JOURNAL_SOURCE_REF_REQUIRED")
+            file=Path(bound["path"])
+            require(file.is_absolute() and file.resolve()==file and file.name==name
+                    and file.is_relative_to(self.private) and file.is_file()
+                    and not file.is_symlink() and not file.is_junction(),"FROZEN_JOURNAL_SOURCE_PATH_REQUIRED")
+            for parent in file.parents:
+                if parent==self.private:break
+                require(parent.is_dir() and not parent.is_symlink() and not parent.is_junction(),"FROZEN_JOURNAL_SOURCE_PARENT_REQUIRED")
+            require(type(bound["bytes"]) is int and 0<bound["bytes"]<=1024*1024
+                    and file.stat().st_size==bound["bytes"] and bound["sha256"]==pin and sha(file)==pin,
+                    "FROZEN_JOURNAL_SOURCE_CHANGED")
+            paths.append(file)
+        require(len({file.parent for file in paths})==1,"FROZEN_JOURNAL_SOURCE_SIBLINGS_REQUIRED")
+        return tuple(paths)
+
     def invoke(self, operation, name, value=None):
         require(not getattr(self, "pending", False) and not list(self.private.glob("linux-journal-request-*.json")),
                 "LINUX_JOURNAL_PENDING_REQUEST_REQUIRES_RECONCILIATION")
+        worker_file, shared_file, _ = self.verified_source_files()
         specification = self.specification
         request = {"schema": 1, "runId": self.run_id, "operation": operation, "name": name, "value": value,
                    "rootProof": specification["rootProof"], "workerSha256": specification["workerSha256"], "sharedSha256": specification["sharedSha256"]}
@@ -183,14 +215,15 @@ class LinuxBuildJournal:
         self.pending = True
         args = ["C:/Windows/System32/wsl.exe", "--distribution", "Ubuntu-24.04", "--user", "canvasrunner",
                 "--exec", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "HOME=/home/canvasrunner", "USER=canvasrunner", "LOGNAME=canvasrunner",
-                "/usr/bin/python3", "-I", client_path(Path(__file__)), "--worker", client_path(file), hashlib.sha256(raw).hexdigest()]
+                "/usr/bin/python3", "-I", client_path(worker_file), "--worker", client_path(file), hashlib.sha256(raw).hexdigest()]
         environment = {k: v for k, v in os.environ.items() if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "COMSPEC", "PATHEXT"}}
         try:
             if self.desktop_transport is None:
                 result = subprocess.run(args, env=environment, stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
             else:
-                result = self.desktop_transport.execute(file, hashlib.sha256(raw).hexdigest(), Path(__file__),
-                                                        Path(__file__).with_name("scoped_native_runtime.py"), client_path)
+                self.verified_source_files()
+                result = self.desktop_transport.execute(file, hashlib.sha256(raw).hexdigest(), worker_file,
+                                                        shared_file, client_path)
         except subprocess.TimeoutExpired as error:
             raise RuntimeError("LINUX_JOURNAL_OUTCOME_UNKNOWN_NO_RETRY") from error
         require(result.returncode == 0 and len(result.stdout) <= 1024 * 1024 and len(result.stderr) <= 4096, "LINUX_JOURNAL_REFUSED_RETAIN_REQUEST")

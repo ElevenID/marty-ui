@@ -20,7 +20,7 @@ from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
 from scoped_passport_maintenance import exact_roles, observed_role_state
 from scoped_passport_successor import CURRENT_PROFILE
-from scoped_native_profiles import D12_PASSPORT_CURRENT
+from scoped_native_profiles import D12_PASSPORT_CURRENT, current_rollout_build
 
 LOCK_OWNER_SHA = "c4531f96157232ea4adc2a28e8822e3daa364d394e609a734820610c45760d89"
 COMPOSE_PLUGIN_SHA = "7ab786491f8445d22c0779678a562116f09a7efe3a7a1c56f157c1fd6c4085f0"
@@ -102,7 +102,9 @@ class D12HeldCanonicalLock:
 class D12CurrentEffectObserver:
     """Fresh exact-CID reads, with one durable selected-create transition."""
 
-    def __init__(self, host, selection_ref, store, save):
+    def __init__(self, host, selection_ref, store, save, profile=CURRENT_PROFILE):
+        self.profile = profile
+        self.build_profile = current_rollout_build(profile)
         require(type(host) is D12ReadOnlyHost and type(store) is LinuxBuildJournal,
                 "D12_REVIEWED_OBSERVER_REQUIRED")
         self.host, self.selection_ref, self.store, self.save = host, selection_ref, store, save
@@ -151,7 +153,7 @@ class D12CurrentEffectObserver:
         snapshot = {"scope": "D12_STATE_PROJECTION_ONLY", "roles": rows,
                     "sourceFactsBoundToPriorReceiptNotNewElfProbe": True,
                     "releaseQualified": False, "recordingQualified": False}
-        exact_roles(snapshot, CURRENT_PROFILE)
+        exact_roles(snapshot, self.profile)
         return snapshot
 
     def database_snapshot(self, database_ref):
@@ -203,10 +205,10 @@ class D12CurrentEffectObserver:
                 and durable.get("runId") == state["runId"],
                 "D12_DURABLE_CREATE_ACK_REQUIRED")
         selection = json.loads(read_ref(self.selection_ref).read_bytes())
-        roles = dict(D12_PASSPORT_CURRENT.roles)
+        roles = dict(self.build_profile.roles)
         require(set(selection.get("binaries", {})) == set(roles)
-                and selection.get("sourceRevision") == D12_PASSPORT_CURRENT.ui_revision
-                and selection.get("coreRevision") == D12_PASSPORT_CURRENT.core_revision,
+                and selection.get("sourceRevision") == self.build_profile.ui_revision
+                and selection.get("coreRevision") == self.build_profile.core_revision,
                 "D12_EXACT_SELECTED_BUILD_REQUIRED")
         self._engine()
         newly = {}
@@ -240,7 +242,7 @@ class D12CurrentEffectObserver:
         self.current = proposed
         try:
             snapshot = self.inspect_all22()
-            by_role = exact_roles(snapshot, CURRENT_PROFILE)
+            by_role = exact_roles(snapshot, self.profile)
             require(all(by_role[role]["state"] == "created" and by_role[role]["hostPid"] == 0
                         and by_role[role]["oomKilled"] is False for role in roles),
                     "D12_SELECTED_CREATED_STATE_REQUIRED")
@@ -277,6 +279,18 @@ class D12CurrentHostBindings:
         self.effect_source_ref = ref(effect_source)
         self.inputs_ref = inputs_ref
         self.inputs = json.loads(read_ref(inputs_ref).read_bytes())
+        self.profile = self.inputs.get("rolloutProfile", CURRENT_PROFILE)
+        self.build_profile = current_rollout_build(self.profile)
+        if self.profile == "d05-membership-current-functional":
+            client_source=Path(LinuxBuildJournal.invoke.__code__.co_filename).resolve()
+            require(client_source==host._root/"scripts/scoped_linux_journal.py"
+                    and sha(client_source)==host._source_files.get("scripts/scoped_linux_journal.py",{}).get("sha256"),
+                    "CURRENT_TEN_REVIEWED_JOURNAL_CLIENT_REQUIRED")
+            frozen_refs=self.inputs.get("journalSourceFiles")
+            require(isinstance(frozen_refs,dict) and set(frozen_refs)=={"operation","build"},"CURRENT_TEN_FROZEN_JOURNAL_REFS_REQUIRED")
+            for role,store in (("operation",operation_journal),("build",build_journal)):
+                require(store.source_files is not None and store.source_files==frozen_refs[role],"CURRENT_TEN_FROZEN_JOURNAL_REFS_REQUIRED")
+                store.verified_source_files()
         self.root = Path(private_root).resolve()
         require(self.root.is_dir() and not self.root.is_symlink()
                 and self.root.is_relative_to(Path.home() / ".codex/private")
@@ -286,7 +300,7 @@ class D12CurrentHostBindings:
         self.host, self.store, self.build_journal = host, operation_journal, build_journal
         selection_ref = self.inputs.get("selection")
         require(isinstance(selection_ref, dict), "D12_SELECTION_REF_REQUIRED")
-        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save)
+        self.observer = D12CurrentEffectObserver(host, selection_ref, operation_journal, self.save, self.profile)
         self.node = read_executable_ref(node_executable)
         self.docker = read_executable_ref(docker_executable)
         self.node_ref, self.docker_ref = node_executable, docker_executable
@@ -472,7 +486,7 @@ class D12CurrentHostBindings:
     def verify_all22_quiescent(self, bound):
         self.assert_inputs()
         frozen = json.loads(read_ref(bound).read_bytes())
-        rows = exact_roles(frozen, CURRENT_PROFILE)
+        rows = exact_roles(frozen, self.profile)
         state = self.store.read("build-state.json")
         require(state.get("phase") == "ALL22_QUIESCENT"
                 and state.get("quiescenceSha256") == bound["sha256"],
@@ -492,7 +506,7 @@ class D12CurrentHostBindings:
         expected = self.host.before
         deadline = time.monotonic() + seconds
         while True:
-            rows = exact_roles(self.observer.inspect_all22(), CURRENT_PROFILE)
+            rows = exact_roles(self.observer.inspect_all22(), self.profile)
             if all(row.get("running") is True and row.get("paused") is False
                    and row.get("oomKilled") is False and type(row.get("hostPid")) is int
                    and row["hostPid"] > 0 and row.get("state") == "running"

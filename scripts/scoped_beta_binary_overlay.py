@@ -28,10 +28,10 @@ def overlay_roles(profile=None, selected_roles=None):
         require(selected_roles is None or len(selected_roles) == 3
                 and set(selected_roles) == set(ROLE_BINARIES), "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED")
         return ROLE_BINARIES
-    if profile == "d12-passport-current-functional":
-        from scoped_native_profiles import D12_PASSPORT_CURRENT
-        roles = dict(D12_PASSPORT_CURRENT.roles)
-        require(selected_roles is None or len(selected_roles) == 3
+    if profile in ("d12-passport-current-functional", "d05-membership-current-functional"):
+        from scoped_native_profiles import current_rollout_build
+        roles = dict(current_rollout_build(profile).roles)
+        require(selected_roles is None or len(selected_roles) == len(roles)
                 and set(selected_roles) == set(roles), "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED")
         return roles
     from scoped_native_profiles import reviewed_profile
@@ -124,20 +124,20 @@ def validate_fenced_observation(observed, expected):
     require(observed.get("appSchemaCreateDenied") is True and observed.get("cancellationHistoryMutationsDenied") is True, "REQUIRED_ACL_DENIALS_UNPROVEN")
 
 def validate_runtime_after(before, after, binaries, maintenance_restart_roles, profile=None):
-    require(profile in (None, "d12-passport-current-functional"), "UNREVIEWED_D12_RUNTIME_PROFILE")
+    require(profile in (None, "d12-passport-current-functional", "d05-membership-current-functional"), "UNREVIEWED_D12_RUNTIME_PROFILE")
     if profile is None:
         source, core, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
     else:
-        from scoped_native_profiles import D12_PASSPORT_CURRENT
-        source, core, roles = (D12_PASSPORT_CURRENT.ui_revision,
-                               D12_PASSPORT_CURRENT.core_revision, dict(D12_PASSPORT_CURRENT.roles))
+        from scoped_native_profiles import current_rollout_build
+        build = current_rollout_build(profile)
+        source, core, roles = build.ui_revision, build.core_revision, dict(build.roles)
     require(set(binaries) == set(roles), "EXACT_D12_THREE_ROLE_SCOPE_REQUIRED")
     old = {row["role"]: row for row in before["roles"]}
     new = {row["role"]: row for row in after["roles"]}
     cohort = runtime_roles(profile)
     require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new) == cohort, "EXACT_22_ROLE_SET_REQUIRED")
     require(len({row["containerId"] for row in new.values()}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
-    require(set(maintenance_restart_roles).issubset(cohort - set(ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
+    require(set(maintenance_restart_roles).issubset(cohort - set(roles if profile == "d05-membership-current-functional" else ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
     changes = []
     for role, prior in old.items():
         actual = new[role]
@@ -151,7 +151,7 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
             require(actual == expected, "UNSELECTED_RUNTIME_CHANGED:" + role)
             continue
         changed_fields = {"containerId", "startedAt", "hostPid", "source", "coreSource", "kind", "sha256", "processExecutableSha256", "binaryMounts", "requiredObservation"}
-        if profile == "d12-passport-current-functional":
+        if profile in ("d12-passport-current-functional", "d05-membership-current-functional"):
             changed_fields.update({"requiredContainerId", "requiredStartedAt", "requiredHostPid",
                                    "requiredEffectiveUid", "requiredEffectiveGid", "requiredBinaryMounts"})
         require({k: v for k, v in actual.items() if k not in changed_fields} == {k: v for k, v in prior.items() if k not in changed_fields}, "UNRELATED_SELECTED_RUNTIME_CHANGED")
@@ -159,7 +159,7 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
         require(actual["containerId"] not in {row["containerId"] for row in old.values()} and actual["source"] == source, "FRESH_SELECTED_SOURCE_REQUIRED")
         require(actual.get("coreSource") == core and actual.get("kind") == "SCOPED_NATIVE_FUNCTIONAL_OVERLAY", "SELECTED_RUNTIME_LINEAGE_CHANGED")
         require(actual["sha256"] == actual["processExecutableSha256"] == binaries[role]["sha256"], "RUNNING_ELF_HASH_CHANGED")
-        if profile == "d12-passport-current-functional":
+        if profile in ("d12-passport-current-functional", "d05-membership-current-functional"):
             require(actual.get("requiredContainerId") == actual["containerId"]
                     and actual.get("requiredStartedAt") == actual["startedAt"]
                     and actual.get("requiredHostPid") == actual["hostPid"]
@@ -187,9 +187,9 @@ def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, sel
     require(frozen_arguments[:4] in (["docker", "compose", "-p", "elevenid-beta"],
                                      ["docker", "compose", "--project-name", "elevenid-beta"]), "FROZEN_BETA_COMPOSE_ARGUMENTS_REQUIRED")
     require(isinstance(no_start, bool) and (not no_start or profile in
-            ("canvas-issuer-scoped-jobs", "d12-passport-canonical-subset", "d12-passport-current-functional",
+            ("canvas-issuer-scoped-jobs", "d12-passport-canonical-subset", "d12-passport-current-functional", "d05-membership-current-functional",
              "native-devtest-passport-four-role")), "REVIEWED_NO_START_PROFILE_REQUIRED")
-    require(profile not in ("d12-passport-canonical-subset", "d12-passport-current-functional",
+    require(profile not in ("d12-passport-canonical-subset", "d12-passport-current-functional", "d05-membership-current-functional",
                             "native-devtest-passport-four-role") or no_start, "D12_CREATE_BEFORE_INSPECTION_REQUIRED")
     require(overlay_path is not None or no_start, "OVERLAY_PATH_REQUIRED")
     require(len(frozen_arguments) >= 8 and len(frozen_arguments[4:]) % 2 == 0, "EXACT_BASE_COMPOSE_GRAMMAR_REQUIRED")
