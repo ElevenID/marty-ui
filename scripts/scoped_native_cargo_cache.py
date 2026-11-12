@@ -511,6 +511,43 @@ def validate_bound_receipt(plan: dict, receipt_path: Path, receipt_sha256: str) 
     validate_receipt(plan, receipt, lock_path.read_bytes(), metadata_path.read_bytes(), checkout_path.read_bytes())
 
 
+def validate_dependency_equivalent_receipt(plan: dict, original_plan: dict,
+                                          receipt_path: Path, receipt_sha256: str, git) -> dict:
+    """Reuse ORIGINAL cache evidence only for identical committed dependency inputs.
+
+    This neither relabels a receipt nor observes current volume/consumer state.
+    The build owner must still perform its fresh engine/custody/consumer guards.
+    """
+    from scoped_native_build import verify_export
+    from scoped_native_runtime import read_ref, require
+    validate_bound_receipt(original_plan, receipt_path, receipt_sha256)
+    require(plan["engineId"] == original_plan["engineId"]
+            and plan["builderImage"] == original_plan["builderImage"]
+            and plan["sources"]["core"] == original_plan["sources"]["core"]
+            and plan["coreRevision"] == plan["sources"]["core"]["revision"]
+            and plan["sources"]["ui"]["repository"] == original_plan["sources"]["ui"]["repository"],
+            "NATIVE_CACHE_DEPENDENCY_SOURCE_CUSTODY_CHANGED")
+    inputs = []
+    for source in (original_plan["sources"]["ui"], plan["sources"]["ui"], plan["sources"]["core"]):
+        verify_export(Path(source["repository"]), source["revision"], Path(source["directory"]),
+                      source["inventory"], git)
+    for source in (original_plan["sources"]["ui"], plan["sources"]["ui"]):
+        rows = json.loads(read_ref(source["inventory"], 4 * 1024**2).read_bytes())
+        inputs.append({row["path"]: {"bytes": row["bytes"], "sha256": row["sha256"]}
+                       for row in rows if Path(row["path"]).name in ("Cargo.toml", "Cargo.lock")
+                       or row["path"].endswith(("/.cargo/config", "/.cargo/config.toml"))
+                       or row["path"] in (".cargo/config", ".cargo/config.toml")})
+    require({"rust/Cargo.toml", "rust/Cargo.lock"} <= set(inputs[0])
+            and inputs[0] == inputs[1], "NATIVE_CACHE_DEPENDENCY_INPUTS_CHANGED")
+    return {"state": "ORIGINAL_CACHE_RECEIPT_DEPENDENCY_EQUIVALENCE_PASS",
+            "originalUiRevision": original_plan["sources"]["ui"]["revision"],
+            "buildUiRevision": plan["sources"]["ui"]["revision"],
+            "coreRevision": plan["coreRevision"], "dependencyFiles": len(inputs[0]),
+            "dependencyInputsSha256": hashlib.sha256(json.dumps(inputs[0], sort_keys=True,
+                separators=(",", ":")).encode()).hexdigest(),
+            "originalReceiptSha256": receipt_sha256, "currentVolumeObservation": False}
+
+
 def cache_budget(local_mode: bool) -> dict:
     """Bound the sequential local-object import separately from networked fetch."""
     if local_mode:

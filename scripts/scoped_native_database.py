@@ -27,6 +27,14 @@ IMAGE = "sha256:c994bb48935acaeda16f2275e89e0342e5eea7414d404781510f73618f4a88bf
 PG_BEFORE = "7edeffa3c4cbc10d02010dd0bfbd2e84e2cf4cf149e1c8d5bf7e834a5aedf075"
 BUILD_RECEIPT_SHA = "bfad815173696a165dee9c915aa7d41e5f735aaf34e54d53b2d0566ceb04159e"
 SCHEMA_ROLES = ("flow", "issuance-native")
+
+def schema_steps(current_ten, command):
+    require(command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
+    suffix = "MIGRATE" if command == "migrate" else "VERIFY"
+    roles = (("ORGANIZATION", "organization"), ("FLOW", "flow"),
+             ("CREDENTIAL_TEMPLATE", "credential-template"), ("ISSUER", "issuance-native")) if current_ten else (("FLOW", "flow"), ("ISSUER", "issuance-native"))
+    return tuple((name + "_" + suffix, role) for name, role in roles)
+
 NODE = r"""const fs=require('node:fs'),cp=require('node:child_process'),crypto=require('node:crypto');
 const [file,sha,request,docker]=process.argv.slice(1);
 if(crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==sha)throw Error('METADATA_SOURCE_CHANGED');
@@ -40,7 +48,7 @@ if(['d12-passport-current-functional','d05-membership-current-functional'].inclu
 const m=require(file);let out;
 if(r.mode==='render')out={argv:['psql','-X','-U','postgres','-d','marty','-At','-v','ON_ERROR_STOP=1','-f','-'],pgOptions:m.sessionOptions(r.settings),stdin: m.operationalSql(r.name,r.sqlSources).toString('base64')};
 else if(r.mode==='json')out=m.sqlOutput(require(file.replace('native-maintenance-metadata.js','functional-debug-runtime.js')).boundBytes(r.stdout),r.schema);
-else if(r.mode==='digest')out=m.migrationDigest(r.sources);
+else if(r.mode==='digest')out=m.migrationDigest(r.sources,r.profile);
 else if(r.mode==='baseline')out=m.currentDatabaseBaseline(r.refs,r.approvedBefore,r.approvedEngine,r.profile);
 else if(r.mode==='catalog')out=m.observeCatalog(r.inputs,{readDocker:a=>cp.execFileSync(docker,['--context','desktop-linux',...a],{encoding:'utf8',env:process.env,timeout:150000,maxBuffer:1048576})});
 else if(r.mode==='verify')out=m.validateProof(r.proof,r.commands,r.context);
@@ -459,11 +467,11 @@ class NativeDatabasePhase:
                 self.epoch = self.node("json", stdout=row["stdout"], schema="marty.passport-beta-fence-verification/v1")["epoch"]
         self.projections["beforeCatalog"], _ = self.step("CATALOG_BEFORE_SCHEMA", self.catalog)
         backup, _ = self.step("DATABASE_BACKUP", self.backup)
-        for step_id, role in ((("ORGANIZATION_MIGRATE","organization"),) if hasattr(self,"tenant_id") else ()) + (("FLOW_MIGRATE", "flow"), ("ISSUER_MIGRATE", "issuance-native")):
+        for step_id, role in schema_steps(hasattr(self, "tenant_id"), "migrate"):
             _, row = self.step(step_id, lambda role=role: self.schema(role, "migrate"))
             self.commands.append(row)
         self.sql_receipts["passport-beta-batch-acl-finalize.sql"], _ = self.step("ACL_FINALIZE", lambda: self.sql("passport-beta-batch-acl-finalize.sql"))
-        for step_id, role in ((("ORGANIZATION_VERIFY","organization"),) if hasattr(self,"tenant_id") else ()) + (("FLOW_VERIFY", "flow"), ("ISSUER_VERIFY", "issuance-native")):
+        for step_id, role in schema_steps(hasattr(self, "tenant_id"), "verify-owned-schema"):
             _, row = self.step(step_id, lambda role=role: self.schema(role, "verify-owned-schema"))
             self.commands.append(row)
         transition = None
@@ -557,7 +565,7 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
         self.authority = inputs["d12Authority"]
         if self.rollout_profile == "d05-membership-current-functional":
             self.tenant_id = current_tenant(inputs, authority)
-            self.SCHEMA_BINARIES = {role: self.role_binaries[role] for role in ("organization", *SCHEMA_ROLES)}
+            self.SCHEMA_BINARIES = {role: self.role_binaries[role] for role in ("organization", "flow", "credential-template", "issuance-native")}
         super().__init__(context, inputs, store)
         self.current_database_target = consume_current_database_target(self.node("baseline",
             refs=self.baseline_refs, approvedBefore=self.expected_database_before,
@@ -594,6 +602,8 @@ SELECT json_build_object('schema','marty.current-ten-startup-schema/v1',
  'tenantId', :'tenant',
  'authLedger', EXISTS(SELECT 1 FROM auth_service.rust_schema_versions WHERE version='rust_auth_0001'),
  'organizationLedger', EXISTS(SELECT 1 FROM organization_service.rust_schema_versions WHERE version='rust_organization_0001'),
+ 'credentialTemplateCriteriaLedger', EXISTS(SELECT 1 FROM credential_template_service.rust_schema_versions WHERE version='rust_credential_template_0003'),
+ 'issuanceCriteriaLedger', EXISTS(SELECT 1 FROM issuance_service.rust_schema_migrations WHERE version='0012_membership_achievement_criteria'),
  'organizationExists', EXISTS(SELECT 1 FROM organization_service.organizations WHERE id=:'tenant'::uuid),
  'flowTenantOwned', (SELECT count(*)=3 AND bool_and(organization_id=:'tenant') FROM flow_service.flow_definitions WHERE id IN ('71000000-0000-0000-0000-000000000001','72000000-0000-0000-0000-000000000010','72000000-0000-0000-0000-000000000040')),
  'bootstrapTenantOwned', EXISTS(SELECT 1 FROM flow_service.flow_instances WHERE id='71000000-0000-0000-0000-000000000101' AND organization_id=:'tenant'));
@@ -604,7 +614,7 @@ ROLLBACK;
     database.guard()
     value=json.loads(result.stdout)
     require(value.get("schema")=="marty.current-ten-startup-schema/v1" and value.get("tenantId")==tenant
-            and all(value.get(k) is True for k in ("authLedger","organizationLedger","organizationExists","flowTenantOwned","bootstrapTenantOwned")),
+            and all(value.get(k) is True for k in ("authLedger","organizationLedger","credentialTemplateCriteriaLedger","issuanceCriteriaLedger","organizationExists","flowTenantOwned","bootstrapTenantOwned")),
             "CURRENT_TEN_NATIVE_STARTUP_SCHEMA_NOT_PROVEN")
     return {"schema":"marty.current-ten-startup-schema-observation/v1","tenantId":tenant,
             "databaseIdentity":database.identity,"sql":source,"stdout":database.g["save_bytes"]("current-ten-startup-schema.stdout",result.stdout),

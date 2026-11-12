@@ -32,6 +32,11 @@ def runtime_roles(profile=None):
             "UNREVIEWED_RUNTIME_ROLE_PROFILE")
     return RUNTIME_ROLES
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
+D05_MIGRATIONS = (*MIGRATIONS, "credential-template/0003_membership_achievement_criteria", "issuance/0012_membership_achievement_criteria")
+
+def migration_names(profile=None):
+    return D05_MIGRATIONS if profile == "d05-membership-current-functional" else MIGRATIONS
+
 JOURNAL_FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
 JOURNAL_FILE_MAXIMUM = 256 * 1024
 JOURNAL_RESPONSE_MAXIMUM = 1024 * 1024

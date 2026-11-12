@@ -24,6 +24,11 @@ MIGRATION_SHA256 = {
     "rust/services/issuance/migrations/0011_passport_administrative_cancellation.sql":
         "9842f5ea39aab254d41cf7bc936411b813b853352a1e2de668594926dd08f682",
 }
+D05_MIGRATION_SHA256 = {**MIGRATION_SHA256,
+    'rust/services/credential-template/migrations/0003_membership_achievement_criteria.sql': '8d4a006db83610c3253bf00504f779939e43069b9e45dde2074694891d9a0987',
+    'rust/services/issuance/migrations/0012_membership_achievement_criteria.sql': '2becfb8d83bfe775f75a95d6b1aa17b317cdcec825f1350e181e93347d67bb7e',
+}
+
 
 
 def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
@@ -31,7 +36,7 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
     build = current_rollout_build(profile)
     """Use LF Git-exported source bytes, never a Windows checkout conversion."""
     from scoped_native_maintenance import operational_sql_sources
-    from scoped_native_runtime import MIGRATIONS
+    from scoped_native_runtime import migration_names
     source = prepared["sources"]["ui"]
     require(source["revision"] == build.ui_revision,
             "D12_EXACT_SQL_SOURCE_REVISION_REQUIRED")
@@ -49,12 +54,13 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
             and read_ref(inputs["catalogSql"]).resolve()
                 == root / "scripts" / "sql" / "passport-beta-maintenance-catalog.sql",
             "D12_EXACT_GIT_EXPORTED_CATALOG_REQUIRED")
+    required_migrations = D05_MIGRATION_SHA256 if profile == "d05-membership-current-functional" else MIGRATION_SHA256
     migration_paths = {"rust/services/" + item.replace("/", "/migrations/", 1) + ".sql"
-                       for item in MIGRATIONS}
-    require(set(inputs["migrationSources"]) == migration_paths == set(MIGRATION_SHA256),
+                       for item in migration_names(profile)}
+    require(set(inputs["migrationSources"]) == migration_paths == set(required_migrations),
             "D12_EXACT_RUST_MIGRATION_SET_REQUIRED")
     for name, bound in inputs["migrationSources"].items():
-        require(bound["sha256"] == MIGRATION_SHA256[name]
+        require(bound["sha256"] == required_migrations[name]
                 and read_ref(bound).resolve() == root / name,
                 "D12_EXACT_GIT_EXPORTED_MIGRATION_REQUIRED")
 

@@ -61,7 +61,7 @@ def test_selected_tenant_and_auth_startup_effects_need_exact_authority():
         with pytest.raises(ValueError):current_tenant({"tenantId":tenant},changed)
 
 
-@pytest.mark.parametrize("failure",[None,"ledger","tenant","profile"])
+@pytest.mark.parametrize("failure",[None,"ledger","ct-ledger","issuer-ledger","tenant","profile"])
 def test_native_startup_schema_observation_uses_actual_db_and_closed_read_only_query(tmp_path,failure):
     import json,subprocess
     from types import SimpleNamespace
@@ -69,8 +69,10 @@ def test_native_startup_schema_observation_uses_actual_db_and_closed_read_only_q
     from scoped_native_runtime import ref
     tenant="750e8400-e29b-41d4-a716-446655440001"
     projection={"schema":"marty.current-ten-startup-schema/v1","tenantId":tenant,
-                **{k:True for k in ("authLedger","organizationLedger","organizationExists","flowTenantOwned","bootstrapTenantOwned")}}
+                **{k:True for k in ("authLedger","organizationLedger","credentialTemplateCriteriaLedger","issuanceCriteriaLedger","organizationExists","flowTenantOwned","bootstrapTenantOwned")}}
     if failure=="ledger":projection["authLedger"]=False
+    if failure=="ct-ledger":projection["credentialTemplateCriteriaLedger"]=False
+    if failure=="issuer-ledger":projection["issuanceCriteriaLedger"]=False
     if failure=="tenant":projection["tenantId"]="750e8400-e29b-41d4-a716-446655440002"
     calls=[]
     def save(name,data):
@@ -98,8 +100,10 @@ def test_metadata_order_extends_only_closed_current_ten_with_owned_org_commands(
     script="const m=require(process.argv[1]);process.stdout.write(JSON.stringify({old:m.currentDatabaseOrder({}),next:m.currentDatabaseOrder({profile:m.D05_PROFILE}),legacy:m.DATABASE_ORDER}));"
     value=json.loads(subprocess.check_output(["node","-e",script,str(module)]))
     assert value["old"]==value["legacy"]
+    ids=[row[0] for row in value["next"]]
+    assert ids.index("CREDENTIAL_TEMPLATE_MIGRATE") < ids.index("ISSUER_MIGRATE") < ids.index("ACL_FINALIZE") < ids.index("CREDENTIAL_TEMPLATE_VERIFY") < ids.index("ISSUER_VERIFY")
     assert [x for x in value["next"] if x[0].startswith("ORGANIZATION_")]==[["ORGANIZATION_MIGRATE","rust","organization:migrate"],["ORGANIZATION_VERIFY","rust","organization:verify-owned-schema"]]
-    assert [x for x in value["next"] if not x[0].startswith("ORGANIZATION_")]==value["old"]
+    assert [x for x in value["next"] if not x[0].startswith(("ORGANIZATION_","CREDENTIAL_TEMPLATE_"))]==value["old"]
 
 
 @pytest.mark.parametrize("profile",[D12_CURRENT_ROLLOUT,D05_CURRENT_ROLLOUT])
