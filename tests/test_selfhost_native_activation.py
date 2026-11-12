@@ -69,7 +69,7 @@ def expected_scope(name):
 
 @pytest.fixture
 def preflight_server(tmp_path):
-    state = SimpleNamespace(fault=None, errors=[], seen=[], rotation=False)
+    state = SimpleNamespace(fault=None, errors=[], seen=[], rotation=False, closed_metadata=False)
     names = sorted(
         SELFHOST_TOKEN_FILES
         | {
@@ -123,6 +123,10 @@ def preflight_server(tmp_path):
                 "orphan": state.fault != generation + "-root-child",
                 "path": "auth/token/create/selfhost-renew-leaf",
             }
+            if state.closed_metadata:
+                data.update(type="service", num_uses=0, identity_policies=[], period=0,
+                            token_period=0, creation_ttl=28800, explicit_max_ttl=28800,
+                            renewable=True)
             if state.fault == "duplicate-policy" and name == "keycloak_master_cookie_token":
                 data["policies"] = ["scope-keycloak-11id-cookie-token"]
             if state.fault == "policy-reference":
@@ -370,7 +374,7 @@ def prepare_certificates(state, mode="ordinary", fault=None):
                 signer.public_key(),
                 signer=signer,
                 ca=True,
-                before=-7200,
+                before=-7200 if mode == "recovery" else -60,
                 after=-3600 if mode == "retire" and not replacement else 365 * 86400,
             )
             roots[name] = signer, issuer
@@ -415,7 +419,9 @@ def prepare_certificates(state, mode="ordinary", fault=None):
                 signer.public_key(),
                 issuer,
                 issuer_signer,
-                after=1800 if fault == "short-leaf" else 8 * 3600,
+                before=-7200,
+                after=-60 if mode == "recovery" and directory == state.old else
+                      1800 if fault == "short-leaf" else 8 * 3600,
             )
             (directory / filename).write_bytes(pem(leaf))
     before, after = state.issuers["workload-pki"], state.issuers["workload-pki-v5"]
