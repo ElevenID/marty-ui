@@ -6,6 +6,8 @@ const path = require('path');
 const assert = require('node:assert/strict');
 const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
 const { createOwnedMembership } = require('./demo-owned-membership');
+const { requireJson } = require('./beta-demo-resource-helpers');
+const { directPostRequestReference, directPostLoginBinding, loginInstanceOwnership, holderDeclineEvidence, freshDirectPostLogin } = require('./beta-membership-support-contract');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
 const { chromium, request } = require('@playwright/test');
@@ -149,21 +151,95 @@ async function receiveBadge(walletPage, offerUri, {
   };
 }
 
-async function presentBadge(walletPage, requestUri) {
+async function presentBadge(walletPage, requestUri, { holderDecision = null } = {}) {
+  assert([null, 'Approve', 'Cancel'].includes(holderDecision));
+  const endpoint = holderDecision === 'Cancel' ? '/api/presentation-decline' : '/api/present';
+  const walletUrl = new URL(walletPage.url());
+  assert(walletUrl.origin === TEST_WALLET_ORIGIN && walletUrl.pathname === '/', 'Owned wallet UI context changed');
   await maskProtocolField(walletPage, 'Presentation request URI');
-  await walletPage.getByLabel('Presentation request URI').fill(requestUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
-    response.url() === `${TEST_WALLET_ORIGIN}/api/present`
-    && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
+  const requestInput = walletPage.getByLabel('Presentation request URI');
+  await requestInput.fill(requestUri);
+  assert(await requestInput.inputValue() === requestUri, 'Wallet request input changed');
+  // Discriminate the actual embedded client before clicking. Never treat a
+  // missing/late dialog after Present as permission to bypass consent.
+  const consent = walletPage.locator('#presentation-consent');
+  const dialogCount = await consent.count();
+  assert([0, 1].includes(dialogCount), 'Ambiguous wallet consent UI');
+  if (dialogCount === 1) {
+    assert.equal(await consent.evaluate(element => element.tagName), 'DIALOG');
+    for (const name of ['Approve', 'Cancel']) assert.equal(await consent.getByRole('button', { name, exact: true, includeHidden: true }).count(), 1);
+  } else assert.equal(holderDecision, null, 'This holder decision requires the reviewed consent UI');
+  const decision = dialogCount === 1 ? holderDecision || 'Approve' : null;
+  const consentProtocol = dialogCount === 1 ? 'EXPLICIT_TEST_WALLET_DIALOG_V1' : 'LEGACY_PRESENT_UI';
+  const responsePromise = walletPage.waitForResponse((response) => {
+    if (response.url() !== `${TEST_WALLET_ORIGIN}${endpoint}` || response.request().method() !== 'POST') return false;
+    try { return response.request().postDataJSON()?.request_uri === requestUri; } catch { return false; }
+  }, { timeout: 60_000 });
+  // An earlier UI failure still owns this waiter; do not leave an unhandled
+  // rejection when cleanup closes its page. Awaiting it below still fails.
+  responsePromise.catch(() => {});
   await walletPage.getByRole('button', { name: /^present$/i }).click();
+  if (decision !== null) {
+    await consent.waitFor({ state: 'visible', timeout: 15000 });
+    await consent.getByRole('button', { name: decision, exact: true }).click({ timeout: 15000 });
+    await consent.waitFor({ state: 'hidden', timeout: 15000 });
+  }
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
+  if (holderDecision === 'Cancel') return { status: response.status(),
+    acknowledged: response.ok() && body?.acknowledged === true,
+    verifierHttpStatus: body?.submission?.verifier_http_status ?? null, holderDecision: decision, consentProtocol };
   return {
     status: response.status(),
     accepted: response.ok() && body?.ok === true,
+    holderDecision: decision, consentProtocol,
     error: response.ok() ? null : redact(body?.error || 'Presentation failed'),
   };
+}
+
+async function bindMembershipLogin(loginPage, operator, details, organizationId, startedAt, acknowledgeOwned = async () => {}) {
+  const reference = directPostRequestReference(details, BETA_ORIGIN);
+  const instancePath = `/v1/flows/instances/${reference.instanceId}`;
+  const before = await requireJson(operator, instancePath);
+  const window = { afterMs: startedAt - 15000, beforeMs: Date.now() + 15000 };
+  const ownership = loginInstanceOwnership({ ...details, dcApiRequestUrl: reference.url }, before,
+    { login: { organizationId } }, BETA_ORIGIN, window);
+  // Retain an independently owned identity before request emission/validation.
+  // A later transport failure can still retire this exact Flow, never a scan.
+  await acknowledgeOwned({ ...ownership, instancePath });
+  const response = await loginPage.context().request.get(reference.url, { timeout: 15000, maxRedirects: 0 });
+  assert.equal(response.status(), 200);
+  assert.equal(response.url(), reference.url);
+  const instance = await requireJson(operator, instancePath);
+  const binding = directPostLoginBinding(details, instance, organizationId, BETA_ORIGIN, window, await response.text());
+  for (const key of ['contextPolicyPresent', 'contextPolicyId', 'contextTrustProfilePresent', 'contextTrustProfileId']) {
+    assert.equal(binding[key], ownership[key], 'Owned login scope changed during request emission');
+  }
+  return binding;
+}
+
+async function observeDeclinedLogin(context, nonce) {
+  const auth = async () => {
+    const response = await context.request.get(`${BETA_ORIGIN}/v1/auth/me`, { timeout: 15000, maxRedirects: 0 });
+    assert.equal(response.status(), 200);
+    assert.equal((await response.json()).authenticated, false);
+    assert.equal((await context.cookies(BETA_ORIGIN)).some(cookie => cookie.name === 'sessionId'), false);
+  };
+  await auth();
+  const finalized = await context.request.get(`${BETA_ORIGIN}/v1/auth/credential-login/finalize?nonce=${encodeURIComponent(nonce)}`,
+    { timeout: 15000, maxRedirects: 0 });
+  const finalizeSetCookie = Boolean(finalized.headers()['set-cookie']);
+  assert.equal(finalizeSetCookie, false);
+  assert([400, 302].includes(finalized.status()), 'Declined request finalized a login');
+  if (finalized.status() === 302) {
+    const destination = new URL(finalized.headers().location, BETA_ORIGIN);
+    assert(destination.origin === BETA_ORIGIN && destination.pathname === '/' && !destination.hash
+      && !destination.username && !destination.password && destination.searchParams.get('auth_error')?.trim(),
+    'Declined request requires the actual Auth error destination');
+  }
+  await auth();
+  return { authHttpStatus: 200, authenticated: false, sessionCookiePresent: false,
+    finalizeStatus: finalized.status(), finalizeSetCookie };
 }
 
 function membershipSessionRetirement(runId) {
@@ -252,7 +328,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
         productPath: 'GOVERNED_MEMBERSHIP_CLAIM_AND_CREDENTIAL_LOGIN', publicWalletProduct: false },
       limitations: [
         'This fresh run uses the governed membership product path with the internal Rust development/test wallet.',
-        ...(retainedMembership ? ['The original three membership assertions do not qualify holder cancellation, untrusted-issuer or expired-offer behavior, or an independent wallet.'] : []),
+        ...(retainedMembership ? ['Holder decline is observed through the first-party test wallet. This run does not qualify untrusted-issuer, expired-offer or independent-wallet behavior.'] : []),
         'Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.',
         'A fresh owned application uses an authorized existing beta test account with synthetic form values. Its credential and application-template authority are retired after this run.',
       ],
@@ -268,6 +344,11 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     },
   };
 
+  if (retainedMembership) report.membershipLoginFlows = [];
+  const saveMembershipProgress = () => {
+    if (retainedMembership) fs.writeFileSync(path.join(artifactDir, 'membership-consent-progress.json'),
+      JSON.stringify({ flows: report.membershipLoginFlows, holderDecline: report.holderDecline || null }) + '\n', { mode: 0o600 });
+  };
   let walletSession, walletContext, loginContext, holderContext, adminContext, adminPage;
   let control, loginVideo, walletVideo;
   const sessionRetirement = ownedMembership ? membershipSessionRetirement(inputs.runId) : null;
@@ -373,18 +454,44 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
         });
       }
     });
-    await loginPage.goto(`${BETA_ORIGIN}/v1/auth/credential-login`, {
-      waitUntil: 'domcontentloaded', timeout: 60_000,
-    });
-    const loginRequest = await loginPage.evaluate(() => ({
-      nonce: document.body.dataset.nonce,
-      href: document.querySelector('#wallet-link')?.href || null,
-      walletOptions: Array.from(document.querySelectorAll('#wallet-select option'))
-        .map((option) => option.textContent.trim()),
-    }));
-    if (!loginRequest.nonce || !loginRequest.href) {
-      throw new Error('Credential login did not provide a nonce and signed presentation link');
+    const openLoginRequest = async () => {
+      const startedAt = Date.now();
+      const entry = retainedMembership ? { createAttempted: true, retirementConfirmed: false, startedAt } : null;
+      if (entry) { report.membershipLoginFlows.push(entry); saveMembershipProgress(); }
+      await loginPage.goto(`${BETA_ORIGIN}/v1/auth/credential-login`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      const details = await loginPage.evaluate(() => ({
+        nonce: document.body.dataset.nonce,
+        href: document.querySelector('#wallet-link')?.href || null,
+        walletOptions: Array.from(document.querySelectorAll('#wallet-select option'))
+          .map((option) => option.textContent.trim()),
+      }));
+      if (!details.nonce || !details.href) throw new Error('Credential login did not provide a nonce and presentation link');
+      const binding = retainedMembership ? await bindMembershipLogin(loginPage, adminPage, details, inputs.organizationId, startedAt,
+        async ownership => { entry.binding = ownership; saveMembershipProgress(); }) : null;
+      if (entry) { entry.binding = binding; saveMembershipProgress(); }
+      return { details, binding };
+    };
+    let currentRequest = await openLoginRequest();
+    if (retainedMembership) {
+      const signedOut = await loginContext.request.get(`${BETA_ORIGIN}/v1/auth/me`, { timeout: 15000, maxRedirects: 0 });
+      assert.equal(signedOut.status(), 200);
+      assert.equal((await signedOut.json()).authenticated, false);
+      assert.equal((await loginContext.cookies(BETA_ORIGIN)).some(cookie => cookie.name === 'sessionId'), false);
+      await explain(walletPage, 'Choose not to share', 'The holder clicks Cancel in the test wallet. No presentation is signed or submitted.');
+      const acknowledgement = await presentBadge(walletPage, currentRequest.details.href, { holderDecision: 'Cancel' });
+      const cancelled = await requireJson(adminPage, currentRequest.binding.instancePath);
+      const noSession = await observeDeclinedLogin(loginContext, currentRequest.details.nonce);
+      report.holderDecline = holderDeclineEvidence(currentRequest.binding, cancelled, acknowledgement, noSession);
+      saveMembershipProgress();
+      const firstBinding = currentRequest.binding;
+      currentRequest = await openLoginRequest();
+      report.freshRequestDistinct = freshDirectPostLogin(firstBinding, currentRequest.binding);
+      report.membershipRetryBinding = currentRequest.binding;
+      await explain(loginPage, 'Start a fresh request', 'The new sign-in request has a different Auth nonce, Flow, presentation nonce and state. The holder now chooses Approve.');
     }
+    const loginRequest = currentRequest.details;
     await explain(
       loginPage,
       'Credential login request ready',
@@ -396,7 +503,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     };
     // The browser owns the one-use finalize; bind its status and redirect before presentation.
     const loginObservation = observeCredentialLoginBrowser(loginPage, BETA_ORIGIN, loginRequest.nonce);
-    report.presentation = await presentBadge(walletPage, loginRequest.href);
+    report.presentation = await presentBadge(walletPage, loginRequest.href, { holderDecision: retainedMembership ? 'Approve' : null });
     if (!report.presentation.accepted || (ownedMembership && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
     }
@@ -476,6 +583,16 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
       'The badge presentation resolved the existing user and created a new authenticated ElevenID session.',
     );
     report.behaviorAssertions = membershipLoginBehaviorAssertions(report);
+    if (retainedMembership) {
+      report.holderConsentAssertions = {
+        holder_cancel_no_session: report.holderDecline?.kind === 'ACTUAL_TEST_WALLET_UI_HOLDER_DECLINE'
+          && report.holderDecline.terminalStatus === 'CANCELLED' && report.holderDecline.noSession.authenticated === false,
+        fresh_request_approved_login: report.freshRequestDistinct === true && report.presentation.accepted === true
+          && report.completion.authenticated === true && report.completion.browserFinalizeVerified === true,
+      };
+      assert(Object.values(report.holderConsentAssertions).every(value => value === true), 'Actual holder consent and recovery required');
+      report.behaviorAssertions.holder_cancel_no_session = Object.values(report.holderConsentAssertions).every(value => value === true);
+    }
     report.engineeringReady = (
       Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.pageErrors.length === 0
@@ -502,6 +619,24 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     report.engineeringReady = false;
     report.error = redact(error.stack || error.message || String(error));
   } finally {
+    if (retainedMembership) {
+      const { retireLoginFlow } = require('./dev-test-wallet-contract');
+      for (const entry of report.membershipLoginFlows) {
+        try {
+          assert(entry.binding, 'Unknown login creation outcome requires explicit reconciliation');
+          const retired = await retireLoginFlow({ binding: entry.binding,
+            readInstance: () => requireJson(adminPage, entry.binding.instancePath),
+            beforeCancel: async () => { entry.cleanupCancelAttempted = true; saveMembershipProgress(); },
+            cancel: () => requireJson(adminPage, entry.binding.instancePath + '/cancel', { method: 'POST' }).then(() => ({ ok: true })) });
+          entry.retirementConfirmed = true; entry.terminalStatus = retired.status;
+          saveMembershipProgress();
+        } catch (error) {
+          report.cleanupErrors ||= [];
+          report.cleanupErrors.push({ operation: 'owned_membership_login_flow', error: redact(error.message) });
+          report.engineeringReady = false;
+        }
+      }
+    }
     if (control) {
       try { report.cleanup = await control.cleanup(); }
       catch (error) { report.cleanupError = redact(error.message); report.engineeringReady = false; }
@@ -535,7 +670,9 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     }
     if (ownedMembership) {
       const cleanupComplete = report.cleanup?.complete === true && report.authoringSessionsRetired === true
-        && walletSession?.evidence.closed === true && !report.cleanupError && !report.cleanupErrors?.length;
+        && walletSession?.evidence.closed === true
+        && (!retainedMembership || report.membershipLoginFlows.length === 2 && report.membershipLoginFlows.every(row => row.retirementConfirmed === true))
+        && !report.cleanupError && !report.cleanupErrors?.length;
       report.engineeringReady = report.engineeringReady === true && cleanupComplete;
       report.releaseReady = report.engineeringReady && !uiCandidate;
       applyLocalNativeReadiness(report, evidence, { ready: report.engineeringReady, cleanupComplete });
@@ -577,4 +714,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { membershipSessionRetirement, closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };
+module.exports = { presentBadge, bindMembershipLogin, observeDeclinedLogin, membershipSessionRetirement, closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };
