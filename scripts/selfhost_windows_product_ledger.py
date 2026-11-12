@@ -10,7 +10,7 @@ import json
 import selfhost_windows_product_probe as probe
 from selfhost_windows_product_schema import _clock
 
-SCHEMA = 'marty.windows-membership-ledgers/v1'
+SCHEMA = 'marty.windows-membership-ledgers/v2'
 BASELINES = {
     'credential_template_service.rust_schema_versions': (
         'rust_credential_template_0001', 'rust_credential_template_0002'),
@@ -46,7 +46,9 @@ def statement(before=None):
     for table, baseline in BASELINES.items():
         target=ADDITIONS[table]
         old_filter="version <> '"+target+"'"
-        all_rows='jsonb_agg(to_jsonb(ledger) ORDER BY version)'
+        # Same ordering as the complete schema probe, so the narrow witness
+        # binds the actual per-ledger profile rather than a separate digest.
+        all_rows='jsonb_agg(to_jsonb(ledger) ORDER BY to_jsonb(ledger)::text)'
         values=["'versions',coalesce(jsonb_agg(version ORDER BY version),'[]'::jsonb)",
                 "'row_count',count(*)", "'rows_sha256',"+_hash(all_rows),
                 "'canonical_rows',coalesce(bool_and(applied_at IS NOT NULL AND (to_jsonb(ledger)-ARRAY['version','applied_at'])='{}'::jsonb),false)"]
@@ -101,3 +103,51 @@ def capture(docker, items, project, *, before=None, profile=probe.LedgerProfile(
     if before is None:validate_before(result)
     else:validate_delta(before,result)
     return result
+
+
+def validate_profile_delta(before, after, ledger_before, ledger_after):
+    """Bind the three narrow additions to the complete database ledger map.
+
+    Application catalog changes need the separate catalog witness; rows,
+    quiescence and source/native custody are also required by the full owner.
+    This fragment deliberately grants no schema/product admission.
+    """
+    validate_delta(ledger_before, ledger_after)
+    for value in (before, after):
+        require(type(value) is dict and set(value) == {'schema', 'probe', 'profile', 'consistency',
+            'database_roles', 'databases'})
+        require(value['schema'] == 'marty.windows-postgres-schema/v3'
+                and value['probe'] == 'catalog-and-source-ledger-profile/v3'
+                and value['profile'] == probe.PROFILE_ID and value['consistency'] == probe.CONSISTENCY)
+        roles = value['database_roles']
+        require(type(roles) is dict and set(roles) == {'application', 'keycloak', 'applicants'})
+        profile = probe.LedgerProfile(**roles)
+        require(type(value['databases']) is dict and set(value['databases']) == set(profile.tables))
+        for database, tables in profile.tables.items():
+            row = value['databases'][database]
+            require(type(row) is dict and set(row) == {'catalog_sha256', 'migration_sha256', 'migration_ledgers'})
+            require(all(type(row[key]) is str and probe.SHA.fullmatch(row[key])
+                        for key in ('catalog_sha256', 'migration_sha256')))
+            values = row['migration_ledgers']
+            require(type(values) is dict and set(values) == {schema+'.'+name for schema, name in tables}
+                    and all(type(item) is str and probe.SHA.fullmatch(item) for item in values.values()))
+            raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
+            require(hashlib.sha256(raw).hexdigest() == row['migration_sha256'])
+    require(before['database_roles'] == after['database_roles'])
+    application = before['database_roles']['application']
+    for database, old in before['databases'].items():
+        new = after['databases'][database]
+        if database != application:
+            require(old == new)
+            continue
+        for name, digest in old['migration_ledgers'].items():
+            if name in BASELINES:
+                require(digest == ledger_before['ledgers'][name]['rows_sha256']
+                        and new['migration_ledgers'][name] == ledger_after['ledgers'][name]['rows_sha256'])
+            else:
+                require(digest == new['migration_ledgers'][name])
+    digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return {'schema': 'marty.windows-membership-profile-delta/v1', 'before_sha256': digest(before),
+            'after_sha256': digest(after), 'ledger_before_sha256': digest(ledger_before),
+            'ledger_after_sha256': digest(ledger_after), 'native_admission': False,
+            'product_transition_admission': False}

@@ -674,6 +674,18 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
             "ledger": ledger.capture(Docker(), items, PROJECT, profile=profile),
             "catalog": catalog.capture(Docker(), items, PROJECT, profile=profile),
         }
+        # This fixture deliberately starts only a subset of application roles.
+        # Bind its real ledger inventory, without claiming the full production
+        # profile or inventing absent service ledgers.
+        fixture_ledgers = frozenset((row['schema'], row['name']) for row in
+                                   json.loads(sql(membership.probe.LEDGERS_SQL)))
+        def detailed_fixture_ledgers():
+            return membership.probe._database_snapshot(Docker(),
+                membership.probe._postgres_base(items, PROJECT), profile.application,
+                fixture_ledgers, detailed=True)
+        profile_before = detailed_fixture_ledgers()
+        for name, witness in prior['ledger']['ledgers'].items():
+            assert profile_before['migration_ledgers'][name] == witness['rows_sha256']
         (OPS / "synthetic-before-witnesses.json").write_text(
             json.dumps(prior, indent=2), encoding="utf-8"
         )
@@ -773,6 +785,14 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
                 ("catalog", catalog),
             ]
         }
+        profile_after = detailed_fixture_ledgers()
+        for name, witness in after['ledger']['ledgers'].items():
+            assert profile_after['migration_ledgers'][name] == witness['rows_sha256']
+        for name in fixture_ledgers:
+            key = '.'.join(name)
+            if key not in ledger.BASELINES:
+                assert profile_before['migration_ledgers'][key] == profile_after['migration_ledgers'][key]
+        REPORT['checks'].append('complete fixture ledger map binds native narrow additions; other ledgers retained')
         (OPS / "synthetic-after-witnesses.json").write_text(
             json.dumps(after, indent=2), encoding="utf-8"
         )

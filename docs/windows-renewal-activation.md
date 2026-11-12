@@ -557,3 +557,14 @@ application writers, or admit a product transition. Sequence state is not MVCC;
 the execution owner must qualify quiescence rather than infer it from transaction
 isolation. The deployment owner still
 needs to bind and validate the narrow migration witnesses with this inventory.
+
+The schema probe has a separate v3 detailed form retaining every reviewed
+ledger digest and its aggregate from the same database transaction. The existing
+v2 snapshot and image-only journal keep their original shape. The membership
+ledger witness is now v2: it uses the complete probe's canonical full-row order
+and refuses old v1 receipts instead of reinterpreting their hashes. Its profile
+comparison binds each of the three expected additions to the narrow before/after
+witness, requires every other application ledger unchanged, and retains the
+entire Keycloak and applicants catalog/ledger profiles. It checks inventory and
+aggregate integrity. This ledger comparison does not qualify application
+catalog changes, ordinary rows, writer quiescence or product/native admission.

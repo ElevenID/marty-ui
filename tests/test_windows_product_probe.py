@@ -71,6 +71,26 @@ def test_catalog_and_ledger_rows_are_hashed_in_repeatable_read_observations(monk
     assert 'pg_authid' not in probe.CATALOG_SQL and 'pg_statistic' not in probe.CATALOG_SQL
 
 
+def test_detailed_snapshot_retains_exact_maps_without_changing_legacy(monkeypatch):
+    docker = Postgres();monkeypatch.setattr(probe, '_text', docker.text)
+    detailed = probe.detailed_schema_snapshot(docker, [item('postgres')], PROJECT)
+    assert detailed['schema'] == 'marty.windows-postgres-schema/v3'
+    for database, tables in probe.LedgerProfile().tables.items():
+        row = detailed['databases'][database]
+        assert row['migration_ledgers'] == {schema+'.'+name: 'c'*64 for schema, name in tables}
+        raw = json.dumps(row['migration_ledgers'], sort_keys=True, separators=(',', ':')).encode()
+        assert row['migration_sha256'] == hashlib.sha256(raw).hexdigest()
+    legacy = probe.schema_snapshot(docker, [item('postgres')], PROJECT)
+    assert legacy['schema'] == probe.SCHEMA
+    for database, row in legacy['databases'].items():
+        assert row == {key: value for key, value in detailed['databases'][database].items() if key != 'migration_ledgers'}
+
+
+def test_detailed_snapshot_still_refuses_inter_observation_drift(monkeypatch):
+    docker = Postgres('snapshot-drift');monkeypatch.setattr(probe, '_text', docker.text)
+    with pytest.raises(ValueError):probe.detailed_schema_snapshot(docker, [item('postgres')], PROJECT)
+
+
 @pytest.mark.parametrize('fault', ['duplicate-database', 'database-shape', 'database-injection', 'raw-catalog',
                                   'no-ledger', 'ledger-injection', 'raw-ledger', 'alembic', 'flyway', 'snapshot-drift',
                                   'foreign-table', 'event-trigger'])

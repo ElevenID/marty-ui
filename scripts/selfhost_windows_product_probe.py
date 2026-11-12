@@ -131,7 +131,7 @@ def _database_script(expected):
     return ('\n'.join(statements)+'\n').encode()
 
 
-def _database_snapshot(docker, base, database, expected):
+def _database_snapshot(docker, base, database, expected, *, detailed=False):
     args = ['exec', '--interactive', *base[1:], '--dbname', database, '--file=-']
     output = _text(docker, args, stdin_bytes=_database_script(expected))
     records = [json.loads(line) for line in output.splitlines()]
@@ -153,7 +153,9 @@ def _database_snapshot(docker, base, database, expected):
         key = row['schema']+'.'+row['name'];require(key not in values);values[key] = row['sha256']
     require(len(values) == len(expected))
     raw = json.dumps(values, sort_keys=True, separators=(',', ':')).encode()
-    return {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
+    result = {'catalog_sha256': catalog['sha256'], 'migration_sha256': hashlib.sha256(raw).hexdigest()}
+    if detailed:result['migration_ledgers'] = values
+    return result
 
 
 def _postgres_base(items, project):
@@ -266,6 +268,20 @@ def refuse_pending_product_migrations(docker, items, project, admitted, *, profi
 
 
 def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    return _schema_snapshot(docker, items, project, profile=profile, detailed=False)
+
+
+def detailed_schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    """Retain each ledger's digest alongside its existing aggregate.
+
+    This v3 witness is for a full schema owner, not the v1 image-only journal.
+    Both forms use the same transactions and drift refusal. Legacy snapshots
+    keep exactly their former shape and meaning.
+    """
+    return _schema_snapshot(docker, items, project, profile=profile, detailed=True)
+
+
+def _schema_snapshot(docker, items, project, *, profile, detailed):
     """Coherent per-DB transactions, bracketed by equal full observations.
 
     PostgreSQL has no shared snapshot across databases. The owning transition
@@ -283,12 +299,14 @@ def schema_snapshot(docker, items, project, *, profile=LedgerProfile()):
         result = {}
         for database, expected in sorted(profile.tables.items()):
             require(time.monotonic() < deadline)
-            result[database] = _database_snapshot(docker, base, database, expected)
+            result[database] = _database_snapshot(docker, base, database, expected, detailed=detailed)
         require(time.monotonic() < deadline)
         return result
     first = observe();second = observe()
     require(first == second, 'Schema changed during compatibility observation')
-    return {'schema': SCHEMA, 'probe': PROBE, 'profile': PROFILE_ID, 'consistency': CONSISTENCY,
+    return {'schema': 'marty.windows-postgres-schema/v3' if detailed else SCHEMA,
+            'probe': 'catalog-and-source-ledger-profile/v3' if detailed else PROBE,
+            'profile': PROFILE_ID, 'consistency': CONSISTENCY,
             'database_roles': {'application': profile.application, 'keycloak': profile.keycloak, 'applicants': profile.applicants},
             'databases': second}
 
