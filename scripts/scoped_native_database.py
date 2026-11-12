@@ -28,6 +28,30 @@ PG_BEFORE = "7edeffa3c4cbc10d02010dd0bfbd2e84e2cf4cf149e1c8d5bf7e834a5aedf075"
 BUILD_RECEIPT_SHA = "bfad815173696a165dee9c915aa7d41e5f735aaf34e54d53b2d0566ceb04159e"
 SCHEMA_ROLES = ("flow", "issuance-native")
 
+
+def require_bound_quiescence(state, inputs, bound):
+    """A terminal DB checkpoint retains the original stopped-generation binding."""
+    require(state.get("runId") == inputs["runId"]
+            and state.get("quiescenceSha256") == bound["sha256"],
+            "D12_DURABLE_QUIESCENCE_NOT_BOUND")
+    if state.get("phase") == "ALL22_QUIESCENT":
+        return
+    require(state.get("phase") == "DATABASE_OPERATION_TERMINAL"
+            and state.get("schema") == "marty.native-d12-current-operation-state/v1"
+            and state.get("sourceRevision") == inputs["uiRevision"]
+            and state.get("coreRevision") == inputs["coreRevision"]
+            and state.get("selectionSha256") == inputs["selection"]["sha256"]
+            and state.get("executorSource") == inputs["executorSource"]
+            and state.get("databaseIdentity") == json.loads(read_ref(inputs["databaseBefore"]).read_bytes())["databaseIdentity"]
+            and state.get("pendingStep") is None and state.get("pendingRequest") is None,
+            "D12_DURABLE_QUIESCENCE_NOT_BOUND")
+    operations = state.get("operations")
+    require(isinstance(operations, list) and operations
+            and operations[-1].get("state") == "SUCCEEDED"
+            and operations[-1].get("unknownOutcome") is False
+            and type(operations[-1].get("exitCode")) is int and operations[-1]["exitCode"] == 0,
+            "D12_DURABLE_QUIESCENCE_NOT_BOUND")
+
 def schema_steps(current_ten, command):
     require(command in ("migrate", "verify-owned-schema"), "CLOSED_SCHEMA_COMMAND_REQUIRED")
     suffix = "MIGRATE" if command == "migrate" else "VERIFY"
@@ -464,6 +488,9 @@ class NativeDatabasePhase:
         intent = self.store.read("build-apply-intent.json")
         require(intent["runId"] == self.i["runId"] and intent["selectionSha256"] == self.i["selection"]["sha256"]
                 and intent["executorSource"] == self.i["executorSource"], "ORIGINAL_MAINTENANCE_INTENT_REQUIRED")
+        # The single journal slot becomes a DB checkpoint after the first step.
+        # Keep its original quiescence binding through every durable transition.
+        self.state["quiescenceSha256"] = prior["quiescenceSha256"]
         order = [("FENCE_INSTALL", "passport-beta-fence-install.sql"), ("FENCE_VERIFY", "passport-beta-fence-verify.sql"),
             ("MAINTENANCE_START", "passport-beta-db-maintenance-start.sql")]
         for step_id, name in order:

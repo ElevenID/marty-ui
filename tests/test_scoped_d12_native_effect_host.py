@@ -140,7 +140,7 @@ def test_quiescence_rechecks_fresh_all22_and_durable_journal(tmp_path, monkeypat
     for row in rows["roles"]:
         row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
     frozen = binding.save("quiescence.json", rows)
-    binding.store.read = lambda name: {"phase": "ALL22_QUIESCENT", "quiescenceSha256": frozen["sha256"]}
+    binding.store.read = lambda name: {"phase": "ALL22_QUIESCENT", "runId": binding.inputs["runId"], "quiescenceSha256": frozen["sha256"]}
     assert binding.verify_all22_quiescent(frozen) is True
     assert calls.count("actual22") == 1
     rows["roles"][0]["hostPid"] = 1
@@ -404,3 +404,81 @@ def test_database_preimage_closed_metadata_shape_preserves_observed_proof(tmp_pa
         with pytest.raises(ValueError, match="D12_DATABASE_PREIMAGE"):
             observer.database_snapshot(ref(path))
         assert not calls
+
+
+def test_two_real_database_steps_keep_the_durable_quiescence_binding(tmp_path, monkeypatch):
+    import scoped_native_database as database
+    binding, rows, calls, inp, _meta = setup_context(tmp_path, monkeypatch)
+    for row in rows["roles"]:
+        row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
+    quiescence = binding.save("quiescence.json", rows)
+    before = binding.save("db-before.json", {"databaseIdentity": {"containerId": "a" * 64}})
+    binding.inputs.update(uiRevision="source", coreRevision="core", executorSource={"path": "executor", "sha256": "b" * 64}, databaseBefore=before)
+    inp.write_text(json.dumps(binding.inputs))
+    binding.inputs_ref = ref(inp)
+    inputs = {**binding.inputs, "quiescence": quiescence, "compatibility": {"plan": {}, "result": {}},
+              "databaseAdminUrl": binding.save_bytes("synthetic-url", b"postgres://postgres:synthetic@postgres:5432/marty"),
+              "migrationSources": {}, "migrationSetSha256": "digest"}
+    value = database.D12CurrentDatabasePhase.__new__(database.D12CurrentDatabasePhase)
+    value.i = inputs
+    value.selection = {"preparedSource": {}, "canonicalBuildReceipt": {}}
+    value.select_binaries = lambda *_: value.selection
+    value.check_compatibility = lambda *_: None
+    value.guard = lambda: None
+    value.state = {"schema": value.operation_schema, "phase": "NOT_STARTED", "runId": inputs["runId"],
+        "sourceRevision": "source", "coreRevision": "core", "selectionSha256": inputs["selection"]["sha256"],
+        "executorSource": inputs["executorSource"], "databaseIdentity": {"containerId": "a" * 64}, "operations": []}
+    value.SCHEMA_BINARIES = {}
+    durable = {"phase": "ALL22_QUIESCENT", "runId": inputs["runId"], "quiescenceSha256": quiescence["sha256"]}
+    history = []
+    intent = {"runId": inputs["runId"], "selectionSha256": inputs["selection"]["sha256"], "executorSource": inputs["executorSource"]}
+    class Journal:
+        def read(self, name):
+            return deepcopy(intent if name == "build-apply-intent.json" else durable)
+        def state(self, row):
+            durable.clear(); durable.update(deepcopy(row)); history.append(deepcopy(row))
+            return {"fileFsync": True, "parentDirectory": {"supported": True, "synced": True}}
+    value.store = binding.store = Journal()
+    value.g = {"dispatch_enabled": True, "build_journal": object(), "verify_all22_quiescent": binding.verify_all22_quiescent, "save": binding.save}
+    value.node = lambda mode, **_: "digest" if mode == "digest" else {"epoch": 1}
+    effects = []
+    value.sql = lambda name: effects.append(name) or {"stdout": {}, "state": "exited", "exitCode": 0}
+    value.sql_receipts = {}
+    class SelectedTwoStepsComplete(Exception):
+        pass
+    def selected_step(step_id, operation):
+        if step_id == "MAINTENANCE_START":
+            raise SelectedTwoStepsComplete
+        return database.NativeDatabasePhase.step(value, step_id, operation)
+    value.step = selected_step
+    with pytest.raises(SelectedTwoStepsComplete):
+        database.NativeDatabasePhase.run(value)
+    assert effects == ["passport-beta-fence-install.sql", "passport-beta-fence-verify.sql"]
+    assert [row["stepId"] for row in durable["operations"]] == ["FENCE_INSTALL", "FENCE_VERIFY"]
+    assert all(row["quiescenceSha256"] == quiescence["sha256"] for row in history)
+    assert durable["phase"] == "DATABASE_OPERATION_TERMINAL"
+    assert calls.count("actual22") == 3  # run entry and independently before both effects
+
+
+@pytest.mark.parametrize("change", ["missing-hash", "run", "selection", "executor", "database", "pending", "unknown-outcome"])
+def test_terminal_database_quiescence_refuses_unbound_or_unknown_checkpoint(tmp_path, change):
+    from scoped_native_database import require_bound_quiescence
+    p = tmp_path / "db.json"
+    p.write_text(json.dumps({"databaseIdentity": {"containerId": "a" * 64}}))
+    inputs = {"runId": "run", "uiRevision": "source", "coreRevision": "core", "selection": {"sha256": "b" * 64},
+              "executorSource": {"path": "executor", "sha256": "c" * 64}, "databaseBefore": ref(p)}
+    bound = {"sha256": "d" * 64}
+    state = {"schema": "marty.native-d12-current-operation-state/v1", "phase": "DATABASE_OPERATION_TERMINAL", "runId": "run",
+             "quiescenceSha256": bound["sha256"], "sourceRevision": "source", "coreRevision": "core",
+             "selectionSha256": inputs["selection"]["sha256"], "executorSource": inputs["executorSource"],
+             "databaseIdentity": {"containerId": "a" * 64}, "pendingStep": None, "pendingRequest": None,
+             "operations": [{"state": "SUCCEEDED", "exitCode": 0, "unknownOutcome": False}]}
+    if change == "missing-hash": state.pop("quiescenceSha256")
+    elif change == "run": state["runId"] = "foreign"
+    elif change == "selection": state["selectionSha256"] = "foreign"
+    elif change == "executor": state["executorSource"] = {}
+    elif change == "database": state["databaseIdentity"] = {}
+    elif change == "pending": state.update(phase="DATABASE_OPERATION_PENDING", pendingStep="FENCE_VERIFY")
+    else: state["operations"][0]["unknownOutcome"] = True
+    with pytest.raises(ValueError, match="D12_DURABLE_QUIESCENCE_NOT_BOUND"):
+        require_bound_quiescence(state, inputs, bound)

@@ -15,7 +15,7 @@ from copy import deepcopy
 from pathlib import Path
 
 from scoped_d12_native_host import D12ReadOnlyHost
-from scoped_native_database import bounded_run
+from scoped_native_database import bounded_run, require_bound_quiescence
 from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
 from scoped_passport_maintenance import exact_roles, observed_role_state, same_full_role_snapshot
@@ -518,9 +518,7 @@ class D12CurrentHostBindings:
         frozen = json.loads(read_ref(bound).read_bytes())
         rows = exact_roles(frozen, self.profile)
         state = self.store.read("build-state.json")
-        require(state.get("phase") == "ALL22_QUIESCENT"
-                and state.get("quiescenceSha256") == bound["sha256"],
-                "D12_DURABLE_QUIESCENCE_NOT_BOUND")
+        require_bound_quiescence(state, self.inputs, bound)
         fresh = self.observer.inspect_all22()
         require(same_full_role_snapshot(fresh, frozen, self.profile),
                 "D12_QUIESCENCE_CHANGED_BEFORE_DATABASE")
