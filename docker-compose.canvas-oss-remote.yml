@@ -23,6 +23,7 @@ x-canvas-volumes: &id001
 - canvas_oss_log:/usr/src/app/log
 services:
   canvas-postgres:
+    restart: unless-stopped
     image: ${CANVAS_OSS_POSTGRES_IMAGE:?CANVAS_OSS_POSTGRES_IMAGE must be an immutable
       digest reference}
     container_name: marty-canvas-oss-postgres
@@ -51,6 +52,7 @@ services:
         max-size: 10m
         max-file: '3'
   canvas-redis:
+    restart: unless-stopped
     image: ${CANVAS_OSS_REDIS_IMAGE:?CANVAS_OSS_REDIS_IMAGE must be an immutable digest
       reference}
     container_name: marty-canvas-oss-redis
@@ -74,6 +76,7 @@ services:
         max-size: 10m
         max-file: '3'
   canvas-mail:
+    restart: unless-stopped
     image: ${CANVAS_OSS_MAILPIT_IMAGE:?CANVAS_OSS_MAILPIT_IMAGE must be an immutable
       digest reference}
     container_name: marty-canvas-oss-mail
@@ -126,6 +129,7 @@ services:
         max-size: 10m
         max-file: '3'
   canvas-web:
+    restart: unless-stopped
     image: ${CANVAS_OSS_IMAGE:?CANVAS_OSS_IMAGE must be an immutable digest reference}
     container_name: marty-canvas-oss-web
     environment:
@@ -169,6 +173,7 @@ services:
         max-size: 10m
         max-file: '3'
   canvas-jobs:
+    restart: unless-stopped
     image: ${CANVAS_OSS_IMAGE:?CANVAS_OSS_IMAGE must be an immutable digest reference}
     container_name: marty-canvas-oss-jobs
     command:
@@ -207,6 +212,7 @@ services:
         max-size: 10m
         max-file: '3'
   canvas-edge:
+    restart: unless-stopped
     image: ${CANVAS_OSS_EDGE_IMAGE:?CANVAS_OSS_EDGE_IMAGE must be an immutable digest
       reference}
     container_name: marty-canvas-oss-edge

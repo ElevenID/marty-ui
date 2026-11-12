@@ -51,6 +51,8 @@ SOURCE_FILES = (
     "scripts/recover_kubernetes_legacy_credentials.py",
     "scripts/release_transaction.py",
     "scripts/reload_kubernetes_legacy_workloads.py",
+    "scripts/selfhost_native_operator.py",
+    "scripts/source_matched_native.py",
     "scripts/stack_tag_gate.py",
     "scripts/stage_kubernetes_application_credentials.py",
     "scripts/verify_installer_provenance.py",
