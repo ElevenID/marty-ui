@@ -147,6 +147,21 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Post && path == "/v1/issuance" {
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.push(json!({
+            "name":"Idempotency-Key", "in":"header", "required":false,
+            "description":"Optional client event key, forwarded unchanged to durable organization-scoped issuance deduplication. Send exactly one value; whitespace and duplicate headers are rejected before cache replay. Reuse the key only for the same request.",
+            "schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]{1,128}$"}
+        }));
+        operation["parameters"] = json!(parameters);
+        operation["responses"]["409"] = json!({"description":"The idempotency key is already in progress or was used for a different request."});
+        operation["responses"]["422"] =
+            json!({"description":"Invalid issuance input or malformed/duplicate Idempotency-Key."});
+    }
     if (method == Get && path == "/v1/organizations/{org_id}/members")
         || (method == Post && path == "/v1/organizations/{org_id}/members/{member_id}/approve")
     {
@@ -884,6 +899,9 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
         did["schema"]["pattern"] = json!("^did:");
         parameters.push(did);
     } else {
+        operation["description"] = json!(
+            "Verifies a signed credential or presentation by evaluating an existing presentation policy. API keys require both verification:execute (credentials:read or flows:execute) and presentation-policy:view (trust:read or trust:write). The least-privilege scope pair is credentials:read plus trust:read. Organization ownership and policy authorization are enforced independently by the policy service."
+        );
         parameters.push(query_parameter(
             "presentation_policy_id",
             "Authorized presentation policy governing credential verification.",
@@ -912,6 +930,9 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
         json!({"application/json":{"schema":success}});
     operation["responses"]["401"] = json!({"description":"Authentication is required."});
     operation["responses"]["403"] = json!({"description":"The caller is not authorized for the selected organization or resource."});
+    if !issue {
+        operation["responses"]["403"] = json!({"description":"The organization or policy is not authorized, or the API key lacks verification:execute or presentation-policy:view. Use credentials:read plus trust:read for the least-privilege scope pair."});
+    }
     operation["responses"]["413"] =
         json!({"description":"Request body exceeds the configured limit."});
     operation["responses"]["422"] = if issue {
