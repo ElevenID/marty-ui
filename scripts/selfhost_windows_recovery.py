@@ -407,6 +407,32 @@ def wait_for_engine(host,engine_id,*,timeout=300):
         time.sleep(min(5,remaining))
 
 
+def expired_operation(args, selection_file):
+    """Explicit operator phases, separate from unattended ordinary renewal."""
+    from contextlib import ExitStack
+    import selfhost_windows_staging_recovery as staging
+    selection.require(not any((args.check_only,args.wait_for_engine,args.renew_once)))
+    phase=args.expired_current
+    selection.require(bool(args.logical_project)==(phase=='stage'))
+    selection.require(bool(args.attempt_directory)==(phase!='inspect'))
+    selection.require(bool(args.source_journal)==(phase in ('select','finalize')))
+    selection.require(phase!='inspect' or args.operator_successor_file is None)
+    with ExitStack() as held:
+        option=None
+        if args.operator_successor_file:
+            option=selection.decode(held.enter_context(renewal.hold_private_input(Path(args.operator_successor_file))))
+            selection.require(type(option) is dict and set(option)=={'assets','expected','gh','cosign','verifier_sha256'})
+        if phase=='inspect':return staging.inspect_failed_current(selection_file)
+        output=Path(args.attempt_directory)
+        if phase=='stage':return staging.stage_recovery_generation(selection_file,output,args.logical_project,operator_successor=option)
+        if phase=='publish':return staging.publish_recovery_candidate(selection_file,output,operator_successor=option)
+        if phase=='activate':
+            from selfhost_windows_recovery_activation import activate_recovery_candidate
+            return activate_recovery_candidate(selection_file,output,operator_successor=option)
+        from selfhost_windows_recovery_finish import finish, finalize
+        return (finish if phase=='select' else finalize)(selection_file,Path(args.source_journal),output,operator_successor=option)
+
+
 def main(argv=None):
     """Managed dispatch used by the existing Windows recovery wrapper."""
     class PrivateParser(argparse.ArgumentParser):
@@ -418,10 +444,16 @@ def main(argv=None):
     parser.add_argument('--wait-for-engine',action='store_true')
     parser.add_argument('--renew-once',action='store_true')
     parser.add_argument('--logical-project')
+    parser.add_argument('--expired-current',choices=('inspect','stage','publish','activate','select','finalize'))
+    parser.add_argument('--attempt-directory')
+    parser.add_argument('--source-journal')
+    parser.add_argument('--operator-successor-file')
     try:
         args=parser.parse_args(argv)
         selection.require(os.name=='nt')
-        selection.require(bool(args.logical_project)==args.renew_once)
+        if not args.expired_current:
+            selection.require(bool(args.logical_project)==args.renew_once)
+            selection.require(not any((args.attempt_directory,args.source_journal,args.operator_successor_file)))
         if args.renew_once:
             selection.require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',args.logical_project))
         with renewal.hold_private_input(Path(args.configuration)) as raw:
@@ -429,7 +461,9 @@ def main(argv=None):
             selection.require(set(config)=={'schema','selection_file'}
                 and config['schema']=='marty.windows-managed-recovery/v1')
             selection.require(isinstance(config['selection_file'],str) and Path(config['selection_file']).is_absolute())
-            if args.renew_once and not args.check_only:
+            if args.expired_current:
+                result=expired_operation(args,Path(config['selection_file']))
+            elif args.renew_once and not args.check_only:
                 if args.wait_for_engine:
                     with selection.selected_inputs(Path(config['selection_file'])) as lease:
                         wait_for_engine(lease.docker_host,lease.engine_id)
@@ -446,7 +480,7 @@ def main(argv=None):
                         output=lease.secrets_dir.parent/('windows-recovery-'+uuid.uuid4().hex)
                         output.mkdir()
                         result=lease.recover_existing(output,fresh_authority=True)
-            if not args.check_only and not args.renew_once:
+            if not args.expired_current and not args.check_only and not args.renew_once:
                 result=selection.decode(renewal.read_private_bytes(output/'result.json'))
                 result['attempt_dir']=str(output)
                 selection.require(not renewal.recovery_pending({'project':lease.project,'current_secrets':str(lease.secrets_dir)}))

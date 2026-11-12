@@ -1379,6 +1379,10 @@ mod tests {
             "achievement_description".to_owned(),
             json!("Membership verified by Marty"),
         );
+        request.claims.insert(
+            "achievement_criteria".to_owned(),
+            json!({"narrative":"Synthetic membership selected by the test issuer."}),
+        );
 
         let built = builder.build(&request).await.expect("JWT-VC build");
 
@@ -1390,6 +1394,10 @@ mod tests {
         )
         .expect("JWT payload");
         assert_eq!(payload["jti"], request.credential_id);
+        assert_eq!(
+            payload["vc"]["credentialSubject"]["achievement"]["criteria"],
+            request.claims["achievement_criteria"]
+        );
         assert_eq!(
             payload["vc"]["credentialSubject"]["achievement"]["id"],
             request.achievement_id.as_deref().expect("achievement")

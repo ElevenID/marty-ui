@@ -152,7 +152,8 @@ def test_current_d12_authority_rejects_old_build_before_database_phase(tmp_path,
         database.D12CurrentDatabasePhase(context, inputs, object())
 
 
-def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch):
+@pytest.mark.parametrize("current_ten", [False, True])
+def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch, current_ten):
     value, _ = operator()
     value.i = {"runId": "fixture", "selection": {"sha256": "a" * 64}, "executorSource": {"sha256": "b" * 64},
         "migrationSources": {}, "migrationSetSha256": "c" * 64, "databaseBefore": {}, "sqlSources": {}}
@@ -176,15 +177,20 @@ def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch):
         seen.append(step_id)
         return {"path": step_id, "sha256": "d" * 64}, operation()
     value.step = step
+    if current_ten:
+        value.tenant_id = "11111111-1111-4111-8111-111111111111"
     value.run()
     import subprocess
     module = Path(__file__).resolve().parents[1] / "tests/scripts/native-maintenance-metadata.js"
-    expected = json.loads(subprocess.check_output(["node", "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).DATABASE_ORDER.map(x=>x[0])))", str(module)]))
+    expected = json.loads(subprocess.check_output(["node", "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).currentDatabaseOrder({profile:process.argv[2]}).map(x=>x[0])))", str(module), "d05-membership-current-functional" if current_ten else "historical"]))
     assert seen == expected
     assert seen.index("ACL_FINALIZE") < seen.index("FLOW_VERIFY") < seen.index("ISSUER_VERIFY")
+    if current_ten:
+        assert seen.index("CREDENTIAL_TEMPLATE_MIGRATE") < seen.index("ISSUER_MIGRATE") < seen.index("ACL_FINALIZE")
+        assert seen.index("ACL_FINALIZE") < seen.index("CREDENTIAL_TEMPLATE_VERIFY") < seen.index("ISSUER_VERIFY")
 
 
-@pytest.mark.parametrize("step_id", ["ENABLE_APP_LOGIN", "ISSUER_MIGRATE", "ACL_FINALIZE", "DATABASE_BACKUP"])
+@pytest.mark.parametrize("step_id", ["ENABLE_APP_LOGIN", "ISSUER_MIGRATE", "CREDENTIAL_TEMPLATE_MIGRATE", "CREDENTIAL_TEMPLATE_VERIFY", "ACL_FINALIZE", "DATABASE_BACKUP"])
 def test_late_phase_rechecks_quiescence_before_effect(step_id):
     value, saved = operator()
     def restarted(_ref):

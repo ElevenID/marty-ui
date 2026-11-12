@@ -100,7 +100,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("original", type=Path)
     parser.add_argument("localized", type=Path)
-    parser.add_argument("--build-profile", choices=(D05_PROFILE,))
+    parser.add_argument("--build-profile", choices=(D05_PROFILE, "d05-membership-current-native-ten-role"))
     args = parser.parse_args()
     if args.build_profile is None:
         result = verify_files(args.original, args.localized)

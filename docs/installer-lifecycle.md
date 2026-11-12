@@ -12,6 +12,21 @@ backup restore, or public browser qualification. Its reports continue to say
 `installation_ready: false`; enabling a timer is not release qualification.
 Existing v1 unit exports are not adopted or upgraded by this fresh-install release.
 
+Cold recovery validates the complete authenticated Compose model while starting
+only the explicit retained infrastructure dependency group. The ingress binding,
+application containers, and completed setup identities remain visible to policy
+and ownership checks; initialization cannot be replayed by this partial start.
+An interrupted start is reconciled against the exact model digest in its original
+intent before another lifecycle operation can proceed.
+
+An older retained operator can refuse this infrastructure-only start before any
+start intent is written because its reduced model omits the bound ingress. Preserve
+that installation and its evidence. The lifecycle configuration binds the original
+signed operator and inventory; replacing that binary is not a supported upgrade.
+Qualify this correction using a fresh installation from a signed release containing
+it. An unchanged generation or a refusal before a start intent is not a renewal
+or restart pass.
+
 Maintenance capabilities depend on the retained owners and selected generation.
 The recurring generation owner supports public ACME generations and
 installer-managed private-CA generations; imported foundation credentials remain
@@ -218,6 +233,66 @@ The lifecycle configuration remains anchored to the initial admitted application
 session. Later selected sessions must prove their authenticated generation
 lineage back to that anchor. Certificate renewal does not rewrite the unit
 configuration or discard maintenance intent.
+
+## Qualify a stopped private-CA installation
+
+Use the retained installation owner and operator for this probe. Keep a public
+record of the installation ID, Docker engine ID, selected generation sequence,
+and application fixtures before stopping the host. `lifecycle status` reports
+the selected generation and whether credential refresh is due. `trust-info`,
+while the selection is valid, reports the public certificate expiry and
+`recorded_token_expires_at`; retain those timestamps without exporting secret
+files.
+
+The current managed private-CA producer issues eight-hour leaves and tokens.
+The generation owner considers credentials due for refresh after thirty
+minutes, so stale-generation renewal can be tested before expiry. The public
+CLI has no short-TTL or force-renew option. A stale-generation test and a real
+offline-expiry test must be recorded separately. For expiry qualification, keep
+the installation paused or the host offline until the recorded validity window
+has actually passed; do not change the clock, edit generation evidence, or
+replace credentials by hand.
+
+Set the actual retained path and use the Docker executable recorded during
+installation:
+
+```sh
+marty_install_dir='/absolute/retained/installation'
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  lifecycle status --install-dir "$marty_install_dir" --docker-bin /usr/bin/docker
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  lifecycle pause --install-dir "$marty_install_dir" --docker-bin /usr/bin/docker
+```
+
+After a successful pause, the customer can stop and start the disposable host
+using its normal platform controls. Pause persists across that restart; the
+stack must remain paused until explicit resume. Once the same user's rootless
+Docker is available, run the exact `next_actions.manual_recovery_command`
+reported by lifecycle status under `setpriv --no-new-privs`, or its equivalent:
+
+```sh
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  lifecycle resume --install-dir "$marty_install_dir" --docker-bin /usr/bin/docker
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  lifecycle status --install-dir "$marty_install_dir" --docker-bin /usr/bin/docker
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  validate --install-dir "$marty_install_dir" --docker-bin /usr/bin/docker
+/usr/bin/setpriv --no-new-privs -- "$marty_install_dir/marty-deploy" \
+  trust-info --install-dir "$marty_install_dir"
+```
+
+Inspect the resume result's generation and OpenBao recovery outcomes, compare
+the selected generation and public validity timestamps, and verify the same
+application fixtures remain usable. `lifecycle maintain` exercises the same
+recovery while running is already intended; it does not clear a deliberate
+pause. Preserve the first failing stage and retained evidence if recovery
+blocks. Replaying the bootstrap, an initial provisioning job, or a Kubernetes
+credential-recovery script is not a continuation of this native installation.
+
+This probe establishes manual recovery for the observed interruption and
+credential age. It does not establish automatic no-login reboot recovery;
+that requires enabling the returned user units and a separate unpaused reboot
+test. Neither observation grants production readiness.
 
 ## Sustained unhealthy processes
 

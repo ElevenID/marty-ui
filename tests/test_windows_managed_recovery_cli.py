@@ -133,3 +133,36 @@ def test_invalid_renewal_mode_refuses_before_private_inputs(monkeypatch,capsys,e
     monkeypatch.setattr(recovery.renewal,'hold_private_input',forbidden)
     assert recovery.main(['--configuration','PRIVATE_SENTINEL',*extra])==1
     out=capsys.readouterr();assert not out.out and 'PRIVATE_SENTINEL' not in out.err
+
+
+@pytest.mark.parametrize('phase',['inspect','stage','publish','activate','select','finalize'])
+def test_expired_current_dispatch_never_calls_ordinary_recovery(monkeypatch,capsys,phase):
+    import selfhost_windows_staging_recovery as staging
+    import selfhost_windows_recovery_activation as activation
+    import selfhost_windows_recovery_finish as finish
+    with configured(monkeypatch) as (root,config,value,calls):
+        owners={'inspect':(staging,'inspect_failed_current'),'stage':(staging,'stage_recovery_generation'),
+            'publish':(staging,'publish_recovery_candidate'),'activate':(activation,'activate_recovery_candidate'),
+            'select':(finish,'finish'),'finalize':(finish,'finalize')}
+        seen=[]
+        def invoke(*args,**kwargs):
+            assert str(args[0])==value['selection_file']
+            seen.append((args,kwargs));return {'phase':phase,'credential_admission':False}
+        module,name=owners[phase];monkeypatch.setattr(module,name,invoke)
+        args=['--configuration',str(config),'--expired-current',phase]
+        if phase!='inspect':args+=['--attempt-directory',str(root/'attempt')]
+        if phase=='stage':args+=['--logical-project','marty-selfhost-synthetic']
+        if phase in ('select','finalize'):args+=['--source-journal',str(root/'source')]
+        assert recovery.main(args)==0
+        assert len(seen)==1 and not calls
+        assert json.loads(capsys.readouterr().out)['phase']==phase
+
+
+@pytest.mark.parametrize('extra',[['--check-only'],['--wait-for-engine'],['--renew-once'],
+    ['--logical-project','PRIVATE_SENTINEL'],['--attempt-directory','PRIVATE_SENTINEL'],
+    ['--source-journal','PRIVATE_SENTINEL'],['--operator-successor-file','PRIVATE_SENTINEL']])
+def test_expired_inspection_refuses_mixed_or_mutation_arguments(monkeypatch,capsys,extra):
+    with configured(monkeypatch) as (_root,config,_value,calls):
+        assert recovery.main(['--configuration',str(config),'--expired-current','inspect',*extra])==1
+        output=capsys.readouterr()
+        assert not output.out and 'PRIVATE_SENTINEL' not in output.err and not calls

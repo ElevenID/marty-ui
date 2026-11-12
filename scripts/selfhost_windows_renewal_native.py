@@ -15,10 +15,42 @@ import subprocess
 import time
 from pathlib import Path, PurePosixPath
 
-from selfhost_windows_inputs import hold_private_input
+from selfhost_windows_inputs import hold_private_input, hold_public_input
 
 EXPORT_CHUNK_BYTES = 12000
 EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
+
+RECOVERY_CONTRACT = {'schema':'marty.windows-recovery-operator/v1',
+    'retained_certificates':True,'recovery_candidate':True,
+    'expired_rollback':False,'automatic_activation':False}
+
+def require_recovery_capability(config, docker_prefix):
+    """Refuse unsupported pinned operators before authority or credential writes.
+
+    This checks compatibility only. Signed successor admission remains the
+    caller's separate responsibility; this never changes a historical binding.
+    """
+    from selfhost_windows_renewal import require, run_owned_mutation
+    with hold_private_input(Path(config['binary']), max_bytes=256*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==config['binary_sha256'])
+        worker = r'''
+import hashlib,json,pathlib,subprocess,sys
+d=json.load(sys.stdin);binary='/operator/tool'
+assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['sha256']
+p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
+assert p.returncode==0 and p.stdout.decode().strip()==d['identity']
+p=subprocess.run([binary,'operator','recovery-contract'],capture_output=True,timeout=20)
+assert p.returncode==0 and json.loads(p.stdout)==d['contract']
+print(json.dumps({'recovery_capable':True}))
+'''
+        args=[*docker_prefix,'run','--rm','--pull','never','-i','--read-only','--network','none',
+              '--memory','128m','--cpus','1','--cap-drop','ALL','--security-opt','no-new-privileges',
+              '--mount',f'type=bind,src={config["binary"]},dst=/operator/tool,readonly',
+              '--entrypoint','python',config['helper_image'],'-c',worker]
+        request={'sha256':config['binary_sha256'],'identity':config['source_sha']+':'+config['release_tag'],
+                 'contract':RECOVERY_CONTRACT}
+        result=run_owned_mutation(args,stdin_bytes=json.dumps(request).encode(),timeout=90)
+        require(result.returncode==0 and json.loads(result.stdout)=={'recovery_capable':True})
 
 PRODUCER_PREPARE = r'''
 import base64,json,os,pathlib,sys
@@ -79,12 +111,20 @@ assert call('generation',{'operation':'verify','current':str(root/'source'),'can
  'ca_overlap':False,'ca_retire':False})=={'value':[d['files'],39]}
 body={'token':token,'old':str(root/'source'),'new':str(root/'generation'),'minimum_ttl':d['minimum_ttl'],
  'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
-print(json.dumps({'files':d['files'],'changed_files':39,'native_verified':True}))
+recovery=d.get('recovery',False);assert type(recovery) is bool
+if recovery:
+ assert d['minimum_ttl']>=3600
+ assert call('recovery-candidate',{'token':token,'old':str(root/'source'),'new':str(root/'generation'),
+                                  'minimum_ttl':d['minimum_ttl']},True)=={'value':None}
+else:
+ for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
+result={'files':d['files'],'changed_files':39,'native_verified':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
-def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,_recovery=False):
     """Produce under the selected owner's durable guard; never activate here.
 
     The caller holds the selected lease, fresh authority and current native proof.
@@ -94,7 +134,7 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     from selfhost_windows_renewal import UncertainComposeMutation
     uncertain=False;zero=False
     try:
-        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint)
+        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,recovery=_recovery)
     except UncertainComposeMutation as error:
         uncertain=True;zero=getattr(error,'owned_processes_zero',False) is True
     except Exception:
@@ -107,10 +147,20 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     raise ValueError('Windows renewal producer refused; preserve its guard and outputs')
 
 
-def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_recovery_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+    """Mint under the recovery owner's durable guard, never select or activate.
+
+    The caller must hold the failed-stage/runtime proofs and fresh scoped
+    authority. Old credentials are evidence only; rollback to them is forbidden.
+    """
+    return produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,_recovery=True)
+
+
+def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,recovery=False):
     from selfhost_windows_renewal import Docker, require, run_owned_mutation
     from selfhost_windows_selection import decode
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
+    require(type(recovery) is bool and (not recovery or native['minimum_ttl']>=3600))
     require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(re.fullmatch(r'[0-9a-f]{32}',cycle_id))
@@ -170,12 +220,15 @@ def _produce_generation(config,current,logical_project,cycle_id,services_image,c
             name=project+'-renew-keycloak-'+cycle_id
             request={k:native[k] for k in ['binary_sha256','source_sha','release_tag','bao_addr','minimum_ttl']}
             request.update(root=root,authority=native['token_file'],files=len(current))
+            if recovery:request['recovery']=True
             args=[*common,'--name',name,'--label','marty.windows.renewal='+cycle_id,'--network',native['network'],
                 '--mount',f'type=volume,src={native["control_volume"]},dst=/control,volume-nocopy',
                 '--mount',f'type=bind,src={native["binary"]},dst=/operator/tool,readonly',
                 '--mount',f'type=bind,src={native["ca_file"]},dst=/input/ca.crt,readonly',
                 '--entrypoint','python',native['helper_image'],'-c',PRODUCER_ASSEMBLE]
-            require(decode(command(args,json.dumps(request).encode()))=={'files':len(current),'changed_files':39,'native_verified':True})
+            expected={'files':len(current),'changed_files':39,'native_verified':True}
+            if recovery:expected['recovery']=True
+            require(decode(command(args,json.dumps(request).encode()))==expected)
             completed_helper('keycloak',name,native['helper_image']);checkpoint('keycloak','completed',{})
             checkpoint('export','started',{})
             values=export_generation(config,native['renewed'])
@@ -232,7 +285,7 @@ print(encoded)
 '''
 
 
-def export_generation(config, mirror):
+def export_generation(config, mirror, *, purpose="selfhost-renewal"):
     """Return private leaf bytes through bounded read-only chunks, never stdout.
 
     The generation owner must hold its project lease and run native admission
@@ -242,7 +295,7 @@ def export_generation(config, mirror):
     from selfhost_windows_renewal import UncertainComposeMutation
     uncertain=False;owned_processes_zero=False
     try:
-        return _export_generation(config,mirror)
+        return _export_generation(config,mirror,purpose=purpose)
     except UncertainComposeMutation as error:
         uncertain=True
         owned_processes_zero=getattr(error,'owned_processes_zero',False) is True
@@ -258,15 +311,172 @@ def export_generation(config, mirror):
     raise ValueError('Windows generation export refused')
 
 
-def _export_generation(config, mirror):
+def _repair_admission_execution(config,model,docker,native):
+    """Reopen actual execution evidence; a readiness field alone admits nothing."""
+    from contextlib import ExitStack, contextmanager
+    with ExitStack() as inputs:
+        @contextmanager
+        def held_input(path, *, max_bytes):
+            # Keep the verified handle open through the bind/source inspection.
+            yield inputs.enter_context(hold_private_input(path,max_bytes=max_bytes))
+        @contextmanager
+        def held_public_input(path, *, max_bytes):
+            yield inputs.enter_context(hold_public_input(path,max_bytes=max_bytes))
+        from selfhost_windows_selection import decode
+        from selfhost_windows_renewal import windows_mount_path_equal
+        def require(value):
+            if not value:raise ValueError('Windows generation export refused')
+        def held_record(reference):
+            require(isinstance(reference,dict) and set(reference)=={'path','sha256','bytes'})
+            with held_input(Path(reference['path']),max_bytes=2*1024*1024) as raw:
+                require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
+                return decode(raw)
+        proof=held_record(config['repair_admission_execution'])
+        require(proof.get('schema')=='marty.passport-role-repair-execution/v1'
+                and proof.get('project')==config['project'] and proof.get('resultSha256')==config['repair_admission_sha256']
+                and proof.get('custodySources')==config['custody_sources']
+                and proof.get('nativeOperator')==model['nativeOperator']
+                and proof.get('volumeIdentity')==native['control_volume_identity'])
+        worker=config['admission_worker']
+        with held_input(Path(worker['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==worker['bytes'] and hashlib.sha256(raw).hexdigest()==worker['sha256']
+                    and proof.get('workerSha256')==worker['sha256'])
+        armed=held_record(config['admission_armed_proposal'])
+        require(proof['armedProposalSha256']==config['admission_armed_proposal']['sha256']
+                and armed.get('executeAuthorized') is True
+                and armed.get('custodyOwner',{}).get('acceptedRevision')==config['custody_sources']['revision']
+                and armed.get('utilities',{}).get('deploy',{}).get('sha256')==native['binary_sha256']
+                and armed.get('utilities',{}).get('bootstrap',{}).get('sha256')==native['bootstrap_sha256'])
+        request=held_record(proof['jobRequest']);job=held_record(proof['jobResult'])
+        actor=config['admission_actor'];actor_plan_ref=config['admission_actor_plan']
+        with held_input(Path(actor['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==actor['bytes'] and hashlib.sha256(raw).hexdigest()==actor['sha256'])
+        actor_plan=held_record(actor_plan_ref)
+        require(actor_plan.get('schema')=='marty.beta-trust-admission/v1' and actor_plan.get('executeAuthorized') is True
+                and actor_plan.get('actor')==actor and actor_plan.get('worker')==worker
+                and actor_plan.get('armedProposal')==config['admission_armed_proposal']
+                and actor_plan.get('actorResultFile')==proof['actorResult']['path']
+                and actor_plan.get('jobMembershipFile')==proof['jobMembership']['path'])
+        require(isinstance(request.get('command'),list) and len(request['command'])==6
+                and request['command']==[actor_plan['interpreter']['path'],'-B',actor['path'],actor_plan_ref['path'],actor_plan_ref['sha256'],'--run']
+                and request.get('executableSha256')==actor_plan['interpreter']['sha256']
+                and request.get('cwd')==str(Path(actor['path']).parent)
+                and request.get('receiptFile')==proof['jobResult']['path']
+                and request.get('environment',{}).get('PYTHONDONTWRITEBYTECODE')=='1')
+        controller=held_record(proof['actorResult']);membership=held_record(proof['jobMembership'])
+        require(controller.get('schema')=='marty.passport-role-repair-controller/v1'
+                and controller.get('state')=='ADMISSION_AND_RESULT_CAPTURE_PASS'
+                and controller.get('actorSha256')==actor['sha256'] and controller.get('actorPlanSha256')==actor_plan_ref['sha256']
+                and controller.get('jobRequestSha256')==proof['jobRequest']['sha256']
+                and controller.get('membershipSha256')==proof['jobMembership']['sha256']
+                and controller.get('workerCid')==proof['workerCid'] and controller.get('resultSha256')==config['repair_admission_sha256']
+                and type(controller.get('controllerPid')) is int and controller['controllerPid']>0
+                and controller['controllerPid']==job.get('controllerPid')==membership.get('controllerPid')
+                and membership.get('schema')=='marty.windows-job-observation/v1'
+                and membership.get('controllerMemberVerified') is True and membership.get('inspectorMemberVerified') is True
+                and membership.get('queryHandleClosed') is True and membership.get('controllerQueryHandleClosed') is True
+                and membership.get('jobMemoryBytes')==request.get('memoryBytes')
+                and membership.get('activeProcessLimit')==request.get('processLimit') and membership.get('limitFlags')==0x2208)
+        require(request.get('schema')=='marty.windows-job-request/v1' and job.get('schema')=='marty.windows-job-result/v1'
+                and isinstance(request.get('executableSha256'),str) and re.fullmatch('[a-f0-9]{64}',request['executableSha256'])
+                and type(request.get('memoryBytes')) is int and request['memoryBytes']>0
+                and job.get('state')=='COMPLETE' and job.get('exitCode')==0 and job.get('jobClosed') is True
+                and job.get('terminalActiveProcesses')==0 and job.get('assignedBeforeResume') is True and job.get('processCreatedSuspended') is True
+                and job.get('executableSha256')==request.get('executableSha256')
+                and job.get('jobMemoryBytes')==request.get('memoryBytes')
+                and all(job.get(k) is False for k in ['forcedTermination','timedOut','cancelled','hostMarginBreached']))
+        cid=proof.get('workerCid');require(isinstance(cid,str) and re.fullmatch('[a-f0-9]{64}',cid))
+        rows=docker.json(['inspect',cid]);require(isinstance(rows,list) and len(rows)==1)
+        item=rows[0];state=item['State'];settings=item['Config'];host=item['HostConfig']
+        require(item['Id']==cid and item['Created']==proof['workerCreated'] and item['Image']==proof['workerImageId']==config['admission_image_id']
+                and item['Name']=='/'+config['project']+'-admission'
+                and state['Status']=='exited' and state['ExitCode']==0 and state['Pid']==0 and state['Running'] is False
+                and state['OOMKilled'] is False and not state['StartedAt'].startswith('0001-')
+                and state['StartedAt']==proof['workerStartedAt'] and state['FinishedAt']==proof['workerFinishedAt']
+                and item['RestartCount']==0 and settings['User']=='0:0'
+                and settings['Entrypoint']==['python3'] and settings['Cmd']==['-B','/work/admit-linux.py','/work/proposal.armed.private.json',proof['armedProposalSha256']]
+                and settings['Labels'].get('elevenid.trust-role.project')==config['project']
+                and settings['Labels'].get('elevenid.trust-role.phase')=='admission'
+                and host['NetworkMode']=='none' and host['Privileged'] is False
+                and 'ALL' in host['CapDrop'] and 'no-new-privileges' in host['SecurityOpt'])
+        mounts=sorted(item['Mounts'],key=lambda m:m['Destination'])
+        require(mounts==proof['workerMounts']==config['admission_mounts'] and len({m['Destination'] for m in mounts})==len(mounts))
+        control=[m for m in mounts if m['Destination']=='/control']
+        require(len(control)==1 and control[0]['Type']=='volume' and control[0]['Name']==native['control_volume'] and control[0]['RW'] is True
+                and all(m['Type']=='bind' and m['RW'] is False for m in mounts if m['Destination']!='/control'))
+        # These are exact file binds, not a host-authored agreement about a broad /work directory.
+        expected={'/work/admit-linux.py':worker,'/work/proposal.armed.private.json':config['admission_armed_proposal'],
+                  '/tools/marty-deploy':armed['utilities']['deploy'],
+                  '/tools/marty-passport-tls-bootstrap':armed['utilities']['bootstrap'],
+                  '/input/workload-ca.pem':armed['publicInputs']['workload_identity_ca_cert']}
+        custody=armed['custodyOwner']['candidateSourceRefs']
+        require(custody['passport_remote_tls.py']['sha256']==config['custody_sources']['admissionOwnerSha256']
+                and custody['selfhost_windows_renewal_native.py']['sha256']==config['custody_sources']['exportOwnerSha256'])
+        for name in ['passport_remote_tls.py','selfhost_windows_renewal_native.py']:
+            expected['/work/candidate/scripts/'+name]=custody[name]
+        sources=config['admission_native_sources']
+        require(set(sources)=={'selfhost_native_operator.py','source_matched_native.py'} and actor_plan.get('nativeSources')==sources)
+        for name,reference in sources.items():expected['/work/owner/'+name]=reference
+        require(set(m['Destination'] for m in mounts)==set(expected)|{'/control','/input/root.token'})
+        for destination,reference in expected.items():
+            matches=[m for m in mounts if m['Destination']==destination]
+            require(len(matches)==1 and matches[0]['Type']=='bind' and matches[0]['RW'] is False
+                    and windows_mount_path_equal(matches[0]['Source'],reference['path']))
+            public_ca=destination=='/input/workload-ca.pem'
+            if public_ca:
+                require(reference['sha256']==model['pinnedIssuerInputSha256']
+                        ==armed['publicInputs']['workload_identity_ca_cert']['sha256']
+                        ==config['workload_ca_sha256'])
+            reader=held_public_input if public_ca else held_input
+            with reader(Path(reference['path']),max_bytes=65536 if public_ca else 128*1024*1024) as raw:
+                require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
+        # Bind the authority path without reopening or exporting its bytes here.
+        authority=[m for m in mounts if m['Destination']=='/input/root.token'][0]
+        require(windows_mount_path_equal(authority['Source'],armed['authorityReference']['path']))
+        return proof
+
+
+def _repair_exporter_source(config,model):
+    """Bind a reviewed successor separately; never rewrite admitted source history."""
+    import inspect
+    from selfhost_windows_selection import decode
+    def require(value):
+        if not value:raise ValueError('Windows generation export refused')
+    own=Path(__file__)
+    if 'public_ca_read_recovery' not in config:
+        require(config['custody_sources']['exportOwnerSha256']==hashlib.sha256(own.read_bytes()).hexdigest())
+        return
+    recovery=config['public_ca_read_recovery']
+    require(recovery.get('schema')=='marty.passport-role-repair-public-ca-export-successor/v1'
+            and isinstance(recovery.get('implementationRevision'),str)
+            and re.fullmatch('[a-f0-9]{40}',recovery['implementationRevision'])
+            and recovery.get('admittedCustodySources')==model['custodySources']==config['custody_sources'])
+    admitted=recovery['admittedExporter'];successor=recovery['successorExporter'];public_owner=recovery['publicInputOwner']
+    require(admitted['sha256']==model['custodySources']['exportOwnerSha256']
+            and Path(successor['path'])==own
+            and Path(public_owner['path'])==Path(inspect.unwrap(hold_public_input).__code__.co_filename))
+    for reference in [admitted,successor,public_owner]:
+        with hold_private_input(Path(reference['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
+
+
+def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
     from selfhost_windows_renewal import Docker, run_owned_mutation
     from selfhost_windows_selection import decode
 
     def require(value):
         if not value:raise ValueError('Windows generation export refused')
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
-    require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
-    require(native['control_volume']==project+'-renewal-control')
+    require(purpose in {'selfhost-renewal','passport-role-repair'})
+    repair=purpose=='passport-role-repair'
+    require(repair or 'public_ca_read_recovery' not in config)
+    if repair:
+        match=re.fullmatch(r'marty-passport-acceptance-trust-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})',project)
+        require(match is not None and native['control_volume']==project+'-tls-custody')
+        require(mirror=='/control/trust-role-'+match.group(1)+'/generation')
+    else:
+        require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
+        require(native['control_volume']==project+'-renewal-control')
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(isinstance(mirror,str))
     path=PurePosixPath(mirror)
@@ -274,16 +484,36 @@ def _export_generation(config, mirror):
             and '..' not in path.parts and path.name in {'generation','application-generation','application-mail-generation'})
     require(all(re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,127}',name) for name in path.parts[2:]))
     deadline=time.monotonic()+600
-    with hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024) as raw:
-        require(hashlib.sha256(raw).hexdigest()==config['compose_sha256'])
+    input_file=config['repair_admission_file'] if repair else config['compose_file']
+    input_digest=config['repair_admission_sha256'] if repair else config['compose_sha256']
+    with hold_private_input(Path(input_file),max_bytes=2*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==input_digest)
         model=decode(raw)
-        require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
-        names=sorted(model['secrets'])
+        if repair:
+            _repair_exporter_source(config,model)
+            names=sorted(['workload_identity_ca_cert','trust_profile_workload_server_cert','trust_profile_workload_server_kms_token'])
+            require(isinstance(model,dict) and model.get('schema')=='marty.passport-role-repair-admission/v1'
+                    and model.get('project')==project and model.get('role')=='trust-profile-server'
+                    and model.get('profile')=='passport-role-repair' and model.get('nativeAdmissionComplete') is True
+                    and isinstance(model.get('files'),dict) and sorted(model['files'])==names)
+        else:
+            require(isinstance(model,dict) and isinstance(model.get('secrets'),dict))
+            names=sorted(model['secrets'])
         require(0<len(names)<=512 and all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}',name) for name in names))
         docker=Docker(config['docker_host'],config['engine_id'])
         volumes=docker.json(['volume','inspect',native['control_volume']])
         require(isinstance(volumes,list) and len(volumes)==1 and volumes[0]['Name']==native['control_volume']
                 and volumes[0]['Driver']=='local' and volumes[0].get('Options') in (None,{}))
+        if repair:
+            require(volumes[0]==native['control_volume_identity'])
+            require(model.get('nativeOperator')=={'sha256':native['binary_sha256'],'sourceSha':native['source_sha'],'releaseTag':native['release_tag']}
+                    and model.get('custodySources')==config['custody_sources']
+                    and set(config['custody_sources'])=={'revision','exportOwnerSha256','admissionOwnerSha256'}
+                    and re.fullmatch(r'[0-9a-f]{64}',config['custody_sources']['admissionOwnerSha256'])
+                    and re.fullmatch(r'[0-9a-f]{40}',config['custody_sources']['revision'])
+                    and model.get('nativeProducerSha256')==native['bootstrap_sha256']
+                    and model.get('pinnedIssuerInputSha256')==config['workload_ca_sha256'])
+            execution=_repair_admission_execution(config,model,docker,native)
         def fetch(part=None,digest=None):
             remaining=deadline-time.monotonic();require(remaining>0)
             request={'mirror':mirror,'names':names,'part':part,'sha256':digest}
@@ -322,6 +552,14 @@ def _export_generation(config, mirror):
             require(len(value)<=65536 and base64.b64encode(value).decode('ascii')==encoded[name]
                     and b'\0' not in value and b'PRIVATE KEY' not in value)
             value.decode('utf-8');values[name]=value
+            if repair:
+                expected=model['files'][name]
+                require(isinstance(expected,dict) and set(expected)=={'bytes','sha256'}
+                        and type(expected['bytes']) is int and 0<expected['bytes']<=65536
+                        and isinstance(expected['sha256'],str) and re.fullmatch(r'[0-9a-f]{64}',expected['sha256'])
+                        and len(value)==expected['bytes'] and hashlib.sha256(value).hexdigest()==expected['sha256'])
+        if repair:
+            require(_repair_admission_execution(config,model,docker,native)==execution)
     require(time.monotonic()<deadline)
     return values
 
@@ -430,14 +668,28 @@ else:
 body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minimum_ttl'],
       'require_orphan_new':not d.get('initial_current',False),'require_orphan_old':False,
       'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
-print(json.dumps({'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}))
+recovery=d.get('recovery',False)
+assert type(recovery) is bool
+if recovery:
+ assert d['transition'] and not d.get('initial_current',False) and d['minimum_ttl']>=3600
+ assert native('recovery-candidate',{'token':token,'old':roots['old'],'new':roots['new'],
+                                   'minimum_ttl':d['minimum_ttl']},True) is None
+else:
+ for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
+result={'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
 def preflight(config, project, old, new, docker_prefix):
     """Verify a changing generation; all transition checks remain mandatory."""
     return _preflight(config, project, old, new, docker_prefix, transition=True)
+
+
+def preflight_recovery(config, project, old, new, docker_prefix):
+    """Candidate proof for expired-current recovery, never activation authority."""
+    return _preflight(config, project, old, new, docker_prefix, transition=True, recovery=True)
 
 
 def preflight_current(config, project, current, docker_prefix):
@@ -460,7 +712,7 @@ def preflight_initial_current(config, project, current, docker_prefix):
 
 
 def _preflight(config, project, old, new, docker_prefix, *, transition,
-               initial_current=False):
+               initial_current=False, recovery=False):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
@@ -468,6 +720,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', name) for name in old))
     changed = sum(old[name] != new[name] for name in old)
     require(type(initial_current) is bool and not (transition and initial_current))
+    require(type(recovery) is bool and (not recovery or (transition and not initial_current)))
     require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
@@ -478,6 +731,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(config['bao_addr'] == 'https://openbao:8200')
     require(type(config['minimum_ttl']) is int and 60 <= config['minimum_ttl'] <= 28800)
     require(transition or config['minimum_ttl'] >= 3600)
+    require(not recovery or config['minimum_ttl'] >= 3600)
     for key in ['current', 'renewed', 'token_file']:
         p = PurePosixPath(config[key])
         require(p.is_relative_to('/control') and len(p.parts) >= 3
@@ -492,6 +746,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
                            initial_current=initial_current, bytes={
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
+            if recovery:request['recovery']=True
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                     '--network', config['network'], '--tmpfs',
@@ -506,5 +761,6 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
             from selfhost_windows_renewal import run_owned_mutation
             p = run_owned_mutation(args, stdin_bytes=json.dumps(request).encode(), timeout=240)
             require(p.returncode == 0)
-            require(json.loads(p.stdout) == {'authority': True, 'generation': transition,
-                                            'tokens': True, 'certificates': True})
+            expected = {'authority': True, 'generation': transition, 'tokens': True, 'certificates': True}
+            if recovery:expected['recovery']=True
+            require(json.loads(p.stdout) == expected)

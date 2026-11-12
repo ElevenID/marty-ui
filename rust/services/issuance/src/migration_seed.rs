@@ -5,6 +5,7 @@ use sqlx::{PgConnection, Row};
 use uuid::Uuid;
 
 const TEMPLATE_NAMESPACE: &str = "c7ad7bbb-3cc8-46bc-a648-f0f66be0473a";
+const MEMBERSHIP_CRITERIA_NARRATIVE: &str = "Submit a membership application that is approved under the issuing organization's configured approval policy.";
 
 pub(super) async fn seed_marty_application_templates(
     connection: &mut PgConnection,
@@ -31,7 +32,7 @@ pub(super) async fn seed_marty_application_templates(
     let organization_name = organization_name.unwrap_or_default();
     let organization_id = organization_id.to_string();
     let rows = sqlx::query(
-        "SELECT id, name, description, claims, issuer_requirements
+        "SELECT id, name, description, credential_type, doctype, vct, claims, issuer_requirements
          FROM credential_template_service.credential_templates
          WHERE organization_id = $1
            AND lower(coalesce(status, 'active')) = 'active'
@@ -63,8 +64,15 @@ pub(super) async fn seed_marty_application_templates(
             format!("{organization_id}:{credential_template_id}").as_bytes(),
         )
         .to_string();
+        let membership_badge = is_stock_membership_badge(
+            &credential_template_id,
+            &display_name,
+            &row.try_get::<String, _>("credential_type")?,
+            row.try_get::<Option<String>, _>("doctype")?.as_deref(),
+            &row.try_get::<String, _>("vct")?,
+        );
         let (fields, rules, ui_config, valid) =
-            final_template_projection(&claims, &display_name, &organization_name);
+            final_template_projection(&claims, &display_name, &organization_name, membership_badge);
         let approval_strategy = if truthy(requirements.get("approval_required")) {
             "manual"
         } else {
@@ -102,7 +110,11 @@ fn final_template_projection(
     claims: &Value,
     display_name: &str,
     organization_name: &str,
+    membership_badge: bool,
 ) -> (Value, Value, Value, bool) {
+    // The stable identity alone does not authorize replacing a customer's
+    // claim definition. Only the unchanged v5 stock claim is issuer-supplied.
+    let membership_badge = membership_badge && uses_stock_membership_criteria(claims);
     let mut original_fields = Vec::new();
     let mut original_rules = Vec::new();
     let mut canonical_fields = Vec::new();
@@ -175,7 +187,7 @@ fn final_template_projection(
     let mut system_rules = Vec::new();
     canonical_fields.retain(|field| {
         let name = field["field_id"].as_str().unwrap_or_default();
-        let Some(source_config) = system_source(name, organization_name) else {
+        let Some(source_config) = system_source(name, organization_name, membership_badge) else {
             return true;
         };
         system_rules.push(json!({
@@ -221,7 +233,24 @@ fn legacy_field_type(claim_type: Option<&str>) -> &'static str {
     }
 }
 
-fn system_source(name: &str, organization_name: &str) -> Option<Value> {
+fn is_stock_membership_badge(
+    id: &str,
+    name: &str,
+    credential_type: &str,
+    doctype: Option<&str>,
+    vct: &str,
+) -> bool {
+    id == "50000000-0000-0000-0000-000000000040"
+        && name == "Marty Verified Member Badge"
+        && matches!(
+            credential_type.to_ascii_lowercase().as_str(),
+            "open_badge" | "open_badge_v3" | "openbadgecredential"
+        )
+        && doctype == Some("org.openbadges.v3")
+        && vct.ends_with("/credentials/marty-verified-member-badge")
+}
+
+fn system_source(name: &str, organization_name: &str, membership_badge: bool) -> Option<Value> {
     let system_field = match name {
         "member_id" | "user_id" => "applicant.user_id",
         "organization_id" => "application.organization_id",
@@ -231,6 +260,12 @@ fn system_source(name: &str, organization_name: &str) -> Option<Value> {
         "document_number" | "employee_id" => "application.reference_number",
         "achievement_name" => "template.name",
         "achievement_description" => "template.description",
+        "achievement_criteria" if membership_badge => {
+            return Some(json!({
+                "system_field": "constant",
+                "value": {"narrative": MEMBERSHIP_CRITERIA_NARRATIVE}
+            }));
+        }
         "organization_name" | "issuing_authority" if !organization_name.is_empty() => {
             return Some(json!({"system_field": "constant", "value": organization_name}));
         }
@@ -238,6 +273,47 @@ fn system_source(name: &str, organization_name: &str) -> Option<Value> {
         _ => return None,
     };
     Some(json!({"system_field": system_field}))
+}
+
+fn stock_membership_criteria_definition() -> Value {
+    json!({
+        "id":"marty-ob-achievement-criteria",
+        "name":"achievement_criteria",
+        "display_name":"Badge Criteria",
+        "description":"Issuer-configured criteria for the membership achievement",
+        "claim_type":"object",
+        "required":true,
+        "selectively_disclosable":false,
+        "derivable":false,
+        "derived_from":null,
+        "pattern":null,
+        "enum_values":null,
+        "min_value":null,
+        "max_value":null,
+        "mdoc_namespace":null,
+        "mdoc_element_identifier":null,
+        "display_icon":null
+    })
+}
+
+fn uses_stock_membership_criteria(claims: &Value) -> bool {
+    let Some(claims) = claims.as_array() else {
+        return false;
+    };
+    let mut criteria = None;
+    for claim in claims {
+        match claim.get("name").and_then(Value::as_str) {
+            Some("achievement") => return false,
+            Some("achievement_criteria") => {
+                if criteria.is_some() {
+                    return false;
+                }
+                criteria = Some(claim);
+            }
+            _ => {}
+        }
+    }
+    criteria.is_some_and(|claim| claim == &stock_membership_criteria_definition())
 }
 
 fn truthy(value: Option<&Value>) -> bool {
@@ -281,6 +357,7 @@ mod tests {
             ]),
             "Course Completion Badge",
             "Canyon Skills Academy",
+            false,
         );
         assert!(valid);
         assert_eq!(fields.as_array().unwrap().len(), 1);
@@ -289,5 +366,143 @@ mod tests {
             "claim_name":"organization_name", "source":"SYSTEM",
             "source_config":{"system_field":"constant","value":"Canyon Skills Academy"},
         })));
+    }
+
+    #[test]
+    fn stock_membership_criteria_are_issuer_owned_and_keep_their_object_shape() {
+        let (fields, rules, _, valid) = final_template_projection(
+            &json!([
+                {"name":"email","claim_type":"string","required":true},
+                stock_membership_criteria_definition()
+            ]),
+            "Marty Verified Member Badge",
+            "Customer Organization",
+            true,
+        );
+        assert!(valid);
+        assert_eq!(fields.as_array().unwrap().len(), 1);
+        assert_eq!(fields[0]["field_id"], "email");
+        let form = json!({"email":"applicant@example.test","achievement_criteria":{"narrative":"forged form value"}})
+            .as_object().unwrap().clone();
+        let mut claims = form.clone();
+        marty_claim_collection::apply_rules(
+            &mut claims,
+            &form,
+            rules.as_array().unwrap(),
+            &Map::new(),
+            &[],
+        );
+        assert_eq!(claims["email"], "applicant@example.test");
+        assert_eq!(
+            claims["achievement_criteria"],
+            json!({"narrative":MEMBERSHIP_CRITERIA_NARRATIVE})
+        );
+    }
+
+    #[test]
+    fn membership_defaults_are_not_applied_to_customer_course_templates() {
+        let id = "50000000-0000-0000-0000-000000000040";
+        let name = "Marty Verified Member Badge";
+        let vct = "https://customer.example/credentials/marty-verified-member-badge";
+        assert!(is_stock_membership_badge(
+            id,
+            name,
+            "open_badge",
+            Some("org.openbadges.v3"),
+            vct
+        ));
+        for (id, name, credential_type, doctype, vct) in [
+            (
+                "customer-template",
+                name,
+                "open_badge",
+                Some("org.openbadges.v3"),
+                vct,
+            ),
+            (
+                id,
+                "Course Completion Badge",
+                "open_badge",
+                Some("org.openbadges.v3"),
+                vct,
+            ),
+            (id, name, "MemberCredential", Some("org.openbadges.v3"), vct),
+            (id, name, "open_badge", None, vct),
+            (
+                id,
+                name,
+                "open_badge",
+                Some("org.openbadges.v3"),
+                "https://customer.example/course",
+            ),
+        ] {
+            assert!(!is_stock_membership_badge(
+                id,
+                name,
+                credential_type,
+                doctype,
+                vct
+            ));
+        }
+        let (fields, rules, _, _) = final_template_projection(
+            &json!([{"name":"achievement_criteria","claim_type":"object"}]),
+            "Course Completion Badge",
+            "Canyon Skills Academy",
+            false,
+        );
+        assert_eq!(fields[0]["field_id"], "achievement_criteria");
+        assert_eq!(rules[0]["source"], "FORM_FIELD");
+        let form = json!({"achievement_criteria":{"narrative":"Customer course criterion","extension":true}})
+            .as_object().unwrap().clone();
+        let mut claims = Map::new();
+        marty_claim_collection::apply_rules(
+            &mut claims,
+            &form,
+            rules.as_array().unwrap(),
+            &Map::new(),
+            &[],
+        );
+        assert_eq!(claims["achievement_criteria"], form["achievement_criteria"]);
+    }
+
+    #[test]
+    fn fresh_issuance_projection_preserves_modified_and_partial_stock_catalogs() {
+        let stock = stock_membership_criteria_definition();
+        let mut custom = stock.clone();
+        custom["description"] = json!("Customer-owned criteria definition");
+        let mut extension = stock.clone();
+        extension["customer_extension"] = json!(true);
+        for definitions in [
+            json!([custom]),
+            json!([extension]),
+            json!([stock.clone(), {"name":"achievement","claim_type":"object"}]),
+            json!([stock.clone(), stock]),
+        ] {
+            assert!(!uses_stock_membership_criteria(&definitions));
+            let (_, rules, _, _) = final_template_projection(
+                &definitions,
+                "Marty Verified Member Badge",
+                "Customer Organization",
+                true,
+            );
+            assert!(rules
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|rule| rule["source"] == "FORM_FIELD"));
+        }
+        // A legacy catalog may migrate after the fresh issuance baseline.
+        // Projection does not invent a claim; forward repair supplies its rule.
+        let (_, rules, _, _) = final_template_projection(
+            &json!([{"name":"achievement_name","claim_type":"string"}]),
+            "Marty Verified Member Badge",
+            "Customer Organization",
+            true,
+        );
+        assert!(rules
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|rule| rule["claim_name"] != "achievement_criteria"));
     }
 }

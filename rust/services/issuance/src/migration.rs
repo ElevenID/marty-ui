@@ -51,6 +51,10 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0011_passport_administrative_cancellation",
         include_str!("../migrations/0011_passport_administrative_cancellation.sql"),
     ),
+    (
+        "0012_membership_achievement_criteria",
+        include_str!("../migrations/0012_membership_achievement_criteria.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",

@@ -377,6 +377,14 @@ fn replacement_mount(mount: &str, kind: &str) -> bool {
     (2..=8).any(|v| mount == format!("{kind}-pki-v{v}"))
 }
 pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    certificates_bound(bao, context, None).await
+}
+
+async fn certificates_bound(
+    bao: &OpenBaoHttp,
+    context: &Value,
+    expected_issuers: Option<&[String; 2]>,
+) -> Result<()> {
     let token = text(context, "token")?;
     let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
     let old = Path::new(text(context, "old")?);
@@ -390,6 +398,9 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
         issuer(bao, token, "workload-pki").await?,
         issuer(bao, token, "keycloak-pki").await?,
     ];
+    if expected_issuers.is_some_and(|expected| expected != &issuers) {
+        return Err(REFUSAL);
+    }
     let next = if let Some(replacement) = replacement {
         let workload = text(replacement, "workload_mount")?;
         let keycloak = text(replacement, "keycloak_mount")?;
@@ -489,6 +500,179 @@ pub async fn certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
                 return Err("certificate differs from its remote signer");
             }
         }
+    }
+    Ok(())
+}
+
+fn retained_certificate_context(context: &Value) -> Result<(&str, &Path, u64)> {
+    let fields = context.as_object().ok_or(REFUSAL)?;
+    if fields.len() != 3
+        || !["token", "generation", "minimum_ttl"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+    {
+        return Err(REFUSAL);
+    }
+    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
+    if !(3600..=28800).contains(&ttl) {
+        return Err(REFUSAL);
+    }
+    Ok((
+        text(context, "token")?,
+        Path::new(text(context, "generation")?),
+        ttl,
+    ))
+}
+
+/// Read-only retained certificate evidence. This grants no TLS, token,
+/// activation, rollback, or credential-production admission.
+pub async fn retained_certificates(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    retained_certificate_issuers(bao, context).await.map(|_| ())
+}
+
+async fn retained_certificate_issuers(bao: &OpenBaoHttp, context: &Value) -> Result<[String; 2]> {
+    let (token, root, ttl) = retained_certificate_context(context)?;
+    authority(bao, token, false).await?;
+    let issuers = [
+        issuer(bao, token, "workload-pki").await?,
+        issuer(bao, token, "keycloak-pki").await?,
+    ];
+    for cert in &issuers {
+        lifetime(cert.as_bytes(), ttl)?;
+    }
+    if certificate_file(&root.join("workload_identity_ca_cert"))? != issuers[0].as_bytes() {
+        return Err(REFUSAL);
+    }
+    let roles = SELFHOST_ROLES
+        .iter()
+        .map(|role| {
+            (
+                role.key_name.to_owned(),
+                role.cert_file.to_owned(),
+                "ecdsa-p256",
+                0,
+            )
+        })
+        .chain(keycloak::REALMS.iter().map(|realm| {
+            (
+                format!("keycloak-{realm}-rs256"),
+                format!("keycloak_{realm}_rs256_cert"),
+                "rsa-2048",
+                1,
+            )
+        }));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| REFUSAL)?;
+    for (key, file, kind, issuer) in roles {
+        let response = request(
+            bao,
+            Method::GET,
+            &format!("transit/keys/{key}"),
+            None,
+            Some(token),
+        )
+        .await?;
+        let metadata = &response["data"];
+        crate::operator::version_one_custody(metadata, kind)?;
+        let public = text(&metadata["keys"]["1"], "public_key")?;
+        let certificate = certificate_file(&root.join(file))?;
+        crate::operator_certificates::retained_leaf_signature(
+            &certificate,
+            issuers[issuer].as_bytes(),
+            now,
+        )?;
+        if public_spki(&certificate, true)? != public_spki(public.as_bytes(), false)? {
+            return Err(REFUSAL);
+        }
+    }
+    Ok(issuers)
+}
+
+fn recovery_candidate_context(context: &Value) -> Result<(&str, &str, &str, u64)> {
+    let fields = context.as_object().ok_or(REFUSAL)?;
+    if fields.len() != 4
+        || !["token", "old", "new", "minimum_ttl"]
+            .iter()
+            .all(|key| fields.contains_key(*key))
+    {
+        return Err(REFUSAL);
+    }
+    let old = text(context, "old")?;
+    let new = text(context, "new")?;
+    let ttl = context["minimum_ttl"].as_u64().ok_or(REFUSAL)?;
+    if old == new || !(3600..=28800).contains(&ttl) {
+        return Err(REFUSAL);
+    }
+    Ok((text(context, "token")?, old, new, ttl))
+}
+
+/// Recovery candidate proof; does not mint credentials or activate containers.
+/// Performs the existing versioned-signature probes using fresh leaf tokens.
+/// Expired old tokens are never used or admitted for rollback.
+pub async fn recovery_candidate(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    let (token, old, new, ttl) = recovery_candidate_context(context)?;
+    generation::verify(Path::new(old), Path::new(new), false, false)?;
+    let certificate_files = SELFHOST_ROLES
+        .iter()
+        .map(|role| role.cert_file.to_owned())
+        .chain(
+            keycloak::REALMS
+                .iter()
+                .map(|realm| format!("keycloak_{realm}_rs256_cert")),
+        );
+    for file in certificate_files {
+        let before = certificate_file(&Path::new(old).join(&file))?;
+        let after = certificate_file(&Path::new(new).join(&file))?;
+        if public_spki(&before, true)? != public_spki(&after, true)? {
+            return Err(REFUSAL);
+        }
+    }
+    let (_, _, token_files) = generation::inventories();
+    let before = token_files
+        .iter()
+        .map(|name| read(&Path::new(old).join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    let after = token_files
+        .iter()
+        .map(|name| read(&Path::new(new).join(name)))
+        .collect::<Result<Vec<_>>>()?;
+    recovery_tokens_are_new(&before, &after)?;
+    let issuers = retained_certificate_issuers(
+        bao,
+        &json!({"token":token,"generation":old,"minimum_ttl":ttl}),
+    )
+    .await?;
+    let fresh = json!({"token":token,"old":new,"new":new,"minimum_ttl":ttl,
+        "require_orphan_old":true,"require_orphan_new":true,
+        "require_closed_new_metadata":true,"replacement":null,"retiring":false});
+    certificates_bound(bao, &fresh, Some(&issuers)).await?;
+    tokens(bao, &fresh).await?;
+    Ok(())
+}
+
+fn recovery_tokens_are_new(old: &[Vec<u8>], new: &[Vec<u8>]) -> Result<()> {
+    use std::collections::BTreeSet;
+    let normalize = |values: &[Vec<u8>]| -> Result<BTreeSet<String>> {
+        values
+            .iter()
+            .map(|raw| {
+                let value = std::str::from_utf8(raw).map_err(|_| REFUSAL)?.trim();
+                if value.is_empty() || !value.is_ascii() {
+                    return Err(REFUSAL);
+                }
+                Ok(value.to_owned())
+            })
+            .collect()
+    };
+    let before = normalize(old)?;
+    let after = normalize(new)?;
+    if old.is_empty()
+        || old.len() != new.len()
+        || after.len() != new.len()
+        || !before.is_disjoint(&after)
+    {
+        return Err(REFUSAL);
     }
     Ok(())
 }

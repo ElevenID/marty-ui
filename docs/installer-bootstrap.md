@@ -8,7 +8,7 @@ not supported.
 
 For a first installation on your own Linux machine, start with the
 [Linux installer tester quickstart](linux-installer-tester.md). It covers host
-preparation, `--check-host`, exact signed candidate selection, pending ACME
+preparation, `--check-host`, `--check-compatibility`, exact signed candidate selection, pending ACME
 orders, HTTPS trust, and feedback. The current external test entry is
 `--candidate-test EXACT_NIGHTLY_TAG`; normal channel/version admission remains
 held. This page describes the bootstrap and deployment boundaries in detail.
@@ -53,6 +53,16 @@ it and run `--check-host` before provisioning. That check performs the bootstrap
 Linux, process-privilege, tool, and rootless Docker checks, then exits before
 verification-tool or release downloads and operator dispatch. It does not
 validate Compose, resource capacity, signed payloads, or an installation.
+
+Next, use the same exact release selector with `--check-compatibility`. This
+authenticates the selected inventory/admission and operator, then runs the
+operator's existing rootless Docker and Compose preflight. Its Compose version
+requirement comes from the native deployment catalog; a newer plugin can be
+unsupported. The check exits before reserving an installation port or creating
+persistent state and reports the selected release, observed tool versions,
+required Compose version, and `installation_ready: false`. It makes no capacity,
+remaining-payload, image, or application-readiness claim. Do not combine it with
+`--check-host`, `--yes`, or installation input paths.
 
 `--candidate-test`, `--channel nightly|stable`, and `--version TAG` are mutually
 exclusive release selectors. The latter two require separate signed admission;

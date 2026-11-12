@@ -1,6 +1,7 @@
 //! Actual gateway/native-process/PG ordinary admission and public token/nonce
 //! paths. Named peers are the existing controlled fixture, not another graph.
-//! Keyed retry is gateway/Redis replay; native early recovery is qualified by
+//! The key and request fingerprint reach durable storage; the retry exercised
+//! here is gateway/Redis replay. Native early recovery is qualified by
 //! didcomm_admission_recovery separately. Nonce consumption below is a direct
 //! real repository check, not a claimed HTTP proof-validation endpoint.
 use std::sync::{
@@ -106,6 +107,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         .await
         .unwrap();
     let status = response.status();
+    assert_eq!(response.headers()["idempotency-replayed"], "false");
     let body: Value = response.json().await.unwrap();
     assert_eq!(
         status,
@@ -168,11 +170,21 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         .unwrap();
     assert_eq!(vector_binding.key_hash, vector["key_hash"]);
     assert_eq!(vector_binding.request_hash, vector["request_hash"]);
-    // Public replay is owned by gateway/Redis. The gateway consumes the key
-    // before forwarding, so the native repository must not claim ownership of
-    // the same idempotency record.
-    assert!(transaction["idempotency_key_hash"].is_null());
-    assert!(transaction["idempotency_request_hash"].is_null());
+    // The gateway forwards the event key to native admission. Preserve the
+    // exact submitted request binding in PostgreSQL as well as the independent
+    // gateway response cache; a warm cache hit alone cannot prove recovery.
+    let submitted_request: InitiationRequest = serde_json::from_value(request.clone()).unwrap();
+    let submitted_binding = idempotency_binding(Some(&key), &submitted_request)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        transaction["idempotency_key_hash"],
+        submitted_binding.key_hash
+    );
+    assert_eq!(
+        transaction["idempotency_request_hash"],
+        submitted_binding.request_hash
+    );
     assert_eq!(transaction_count(pool).await, initial_count + 1);
     assert_eq!(effects(peers), initial_effects);
 
@@ -188,6 +200,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         .await
         .unwrap();
     assert_eq!(replay.status(), reqwest::StatusCode::OK);
+    assert_eq!(replay.headers()["idempotency-replayed"], "true");
     assert_eq!(replay.json::<Value>().await.unwrap(), body);
     assert_eq!(stored(pool, id).await, reserved);
     let mut conflicting = request.clone();
@@ -202,6 +215,7 @@ pub(super) async fn run(pool: &PgPool, gateway: &GatewayFixture, peers: &PeerSta
         .await
         .unwrap();
     assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
+    assert!(conflict.headers().get("idempotency-replayed").is_none());
     assert_mip(
         conflict.json().await.unwrap(),
         &json!({"error":"idempotency_conflict","error_description":"Idempotency key was reused for another request"}),

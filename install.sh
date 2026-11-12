@@ -8,11 +8,13 @@ main() (
     fail() { printf 'Marty installer: %s\n' "$*" >&2; exit 1; }
     usage() {
         printf '%s\n' \
-            'Usage: install.sh [--check-host] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--settings-file PATH] [--acme-staging-roots PATH] [--yes]' \
+            'Usage: install.sh [--check-host | --check-compatibility] [--channel nightly|stable | --version TAG | --candidate-test NIGHTLY_TAG] [--install-dir PATH] [--foundation-file PATH] [--hosting-file PATH] [--settings-file PATH] [--acme-staging-roots PATH] [--yes]' \
             'Supported host: Linux amd64, a regular non-root user, no-new-privileges, and an already-running rootless Docker daemon.' \
             'Run a downloaded copy with: /usr/bin/setpriv --no-new-privs -- sh /absolute/install.sh [options]' \
             '--check-host checks bootstrap tools, platform, process privileges, and rootless Docker connectivity, then exits without downloads or installation.' \
             'It creates and removes a private temporary Docker configuration. It does not check Compose, resources, images, release availability, or installation readiness.' \
+            '--check-compatibility downloads and authenticates the selected operator, runs its read-only Docker/Compose compatibility checks, then exits without creating an installation.' \
+            'Compatibility checking cannot be combined with --check-host, --yes, or installation input paths; it does not check resources, payloads, images, or application readiness.' \
             '--candidate-test requires an exact published nightly tag and grants no Ready status; --channel and --version require signed installer admission.' \
             'Managed OpenBao is the default; --foundation-file is optional. Host setup is separate: the installer does not use sudo or install OS packages.' \
             '--settings-file accepts a private typed JSON application policy and private optional credential-file references; see docs/installer-application-settings.md.'
@@ -128,6 +130,7 @@ main() (
     acme_staging_roots=
     yes=false
     check_host=false
+    check_compatibility=false
     complete=false
     candidate_test=false
     while [ "$#" -gt 0 ]; do
@@ -136,6 +139,7 @@ main() (
             --help|-h) usage; exit 0 ;;
             --yes) yes=true; shift ;;
             --check-host) check_host=true; shift ;;
+            --check-compatibility) [ "$check_compatibility" = false ] || fail 'Repeated compatibility check'; check_compatibility=true; shift ;;
             --channel|--version|--candidate-test|--install-dir|--foundation-file|--hosting-file|--settings-file|--acme-staging-roots)
                 [ "$#" -ge 2 ] && [ -n "$2" ] || fail "Missing value for $1"
                 case "$2" in --*) fail "Missing value for $1" ;; esac
@@ -154,6 +158,11 @@ main() (
         esac
     done
     [ "$complete" = true ] || fail 'Incomplete bootstrap download; retry the original command'
+    if [ "$check_compatibility" = true ]; then
+        [ "$check_host" = false ] && [ "$yes" = false ] &&
+            [ -z "$destination$foundation_file$hosting_file$settings_file$acme_staging_roots" ] ||
+            fail 'Compatibility checking cannot be combined with --check-host, --yes, or installation input paths'
+    fi
     case "$channel" in nightly|stable) ;; *) fail 'Channel must be nightly or stable' ;; esac
     require_rootless_process
     select_platform
@@ -182,6 +191,7 @@ main() (
         printf '%s\n' \
             "Marty bootstrap host checks passed: Linux amd64, non-root UID $uid, no-new-privileges, zero effective/permitted/ambient capabilities, and rootless Docker connectivity." \
             'Only bootstrap tools and host checks ran; Compose, resources, images, release availability, and installation readiness were not checked.' \
+            'Next: use the same release selector with --check-compatibility to authenticate the operator and check its exact Docker/Compose requirements before installation.' \
             'The private temporary Docker configuration will be removed on exit. No downloads, Docker mutations, or installation were performed.'
         return
     fi
@@ -296,6 +306,7 @@ main() (
         [ -z "$settings_file" ] || set -- "$@" --settings-file "$settings_file"
         [ -z "$acme_staging_roots" ] || set -- "$@" --acme-staging-roots "$acme_staging_roots"
         [ "$yes" = false ] || set -- "$@" --yes
+        [ "$check_compatibility" = false ] || set -- "$@" --check-compatibility
         "$stage/marty-deploy" "$@"
         return
     fi
@@ -375,6 +386,7 @@ main() (
         set -- "$@" --channel "$channel" --verified-channel "$stage/channel.json"
     fi
     [ "$yes" = false ] || set -- "$@" --yes
+    [ "$check_compatibility" = false ] || set -- "$@" --check-compatibility
     # Operator re-verifies admission/inventory and owns persistent state. Keep
     # staging alive until it exits; no exec, so the cleanup trap also runs.
     "$stage/marty-deploy" "$@"

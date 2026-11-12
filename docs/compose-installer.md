@@ -53,6 +53,15 @@ configuration hashes, `up --wait`, and explicit setup-job exit status. The
 qualified build passed the real Compose baseline parser fixture. Parsing alone
 does not establish daemon execution or full application qualification.
 
+The release's native `COMPOSE_VERSION` constant is the version authority. The
+public bootstrap's `--check-host` checks only bootstrap prerequisites and Docker
+connectivity. Run the same exact release selector with `--check-compatibility`
+to authenticate the operator and exercise its native Docker/Compose preflight
+without creating an installation. The result identifies the required Compose
+version and makes no capacity, payload, image, or readiness claim. Follow the
+[Linux tester host preparation](linux-installer-tester.md) before installing;
+the latest Docker plugin package is not necessarily the selected baseline.
+
 Private inputs remain in the installation's owned directories. File-backed
 Compose secrets are files, not an encrypted vault; the existing file-type, mode,
 owner, link, and retained-directory checks still apply. Narrow bind mounts remain
