@@ -385,6 +385,7 @@ def _repair_admission_execution(config,model,docker,native):
 
 def _repair_exporter_source(config,model):
     """Bind a reviewed successor separately; never rewrite admitted source history."""
+    import inspect
     from selfhost_windows_selection import decode
     def require(value):
         if not value:raise ValueError('Windows generation export refused')
@@ -400,7 +401,7 @@ def _repair_exporter_source(config,model):
     admitted=recovery['admittedExporter'];successor=recovery['successorExporter'];public_owner=recovery['publicInputOwner']
     require(admitted['sha256']==model['custodySources']['exportOwnerSha256']
             and Path(successor['path'])==own
-            and Path(public_owner['path'])==Path(hold_public_input.__code__.co_filename))
+            and Path(public_owner['path'])==Path(inspect.unwrap(hold_public_input).__code__.co_filename))
     for reference in [admitted,successor,public_owner]:
         with hold_private_input(Path(reference['path']),max_bytes=2*1024*1024) as raw:
             require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
