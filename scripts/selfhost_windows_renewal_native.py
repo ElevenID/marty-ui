@@ -15,7 +15,7 @@ import subprocess
 import time
 from pathlib import Path, PurePosixPath
 
-from selfhost_windows_inputs import hold_private_input
+from selfhost_windows_inputs import hold_private_input, hold_public_input
 
 EXPORT_CHUNK_BYTES = 12000
 EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
@@ -266,6 +266,9 @@ def _repair_admission_execution(config,model,docker,native):
         def held_input(path, *, max_bytes):
             # Keep the verified handle open through the bind/source inspection.
             yield inputs.enter_context(hold_private_input(path,max_bytes=max_bytes))
+        @contextmanager
+        def held_public_input(path, *, max_bytes):
+            yield inputs.enter_context(hold_public_input(path,max_bytes=max_bytes))
         from selfhost_windows_selection import decode
         from selfhost_windows_renewal import windows_mount_path_equal
         def require(value):
@@ -366,12 +369,41 @@ def _repair_admission_execution(config,model,docker,native):
             matches=[m for m in mounts if m['Destination']==destination]
             require(len(matches)==1 and matches[0]['Type']=='bind' and matches[0]['RW'] is False
                     and windows_mount_path_equal(matches[0]['Source'],reference['path']))
-            with held_input(Path(reference['path']),max_bytes=128*1024*1024) as raw:
+            public_ca=destination=='/input/workload-ca.pem'
+            if public_ca:
+                require(reference['sha256']==model['pinnedIssuerInputSha256']
+                        ==armed['publicInputs']['workload_identity_ca_cert']['sha256']
+                        ==config['workload_ca_sha256'])
+            reader=held_public_input if public_ca else held_input
+            with reader(Path(reference['path']),max_bytes=65536 if public_ca else 128*1024*1024) as raw:
                 require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
         # Bind the authority path without reopening or exporting its bytes here.
         authority=[m for m in mounts if m['Destination']=='/input/root.token'][0]
         require(windows_mount_path_equal(authority['Source'],armed['authorityReference']['path']))
         return proof
+
+
+def _repair_exporter_source(config,model):
+    """Bind a reviewed successor separately; never rewrite admitted source history."""
+    from selfhost_windows_selection import decode
+    def require(value):
+        if not value:raise ValueError('Windows generation export refused')
+    own=Path(__file__)
+    if 'public_ca_read_recovery' not in config:
+        require(config['custody_sources']['exportOwnerSha256']==hashlib.sha256(own.read_bytes()).hexdigest())
+        return
+    recovery=config['public_ca_read_recovery']
+    require(recovery.get('schema')=='marty.passport-role-repair-public-ca-export-successor/v1'
+            and isinstance(recovery.get('implementationRevision'),str)
+            and re.fullmatch('[a-f0-9]{40}',recovery['implementationRevision'])
+            and recovery.get('admittedCustodySources')==model['custodySources']==config['custody_sources'])
+    admitted=recovery['admittedExporter'];successor=recovery['successorExporter'];public_owner=recovery['publicInputOwner']
+    require(admitted['sha256']==model['custodySources']['exportOwnerSha256']
+            and Path(successor['path'])==own
+            and Path(public_owner['path'])==Path(hold_public_input.__code__.co_filename))
+    for reference in [admitted,successor,public_owner]:
+        with hold_private_input(Path(reference['path']),max_bytes=2*1024*1024) as raw:
+            require(len(raw)==reference['bytes'] and hashlib.sha256(raw).hexdigest()==reference['sha256'])
 
 
 def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
@@ -383,6 +415,7 @@ def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
     require(purpose in {'selfhost-renewal','passport-role-repair'})
     repair=purpose=='passport-role-repair'
+    require(repair or 'public_ca_read_recovery' not in config)
     if repair:
         match=re.fullmatch(r'marty-passport-acceptance-trust-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})',project)
         require(match is not None and native['control_volume']==project+'-tls-custody')
@@ -403,6 +436,7 @@ def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
         require(hashlib.sha256(raw).hexdigest()==input_digest)
         model=decode(raw)
         if repair:
+            _repair_exporter_source(config,model)
             names=sorted(['workload_identity_ca_cert','trust_profile_workload_server_cert','trust_profile_workload_server_kms_token'])
             require(isinstance(model,dict) and model.get('schema')=='marty.passport-role-repair-admission/v1'
                     and model.get('project')==project and model.get('role')=='trust-profile-server'
@@ -420,7 +454,6 @@ def _export_generation(config, mirror, *, purpose="selfhost-renewal"):
             require(volumes[0]==native['control_volume_identity'])
             require(model.get('nativeOperator')=={'sha256':native['binary_sha256'],'sourceSha':native['source_sha'],'releaseTag':native['release_tag']}
                     and model.get('custodySources')==config['custody_sources']
-                    and config['custody_sources']['exportOwnerSha256']==hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
                     and set(config['custody_sources'])=={'revision','exportOwnerSha256','admissionOwnerSha256'}
                     and re.fullmatch(r'[0-9a-f]{64}',config['custody_sources']['admissionOwnerSha256'])
                     and re.fullmatch(r'[0-9a-f]{40}',config['custody_sources']['revision'])
