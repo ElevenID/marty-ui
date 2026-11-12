@@ -9,7 +9,7 @@ import selfhost_windows_recovery_activation as activation
 import selfhost_windows_staging_recovery as recovery
 import selfhost_windows_selection as selection
 
-@pytest.mark.parametrize('fault',[None,'uncertain','data','native'])
+@pytest.mark.parametrize('fault',[None,'uncertain','data','native','result-replaced'])
 def test_activation_never_rolls_back_or_clears_guards(monkeypatch,fault):
     with prepared(monkeypatch) as (path,cfg,output,events):
         recovery.publish_recovery_candidate(path,output)
@@ -26,6 +26,10 @@ def test_activation_never_rolls_back_or_clears_guards(monkeypatch,fault):
                 lease['config'].setdefault('tls_init_receipt',{})
                 state.update(lease=lease)
                 yield lease
+            if fault=='result-replaced':
+                result_path=Path(state['lease']['config']['result'])
+                result_path.rename(result_path.with_name('result-original'))
+                result_path.write_bytes(b'')
         monkeypatch.setattr(activation,'_recovery_candidate_inputs',inputs)
         monkeypatch.setattr(activation.renewal,'checked_models',lambda *args:None)
         monkeypatch.setattr(activation.renewal,'checked_live_configuration',lambda *args:None)
@@ -62,3 +66,27 @@ def test_activation_never_rolls_back_or_clears_guards(monkeypatch,fault):
         assert (output/'activation/rollback_log').read_bytes()==b''
         assert selection.renewal.recovery_guard(cfg).exists()
         assert selection.renewal.renewal_staging_guard(cfg).exists()
+
+
+def test_owned_config_change_between_proof_and_baseline_refuses_before_recreate(monkeypatch):
+    with prepared(monkeypatch) as (path,cfg,output,events):
+        recovery.publish_recovery_candidate(path,output)
+        original=activation._recovery_candidate_inputs
+        @contextmanager
+        def changed(*args,**kwargs):
+            with original(*args,**kwargs) as lease:
+                observed=lease['observed'];docker=observed['docker']
+                previous=docker.containers
+                def containers():
+                    items=previous()
+                    owned=next(item for item in items if activation.renewal._service(item)=='gateway')
+                    owned['Config']['Cmd']=['PUBLIC_CHANGED_COMMAND']
+                    return items
+                monkeypatch.setattr(docker,'containers',containers)
+                monkeypatch.setattr(docker,'hashes',lambda command:{},raising=False)
+                yield lease
+        monkeypatch.setattr(activation,'_recovery_candidate_inputs',changed)
+        monkeypatch.setattr(activation.renewal,'checked_models',lambda *args:None)
+        monkeypatch.setattr(activation.renewal,'recreate',lambda *args,**kwargs:pytest.fail('Changed baseline admitted'))
+        with pytest.raises(ValueError):activation.activate_recovery_candidate(path,output)
+        assert selection.renewal.recovery_guard(cfg).exists()

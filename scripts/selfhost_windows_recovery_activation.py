@@ -36,13 +36,15 @@ def activate_recovery_candidate(config_path, output_dir, *, operator_successor=N
             lease['names'].add(Path(cfg['renewed_env']).name)
             stack.enter_context(renewal.hold_private_input(Path(cfg['renewed_env'])))
             activation.mkdir();lease['names'].add('activation')
-            stack.enter_context(renewal.hold_storage_namespace(activation))
+            coordination.enter_context(renewal.hold_storage_namespace(activation))
             stack.enter_context(selection._held_private_input(activation,directory=True,mutable_directory=True))
             outputs={name:Path(cfg[name]) for name in ('intent','result','new_log','rollback_log')}
             steps=cfg['step_receipts']
             paths=[*outputs.values(),*(Path(path) for step in steps for path in step.values())]
             selection.require(len(set(paths))==len(paths) and all(path.parent==activation for path in paths))
             for path in paths:selection._new_private(path,b'')
+            from selfhost_windows_inputs import _path_identities
+            result_identities=_path_identities(outputs['result'])
             def membership():selection.require({p.name for p in activation.iterdir()}=={p.name for p in paths})
             membership();stack.callback(membership)
             command=docker.compose(project,Path(cfg['renewed_env']),source)
@@ -53,7 +55,8 @@ def activate_recovery_candidate(config_path, output_dir, *, operator_successor=N
             layers=renewal.dependency_layers(model,observed['services'],changing)
             selection.require(len(steps)==len(layers))
             hashes=docker.hashes(command)
-            baseline=docker.containers();owned=[item for item in baseline if renewal._project(item)==project]
+            baseline=observed['context'].check(before_intent=True)
+            owned=[item for item in baseline if renewal._project(item)==project]
             data_before=renewal.data_mounts(owned)
             selection.require(selection.digest(selection.packed(data_before))==lease['proof']['data_sha256'])
             context=renewal.ForeignContext(docker,project,changing,baseline,docker.volumes(),cfg['native']['helper_image'])
@@ -83,5 +86,6 @@ def activate_recovery_candidate(config_path, output_dir, *, operator_successor=N
                     'secret_mounts':mounts,'data_sha256':lease['proof']['data_sha256'],
                     'guards_retained':True,'rollback_to_expired':False,'credential_admission':False}
         # All held proof exits passed. Project coordination still excludes writers.
-        renewal.write_empty_private_file(outputs['result'],selection.packed(result).decode())
+        renewal.write_empty_private_file(outputs['result'],selection.packed(result).decode(),
+                                        expected_identities=result_identities)
     return result

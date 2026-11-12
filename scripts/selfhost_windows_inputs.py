@@ -166,18 +166,24 @@ def hold_private_generation(root: Path, names: list[str]):
         raise ValueError(REFUSAL) from None
 
 
-def write_empty_private_file(path: Path, value: str) -> None:
+def write_empty_private_file(path: Path, value: str, *, expected_identities=None) -> None:
     """Initialize an existing empty private file through one verified writer.
 
     Never creates a file or changes its ACL. A failure after writing can leave
     partial material: preserve it for operator inspection, never retry blindly.
+    Optional expected identities bind the whole path to an earlier held output
+    allocation; a replacement is refused before the verified handle is written.
     """
     try:
         require(os.name == "nt")
         require(isinstance(value, str))
         payload = value.encode("utf-8")
         require(0 < len(payload) <= MAX_BYTES and b"\0" not in payload)
-        _private_file_bytes(path, payload)
+        if expected_identities is None:
+            _private_file_bytes(path, payload)
+        else:
+            with _held_private_input(path,payload,_expected_identities=expected_identities):
+                pass
     except (OSError, UnicodeError, ValueError, TypeError):
         raise ValueError(WRITE_REFUSAL) from None
 
@@ -189,7 +195,8 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
 @contextmanager
 def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
-                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, mutable_directory=False, _rename_to=None):
+                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, mutable_directory=False, _rename_to=None,
+                        _expected_identities=None):
     from ctypes import wintypes as w
 
     path = Path(path)
@@ -200,6 +207,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
     require(type(mutable_directory) is bool and (not mutable_directory or
             (directory and not ancestor and write_value is None and not exclusive)))
     before = _path_identities(path, directory=directory)
+    if _expected_identities is not None:require(before==_expected_identities)
     require(not directory or write_value is None)
     require(not ancestor or write_value is None)
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
