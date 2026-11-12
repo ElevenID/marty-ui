@@ -201,6 +201,8 @@ def verify_completed_evidence(output: Path, result: dict, binding: dict, private
                           and expected["totalBytes"] == sum(record["bytes"] for record in files.values()),
                           "reload completion evidence totals differ")
         journal_recheck(output, journal["directories"], files, full=True)
+        verify_dispatch_evidence(output, binding, private_plan_sha256, files)
+        journal_recheck(output, journal["directories"], files, full=False, validated=True)
     except (OSError, KeyError, TypeError, ValueError) as error:
         raise bootstrap.BootstrapError("reload completion evidence is unavailable or invalid") from error
 
@@ -444,7 +446,13 @@ def release_annotation_matches(key: str, expected: object, actual: object) -> bo
 
 
 def deployment(value: dict, name: str, request: ReloadRequest, release_name: str | None = None) -> str:
-    metadata = identity(value, "Deployment", request.binding["namespace"], name)
+    return deployment_profile(value, name, request.original, request.binding, release_name)
+
+
+def deployment_profile(value: dict, name: str, original: dict, binding: dict,
+                       release_name: str | None = None) -> str:
+    """One admission policy shared by early observation and final reload."""
+    metadata = identity(value, "Deployment", binding["namespace"], name)
     labels, annotations, spec = metadata.get("labels", {}), metadata.get("annotations", {}), value.get("spec", {})
     selected_release = labels.get("app.kubernetes.io/instance")
     bootstrap.require(isinstance(selected_release, str) and re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,51}[a-z0-9])?", selected_release)
@@ -453,7 +461,7 @@ def deployment(value: dict, name: str, request: ReloadRequest, release_name: str
                       and labels.get("app.kubernetes.io/managed-by") == "Helm"
                       and labels.get("app.kubernetes.io/component", name) == name
                       and annotations.get("meta.helm.sh/release-name") == selected_release
-                      and annotations.get("meta.helm.sh/release-namespace") == request.binding["namespace"]
+                      and annotations.get("meta.helm.sh/release-namespace") == binding["namespace"]
                       and not metadata.get("ownerReferences") and not metadata.get("finalizers")
                       and type(metadata.get("generation")) is int and metadata["generation"] > 0
                       and type(spec.get("replicas")) is int and spec["replicas"] == 1
@@ -465,12 +473,40 @@ def deployment(value: dict, name: str, request: ReloadRequest, release_name: str
     template = spec.get("template", {})
     bootstrap.require(all(template.get("metadata", {}).get("labels", {}).get(key) == item for key, item in selector.items()),
                       "Deployment template labels differ")
-    for key, item in request.original["release"].items():
+    for key, item in original["release"].items():
         bootstrap.require(release_annotation_matches(key, item,
                           template.get("metadata", {}).get("annotations", {}).get("marty.11id.dev/" + key)),
                           "Deployment original release annotations differ")
-    workload_template(template, name, request.original)
+    workload_template(template, name, original)
     return selected_release
+
+
+def preflight_workloads(original: dict, binding: dict, transport) -> dict:
+    """GET the original 16 profiles before the caller issues any credentials.
+
+    The authenticated recovery caller holds the retained-state lock. This is
+    early admission only: it creates no producer, issues no credentials, makes
+    no readiness claim and cannot replace final reload/freshness validation.
+    """
+    original, binding = deepcopy(original), deepcopy(binding)
+    bootstrap.require(transport.namespace == binding["namespace"], "preflight transport namespace differs")
+    budget = Budget()
+    release_name, seen_uids, workloads = None, set(), {}
+    for name in WORKLOADS:
+        raw = transport.kubectl("legacy workload profile preflight", "get", "deployment", name,
+                                "-o", "json", timeout=budget.timeout())
+        budget.timeout()
+        observed = inspection.decode(raw, OBJECT_LIMIT, "private workload profile preflight")
+        release_name = deployment_profile(observed, name, original, binding, release_name)
+        metadata = observed["metadata"]
+        bootstrap.require(metadata["uid"] not in seen_uids, "Deployment UIDs repeat")
+        seen_uids.add(metadata["uid"])
+        workloads[name] = {"uid": metadata["uid"], "resourceVersion": metadata["resourceVersion"]}
+    budget.timeout()
+    return {"schema": "marty.kubernetes-legacy-workload-preflight/v1", "binding": binding,
+            "originalRuntime": original["release"], "status": "original-workload-profiles-admitted",
+            "workloads": workloads, "workloadCount": len(workloads), "credentialsIssued": False,
+            "activation": False, "readinessAssessed": False, "fullEnvironmentHealthAssessed": False}
 
 
 @dataclass(frozen=True)
@@ -559,8 +595,81 @@ def same_deployment(observed: dict, expected: dict, namespace: str, *, controlle
     inspection.same(normalized_metadata(observed["metadata"], controller=controller),
                     normalized_metadata(expected["metadata"], controller=controller),
                     "Deployment metadata changed outside the reload")
-    bootstrap.require(observed["metadata"]["generation"] == expected["metadata"]["generation"],
+    bootstrap.require(type(observed["metadata"].get("generation")) is int
+                      and observed["metadata"]["generation"] == expected["metadata"]["generation"],
                       "Deployment generation changed concurrently")
+
+
+def restart_patch(deployed: dict, annotation: str, private_plan_sha256: str) -> list:
+    """Keep the full atomic preconditions while selecting one observed version."""
+    return [
+        {"op": "test", "path": "/metadata/uid", "value": deployed["metadata"]["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": deployed["metadata"]["resourceVersion"]},
+        {"op": "test", "path": "/spec/template", "value": deepcopy(deployed["spec"]["template"])},
+        {"op": "add", "path": "/spec/template/metadata/annotations/" + annotation.replace("~", "~0").replace("/", "~1"),
+         "value": private_plan_sha256},
+    ]
+
+
+def verify_dispatch_evidence(output: Path, binding: dict, private_plan_sha256: str, files: dict) -> None:
+    """Check semantic bindings as well as the sealed journal's byte custody."""
+    def raw(name: str, maximum: int = OBJECT_LIMIT) -> bytes:
+        value, observed = private_record(output / name, maximum)
+        inspection.same(observed, files[name], "reload dispatch record differs from the sealed journal")
+        return value
+
+    def document(name: str, maximum: int = OBJECT_LIMIT) -> dict:
+        return inspection.decode(raw(name, maximum), maximum, "private reload dispatch evidence")
+
+    qualified_raw = raw("qualified-plan.json", recovery.REPORT_LIMIT + 1)
+    bootstrap.require(recovery.sha256(qualified_raw) == private_plan_sha256, "reload qualified plan binding differs")
+    qualified = inspection.decode(qualified_raw, recovery.REPORT_LIMIT + 1, "private qualified plan")
+    deadline = qualified["validBeforeUnixSeconds"]
+    bootstrap.require(type(deadline) is int and deadline > 0, "reload qualification deadline is invalid")
+    requested, planned = document("reload-requested.json", 65536), document("reload-plan.json", LIST_LIMIT)
+    annotation = requested.get("annotation")
+    bootstrap.require(requested.get("schema") == planned.get("schema") == SCHEMA
+                      and requested.get("binding") == planned.get("binding") == binding
+                      and requested.get("privatePlanSha256") == planned.get("privatePlanSha256") == private_plan_sha256
+                      and isinstance(annotation, str) and re.fullmatch(r"marty\.11id\.dev/legacy-reload-[0-9a-f]{12}", annotation)
+                      and isinstance(planned.get("patches"), dict) and set(planned["patches"]) == set(WORKLOADS),
+                      "reload initial plan or annotation binding differs")
+    seen_uids = set()
+    for index, name in enumerate(WORKLOADS):
+        before = document(f"deployment-before-{index:02}.json")
+        dispatch_raw = raw(f"deployment-dispatch-{index:02}.json")
+        dispatch = inspection.decode(dispatch_raw, OBJECT_LIMIT, "private dispatch preimage")
+        identity(before, "Deployment", binding["namespace"], name)
+        bootstrap.require(type(before["metadata"].get("generation")) is int and before["metadata"]["generation"] > 0
+                          and before["metadata"]["uid"] not in seen_uids
+                          and annotation not in before["spec"]["template"]["metadata"]["annotations"],
+                          "reload original Deployment binding is invalid")
+        seen_uids.add(before["metadata"]["uid"])
+        same_deployment(dispatch, before, binding["namespace"], controller=True)
+        inspection.same(planned["patches"][name], restart_patch(before, annotation, private_plan_sha256),
+                        "reload frozen plan changed outside its original preimage")
+        request_raw = raw(f"patch-request-{index:02}.json")
+        bootstrap.require(request_raw == bootstrap.encoded(restart_patch(dispatch, annotation, private_plan_sha256)),
+                          "reload dispatch patch differs from its validated fresh preimage")
+        inspection.same(document(f"patch-intent-{index:02}.json"), {
+            "name": name, "uid": dispatch["metadata"]["uid"], "resourceVersion": dispatch["metadata"]["resourceVersion"],
+            "dispatchPreimageSha256": recovery.sha256(dispatch_raw), "patchSha256": recovery.sha256(request_raw),
+            "privatePlanSha256": private_plan_sha256, "validBeforeUnixSeconds": deadline},
+            "reload dispatch intent differs from its preimage, patch or qualification")
+        patched_raw = raw(f"deployment-patched-{index:02}.json")
+        patched = inspection.decode(patched_raw, OBJECT_LIMIT, "private patched Deployment")
+        expected = deepcopy(dispatch)
+        expected["spec"]["template"]["metadata"]["annotations"][annotation] = private_plan_sha256
+        expected["metadata"]["generation"] += 1
+        same_deployment(patched, expected, binding["namespace"])
+        bootstrap.require(patched["metadata"]["resourceVersion"] != dispatch["metadata"]["resourceVersion"],
+                          "reload patch response did not advance its dispatch version")
+        response = document(f"patch-response-{index:02}.json", 5 * 1024 * 1024)
+        bootstrap.require(response.get("completed") is True and type(response.get("exitCode")) is int
+                          and response["exitCode"] == 0 and response.get("bounded") is True
+                          and base64.b64decode(response["stdoutBase64"], validate=True) == patched_raw
+                          and len(base64.b64decode(response["stderrBase64"], validate=True)) <= 1024 * 1024,
+                          "reload captured response differs from the verified dispatch result")
 
 
 def ready(value: dict) -> bool:
@@ -783,13 +892,7 @@ def reload_workloads(request: ReloadRequest, transport, freshness: Freshness,
             bootstrap.require(annotation not in template["metadata"]["annotations"], "recovery annotation already exists")
             originals[name], probes[name] = observed, projections(template, changed, after)
             evidence.write(f"deployment-before-{index:02}.json", bootstrap.encoded(observed))
-            patches[name] = [
-                {"op": "test", "path": "/metadata/uid", "value": observed["metadata"]["uid"]},
-                {"op": "test", "path": "/metadata/resourceVersion", "value": observed["metadata"]["resourceVersion"]},
-                {"op": "test", "path": "/spec/template", "value": template},
-                {"op": "add", "path": "/spec/template/metadata/annotations/" + annotation.replace("~", "~0").replace("/", "~1"),
-                 "value": request.qualified_plan_sha256},
-            ]
+            patches[name] = restart_patch(observed, annotation, request.qualified_plan_sha256)
         evidence.write("reload-plan.json", bootstrap.encoded({"schema": SCHEMA, "binding": request.binding,
             "privatePlanSha256": request.qualified_plan_sha256, "patches": patches}), LIST_LIMIT)
         for index, name in enumerate(WORKLOADS):
@@ -798,18 +901,29 @@ def reload_workloads(request: ReloadRequest, transport, freshness: Freshness,
             guard()
             secrets_stable()
             fresh()
+            # Controller status changes can advance RV after the initial full
+            # census. Refresh once, retaining the frozen identity/spec/profile;
+            # a race after this GET still fails the atomic tests without retry.
+            dispatch = get("deployment", name)
+            same_deployment(dispatch, originals[name], request.binding["namespace"], controller=True)
+            dispatch_raw = bootstrap.encoded(dispatch)
+            patch = restart_patch(dispatch, annotation, request.qualified_plan_sha256)
+            patch_raw = bootstrap.encoded(patch)
+            evidence.write(f"deployment-dispatch-{index:02}.json", dispatch_raw)
+            evidence.write(f"patch-request-{index:02}.json", patch_raw)
             evidence.write(f"patch-intent-{index:02}.json", bootstrap.encoded({"name": name,
-                "uid": originals[name]["metadata"]["uid"], "patchSha256": recovery.sha256(bootstrap.encoded(patches[name])),
+                "uid": dispatch["metadata"]["uid"], "resourceVersion": dispatch["metadata"]["resourceVersion"],
+                "dispatchPreimageSha256": recovery.sha256(dispatch_raw), "patchSha256": recovery.sha256(patch_raw),
                 "privatePlanSha256": request.qualified_plan_sha256, "validBeforeUnixSeconds": plan["validBeforeUnixSeconds"]}))
             evidence.recheck(full=True)
             attempted.append(name)
-            raw = captured_patch(bounded, name, patches[name], index, fresh)
+            raw = captured_patch(bounded, name, patch, index, fresh)
             observed = inspection.decode(raw, OBJECT_LIMIT, "private Deployment patch reply")
-            expected = deepcopy(originals[name])
+            expected = deepcopy(dispatch)
             expected["spec"]["template"]["metadata"]["annotations"][annotation] = request.qualified_plan_sha256
             expected["metadata"]["generation"] += 1
             same_deployment(observed, expected, request.binding["namespace"])
-            bootstrap.require(observed["metadata"]["resourceVersion"] != originals[name]["metadata"]["resourceVersion"],
+            bootstrap.require(observed["metadata"]["resourceVersion"] != dispatch["metadata"]["resourceVersion"],
                               "Deployment patch response did not advance its resource version")
             evidence.write(f"deployment-patched-{index:02}.json", raw)
             patched[name] = observed
