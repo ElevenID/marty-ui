@@ -340,13 +340,16 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _
             'data_sha256':record['data_sha256'],'credential_admission':False,'guards_retained':True}
         for name in markers:
             require(stack.enter_context(renewal.hold_private_input(root/name))==packed(proof))
-        yield {'proof':proof,'root':root,'names':names,'markers':markers}
+        yield {'proof':proof,'root':root,'names':names,'markers':markers,
+               'config':config,'observed':observed,'stack':stack,
+               'old_bytes':lease['values'][record['choice']],'new_bytes':held}
 
 
 def publish_recovery_candidate(config_path, output_dir, *, operator_successor=None):
     """Publish checked metadata only; retain both guards and forbid activation.
 
-    A failed exit leaves only the pending filename, which is never admission.
+    A failed proof exit leaves pending metadata. A rename followed by a failed
+    postcheck is uncertain publication and requires fresh reproof.
     Existing publication is freshly reverified; no phase or mint is replayed.
     """
     import selfhost_windows_selection as selection
