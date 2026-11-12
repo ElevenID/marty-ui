@@ -39,7 +39,7 @@ use marty_signing_grant::{
     minter::{GrantMinter, GrantMinting},
 };
 #[cfg(test)]
-use marty_signing_grant::{GrantBinding, GrantError, SigningOrigin};
+use marty_signing_grant::SigningOrigin;
 #[path = "runtime_organization_defaults.rs"]
 mod organization_defaults;
 #[path = "runtime_signing_ceremony.rs"]
