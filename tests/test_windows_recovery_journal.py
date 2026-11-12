@@ -56,6 +56,9 @@ def seed_inputs(tmp_path):
     cfg.update(schema=selection.renewal.SCHEMA,candidate_only=True,
         current_secrets=str(tmp_path/'selected'),renewed_secrets=str(tmp_path/'recovered'),
         current_env=str(tmp_path/'selected.env'),renewed_env=str(tmp_path/'recovered.env'))
+    cfg.update({name:str(tmp_path/'activation'/name) for name in ('intent','result','new_log','rollback_log')})
+    cfg['step_receipts']=[{name:str(tmp_path/'activation'/name) for name in
+        ('new_started','new_completed','rollback_started','rollback_completed')}]
     cfg['native'].update(minimum_ttl=3600,current='/control/selected/generation',renewed='/control/recovered/generation')
     snapshots={choice:{'env_file':cfg[prefix+'_env'],'env_sha256':'e'*64,
         'secrets_dir':cfg[prefix+'_secrets'],'secrets_sha256':('f' if choice=='new' else 'e')*64,
@@ -87,11 +90,17 @@ def test_recovery_seed_selects_new_generation_and_retains_execution_hashes(tmp_p
     seed=derive_seed(**args)
     selected=selection.decode(seed['000001.selection.json'])
     assert selected['selected']==args['snapshots']['new'] and selected['decision']=='recovered-new'
-    assert selected['result_sha256']==selection.digest(args['activation_result_raw'])
+    assert selected['result_sha256']==selection.digest(b'')
     assert selection.decode(seed['checkpoint.json'])['sequence_offset']==24
     owner=selection.decode(seed['owner.json'])['binding']
     intents,records=selection._parse(seed,owner)
     assert intents[1]['operation']=='recovery-successor' and records[1]['choice']=='new'
+
+
+def test_already_admitted_operator_requires_exact_unchanged_binding(tmp_path):
+    old,new,_=bindings(tmp_path)
+    assert checked_successor_binding(old,deepcopy(old),None)==old
+    with pytest.raises(ValueError):checked_successor_binding(old,new,None)
 
 
 @pytest.mark.parametrize('fault',['predecessor','selection','data','rollback','result','mirror','config','publication'])

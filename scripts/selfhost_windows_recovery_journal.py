@@ -13,13 +13,16 @@ OPERATOR_FIELDS = {'binary','binary_sha256','source_sha','release_tag'}
 
 
 def checked_successor_binding(previous, successor, admission):
-    """Exactly one freshly admitted operator, preserving all runtime bindings.
+    """Preserve the admitted operator or bind one freshly admitted successor.
 
     The finishing owner must provide the admission obtained under its held
     signature/API/capability context. A serialized dict is never that authority.
     """
     require=selection.require
     require(type(previous) is dict and type(successor) is dict)
+    if admission is None:
+        require(previous==successor)
+        return deepcopy(successor)
     expected=deepcopy(previous)
     require(set(successor)==set(previous) and type(admission) is dict)
     require(set(admission)=={'schema','source_sha','release_tag','run_id','run_attempt','binary_sha256',
@@ -44,6 +47,16 @@ def checked_successor_binding(previous, successor, admission):
                 for field in ('binary_sha256','source_sha','release_tag')))
     require(successor['native']['binary_sha256']!=previous['native']['binary_sha256'])
     return deepcopy(successor)
+
+
+def successor_configuration(config, root):
+    """Separate retained recovery receipts from future ordinary operations."""
+    result=deepcopy(config)
+    for key in ('intent','result','new_log','rollback_log'):
+        result[key]=str(Path(root)/'selection'/('credential-'+key+'.json'))
+    result['step_receipts']=[{key:str(Path(root)/'selection'/f'credential-{index:03}-{key}.json')
+        for key in step} for index,step in enumerate(config['step_receipts'])]
+    return result
 
 
 def derive_seed(*, previous_binding, previous_intent, previous_record, config_path, config_raw,
@@ -106,15 +119,17 @@ def derive_seed(*, previous_binding, previous_intent, previous_record, config_pa
                 and snapshot['native_mirror']==config['native'][mirror]
                 and all(type(snapshot[key]) is str and re.fullmatch(r'[0-9a-f]{64}',snapshot[key])
                         for key in ('env_sha256','secrets_sha256')))
+    successor=successor_configuration(config,Path(config_path).parent)
+    successor_raw=selection.packed(successor)
     first={'schema':selection.SCHEMA,'sequence':1,'parent':None,'operation':'recovery-successor',
-           'config_path':str(config_path),'config_file_sha256':selection.digest(config_raw),
-           'config_sha256':selection.config_digest(config),'inputs':deepcopy(snapshots),
+           'config_path':str(Path(config_path).parent/'selection.config.private.json'),
+           'config_file_sha256':selection.digest(successor_raw),
+           'config_sha256':selection.config_digest(successor),'inputs':deepcopy(snapshots),
            'result_before_sha256':selection.digest(b'')}
     selected={'schema':selection.SCHEMA,'sequence':1,'parent':None,
               'intent_sha256':selection.digest(selection.packed(first)),'decision':'recovered-new',
               'choice':'new','selected':deepcopy(snapshots['new']),'data_sha256':data_sha,
-              'result_sha256':selection.digest(activation_result_raw),
-              'transition_intent_sha256':selection.digest(activation_intent_raw)}
+              'result_sha256':selection.digest(b''),'transition_intent_sha256':selection.digest(b'')}
     carry={'schema':SCHEMA,'source_dir':str(source_dir),'intent_sha256':transition_sha256,
            'sequence_offset':generation_sequence,'generation_model':model_binding(config),
            'first_intent':first,'first_selection':selected}
@@ -203,11 +218,22 @@ def seed(raw,expected,current_model,marker,stack):
     paths=[Path(config[key]) for key in ('intent','result','new_log','rollback_log')]
     paths += [Path(path) for step in config['step_receipts'] for path in step.values()]
     require(all(path.parent==root/'activation' for path in paths))
+    successor=successor_configuration(config,root)
+    successor_path=root/'selection.config.private.json'
+    require(stack.enter_context(renewal.hold_private_input(successor_path))==selection.packed(successor))
+    selection_paths=[Path(successor[key]) for key in ('intent','result','new_log','rollback_log')]
+    selection_paths += [Path(path) for step in successor['step_receipts'] for path in step.values()]
+    require(all(path.parent==root/'selection' for path in selection_paths))
+    stack.enter_context(_held_private_input(root/'selection',directory=True))
+    require({path.name for path in (root/'selection').iterdir()}=={path.name for path in selection_paths})
+    require(all(stack.enter_context(renewal.hold_private_input(path))==b'' for path in selection_paths))
     expected_files={*RECOVERY_RECEIPTS,'intent.json','config.private.json','publication.json','renewed.env',
+                    'selection.config.private.json',
+                    *(str(path.relative_to(root)).replace('\\','/') for path in selection_paths),
                     *(str(path.relative_to(root)).replace('\\','/') for path in paths)}
     require(set(marker['evidence_sha256'])==expected_files)
     require({path.name for path in root.iterdir()}==set(RECOVERY_RECEIPTS)|
-        {'intent.json','config.private.json','publication.json','renewed.env','activation'})
+        {'intent.json','config.private.json','publication.json','renewed.env','activation','selection','selection.config.private.json'})
     stack.enter_context(_held_private_input(root/'activation',directory=True))
     require({path.name for path in (root/'activation').iterdir()}=={path.name for path in paths})
     bodies={name:stack.enter_context(renewal.hold_private_input(root/name,max_bytes=2*1024*1024)) for name in expected_files}
