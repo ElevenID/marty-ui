@@ -59,19 +59,26 @@ class MembershipBuildTests(unittest.TestCase):
         self.assertEqual(set(current['packages']), set(current['roles'].values()))
         self.assertEqual(build.cargo_arguments(build.D05_MEMBERSHIP_LATEST_PROFILE).count('--bin'), 10)
 
-    def test_strict_capacity_and_before_parent_startup_allowance(self):
-        required = 4 * 1024 ** 3 + 64 * 1024 ** 2
-        for before_parent, threshold in ((False, required), (True, required + 1024 ** 3)):
-            self.assertEqual(build.membership_required_free_bytes(before_parent=before_parent), threshold)
-            for free, accepted in ((threshold, True), (threshold - 1024, False)):
-                helper = SimpleNamespace(run=lambda *args: SimpleNamespace(stdout=str(free // 1024)))
-                with self.subTest(before_parent=before_parent, free=free), \
-                     patch.object(build.shutil, 'disk_usage', return_value=SimpleNamespace(free=8 * 1024 ** 3)):
-                    if accepted:
-                        build.membership_capacity(helper, Path('.'), before_parent=before_parent)
-                    else:
-                        with self.assertRaisesRegex(ValueError, f'freeBytes={free} requiredBytes={threshold}'):
-                            build.membership_capacity(helper, Path('.'), before_parent=before_parent)
+    def test_profile_capacity_bounds_current_and_preserves_historical(self):
+        for profile, windows, current, parent in (
+                (build.D05_MEMBERSHIP_PROFILE, 1024 ** 3, 4362076160, 5435817984),
+                (build.D05_MEMBERSHIP_LATEST_PROFILE, 128 * 1024 ** 2, 3422552064, 3422552064)):
+            self.assertEqual(build.membership_windows_memory_bytes(profile), windows)
+            for before_parent, threshold in ((False, current), (True, parent)):
+                self.assertEqual(build.membership_required_free_bytes(profile, before_parent=before_parent), threshold)
+                for free, accepted in ((threshold, True), (threshold - 1024, False)):
+                    helper = SimpleNamespace(run=lambda *args: SimpleNamespace(stdout=str(free // 1024)))
+                    with self.subTest(profile=profile, before_parent=before_parent, free=free), \
+                         patch.object(build.shutil, 'disk_usage', return_value=SimpleNamespace(free=8 * 1024 ** 3)):
+                        if accepted:
+                            build.membership_capacity(helper, Path('.'), profile, before_parent=before_parent)
+                        else:
+                            with self.assertRaisesRegex(ValueError, f'freeBytes={free} requiredBytes={threshold}'):
+                                build.membership_capacity(helper, Path('.'), profile, before_parent=before_parent)
+        helper = SimpleNamespace(run=unittest.mock.Mock())
+        with self.assertRaisesRegex(ValueError, 'D05_BUILD_PROFILE_REQUIRED'):
+            build.membership_capacity(helper, Path('.'), 'unreviewed-profile')
+        helper.run.assert_not_called()
 
     def test_r5_terminal_mount_order_is_not_identity(self):
         row = terminal()

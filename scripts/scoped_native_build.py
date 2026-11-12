@@ -496,24 +496,30 @@ def membership_consumers(helper, plan, expected=None, owned_cid=None, owned_stat
     return rows
 
 
-def membership_required_free_bytes(*, before_parent=False):
-    """Strict free-memory guard, plus startup allowance before the Job starts.
+def membership_windows_memory_bytes(profile):
+    require(profile in D05_MEMBERSHIP_PROFILES, "D05_BUILD_PROFILE_REQUIRED")
+    return 128 * 1024 ** 2 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 1024 ** 3
 
-    Keep the complete Windows budget in the in-parent guard: Job commit/peak
-    counters do not establish its current physical residency. Admission before
-    spawning the parent adds another Windows-budget-sized allowance so its
-    startup clients do not immediately consume the in-parent headroom. This is
-    conservative admission, not a reservation; each dispatch still rechecks.
+
+def membership_required_free_bytes(profile, *, before_parent=False):
+    """Full admitted budget; never infer physical residency from Job counters.
+
+    Current ten-role source checks passed in a bounded 128 MiB Windows Job;
+    the complete controller lifetime still must pass that actual limit. Count
+    its startup once inside the same Job budget. Preserve the historical
+    six-role profile's Windows cap and extra pre-parent allowance unchanged.
     """
     require(type(before_parent) is bool, "D05_CAPACITY_PHASE_INVALID")
-    return 4 * 1024 ** 3 + 64 * 1024 ** 2 + (1024 ** 3 if before_parent else 0)
+    windows = membership_windows_memory_bytes(profile)
+    historical_startup = windows if profile == D05_MEMBERSHIP_PROFILE and before_parent else 0
+    return 2 * 1024 ** 3 + windows + 1024 ** 3 + 64 * 1024 ** 2 + historical_startup
 
 
-def membership_capacity(helper, private, *, before_parent=False):
-    required_bytes = membership_required_free_bytes(before_parent=before_parent)
+def membership_capacity(helper, private, profile, *, before_parent=False):
+    required_bytes = membership_required_free_bytes(profile, before_parent=before_parent)
     host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
-    # Linux 2 GiB + Windows controller 1 GiB + unchanged host reserve 1 GiB + 64 MiB.
+    # Linux 2 GiB + the admitted Windows cap + unchanged host reserve 1 GiB + 64 MiB.
     require(host_kib * 1024 >= required_bytes,
             "D05_HOST_HEADROOM_REQUIRED "
             f"phase={'before-parent' if before_parent else 'in-parent'} "
@@ -713,7 +719,7 @@ def start(prepared_ref, helper, git, profile=None):
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
     if profile in D05_MEMBERSHIP_PROFILES:
-        membership_capacity(helper, private)
+        membership_capacity(helper, private, profile)
     require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED")
     if profile in OFFICIAL_PROFILES:
         volume = build_scope(profile)["volumes"][1]
@@ -781,7 +787,7 @@ def start(prepared_ref, helper, git, profile=None):
     if profile in CURRENT_ISSUER_READY_PROFILES:
         current_issuer_capacity(helper, private, profile)
     if profile in D05_MEMBERSHIP_PROFILES:
-        membership_capacity(helper, private)
+        membership_capacity(helper, private, profile)
     state = {"state": "BUILD_CREATE_INTENT", "runId": plan["runId"], "preparationSha256": preparation_sha, "resourcesBefore": resource, "releaseQualified": False, "recordingQualified": False}
     if resource_state is None:
         state["intentDurability"] = store.exclusive("build-apply-intent.json", state)
@@ -814,7 +820,7 @@ def start(prepared_ref, helper, git, profile=None):
             require(durable_barrier(store.state(state)), "BUILD_CREATED_JOURNAL_REQUIRED")
             if profile in D05_MEMBERSHIP_PROFILES:
                 membership_consumers(helper, plan, cache_baseline, cid, "created")
-                membership_capacity(helper, private)
+                membership_capacity(helper, private, profile)
                 require(helper.run("docker", "--context", "desktop-linux", "info", "--format", "{{.ID}}").stdout.strip() == plan["engineId"], "ENGINE_CHANGED_BEFORE_D05_START")
             else:
                 current_issuer_created_identity(helper, plan, cid, profile=profile)
