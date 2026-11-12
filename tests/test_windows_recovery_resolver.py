@@ -24,3 +24,18 @@ def test_incomplete_recovery_link_seals_predecessor(monkeypatch):
             with selection.selected_inputs(path):pytest.fail('Incomplete recovery link fell back')
         assert not target.exists()
         assert all((journal/name).read_bytes()==raw for name,raw in before.items())
+
+
+@pytest.mark.parametrize('field',['binary','binary_sha256','source_sha','release_tag'])
+def test_uncommitted_operator_identity_never_gains_authority_from_replay(monkeypatch,field):
+    with fixture(monkeypatch) as (root,_phase,_tx,_outcome,path,cfg):
+        selection.adopt(path)
+        journal=selection.directory(cfg)
+        before={p.name:p.read_bytes() for p in journal.iterdir()}
+        forged=selection.decode(selection.packed(cfg))
+        forged['native'][field]={'binary':str(root/'unadmitted-operator'),
+            'binary_sha256':'f'*64,'source_sha':'f'*40,'release_tag':'v9.9.9'}[field]
+        caller=root/'unadmitted-config.json';caller.write_bytes(selection.packed(forged))
+        with pytest.raises(ValueError),selection._session(caller):pass
+        assert {p.name:p.read_bytes() for p in journal.iterdir()}==before
+        assert not selection.renewal.recovery_pending(cfg)

@@ -400,6 +400,12 @@ release tag, run ID/attempt, binary SHA256), `gh`, `cosign`, and trusted
 binary identity and capability verification; local metadata is insufficient.
 Historical runtime, model, images, CA and storage bindings stay unchanged.
 
+The next ordinary renewal uses a newly staged configuration with the selected
+operator. Resolution replays the complete stored-owner chain before admitting
+that caller identity. Older entrypoints must match a recorded historical
+configuration; newly staged transactions must match the selected owner. Neither
+an uncommitted recovery marker nor a stale operator grants mutation authority.
+
 Never replay an interrupted producer or activation. Preserve its receipts for
 operator reconciliation. Selection can complete missing or exactly empty target
 seed files after fresh proof; partial/empty source intent or decision files

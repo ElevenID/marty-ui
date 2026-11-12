@@ -273,3 +273,39 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
         next_config=selection.decode(Path(next_stage['next_config']).read_bytes())
         assert next_config['current_secrets']==str(candidate)
         assert Path(next_config['intent']).read_bytes()==b''
+        # The next transaction enters through its newly staged configuration,
+        # whose admitted operator differs from the original journal owner.
+        with selection._session(Path(next_stage['next_config'])) as (_cfg,_raw,_owner,active,_entries,_stack):
+            assert active==target
+        next_path=Path(next_stage['next_config']);next_raw=next_path.read_bytes()
+        if commit_owner=='replay':
+            faults=['operator','control','model']+(['stale-operator'] if operator_successor else [])
+            for fault in faults:
+                bad=selection.decode(next_raw)
+                if fault=='operator':bad['native']['source_sha']='f'*40
+                elif fault=='control':bad['native']['control_volume']='PUBLIC_UNADMITTED_CONTROL'
+                elif fault=='model':bad['compose_sha256']='f'*64
+                else:
+                    for key in recovery.OPERATOR_FIELDS:bad['native'][key]=cfg['native'][key]
+                next_path.write_bytes(selection.packed(bad))
+                with pytest.raises(ValueError),selection._session(next_path):pass
+                next_path.write_bytes(next_raw)
+        monkeypatch.setattr(selection.renewal,'native_preflight',lambda *args:None)
+        monkeypatch.setattr(selection.renewal,'Docker',lambda *args:SimpleNamespace(prefix=['PUBLIC_DOCKER']))
+        assert selection.prepare(next_path,staging_sha256=next_stage['guard_sha256'],
+                                 authority_file=next_stage['authority_file'])==2
+        assert not selection.renewal.renewal_staging_guard(cfg).exists()
+        with ExitStack() as held:
+            values,_=selection._inputs(next_config,held)
+            with selection.activation_admission(next_config,values['old'],values['new'],
+                    Path(next_config['current_env']).read_bytes(),Path(next_config['renewed_env']).read_bytes()):pass
+        # Runtime effects are substituted, but registration, activation admission,
+        # completion and both historical/current entrypoints use their real owners.
+        outcome(next_config,'activated')
+        Path(next_config['intent']).write_bytes(b'PUBLIC_NEXT_ACTIVATION')
+        phase['active']=Path(next_config['renewed_secrets'])
+        assert selection.complete(next_path)['sequence']==2
+        for entrypoint in (path,next_path):
+            with selection.selected_inputs(entrypoint) as lease:
+                assert lease.generation_sequence==3 and lease.sequence==2
+                assert lease.secrets_dir==phase['active'] and lease.check_current()==record['data_sha256']

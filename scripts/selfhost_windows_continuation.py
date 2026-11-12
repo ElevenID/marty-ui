@@ -86,6 +86,40 @@ def decision(marker, initial):
 
 
 def resolve(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None, pending_recovery_sha256=None):
+    """Replay stored owners, then admit the caller's actual operator identity.
+
+    A completed recovery can change four operator fields. A new transaction
+    must match the selected owner; an older entrypoint must match a recorded
+    historical configuration in the verified predecessor chain. Uncommitted
+    markers and unselected operator identities grant no caller authority.
+    """
+    from selfhost_windows_model import immutable_binding, model_binding
+    from selfhost_windows_recovery_journal import OPERATOR_FIELDS
+    ancestry=[] if ancestry is None else ancestry
+    start=len(ancestry)
+    replay=deepcopy(config)
+    if raw:
+        stored=selection.decode(raw['owner.json'])['binding']
+        for field in OPERATOR_FIELDS:replay['native'][field]=stored['native'][field]
+    expected,active,entries,accepted=_resolve_chain(replay,root,raw,stack,
+        pending_model=pending_model,pending_continuation_sha256=pending_continuation_sha256,
+        ancestry=ancestry,discover_pending=discover_pending,pending_product_sha256=pending_product_sha256,
+        pending_recovery_sha256=pending_recovery_sha256)
+    supplied=immutable_binding(selection.binding(config))
+    historical=False
+    if supplied!=immutable_binding(expected):
+        for _prior_root,prior_raw in ancestry[start:]:
+            owner=selection.decode(prior_raw['owner.json'])['binding']
+            if immutable_binding(owner)!=supplied:continue
+            for name,body in prior_raw.items():
+                if selection.ENTRY.fullmatch(name) and name.endswith('.intent.json'):
+                    historical |= selection.decode(body)['config_sha256']==selection.config_digest(config)
+    require(supplied==immutable_binding(expected) or historical)
+    require(model_binding(config) in accepted)
+    return expected,active,entries,accepted
+
+
+def _resolve_chain(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None, pending_recovery_sha256=None):
     """Called under the shared project lock, including activation's existing lock.
 
     All sealed predecessor records/directories remain held through the caller's
