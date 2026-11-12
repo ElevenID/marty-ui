@@ -264,7 +264,7 @@ pub async fn prepare_verification_submission(
             response_jwk.as_deref(),
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
-        marty_iso18013::openid4vp::mdoc_binding_digests(
+        let binding = marty_iso18013::openid4vp::mdoc_binding_digests(
             &transcript,
             client_id,
             &nonce,
@@ -273,6 +273,18 @@ pub async fn prepare_verification_submission(
             &vp_token,
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
+        // Preserve the existing privacy-safe audit message inside tracing JSON.
+        // Only hashes cross the log boundary; request and credential bytes stay private.
+        tracing::info!(
+            "OID4VP mdoc binding flow_instance_sha256={} transcript_sha256={} client_id_sha256={} nonce_sha256={} response_uri_sha256={} response_key_thumbprint_sha256={} presentation_sha256={}",
+            sha256_hex(instance.id.as_bytes()),
+            binding.transcript_sha256,
+            binding.client_id_sha256,
+            binding.nonce_sha256,
+            binding.response_uri_sha256,
+            binding.response_key_thumbprint_sha256,
+            binding.presentation_sha256,
+        );
         evaluation_context.insert(
             "mdoc_session_transcript_b64url".into(),
             json!(URL_SAFE_NO_PAD.encode(transcript)),

@@ -467,7 +467,13 @@ fn verify_mdoc(
         issuer_trusted = result.issuer_trusted,
         device_authentication_valid = result.device_authentication_valid,
         device_auth_error_kind = error_kind,
-        "mDoc verification completed"
+        "mDoc verification binding transcript_sha256={} device_response_sha256={} issuer_signature_valid={} issuer_trusted={} device_authentication_valid={} device_auth_error_kind={}",
+        hex::encode(Sha256::digest(&session_transcript)),
+        hex::encode(Sha256::digest(&mdoc_bytes)),
+        if result.issuer_signature_valid { "True" } else { "False" },
+        if result.issuer_trusted { "True" } else { "False" },
+        if result.device_authentication_valid { "True" } else { "False" },
+        error_kind,
     );
     project_mdoc_result(&mdoc_bytes, result, context)
 }
