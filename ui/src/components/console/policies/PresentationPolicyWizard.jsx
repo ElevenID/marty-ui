@@ -35,6 +35,7 @@ import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
 import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutomaticTemplateConfig } from './policyTemplateDefaults';
 import { isClaimsConfigurationComplete } from './policyClaimsValidation';
+import { isValidPolicyCredentialAge } from './policyFreshnessValidation';
 import { clearPreviousTemplateBinding, projectTemplatePolicyClaims, TemplatePolicyClaimsError } from './projectTemplatePolicyClaims';
 import {
   TrustProfileStep,
@@ -64,15 +65,15 @@ const INITIAL_DATA = {
     holder_binding: 'device_key',
     freshness_requirements: {
       max_credential_age_seconds: 31536000, // 1 year default
-      max_proof_age_seconds: 300, // 5 minutes default
       require_revocation_check: true,
     },
     prefer_predicates: true,
-    single_presentation: false,
     metadata: {},
   },
   activateImmediately: true,
 };
+
+const isActivePolicy = (policy) => String(policy?.status || '').trim().toLowerCase() === 'active';
 
 const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
@@ -116,9 +117,8 @@ const PresentationPolicyWizard = () => {
           return false;
         }
       case 3: // Freshness & Binding (optional)
-        return true;
       case 4: // Review
-        return true;
+        return isValidPolicyCredentialAge(stepData.policyConfig.freshness_requirements?.max_credential_age_seconds);
       default:
         return false;
     }
@@ -129,6 +129,9 @@ const PresentationPolicyWizard = () => {
     const isCurrent = () => epoch === scopeEpoch.current;
     if (!isClaimsConfigurationComplete(data.policyConfig)) {
       throw new Error(t('wizards.presentationPolicy.claimsConfigurationStep.validation.completeClaims'));
+    }
+    if (!isValidPolicyCredentialAge(data.policyConfig.freshness_requirements?.max_credential_age_seconds)) {
+      throw new Error(t('wizards.presentationPolicy.freshnessBindingStep.validation.maxCredentialAge'));
     }
     const credentialRequirements = projectClaims(data);
     await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
@@ -166,8 +169,10 @@ const PresentationPolicyWizard = () => {
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: submitReviewedData,
-    onComplete: () => {
-      navigate('/console/org/deploy/profiles');
+    onComplete: (policy) => {
+      navigate(isActivePolicy(policy)
+        ? '/console/org/deploy/profiles'
+        : `/console/org/policies/presentation/${encodeURIComponent(policy.id)}`);
     },
     onCancel: () => {
       navigate('/console/org/policies');
@@ -222,7 +227,6 @@ const PresentationPolicyWizard = () => {
         ...template.config,
         metadata: {
           ...(template.config.metadata || {}),
-          standard_reference: template.standardReference,
           template_id: template.id,
         },
       };
@@ -297,6 +301,7 @@ const PresentationPolicyWizard = () => {
 
   // Show success message
   if (wizard.success) {
+    const active = isActivePolicy(wizard.result);
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -305,12 +310,14 @@ const PresentationPolicyWizard = () => {
             {t('wizards.presentationPolicy.success.title')}
           </Typography>
           <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
-            {wizard.data.activateImmediately 
+            {active
               ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
               : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {t('wizards.presentationPolicy.success.redirecting')}
+            {active
+              ? t('wizards.presentationPolicy.success.redirecting')
+              : t('wizards.presentationPolicy.success.redirectingDraft', { defaultValue: 'Opening the saved policy draft...' })}
           </Typography>
         </Paper>
       </Container>
@@ -378,7 +385,7 @@ const PresentationPolicyWizard = () => {
             {getSteps(t)[wizard.activeStep].optional && (
               <Button
                 onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
-                disabled={wizard.loading}
+                disabled={wizard.loading || !wizard.isStepValid()}
                 data-testid="wizard.policy.skip"
               >
                 {t('wizards.presentationPolicy.buttons.skip')}

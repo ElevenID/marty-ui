@@ -23,6 +23,36 @@ function reviewData(claim = {}) {
 
 describe('presentation policy review', () => {
   it.each([
+    [0, '0 seconds'],
+    [43200, '12 hours'],
+    [129600, '1 day, 12 hours'],
+    ['86401', '1 day, 1 second'],
+    [90061, '1 day, 1 hour, 1 minute, 1 second'],
+  ])('shows every part of the %s-second age limit', (seconds, duration) => {
+    const data = reviewData();
+    render(<ReviewStep data={{ ...data, policyConfig: {
+      ...data.policyConfig,
+      freshness_requirements: { ...data.policyConfig.freshness_requirements, max_credential_age_seconds: seconds },
+    } }} onEdit={vi.fn()} onToggleActivation={vi.fn()} />);
+    expect(screen.getByText(duration)).toBeInTheDocument();
+  });
+
+  it('does not promise unsupported settings from an older draft will be saved', () => {
+    const data = reviewData();
+    render(<ReviewStep data={{ ...data, policyConfig: {
+      ...data.policyConfig,
+      single_presentation: true,
+      metadata: { standard_reference: 'An unsaved standard' },
+    } }} onEdit={vi.fn()} onToggleActivation={vi.fn()} />);
+    expect(screen.getByText('1 day')).toBeInTheDocument();
+    expect(screen.getByText('Required')).toBeInTheDocument();
+    expect(screen.queryByText('Max Proof Age')).not.toBeInTheDocument();
+    expect(screen.queryByText('Compliance Standard')).not.toBeInTheDocument();
+    expect(screen.queryByText('An unsaved standard')).not.toBeInTheDocument();
+    expect(screen.queryByText('Single Presentation')).not.toBeInTheDocument();
+  });
+
+  it.each([
     ['native zero overrides the legacy value', { value_constraint: 0, required_value: 'legacy' }, '0'],
     ['native false overrides the legacy value', { value_constraint: false, required_value: 'legacy' }, 'false'],
     ['string zero is distinct from numeric zero', { value_constraint: '0' }, '"0"'],

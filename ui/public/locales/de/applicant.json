@@ -80,5 +80,32 @@
       "revoked": "Dieser Nachweis wurde widerrufen. Wenden Sie sich an den Aussteller, um Hilfe zu erhalten.",
       "additionalInformation": "Der Aussteller benötigt weitere Informationen. Fragen Sie beim Aussteller nach, wie Sie diese bereitstellen können."
     }
+  },
+  "devices": {
+    "loading": "Geräte werden geladen",
+    "searchLabel": "Geräte suchen",
+    "noMatches": "Keine Geräte entsprechen Ihrer Suche.",
+    "clearSearch": "Suche löschen",
+    "tableLabel": "Registrierte Geräte",
+    "notReported": "Nicht angegeben",
+    "signInRequired": "Melden Sie sich an, um Ihre registrierten Geräte anzuzeigen.",
+    "tableHeaders": {
+      "status": "Registrierung"
+    },
+    "status": {
+      "inactive": "Inaktiv"
+    },
+    "actions": {
+      "unregisterNamed": "Gerät {{deviceId}} abmelden"
+    },
+    "errorUnregisteringFallback": "Das Gerät konnte nicht abgemeldet werden. Versuchen Sie es erneut.",
+    "info": "Sehen Sie Ihre registrierten Geräte an und melden Sie nicht mehr verwendete Geräte ab. Eine aktive Registrierung sagt nicht aus, ob ein Gerät online ist.",
+    "empty": {
+      "description": "Geräte werden hier angezeigt, nachdem sie mit Ihrem Konto registriert wurden."
+    },
+    "unregisterDialog": {
+      "message": "Dieses Gerät abmelden? Seine Registrierung wird inaktiv. Um es wieder zu verwenden, registrieren Sie das Gerät erneut."
+    },
+    "description": "Verwalten Sie Ihre Geräteregistrierungen."
   }
 }

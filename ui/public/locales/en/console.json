@@ -158,14 +158,14 @@
       "unavailable": "Integration information unavailable"
     },
     "runtimeReadiness": {
-      "title": "Runtime Operational Status",
-      "description": "Real-time readiness for credential operations",
+      "title": "Credential Operation Configuration",
+      "description": "This summary reports configured resources. Check System Status for service health and Setup Readiness for remaining requirements.",
       "credentialIssuance": "Credential Issuance",
       "credentialVerification": "Credential Verification",
       "signingKeys": "Signing Keys",
-      "ready": "Ready",
-      "degraded": "Degraded",
-      "notReady": "Not Ready",
+      "ready": "Configured",
+      "degraded": "Needs review",
+      "notReady": "Not configured",
       "valid": "Valid",
       "invalid": "Invalid",
       "never": "Never",
@@ -178,7 +178,7 @@
       "issuance": {
         "keysInvalid": "Keys invalid or expired",
         "issuerInactive": "Issuer not active",
-        "operational": "Credential issuance is ready",
+        "operational": "Active resources are configured for credential issuance.",
         "keysReason": "Valid signing keys are required to sign and issue verifiable credentials. Without them, credential issuance cannot proceed.",
         "issuerReason": "The issuer service must be active and properly configured to handle credential issuance requests.",
         "fixSigningKeys": "Fix Signing Keys",
@@ -186,7 +186,7 @@
         "noDeployments": "No active deployments",
         "deploymentsReason": "An active deployment profile is required before credentials can be issued.",
         "configureDeployment": "Configure Deployment",
-        "notReady": "Credential issuance is not ready",
+        "notReady": "Credential issuance configuration is incomplete",
         "readinessReason": "Review the issuance flow and its required resources before issuing credentials.",
         "reviewFlows": "Review Issuance Flows",
         "issuerConfigurationRequired": "Issuer configuration needs review",
@@ -195,12 +195,12 @@
       "verification": {
         "noDeployments": "No active deployments",
         "policyUnreachable": "No active presentation policies",
-        "operational": "Credential verification is ready",
+        "operational": "Active policy and deployment resources are configured for verification.",
         "deploymentsReason": "At least one deployment profile must be active to verify credentials. Deployments define the trust policies and verification rules.",
         "policyReason": "At least one active presentation policy is required before credentials can be verified.",
         "configureDeployment": "Configure Deployment",
         "fixPolicies": "Fix Policies",
-        "notReady": "Credential verification is not ready",
+        "notReady": "Credential verification configuration is incomplete",
         "readinessReason": "Review the verification configuration before starting a session.",
         "reviewSetup": "Review Verification Setup"
       },
@@ -733,7 +733,8 @@
       "viewDetails": "View Details",
       "duplicate": "Duplicate",
       "edit": "Edit",
-      "previewForm": "Preview Application Form"
+      "previewForm": "Preview Application Form",
+      "retryCredentialDetails": "Retry credential details"
     },
     "breadcrumbs": {
       "console": "Console",
@@ -742,6 +743,12 @@
     },
     "validation": {
       "validityDays": "Enter a whole number from 1 to 3650 days."
+    },
+    "errors": {
+      "loadFailed": "Application templates could not be loaded.",
+      "invalidInventory": "Application templates could not be loaded for the selected organization.",
+      "selectOrganization": "Select an organization before loading application templates.",
+      "credentialDetailsUnavailable": "Credential template details could not be loaded. Names and derived field counts may be unavailable."
     }
   },
   "createTemplateDrawer": {
@@ -861,7 +868,7 @@
       },
       "entryPoints": {
         "title": "Applicant Entry Points",
-        "description": "Share these with applicants to start the credential issuance process",
+        "flowDescription": "Share an available applicant link to start this flow.",
         "applicationUrlLabel": "Application URL",
         "linkUnavailable": "No application link is available for this flow.",
         "qrUnavailable": "No QR code is available for this flow.",
@@ -913,7 +920,7 @@
         "copied": "Copied!",
         "downloadQr": "Download QR",
         "previewButton": "Preview Applicant Experience",
-        "backToFlowsButton": "Back to Issuance Flows"
+        "backToFlows": "Back to Flows"
       },
       "alerts": {
         "draftStatus": "This flow is in draft status. Publish the flow to make it available to applicants."
@@ -951,7 +958,7 @@
     "deploymentProfilesDescription": "Configure deployment profiles for APIs, kiosks, lanes/devices, and both online and offline environments.",
     "apiKeys": "API Keys",
     "apiKeysDescription": "Generate and manage API keys for programmatic access to identity services.",
-    "lanesDevices": "Lanes & Devices",
+    "lanesDevices": "Devices",
     "webhooks": "Webhooks",
     "apiKeysPage": {
       "generateKey": "Create API Key",
@@ -986,8 +993,8 @@
       "error": "Failed to load API keys"
     },
     "lanesDevicesPage": {
-      "title": "Lanes & Devices",
-      "description": "Monitor and manage verification lanes and connected devices.",
+      "title": "Your Registered Devices",
+      "description": "View the devices you have registered with the selected organization.",
       "addLane": "Add Lane",
       "searchPlaceholder": "Search lanes...",
       "deploymentFilter": "Deployment",
@@ -1012,7 +1019,9 @@
         "viewDevices": "View Devices",
         "configure": "Configure"
       },
-      "error": "Failed to load lanes"
+      "error": "Failed to load lanes",
+      "noDevices": "You have no device registrations in this organization.",
+      "selectOrganization": "Select an organization to view your device registrations."
     },
     "deploymentActivityCard": {
       "status": {
@@ -1049,7 +1058,7 @@
       "deploy": "Deploy",
       "deploymentProfiles": "Deployment Profiles",
       "apiKeys": "API Keys",
-      "lanesDevices": "Lanes & Devices",
+      "lanesDevices": "Devices",
       "signingKeys": "Signing Keys"
     },
     "signingKeys": {
@@ -1897,8 +1906,8 @@
         },
         "helpers": {
           "holderBinding": "How should the presentation be bound to the credential holder?",
-          "freshness": "Control how recent credentials and proofs must be.",
-          "maxCredentialAge": "How old can the credential be? (1 year = 365 days)",
+          "freshness": "Control how recent credentials must be.",
+          "maxCredentialAge": "Maximum time since issuance in seconds (1 day = 86,400 seconds).",
           "maxProofAge": "How old can the proof be? (typically 5-10 minutes)",
           "revocationCheck": "Verify that credentials have not been revoked (recommended)",
           "compliance": "Track which standard version this policy targets for compliance audits.",
@@ -1912,7 +1921,11 @@
         },
         "units": {
           "days": "days",
-          "minutes": "minutes"
+          "minutes": "minutes",
+          "seconds": "seconds"
+        },
+        "validation": {
+          "maxCredentialAge": "Enter a valid whole number of seconds, 0 or greater."
         },
         "bindingOptions": {
           "device_key": {
@@ -2002,7 +2015,8 @@
         "messageActive": "\"{{name}}\" is active and ready to use.",
         "messageDraft": "\"{{name}}\" is saved as draft.",
         "nextStep": "Next, create a deployment profile to define where and how this policy is enforced.",
-        "redirecting": "Redirecting to Deployment Profiles..."
+        "redirecting": "Redirecting to Deployment Profiles...",
+        "redirectingDraft": "Opening the saved policy draft..."
       }
     },
     "flowDefinition": {

@@ -175,22 +175,27 @@
 			"noCriticalEvents": "In den letzten 24 Stunden wurden keine kritischen Ereignisse gemeldet."
 		},
 		"runtimeReadiness": {
+			"title": "Konfiguration der Nachweisvorgänge",
+			"description": "Diese Übersicht zeigt konfigurierte Ressourcen. Prüfen Sie den Systemstatus für den Dienstzustand und die Einrichtungsbereitschaft für noch offene Anforderungen.",
+			"ready": "Konfiguriert",
+			"degraded": "Prüfung erforderlich",
+			"notReady": "Nicht konfiguriert",
 			"issuance": {
 				"noDeployments": "Keine aktiven Bereitstellungen",
 				"deploymentsReason": "Für die Ausstellung von Nachweisen ist ein aktives Bereitstellungsprofil erforderlich.",
 				"configureDeployment": "Bereitstellung konfigurieren",
-				"notReady": "Die Nachweisausstellung ist noch nicht bereit",
+				"notReady": "Die Konfiguration der Nachweisausstellung ist unvollständig",
 				"readinessReason": "Prüfen Sie den Ausstellungsablauf und die erforderlichen Ressourcen, bevor Sie Nachweise ausstellen.",
 				"reviewFlows": "Ausstellungsabläufe prüfen",
-				"operational": "Die Nachweisausstellung ist bereit",
+				"operational": "Aktive Ressourcen sind für die Ausstellung von Nachweisen konfiguriert.",
 				"issuerConfigurationRequired": "Ausstellerkonfiguration muss geprüft werden",
 				"issuerConfigurationReason": "Prüfen Sie vor der Ausstellung von Nachweisen die Ausstelleridentität und die Aussteller-DID, auf die die aktive Nachweisvorlage verweist."
 			},
 			"verification": {
-				"notReady": "Die Nachweisprüfung ist noch nicht bereit",
+				"notReady": "Die Konfiguration der Nachweisprüfung ist unvollständig",
 				"readinessReason": "Prüfen Sie die Verifizierungskonfiguration, bevor Sie eine Sitzung starten.",
 				"reviewSetup": "Verifizierungseinrichtung prüfen",
-				"operational": "Die Nachweisprüfung ist bereit",
+				"operational": "Aktive Richtlinien- und Bereitstellungsressourcen sind für die Verifizierung konfiguriert.",
 				"policyUnreachable": "Keine aktiven Präsentationsrichtlinien",
 				"policyReason": "Für die Verifizierung von Nachweisen ist mindestens eine aktive Präsentationsrichtlinie erforderlich."
 			},
@@ -280,7 +285,7 @@
 		"deploymentProfilesDescription": "Konfigurieren Sie Bereitstellungsprofile für APIs, Kioske und Geräte in Online-/Offline-Szenarien.",
 		"apiKeys": "API-Schlüssel",
 		"apiKeysDescription": "Erstellen und verwalten Sie API-Schlüssel für den programmatischen Zugriff.",
-		"lanesDevices": "Spuren & Geräte",
+		"lanesDevices": "Geräte",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "API-Schlüssel erstellen",
@@ -349,8 +354,14 @@
 			"deploy": "Bereitstellung",
 			"deploymentProfiles": "Bereitstellungsprofile",
 			"apiKeys": "API-Schlüssel",
-			"lanesDevices": "Spuren & Geräte",
+			"lanesDevices": "Geräte",
 			"signingKeys": "Signaturschlüssel"
+		},
+		"lanesDevicesPage": {
+			"title": "Ihre registrierten Geräte",
+			"description": "Sehen Sie die Geräte an, die Sie bei der ausgewählten Organisation registriert haben.",
+			"noDevices": "Sie haben keine registrierten Geräte in dieser Organisation.",
+			"selectOrganization": "Wählen Sie eine Organisation aus, um Ihre registrierten Geräte anzuzeigen."
 		}
 	},
 	"audit": {
@@ -493,6 +504,18 @@
 			"optional": "Optional"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Legen Sie fest, wie aktuell Nachweise sein müssen.",
+					"maxCredentialAge": "Maximale Zeit seit der Ausstellung in Sekunden (1 Tag = 86.400 Sekunden)."
+				},
+				"units": {
+					"seconds": "Sekunden"
+				},
+				"validation": {
+					"maxCredentialAge": "Geben Sie eine gültige ganze Anzahl von Sekunden ein, die 0 oder größer ist."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Geben Sie einen Claim-Namen ein.",
@@ -593,6 +616,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und 3650 ein."
+		},
+		"errors": {
+			"loadFailed": "Die Antragsvorlagen konnten nicht geladen werden.",
+			"invalidInventory": "Die Antragsvorlagen konnten für die ausgewählte Organisation nicht geladen werden.",
+			"selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie Antragsvorlagen laden.",
+			"credentialDetailsUnavailable": "Die Details der Nachweisvorlagen konnten nicht geladen werden. Namen und daraus abgeleitete Feldanzahlen sind möglicherweise nicht verfügbar."
+		},
+		"actions": {
+			"retryCredentialDetails": "Nachweisdetails erneut laden"
 		}
 	}
 }

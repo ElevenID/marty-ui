@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@test/utils'
 
 import FlowManager from '../vendor/FlowManager'
@@ -73,11 +73,6 @@ vi.mock('../../hooks/useNotifications', () => ({
 }))
 
 vi.mock('../../services/flowsApi', () => ({
-  FLOW_STATES: {
-    DRAFT: 'draft',
-    PUBLISHED: 'published',
-    DISABLED: 'disabled',
-  },
   default: {
     listFlows: mockListFlows,
     listFlowExecutions: mockListFlowExecutions,
@@ -131,6 +126,9 @@ vi.mock('../common', () => ({
 }))
 
 describe('FlowManager', () => {
+  const initialUrl = window.location.href
+  afterEach(() => { window.history.replaceState({}, '', initialUrl) })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockListCredentials.mockResolvedValue([])
@@ -140,6 +138,65 @@ describe('FlowManager', () => {
     mockListTrustProfiles.mockResolvedValue([])
     mockListCredentialTemplates.mockResolvedValue([])
     mockListDeploymentProfiles.mockResolvedValue([])
+  })
+
+  it('shows native custom-flow state and references without fabricated publication, wallets or lifecycle actions', async () => {
+    mockListFlows.mockResolvedValue([
+      { id: 'flow/active?view=one', name: 'Automatic custom flow', flow_type: 'custom', status: 'ACTIVE',
+        approval_strategy: 'AUTO', credential_template_id: 'template-1' },
+      { id: 'flow-rules', name: 'Rules flow', flow_type: 'custom', status: 'PAUSED', approval_strategy: 'RULES_BASED' },
+      { id: 'flow-external', name: 'External flow', flow_type: 'custom', status: 'ARCHIVED', approval_strategy: 'EXTERNAL' },
+      { id: 'flow-draft', name: 'Draft flow', flow_type: 'custom', status: 'DRAFT', approval_strategy: 'MANUAL' },
+    ])
+    const { user } = render(<FlowManager hideHeader />)
+    const row = (await screen.findByText('Automatic custom flow')).closest('tr') as HTMLElement
+    expect(within(row).getByText('Active').closest('.MuiChip-root')).toHaveClass('MuiChip-colorSuccess')
+    expect(within(row).getByText('Auto')).toBeInTheDocument()
+    expect(within(row).getByText(formatOfficialReference('template-1', 'template'))).toBeInTheDocument()
+    expect(within(row).getByText('No applicant URL available')).toBeInTheDocument()
+    expect(screen.getByText('Rules based')).toBeInTheDocument()
+    expect(screen.getByText('External')).toBeInTheDocument()
+    expect(screen.getByText('Manual')).toBeInTheDocument()
+    expect(screen.getAllByText('No credential template linked')).toHaveLength(3)
+    expect(screen.queryByText('Not configured')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not Published')).not.toBeInTheDocument()
+    expect(screen.queryByRole('columnheader', { name: 'Wallet Targets' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /publish|disable/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Open applicant entry/ })).not.toBeInTheDocument()
+
+    const region = screen.getByRole('region', { name: 'Flow definitions' })
+    expect(region).toHaveAttribute('tabindex', '0')
+    const details = within(row).getByRole('link', { name: 'View details for Automatic custom flow' })
+    expect(details).toHaveAttribute('href', '/console/org/flows/definitions/flow%2Factive%3Fview%3Done')
+    region.focus()
+    await user.tab()
+    expect(details).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(window.location.pathname).toBe('/console/org/flows/definitions/flow%2Factive%3Fview%3Done')
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { status: 'ACTIVE', public_url: 'https://example.test/apply/flow-1', available: true },
+    { status: 'ACTIVE', public_url: 'javascript:alert(1)', available: false },
+    { status: 'ACTIVE', public_url: 'https://user:password@example.test/apply', available: false },
+    { status: 'ACTIVE', public_url: { href: 'https://example.test/apply' }, available: false },
+    { status: 'DRAFT', public_url: 'https://example.test/apply/flow-1', available: false },
+  ])('only offers an explicitly supplied usable applicant URL ($status, $public_url)', async ({ status, public_url, available }) => {
+    mockListFlows.mockResolvedValue([{ id: 'flow-1', name: 'Provided entry', flow_type: 'custom', status, public_url }])
+    render(<FlowManager hideHeader />)
+    await screen.findByText('Provided entry')
+    const entry = screen.queryByRole('link', { name: 'Open applicant entry for Provided entry' })
+    if (available) {
+      expect(entry).toHaveAttribute('href', public_url)
+      expect(entry).toHaveAttribute('target', '_blank')
+      expect(entry).toHaveAttribute('rel', 'noopener noreferrer')
+      expect(screen.queryByText('No applicant URL available')).not.toBeInTheDocument()
+    } else {
+      expect(entry).not.toBeInTheDocument()
+      expect(screen.getByText('No applicant URL available')).toBeInTheDocument()
+    }
+    expect(screen.queryByText('QR')).not.toBeInTheDocument()
   })
 
   it('surfaces flow loading failures without sample data fallback', async () => {

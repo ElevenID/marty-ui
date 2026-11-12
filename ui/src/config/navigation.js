@@ -18,6 +18,7 @@ import BadgeIcon from '@mui/icons-material/Badge';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
+import DevicesIcon from '@mui/icons-material/Devices';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
@@ -210,6 +211,13 @@ export const APPLICANT_NAV = [
     label: 'Organizations',
     path: '/console/organizations',
     icon: BusinessIcon,
+    exact: true,
+  },
+  {
+    id: 'devices',
+    label: 'Devices',
+    path: '/console/applicant/devices',
+    icon: DevicesIcon,
     exact: true,
   },
   {

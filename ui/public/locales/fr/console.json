@@ -175,22 +175,27 @@
 			"noCriticalEvents": "Aucun événement critique n'a été signalé au cours des dernières 24 heures."
 		},
 		"runtimeReadiness": {
+			"title": "Configuration des opérations d’identifiants",
+			"description": "Ce résumé présente les ressources configurées. Consultez l’état du système pour la santé des services et la préparation de la configuration pour les exigences restantes.",
+			"ready": "Configuré",
+			"degraded": "À vérifier",
+			"notReady": "Non configuré",
 			"issuance": {
 				"noDeployments": "Aucun déploiement actif",
 				"deploymentsReason": "Un profil de déploiement actif est requis avant de pouvoir émettre des identifiants.",
 				"configureDeployment": "Configurer le déploiement",
-				"notReady": "L'émission d'identifiants n'est pas prête",
+				"notReady": "La configuration de l’émission d’identifiants est incomplète",
 				"readinessReason": "Vérifiez le flux d'émission et ses ressources requises avant d'émettre des identifiants.",
 				"reviewFlows": "Vérifier les flux d'émission",
-				"operational": "L'émission d'identifiants est prête",
+				"operational": "Des ressources actives sont configurées pour l’émission d’identifiants.",
 				"issuerConfigurationRequired": "La configuration de l'émetteur doit être vérifiée",
 				"issuerConfigurationReason": "Vérifiez l'identité de l'émetteur et le DID d'émetteur référencé par le modèle d'identifiant actif avant d'émettre des identifiants."
 			},
 			"verification": {
-				"notReady": "La vérification des identifiants n'est pas prête",
+				"notReady": "La configuration de la vérification des identifiants est incomplète",
 				"readinessReason": "Vérifiez la configuration de vérification avant de démarrer une session.",
 				"reviewSetup": "Vérifier la configuration de vérification",
-				"operational": "La vérification des identifiants est prête",
+				"operational": "Des ressources actives de politique et de déploiement sont configurées pour la vérification.",
 				"policyUnreachable": "Aucune politique de présentation active",
 				"policyReason": "Au moins une politique de présentation active est requise pour vérifier des identifiants."
 			},
@@ -280,7 +285,7 @@
 		"deploymentProfilesDescription": "Configurez des profils de déploiement pour API, bornes et appareils en ligne/hors ligne.",
 		"apiKeys": "Clés API",
 		"apiKeysDescription": "Générez et gérez des clés API pour l'accès programmatique.",
-		"lanesDevices": "Voies et appareils",
+		"lanesDevices": "Appareils",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "Générer une clé API",
@@ -349,8 +354,14 @@
 			"deploy": "Déploiement",
 			"deploymentProfiles": "Profils de déploiement",
 			"apiKeys": "Clés API",
-			"lanesDevices": "Voies et appareils",
+			"lanesDevices": "Appareils",
 			"signingKeys": "Clés de signature"
+		},
+		"lanesDevicesPage": {
+			"title": "Vos appareils enregistrés",
+			"description": "Consultez les appareils que vous avez enregistrés auprès de l’organisation sélectionnée.",
+			"noDevices": "Vous n’avez aucun appareil enregistré dans cette organisation.",
+			"selectOrganization": "Sélectionnez une organisation pour consulter vos appareils enregistrés."
 		}
 	},
 	"audit": {
@@ -493,6 +504,18 @@
 			"optional": "Optionnel"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Définissez l’ancienneté maximale des attestations.",
+					"maxCredentialAge": "Durée maximale depuis l’émission, en secondes (1 jour = 86 400 secondes)."
+				},
+				"units": {
+					"seconds": "secondes"
+				},
+				"validation": {
+					"maxCredentialAge": "Saisissez un nombre entier valide de secondes, supérieur ou égal à 0."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Saisissez un nom d’attribut.",
@@ -593,6 +616,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Saisissez un nombre entier de jours compris entre 1 et 3650."
+		},
+		"errors": {
+			"loadFailed": "Impossible de charger les modèles de demande.",
+			"invalidInventory": "Impossible de charger les modèles de demande pour l’organisation sélectionnée.",
+			"selectOrganization": "Sélectionnez une organisation avant de charger les modèles de demande.",
+			"credentialDetailsUnavailable": "Impossible de charger les détails des modèles d’attestation. Les noms et les nombres de champs dérivés peuvent être indisponibles."
+		},
+		"actions": {
+			"retryCredentialDetails": "Réessayer les détails des attestations"
 		}
 	}
 }

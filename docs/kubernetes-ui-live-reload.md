@@ -119,29 +119,95 @@ lifecycle; this overlay watches the UI checkout only.
 
 ## Resume an existing development installation
 
-For a UI-only replay with unchanged backend images and schemas, an existing
-installation can disable the regular setup Jobs with `migrations.enabled=false`
-and `keycloak.configurator.enabled=false`. Both default to `true`; record these
-overrides in the installation values and review them before a later runtime
-upgrade. The Keycloak switch removes only its configurator Job; Keycloak itself
-continues to run. This avoids replaying the two-hour migration credential or
-resetting the operator password from the initial Secret. Keep all existing
-credentials, organization settings and image pins, and do not rerun bootstrap.
+Inspect current deployment readiness, pod state and relevant service logs first.
+Historical credential or reload failures do not establish a current failure;
+keep healthy services running and investigate current authentication evidence
+before forcing credential reloads or restarts. Verify that the node's agreed
+automatic stop guard is still active, and retain its existing deadline.
 
-If the node's public IP changed, retain a backup of the installation values and
-certificate manifest. Preserve the currently installed `MARTY_ISSUER_DID` from
-`marty-config` as an explicit `organization.did`, then update `publicHost` and
-the exact `publicOrigin`, including its port. Update the existing public
-Certificate's IP SAN and wait for cert-manager to issue a valid certificate for
-the new address. Apply the live-reload Helm upgrade with both setup Jobs disabled.
+Record the mounted checkout's branch, status and diff before replaying a review
+branch. Preserve any local edits by creating a new isolated worktree for that
+revision, then set up its real `ui/node_modules` mountpoint as described above.
+Switch `ui.development.checkoutPath` to it in a separate, reviewed source replay;
+do not reset, clean or switch branches in another session's mounted checkout.
+
+Keep private evidence under a restrictive `umask 077`, but run Git and source
+checkout operations in a separate subshell with `umask 022`. Otherwise new
+root-owned source files can become unreadable to the UID 1000 watcher and crash
+its checkers. Before reload, verify that UID 1000 can traverse and read `ui/`
+and `contracts/`. If repair is needed, correct only tracked public source files
+to `0644` (or `0755` for tracked executables) and their source directories to
+`0755`; do not recursively change ownership or permissions on the installation,
+private evidence, or credential directories.
+
+For an origin-only replay with unchanged backend images and schemas, retain
+private backups of the installed Helm values, manifest and certificate resource.
+Use the exact chart contents from the installed release, including its existing
+live-reload support; a matching chart version alone is insufficient. Render the
+installed values with that chart and compare with the stored release manifest
+before changing values. Resolve unexplained differences before proceeding.
+
+Set both `migrations.enabled=false` and `keycloak.configurator.enabled=false`
+in the development values. These are ordinary setup Jobs, so `--no-hooks` alone
+does not disable them. Both values default to `true`; retain these overrides
+and review them before a later runtime upgrade. Keycloak itself continues to
+run. Keep existing credentials, organization settings and image pins, and do
+not rerun bootstrap or the full configurator, which reapplies the initial
+operator password even for an existing user.
+
+If the public IP changed, preserve the currently installed `MARTY_ISSUER_DID`
+from `marty-config` as an explicit `organization.did`, then update `publicHost`
+and the exact `publicOrigin`, including its port. Check explicit `config`
+overrides for stale public URLs. Preview the desired manifest: it must contain
+no setup Jobs, retain every image reference, and limit other changes to the
+approved public-origin fields and derived configuration checksums.
+
+Locate the certificate actually serving HTTPS by following the installed
+TLSStore or Ingress reference to its TLS Secret and owning Certificate. The
+public Certificate may be in a different namespace from the application;
+match the resource and its current SAN before editing. Update that existing
+Certificate's IP SAN, preserving its issuer and Secret reference. Wait for
+`Ready=True` for the new generation and verify the served certificate's new
+SAN; an earlier generation's Ready condition is insufficient.
+
+For the public-IP profile, keep the existing automated Let's Encrypt production
+issuer, ACME account and `shortlived` profile shown in
+[`ip-certificate.yaml.example`](../deploy/k3s/ip-certificate.yaml.example).
+Retain its HTTP-01 challenge route and certificate renewal configuration.
+Check the issued leaf's validity dates and the Certificate's next renewal time,
+then verify HTTPS with normal certificate validation. When an IP client does
+not send SNI, the ingress controller's default TLSStore must reference that
+same issued Secret. Reconcile the certificate owned by this installation;
+running a different retained single-installer installation does not update
+the K3s ingress certificate.
+
+For this same-chart origin-only update, reuse the installed values and apply
+only the reviewed origin overrides, including the two disabled Jobs:
+
+```sh
+helm upgrade "$MARTY_DEV_RELEASE" "$MARTY_DEV_INSTALLED_CHART" \
+  --namespace "$MARTY_DEV_NAMESPACE" --reuse-values \
+  -f "$MARTY_DEV_ORIGIN_VALUES" --no-hooks --wait --timeout 15m
+```
+
+Here `MARTY_DEV_INSTALLED_CHART` is the verified installed chart directory or
+archive, and `MARTY_DEV_ORIGIN_VALUES` is the minimal reviewed override file.
+This replay does not need the new-default loading used when first enabling
+the overlay. Configuration checksum changes trigger the affected rollouts;
+inspect their completion before adding any manual restart.
 
 Reconcile only the existing `marty-ui` Keycloak client's `redirectUris`,
-`webOrigins` and `attributes.post.logout.redirect.uris` to the new origin through
-the existing Admin CLI/API. Authenticate with the existing administrator
-credentials inside the Keycloak container, keep authentication output private,
-and remove any temporary CLI session file. Read back those three public fields
-and verify HTTPS and login. Do not invoke the full configurator: it reapplies
-the initial operator password even for an existing user.
+`webOrigins` and `attributes.post.logout.redirect.uris` through the existing
+Admin CLI/API. Preserve all other client fields and attributes, including its
+PKCE requirement. Authenticate with existing administrator credentials inside
+the Keycloak container. Keep authentication output, CLI state and admin-operation
+evidence in distinct private files with restricted permissions; keep sanitized
+public-field receipts separate, and clean up temporary CLI sessions on exit.
+Read back those three public fields and the preserved PKCE setting.
+
+Finish by checking HTTPS, deployment readiness and the stop guard, then perform
+the authenticated browser and visible HMR round trip described above. Record
+those outcomes separately from the certificate, Helm and client-update checks.
 
 This preserves the issuer DID and its existing records. A DID or issuer profile
 that still names the previous address remains unsuitable for an issuance or

@@ -18,6 +18,15 @@ import { getApplicationTemplate } from '../../services/applicationTemplatesApi';
 import { get } from '../../services/api';
 import { normalizeTemplateToFormConfig } from '../../application/applications';
 
+const VERIFICATION_FLOW_TYPES = new Set(['oid4vp_presentation', 'mdl_presentation', 'siopv2']);
+
+function isVerificationFlow(flow) {
+  const flowType = String(flow.flow_type || '').trim().toLowerCase();
+  const effectiveType = flowType === 'custom' ? flow.extension?.extends_flow_type : flowType;
+  return String(flow.flow_category || '').trim().toUpperCase() === 'VERIFICATION'
+    || VERIFICATION_FLOW_TYPES.has(String(effectiveType || '').trim().toLowerCase());
+}
+
 function PreviewFlowContent({ flowId, organizationId }) {
   const { updateContextLabel } = usePreview();
   const beginLoad = useAsyncActionScope();
@@ -31,6 +40,14 @@ function PreviewFlowContent({ flowId, organizationId }) {
         if (flow?.id !== flowId || !flow.organization_id
           || (organizationId != null && flow.organization_id !== organizationId)) {
           throw new Error('This Flow is not available in the selected organization.');
+        }
+
+        // A verification flow can reference the credential it checks without
+        // offering an application to issue that credential.
+        if (isVerificationFlow(flow)) {
+          updateContextLabel(`Flow: ${flow.name || flowId}`);
+          setLoaded({ flow, verification: true });
+          return;
         }
 
         let applicationTemplate = null;
@@ -86,6 +103,15 @@ function PreviewFlowContent({ flowId, organizationId }) {
     </Container>;
   }
 
+  if (loaded.verification) {
+    return <Container maxWidth="md" sx={{ py: 4 }}>
+      <Typography variant="h5" component="h1" gutterBottom>Credential verification preview</Typography>
+      <Alert severity="info">
+        This flow requests presentation of existing credentials. Interactive verification preview is unavailable here. No verification has been started.
+      </Alert>
+    </Container>;
+  }
+
   const status = String(loaded.flow.status || '').toUpperCase();
 
   return (
@@ -93,15 +119,15 @@ function PreviewFlowContent({ flowId, organizationId }) {
       {status === 'DRAFT' && (
         <Container maxWidth="md" sx={{ py: 2 }}>
           <Alert severity="info">
-            <strong>Draft Status:</strong> This flow is in draft status and not yet published to applicants. 
-            Publish this flow to make it available for applications.
+            <strong>Draft Status:</strong> Activate this flow before it can start new instances.
           </Alert>
         </Container>
       )}
       {['PAUSED', 'ARCHIVED', 'DISABLED'].includes(status) && (
         <Container maxWidth="md" sx={{ py: 2 }}>
           <Alert severity="warning">
-            <strong>{status}:</strong> This flow is not accepting new applications. You can still preview its form.
+            <strong>{status}:</strong> This flow cannot start new instances.
+            {loaded.context && ' You can still preview its linked application form.'}
           </Alert>
         </Container>
       )}

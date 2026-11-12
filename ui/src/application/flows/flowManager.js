@@ -2,31 +2,30 @@
  * Pure helpers for the vendor flow management console.
  */
 
-export function getFlowStatusPresentation(status, flowStates = {}) {
-  const draftState = flowStates.DRAFT || 'DRAFT';
-  const publishedState = flowStates.PUBLISHED || 'PUBLISHED';
-  const normalizedStatus = status || draftState;
-  const isDraft = normalizedStatus === draftState;
-  const isPublished = normalizedStatus === publishedState;
-
+export function getFlowStatusPresentation(status) {
+  const normalizedStatus = typeof status === 'string' ? status.trim().toUpperCase() : '';
+  const presentation = {
+    DRAFT: { label: 'Draft', color: 'default', icon: 'warning' },
+    ACTIVE: { label: 'Active', color: 'success', icon: 'success' },
+    PAUSED: { label: 'Paused', color: 'warning', icon: 'warning' },
+    ARCHIVED: { label: 'Archived', color: 'default', icon: null },
+  }[normalizedStatus] || { label: 'Unknown', color: 'default', icon: null };
   return {
-    status: normalizedStatus,
-    label: normalizedStatus.charAt(0).toUpperCase() + normalizedStatus.slice(1).toLowerCase(),
-    color: isDraft ? 'default' : isPublished ? 'success' : 'error',
-    icon: isDraft ? 'warning' : isPublished ? 'success' : 'error',
-    isDraft,
-    isPublished,
-    isDisabled: !isDraft && !isPublished,
-    hasApplicantEntry: isPublished,
+    status: normalizedStatus || 'UNKNOWN',
+    ...presentation,
+    isDraft: normalizedStatus === 'DRAFT',
+    isActive: normalizedStatus === 'ACTIVE',
   };
 }
 
 export function getApprovalStrategyPresentation(strategy) {
-  const isAuto = strategy === 'auto';
+  const normalizedStrategy = typeof strategy === 'string' ? strategy.trim().toUpperCase() : '';
   return {
-    label: isAuto ? 'Auto' : 'Manual',
-    color: isAuto ? 'success' : 'warning',
-  };
+    AUTO: { label: 'Auto', color: 'success' },
+    MANUAL: { label: 'Manual', color: 'warning' },
+    RULES_BASED: { label: 'Rules based', color: 'info' },
+    EXTERNAL: { label: 'External', color: 'info' },
+  }[normalizedStrategy] || { label: 'Unknown', color: 'default' };
 }
 
 export function getPendingExecutions(executions = []) {

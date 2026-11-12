@@ -3,14 +3,14 @@ import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutom
 
 const initial = {
   name: '', purpose: '', description: '', accepted_credential_types: [], required_claims: [],
-  holder_binding: 'device_key', freshness_requirements: { max_proof_age_seconds: 300 }, metadata: {},
+  holder_binding: 'device_key', freshness_requirements: { max_credential_age_seconds: 31536000 }, metadata: {},
 };
 const generated = {
   name: 'Automatic name', purpose: 'Automatic purpose', description: 'Automatic description',
   accepted_credential_types: ['urn:template-a'],
   required_claims: [{ claim_name: 'employee_id', credential_type: 'urn:template-a', required_value: null }],
   credential_requirements: [{ credential_template_id: 'template-a', requested_claims: [{ claim_name: 'employee_id' }] }],
-  holder_binding: 'device_key', freshness_requirements: { max_proof_age_seconds: 300 },
+  holder_binding: 'device_key', freshness_requirements: { max_credential_age_seconds: 31536000 },
   metadata: { credential_template_id: 'template-a', credential_template_vct: 'urn:template-a',
     credential_payload_format: 'SD_JWT_VC', template_id: 'credential-template:template-a', standard_reference: 'SD_JWT_VC' },
 };
@@ -20,7 +20,7 @@ describe('automatic policy-template configuration', () => {
     const selectedTemplate = { _organizationDefault: { previousConfig: initial, generatedConfig: generated } };
     const current = {
       ...generated, name: 'Edited name', purpose: 'Edited purpose',
-      freshness_requirements: { max_proof_age_seconds: 42 },
+      freshness_requirements: { max_credential_age_seconds: 86400 },
       accepted_credential_types: ['urn:template-a', 'urn:manual'],
       required_claims: [
         { ...generated.required_claims[0], required_value: 'edited automatic claim' },
@@ -32,7 +32,7 @@ describe('automatic policy-template configuration', () => {
     const cleaned = clearAutomaticTemplateConfig(current, selectedTemplate);
     expect(cleaned).toMatchObject({
       name: 'Edited name', purpose: 'Edited purpose', description: '',
-      freshness_requirements: { max_proof_age_seconds: 42 },
+      freshness_requirements: { max_credential_age_seconds: 86400 },
       accepted_credential_types: ['urn:manual'],
       required_claims: [{ claim_name: 'manual_claim', credential_type: 'urn:manual' }],
       credential_requirements: [{ credential_template_id: 'manual-template' }],

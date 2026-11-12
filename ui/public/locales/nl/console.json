@@ -39,6 +39,16 @@
 			"readDenied": "Je hebt geen toestemming om de mogelijkheden voor uitgevers in de geselecteerde organisatie te bekijken.",
 			"createDenied": "Je hebt geen toestemming om uitgeversidentiteiten te maken in de geselecteerde organisatie.",
 			"responseMismatch": "De server heeft de gevraagde uitgeversidentiteit niet bevestigd. Controleer de lijst met uitgeversidentiteiten voordat je het opnieuw probeert."
+		},
+		"lanesDevices": "Apparaten",
+		"breadcrumbs": {
+			"lanesDevices": "Apparaten"
+		},
+		"lanesDevicesPage": {
+			"title": "Uw geregistreerde apparaten",
+			"description": "Bekijk de apparaten die u bij de geselecteerde organisatie hebt geregistreerd.",
+			"noDevices": "U hebt geen geregistreerde apparaten in deze organisatie.",
+			"selectOrganization": "Selecteer een organisatie om uw geregistreerde apparaten te bekijken."
 		}
 	},
   "trust": {
@@ -206,6 +216,18 @@
       }
     },
     "presentationPolicy": {
+      "freshnessBindingStep": {
+        "helpers": {
+          "freshness": "Bepaal hoe recent credentials moeten zijn.",
+          "maxCredentialAge": "Maximale tijd sinds uitgifte in seconden (1 dag = 86.400 seconden)."
+        },
+        "units": {
+          "seconds": "seconden"
+        },
+        "validation": {
+          "maxCredentialAge": "Voer een geldig geheel aantal seconden in, 0 of hoger."
+        }
+      },
       "claimsConfigurationStep": {
         "validation": {
           "claimName": "Voer een claimnaam in.",
@@ -261,22 +283,27 @@
       "noCriticalEvents": "Er zijn de afgelopen 24 uur geen kritieke gebeurtenissen gemeld."
     },
     "runtimeReadiness": {
+      "title": "Configuratie van bewerkingen voor digitale bewijzen",
+      "description": "Dit overzicht toont geconfigureerde resources. Controleer de systeemstatus voor de gezondheid van services en de gereedheid van de inrichting voor resterende vereisten.",
+      "ready": "Geconfigureerd",
+      "degraded": "Controle nodig",
+      "notReady": "Niet geconfigureerd",
       "issuance": {
         "noDeployments": "Geen actieve implementaties",
         "deploymentsReason": "Voor het uitgeven van digitale bewijzen is een actief implementatieprofiel nodig.",
         "configureDeployment": "Implementatie configureren",
-        "notReady": "Uitgifte van digitale bewijzen is niet gereed",
+        "notReady": "De configuratie voor uitgifte van digitale bewijzen is onvolledig",
         "readinessReason": "Controleer de uitgifteflow en de vereiste resources voordat u digitale bewijzen uitgeeft.",
         "reviewFlows": "Uitgifteflows bekijken",
-        "operational": "Uitgifte van digitale bewijzen is gereed",
+        "operational": "Actieve resources zijn geconfigureerd voor de uitgifte van digitale bewijzen.",
         "issuerConfigurationRequired": "Uitgeverconfiguratie moet worden gecontroleerd",
         "issuerConfigurationReason": "Controleer de uitgeveridentiteit en de uitgever-DID waarnaar het actieve sjabloon voor digitale bewijzen verwijst voordat u digitale bewijzen uitgeeft."
       },
       "verification": {
-        "notReady": "Verificatie van digitale bewijzen is niet gereed",
+        "notReady": "De configuratie voor verificatie van digitale bewijzen is onvolledig",
         "readinessReason": "Controleer de verificatieconfiguratie voordat u een sessie start.",
         "reviewSetup": "Verificatie-instellingen bekijken",
-        "operational": "Verificatie van digitale bewijzen is gereed",
+        "operational": "Actieve beleids- en implementatieresources zijn geconfigureerd voor verificatie.",
         "policyUnreachable": "Geen actieve presentatiebeleidsregels",
         "policyReason": "Er is minstens één actieve presentatiebeleidsregel nodig om digitale bewijzen te verifiëren."
       },
@@ -367,6 +394,15 @@
   "applicationTemplatesPage": {
     "validation": {
       "validityDays": "Voer een geheel aantal dagen tussen 1 en 3650 in."
+    },
+    "errors": {
+      "loadFailed": "De aanvraagtemplates konden niet worden geladen.",
+      "invalidInventory": "De aanvraagtemplates voor de geselecteerde organisatie konden niet worden geladen.",
+      "selectOrganization": "Selecteer een organisatie voordat u aanvraagtemplates laadt.",
+      "credentialDetailsUnavailable": "De details van de credentialtemplates konden niet worden geladen. Namen en afgeleide aantallen velden zijn mogelijk niet beschikbaar."
+    },
+    "actions": {
+      "retryCredentialDetails": "Credentialdetails opnieuw laden"
     }
   }
 }
