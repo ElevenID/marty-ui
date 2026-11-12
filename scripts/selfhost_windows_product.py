@@ -225,6 +225,7 @@ class ProductContext(renewal.ForeignContext):
     def __init__(self, docker, project, baseline, volumes, helper_image, *, old_model,
                  new_model, admitted, image_ids, configuration_hashes):
         self._issuance_helper = None
+        self._schema_stops = None
         self.old_model = deepcopy(old_model)
         self.new_model = deepcopy(new_model)
         self.admitted = deepcopy(admitted)
@@ -249,6 +250,125 @@ class ProductContext(renewal.ForeignContext):
             require(key and key not in result, 'Helper environment is ambiguous')
             result[key] = body
         return result
+
+    def prepare_schema_stops(self, cycle):
+        """Arm one exact writer cohort after the owner's durable intent.
+
+        This grants no migration, restart or activation authority. The full
+        schema owner must preserve this evidence and qualify the database too.
+        """
+        require(self._schema_stops is None and self._issuance_helper is None
+                and type(cycle) is str and re.fullmatch(r'[0-9a-f]{32}', cycle))
+        rows = self.check()
+        owned = [row for row in rows if renewal._project(row) == self.project]
+        require(renewal.context_snapshot(owned) == renewal.context_snapshot(self.owned)
+                and all(row['Config'] == next(old['Config'] for old in self.owned
+                    if old['Id'] == row['Id']) for row in owned), 'Writer cohort must precede product changes')
+        excluded = PROVIDER_ROLES | HISTORICAL_ROLES | MIGRATION_ROLES | CONFIGURATION_ROLES | renewal.INITIALIZERS
+        excluded |= {'postgres', 'redis', 'edge', 'ui'}
+        writers = {renewal._service(row): row for row in owned if renewal._service(row) not in excluded}
+        require(writers and all(type(role) is str and re.fullmatch(r'[a-z][a-z0-9-]{0,62}', role) for role in writers)
+                and all(row['State'].get('Status') == 'running' and row['State'].get('Running') is True
+                               for row in writers.values()), 'Every writer must initially be running')
+        for row in writers.values():
+            self._helper_time(row.get('Created'));self._helper_time(row['State'].get('StartedAt'))
+            require(type(row.get('RestartCount')) is int and row['RestartCount'] >= 0
+                    and type(row['State'].get('Pid')) is int and row['State']['Pid'] > 0
+                    and all(row['State'].get(flag) is False for flag in ('Paused', 'Dead', 'OOMKilled', 'Restarting'))
+                    and not row['State'].get('Error'))
+            networks = row.get('NetworkSettings', {}).get('Networks')
+            require(type(networks) is dict and networks and all(type(value.get('NetworkID')) is str
+                    and re.fullmatch(r'[0-9a-f]{64}', value['NetworkID']) for value in networks.values()))
+        for row in owned:
+            if renewal._service(row) in MIGRATION_ROLES | CONFIGURATION_ROLES:
+                require(row['State']['Status'] == 'exited' and type(row['State'].get('ExitCode')) is int
+                        and row['State']['ExitCode'] == 0, 'Persistent configuration jobs must be completed')
+        self._schema_stops = {'cycle': cycle, 'roles': {role: {'stage': 'running', 'id': row['Id'],
+            'terminal': None} for role, row in writers.items()}}
+        self.check()
+        return {role: value['id'] for role, value in self._schema_stops['roles'].items()}
+
+    def begin_schema_stop(self, role):
+        plan = self._schema_stops
+        require(plan is not None and role in plan['roles'] and plan['roles'][role]['stage'] == 'running')
+        self.check()
+        plan['roles'][role]['stage'] = 'stopping'
+
+    def acknowledge_schema_stop(self, role, cid):
+        plan = self._schema_stops
+        require(plan is not None and role in plan['roles'] and plan['roles'][role]['stage'] == 'stopping'
+                and plan['roles'][role]['id'] == cid)
+        plan['roles'][role]['stage'] = 'stopped'
+        rows = self.check()
+        item = next(row for row in rows if row['Id'] == cid)
+        return {'role': role, 'id': cid, 'cycle': plan['cycle'], 'observation_sha256': digest(item),
+                'terminal': deepcopy(plan['roles'][role]['terminal'])}
+
+    def schema_stopped_witness(self):
+        plan = self._schema_stops
+        require(plan is not None and all(value['stage'] == 'stopped' for value in plan['roles'].values()))
+        rows = self.check()
+        by_id = {row['Id']: row for row in rows}
+        return {'schema': 'marty.windows-schema-stopped-writers/v1', 'project': self.project,
+                'cycle': plan['cycle'], 'writers': {role: {'id': value['id'],
+                    'terminal': deepcopy(value['terminal']), 'observation_sha256': digest(by_id[value['id']])}
+                    for role, value in plan['roles'].items()},
+                'product_transition_admission': False, 'native_admission': False}
+
+    def _schema_stop_rows(self, items, before_intent):
+        plan = self._schema_stops
+        if plan is None:return items
+        require(not before_intent, 'Writer stopping cannot precede schema intent')
+        prior = {row['Id']: row for row in self.owned}
+        normalized = []
+        for item in items:
+            role = renewal._service(item)
+            entry = plan['roles'].get(role) if renewal._project(item) == self.project else None
+            if entry is None:
+                if renewal._project(item) == self.project:
+                    old = prior.get(item['Id'])
+                    require(old is not None and renewal.context_snapshot([item]) == renewal.context_snapshot([old])
+                            and item['Config'] == old['Config'] and item.get('HostConfig') == old.get('HostConfig')
+                            and item.get('NetworkSettings', {}).get('Networks') == old.get('NetworkSettings', {}).get('Networks')
+                            and all(item['State'].get(flag) == old['State'].get(flag)
+                                    for flag in ('Running', 'Paused', 'Dead', 'OOMKilled', 'Restarting', 'Error', 'FinishedAt')),
+                            'Nonwriter execution changed during schema maintenance')
+                normalized.append(item);continue
+            require(item['Id'] == entry['id'], 'Writer was replaced during schema maintenance')
+            old = prior[entry['id']]
+            require(all(item.get(key) == old.get(key) for key in ('Created', 'RestartCount', 'Image', 'Config', 'HostConfig'))
+                    and renewal.canonical_mounts(item['Mounts']) == renewal.canonical_mounts(old['Mounts']),
+                    'Stopped writer identity, configuration or storage changed')
+            networks = lambda row: {key: value.get('NetworkID') for key, value in
+                                   row.get('NetworkSettings', {}).get('Networks', {}).items()}
+            require(networks(item) == networks(old), 'Stopped writer network closure changed')
+            if entry['stage'] == 'running':
+                require(renewal.context_snapshot([item]) == renewal.context_snapshot([old])
+                        and item['State'].get('Running') is True, 'Writer changed before its planned stop')
+                normalized.append(item);continue
+            state = item['State']
+            require(state.get('StartedAt') == old['State'].get('StartedAt')
+                    and state.get('Paused') is False and state.get('Dead') is False
+                    and state.get('OOMKilled') is False and state.get('Restarting', False) is False
+                    and not state.get('Error'), 'Stopped writer restarted or is unsafe')
+            if state.get('Status') == 'running':
+                require(entry['stage'] == 'stopping' and entry['terminal'] is None
+                        and state.get('Running') is True and type(state.get('Pid')) is int and state['Pid'] > 0
+                        and renewal.context_snapshot([item]) == renewal.context_snapshot([old]),
+                        'Stopped writer resumed')
+                normalized.append(item);continue
+            require(state.get('Status') == 'exited' and state.get('Running') is False
+                    and type(state.get('Pid')) is int and state['Pid'] == 0
+                    and type(state.get('ExitCode')) is int and state['ExitCode'] in (0, 143),
+                    'Writer did not stop cleanly')
+            terminal = {'finished_at': self._helper_time(state.get('FinishedAt')), 'exit_code': state['ExitCode']}
+            require(datetime.datetime.fromisoformat(terminal['finished_at'].replace('Z', '+00:00')) >=
+                    datetime.datetime.fromisoformat(old['State']['StartedAt'].replace('Z', '+00:00')))
+            if entry['terminal'] is None:entry['terminal'] = terminal
+            require(entry['terminal'] == terminal, 'Stopped writer terminal outcome changed')
+            row = deepcopy(item);row['State'] = deepcopy(old['State'])
+            normalized.append(row)
+        return normalized
 
     def prepare_issuance_helper(self, env, source, cycle):
         """Arm one exact transient shape, not SQL execution or admission.
@@ -415,6 +535,8 @@ class ProductContext(renewal.ForeignContext):
 
     def _candidate(self, items, *, before_intent):
         items = self._without_issuance_helper(items, before_intent)
+        actual = items
+        items = self._schema_stop_rows(items, before_intent)
         owned = [item for item in items if renewal._project(item) == self.project]
         _checked_runtime_change(self.owned, owned, self.old_model, self.new_model,
                                 self.admitted, self.image_ids, expected_project=self.project, allow_pending=True)
@@ -433,7 +555,7 @@ class ProductContext(renewal.ForeignContext):
         if before_intent:
             require(snapshot == {key: value for key, value in self.initial.items()
                                  if value['project'] == self.project}, 'Product changed before intent')
-        return snapshot
+        return renewal.context_snapshot([item for item in actual if renewal._project(item) == self.project])
 
 
 def migration_sources(checkout, source_sha):

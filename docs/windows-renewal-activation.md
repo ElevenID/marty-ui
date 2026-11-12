@@ -579,3 +579,17 @@ counts, database names and clocks are returned. The enclosing owner must also
 prove its runtime writer cohort remains stopped and repeat this check before
 schema write boundaries. These observations do not block future external
 connections, disconnect clients, authorize SQL or replace runtime ownership.
+
+The product context can arm one exact schema-stop cohort after guarded intent.
+It excludes PostgreSQL, Redis, the edge/UI, OpenBao and completed migration/
+configuration jobs; all remaining declared roles must be running initially.
+Each stop admits only that original container ID, configuration, image,
+storage and network identity. Successful zero/SIGTERM exits are latched;
+restarts, replacements, changed outcomes and unsafe exits refuse. Observations
+returned to inherited storage proof retain the actual stopped state. Only
+comparison against the original workload shape uses the qualified stop frame.
+The internal producer writes intent before each bounded normal stop and never
+retries or restarts on failure. A stopped-cohort witness grants no SQL authority:
+database quiescence, migration/data/catalog admission and the versioned journal
+are still required. This mode deliberately permits no resume or activation and
+has no production call site until that complete owner is qualified.

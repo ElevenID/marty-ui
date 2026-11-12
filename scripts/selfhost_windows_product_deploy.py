@@ -107,6 +107,36 @@ def _run_issuance_migration(context, env, source, cycle, *, write):
     return witness
 
 
+def _stop_schema_writers(context, cycle, *, write):
+    """One forward-only stop of the exact cohort under the enclosing owner.
+
+    Caller supplies durable private phase files and held schema intent/lease.
+    Failure never restarts a writer or retries a stop. No public call site uses
+    this component until the full schema journal/activation owner is qualified.
+    """
+    roles = context.prepare_schema_stops(cycle)
+    deadline = time.monotonic()+1200
+    base = {'schema': 'marty.windows-schema-writer-stop/v1', 'project': context.project, 'cycle': cycle}
+    def receipt(phase, **facts):
+        write('schema-stop.'+phase+'.json', selection.packed(dict(base, phase=phase, **facts)))
+    receipt('started', roles=roles)
+    for role, cid in sorted(roles.items()):
+        receipt(role+'.started', role=role, id=cid)
+        context.begin_schema_stop(role)
+        remaining = deadline-time.monotonic()
+        renewal.require(remaining > 0, 'Writer stop budget expired; retain guard')
+        result = renewal.run_owned_mutation([*context.docker.prefix, 'stop', '--time', '30', cid],
+                                             timeout=min(60, remaining))
+        if result.returncode != 0 or result.stdout not in (cid.encode(), (cid+'\n').encode(), (cid+'\r\n').encode()):
+            raise renewal.UncertainComposeMutation('Writer stop acknowledgement requires operator reconciliation')
+        receipt(role+'.returned', role=role, id=cid, admitted=False)
+        witness = context.acknowledge_schema_stop(role, cid)
+        receipt(role+'.completed', witness=witness)
+    witness = context.schema_stopped_witness()
+    receipt('completed', witness=witness)
+    return witness
+
+
 def qualified_images(docker, before, after, owned):
     """Require already cached exact amd64 subjects and existing volume targets."""
     by_role = {renewal._service(item): item for item in owned}
