@@ -287,16 +287,25 @@ impl Bao {
     }
 }
 
+struct ProvisioningProfile<'a> {
+    profile: Profile,
+    renewal_pki_mount: &'a str,
+    repair: Option<&'a PassportRoleRepair>,
+}
+
 async fn provision(
     bao: &Bao,
     output: &Path,
     project: &str,
-    profile: Profile,
+    context: ProvisioningProfile<'_>,
     endpoint: &str,
     ca_file: &Path,
-    renewal_pki_mount: &str,
-    repair: Option<&PassportRoleRepair>,
 ) -> Result<(), Box<dyn Error>> {
+    let ProvisioningProfile {
+        profile,
+        renewal_pki_mount,
+        repair,
+    } = context;
     if (profile == Profile::PassportRoleRepair) != repair.is_some() {
         return Err("selective TLS repair context mismatch".into());
     }
@@ -852,11 +861,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &bao,
         &output,
         &project,
-        profile,
+        ProvisioningProfile {
+            profile,
+            renewal_pki_mount,
+            repair: repair.as_ref(),
+        },
         &endpoint,
         Path::new(&ca_file),
-        renewal_pki_mount,
-        repair.as_ref(),
     )
     .await?;
     Ok(())
