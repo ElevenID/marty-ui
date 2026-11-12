@@ -79,12 +79,20 @@ assert call('generation',{'operation':'verify','current':str(root/'source'),'can
  'ca_overlap':False,'ca_retire':False})=={'value':[d['files'],39]}
 body={'token':token,'old':str(root/'source'),'new':str(root/'generation'),'minimum_ttl':d['minimum_ttl'],
  'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
-print(json.dumps({'files':d['files'],'changed_files':39,'native_verified':True}))
+recovery=d.get('recovery',False);assert type(recovery) is bool
+if recovery:
+ assert d['minimum_ttl']>=3600
+ assert call('recovery-candidate',{'token':token,'old':str(root/'source'),'new':str(root/'generation'),
+                                  'minimum_ttl':d['minimum_ttl']},True)=={'value':None}
+else:
+ for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
+result={'files':d['files'],'changed_files':39,'native_verified':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
-def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,_recovery=False):
     """Produce under the selected owner's durable guard; never activate here.
 
     The caller holds the selected lease, fresh authority and current native proof.
@@ -94,7 +102,7 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     from selfhost_windows_renewal import UncertainComposeMutation
     uncertain=False;zero=False
     try:
-        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint)
+        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,recovery=_recovery)
     except UncertainComposeMutation as error:
         uncertain=True;zero=getattr(error,'owned_processes_zero',False) is True
     except Exception:
@@ -107,10 +115,20 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     raise ValueError('Windows renewal producer refused; preserve its guard and outputs')
 
 
-def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_recovery_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+    """Mint under the recovery owner's durable guard, never select or activate.
+
+    The caller must hold the failed-stage/runtime proofs and fresh scoped
+    authority. Old credentials are evidence only; rollback to them is forbidden.
+    """
+    return produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,_recovery=True)
+
+
+def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,recovery=False):
     from selfhost_windows_renewal import Docker, require, run_owned_mutation
     from selfhost_windows_selection import decode
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
+    require(type(recovery) is bool and (not recovery or native['minimum_ttl']>=3600))
     require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(re.fullmatch(r'[0-9a-f]{32}',cycle_id))
@@ -170,12 +188,15 @@ def _produce_generation(config,current,logical_project,cycle_id,services_image,c
             name=project+'-renew-keycloak-'+cycle_id
             request={k:native[k] for k in ['binary_sha256','source_sha','release_tag','bao_addr','minimum_ttl']}
             request.update(root=root,authority=native['token_file'],files=len(current))
+            if recovery:request['recovery']=True
             args=[*common,'--name',name,'--label','marty.windows.renewal='+cycle_id,'--network',native['network'],
                 '--mount',f'type=volume,src={native["control_volume"]},dst=/control,volume-nocopy',
                 '--mount',f'type=bind,src={native["binary"]},dst=/operator/tool,readonly',
                 '--mount',f'type=bind,src={native["ca_file"]},dst=/input/ca.crt,readonly',
                 '--entrypoint','python',native['helper_image'],'-c',PRODUCER_ASSEMBLE]
-            require(decode(command(args,json.dumps(request).encode()))=={'files':len(current),'changed_files':39,'native_verified':True})
+            expected={'files':len(current),'changed_files':39,'native_verified':True}
+            if recovery:expected['recovery']=True
+            require(decode(command(args,json.dumps(request).encode()))==expected)
             completed_helper('keycloak',name,native['helper_image']);checkpoint('keycloak','completed',{})
             checkpoint('export','started',{})
             values=export_generation(config,native['renewed'])
