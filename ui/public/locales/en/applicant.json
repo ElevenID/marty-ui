@@ -254,17 +254,23 @@
       "uploaded": "Uploaded",
       "terms": "I certify that all information provided is accurate and complete. I understand that providing false information may result in denial of my application."
     },
+    "oneClick": {
+      "previewAction": "Preview credential request",
+      "previewHelper": "Simulate the request without submitting an application or opening a wallet.",
+      "previewMessage": "In the live experience, the applicant would be prompted to receive the credential in a wallet when it is ready.",
+      "walletHelper": "You'll be prompted to open your wallet to receive this credential."
+    },
     "success": {
       "title": "Application Submitted!",
-      "previewTitle": "Preview: Application Would Be Submitted",
+      "previewTitle": "Preview complete",
       "message": "Your application has been submitted successfully.",
       "applicationId": "Application ID: {{id}}",
       "nextSteps": "You will receive updates on your application status via email. Redirecting to your applications page...",
       "viewApplications": "View My Applications",
       "dataCollected": "Application data collected:",
       "previewMode": "Preview Mode",
-      "previewMessage": "In production, this application would be submitted for review.",
-      "previewNote": "The applicant would receive confirmation and be able to track the application status."
+      "previewMessage": "In the live experience, this application would be submitted using the template's approval settings.",
+      "previewNote": "This was a simulation. No application was submitted, no credential was issued, and no wallet was opened."
     },
     "errors": {
       "noCredential": "Please select a credential from the catalog before starting an application."

@@ -32,6 +32,7 @@ import RuleIcon from '@mui/icons-material/Rule';
 import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useConsole } from '../../../contexts/ConsoleContext';
+import { publicEntryHref } from '../../../application/routing/publicEntry';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';
 import { listCredentialTemplates } from '../../../services/presentationPolicyApi';
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
@@ -139,8 +140,8 @@ function ApplicationTemplatesContent({ organizationId }) {
       {loading ? (
         <LinearProgress />
       ) : error ? null : (
-        <TableContainer component={Paper}>
-          <Table>
+        <TableContainer component={Paper} role="region" aria-label={t('applicationTemplatesPage.title')} tabIndex={0} sx={{ maxWidth: '100%' }}>
+          <Table sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell>{t('applicationTemplatesPage.tableHeaders.name')}</TableCell>
@@ -226,7 +227,10 @@ function ApplicationTemplatesContent({ organizationId }) {
                       </Tooltip>}
                       <Tooltip title={t('applicationTemplatesPage.actions.previewForm')}>
                         <IconButton
-                          onClick={() => window.open(`/applicant/preview/applications/${template.id}`, '_blank')}
+                          component="a"
+                          href={publicEntryHref(`/applicant/preview/applications/${encodeURIComponent(template.id)}?organization_id=${encodeURIComponent(organizationId)}`)}
+                          target="_blank"
+                          rel="noopener noreferrer"
                           size="small"
                           color="primary"
                         >

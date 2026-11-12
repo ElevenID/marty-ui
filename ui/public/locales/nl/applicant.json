@@ -252,17 +252,23 @@
       "uploaded": "Geüpload",
       "terms": "Ik verklaar dat alle verstrekte informatie nauwkeurig en volledig is. Ik begrijp dat het verstrekken van valse informatie kan leiden tot afwijzing van mijn aanvraag."
     },
+    "oneClick": {
+      "previewAction": "Credentialaanvraag voorvertonen",
+      "previewHelper": "Simuleer de aanvraag zonder deze in te dienen of een wallet te openen.",
+      "previewMessage": "Bij daadwerkelijk gebruik zou de aanvrager worden gevraagd de credential in een wallet te ontvangen zodra deze gereed is.",
+      "walletHelper": "U wordt gevraagd uw wallet te openen om deze credential te ontvangen."
+    },
     "success": {
       "title": "Aanvraag ingediend!",
-      "previewTitle": "Voorbeeld: aanvraag zou worden ingediend",
+      "previewTitle": "Voorbeeld voltooid",
       "message": "Uw aanvraag is succesvol ingediend.",
       "applicationId": "Aanvraag-ID: {{id}}",
       "nextSteps": "U ontvangt updates over uw aanvraagstatus via e-mail. U wordt doorgestuurd naar uw aanvragenpagina...",
       "viewApplications": "Mijn aanvragen bekijken",
       "dataCollected": "Verzamelde aanvraaggegevens:",
       "previewMode": "Voorbeeldmodus",
-      "previewMessage": "In productie zou deze aanvraag worden ingediend voor beoordeling.",
-      "previewNote": "De aanvrager zou een bevestiging ontvangen en de aanvraagstatus kunnen volgen."
+      "previewMessage": "In de live-ervaring zou deze aanvraag worden ingediend volgens de goedkeuringsinstellingen van de sjabloon.",
+      "previewNote": "Dit was een simulatie. Er is geen aanvraag ingediend, geen credential uitgegeven en geen wallet geopend."
     },
     "errors": {
       "noCredential": "Selecteer een referentie uit de catalogus voordat u een aanvraag start."

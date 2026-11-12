@@ -368,6 +368,8 @@ def build_arguments(plan, profile=None):
     # The current local D12 three-role attempt has a harder resident cap while
     # retaining the existing 4 GiB combined memory+swap ceiling and j1 recipe.
     memory = (current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES
+              else str(membership_linux_memory_bytes(profile) // 1024 ** 2) + "m"
+              if profile == D05_MEMBERSHIP_LATEST_PROFILE
               else str(membership_linux_memory_bytes(profile) // 1024 ** 3) + "g"
               if profile in D05_MEMBERSHIP_PROFILES
               else "1g" if profile == "d12-passport-current-three-role" else "2g")
@@ -500,20 +502,20 @@ def membership_consumers(helper, plan, expected=None, owned_cid=None, owned_stat
 
 def membership_windows_memory_bytes(profile):
     require(profile in D05_MEMBERSHIP_PROFILES, "D05_BUILD_PROFILE_REQUIRED")
-    return 1024 ** 3
+    return 768 * 1024 ** 2 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 1024 ** 3
 
 
 def membership_linux_memory_bytes(profile):
     require(profile in D05_MEMBERSHIP_PROFILES, "D05_BUILD_PROFILE_REQUIRED")
-    # Current ten-role trial keeps j1 and the 4 GiB combined RAM+swap ceiling.
-    # A prior three-role 1 GiB build passed; current ten-role success is unproven.
-    return 1024 ** 3 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 2 * 1024 ** 3
+    # Compact current ten-role trial retains j1 and 4 GiB combined RAM+swap.
+    # Prior larger-cap builds do not qualify this smaller physical-memory trial.
+    return 512 * 1024 ** 2 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 2 * 1024 ** 3
 
 
 def membership_required_free_bytes(profile, *, before_parent=False):
     """Full admitted budget; never infer physical residency from Job counters.
 
-    Current ten-role trial admits one 1 GiB Windows Job plus a 1 GiB Linux
+    Current ten-role trial admits one 768 MiB Windows Job plus a 512 MiB Linux
     compiler, retaining the complete 1 GiB host reserve and 64 MiB cushion.
     Count startup once inside its Job. Neither prior source-phase measurements
     nor the smaller Linux trial qualify the complete current build. Preserve

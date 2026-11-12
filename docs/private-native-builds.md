@@ -66,3 +66,21 @@ all required notices when distributing compiled Marty artifacts. Changing
 visibility does not retract previously published source or artifacts. Removing
 the variable later only restores anonymous build behavior; it does not make a
 private fork public or restore unauthenticated access.
+
+
+## Compact local ten-role compiler trial
+
+The closed `d05-membership-current-native-ten-role` profile admits a real
+768 MiB Windows Job and a real 512 MiB Linux compiler cgroup, with the existing
+4 GiB combined Linux RAM and swap ceiling. Both admission phases retain the
+full 1 GiB host reserve and 64 MiB cushion: 2,483,027,968 bytes in total.
+The Linux ceiling permits up to 3.5 GiB swap; verify sufficient guest swap
+backing before attempting the trial. Historical profiles retain their budgets.
+
+All ten binaries, source pins, feature checks, offline recipe, j1, CPU and PID
+limits, security settings, source and cache ownership guards, and exact-CID
+cleanup remain unchanged. Prior builds with larger caps do not qualify these
+caps. Qualification requires the actual compiler to exit successfully without
+OOM and the normal Job and owned helper retirement to close successfully;
+a memory-allocation failure remains a failed trial. This local resource choice
+does not waive CI, release, runtime-library or functional requirements.

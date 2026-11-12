@@ -159,7 +159,7 @@
   },
   "previewMode": {
     "title": "Preview Mode",
-    "description": "This is what an applicant sees. Actions are disabled and nothing will be submitted.",
+    "description": "Explore the applicant experience. Form submissions are simulated; no application is created or credential issued.",
     "exitPreview": "Exit Preview",
     "org": "Org: {{organizationName}}"
   },

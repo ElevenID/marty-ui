@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, within } from '@testing-library/react';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 import ApplicationTemplatesPage from './ApplicationTemplatesPage';
@@ -41,6 +41,7 @@ function deferred<T>() {
 }
 
 const route = { initialEntries: ['/console/org/templates/applications'] };
+const originalUrl = window.location.href;
 
 describe('ApplicationTemplatesPage', () => {
   beforeEach(() => {
@@ -50,6 +51,33 @@ describe('ApplicationTemplatesPage', () => {
     authState.user = { user_id: 'user-1' };
     mockListApplicationTemplates.mockResolvedValue([]);
     mockListCredentialTemplates.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    delete (window as any).__MARTY_RUNTIME_CONFIG__;
+    (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+  });
+
+  it('links previews to the selected organization and canonical public entry without opener access', async () => {
+    (globalThis as any).jsdom.reconfigure({ url: 'https://203.0.113.10:8443/console/org/templates/applications' });
+    (window as any).__MARTY_RUNTIME_CONFIG__ = {
+      hosting: {
+        canonicalOrigin: 'https://marty.example.com:8443',
+        publicEntryOrigins: ['https://203.0.113.10:8443'],
+      },
+    };
+    consoleState.activeOrgId = 'org/selected?scope=two';
+    mockListApplicationTemplates.mockResolvedValue([applicationTemplate({
+      id: 'application/template?preview=one',
+      organization_id: consoleState.activeOrgId,
+    })]);
+
+    renderWithRouter(<ApplicationTemplatesPage />, route);
+
+    const preview = await screen.findByRole('link', { name: 'Preview Application Form' });
+    expect(preview).toHaveAttribute('href', 'https://marty.example.com:8443/applicant/preview/applications/application%2Ftemplate%3Fpreview%3Done?organization_id=org%2Fselected%3Fscope%3Dtwo');
+    expect(preview).toHaveAttribute('target', '_blank');
+    expect(preview).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
   it('keeps a failed first load out of the table and retries in place', async () => {
@@ -137,6 +165,7 @@ describe('ApplicationTemplatesPage', () => {
       .mockResolvedValueOnce([{ id: 'credential-template-1', organization_id: 'org-2', name: 'Second organization badge', claims: [] }]);
     const { user, rerender } = renderWithRouter(<ApplicationTemplatesPage />, route);
     await screen.findByText('Membership application');
+    expect(screen.getByRole('link', { name: 'Preview Application Form' })).toHaveAttribute('href', '/applicant/preview/applications/application-template-1?organization_id=org-1');
     await user.click(screen.getByRole('button', { name: 'Configure required checks' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('Membership application');
 
@@ -144,12 +173,15 @@ describe('ApplicationTemplatesPage', () => {
     rerender(<ApplicationTemplatesPage />);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(screen.queryByText('Membership application')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Preview Application Form' })).not.toBeInTheDocument();
     expect(await screen.findByText('Second organization application')).toBeInTheDocument();
     expect(await screen.findByText('Second organization badge')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Preview Application Form' })).toHaveAttribute('href', '/applicant/preview/applications/application-template-2?organization_id=org-2');
     await act(async () => { oldDetails.resolve([{ id: 'credential-template-1', organization_id: 'org-1', name: 'Old organization badge', claims: [{ name: 'old_claim' }] }]); });
 
     expect(screen.queryByText('Old organization badge')).not.toBeInTheDocument();
     expect(screen.getByText('Second organization badge')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Preview Application Form' })).toHaveAttribute('href', '/applicant/preview/applications/application-template-2?organization_id=org-2');
     expect(mockListApplicationTemplates).toHaveBeenLastCalledWith('org-2');
   });
 
