@@ -18,6 +18,7 @@ import subprocess
 import tarfile
 import time
 from pathlib import Path
+from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -171,3 +172,37 @@ def require_compatible_source(source: str, executable: str, protected_main: str,
         require(SHA.fullmatch(commit) is not None and history.inventory(commit) == expected,
                 "release program or policy changed after candidate admission")
     return fingerprint
+
+
+def authenticated_current(github, source: str, executable: str, *, repository: Path = ROOT,
+                          deadline: datetime | None = None, verified: set | None = None) -> str:
+    """Observe protected M freshly; cache only immutable Git history proofs.
+
+    This does not validate workflow identity or a clean executable checkout.
+    Callers retain those checks, successful original-run qualification and all
+    write admission. The cache cannot replace the fresh protected-branch read.
+    """
+    if __package__:
+        from . import release_tag_handoff as h
+    else:
+        import release_tag_handoff as h
+    require(all(type(value) is str and SHA.fullmatch(value) for value in (source, executable)),
+            "source identity is malformed")
+    main = github.main()["commit"]["sha"]
+    require(type(main) is str and SHA.fullmatch(main) is not None, "protected main identity is malformed")
+    key = (source, executable, main)
+    if verified is None or key not in verified:
+        # Reject historical/unsupported local candidates before external fetch.
+        # Trusted workflow checkouts must contain the admitted S and full main
+        # history; a candidate payload cannot select code or policy to execute.
+        history = History(repository, h.remaining(deadline, 30))
+        require(history.git("cat-file", "-t", source).strip() == b"commit", "source must be a commit")
+        history.fingerprint(source, history.inventory(source))
+        h.git("-c", f"core.hooksPath={os.devnull}", "-c", "protocol.file.allow=never",
+              "fetch", "--no-tags", "origin", *sorted({source, executable, main}),
+              repository=repository, deadline=deadline)
+        require_compatible_source(source, executable, main, repository=repository,
+                                  timeout_seconds=h.remaining(deadline, 30))
+        if verified is not None:
+            verified.add(key)
+    return main

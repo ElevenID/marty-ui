@@ -160,7 +160,7 @@ class InitialVisibilityTests(unittest.TestCase):
         self.synced.clear()
         self.driver = pipeline.Pipeline(
             "qualify", 123, SOURCE, "2025-01-01T00:00:00Z", "v1.2.3",
-            {"channel": "stable", "profile": "full", "production_web": False, "external_images": "{}"},
+            {"channel": "both", "profile": "full", "production_web": False, "external_images": "{}"},
             self.journal, github=self.http.github, now=self.clock.now, sleep=self.clock.sleep)
         self.output = io.StringIO()
 

@@ -18,9 +18,11 @@ from typing import Callable
 
 if __package__:
     from . import release_tag_handoff as transport
+    from . import release_source_authority as source_authority
     from .ci.check_release_preflight import check as source_preflight
 else:
     import release_tag_handoff as transport
+    import release_source_authority as source_authority
     from ci.check_release_preflight import check as source_preflight
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +36,7 @@ DISPATCH = {
     "nightly-claim": (".github/workflows/prepare-nightly-claim.yml", {"source_sha"}, {"claim"}),
     "nightly-release": (".github/workflows/nightly-release.yml", {"claim_run_id", "publish_cloudflare_addon"},
                         {"admit", "prepare-native", "prepare-installation", "runtime-happy-path", "sign-release", "publish"}),
-    "stable-claim": (".github/workflows/prepare-stack-tag.yml", {"source_sha", "tag"},
+    "stable-claim": (".github/workflows/prepare-stack-tag.yml", {"source_sha", "tag", "qualification_run_id"},
                      {"Validate exact main and persist the no-write claim"}),
     "stable-release": (".github/workflows/cd.yml",
                        {"claim_run_id", "publication_contract", "selfhost_public_profile",
@@ -209,6 +211,7 @@ class Pipeline:
         self.operation = "create_stage_journal"
         self.child_run_id: int | None = None
         self.observed_main_sha: str | None = None
+        self.verified_sources: set[tuple[str, str, str]] = set()
         self.now, self.sleep = now, sleep
         self.created = transport.timestamp(created_at)
         self.deadline = now() + timedelta(minutes=PHASE_MINUTES[phase])
@@ -261,7 +264,7 @@ class Pipeline:
                   "The stopped-stage journal could not be finalized. Preserve the preceding error and last saved journal.",
                   flush=True)
 
-    def current(self) -> None:
+    def current(self, *, exact: bool = False) -> None:
         self.operation = "check_deadline"
         require(self.now() < self.deadline, "stage_deadline_exceeded")
         self.operation = "check_protected_main"
@@ -269,7 +272,13 @@ class Pipeline:
         main_sha = self.github.main()["commit"]["sha"]
         if isinstance(main_sha, str) and transport.SHA.fullmatch(main_sha):
             self.observed_main_sha = main_sha
-        require(main_sha == self.source, "source_changed")
+        if main_sha != self.source:
+            require(not exact, "source_changed")
+            try:
+                source_authority.authenticated_current(self.github, self.source, self.source,
+                    deadline=self.deadline, verified=self.verified_sources)
+            except (source_authority.SourceAuthorityError, transport.HandoffError):
+                require(False, "source_changed")
 
     def run(self, run_id: int, workflow: str, *, event: str = "workflow_dispatch", title: str | None = None) -> dict:
         self.operation = "read_child_run"
@@ -402,14 +411,16 @@ class Pipeline:
                         "child_state_unknown")
             self.sleep(min(15.0, max(0.0, (self.deadline - self.now()).total_seconds())))
 
-    def dispatch(self, name: str, inputs: dict, *, title: str | None = None) -> int:
+    def dispatch(self, name: str, inputs: dict, *, title: str | None = None, wait: bool = True) -> int:
         self.operation = "prepare_dispatch"
         self.child_run_id = None
         require(name in DISPATCH and all(step["name"] != name for step in self.record["steps"]),
                 "dispatch_already_consumed")
         workflow, keys, jobs = DISPATCH[name]
         require(isinstance(inputs, dict) and set(inputs) == keys, "dispatch_inputs_mismatch")
-        self.current()
+        # CI/build producers must all be admitted at the original source before
+        # waiting. Later immutable-candidate publication has separate identities.
+        self.current(exact=name != "stable-publisher")
         endpoint = f"repos/{transport.REPOSITORY}/actions/workflows/{Path(workflow).name}/dispatches"
         payload = {"ref": "main", "inputs": inputs}
         step = {"name": name, "workflow": workflow, "request": payload, "outcome": "unknown"}
@@ -441,10 +452,11 @@ class Pipeline:
                                  "step": name, "workflow": workflow, "run_id": run_id,
                                  "run_attempt": 1}).decode(), end="", flush=True)
         first_run = self._wait_dispatched_visibility(step)
-        self._wait(run_id, workflow, jobs, title=title, first_run=first_run)
-        step["outcome"] = "success"
-        self.operation = "record_child_success"
-        self.persist()
+        if wait:
+            self._wait(run_id, workflow, jobs, title=title, first_run=first_run)
+            step["outcome"] = "success"
+            self.operation = "record_child_success"
+            self.persist()
         return run_id
 
     def stable_publisher(self, candidate: int) -> int:
@@ -499,6 +511,19 @@ class Pipeline:
                 website_run_id: int | None = None) -> dict:
         self.operation = "execute_stage"
         if self.phase == "qualify":
+            if self.plan["channel"] == "stable":
+                # The exact original IDs are returned by each one-shot POST.
+                # Claim waits for this CI, and CD waits for this claim before
+                # any build/sign/publish work. No failed dependency is replaced.
+                ci = self.dispatch("full-ci", {"canvas_migrated_base_pilot": False}, wait=False)
+                claim = self.dispatch("stable-claim", {"source_sha": self.source, "tag": self.tag,
+                                      "qualification_run_id": str(ci)}, wait=False)
+                release = self.dispatch("stable-release", {"claim_run_id": str(claim), "publication_contract": "v2",
+                    "selfhost_public_profile": self.plan["profile"], "publish_cloudflare_addon": False,
+                    "selfhost_external_images_json": self.plan["external_images"]}, wait=False)
+                self.wait(ci, DISPATCH["full-ci"][0], DISPATCH["full-ci"][2])
+                return {"ci_run_id": ci, "stable_claim_run_id": claim,
+                        "stable_run_id": release, "stable_tag": self.tag}
             return {"ci_run_id": self.dispatch("full-ci", {"canvas_migrated_base_pilot": False}), "stable_tag": self.tag}
         self.wait(ci_run_id, DISPATCH["full-ci"][0], DISPATCH["full-ci"][2])
         self.operation = "execute_stage"
@@ -509,7 +534,12 @@ class Pipeline:
             return {"nightly_claim_run_id": claim, "nightly_run_id": release}
         require(self.plan["channel"] in {"stable", "both"}, "stable_not_requested")
         if self.phase == "stable":
-            claim = self.dispatch("stable-claim", {"source_sha": self.source, "tag": self.tag})
+            if self.plan["channel"] == "stable":
+                require(transport.positive(stable_run_id), "invalid_child_run_id")
+                self.wait(stable_run_id, DISPATCH["stable-release"][0], DISPATCH["stable-release"][2])
+                return {"stable_run_id": stable_run_id, "stable_tag": self.tag}
+            claim = self.dispatch("stable-claim", {"source_sha": self.source, "tag": self.tag,
+                                  "qualification_run_id": str(ci_run_id)})
             release = self.dispatch("stable-release", {"claim_run_id": str(claim), "publication_contract": "v2",
                                     "selfhost_public_profile": self.plan["profile"], "publish_cloudflare_addon": False,
                                     "selfhost_external_images_json": self.plan["external_images"]})

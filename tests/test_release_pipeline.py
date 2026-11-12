@@ -196,6 +196,28 @@ class PipelineTests(unittest.TestCase):
                          ["ci.yml/dispatches", "prepare-nightly-claim.yml/dispatches", "nightly-release.yml/dispatches",
                           "prepare-stack-tag.yml/dispatches", "cd.yml/dispatches"])
 
+    def test_stable_admits_all_original_producers_before_waiting_for_ci(self) -> None:
+        self.plan = {**self.plan, "channel": "stable", "production_web": False}
+        driver = self.driver("qualify")
+
+        def admitted(run):
+            if run["path"] == ".github/workflows/ci.yml":
+                run.update(status="in_progress", conclusion=None)
+            if run["path"] == ".github/workflows/cd.yml":
+                self.github.runs[200].update(status="completed", conclusion="success")
+
+        self.github.after_post = admitted
+        driver.sleep = lambda _: self.fail("CI was awaited before admission of the claim and CD")
+        self.assertEqual(driver.execute(), {"ci_run_id": 200, "stable_claim_run_id": 201,
+                                           "stable_run_id": 202, "stable_tag": "v1.2.3"})
+        self.assertEqual(len(self.github.posts), 3)
+        self.assertEqual(self.github.posts[1][1]["inputs"]["qualification_run_id"], "200")
+        self.assertEqual(self.github.posts[2][1]["inputs"]["claim_run_id"], "201")
+        monitor = self.driver("stable", name="stable-monitor.json")
+        self.assertEqual(monitor.execute(ci_run_id=200, stable_run_id=202),
+                         {"stable_run_id": 202, "stable_tag": "v1.2.3"})
+        self.assertEqual(len(self.github.posts), 3)
+
     def test_failed_ci_or_claim_prevents_the_next_producer(self) -> None:
         driver = self.driver("nightly")
         self.github.runs[50]["conclusion"] = "failure"

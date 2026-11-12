@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import sys
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -134,3 +136,53 @@ def test_rejects_incomplete_or_overridden_history(repository, fault, tmp_path) -
         write(root, ".git/shallow", source.encode() + b"\n")
     with pytest.raises(MODULE.SourceAuthorityError, match="replace|grafts|complete"):
         MODULE.require_compatible_source(source, source, source, repository=root)
+
+
+def test_immutable_cache_never_replaces_a_fresh_protected_main_read(repository, monkeypatch) -> None:
+    root, source = repository
+    h = import_module("scripts.release_tag_handoff")
+    monkeypatch.setitem(sys.modules, "release_tag_handoff", h)
+    current = [source]
+    protected = [True]
+    reads, fetches = [], []
+    github = h.GitHub()
+
+    def branch(path):
+        assert path == f"repos/{h.REPOSITORY}/branches/main"
+        reads.append(path)
+        return {"name": "main", "protected": protected[0], "commit": {"sha": current[0]}}
+
+    def fetch(*arguments, **kwargs):
+        assert "fetch" in arguments and "--no-tags" in arguments
+        assert kwargs["repository"] == root
+        fetches.append(arguments)
+
+    monkeypatch.setattr(github, "json", branch)
+    monkeypatch.setattr(h, "git", fetch)
+    verified = set()
+    for _ in range(2):
+        assert MODULE.authenticated_current(github, source, source, repository=root, verified=verified) == source
+    assert len(reads) == 2 and len(fetches) == 1
+    write(root, "ui/next.ts", b"next\n")
+    current[0] = commit(root, "Unrelated protected-main advance")
+    assert MODULE.authenticated_current(github, source, source, repository=root, verified=verified) == current[0]
+    assert len(reads) == 3 and len(fetches) == 2
+    protected[0] = False
+    with pytest.raises(h.HandoffError, match="authenticated protected main"):
+        MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
+    assert len(fetches) == 2
+
+
+def test_current_main_policy_change_is_not_covered_by_cached_old_main(repository, monkeypatch) -> None:
+    root, source = repository
+    h = import_module("scripts.release_tag_handoff")
+    monkeypatch.setitem(sys.modules, "release_tag_handoff", h)
+    write(root, "config/envoy/proto_descriptor.pb", b"changed-native-build-input")
+    main = commit(root, "Change native authority input")
+    github = h.GitHub()
+    monkeypatch.setattr(github, "json", lambda _: {"name": "main", "protected": True, "commit": {"sha": main}})
+    monkeypatch.setattr(h, "git", lambda *args, **kwargs: None)
+    verified = {(source, source, source)}
+    with pytest.raises(MODULE.SourceAuthorityError, match="program or policy changed"):
+        MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
+    assert verified == {(source, source, source)}
