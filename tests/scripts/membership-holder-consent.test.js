@@ -39,7 +39,7 @@ test('retry must replace RP nonce, Flow, presentation nonce, state and request w
 
 function driver(overrides={}){
  const source=fs.readFileSync(path.join(__dirname,'verify-beta-credential-login.js'),'utf8'),module={exports:{}};
- const scopedRequire=name=>Object.hasOwn(overrides,name)?overrides[name]:['fs','path','node:assert/strict'].includes(name)?require(name):name==='./beta-membership-support-contract'?contract:name==='./demo-recording'?{maskProtocolField:async()=>{}}:{};
+ const scopedRequire=name=>Object.hasOwn(overrides,name)?overrides[name]:['fs','path','node:assert/strict'].includes(name)?require(name):name==='./demo-wallet-session'?require('./demo-wallet-session'):name==='./beta-membership-support-contract'?contract:name==='./demo-recording'?{maskProtocolField:async()=>{}}:{};
  vm.runInNewContext(source,{require:scopedRequire,module,__dirname,process:{env:{},argv:[]},URL,Buffer,console,setTimeout,clearTimeout});
  return module.exports;
 }

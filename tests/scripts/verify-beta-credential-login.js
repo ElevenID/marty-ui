@@ -9,7 +9,7 @@ const { createOwnedMembership } = require('./demo-owned-membership');
 const { requireJson } = require('./beta-demo-resource-helpers');
 const { directPostRequestReference, directPostLoginBinding, loginInstanceOwnership, holderDeclineEvidence, freshDirectPostLogin } = require('./beta-membership-support-contract');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
-const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
+const { acquireWalletSession, openIsolatedWallet, presentWalletRequest } = require('./demo-wallet-session');
 const { chromium, request } = require('@playwright/test');
 const { createCanvasCaptureCustody, createOriginalCookieSessionContext, retireCanvasBetaSession } = require('./run-canvas-oss-standard-contract');
 const {
@@ -153,38 +153,12 @@ async function receiveBadge(walletPage, offerUri, {
 
 async function presentBadge(walletPage, requestUri, { holderDecision = null } = {}) {
   assert([null, 'Approve', 'Cancel'].includes(holderDecision));
-  const endpoint = holderDecision === 'Cancel' ? '/api/presentation-decline' : '/api/present';
   const walletUrl = new URL(walletPage.url());
   assert(walletUrl.origin === TEST_WALLET_ORIGIN && walletUrl.pathname === '/', 'Owned wallet UI context changed');
   await maskProtocolField(walletPage, 'Presentation request URI');
-  const requestInput = walletPage.getByLabel('Presentation request URI');
-  await requestInput.fill(requestUri);
-  assert(await requestInput.inputValue() === requestUri, 'Wallet request input changed');
-  // Discriminate the actual embedded client before clicking. Never treat a
-  // missing/late dialog after Present as permission to bypass consent.
-  const consent = walletPage.locator('#presentation-consent');
-  const dialogCount = await consent.count();
-  assert([0, 1].includes(dialogCount), 'Ambiguous wallet consent UI');
-  if (dialogCount === 1) {
-    assert.equal(await consent.evaluate(element => element.tagName), 'DIALOG');
-    for (const name of ['Approve', 'Cancel']) assert.equal(await consent.getByRole('button', { name, exact: true, includeHidden: true }).count(), 1);
-  } else assert.equal(holderDecision, null, 'This holder decision requires the reviewed consent UI');
-  const decision = dialogCount === 1 ? holderDecision || 'Approve' : null;
-  const consentProtocol = dialogCount === 1 ? 'EXPLICIT_TEST_WALLET_DIALOG_V1' : 'LEGACY_PRESENT_UI';
-  const responsePromise = walletPage.waitForResponse((response) => {
-    if (response.url() !== `${TEST_WALLET_ORIGIN}${endpoint}` || response.request().method() !== 'POST') return false;
-    try { return response.request().postDataJSON()?.request_uri === requestUri; } catch { return false; }
-  }, { timeout: 60_000 });
-  // An earlier UI failure still owns this waiter; do not leave an unhandled
-  // rejection when cleanup closes its page. Awaiting it below still fails.
-  responsePromise.catch(() => {});
-  await walletPage.getByRole('button', { name: /^present$/i }).click();
-  if (decision !== null) {
-    await consent.waitFor({ state: 'visible', timeout: 15000 });
-    await consent.getByRole('button', { name: decision, exact: true }).click({ timeout: 15000 });
-    await consent.waitFor({ state: 'hidden', timeout: 15000 });
-  }
-  const response = await responsePromise;
+  const { response, holderDecision: decision, consentProtocol } = await presentWalletRequest(
+    walletPage, requestUri, { origin: TEST_WALLET_ORIGIN, holderDecision },
+  );
   const body = await response.json().catch(() => null);
   if (holderDecision === 'Cancel') return { status: response.status(),
     acknowledged: response.ok() && body?.acknowledged === true,

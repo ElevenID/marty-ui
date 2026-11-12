@@ -16,7 +16,7 @@ const {
   requireOwnedApplication, requireOwnedTransaction,
   selectCurrentCredential, submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
-const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin } = require('./demo-wallet-session');
+const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin, presentWalletRequest } = require('./demo-wallet-session');
 const { VIDEO_SIZE, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
 const {
   GRANT, assertions, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
@@ -381,11 +381,7 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
   await step(authPage, allowed ? '4. Sign in with the trusted badge' : '2. Try the foreign issuer badge',
     'The real credential sign-in page has created a signed request. The separate wallet is the first-party Rust test client.');
   await maskProtocolField(walletPage, 'Presentation request URI', record);
-  await walletPage.getByLabel('Presentation request URI').fill(details.href);
-  const pending = walletPage.waitForResponse((response) => response.url() === `${wallet}/api/present`
-    && response.request().method() === 'POST', { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^present$/i }).click();
-  const response = await pending;
+  const { response } = await presentWalletRequest(walletPage, details.href, { origin: wallet });
   const observed = allowed ? await browserObservation.completion() : null;
   const outcome = allowed ? observed.nonceEvidence : await waitFor(async () => {
     const polled = await authContext.request.get(`${origin}/v1/auth/credential-login/status?nonce=${encodeURIComponent(details.nonce)}`, { timeout: 15_000 });
