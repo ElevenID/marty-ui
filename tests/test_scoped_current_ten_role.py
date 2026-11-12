@@ -136,8 +136,12 @@ def test_current_runtime_positive_keeps_selected_source_and_retained_generations
 
 @pytest.mark.parametrize("change",[None,"changed","outside"])
 def test_frozen_sources_keep_current_client_identity_and_exact_private_custody(tmp_path,monkeypatch,change):
-    import hashlib,json
+    import hashlib,json,types
     import scoped_linux_journal as client
+    # This fixture exercises Windows client custody with an in-process transport.
+    # Replace only this module's platform view; keep real fsync/environment APIs
+    # and avoid changing the process-wide os.name/pathlib implementation.
+    monkeypatch.setattr(client,"os",types.SimpleNamespace(**{**vars(client.os),"name":"nt"}))
     root=tmp_path/".codex/private";private=root/"operation";private.mkdir(parents=True)
     monkeypatch.setattr(Path,"home",classmethod(lambda cls:tmp_path))
     monkeypatch.setattr(client,"client_path",lambda path:"/unit-test-no-transport/"+Path(path).name)

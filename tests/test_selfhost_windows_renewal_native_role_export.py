@@ -100,10 +100,13 @@ class PortableControls(unittest.TestCase):
   selection=types.ModuleType('selfhost_windows_selection');selection.decode=json.loads
   prior={name:sys.modules.get(name) for name in ['selfhost_windows_renewal','selfhost_windows_selection']}
   sys.modules['selfhost_windows_renewal']=fake;sys.modules['selfhost_windows_selection']=selection
-  original=owner.hold_private_input;owner.hold_private_input=held
+  original_private=owner.hold_private_input;original_public=owner.hold_public_input
+  # Both public CA/source records and private records are synthetic held inputs.
+  # The production reader still enforces its Windows boundary outside this unit.
+  owner.hold_private_input=held;owner.hold_public_input=held
   try:return owner._export_generation(config,mirror,purpose='selfhost-renewal' if defect=='legacy-purpose' else 'passport-role-repair')
   finally:
-   owner.hold_private_input=original
+   owner.hold_private_input=original_private;owner.hold_public_input=original_public
    for name,value in prior.items():
     if value is None:sys.modules.pop(name,None)
     else:sys.modules[name]=value
