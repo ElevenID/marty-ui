@@ -461,6 +461,18 @@ and receipts record source revisions, image references/config IDs, engine ID
 and the executed fixture hash. These remain synthetic execution evidence,
 without production or release admission.
 
+The isolated PostgreSQL fixture requires a per-attempt synthetic password;
+ordinary native clients receive a correctly encoded URI. New Issuance instead
+receives only `MARTY_DB_PASSWORD_FILE` and `DATABASE_URL_TEMPLATE`, then runs
+`/bin/sh` with `set -e`, the image's `/app/load-secrets-env.sh`, and an explicit
+`exec /usr/local/bin/marty-issuance-service migrate`. Its normal service
+entrypoint does not forward the migration argument. The synthetic password
+contains reserved URI bytes to check the loader's encoding. Old Issuance keeps
+the direct encoded URI: the historical loader does not encode those bytes and
+fails this input. This qualifies the new native command and secret transport;
+it does not qualify Compose one-off ownership, durable migration receipts, or
+the complete deployment transition.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured

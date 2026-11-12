@@ -19,6 +19,7 @@ import subprocess
 import sys
 import time
 import uuid
+from urllib.parse import quote
 
 import pytest
 
@@ -74,6 +75,14 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
     NETWORK_INTENDED = False
     NETWORK_ID = None
     ATTEMPT_ID = uuid.uuid4().hex
+    # Synthetic only; reserved URI bytes exercise the image's secret loader.
+    DB_PASSWORD = "native-fixture-" + ATTEMPT_ID + "%:/@"
+    # Only this fixture writes the synthetic file; a production one-off must
+    # inherit the admitted service's existing secrets and override its entrypoint.
+    issuance_shell = (
+        'set -e; printf %s "$SYNTHETIC_DB_PASSWORD" > /tmp/synthetic-db-password; '
+        '. /app/load-secrets-env.sh; exec /usr/local/bin/marty-issuance-service migrate'
+    )
     INTENDED_CONTAINERS = {}
     ACK_IDS = {}
     REPORT = {
@@ -169,7 +178,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         if role == "redis":
             options += ["--tmpfs", "/data:rw,noexec,nosuid,size=16777216"]
         env = {
-            "DATABASE_URL": "postgresql://postgres@" + PG + "/marty_schema_test",
+            "DATABASE_URL": "postgresql://postgres:" + quote(DB_PASSWORD, safe="") + "@" + PG + "/marty_schema_test",
             "ENVIRONMENT": "test",
             "MARTY_MIGRATION_PROFILE": "selfhost-production",
             "PUBLIC_API_URL": "https://startup-qa.invalid",
@@ -190,6 +199,14 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         }
         if role in {"wrong-tenant-deployment", "wrong-tenant-flow"}:
             env["MARTY_ORG_ID"] = "00000000-0000-0000-0000-000000000002"
+        if role == "new-issuance-migrate":
+            require(entry == "/bin/sh" and args == ["-c", issuance_shell])
+            env.pop("DATABASE_URL")
+            env.update({
+                "SYNTHETIC_DB_PASSWORD": DB_PASSWORD,
+                "MARTY_DB_PASSWORD_FILE": "/tmp/synthetic-db-password",
+                "DATABASE_URL_TEMPLATE": "postgresql://postgres:${MARTY_DB_PASSWORD}@" + PG + "/marty_schema_test",
+            })
         for k, v in env.items():
             options += ["--env", k + "=" + v]
         cid = cmd([*options, "--entrypoint", entry, image, *args]).decode().strip()
@@ -408,7 +425,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
                     "--env",
                     "POSTGRES_USER=postgres",
                     "--env",
-                    "POSTGRES_HOST_AUTH_METHOD=trust",
+                    "POSTGRES_PASSWORD=" + DB_PASSWORD,
                     "--env",
                     "PGDATA=/var/lib/postgresql/data/owned",
                     "--tmpfs",
@@ -534,7 +551,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             False,
         )
         remove(migration)
-        REPORT["checks"].append("old issuance native migrate with seed")
+        REPORT["checks"].append("old issuance native migrate with seed and password authentication")
         deployment = run(
             OLD, "old-deployment", "/usr/local/bin/marty-deployment-profile"
         )
@@ -681,12 +698,12 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         migration = run(
             NEW,
             "new-issuance-migrate",
-            "/usr/local/bin/marty-issuance-service",
-            ["migrate"],
+            "/bin/sh",
+            ["-c", issuance_shell],
             False,
         )
         remove(migration)
-        REPORT["checks"].append("new issuance native migrate")
+        REPORT["checks"].append("new issuance native migrate with file-secret authentication")
         deployment_clock = json.loads(sql("SELECT to_json(clock_timestamp());"))
         deployment = run(
             NEW, "new-deployment", "/usr/local/bin/marty-deployment-profile"
