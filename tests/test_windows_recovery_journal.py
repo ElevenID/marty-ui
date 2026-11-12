@@ -89,6 +89,9 @@ def test_recovery_seed_selects_new_generation_and_retains_execution_hashes(tmp_p
     assert selected['selected']==args['snapshots']['new'] and selected['decision']=='recovered-new'
     assert selected['result_sha256']==selection.digest(args['activation_result_raw'])
     assert selection.decode(seed['checkpoint.json'])['sequence_offset']==24
+    owner=selection.decode(seed['owner.json'])['binding']
+    intents,records=selection._parse(seed,owner)
+    assert intents[1]['operation']=='recovery-successor' and records[1]['choice']=='new'
 
 
 @pytest.mark.parametrize('fault',['predecessor','selection','data','rollback','result','mirror','config','publication'])

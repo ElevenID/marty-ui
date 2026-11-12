@@ -28,7 +28,8 @@ def checkpoint(raw):
     require(type(value) is dict and set(value) == {'schema', 'source_dir', 'intent_sha256', 'sequence_offset', 'generation_model',
                                                   'first_intent', 'first_selection'})
     from selfhost_windows_product_journal import SCHEMA as product_schema
-    require(value['schema'] in {SCHEMA, product_schema} and Path(value['source_dir']).is_absolute()
+    from selfhost_windows_recovery_journal import SCHEMA as recovery_schema
+    require(value['schema'] in {SCHEMA, product_schema, recovery_schema} and Path(value['source_dir']).is_absolute()
             and re.fullmatch(r'[0-9a-f]{64}', value['intent_sha256'])
             and type(value['sequence_offset']) is int and value['sequence_offset'] >= 0)
     require(value['first_intent'] == selection.decode(raw['000001.intent.json'])
@@ -94,6 +95,7 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
     from selfhost_windows_model import hold_history, model_binding, owner_binding
     import selfhost_windows_renewal as renewal
     import selfhost_windows_product_journal as product
+    import selfhost_windows_recovery_journal as recovery
     accepted = [];visited = set();expected_seed = None
     while True:
         require(root not in visited);visited.add(root)
@@ -106,17 +108,35 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
             return expected, root, raw, [model_binding(expected)]
         has_link = INTENT in raw
         has_product = product.INTENT in raw
-        require(not (has_link and has_product) and (product.DECISION not in raw or has_product))
+        has_recovery = recovery.INTENT in raw
+        require(sum((has_link,has_product,has_recovery))<=1 and (product.DECISION not in raw or has_product)
+                and (recovery.DECISION not in raw or has_recovery))
         require(DECISION not in raw or has_link)
         intents, records = selection._parse(raw, expected, allow_pending_model=pending_model and not (has_link or has_product))
         current_model, models = hold_history(raw, expected, records, stack,
                                              allow_pending=pending_model and not (has_link or has_product))
         accepted.extend(models)
-        if not has_link and not has_product:
+        if not has_link and not has_product and not has_recovery:
             require(pending_continuation_sha256 is None and pending_product_sha256 is None)
             require(model_binding(config) in accepted)
             return expected, root, raw, accepted
         require(len(intents) == len(records))
+        if has_recovery:
+            require(not pending_model and pending_continuation_sha256 is None and pending_product_sha256 is None)
+            marker=recovery.validate_marker(raw,expected,current_model,root)
+            require(recovery.DECISION in raw)
+            initial=recovery.seed(raw,expected,current_model,marker,stack)
+            require(selection.decode(raw[recovery.DECISION])==recovery.decision(marker,initial))
+            if ancestry is not None:ancestry.append((root,dict(raw)))
+            stack.enter_context(_held_private_input(root,directory=True))
+            config=selection.decode(initial['000001.intent.json'])
+            config=selection.decode(stack.enter_context(renewal.hold_private_input(Path(config['config_path']))))
+            root=Path(marker['target_dir'])
+            require(root not in visited)
+            stack.enter_context(renewal.hold_storage_namespace(root))
+            with _held_private_input(root,directory=True):pass
+            raw=selection._read(root,stack);expected_seed=initial
+            continue
         if has_product:
             marker = product.validate_marker(raw, expected, current_model, root)
             if pending_product_sha256 == selection.digest(raw[product.INTENT]):

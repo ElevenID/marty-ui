@@ -110,10 +110,11 @@ def directory(config):
 def _read(root, stack):
     from selfhost_windows_continuation import FILES
     from selfhost_windows_product_journal import FILES as product_files
+    from selfhost_windows_recovery_journal import FILES as recovery_files
     from selfhost_windows_model import ENTRY as model_entry, LIMIT as model_limit
     names = sorted(p.name for p in root.iterdir())
-    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1+len(FILES)+len(product_files)
-            and all(n == 'owner.json' or n in FILES or n in product_files or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
+    require(len(names) <= 2*(MAX_SELECTIONS+model_limit)+1+len(FILES)+len(product_files)+len(recovery_files)
+            and all(n == 'owner.json' or n in FILES or n in product_files or n in recovery_files or ENTRY.fullmatch(n) or model_entry.fullmatch(n) for n in names))
     raw = {n: stack.enter_context(renewal.hold_private_input(root/n)) for n in names}
     require(sorted(p.name for p in root.iterdir()) == names)
     return raw
@@ -122,13 +123,14 @@ def _read(root, stack):
 def _parse(raw, expected, *, allow_pending_model=False):
     from selfhost_windows_continuation import FILES, checkpoint
     from selfhost_windows_product_journal import FILES as product_files, SCHEMA as product_schema
+    from selfhost_windows_recovery_journal import FILES as recovery_files, SCHEMA as recovery_schema
     from selfhost_windows_model import ENTRY as model_entry, history
     require('owner.json' in raw)
     require(decode(raw['owner.json']) == {'schema': SCHEMA, 'binding': expected})
     carry = checkpoint(raw)
     intents = {};selections = {};previous = None;prior_record = None
     for name, value in raw.items():
-        if name == 'owner.json' or name in FILES or name in product_files or model_entry.fullmatch(name):continue
+        if name == 'owner.json' or name in FILES or name in product_files or name in recovery_files or model_entry.fullmatch(name):continue
         match = ENTRY.fullmatch(name);require(match is not None)
         number = int(match[1]);require(1 <= number <= MAX_SELECTIONS)
         target = intents if match[2] == 'intent' else selections
@@ -142,7 +144,7 @@ def _parse(raw, expected, *, allow_pending_model=False):
                                'config_sha256', 'inputs', 'operation', 'result_before_sha256'})
         require(intent['schema'] == SCHEMA and intent['sequence'] == number and intent['parent'] == previous)
         require(type(intent['sequence']) is int)
-        first_operation = ('product-successor' if carry['schema'] == product_schema else 'continuation') if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
+        first_operation = ({product_schema:'product-successor',recovery_schema:'recovery-successor'}.get(carry['schema'],'continuation')) if carry else ('adopt-current' if expected.get('initial_current') else 'adopt')
         require(intent['operation'] == (first_operation if number == 1 else 'activation'))
         require(isinstance(intent['inputs'], dict) and set(intent['inputs']) == {'old', 'new'})
         for snapshot in intent['inputs'].values():
@@ -170,7 +172,7 @@ def _parse(raw, expected, *, allow_pending_model=False):
             require(record['intent_sha256'] == digest(raw[f'{number:06}.intent.json']))
             require(isinstance(record['choice'], str) and record['choice'] in {'old', 'new'} and record['selected'] == intent['inputs'][record['choice']])
             if number == 1 and carry:
-                prefix = 'product-selected-' if carry['schema'] == product_schema else 'continued-'
+                prefix = {product_schema:'product-selected-',recovery_schema:'recovered-'}.get(carry['schema'],'continued-')
                 require(record['decision'] == prefix+record['choice'])
             else:
                 decisions = {'adopted', 'activated', 'rolled_back', 'reconciled-old', 'reconciled-new'}

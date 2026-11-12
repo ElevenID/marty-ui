@@ -121,3 +121,118 @@ def derive_seed(*, previous_binding, previous_intent, previous_record, config_pa
     return {'owner.json':selection.packed({'schema':selection.SCHEMA,'binding':owner}),
             CHECKPOINT:selection.packed(carry),'000001.intent.json':selection.packed(first),
             '000001.selection.json':selection.packed(selected)}
+
+
+def validate_marker(raw, expected, current_model, journal):
+    """A recovery link seals the predecessor; missing decisions never fall back."""
+    from selfhost_windows_continuation import INTENT as continuation, checkpoint
+    from selfhost_windows_product_journal import INTENT as product
+    require=selection.require
+    marker=selection.decode(raw[INTENT])
+    require(raw[INTENT]==selection.packed(marker) and continuation not in raw and product not in raw)
+    require(set(marker)=={'schema','project','engine_id','source_dir','target_dir','source_sha256',
+        'attempt_dir','config_sha256','generation_sequence','evidence_sha256','candidate_only'})
+    require(marker['schema']==SCHEMA and marker['candidate_only'] is True
+        and marker['project']==expected['project'] and marker['engine_id']==expected['engine_id']
+        and marker['source_dir']==str(journal))
+    require(marker['source_sha256']=={name:selection.digest(body) for name,body in raw.items() if name not in FILES})
+    intents,records=selection._parse(raw,expected)
+    require(len(intents)==len(records))
+    carry=checkpoint(raw)
+    require(type(marker['generation_sequence']) is int and marker['generation_sequence']==
+        len(records)+(carry['sequence_offset'] if carry else 0))
+    root,target=Path(marker['attempt_dir']),Path(marker['target_dir'])
+    require(root.parent==target.parent==Path(expected['root'])
+        and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',root.name)
+        and re.fullmatch(re.escape('.'+expected['project']+'.generation-recovery-')+r'[0-9a-f]{32}',target.name))
+    require(type(marker['evidence_sha256']) is dict and marker['evidence_sha256']
+        and all(type(name) is str and type(value) is str and re.fullmatch(r'[0-9a-f]{64}',value)
+                for name,value in marker['evidence_sha256'].items()))
+    require(type(marker['config_sha256']) is str and re.fullmatch(r'[0-9a-f]{64}',marker['config_sha256']))
+    return marker
+
+
+def seed(raw,expected,current_model,marker,stack):
+    """Replay held immutable recovery execution evidence, never live admission."""
+    from selfhost_windows_inputs import _held_private_input
+    from selfhost_windows_model import effective_config, model_binding
+    from selfhost_windows_staging_recovery import RECOVERY_RECEIPTS, recovery_phase_receipts, failed_current_receipts
+    renewal=selection.renewal;require=selection.require
+    require(validate_marker(raw,expected,current_model,Path(marker['source_dir']))==marker)
+    intents,records=selection._parse(raw,expected)
+    prior_intent,prior=intents[len(records)],records[len(records)]
+    old_raw=stack.enter_context(renewal.hold_private_input(Path(prior_intent['config_path'])))
+    require(selection.digest(old_raw)==prior_intent['config_file_sha256'])
+    old=effective_config(selection.decode(old_raw),current_model)
+    root=Path(marker['attempt_dir'])
+    stack.enter_context(renewal.hold_storage_namespace(root))
+    stack.enter_context(_held_private_input(root,directory=True))
+    config_path=root/'config.private.json'
+    config_raw=stack.enter_context(renewal.hold_private_input(config_path))
+    config=selection.decode(config_raw)
+    require(config_raw==selection.packed(config) and selection.digest(config_raw)==marker['config_sha256'])
+    stage=selection.decode(stack.enter_context(renewal.hold_private_input(root/'intent.json')))
+    require(set(stage)=={'schema','failed_proof','failed_root','root','logical_project','config_sha256',
+                        'operator_admission','credential_admission','rollback_to_expired'}
+        and stage['schema']=='marty.windows-expired-renewal-staging/v1' and stage['root']==str(root)
+        and stage['config_sha256']==marker['config_sha256'] and stage['credential_admission'] is False
+        and stage['rollback_to_expired'] is False)
+    failure=stage['failed_proof'];failed=Path(stage['failed_root'])
+    require(failed.parent==root.parent and failed!=root and re.fullmatch(r'windows-renewal-[0-9a-f]{32}',failed.name)
+        and failure['schema']=='marty.windows-failed-current-proof/v1' and failure['sequence']==prior['sequence']
+        and failure['project']==expected['project'] and failure['data_sha256']==prior['data_sha256']
+        and failure['credential_admission'] is False and failure['guard_retained'] is True)
+    stack.enter_context(renewal.hold_storage_namespace(failed))
+    stack.enter_context(_held_private_input(failed,directory=True))
+    require(selection.digest(stack.enter_context(renewal.hold_private_input(failed/'intent.json')))==failure['guard_sha256'])
+    failed_receipts={name:stack.enter_context(renewal.hold_private_input(failed/name))
+        for name in selection._stage_names() if name!='intent.json'}
+    require(failed_current_receipts(failed_receipts)==failure['receipt_sha256'])
+    # Reconstruct the only staged configuration, including admitted operator fields.
+    model_raw=stack.enter_context(renewal.hold_private_input(Path(config['compose_file']),max_bytes=2*1024*1024))
+    model=selection.decode(model_raw)
+    require(selection.digest(model_raw)==config['compose_sha256'])
+    execution=selection.decode(stack.enter_context(renewal.hold_private_input(Path(config['intent']))))
+    services=set(execution['data_mounts_before'])
+    require(services and services<=set(model['services']))
+    layers=renewal.dependency_layers(model,services,renewal.owned_roles(model,services))
+    require(execution['layers']==layers)
+    reconstructed=selection._stage_configuration(old,prior['choice'],prior,root,layers)
+    for field in OPERATOR_FIELDS:reconstructed['native'][field]=config['native'][field]
+    require(reconstructed==config and model_binding(old)==model_binding(config))
+    paths=[Path(config[key]) for key in ('intent','result','new_log','rollback_log')]
+    paths += [Path(path) for step in config['step_receipts'] for path in step.values()]
+    require(all(path.parent==root/'activation' for path in paths))
+    expected_files={*RECOVERY_RECEIPTS,'intent.json','config.private.json','publication.json','renewed.env',
+                    *(str(path.relative_to(root)).replace('\\','/') for path in paths)}
+    require(set(marker['evidence_sha256'])==expected_files)
+    require({path.name for path in root.iterdir()}==set(RECOVERY_RECEIPTS)|
+        {'intent.json','config.private.json','publication.json','renewed.env','activation'})
+    stack.enter_context(_held_private_input(root/'activation',directory=True))
+    require({path.name for path in (root/'activation').iterdir()}=={path.name for path in paths})
+    bodies={name:stack.enter_context(renewal.hold_private_input(root/name,max_bytes=2*1024*1024)) for name in expected_files}
+    require(all(selection.digest(body)==marker['evidence_sha256'][name] for name,body in bodies.items()))
+    receipts={name:bodies[name] for name in RECOVERY_RECEIPTS}
+    hashes,_=recovery_phase_receipts(receipts,expected['project'],root.name.removeprefix('windows-renewal-'),
+        config['native']['helper_image'],model['services']['signing-keys']['image'])
+    publication=selection.decode(bodies['publication.json'])
+    require(publication['receipt_sha256']==hashes)
+    for index,layer in enumerate(layers):
+        step=config['step_receipts'][index]
+        for event in ('started','completed'):
+            require(bodies[str(Path(step['new_'+event]).relative_to(root)).replace('\\','/')]==
+                    selection.packed({'roles':layer,'event':event}))
+            require(bodies[str(Path(step['rollback_'+event]).relative_to(root)).replace('\\','/')]==b'')
+    require(bodies['activation/rollback_log']==b'')
+    _values,snapshots=selection._inputs(config,stack)
+    old_binding_config=deepcopy(old);old_binding_config.pop('_historical_compose_sha256',None)
+    return derive_seed(previous_binding=selection.binding(old_binding_config),previous_intent=prior_intent,previous_record=prior,
+        config_path=config_path,config_raw=config_raw,snapshots=snapshots,admission=stage['operator_admission'],
+        publication_raw=bodies['publication.json'],activation_intent_raw=bodies['activation/intent'],
+        activation_result_raw=bodies['activation/result'],source_dir=Path(marker['source_dir']),
+        transition_sha256=selection.digest(selection.packed(marker)),generation_sequence=marker['generation_sequence'])
+
+
+def decision(marker,initial):
+    return {'schema':SCHEMA,'intent_sha256':selection.digest(selection.packed(marker)),
+            'target_entries_sha256':{name:selection.digest(body) for name,body in initial.items()},'candidate_only':True}

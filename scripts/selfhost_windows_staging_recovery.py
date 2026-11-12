@@ -214,7 +214,7 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
         cycle = root.name.removeprefix('windows-renewal-')
         guard = renewal.recovery_guard(cfg)
         intent = {'schema': 'marty.windows-expired-renewal-staging/v1',
-                  'failed_proof': lease['proof'], 'root': str(root),
+                  'failed_proof': lease['proof'], 'failed_root':str(lease['failed_root']), 'root': str(root),
                   'logical_project': logical_project, 'config_sha256': selection.digest(packed(config)),
                   'operator_admission': operator_admission,
                   'credential_admission': False, 'rollback_to_expired': False}
@@ -322,6 +322,7 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _
         else:
             native.require_recovery_capability(config['native'],observed['docker'].prefix)
         require(intent=={'schema':'marty.windows-expired-renewal-staging/v1','failed_proof':lease['proof'],
+            'failed_root':str(lease['failed_root']),
             'root':str(root),'logical_project':intent['logical_project'],'config_sha256':selection.digest(packed(config)),
             'operator_admission':admission,'credential_admission':False,'rollback_to_expired':False})
         require(stack.enter_context(renewal.hold_private_input(root/'config.private.json'))==packed(config))
