@@ -45,6 +45,20 @@ class Helper:
 
 
 class MembershipBuildTests(unittest.TestCase):
+    def test_current_ten_role_scope_keeps_original_six_and_closes_login_chain(self):
+        old = build.build_scope(build.D05_MEMBERSHIP_PROFILE)
+        current = build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertEqual(current['uiRevision'], 'b7c7055830722d10512ccac042b1e0abe0e1ecec')
+        self.assertEqual(current['coreRevision'], old['coreRevision'])
+        self.assertEqual(current['volumes'], old['volumes'])
+        self.assertEqual(current['roles'], {**old['roles'], 'auth': 'marty-auth', 'flow': 'marty-flow',
+                         'issuance-native': 'marty-issuance-service', 'organization': 'marty-organization'})
+        recipe = build.render_recipe(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertIn('--build-profile d05-membership-current-native-ten-role', recipe)
+        self.assertIn('assert len(services)==10', recipe)
+        self.assertEqual(set(current['packages']), set(current['roles'].values()))
+        self.assertEqual(build.cargo_arguments(build.D05_MEMBERSHIP_LATEST_PROFILE).count('--bin'), 10)
+
     def test_strict_capacity_and_before_parent_startup_allowance(self):
         required = 4 * 1024 ** 3 + 64 * 1024 ** 2
         for before_parent, threshold in ((False, required), (True, required + 1024 ** 3)):
