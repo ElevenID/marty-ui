@@ -159,7 +159,15 @@ def test_packaged_source_imports_without_checkout_fallback_or_private_inputs(tmp
             cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
         assert result.returncode == 0, result.stderr
         assert "--recovery-source-sha" in result.stdout
-    command = "import sys; sys.path.insert(0, sys.argv[1]); import kubernetes_legacy_recovery_sources as s; print(len(s.snapshot()))"
+    # Import the optional acquisition collector from the copied closure as well:
+    # the recovery entrypoints' --help path does not load its dependencies.
+    command = (
+        "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+        "import kubernetes_legacy_recovery_sources as s; "
+        "import installer_acceptance_acquisition as acquisition; "
+        "assert Path(acquisition.__file__).resolve() == Path(sys.argv[1]) / 'installer_acceptance_acquisition.py'; "
+        "print(len(s.snapshot()))"
+    )
     result = subprocess.run([sys.executable, "-B", "-c", command, str(root / "scripts")],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
