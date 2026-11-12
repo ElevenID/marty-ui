@@ -199,7 +199,8 @@ def seed(raw,expected,current_model,marker,stack):
         and failure['credential_admission'] is False and failure['guard_retained'] is True)
     stack.enter_context(renewal.hold_storage_namespace(failed))
     stack.enter_context(_held_private_input(failed,directory=True))
-    require(selection.digest(stack.enter_context(renewal.hold_private_input(failed/'intent.json')))==failure['guard_sha256'])
+    failed_intent_raw=stack.enter_context(renewal.hold_private_input(failed/'intent.json'))
+    require(selection.digest(failed_intent_raw)==failure['guard_sha256'])
     failed_receipts={name:stack.enter_context(renewal.hold_private_input(failed/name))
         for name in selection._stage_names() if name!='intent.json'}
     require(failed_current_receipts(failed_receipts)==failure['receipt_sha256'])
@@ -212,6 +213,37 @@ def seed(raw,expected,current_model,marker,stack):
     require(services and services<=set(model['services']))
     layers=renewal.dependency_layers(model,services,renewal.owned_roles(model,services))
     require(execution['layers']==layers)
+    failed_config=selection._stage_configuration(old,prior['choice'],prior,failed,layers)
+    failed_config_raw=stack.enter_context(renewal.hold_private_input(failed/'activation/config.private.json'))
+    require(failed_config_raw==selection.packed(failed_config))
+    failed_intent=selection.decode(failed_intent_raw)
+    failed_cycle=failed.name.removeprefix('windows-renewal-')
+    require(failed_intent_raw==selection.packed(failed_intent) and failed_intent=={
+        'schema':selection.STAGE_SCHEMA,'project':expected['project'],'engine_id':expected['engine_id'],
+        'sequence':prior['sequence']+1,'selected_sha256':selection.digest(selection.packed(prior['selected'])),
+        'data_sha256':prior['data_sha256'],'root':str(failed),
+        'config_path':str(failed/'activation/config.private.json'),'config_sha256':selection.digest(failed_config_raw),
+        'authority_file':'/control/recovery-session-'+failed_cycle+'/token',
+        'logical_project':failed_intent['logical_project'],
+        'services_image':model['services']['signing-keys']['image'],'candidate_only':True})
+    require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}',failed_intent['logical_project']))
+    require({p.name for p in failed.iterdir()}==set(selection._stage_names())|
+            {'result.json','publication.pending.json','renewed.env','activation'})
+    failed_paths=[Path(failed_config[name]) for name in ('intent','result','new_log','rollback_log')]
+    failed_paths += [Path(path) for step in failed_config['step_receipts'] for path in step.values()]
+    stack.enter_context(_held_private_input(failed/'activation',directory=True))
+    require({p.name for p in (failed/'activation').iterdir()}=={'config.private.json',*(p.name for p in failed_paths)})
+    for path in [*failed_paths,failed/'result.json',failed/'publication.pending.json']:
+        require(stack.enter_context(renewal.hold_private_input(path))==b'')
+    failed_env=stack.enter_context(renewal.hold_private_input(failed/'renewed.env'))
+    old_env=stack.enter_context(renewal.hold_private_input(Path(failed_config['current_env'])))
+    require(renewal.env_body(failed_env,Path(failed_config['renewed_secrets']))==
+            renewal.env_body(old_env,Path(failed_config['current_secrets'])))
+    failed_candidate=Path(failed_config['renewed_secrets'])
+    stack.enter_context(renewal.hold_storage_namespace(failed_candidate))
+    stack.enter_context(_held_private_input(failed_candidate,directory=True))
+    require(not list(failed_candidate.iterdir()))
+    stack.callback(lambda:require(not list(failed_candidate.iterdir())))
     reconstructed=selection._stage_configuration(old,prior['choice'],prior,root,layers)
     for field in OPERATOR_FIELDS:reconstructed['native'][field]=config['native'][field]
     require(reconstructed==config and model_binding(old)==model_binding(config))
@@ -242,7 +274,7 @@ def seed(raw,expected,current_model,marker,stack):
     hashes,_=recovery_phase_receipts(receipts,expected['project'],root.name.removeprefix('windows-renewal-'),
         config['native']['helper_image'],model['services']['signing-keys']['image'])
     publication=selection.decode(bodies['publication.json'])
-    require(publication['receipt_sha256']==hashes)
+    require(publication['receipt_sha256']==hashes and publication['guard_sha256']==selection.digest(bodies['intent.json']))
     for index,layer in enumerate(layers):
         step=config['step_receipts'][index]
         for event in ('started','completed'):

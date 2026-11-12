@@ -14,7 +14,8 @@ from selfhost_windows_staging_recovery import RECOVERY_PHASES, RECOVERY_RECEIPTS
 
 
 @pytest.mark.parametrize('operator_successor',[False,True])
-def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor):
+@pytest.mark.parametrize('failed_fault',[None,'selected','config'])
+def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault):
     with fixture(monkeypatch) as (root,phase,tx,outcome,path,cfg):
         model=selection.decode(Path(cfg['compose_file']).read_bytes())
         roles={row['Service'] for row in states(model)}
@@ -45,7 +46,29 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
         Path(staged['renewed_env']).write_bytes(b''.join(lines))
         (attempt/'config.private.json').write_bytes(selection.packed(staged))
         failed=root/('windows-renewal-'+'a'*32);failed.mkdir()
-        (failed/'intent.json').write_bytes(b'PUBLIC_FAILED_INTENT')
+        failed_config=selection._stage_configuration(cfg,'new',record,failed,layers)
+        (failed/'activation').mkdir()
+        failed_paths=[Path(failed_config[name]) for name in ('intent','result','new_log','rollback_log')]
+        failed_paths += [Path(file) for step in failed_config['step_receipts'] for file in step.values()]
+        for file in failed_paths:file.write_bytes(b'')
+        Path(failed_config['renewed_secrets']).mkdir()
+        failed_env=[b'SELFHOST_SECRET_DIR='+Path(failed_config['renewed_secrets']).as_posix().encode()+b'\n'
+            if line.startswith(b'SELFHOST_SECRET_DIR=') else line
+            for line in Path(failed_config['current_env']).read_bytes().splitlines(keepends=True)]
+        (failed/'renewed.env').write_bytes(b''.join(failed_env))
+        if failed_fault=='config':failed_config['native']['control_volume']='PUBLIC_CHANGED_CONTROL'
+        failed_config_raw=selection.packed(failed_config)
+        (failed/'activation/config.private.json').write_bytes(failed_config_raw)
+        failed_intent={'schema':selection.STAGE_SCHEMA,'project':cfg['project'],'engine_id':cfg['engine_id'],
+            'sequence':2,'selected_sha256':selection.digest(selection.packed(record['selected'])),
+            'data_sha256':record['data_sha256'],'root':str(failed),
+            'config_path':str(failed/'activation/config.private.json'),'config_sha256':selection.digest(failed_config_raw),
+            'authority_file':'/control/recovery-session-'+'a'*32+'/token','logical_project':'marty-selfhost-synthetic',
+            'services_image':model['services']['signing-keys']['image'],'candidate_only':True}
+        if failed_fault=='selected':failed_intent['selected_sha256']='0'*64
+        (failed/'intent.json').write_bytes(selection.packed(failed_intent))
+        (failed/'result.json').write_bytes(b'')
+        (failed/'publication.pending.json').write_bytes(b'')
         failed_raw={name:b'' for name in selection._stage_names() if name!='intent.json'}
         for name in ('authority.started.json','authority.completed.json','current.started.json'):
             p,e,_=name.split('.');failed_raw[name]=selection.packed({'phase':p,'event':e,'metadata':{}})
@@ -101,6 +124,11 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
             'evidence_sha256':evidence,'candidate_only':True}
         raw[recovery.INTENT]=selection.packed(marker)
         (journal/recovery.INTENT).write_bytes(raw[recovery.INTENT])
+        if failed_fault:
+            with pytest.raises(ValueError), ExitStack() as held:
+                recovery.seed(raw,expected,{'compose_file':cfg['compose_file'],'compose_sha256':cfg['compose_sha256']},marker,held)
+            assert not target.exists()
+            return
         with ExitStack() as held:initial=recovery.seed(raw,expected,{'compose_file':cfg['compose_file'],'compose_sha256':cfg['compose_sha256']},marker,held)
         target.mkdir()
         for name,body in initial.items():(target/name).write_bytes(body)
