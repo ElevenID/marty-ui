@@ -249,6 +249,93 @@ def retained_rows_snapshot(docker, items, project, *, profile=LedgerProfile()):
             'database': profile.application, 'tables': result}
 
 
+MUTABLE_TABLES = {
+    'credential_template': ('credential_template_service.credential_templates', ('claims', 'version', 'updated_at')),
+    'issuance_application': ('issuance_service.application_templates', ('claim_collection_rules', 'management_version', 'updated_at')),
+    'wallets': ('credential_template_service.wallet_registry', ('updated_at',)),
+    'destinations': ('credential_template_service.delivery_destinations', ('updated_at',)),
+    'issuer': ('trust_profile_service.issuer_entities', ('updated_at',)),
+    'roles': ('organization_service.roles', ('updated_at',)),
+    'deployment': ('deployment_profile_service.deployment_profiles', ('updated_at',)),
+}
+
+
+def _mutable_scope(membership_before, startup_before):
+    import selfhost_windows_product_schema as membership
+    import selfhost_windows_product_startup as startup
+    membership.validate_before(membership_before);startup.validate_before(startup_before)
+    return {name: {'table': table, 'excluded': list(excluded),
+            'keys': (membership_before if name in membership.TABLES else startup_before)[name]['eligible_id_sha256'],
+            'rows': (membership_before if name in membership.TABLES else startup_before)[name]['row_count']}
+            for name, (table, excluded) in MUTABLE_TABLES.items()}
+
+
+def _mutable_rows_script(scope):
+    # Catalog identifiers are quoted by PostgreSQL, including unknown columns.
+    # Only validated fixed-length hashes become values. Unsupported custom
+    # output types prevent command generation, before evaluating physical rows.
+    statements = [r'\set ON_ERROR_STOP on', 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;',
+        "SET LOCAL TimeZone='UTC'; SET LOCAL DateStyle='ISO,YMD'; SET LOCAL IntervalStyle='postgres';",
+        "SET LOCAL bytea_output='hex'; SET LOCAL extra_float_digits=3; SET LOCAL lc_monetary='C';",
+        "SELECT jsonb_build_object('kind','support','supported',NOT("+ROW_UNSUPPORTED+"));"]
+    for name, entry in sorted(scope.items()):
+        schema, table = entry['table'].split('.')
+        excluded = 'ARRAY['+','.join("'"+key+"'" for key in entry['excluded'])+']::text[]'
+        keys = '{'+','.join(entry['keys'])+'}'
+        statements.append("SELECT format($owned$SELECT jsonb_build_object('kind','rows','table',%L,"
+            "'rows',count(*),'masked',count(*) FILTER(WHERE selected),'columns',%L::jsonb,'excluded',%L::jsonb,"
+            "'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(payload ORDER BY payload COLLATE \"C\"),"
+            "'[]'::jsonb)::text,'UTF8')),'hex')) FROM (SELECT "
+            "encode(sha256(convert_to(t.id::text,'UTF8')),'hex')=ANY(%L::text[]) AS selected,"
+            "CASE WHEN encode(sha256(convert_to(t.id::text,'UTF8')),'hex')=ANY(%L::text[]) "
+            "THEN ROW(%s)::text ELSE t::text END AS payload FROM (SELECT * FROM %I.%I LIMIT "
+            +str(ROW_LIMIT+1)+") t) physical;$owned$,'"+entry['table']+"',"
+            "coalesce(jsonb_agg(attname ORDER BY attnum) FILTER(WHERE NOT(attname=ANY("+excluded+"))),'[]'::jsonb)::text,"
+            "coalesce(jsonb_agg(attname ORDER BY attname) FILTER(WHERE attname=ANY("+excluded+")),'[]'::jsonb)::text,"
+            "'"+keys+"','"+keys+"',string_agg(format('t.%I',attname),',' ORDER BY attnum) "
+            "FILTER(WHERE NOT(attname=ANY("+excluded+"))),'"+schema+"','"+table+"') "
+            "FROM pg_attribute WHERE attrelid=to_regclass('"+entry['table']+"') AND attnum>0 AND NOT attisdropped "
+            "HAVING count(*)>0 AND NOT("+ROW_UNSUPPORTED+")\n"+r'\gexec')
+    statements.append('COMMIT;')
+    return ('\n'.join(statements)+'\n').encode()
+
+
+def retained_mutable_rows_snapshot(docker, items, project, membership_before, startup_before, *, profile=LedgerProfile()):
+    """Physical retention outside exactly qualified mutable fields/cohorts.
+
+    This supplements, never replaces, the semantic migration/startup witnesses.
+    Selected rows omit only the fixed modified fields; every other physical
+    column remains typed SQL text. Unselected rows retain the whole SQL row.
+    Values never leave PostgreSQL. Catalog/type equality and quiescence are
+    separate requirements, and this fingerprint grants no mutation authority.
+    """
+    require(type(profile) is LedgerProfile)
+    scope = _mutable_scope(membership_before, startup_before)
+    base = _postgres_base(items, project)
+    output = _text(docker, [base[0], '--interactive', *base[1:], '--dbname', profile.application,
+                           '--file=-'], stdin_bytes=_mutable_rows_script(scope))
+    records = [json.loads(line) for line in output.splitlines()]
+    require(len(records) == len(scope)+1 and all(type(row) is dict for row in records))
+    supported, *rows = records
+    require(supported == {'kind': 'support', 'supported': True} and supported['supported'] is True)
+    values = {}
+    for row, (name, entry) in zip(rows, sorted(scope.items())):
+        require(set(row) == {'kind', 'table', 'rows', 'masked', 'columns', 'excluded', 'sha256'}
+                and row['kind'] == 'rows' and row['table'] == entry['table']
+                and type(row['rows']) is int and row['rows'] == entry['rows']
+                and type(row['masked']) is int and row['masked'] == len(entry['keys'])
+                and type(row['columns']) is list and row['columns'] and 'id' in row['columns']
+                and all(type(column) is str and column for column in row['columns'])
+                and len(row['columns']) == len(set(row['columns']))
+                and not set(row['columns']) & set(entry['excluded'])
+                and row['excluded'] == sorted(entry['excluded'])
+                and type(row['sha256']) is str and SHA.fullmatch(row['sha256']))
+        values[entry['table']] = {key: row[key] for key in ('rows', 'masked', 'columns', 'sha256')}
+    return {'schema': 'marty.windows-retained-mutable-rows/v1', 'database': profile.application,
+            'scope_sha256': hashlib.sha256(json.dumps(scope, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+            'tables': values}
+
+
 def refuse_pending_product_migrations(docker, items, project, admitted, *, profile=LedgerProfile()):
     """Require the reviewed image-only baseline before any product intent/write.
 

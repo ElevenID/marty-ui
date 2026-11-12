@@ -596,6 +596,8 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
 INSERT INTO synthetic_retained.value_shapes VALUES('shape','[0:1]={1,2}'::int[],'{"key":1,"key":2}'::json);
 CREATE SEQUENCE synthetic_retained.positions;
 CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) AS total FROM synthetic_retained.accounts;""")
+        sql("""ALTER TABLE credential_template_service.credential_templates ADD COLUMN synthetic_array int[], ADD COLUMN synthetic_raw json;
+UPDATE credential_template_service.credential_templates SET synthetic_array='[0:1]={1,2}'::int[], synthetic_raw='{"key":1,"key":2}'::json;""")
         before_all = all_table_fingerprints()
         json_shape = sql("SELECT to_jsonb(t)::text FROM synthetic_retained.value_shapes t;")
         for mutation, restore in [
@@ -699,6 +701,24 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
         profile_before = detailed_fixture_ledgers()
         for name, witness in prior['ledger']['ledgers'].items():
             assert profile_before['migration_ledgers'][name] == witness['rows_sha256']
+        def mutable_physical():
+            return membership.probe.retained_mutable_rows_snapshot(Docker(), items, PROJECT,
+                prior['membership'], prior['startup'], profile=profile)
+        mutable_before = mutable_physical()
+        stock = " FROM credential_template_service.credential_templates t WHERE id='"+membership.STOCK_ID+"'"
+        stock_shape = sql('SELECT to_jsonb(t)::text'+stock)
+        for mutation, restore in [
+            ("synthetic_array=ARRAY[1,2]", "synthetic_array='[0:1]={1,2}'::int[]"),
+            ("synthetic_raw='{\"key\":2}'::json", "synthetic_raw='{\"key\":1,\"key\":2}'::json"),
+        ]:
+            update = 'UPDATE credential_template_service.credential_templates SET '
+            predicate = " WHERE id='"+membership.STOCK_ID+"';"
+            sql(update+mutation+predicate)
+            assert sql('SELECT to_jsonb(t)::text'+stock) == stock_shape
+            assert mutable_physical() != mutable_before
+            sql(update+restore+predicate)
+        assert mutable_physical() == mutable_before
+        REPORT['checks'].append('eligible stock row array bounds and raw JSON changes detected despite equal JSON projections')
         (OPS / "synthetic-before-witnesses.json").write_text(
             json.dumps(prior, indent=2), encoding="utf-8"
         )
@@ -799,6 +819,8 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
             ]
         }
         profile_after = detailed_fixture_ledgers()
+        assert (mutable_physical() == mutable_before) is old_reconciled
+        REPORT['checks'].append('typed retention of seven mutable tables agrees only for reconciled startup')
         quiet_after = membership.probe.quiescence_snapshot(Docker(), items, PROJECT, profile=profile)
         assert quiet_after['product_transition_admission'] is False
         REPORT['checks'].append('cluster quiescence observed twice before and after native changes')

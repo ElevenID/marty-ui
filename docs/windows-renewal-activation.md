@@ -593,3 +593,16 @@ retries or restarts on failure. A stopped-cohort witness grants no SQL authority
 database quiescence, migration/data/catalog admission and the versioned journal
 are still required. This mode deliberately permits no resume or activation and
 has no production call site until that complete owner is qualified.
+
+`retained_mutable_rows_snapshot` supplements the semantic witnesses for the
+seven tables with permitted membership/startup updates. Eligible row identities
+come from validated before-witness hashes. PostgreSQL projects every physical
+column except the exact known modified fields for those rows; other rows retain
+their complete SQL text. Unknown columns remain included and are quoted through
+the catalog, preserving array bounds and raw JSON representation. The probe
+requires exact table/row/masked-row counts, retained column inventories and the
+fixed excluded fields. All values remain inside a read-only repeatable-read
+transaction; only metadata and hashes leave PostgreSQL. Compare both snapshots
+using the same before scope, alongside the semantic changed-field witnesses,
+complete unaffected-row inventory and catalog/type proof. This projection alone
+does not qualify any migration, quiescence or product activation.
