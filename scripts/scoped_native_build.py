@@ -368,6 +368,8 @@ def build_arguments(plan, profile=None):
     # The current local D12 three-role attempt has a harder resident cap while
     # retaining the existing 4 GiB combined memory+swap ceiling and j1 recipe.
     memory = (current_issuer_limits(profile)[0] if profile in CURRENT_ISSUER_READY_PROFILES
+              else str(membership_linux_memory_bytes(profile) // 1024 ** 3) + "g"
+              if profile in D05_MEMBERSHIP_PROFILES
               else "1g" if profile == "d12-passport-current-three-role" else "2g")
     args = ["docker", "--context", "desktop-linux", "run", "--detach", "--pull", "never", "--network", "none", "--name", plan["containerName"],
         "--cpus", "1", "--memory", memory, "--memory-swap", memory if profile in CURRENT_ISSUER_READY_PROFILES else "4g",
@@ -416,7 +418,7 @@ def membership_created_identity(helper, plan, cid, expected_status="created"):
             and row["Config"]["Labels"] == {**(image["Config"].get("Labels") or {}),
                 "elevenid.owner": scope["owner"], "elevenid.run": plan["runId"]},
             "D05_COMPILER_IDENTITY_CHANGED")
-    require(host["NetworkMode"] == "none" and host["Memory"] == 2 * 1024 ** 3
+    require(host["NetworkMode"] == "none" and host["Memory"] == membership_linux_memory_bytes(profile)
             and host["MemorySwap"] == 4 * 1024 ** 3 and host["PidsLimit"] == 128
             and host["NanoCpus"] == 10 ** 9 and host["Privileged"] is False
             and "ALL" in host["CapDrop"] and "no-new-privileges" in host["SecurityOpt"],
@@ -498,28 +500,36 @@ def membership_consumers(helper, plan, expected=None, owned_cid=None, owned_stat
 
 def membership_windows_memory_bytes(profile):
     require(profile in D05_MEMBERSHIP_PROFILES, "D05_BUILD_PROFILE_REQUIRED")
-    return 128 * 1024 ** 2 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 1024 ** 3
+    return 1024 ** 3
+
+
+def membership_linux_memory_bytes(profile):
+    require(profile in D05_MEMBERSHIP_PROFILES, "D05_BUILD_PROFILE_REQUIRED")
+    # Current ten-role trial keeps j1 and the 4 GiB combined RAM+swap ceiling.
+    # A prior three-role 1 GiB build passed; current ten-role success is unproven.
+    return 1024 ** 3 if profile == D05_MEMBERSHIP_LATEST_PROFILE else 2 * 1024 ** 3
 
 
 def membership_required_free_bytes(profile, *, before_parent=False):
     """Full admitted budget; never infer physical residency from Job counters.
 
-    Current ten-role source checks passed in a bounded 128 MiB Windows Job;
-    the complete controller lifetime still must pass that actual limit. Count
-    its startup once inside the same Job budget. Preserve the historical
-    six-role profile's Windows cap and extra pre-parent allowance unchanged.
+    Current ten-role trial admits one 1 GiB Windows Job plus a 1 GiB Linux
+    compiler, retaining the complete 1 GiB host reserve and 64 MiB cushion.
+    Count startup once inside its Job. Neither prior source-phase measurements
+    nor the smaller Linux trial qualify the complete current build. Preserve
+    the historical six-role caps and pre-parent allowance unchanged.
     """
     require(type(before_parent) is bool, "D05_CAPACITY_PHASE_INVALID")
     windows = membership_windows_memory_bytes(profile)
     historical_startup = windows if profile == D05_MEMBERSHIP_PROFILE and before_parent else 0
-    return 2 * 1024 ** 3 + windows + 1024 ** 3 + 64 * 1024 ** 2 + historical_startup
+    return membership_linux_memory_bytes(profile) + windows + 1024 ** 3 + 64 * 1024 ** 2 + historical_startup
 
 
 def membership_capacity(helper, private, profile, *, before_parent=False):
     required_bytes = membership_required_free_bytes(profile, before_parent=before_parent)
     host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
                               "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
-    # Linux 2 GiB + the admitted Windows cap + unchanged host reserve 1 GiB + 64 MiB.
+    # Admitted Linux and Windows caps + unchanged host reserve 1 GiB + 64 MiB.
     require(host_kib * 1024 >= required_bytes,
             "D05_HOST_HEADROOM_REQUIRED "
             f"phase={'before-parent' if before_parent else 'in-parent'} "

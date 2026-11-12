@@ -1,5 +1,6 @@
 """Closed D05 lifecycle controls; no daemon or compiler is invoked."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -45,6 +46,29 @@ class Helper:
 
 
 class MembershipBuildTests(unittest.TestCase):
+    def test_current_actual_resource_trial_keeps_full_recipe_and_historical_caps(self):
+        self.test_profile_capacity_bounds_current_and_preserves_historical()
+        import scoped_native_profiles
+        for profile, expected in ((build.D05_MEMBERSHIP_PROFILE, '2g'),
+                                  (build.D05_MEMBERSHIP_LATEST_PROFILE, '1g')):
+            scope = build.build_scope(profile)
+            run = '11111111-1111-4111-8111-111111111111'
+            plan = {'buildProfile': profile, 'profileSourceSha256': build.sha(Path(scoped_native_profiles.__file__)),
+                    'uiRevision': scope['uiRevision'], 'coreRevision': scope['coreRevision'],
+                    'roleBinaries': scope['roles'], 'releaseQualified': False, 'recordingQualified': False,
+                    'runId': run, 'containerName': scope['prefix'] + run, 'builderImage': 'sha256:' + 'c' * 64,
+                    'sources': {'ui': {'directory': '/ui'}, 'core': {'directory': '/core'}},
+                    'outputDirectory': '/out', 'recipe': {'path': '/recipe'}, 'lockGuard': {'path': '/guard'}}
+            args = build.build_arguments(plan, profile)
+            for flag, value in (('--memory', expected), ('--memory-swap', '4g'), ('--cpus', '1'),
+                                ('--pids-limit', '128'), ('--network', 'none')):
+                self.assertEqual(args[args.index(flag) + 1], value)
+            self.assertEqual(build.membership_linux_memory_bytes(profile), int(expected[0]) * 1024 ** 3)
+        recipe = build.render_recipe(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertEqual(hashlib.sha256(recipe.encode()).hexdigest(),
+                         '535a7fda0cfeb2b02802ff94f1f7e5d9a00a292a8a62003d22d80590c9ab7ee0')
+        self.assertEqual(len(build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)['roles']), 10)
+
     def test_current_ten_role_scope_keeps_original_six_and_closes_login_chain(self):
         old = build.build_scope(build.D05_MEMBERSHIP_PROFILE)
         current = build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)
@@ -62,7 +86,7 @@ class MembershipBuildTests(unittest.TestCase):
     def test_profile_capacity_bounds_current_and_preserves_historical(self):
         for profile, windows, current, parent in (
                 (build.D05_MEMBERSHIP_PROFILE, 1024 ** 3, 4362076160, 5435817984),
-                (build.D05_MEMBERSHIP_LATEST_PROFILE, 128 * 1024 ** 2, 3422552064, 3422552064)):
+                (build.D05_MEMBERSHIP_LATEST_PROFILE, 1024 ** 3, 3288334336, 3288334336)):
             self.assertEqual(build.membership_windows_memory_bytes(profile), windows)
             for before_parent, threshold in ((False, current), (True, parent)):
                 self.assertEqual(build.membership_required_free_bytes(profile, before_parent=before_parent), threshold)
