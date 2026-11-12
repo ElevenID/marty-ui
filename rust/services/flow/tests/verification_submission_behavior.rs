@@ -131,6 +131,72 @@ fn with_emitted_query(
 }
 
 #[tokio::test]
+async fn mdoc_binding_diagnostic_retains_only_existing_audit_hashes() {
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Capture {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let writer = Capture(output.clone());
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_ansi(false)
+        .with_writer(move || writer.clone())
+        .finish();
+    let _subscriber = tracing::subscriber::set_default(subscriber);
+    let mut original = instance(false);
+    let response_uri = "https://verifier.example/private-fixture-response";
+    original.context["oid4vp_response_uri"] = json!(response_uri);
+    let original_id = original.id.clone();
+    let nonce = original.context["nonce"].as_str().unwrap().to_owned();
+    let client_id = original.context["oid4vp_client_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let presentation = "private-fixture-presentation";
+    let (ports, _) = providers(Ok(allowed()));
+    let _ = prepare_verification_submission(
+        &ports,
+        original,
+        input(presentation),
+        &options(None),
+        now(),
+    )
+    .await
+    .unwrap();
+    let captured = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+    let events = captured
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .filter(|event| {
+            event["fields"]["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("OID4VP mdoc binding "))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1);
+    let message = events[0]["fields"]["message"].as_str().unwrap();
+    for private in [
+        original_id.as_str(),
+        nonce.as_str(),
+        client_id.as_str(),
+        response_uri,
+        presentation,
+    ] {
+        assert!(!message.contains(private));
+    }
+    assert!(message.contains("response_key_thumbprint_sha256=none"));
+    println!("PINNED_MDOC_AUDIT_EVENT={}", events[0]);
+}
+
+#[tokio::test]
 async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_restart() {
     let authority = presentation_snapshot::authority("org-1");
     let mut managed = instance(false);
@@ -1699,70 +1765,4 @@ async fn rejected_mdoc_wrong_binding_and_generic_auth_failure_cannot_inherit_fin
         .last_presentation_attempt
         .is_none());
     assert_eq!(cleared.instance.status, FlowInstanceStatus::AwaitingWallet);
-}
-
-#[tokio::test]
-async fn mdoc_binding_diagnostic_retains_only_existing_audit_hashes() {
-    #[derive(Clone)]
-    struct Capture(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Capture {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let output = Arc::new(Mutex::new(Vec::new()));
-    let writer = Capture(output.clone());
-    let subscriber = tracing_subscriber::fmt()
-        .json()
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let _subscriber = tracing::subscriber::set_default(subscriber);
-    let mut original = instance(false);
-    let response_uri = "https://verifier.example/private-fixture-response";
-    original.context["oid4vp_response_uri"] = json!(response_uri);
-    let original_id = original.id.clone();
-    let nonce = original.context["nonce"].as_str().unwrap().to_owned();
-    let client_id = original.context["oid4vp_client_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let presentation = "private-fixture-presentation";
-    let (ports, _) = providers(Ok(allowed()));
-    let _ = prepare_verification_submission(
-        &ports,
-        original,
-        input(presentation),
-        &options(None),
-        now(),
-    )
-    .await
-    .unwrap();
-    let captured = String::from_utf8(output.lock().unwrap().clone()).unwrap();
-    let events = captured
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .filter(|event| {
-            event["fields"]["message"]
-                .as_str()
-                .is_some_and(|message| message.starts_with("OID4VP mdoc binding "))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(events.len(), 1);
-    let message = events[0]["fields"]["message"].as_str().unwrap();
-    for private in [
-        original_id.as_str(),
-        nonce.as_str(),
-        client_id.as_str(),
-        response_uri,
-        presentation,
-    ] {
-        assert!(!message.contains(private));
-    }
-    assert!(message.contains("response_key_thumbprint_sha256=none"));
-    println!("PINNED_MDOC_AUDIT_EVENT={}", events[0]);
 }
