@@ -1028,6 +1028,7 @@ fn run() -> Result<(), String> {
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
             }
+            #[cfg(target_os = "linux")]
             Some("kubernetes-renewal-adoption-verify") if args.len() == 5 => {
                 use std::{io::IsTerminal, path::Path};
                 if std::io::stdout().is_terminal() {
