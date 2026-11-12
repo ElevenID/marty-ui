@@ -339,3 +339,47 @@ def test_remote_redis_cache_data_is_bounded_ephemeral_without_anonymous_volume()
     assert "cache_store: redis_cache_store" in configuration
     assert "session_store: encrypted_cookie_store" in configuration
     assert "adapter: postgresql" in configuration
+
+
+def test_remote_redis_cache_real_compose_render_contract(tmp_path: Path) -> None:
+    """Normal interpolated Compose serialization: public values, no daemon/services."""
+    import os
+
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("", encoding="utf-8")
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    allowed = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "PATHEXT", "PROGRAMFILES", "PROGRAMFILES(X86)"}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    lock = json.loads((ROOT / "deploy-config/catalog/canvas-oss.lock.json").read_text(encoding="utf-8"))
+    dependencies = lock["runtime_dependencies"]
+    environment.update(
+        DOCKER_CONFIG=str(docker_config), COMPOSE_DISABLE_ENV_FILE="true",
+        CANVAS_OSS_IMAGE=lock["image"]["repository"] + "@" + lock["image"]["digest"],
+        CANVAS_OSS_POSTGRES_IMAGE=dependencies["postgres"],
+        CANVAS_OSS_REDIS_IMAGE=dependencies["redis"],
+        CANVAS_OSS_MAILPIT_IMAGE=dependencies["mailpit"],
+        CANVAS_OSS_EDGE_IMAGE=dependencies["edge"],
+        CANVAS_OSS_ADMIN_EMAIL="render-only@example.invalid",
+        CANVAS_OSS_CONFIG_DIR="/render-only/config",
+        CANVAS_OSS_SECRET_DIR="/render-only/secrets",
+        CANVAS_OSS_TLS_DIR="/render-only/tls",
+        CANVAS_OSS_ACME_DIR="/render-only/acme",
+    )
+    rendered = subprocess.run(
+        ["docker", "compose", "--project-name", "canvas-oss-remote",
+         "--project-directory", str(ROOT), "--env-file", str(empty_env),
+         "--file", str(ROOT / "docker-compose.canvas-oss-remote.yml"),
+         "config", "--no-path-resolution", "--format", "json"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert rendered.returncode == 0, "Real Compose source render failed; captured output is private"
+    model = json.loads(rendered.stdout)
+    redis = model["services"]["canvas-redis"]
+    assert "tmpfs" not in redis
+    # Normal interpolation/schema route (not --no-interpolate): actual Compose5.4 UnitBytes serializes as a decimal
+    # STRING at this boundary; Moby TmpfsOptions.SizeBytes remains numeric64MiB.
+    assert redis["volumes"] == [{"type": "tmpfs", "target": "/data", "tmpfs": {"size": "67108864", "mode": 1023}}]
+    assert int(redis["volumes"][0]["tmpfs"]["size"]) == 64 * 1024 * 1024
+    assert redis["volumes"][0]["tmpfs"]["mode"] == 0o1777
+    assert set(model["volumes"]) == {"canvas_oss_files", "canvas_oss_log", "canvas_oss_postgres"}
