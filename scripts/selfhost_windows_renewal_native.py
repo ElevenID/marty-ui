@@ -430,14 +430,28 @@ else:
 body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minimum_ttl'],
       'require_orphan_new':not d.get('initial_current',False),'require_orphan_old':False,
       'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
-print(json.dumps({'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}))
+recovery=d.get('recovery',False)
+assert type(recovery) is bool
+if recovery:
+ assert d['transition'] and not d.get('initial_current',False) and d['minimum_ttl']>=3600
+ assert native('recovery-candidate',{'token':token,'old':roots['old'],'new':roots['new'],
+                                   'minimum_ttl':d['minimum_ttl']},True) is None
+else:
+ for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
+result={'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
 def preflight(config, project, old, new, docker_prefix):
     """Verify a changing generation; all transition checks remain mandatory."""
     return _preflight(config, project, old, new, docker_prefix, transition=True)
+
+
+def preflight_recovery(config, project, old, new, docker_prefix):
+    """Candidate proof for expired-current recovery, never activation authority."""
+    return _preflight(config, project, old, new, docker_prefix, transition=True, recovery=True)
 
 
 def preflight_current(config, project, current, docker_prefix):
@@ -460,7 +474,7 @@ def preflight_initial_current(config, project, current, docker_prefix):
 
 
 def _preflight(config, project, old, new, docker_prefix, *, transition,
-               initial_current=False):
+               initial_current=False, recovery=False):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
@@ -468,6 +482,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', name) for name in old))
     changed = sum(old[name] != new[name] for name in old)
     require(type(initial_current) is bool and not (transition and initial_current))
+    require(type(recovery) is bool and (not recovery or (transition and not initial_current)))
     require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
@@ -478,6 +493,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(config['bao_addr'] == 'https://openbao:8200')
     require(type(config['minimum_ttl']) is int and 60 <= config['minimum_ttl'] <= 28800)
     require(transition or config['minimum_ttl'] >= 3600)
+    require(not recovery or config['minimum_ttl'] >= 3600)
     for key in ['current', 'renewed', 'token_file']:
         p = PurePosixPath(config[key])
         require(p.is_relative_to('/control') and len(p.parts) >= 3
@@ -492,6 +508,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
                            initial_current=initial_current, bytes={
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
+            if recovery:request['recovery']=True
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                     '--network', config['network'], '--tmpfs',
@@ -506,5 +523,6 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
             from selfhost_windows_renewal import run_owned_mutation
             p = run_owned_mutation(args, stdin_bytes=json.dumps(request).encode(), timeout=240)
             require(p.returncode == 0)
-            require(json.loads(p.stdout) == {'authority': True, 'generation': transition,
-                                            'tokens': True, 'certificates': True})
+            expected = {'authority': True, 'generation': transition, 'tokens': True, 'certificates': True}
+            if recovery:expected['recovery']=True
+            require(json.loads(p.stdout) == expected)

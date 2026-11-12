@@ -613,6 +613,21 @@ fn recovery_candidate_context(context: &Value) -> Result<(&str, &str, &str, u64)
 pub async fn recovery_candidate(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
     let (token, old, new, ttl) = recovery_candidate_context(context)?;
     generation::verify(Path::new(old), Path::new(new), false, false)?;
+    let certificate_files = SELFHOST_ROLES
+        .iter()
+        .map(|role| role.cert_file.to_owned())
+        .chain(
+            keycloak::REALMS
+                .iter()
+                .map(|realm| format!("keycloak_{realm}_rs256_cert")),
+        );
+    for file in certificate_files {
+        let before = certificate_file(&Path::new(old).join(&file))?;
+        let after = certificate_file(&Path::new(new).join(&file))?;
+        if public_spki(&before, true)? != public_spki(&after, true)? {
+            return Err(REFUSAL);
+        }
+    }
     let (_, _, token_files) = generation::inventories();
     let before = token_files
         .iter()
