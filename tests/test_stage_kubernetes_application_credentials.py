@@ -572,3 +572,21 @@ def test_observed_selection_inode_drift_refuses_before_issuing_replacements(flow
         staging.stage(flow.args)
     assert flow.stage_calls == 0
     assert not (flow.args.operation_dir / "application-stage-complete.json").exists()
+
+
+def test_adopted_first_application_stage_uses_live_generation_and_preserves_tls(flow, monkeypatch):
+    from tests.kubernetes_renewal_adoption_fixture import staging_flow
+    fixture, selected_operator = staging_flow(flow, monkeypatch)
+    historical = staging.current_snapshot(flow.args.state_dir / "credentials")
+    bootstrap_bytes = (flow.args.state_dir / "bootstrap-complete.json").read_bytes()
+    staging.stage(flow.args)
+    candidate = staging.current_snapshot(flow.args.operation_dir / "candidate")
+    assert candidate == flow.candidate
+    assert staging.current_snapshot(flow.args.state_dir / "credentials") == historical
+    assert (flow.args.state_dir / "bootstrap-complete.json").read_bytes() == bootstrap_bytes
+    assert unpack((flow.args.operation_dir / "current-snapshot.tar").read_bytes()) == flow.snapshot
+    assert any(context.get("current") == str(fixture.candidate) for _, context in flow.generation_calls)
+    assert flow.creates[0]["spec"]["containers"][0]["image"] == selected_operator["images"]["services"]
+    for name in set(bootstrap.SELFHOST_TLS_FILES) | bootstrap.KEYCLOAK_FILES:
+        assert candidate[name] == flow.snapshot[name]
+    assert staging.record(flow.args.operation_dir / "application-stage-requested.json")["runtime"] == flow.values["release"]

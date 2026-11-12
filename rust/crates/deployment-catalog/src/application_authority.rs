@@ -865,6 +865,110 @@ pub(crate) async fn bootstrap(bao: &OpenBaoHttp, output: &Path, context: &Value)
     enroll(&Http(bao), output, context).await
 }
 
+/// Reconcile an existing enrollment without issuing an identity or a leaf token.
+/// A retained complete identity is required; interrupted enrollment is never replayed.
+pub(crate) async fn verify_enrollment(
+    bao: &OpenBaoHttp,
+    identity: &Path,
+    current: &Path,
+    output: &Path,
+    binding: &Binding,
+    minimum_ttl: u64,
+) -> Result<()> {
+    verify_enrollment_with(&Http(bao), identity, current, output, binding, minimum_ttl).await
+}
+
+async fn verify_enrollment_with(
+    api: &impl Api,
+    identity: &Path,
+    current: &Path,
+    output: &Path,
+    binding: &Binding,
+    minimum_ttl: u64,
+) -> Result<()> {
+    if !(3600..=4500).contains(&minimum_ttl) {
+        return Err(REFUSAL);
+    }
+    let identity = read_identity(identity, binding)?;
+    let current = owned_directory(current)?;
+    let output = owned_directory(output)?;
+    if [&identity.directory, &current, &output]
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .len()
+        != 3
+        || fs::read_dir(&output).map_err(|_| REFUSAL)?.next().is_some()
+    {
+        return Err(REFUSAL);
+    }
+    let before = generation_snapshot(&current)?;
+    let values = current_tokens(&current, false)?;
+    persist(
+        &output.join("attempt.json"),
+        &json!({
+            "schema":"marty.application-enrollment-verification-attempt/v1",
+            "binding":binding,"minimumTtlSeconds":minimum_ttl,
+            "enrollmentReplayed":false,"credentialsIssued":false,
+        }),
+        4096,
+    )?;
+    let authority = session(api, &identity, Some(&output.join("login-response.json"))).await?;
+    let verified: Result<()> = async {
+        for spec in runtime_specs() {
+            let value = values.get(&spec.file).ok_or(REFUSAL)?;
+            let observed = api
+                .request(
+                    Method::POST,
+                    "auth/token/lookup",
+                    Some(&json!({"token":value})),
+                    Some(&authority),
+                )
+                .await?;
+            let replacement = format!(
+                "auth/token/create/{}",
+                spec.replacement_role.as_deref().ok_or(REFUSAL)?
+            );
+            let remaining = metadata(
+                &observed["data"],
+                value,
+                &spec.policies,
+                spec.ttl_seconds,
+                &[
+                    "auth/token/create",
+                    "auth/token/create-orphan",
+                    &replacement,
+                ],
+                Some(false),
+                true,
+            )?;
+            if !no_names(&observed["warnings"]) || remaining < minimum_ttl {
+                return Err(REFUSAL);
+            }
+        }
+        health(api, binding).await?;
+        if generation_snapshot(&current)? != before
+            || read_identity(&identity.directory, binding)?.role_id != identity.role_id
+            || read_identity(&identity.directory, binding)?.secret_id != identity.secret_id
+        {
+            return Err(REFUSAL);
+        }
+        Ok(())
+    }
+    .await;
+    let retired = revoke(api, &authority).await;
+    verified.map_err(|_| RECOVERY)?;
+    retired.map_err(|_| RECOVERY)?;
+    persist(
+        &output.join("complete.json"),
+        &json!({
+            "schema":"marty.application-enrollment-verification/v1","binding":binding,
+            "count":11,"minimumTtlSeconds":minimum_ttl,"transientRevoked":true,
+            "enrollmentReplayed":false,"credentialsIssued":false,
+        }),
+        4096,
+    )
+}
+
 async fn enroll(api: &impl Api, output: &Path, context: Enrollment) -> Result<()> {
     context.binding.validate()?;
     token(&context.root_token)?;
@@ -1570,6 +1674,9 @@ mod tests {
                 if self.fault == "current-bundle" && !state.issued.contains_key(value) {
                     data["policies"] = json!(["root"]);
                 }
+                if self.fault == "adoption-expired" {
+                    data["ttl"] = json!(4499);
+                }
                 if state.issued.contains_key(value)
                     && value == synthetic_token(&runtime_specs()[self.at].file, true)
                 {
@@ -2135,6 +2242,75 @@ mod tests {
             assert_ne!(error, RECOVERY);
             assert_eq!(api.state.lock().unwrap().calls.len(), 0);
             assert_eq!(fs::read_dir(&f.operation).unwrap().count(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn adoption_reconciles_existing_application_identity_without_reenrollment_or_minting() {
+        for fault in [
+            "",
+            "current-bundle",
+            "policy",
+            "leaf-role",
+            "adoption-expired",
+            "cleanup",
+        ] {
+            let fixture = Fixture::new(true, true);
+            let before = generation_snapshot(&fixture.current).unwrap();
+            let api = Fake::new(&fixture, true, fault, 0);
+            let result = verify_enrollment_with(
+                &api,
+                &fixture.identity,
+                &fixture.current,
+                &fixture.operation,
+                &binding(),
+                4500,
+            )
+            .await;
+            assert_eq!(result.is_ok(), fault.is_empty(), "{fault}");
+            assert_eq!(
+                fixture.operation.join("complete.json").exists(),
+                fault.is_empty()
+            );
+            assert_eq!(generation_snapshot(&fixture.current).unwrap(), before);
+            let state = api.state.lock().unwrap();
+            assert_eq!(state.mints, 0);
+            assert_eq!(state.mutations, 0);
+            assert_eq!(state.logins, 1);
+            assert_eq!(state.revokes, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn adoption_refuses_partial_or_wrong_bound_application_identity_before_login() {
+        for fault in ["partial", "namespace", "cluster", "owner"] {
+            let fixture = Fixture::new(true, true);
+            let api = Fake::new(&fixture, true, "", 0);
+            let mut expected = binding();
+            match fault {
+                "partial" => fs::remove_file(fixture.identity.join(SECRET_FILE)).unwrap(),
+                "namespace" => expected.namespace = "another-installation".into(),
+                "cluster" => {
+                    expected.openbao_cluster_id = "00000000-1111-2222-3333-444444444444".into()
+                }
+                "owner" => {
+                    fs::set_permissions(&fixture.identity, fs::Permissions::from_mode(0o755))
+                        .unwrap()
+                }
+                _ => unreachable!(),
+            }
+            assert!(verify_enrollment_with(
+                &api,
+                &fixture.identity,
+                &fixture.current,
+                &fixture.operation,
+                &expected,
+                4500
+            )
+            .await
+            .is_err());
+            assert!(api.state.lock().unwrap().calls.is_empty());
+            assert!(!fixture.operation.join("attempt.json").exists());
         }
     }
 

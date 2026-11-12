@@ -1028,6 +1028,37 @@ fn run() -> Result<(), String> {
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
             }
+            Some("kubernetes-renewal-adoption-verify") if args.len() == 5 => {
+                use std::{io::IsTerminal, path::Path};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_renewal_adoption::verify(
+                            &args[2],
+                            Path::new(&args[3]),
+                            Path::new(&args[4]),
+                            &context,
+                            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+                        ),
+                    )?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &result).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
+            }
             Some(
                 "kubernetes-renewal-enroll"
                 | "kubernetes-renewal-stage"

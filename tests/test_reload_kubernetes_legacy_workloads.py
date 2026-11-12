@@ -907,3 +907,52 @@ def test_completion_does_not_seal_changed_prior_or_completion_bytes(reload_flow,
         run(item)
     assert changed == [record]
     assert len(item.reload_patches) == len(item.execs) == 16
+
+
+@pytest.mark.parametrize("fault", [None, "foreign-owner", "namespace", "secret", "projection", "expired"])
+def test_adoption_readback_reuses_owned_profiles_and_never_restarts_workloads(reload_flow, monkeypatch, fault):
+    import adopt_kubernetes_renewal as coordinator
+    import kubernetes_renewal_adoption_state as adoption
+    item = reload_flow
+    run(item)
+    original_patches = list(item.reload_patches)
+    _, after, changed = reload.admitted_inputs(item.request)
+    verification = item.request.output.parent / "adoption-verification"
+    verification.mkdir(mode=0o700)
+    now = int(item.clock.wall)
+    bootstrap.write_new(verification / "verified.json", bootstrap.encoded({"verification": {
+        "validBeforeUnixSeconds": now - 1 if fault == "expired" else now + 900}}))
+    intent = {"binding": item.binding, "adoptionId": "a" * 32,
+              "candidateInputs": recovery.input_bindings(item.candidate)}
+    legacy = {"after": after, "changed": changed, "bound": item.bound, "plan": item.plan_bytes}
+    monkeypatch.setattr(coordinator, "time", SimpleNamespace(time=lambda: item.clock.wall,
+        monotonic=lambda: item.clock.monotonic))
+    if fault == "foreign-owner":
+        def tamper(pod):
+            pod["metadata"]["ownerReferences"][0]["uid"] = str(uuid.UUID(int=987654))
+        item.pod_tamper = tamper
+    elif fault == "namespace":
+        previous = item.transport.kubectl
+        def wrong_namespace(operation, *command, **kwargs):
+            if command[:2] == ("get", "namespace"):
+                return bootstrap.encoded({"metadata": {"name": item.binding["namespace"], "uid": str(uuid.UUID(int=987654))}})
+            return previous(operation, *command, **kwargs)
+        monkeypatch.setattr(item.transport, "kubectl", wrong_namespace)
+    elif fault == "secret":
+        secret = next(iter(item.secrets.values()))
+        secret["data"][next(iter(secret["data"]))] = base64.b64encode(b"different-generation").decode()
+    elif fault == "projection":
+        item.reload_failure = "file-hash"
+    if fault is not None:
+        with pytest.raises(bootstrap.BootstrapError):
+            coordinator.delivery(verification, intent, item.request.original, legacy, item.transport, lambda: None)
+        assert not (verification / "delivery.json").exists()
+    else:
+        coordinator.delivery(verification, intent, item.request.original, legacy, item.transport, lambda: None)
+        receipt = json.loads((verification / "delivery.json").read_bytes())
+        assert receipt["schema"] == adoption.DELIVERY_SCHEMA
+        assert receipt["secretCount"] == 34 and receipt["workloadCount"] == 16
+        assert receipt["credentialDeliveryVerified"] is True and receipt["credentialConsumptionVerified"] is False
+        assert set(receipt["workloads"]) == set(reload.WORKLOADS)
+        assert len(receipt["observationHashes"]) > 100
+    assert item.reload_patches == original_patches

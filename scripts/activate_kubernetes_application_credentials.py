@@ -28,6 +28,7 @@ import time
 
 import bootstrap_kubernetes_openbao as bootstrap
 import kubernetes_application_state as application_state
+import kubernetes_renewal_adoption_state as adoption
 import stage_kubernetes_application_credentials as staging
 
 
@@ -430,49 +431,16 @@ def original_binding(state: Path) -> tuple[dict, dict]:
     complete = staging.record(state / "bootstrap-complete.json")
     bootstrap.require(complete.get("status") == "openbao-and-application-credentials-ready",
                       "original Kubernetes bootstrap is not complete")
-    authority = complete.get("applicationAuthority")
-    bootstrap.require(isinstance(authority, dict) and set(authority) == {
-        "schema", "binding", "identityDirectory", "files"}
-        and authority["schema"] == "marty.kubernetes-application-authority/v1"
-        and authority["identityDirectory"] == "application-identity"
-        and authority["files"] == sorted(bootstrap.APPLICATION_IDENTITY_FILES),
-        "original bootstrap has no supported application authority")
-    binding = bootstrap.application_binding(authority["binding"])
-    lifecycle = complete["credentialLifecycle"]
-    bootstrap.require(binding == {"namespace": complete["namespace"],
-        "namespaceUid": lifecycle["namespaceUid"], "openbaoClusterId": complete["openbaoClusterId"],
-        "workloadProject": lifecycle["workloadProject"]}, "original application binding differs")
+    binding, _ = adoption.authority(state, complete, "application")
     return complete, binding
 
 
 def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, binding: dict) -> dict:
-    bootstrap.require(complete["runtimeSourceSha"] == args.runtime_source_sha
-                      and complete["chartSourceSha"] == args.chart_source_sha,
-                      "explicit runtime or chart identity differs from original bootstrap")
-    values, _ = bootstrap.prepare(assets=args.assets, runtime_source_sha=args.runtime_source_sha,
-        release_tag=args.release_tag, build_run_id=args.build_run_id, build_run_attempt=args.build_run_attempt,
-        chart_source_sha=args.chart_source_sha, gh=args.gh, cosign=args.cosign,
-        output=work / "marty-images.json", openbao_output=work / "openbao-images.json")
-    bootstrap.require(bootstrap.encoded(values) == bootstrap.encoded(staging.record(args.state_dir / "marty-images.json")),
-                      "authenticated original runtime differs")
-    operator_bytes, _ = bootstrap.authenticated_bootstrap_inputs(args.assets, values["release"])
-    retained, _ = staging.private_bytes(args.state_dir / "marty-deploy", staging.OPERATOR_LIMIT, {0o700})
-    bootstrap.require(operator_bytes == retained and len(operator_bytes) <= staging.OPERATOR_LIMIT,
-                      "retained signed operator differs")
-    operator = work / "marty-deploy"
-    bootstrap.write_new(operator, operator_bytes, 0o700)
-    identity = subprocess.run([str(operator), "--build-identity"], stdin=subprocess.DEVNULL,
-                             capture_output=True, check=False, timeout=10, env={})
-    bootstrap.require(identity.returncode == 0 and identity.stdout.strip().decode()
-                      == args.runtime_source_sha + ":" + args.release_tag, "signed operator build identity differs")
-    publication = bootstrap.publication_contract(operator)
-    application = bootstrap.application_token_contract(operator)
-    bootstrap.require(publication == complete["credentialPublication"]
-                      and application == complete["applicationTokenContract"],
-                      "original compiled publication contracts differ")
+    operator, operator_bytes, values, publication, application = staging.admitted_runtime(
+        args, complete, staging.record(args.state_dir / "marty-images.json"), work)
     activation = bootstrap.compiled_contract(operator, "kubernetes-application-activation-contract",
         activation_contract(publication, application), "application activation")
-    source = args.state_dir / "application-identity"
+    _, source = adoption.authority(args.state_dir, complete, "application")
     staging.existing_private_directory(source)
     bootstrap.require({path.name for path in source.iterdir()} == bootstrap.APPLICATION_IDENTITY_FILES,
                       "application authority identity inventory differs")
@@ -490,12 +458,13 @@ def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, 
     bootstrap.write_new(work / "kubeconfig", kubeconfig)
     kubectl = shutil.which("kubectl")
     bootstrap.require(kubectl is not None, "kubectl must be installed")
-    pull_secrets = complete.get("imagePullSecrets")
+    pull_secrets = adoption.pull_secrets(args.state_dir, complete)
     bootstrap.require(isinstance(pull_secrets, list) and all(isinstance(name, str) and re.fullmatch(
         r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]|[a-z0-9]", name) for name in pull_secrets),
         "retained image pull Secret names are invalid")
     return {"binding": binding, "values": values, "operator": operator, "operatorBytes": operator_bytes,
             "authority": authority, "activation": activation, "pullSecrets": pull_secrets,
+            "producerImage": adoption.producer_image(args, values),
             "transport": BoundedTransport(work, work / "kubeconfig", binding["namespace"], kubectl)}
 
 
@@ -560,7 +529,7 @@ def fresh_proof(context: dict, current: dict, candidate: dict) -> float:
     transport = context["transport"]
     nonce = bootstrap.secrets.token_hex(6)
     bootstrap.check_application_binding(transport, context["binding"])
-    pod = bootstrap.create_producer_pod(transport, image=context["values"]["images"]["services"],
+    pod = bootstrap.create_producer_pod(transport, image=context.get("producerImage", context["values"]["images"]["services"]),
         nonce=nonce, pull_secrets=context["pullSecrets"], purpose="application-activation")
     remote_ready, uncertain, complete = False, False, False
     proof_started = None
@@ -845,6 +814,7 @@ def activate(args: argparse.Namespace) -> None:
                       "activation operation overlaps retained private inputs")
     with application_state.locked(state) as held:
         complete, binding = original_binding(state)
+        adoption.operation_allowed(state, operation)
         pending = held.pending(binding) if args.reconcile else None
         selected = held.current(binding,
             pending_operation=operation if args.reconcile and pending is not None else None)
@@ -996,6 +966,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + name, required=True)
     for name in ("build-run-id", "build-run-attempt"):
         parser.add_argument("--" + name, required=True, type=int)
+    adoption.add_operator_arguments(parser)
     try:
         activate(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, subprocess.TimeoutExpired,

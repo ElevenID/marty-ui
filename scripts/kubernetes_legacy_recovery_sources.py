@@ -23,6 +23,9 @@ SOURCE_FILES = (
     "deploy-config/catalog/kubernetes-application-tokens.json",
     "deploy-config/catalog/kubernetes-secrets.json",
     "scripts/bootstrap_kubernetes_openbao.py",
+    "scripts/adopt_kubernetes_renewal.py",
+    "scripts/activate_kubernetes_application_credentials.py",
+    "scripts/activate_kubernetes_renewal_credentials.py",
     "scripts/build_selfhost_image_lock.py",
     "scripts/inspect_kubernetes_legacy_credentials.py",
     "scripts/installer_acceptance.py",
@@ -44,6 +47,7 @@ SOURCE_FILES = (
     "scripts/installer_startup_observation.py",
     "scripts/installer_startup_process.py",
     "scripts/kubernetes_application_state.py",
+    "scripts/kubernetes_renewal_adoption_state.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
     "scripts/passport_remote_tls.py",
     "scripts/prepare_kubernetes_helm_values.py",
@@ -55,6 +59,7 @@ SOURCE_FILES = (
     "scripts/source_matched_native.py",
     "scripts/stack_tag_gate.py",
     "scripts/stage_kubernetes_application_credentials.py",
+    "scripts/stage_kubernetes_renewal_credentials.py",
     "scripts/verify_installer_provenance.py",
 )
 FILE_LIMIT = 1024 * 1024

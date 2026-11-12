@@ -111,6 +111,8 @@ pub mod kubernetes_application;
 pub mod kubernetes_legacy_recovery;
 pub mod kubernetes_renewal;
 pub mod kubernetes_renewal_activation;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_renewal_adoption;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 

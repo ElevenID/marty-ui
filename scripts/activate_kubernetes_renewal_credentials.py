@@ -23,6 +23,7 @@ import time
 import activate_kubernetes_application_credentials as application
 import bootstrap_kubernetes_openbao as bootstrap
 import kubernetes_application_state as selection
+import kubernetes_renewal_adoption_state as adoption
 import stage_kubernetes_application_credentials as staging
 import stage_kubernetes_renewal_credentials as renewal
 
@@ -359,20 +360,9 @@ def original_binding(state: Path) -> tuple[dict, dict, dict, bytes]:
     complete = staging.record(state / "bootstrap-complete.json")
     bootstrap.require(complete.get("status") == "openbao-and-application-credentials-ready",
                       "original Kubernetes bootstrap is incomplete")
-    authority = complete.get("renewalAuthority")
-    bootstrap.require(isinstance(authority, dict) and set(authority) == {
-        "schema", "binding", "identityDirectory", "files", "bindingFile"}
-        and authority["schema"] == "marty.kubernetes-renewal-authority/v1"
-        and authority["identityDirectory"] == "renewal-identity"
-        and authority["files"] == sorted(bootstrap.RENEWAL_IDENTITY_FILES)
-        and authority["bindingFile"] == "renewal-binding.json",
-        "original bootstrap has no supported Renewal authority")
-    binding = bootstrap.application_binding(authority["binding"])
+    binding, _ = adoption.authority(state, complete, "renewal")
     lifecycle = complete["credentialLifecycle"]
-    bootstrap.require(binding == {"namespace": complete["namespace"], "namespaceUid": lifecycle["namespaceUid"],
-        "openbaoClusterId": complete["openbaoClusterId"], "workloadProject": lifecycle["workloadProject"]},
-        "original Renewal binding differs")
-    raw, _ = staging.private_bytes(state / "renewal-binding.json", 4096, {0o600})
+    raw, _ = staging.private_bytes(adoption.binding_path(state), 4096, {0o600})
     receipt = bootstrap.renewal_binding(application.json_bytes(raw, 4096), binding)
     bootstrap.require(receipt["producerNonce"] == lifecycle.get("producerNonce"),
                       "original Renewal producer identity differs")
@@ -384,11 +374,11 @@ def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, 
     retained = staging.record(args.state_dir / "marty-images.json")
     operator, operator_bytes, values, publication, _ = staging.admitted_runtime(args, complete, retained, work)
     contract = bootstrap.renewal_contract(operator)
-    renewal.same_metadata(contract, complete.get("renewalContract"),
+    renewal.same_metadata(contract, adoption.contract(args.state_dir, complete, "renewal"),
                           "retained Renewal capability differs; fresh bootstrap is required")
     activation = bootstrap.compiled_contract(operator, "kubernetes-renewal-activation-contract",
         activation_contract(publication), "Kubernetes Renewal activation")
-    source = args.state_dir / "renewal-identity"
+    _, source = adoption.authority(args.state_dir, complete, "renewal")
     staging.existing_private_directory(source)
     bootstrap.require({path.name for path in source.iterdir()} == bootstrap.RENEWAL_IDENTITY_FILES,
                       "Renewal identity inventory differs")
@@ -407,13 +397,15 @@ def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, 
     bootstrap.write_new(work / "kubeconfig", kubeconfig)
     kubectl = shutil.which("kubectl")
     bootstrap.require(kubectl is not None, "kubectl must be installed")
-    pulls = complete.get("imagePullSecrets")
+    pulls = adoption.pull_secrets(args.state_dir, complete)
     bootstrap.require(isinstance(pulls, list) and all(isinstance(name, str) and re.fullmatch(
         r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]|[a-z0-9]", name) for name in pulls),
         "retained pull Secret names differ")
     result = {"binding": binding, "bindingReceipt": receipt, "bindingBytes": binding_raw,
         "values": values, "operator": operator, "operatorBytes": operator_bytes, "authority": authority,
         "activation": activation, "pullSecrets": pulls, "state": args.state_dir, "work": work,
+        "authoritySource": source, "bindingSource": adoption.binding_path(args.state_dir),
+        "producerImage": adoption.producer_image(args, values),
         "transport": application.BoundedTransport(work, work / "kubeconfig", binding["namespace"], kubectl),
         "activationAnnotation": ANNOTATION, "rolloutRequestSchema": "marty.kubernetes-renewal-rollout-request/v1"}
     result["deploymentSnapshot"] = lambda resource: deployment_snapshot(
@@ -426,9 +418,9 @@ def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, 
 def custody(context: dict, current: dict, candidate: dict) -> None:
     bootstrap.require(staging.current_snapshot(context["currentDirectory"]) == current
                       and staging.current_snapshot(context["candidateDirectory"]) == candidate
-                      and staging.current_snapshot(context["state"] / "renewal-identity") == context["authority"]
+                      and staging.current_snapshot(context.get("authoritySource", context["state"] / "renewal-identity")) == context["authority"]
                       and staging.current_snapshot(context["work"] / "renewal-identity") == context["authority"]
-                      and staging.private_bytes(context["state"] / "renewal-binding.json", 4096, {0o600})[0]
+                      and staging.private_bytes(context.get("bindingSource", context["state"] / "renewal-binding.json"), 4096, {0o600})[0]
                           == context["bindingBytes"]
                       and staging.private_bytes(context["work"] / "renewal-binding.json", 4096, {0o600})[0]
                           == context["bindingBytes"], "Renewal credential custody changed")
@@ -470,7 +462,7 @@ def fresh_proof(context: dict, current: dict, candidate: dict) -> float:
     transport.deadline = deadline
     custody(context, current, candidate)
     bootstrap.check_application_binding(transport, context["binding"])
-    pod = bootstrap.create_producer_pod(transport, image=context["values"]["images"]["services"],
+    pod = bootstrap.create_producer_pod(transport, image=context.get("producerImage", context["values"]["images"]["services"]),
         nonce=bootstrap.secrets.token_hex(6), pull_secrets=context["pullSecrets"], purpose="renewal-activation")
     remote_ready, uncertain, complete = False, False, False
     try:
@@ -706,6 +698,7 @@ def activate(args: argparse.Namespace) -> None:
                       "Renewal activation overlaps retained private inputs")
     with selection.locked(state) as held:
         complete, binding, binding_receipt, binding_raw = original_binding(state)
+        adoption.operation_allowed(state, operation)
         pending = held.pending(binding, domain="renewal") if args.reconcile else None
         selected = held.current(binding, pending_operation=operation if args.reconcile and pending is not None else None,
                                 domain="renewal")
@@ -831,6 +824,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + name, required=True)
     for name in ("build-run-id", "build-run-attempt"):
         parser.add_argument("--" + name, required=True, type=int)
+    adoption.add_operator_arguments(parser)
     try:
         activate(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, subprocess.TimeoutExpired,

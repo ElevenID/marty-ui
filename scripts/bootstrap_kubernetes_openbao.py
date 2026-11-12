@@ -685,18 +685,18 @@ def enroll_application_authority(transport: Transport, pod: str, *, root_token: 
 
 
 def enroll_renewal_authority(transport: Transport, pod: str, *, root_token: str,
-                             binding: dict) -> dict:
+                             binding: dict, current: Path | None = None) -> dict:
     # Share the same bounded, private generation custody as routine staging.
     # Import lazily: application staging already imports this bootstrap module.
     from stage_kubernetes_application_credentials import current_snapshot, archive_snapshot
 
     binding = application_binding(binding)
+    source = transport.state / "credentials" if current is None else current
     current = "/tmp/renewal-current"
     identity = "/tmp/renewal-identity"
     evidence = "/tmp/renewal-enrollment"
     output = transport.state / "renewal-identity"
     private_directory(output)
-    source = transport.state / "credentials"
     snapshot = current_snapshot(source)
     require(set(SELFHOST_TLS_FILES) | KEYCLOAK_FILES <= set(snapshot),
             "initial renewal generation is incomplete")

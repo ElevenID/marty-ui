@@ -37,6 +37,8 @@ pub fn metadata() -> Value {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) use runtime::verify_enrollment;
+#[cfg(target_os = "linux")]
 pub use runtime::{enroll, stage, verify_candidate};
 
 #[cfg(not(target_os = "linux"))]
@@ -113,6 +115,16 @@ mod runtime {
         current: PathBuf,
         output: PathBuf,
         binding: Binding,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct EnrollmentVerification {
+        current: PathBuf,
+        output: PathBuf,
+        binding_file: PathBuf,
+        binding: Binding,
+        minimum_ttl: u64,
     }
 
     #[derive(Deserialize)]
@@ -544,6 +556,106 @@ mod runtime {
             .map_err(|_| REFUSAL)?;
         require(input(ca, 65536)? == ca_bytes)?;
         enroll_with(&Native { bao: &bao, ca }, ca, &ca_bytes, identity, context).await
+    }
+
+    /// Verify a complete retained identity and its live scopes without enrollment replay.
+    pub(crate) async fn verify_enrollment(
+        endpoint: &str,
+        ca: &Path,
+        identity: &Path,
+        context: &Value,
+    ) -> Result<()> {
+        let ca_bytes = input(ca, 65536)?;
+        let context: EnrollmentVerification =
+            serde_json::from_value(context.clone()).map_err(|_| REFUSAL)?;
+        let bao = OpenBaoHttp::connect(endpoint, Some(ca), Duration::from_secs(10))
+            .map_err(|_| REFUSAL)?;
+        verify_enrollment_with(&Native { bao: &bao, ca }, ca, &ca_bytes, identity, context).await
+    }
+
+    async fn verify_enrollment_with(
+        api: &impl Producers,
+        ca: &Path,
+        ca_bytes: &[u8],
+        identity: &Path,
+        context: EnrollmentVerification,
+    ) -> Result<()> {
+        require((3600..=4500).contains(&context.minimum_ttl))?;
+        let budget = Budget::new(OPERATION_SECONDS)?;
+        nonce(&context.binding)?;
+        let identity = HeldDirectory::open(identity, false)?;
+        let current = HeldDirectory::open(&context.current, false)?;
+        let output = HeldDirectory::open(&context.output, true)?;
+        distinct(&[&identity, &current, &output])?;
+        let before = snapshot(&current.path)?;
+        require(
+            before
+                .get("openbao_tls_ca_cert")
+                .is_some_and(|entry| entry.0 == ca_bytes),
+        )?;
+        let credentials = identity_snapshot(&identity)?;
+        let enrolled = policies(&credentials["renewal-leaf-policies.json"].0)?;
+        let bound = input(&context.binding_file, 4096)?;
+        binding_receipt(&bound, &context.binding)?;
+        let unchanged = || -> Result<()> {
+            for directory in [&identity, &current, &output] {
+                directory.require()?;
+            }
+            require(
+                snapshot(&current.path)? == before
+                    && identity_snapshot(&identity)? == credentials
+                    && input(&context.binding_file, 4096)? == bound
+                    && input(ca, 65536)? == ca_bytes,
+            )
+        };
+        unchanged()?;
+        budget.run(false, api.health(&context.binding)).await?;
+        receipt(
+            &output,
+            "pending.json",
+            &json!({
+                "schema":"marty.renewal-enrollment-verification-attempt/v1","binding":context.binding,
+                "inputHashes":hashes(&before),"identityHashes":hashes(&credentials),
+                "enrollmentReplayed":false,"credentialsIssued":false,
+            }),
+            MAX_RECEIPT,
+        )?;
+        let mut captured = None;
+        let login = budget
+            .run(false, api.login(&identity.path, &mut captured))
+            .await;
+        let token = captured.ok_or(RECOVERY)?;
+        let custody = write(&output, "authority.token", token.as_bytes(), 1024);
+        let verified: Result<()> = async {
+            custody?;
+            safe_token(&token)?;
+            require(login?["token"] == token)?;
+            budget.run(false, api.authority(&token)).await?;
+            unchanged()?;
+            let checks = json!({"token":token,"old":current.path,"new":current.path,
+                "minimum_ttl":context.minimum_ttl,"require_orphan_new":false,"require_orphan_old":false,
+                "require_closed_new_metadata":true,"replacement":null,"retiring":false});
+            same_policies(budget.run(false, api.tokens(&checks)).await?, &enrolled)?;
+            budget.run(false, api.certificates(&checks)).await?;
+            budget.run(false, api.health(&context.binding)).await?;
+            unchanged()
+        }.await;
+        budget
+            .run(true, api.retire(&token))
+            .await
+            .map_err(|_| RECOVERY)?;
+        verified.map_err(|_| RECOVERY)?;
+        unchanged()?;
+        receipt(
+            &output,
+            "complete.json",
+            &json!({
+                "schema":"marty.renewal-enrollment-verification/v1","binding":context.binding,
+                "scopedLeafTokens":21,"minimumTtlSeconds":context.minimum_ttl,"transientRevoked":true,
+                "enrollmentReplayed":false,"credentialsIssued":false,
+            }),
+            4096,
+        )
     }
 
     async fn enroll_with(
@@ -1259,7 +1371,7 @@ mod runtime {
             }
             async fn tokens(&self, checks: &Value) -> Result<Vec<String>> {
                 self.tick("tokens")?;
-                assert_eq!(checks["require_orphan_new"], true);
+                assert_eq!(checks["require_orphan_new"], checks["old"] != checks["new"]);
                 assert_eq!(checks["require_orphan_old"], false);
                 assert_eq!(checks["require_closed_new_metadata"], true);
                 assert!(checks["minimum_ttl"].as_u64().unwrap() > 3600);
@@ -1426,6 +1538,65 @@ mod runtime {
                 "transientRevoked":true})
             );
             assert!(!result.to_string().contains(LOGIN_TOKEN));
+        }
+
+        #[tokio::test]
+        async fn adoption_reconciles_retained_renewal_identity_without_enrolling_or_issuing() {
+            for failure in [
+                "",
+                "login",
+                "authority",
+                "token-scope",
+                "certificates",
+                "retire",
+                "verification-identity-drift",
+                "verification-binding-drift",
+            ] {
+                let fixture = Fixture::new();
+                let before = snapshot(&fixture.current).unwrap();
+                let api = fixture.fake(failure);
+                let context = EnrollmentVerification {
+                    current: fixture.current.clone(),
+                    output: fixture.output.clone(),
+                    binding_file: fixture.bound.clone(),
+                    binding: binding(),
+                    minimum_ttl: 4500,
+                };
+                let result =
+                    verify_enrollment_with(&api, &fixture.ca, CA, &fixture.identity, context).await;
+                assert_eq!(result.is_ok(), failure.is_empty(), "{failure}");
+                assert_eq!(
+                    fixture.output.join("complete.json").exists(),
+                    failure.is_empty()
+                );
+                assert_eq!(snapshot(&fixture.current).unwrap(), before);
+                let events = api.events.lock().unwrap();
+                assert!(!events
+                    .iter()
+                    .any(|event| ["enroll", "tls", "keycloak"].contains(event)));
+                assert_eq!(events.iter().filter(|event| **event == "retire").count(), 1);
+            }
+        }
+
+        #[tokio::test]
+        async fn adoption_refuses_certificate_without_full_remaining_floor() {
+            let fixture = Fixture::new();
+            let mut api = fixture.fake("");
+            api.certificate_ttl = Some(4499);
+            let context = EnrollmentVerification {
+                current: fixture.current.clone(),
+                output: fixture.output.clone(),
+                binding_file: fixture.bound.clone(),
+                binding: binding(),
+                minimum_ttl: 4500,
+            };
+            assert!(
+                verify_enrollment_with(&api, &fixture.ca, CA, &fixture.identity, context)
+                    .await
+                    .is_err()
+            );
+            assert!(!fixture.output.join("complete.json").exists());
+            assert_eq!(api.events.lock().unwrap().last(), Some(&"retire"));
         }
 
         #[tokio::test]
