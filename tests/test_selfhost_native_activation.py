@@ -383,7 +383,7 @@ def prepare_certificates(state, mode="ordinary", fault=None):
                 signer.public_key(),
                 signer=signer,
                 ca=True,
-                before=-7200 if mode == "recovery" else -60,
+                before=-7200 if mode in ("recovery", "retire") else -60,
                 after=-3600 if mode == "retire" and not replacement else 365 * 86400,
             )
             roots[name] = signer, issuer
