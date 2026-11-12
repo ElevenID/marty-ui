@@ -59,6 +59,9 @@ def admitted_operator(config, assets, expected, *, gh, cosign, verifier_sha256, 
         successor.update(binary=str(binary),binary_sha256=expected['binary_sha256'],
                          source_sha=expected['source_sha'],release_tag=expected['release_tag'])
         native.require_recovery_capability(successor, docker_prefix)
-        yield successor, {'schema':'marty.windows-recovery-operator-admission/v1', **expected,
-                          'verifier_sha256':dict(verifier_sha256),
-                          'historical_operator_sha256':config['binary_sha256']}
+        admission={'schema':'marty.windows-recovery-operator-admission/v1', **expected,
+                   'verifier_sha256':dict(verifier_sha256),
+                   'historical_operator_sha256':config['binary_sha256']}
+        from selfhost_windows_recovery_journal import checked_successor_binding
+        checked_successor_binding({'native':config},{'native':successor},admission)
+        yield successor, admission
