@@ -6,6 +6,7 @@ import pytest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import selfhost_windows_product_schema as witness
 import selfhost_windows_product_ledger as ledger
+import selfhost_windows_product_catalog as catalog
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -190,6 +191,77 @@ def test_native_repairs_and_unexpected_edits_on_fresh_owned_tmpfs_postgres(tmp_p
         sql('UPDATE '+table+" SET applied_at=clock_timestamp() WHERE version='"+ledger.ADDITIONS[table]+"'; ALTER TABLE "+table+' ALTER COLUMN applied_at SET NOT NULL;')
         sql('ALTER TABLE '+table+' ADD COLUMN customer_metadata text;')
         with pytest.raises(ValueError):ledger.capture(Docker(),[owned()],project,before=baseline,profile=profile)
+        # Catalog-only fixture: execute the public native DDL on synthetic
+        # retained state. This is not full native service startup qualification.
+        sql((ROOT/'rust/services/trust-profile/migrations/0001_trust_profile_schema.sql').read_text(encoding='utf-8'))
+        original=catalog.capture(Docker(),[owned()],project,profile=profile)
+        assert original['parent_has_triggers']is False
+        sql((ROOT/'rust/services/trust-profile/migrations/0002_credential_authority_revisions.sql').read_text(encoding='utf-8'))
+        changed=catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        shape=json.loads(sql(catalog.statement(original,debug_shape=True)))
+        (tmp_path/'native-authority-shape.json').write_text(json.dumps(shape,indent=2),encoding='utf-8')
+        print('NATIVE_AUTHORITY_SHAPE_SHA256='+changed['shape_sha256'])
+        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256']:
+            assert changed[field]==original[field],field
+        assert changed['parent_has_triggers']is True and changed['storage_distinct']is True
+        assert changed['new_row_count']==0 and changed['unsupported_objects']is False
+        assert len(shape['relations'])==4 and len(shape['types'])==2 and len(shape['triggers'])==4
+        assert all(t['name_matches_oid']for t in shape['triggers'])
+        native=(ROOT/'rust/services/trust-profile/migrations/0002_credential_authority_revisions.sql').read_text(encoding='utf-8')
+        sql(native)
+        repeat=catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        for key in ['raw_catalog_sha256','raw_dependencies_sha256','raw_shared_dependencies_sha256']:
+            assert repeat[key]==changed[key]
+        # New OIDs are allowed only for the exact independently qualified shape.
+        def fresh_native():
+            sql('DROP TABLE '+catalog.TABLE+' CASCADE;'+native)
+            catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        for mutation in [
+            'ALTER TABLE '+catalog.TABLE+' ADD COLUMN unexpected text;',
+            'ALTER TABLE '+catalog.TABLE+' ENABLE ROW LEVEL SECURITY;',
+            "COMMENT ON TABLE "+catalog.TABLE+" IS 'unexpected';",
+            'ALTER TABLE '+catalog.TABLE+' DISABLE TRIGGER ALL;',
+            'CREATE INDEX unexpected_authority_idx ON '+catalog.TABLE+'(observed_at);',
+            'CREATE POLICY unexpected_authority_policy ON '+catalog.TABLE+' USING(true);',
+            'ALTER TABLE '+catalog.TABLE+' ALTER COLUMN observed_at SET DEFAULT now();',
+            'ALTER TABLE '+catalog.TABLE+' DROP CONSTRAINT credential_authority_revisions_version_check;',
+            'ALTER TABLE '+catalog.TABLE+' DROP CONSTRAINT credential_authority_revisions_profile_id_fkey; ALTER TABLE '+catalog.TABLE+' ADD FOREIGN KEY(profile_id) REFERENCES '+catalog.PARENT+'(id) ON DELETE RESTRICT;',
+        ]:
+            sql(mutation)
+            observed=catalog._observe(Docker(),[owned()],project,before=original,profile=profile)
+            with pytest.raises(ValueError):catalog.validate_delta(original,observed)
+            fresh_native()
+        # Retained catalog drift cannot be absorbed by masking new objects.
+        sql('ALTER TABLE '+catalog.PARENT+' SET (fillfactor=80);')
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        sql('ALTER TABLE '+catalog.PARENT+' RESET (fillfactor);')
+        catalog.capture(Docker(),[owned()],project,before=original,profile=profile)
+        # User-trigger identity survives both false->true and already-true flag paths.
+        sql('DROP TABLE '+catalog.TABLE+' CASCADE; CREATE FUNCTION trust_profile_service.fixture_keep_trigger() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; CREATE TRIGGER fixture_retained BEFORE INSERT ON '+catalog.PARENT+' FOR EACH ROW EXECUTE FUNCTION trust_profile_service.fixture_keep_trigger();')
+        already_triggered=catalog.capture(Docker(),[owned()],project,profile=profile)
+        assert already_triggered['parent_has_triggers']is True
+        sql(native)
+        catalog.capture(Docker(),[owned()],project,before=already_triggered,profile=profile)
+        # A native non-bootstrap owner has explicit shared owner dependencies.
+        sql('DROP TABLE '+catalog.TABLE+' CASCADE; CREATE ROLE fixture_runtime_owner NOLOGIN; ALTER SCHEMA trust_profile_service OWNER TO fixture_runtime_owner; ALTER TABLE '+catalog.PARENT+' OWNER TO fixture_runtime_owner;')
+        custom_owner=catalog.capture(Docker(),[owned()],project,profile=profile)
+        assert custom_owner['parent_owner_bootstrap']is False
+        sql('SET ROLE fixture_runtime_owner;'+native+'RESET ROLE;')
+        custom_changed=catalog.capture(Docker(),[owned()],project,before=custom_owner,profile=profile)
+        print('NATIVE_NON_BOOTSTRAP_AUTHORITY_SHAPE_SHA256='+custom_changed['shape_sha256'])
+        for field in ['catalog_sha256','dependencies_sha256','shared_dependencies_sha256']:
+            assert custom_changed[field]==custom_owner[field],field
+        # Wrong ownership cannot exploit the bootstrap shared-dependency exception.
+        sql('ALTER TABLE '+catalog.TABLE+' OWNER TO postgres;')
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=custom_owner,profile=profile)
+        sql('ALTER TABLE '+catalog.TABLE+' OWNER TO fixture_runtime_owner;')
+        catalog.capture(Docker(),[owned()],project,before=custom_owner,profile=profile)
+        sql("INSERT INTO "+catalog.PARENT+"(id,organization_id,name) VALUES('fixture-profile','fixture-tenant','Fixture'); INSERT INTO "+catalog.TABLE+"(profile_id) VALUES('fixture-profile');")
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,before=custom_owner,profile=profile)
+        sql('DROP TABLE '+catalog.TABLE+' CASCADE; ALTER DEFAULT PRIVILEGES FOR ROLE fixture_runtime_owner GRANT SELECT ON TABLES TO postgres;')
+        unsupported=json.loads(sql(catalog.statement()))
+        assert unsupported['new_objects_absent']is True and unsupported['owner_defaults_empty']is False
+        with pytest.raises(ValueError):catalog.capture(Docker(),[owned()],project,profile=profile)
     finally:
         if cid is None:
             remaining=command(['ps','-aq','--filter','label=com.docker.compose.project='+project]).decode().split()
