@@ -49,8 +49,8 @@ class MembershipBuildTests(unittest.TestCase):
     def test_current_actual_resource_trial_keeps_full_recipe_and_historical_caps(self):
         self.test_profile_capacity_bounds_current_and_preserves_historical()
         import scoped_native_profiles
-        for profile, expected in ((build.D05_MEMBERSHIP_PROFILE, '2g'),
-                                  (build.D05_MEMBERSHIP_LATEST_PROFILE, '1g')):
+        for profile, expected, memory_bytes in ((build.D05_MEMBERSHIP_PROFILE, '2g', 2 * 1024 ** 3),
+                                  (build.D05_MEMBERSHIP_LATEST_PROFILE, '512m', 512 * 1024 ** 2)):
             scope = build.build_scope(profile)
             run = '11111111-1111-4111-8111-111111111111'
             plan = {'buildProfile': profile, 'profileSourceSha256': build.sha(Path(scoped_native_profiles.__file__)),
@@ -63,7 +63,7 @@ class MembershipBuildTests(unittest.TestCase):
             for flag, value in (('--memory', expected), ('--memory-swap', '4g'), ('--cpus', '1'),
                                 ('--pids-limit', '128'), ('--network', 'none')):
                 self.assertEqual(args[args.index(flag) + 1], value)
-            self.assertEqual(build.membership_linux_memory_bytes(profile), int(expected[0]) * 1024 ** 3)
+            self.assertEqual(build.membership_linux_memory_bytes(profile), memory_bytes)
         recipe = build.render_recipe(build.D05_MEMBERSHIP_LATEST_PROFILE)
         self.assertEqual(hashlib.sha256(recipe.encode()).hexdigest(),
                          '535a7fda0cfeb2b02802ff94f1f7e5d9a00a292a8a62003d22d80590c9ab7ee0')
@@ -86,7 +86,7 @@ class MembershipBuildTests(unittest.TestCase):
     def test_profile_capacity_bounds_current_and_preserves_historical(self):
         for profile, windows, current, parent in (
                 (build.D05_MEMBERSHIP_PROFILE, 1024 ** 3, 4362076160, 5435817984),
-                (build.D05_MEMBERSHIP_LATEST_PROFILE, 1024 ** 3, 3288334336, 3288334336)):
+                (build.D05_MEMBERSHIP_LATEST_PROFILE, 768 * 1024 ** 2, 2483027968, 2483027968)):
             self.assertEqual(build.membership_windows_memory_bytes(profile), windows)
             for before_parent, threshold in ((False, current), (True, parent)):
                 self.assertEqual(build.membership_required_free_bytes(profile, before_parent=before_parent), threshold)
