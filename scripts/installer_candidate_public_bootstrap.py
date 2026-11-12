@@ -333,17 +333,24 @@ def verify(path, tools, workflow, source, run, attempt, home):
 
 
 
-# This standalone bootstrap has no repository imports on the guest. Keep this
-# closed parser equivalent to installer_candidate_hosting; shared fixtures cover
-# byte/context parity. The signed native operator independently validates again.
+# Standalone guest execution retains an embedded parser with no repository imports.
+# BEGIN GENERATED HOSTING PARSER
+# Source: installer_candidate_hosting.py; regenerate with generate_bootstrap_hosting.py.
 HOSTING_MAX = 8192
+
+
 HOSTING_ROOTS_MAX = 65536
+
+
 HOSTING_FIELDS = {"input_sha256", "input_size_bytes", "public_origin", "public_entry_origin",
-                  "certificate_source", "acme_environment", "acme_terms_url", "staging_trust"}
+          "certificate_source", "acme_environment", "acme_terms_url", "staging_trust"}
+
+
 HOSTING_DIRECTORIES = {
     "staging": "https://acme-staging-v02.api.letsencrypt.org/directory",
     "production": "https://acme-v02.api.letsencrypt.org/directory",
 }
+
 
 def _hosting_exact(value, required, optional=frozenset()):
     require(type(value) is dict and required <= set(value) <= required | optional)
@@ -399,7 +406,7 @@ def _hosting_origin(value: str, *, address: bool) -> str:
         # proof that downstream URL clients will preserve the same authority.
         for label in host.split("."):
             if label.startswith("xn--"):
-                require(label.encode("ascii")._hosting_decode("idna").encode("idna")._hosting_decode("ascii") == label)
+                require(label.encode("ascii").decode("idna").encode("idna").decode("ascii") == label)
     return value
 
 
@@ -498,7 +505,7 @@ def _hosting_from_bytes(raw: bytes, *, staging_roots: bytes | None = None) -> di
 def _hosting_require_bytes(binding: dict, raw: bytes, *, staging_roots: bytes | None = None) -> None:
     _hosting_validate(binding)
     require(_hosting_from_bytes(raw, staging_roots=staging_roots) == binding, "authenticated candidate hosting bytes changed")
-
+# END GENERATED HOSTING PARSER
 
 
 def candidate_hosting(auth, receipt, directory):

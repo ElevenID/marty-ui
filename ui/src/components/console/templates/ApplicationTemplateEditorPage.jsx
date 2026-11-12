@@ -1,5 +1,6 @@
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -93,11 +94,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   const { t } = useTranslation('console');
   const beginSave = useAsyncActionScope();
   const savingRef = useRef(false);
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.href
-      && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.routeKey
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
   const [data, setData] = useState(EMPTY);
   const [fieldRows, setFieldRows] = useState([]);
   const [claimRows, setClaimRows] = useState([]);
@@ -539,26 +536,7 @@ export default function ApplicationTemplateEditorPage() {
   const { activeOrgId } = useConsole();
   const { user, isAuthenticated } = useAuth();
   const location = useLocation();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  // Retain the committed entry through organization/auth changes while a newer
-  // BrowserRouter destination has changed history but is still suspended.
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    routeKey: location.key,
-    generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const entry = { href: window.location.href, key: window.history.state?.key };
-    const handlePopState = () => {
-      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
-        setReturnedEntry((value) => value + 1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location.key, location.pathname, location.search, location.hash]);
+  const browserEntry = useBrowserEntry(location);
   const { templateId } = useParams();
   const [searchParams] = useSearchParams();
   const { can, isLoading } = usePermissions();

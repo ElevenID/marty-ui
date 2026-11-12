@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
@@ -41,11 +42,7 @@ const CustomFlowBuilderForm = ({ organizationId, requestedTemplateId, browserEnt
   const navigate = useNavigate();
   const pending = useRef(false);
   const startAction = useAsyncActionScope();
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.href
-      && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.routeKey
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const invalidateAction = () => { startAction(); };
@@ -281,24 +278,7 @@ export default function CustomFlowBuilder() {
   const [search] = useSearchParams();
   const requestedTemplateId = search.get('templateId');
   const location = useLocation();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  // Retain the committed route across organization/template child replacement.
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    routeKey: location.key,
-    generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const handlePopState = () => {
-      if ((window.history.state?.key || 'default') === location.key) {
-        setReturnedEntry((value) => value + 1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location]);
+  const browserEntry = useBrowserEntry(location, { matchReturnByRouteKey: true });
   return <CustomFlowBuilderForm key={JSON.stringify([organizationId, requestedTemplateId,
     location.key, location.pathname, location.search, location.hash, browserEntry.generation])}
     organizationId={organizationId} requestedTemplateId={requestedTemplateId} browserEntry={browserEntry} />;
