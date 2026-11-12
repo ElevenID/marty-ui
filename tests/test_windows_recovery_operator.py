@@ -1,10 +1,13 @@
 """Successor signatures/API state are reverified under real private NTFS holds."""
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.skipif(os.name != 'nt', reason='Actual Windows private ACL and held asset leases')
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 from test_selfhost_windows_inputs import private_fixture
 import selfhost_windows_recovery_operator as recovery
