@@ -280,7 +280,7 @@
 		"deploymentProfilesDescription": "Konfigurieren Sie Bereitstellungsprofile für APIs, Kioske und Geräte in Online-/Offline-Szenarien.",
 		"apiKeys": "API-Schlüssel",
 		"apiKeysDescription": "Erstellen und verwalten Sie API-Schlüssel für den programmatischen Zugriff.",
-		"lanesDevices": "Spuren & Geräte",
+		"lanesDevices": "Geräte",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "API-Schlüssel erstellen",
@@ -349,8 +349,14 @@
 			"deploy": "Bereitstellung",
 			"deploymentProfiles": "Bereitstellungsprofile",
 			"apiKeys": "API-Schlüssel",
-			"lanesDevices": "Spuren & Geräte",
+			"lanesDevices": "Geräte",
 			"signingKeys": "Signaturschlüssel"
+		},
+		"lanesDevicesPage": {
+			"title": "Ihre registrierten Geräte",
+			"description": "Sehen Sie die Geräte an, die Sie bei der ausgewählten Organisation registriert haben.",
+			"noDevices": "Sie haben keine registrierten Geräte in dieser Organisation.",
+			"selectOrganization": "Wählen Sie eine Organisation aus, um Ihre registrierten Geräte anzuzeigen."
 		}
 	},
 	"audit": {
@@ -593,6 +599,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Geben Sie eine ganze Anzahl von Tagen zwischen 1 und 3650 ein."
+		},
+		"errors": {
+			"loadFailed": "Die Antragsvorlagen konnten nicht geladen werden.",
+			"invalidInventory": "Die Antragsvorlagen konnten für die ausgewählte Organisation nicht geladen werden.",
+			"selectOrganization": "Wählen Sie eine Organisation aus, bevor Sie Antragsvorlagen laden.",
+			"credentialDetailsUnavailable": "Die Details der Nachweisvorlagen konnten nicht geladen werden. Namen und daraus abgeleitete Feldanzahlen sind möglicherweise nicht verfügbar."
+		},
+		"actions": {
+			"retryCredentialDetails": "Nachweisdetails erneut laden"
 		}
 	}
 }

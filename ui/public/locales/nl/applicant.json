@@ -89,9 +89,9 @@
   },
   "devices": {
     "title": "Apparaatbeheer",
-    "description": "Beheer uw geregistreerde apparaten voor veilige referentietoegang.",
+    "description": "Beheer uw apparaatregistraties.",
     "refresh": "Vernieuwen",
-    "info": "Geregistreerde apparaten kunnen pushmeldingen ontvangen en veilig verificatie-uitdagingen ondertekenen. Verwijder apparaten die u niet meer gebruikt om de beveiliging te handhaven.",
+    "info": "Bekijk uw apparaatregistraties en meld apparaten af die u niet meer gebruikt. Een actieve registratie geeft niet aan of een apparaat online is.",
     "errorLoading": "Kan apparaten niet laden",
     "errorUnregistering": "Kan apparaat niet uitschrijven: {{message}}",
     "tableHeaders": {
@@ -101,26 +101,29 @@
       "registered": "Geregistreerd",
       "lastSeen": "Laatst gezien",
       "security": "Beveiliging",
-      "actions": "Acties"
+      "actions": "Acties",
+      "status": "Registratie"
     },
     "status": {
       "active": "Actief",
       "secured": "Beveiligd",
-      "basic": "Basis"
+      "basic": "Basis",
+      "inactive": "Inactief"
     },
     "security": {
       "hasPublicKey": "Apparaat heeft een openbare sleutel geregistreerd voor uitdagingsondertekening"
     },
     "empty": {
       "title": "Geen apparaten geregistreerd",
-      "description": "Registreer uw mobiele wallet-app om pushmeldingen te ontvangen en veilige verificatiefuncties te gebruiken."
+      "description": "Apparaten verschijnen hier nadat ze bij uw account zijn geregistreerd."
     },
     "actions": {
-      "unregister": "Apparaat uitschrijven"
+      "unregister": "Apparaat uitschrijven",
+      "unregisterNamed": "Apparaat {{deviceId}} afmelden"
     },
     "unregisterDialog": {
       "title": "Apparaat uitschrijven?",
-      "message": "Weet u zeker dat u dit apparaat wilt uitschrijven? Dit voorkomt dat het pushmeldingen ontvangt en veilige verificatiefuncties gebruikt.",
+      "message": "Dit apparaat afmelden? De registratie wordt inactief. Registreer het apparaat opnieuw om het weer te gebruiken.",
       "deviceId": "Apparaat-ID: {{deviceId}}",
       "platform": "Platform: {{platform}}",
       "confirm": "Uitschrijven",
@@ -128,7 +131,15 @@
     },
     "formatDate": {
       "never": "Nooit"
-    }
+    },
+    "loading": "Apparaten laden",
+    "searchLabel": "Apparaten zoeken",
+    "noMatches": "Geen apparaten komen overeen met uw zoekopdracht.",
+    "clearSearch": "Zoekopdracht wissen",
+    "tableLabel": "Geregistreerde apparaten",
+    "notReported": "Niet opgegeven",
+    "signInRequired": "Meld u aan om uw geregistreerde apparaten te bekijken.",
+    "errorUnregisteringFallback": "Het apparaat kon niet worden afgemeld. Probeer het opnieuw."
   },
   "settings": {
     "title": "Instellingen",

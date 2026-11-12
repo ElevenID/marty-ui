@@ -39,6 +39,16 @@
 			"readDenied": "Je hebt geen toestemming om de mogelijkheden voor uitgevers in de geselecteerde organisatie te bekijken.",
 			"createDenied": "Je hebt geen toestemming om uitgeversidentiteiten te maken in de geselecteerde organisatie.",
 			"responseMismatch": "De server heeft de gevraagde uitgeversidentiteit niet bevestigd. Controleer de lijst met uitgeversidentiteiten voordat je het opnieuw probeert."
+		},
+		"lanesDevices": "Apparaten",
+		"breadcrumbs": {
+			"lanesDevices": "Apparaten"
+		},
+		"lanesDevicesPage": {
+			"title": "Uw geregistreerde apparaten",
+			"description": "Bekijk de apparaten die u bij de geselecteerde organisatie hebt geregistreerd.",
+			"noDevices": "U hebt geen geregistreerde apparaten in deze organisatie.",
+			"selectOrganization": "Selecteer een organisatie om uw geregistreerde apparaten te bekijken."
 		}
 	},
   "trust": {
@@ -367,6 +377,15 @@
   "applicationTemplatesPage": {
     "validation": {
       "validityDays": "Voer een geheel aantal dagen tussen 1 en 3650 in."
+    },
+    "errors": {
+      "loadFailed": "De aanvraagtemplates konden niet worden geladen.",
+      "invalidInventory": "De aanvraagtemplates voor de geselecteerde organisatie konden niet worden geladen.",
+      "selectOrganization": "Selecteer een organisatie voordat u aanvraagtemplates laadt.",
+      "credentialDetailsUnavailable": "De details van de credentialtemplates konden niet worden geladen. Namen en afgeleide aantallen velden zijn mogelijk niet beschikbaar."
+    },
+    "actions": {
+      "retryCredentialDetails": "Credentialdetails opnieuw laden"
     }
   }
 }

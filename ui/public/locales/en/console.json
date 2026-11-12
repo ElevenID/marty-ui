@@ -733,7 +733,8 @@
       "viewDetails": "View Details",
       "duplicate": "Duplicate",
       "edit": "Edit",
-      "previewForm": "Preview Application Form"
+      "previewForm": "Preview Application Form",
+      "retryCredentialDetails": "Retry credential details"
     },
     "breadcrumbs": {
       "console": "Console",
@@ -742,6 +743,12 @@
     },
     "validation": {
       "validityDays": "Enter a whole number from 1 to 3650 days."
+    },
+    "errors": {
+      "loadFailed": "Application templates could not be loaded.",
+      "invalidInventory": "Application templates could not be loaded for the selected organization.",
+      "selectOrganization": "Select an organization before loading application templates.",
+      "credentialDetailsUnavailable": "Credential template details could not be loaded. Names and derived field counts may be unavailable."
     }
   },
   "createTemplateDrawer": {
@@ -951,7 +958,7 @@
     "deploymentProfilesDescription": "Configure deployment profiles for APIs, kiosks, lanes/devices, and both online and offline environments.",
     "apiKeys": "API Keys",
     "apiKeysDescription": "Generate and manage API keys for programmatic access to identity services.",
-    "lanesDevices": "Lanes & Devices",
+    "lanesDevices": "Devices",
     "webhooks": "Webhooks",
     "apiKeysPage": {
       "generateKey": "Create API Key",
@@ -986,8 +993,8 @@
       "error": "Failed to load API keys"
     },
     "lanesDevicesPage": {
-      "title": "Lanes & Devices",
-      "description": "Monitor and manage verification lanes and connected devices.",
+      "title": "Your Registered Devices",
+      "description": "View the devices you have registered with the selected organization.",
       "addLane": "Add Lane",
       "searchPlaceholder": "Search lanes...",
       "deploymentFilter": "Deployment",
@@ -1012,7 +1019,9 @@
         "viewDevices": "View Devices",
         "configure": "Configure"
       },
-      "error": "Failed to load lanes"
+      "error": "Failed to load lanes",
+      "noDevices": "You have no device registrations in this organization.",
+      "selectOrganization": "Select an organization to view your device registrations."
     },
     "deploymentActivityCard": {
       "status": {
@@ -1049,7 +1058,7 @@
       "deploy": "Deploy",
       "deploymentProfiles": "Deployment Profiles",
       "apiKeys": "API Keys",
-      "lanesDevices": "Lanes & Devices",
+      "lanesDevices": "Devices",
       "signingKeys": "Signing Keys"
     },
     "signingKeys": {

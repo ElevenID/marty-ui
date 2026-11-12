@@ -7,6 +7,7 @@ import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useDialog } from '../../../hooks/useDialog';
+import { useAuth } from '../../../hooks/useAuth';
 import {
   Box,
   Paper,
@@ -21,6 +22,7 @@ import {
   IconButton,
   Tooltip,
   Alert,
+  Button,
   LinearProgress,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
@@ -35,19 +37,28 @@ import { listCredentialTemplates } from '../../../services/presentationPolicyApi
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import CheckConfigurationDialog from './CheckConfigurationDialog';
 
-function ApplicationTemplatesPage() {
+function ApplicationTemplatesContent({ organizationId }) {
   const { t } = useTranslation('console');
-  const { activeOrgId: organizationId } = useConsole();
-  const { data: templates = [], loading, error, reload } = useAsyncData(async () => {
+  const { data: templatesData, loading, error, reload } = useAsyncData(async () => {
     const data = await listApplicationTemplates(organizationId);
-    return data || [];
+    if (!Array.isArray(data) || data.some((template) => typeof template?.id !== 'string'
+      || !template.id.trim() || template.organization_id !== organizationId
+      || (template.required_checks != null && !Array.isArray(template.required_checks))
+      || (template.form_fields != null && !Array.isArray(template.form_fields)))) {
+      throw new Error(t('applicationTemplatesPage.errors.invalidInventory', {
+        defaultValue: 'Application templates could not be loaded for the selected organization.',
+      }));
+    }
+    return data;
   }, [organizationId]);
+  const templates = templatesData ?? [];
 
-  const { data: credentialTemplates = [] } = useAsyncData(async () => {
-    const result = await loadScopedCatalog(listCredentialTemplates, organizationId);
-    const items = result;
-    return items;
-  }, [organizationId]);
+  const {
+    data: credentialTemplates,
+    loading: credentialTemplatesLoading,
+    error: credentialTemplatesError,
+    reload: reloadCredentialTemplates,
+  } = useAsyncData(() => loadScopedCatalog(listCredentialTemplates, organizationId), [organizationId]);
 
   const credentialTemplateNameById = Object.fromEntries(
     (Array.isArray(credentialTemplates) ? credentialTemplates : []).map((ct) => [ct.id, ct.name])
@@ -82,7 +93,8 @@ function ApplicationTemplatesPage() {
       return template.form_fields.length;
     }
 
-    return credentialTemplateClaimsCountById[template?.credential_template_id] || 0;
+    if (credentialTemplatesLoading || credentialTemplatesError) return '—';
+    return credentialTemplateClaimsCountById[template?.credential_template_id] ?? '—';
   };
 
   return (
@@ -97,14 +109,36 @@ function ApplicationTemplatesPage() {
       breadcrumbs={getBreadcrumbs()}
     >
       {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error?.message || String(error)}
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={<Button color="inherit" size="small" onClick={reload}>{t('common.retry', { defaultValue: 'Retry' })}</Button>}
+        >
+          {error.message?.trim() || t('applicationTemplatesPage.errors.loadFailed', {
+            defaultValue: 'Application templates could not be loaded.',
+          })}
+        </Alert>
+      )}
+
+      {credentialTemplatesError && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 3 }}
+          action={(
+            <Button color="inherit" size="small" onClick={reloadCredentialTemplates}>
+              {t('applicationTemplatesPage.actions.retryCredentialDetails', { defaultValue: 'Retry credential details' })}
+            </Button>
+          )}
+        >
+          {t('applicationTemplatesPage.errors.credentialDetailsUnavailable', {
+            defaultValue: 'Credential template details could not be loaded. Names and derived field counts may be unavailable.',
+          })}
         </Alert>
       )}
 
       {loading ? (
         <LinearProgress />
-      ) : (
+      ) : error ? null : (
         <TableContainer component={Paper}>
           <Table>
             <TableHead>
@@ -216,6 +250,19 @@ function ApplicationTemplatesPage() {
     />
     </>
   );
+}
+
+function ApplicationTemplatesPage() {
+  const { t } = useTranslation('console');
+  const { activeOrgId: organizationId } = useConsole();
+  const { user, isAuthenticated } = useAuth();
+  const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
+  if (!organizationId) {
+    return <Alert severity="error">{t('applicationTemplatesPage.errors.selectOrganization', {
+      defaultValue: 'Select an organization before loading application templates.',
+    })}</Alert>;
+  }
+  return <ApplicationTemplatesContent key={`${principalId}:${organizationId}`} organizationId={organizationId} />;
 }
 
 export default ApplicationTemplatesPage;

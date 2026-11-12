@@ -280,7 +280,7 @@
 		"deploymentProfilesDescription": "Configurez des profils de déploiement pour API, bornes et appareils en ligne/hors ligne.",
 		"apiKeys": "Clés API",
 		"apiKeysDescription": "Générez et gérez des clés API pour l'accès programmatique.",
-		"lanesDevices": "Voies et appareils",
+		"lanesDevices": "Appareils",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "Générer une clé API",
@@ -349,8 +349,14 @@
 			"deploy": "Déploiement",
 			"deploymentProfiles": "Profils de déploiement",
 			"apiKeys": "Clés API",
-			"lanesDevices": "Voies et appareils",
+			"lanesDevices": "Appareils",
 			"signingKeys": "Clés de signature"
+		},
+		"lanesDevicesPage": {
+			"title": "Vos appareils enregistrés",
+			"description": "Consultez les appareils que vous avez enregistrés auprès de l’organisation sélectionnée.",
+			"noDevices": "Vous n’avez aucun appareil enregistré dans cette organisation.",
+			"selectOrganization": "Sélectionnez une organisation pour consulter vos appareils enregistrés."
 		}
 	},
 	"audit": {
@@ -593,6 +599,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Saisissez un nombre entier de jours compris entre 1 et 3650."
+		},
+		"errors": {
+			"loadFailed": "Impossible de charger les modèles de demande.",
+			"invalidInventory": "Impossible de charger les modèles de demande pour l’organisation sélectionnée.",
+			"selectOrganization": "Sélectionnez une organisation avant de charger les modèles de demande.",
+			"credentialDetailsUnavailable": "Impossible de charger les détails des modèles d’attestation. Les noms et les nombres de champs dérivés peuvent être indisponibles."
+		},
+		"actions": {
+			"retryCredentialDetails": "Réessayer les détails des attestations"
 		}
 	}
 }

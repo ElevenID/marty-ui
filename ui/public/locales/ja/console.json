@@ -280,7 +280,7 @@
 		"deploymentProfilesDescription": "API、キオスク、デバイス向けのデプロイプロファイルをオンライン/オフライン環境で構成します。",
 		"apiKeys": "APIキー",
 		"apiKeysDescription": "プログラムアクセス用のAPIキーを生成・管理します。",
-		"lanesDevices": "レーンとデバイス",
+		"lanesDevices": "デバイス",
 		"webhooks": "Webhook",
 		"apiKeysPage": {
 			"generateKey": "APIキーを生成",
@@ -349,8 +349,14 @@
 			"deploy": "デプロイ",
 			"deploymentProfiles": "デプロイプロファイル",
 			"apiKeys": "APIキー",
-			"lanesDevices": "レーンとデバイス",
+			"lanesDevices": "デバイス",
 			"signingKeys": "署名鍵"
+		},
+		"lanesDevicesPage": {
+			"title": "登録済みデバイス",
+			"description": "選択した組織に自分が登録したデバイスを確認できます。",
+			"noDevices": "この組織に登録したデバイスはありません。",
+			"selectOrganization": "登録済みデバイスを表示するには組織を選択してください。"
 		}
 	},
 	"audit": {
@@ -593,6 +599,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "1～3650の整数で日数を入力してください。"
+		},
+		"errors": {
+			"loadFailed": "申請テンプレートを読み込めませんでした。",
+			"invalidInventory": "選択した組織の申請テンプレートを読み込めませんでした。",
+			"selectOrganization": "申請テンプレートを読み込む前に組織を選択してください。",
+			"credentialDetailsUnavailable": "資格情報テンプレートの詳細を読み込めませんでした。名前とテンプレートから算出されるフィールド数を表示できない場合があります。"
+		},
+		"actions": {
+			"retryCredentialDetails": "資格情報の詳細を再読み込み"
 		}
 	}
 }

@@ -280,7 +280,7 @@
 		"deploymentProfilesDescription": "Configura perfiles de despliegue para APIs, quioscos y dispositivos en entornos en línea y fuera de línea.",
 		"apiKeys": "Claves API",
 		"apiKeysDescription": "Genera y gestiona claves API para acceso programático.",
-		"lanesDevices": "Carriles y dispositivos",
+		"lanesDevices": "Dispositivos",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "Generar clave API",
@@ -349,8 +349,14 @@
 			"deploy": "Despliegue",
 			"deploymentProfiles": "Perfiles de despliegue",
 			"apiKeys": "Claves API",
-			"lanesDevices": "Carriles y dispositivos",
+			"lanesDevices": "Dispositivos",
 			"signingKeys": "Claves de firma"
+		},
+		"lanesDevicesPage": {
+			"title": "Tus dispositivos registrados",
+			"description": "Consulta los dispositivos que has registrado en la organización seleccionada.",
+			"noDevices": "No tienes dispositivos registrados en esta organización.",
+			"selectOrganization": "Selecciona una organización para ver tus dispositivos registrados."
 		}
 	},
 	"audit": {
@@ -593,6 +599,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Introduce un número entero de días entre 1 y 3650."
+		},
+		"errors": {
+			"loadFailed": "No se pudieron cargar las plantillas de solicitud.",
+			"invalidInventory": "No se pudieron cargar las plantillas de solicitud de la organización seleccionada.",
+			"selectOrganization": "Selecciona una organización antes de cargar las plantillas de solicitud.",
+			"credentialDetailsUnavailable": "No se pudieron cargar los detalles de las plantillas de credenciales. Es posible que los nombres y los recuentos de campos derivados no estén disponibles."
+		},
+		"actions": {
+			"retryCredentialDetails": "Reintentar detalles de credenciales"
 		}
 	}
 }
