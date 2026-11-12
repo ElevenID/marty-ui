@@ -272,12 +272,12 @@ def prepare_linux_journal(private, run_id, worker_sha256, shared_sha256):
     return {**specification, "rootProof": response["rootProof"], "bootstrapParent": response["bootstrapParent"]}
 
 
-def prepare_desktop_journal(private, run_id, worker_sha256, shared_sha256, desktop):
+def prepare_desktop_journal(private, run_id, worker_sha256, shared_sha256, desktop, *, sourceFiles=None):
     """Explicit owned Docker resource initialization; never a WSL fallback."""
     require(desktop.get("volumeProof") is None, "DESKTOP_NEW_VOLUME_REQUIRED")
     specification = {"schema": 1, "backend": "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1", "workerSha256": worker_sha256,
                      "sharedSha256": shared_sha256, "rootProof": None, "bootstrapParent": None, "desktop": dict(desktop)}
-    store = LinuxBuildJournal(private, run_id, specification, initializing=True)
+    store = LinuxBuildJournal(private, run_id, specification, initializing=True, sourceFiles=sourceFiles)
     store.desktop_transport.prepare_volume()
     response = store.invoke("initialize", None)
     return {**specification, "rootProof": response["rootProof"], "bootstrapParent": response["bootstrapParent"]}

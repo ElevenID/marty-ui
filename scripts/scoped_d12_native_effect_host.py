@@ -381,14 +381,14 @@ class D12CurrentHostBindings:
                 "D12_PINNED_DESKTOP_CONTEXT_META_REQUIRED")
         return True
 
-    def _probe_compose_discovery(self):
+    def _probe_compose_discovery(self, observation_prefix=""):
         self.assert_inputs()
         result = bounded_run([str(self.docker), "--context", "desktop-linux",
                               "compose", "version", "--short"], env=self.environment,
                              timeout=30, stdout_limit=1024, stderr_limit=8192)
-        self.save_bytes("d12-compose-version-stdout.private", result.stdout)
-        self.save_bytes("d12-compose-version-stderr.private", result.stderr)
-        self.save("d12-compose-version-terminal.private.json", {"exitCode": result.returncode,
+        self.save_bytes(observation_prefix + "d12-compose-version-stdout.private", result.stdout)
+        self.save_bytes(observation_prefix + "d12-compose-version-stderr.private", result.stderr)
+        self.save(observation_prefix + "d12-compose-version-terminal.private.json", {"exitCode": result.returncode,
             "observation": result.observation})
         require(type(result.returncode) is int and result.returncode == 0
                 and result.observation["timedOut"] is False
@@ -441,7 +441,10 @@ class D12CurrentHostBindings:
                 and authority_ref == self.inputs.get("d12Authority")
                 and self.dispatch_permit["authority"] == authority_ref,
                 "D12_ROOT_INTENT_AND_HELD_LOCK_REQUIRED")
-        self._probe_compose_discovery()
+        self._authorization_attempt = getattr(self, "_authorization_attempt", 0) + 1
+        attempt = self._authorization_attempt
+        observation_prefix = f"d12-authorization-{attempt:04d}-"
+        self._probe_compose_discovery(observation_prefix)
         profile_ref = self.dispatch_permit["resourceProfile"]
         profile = json.loads(read_ref(profile_ref, 2 * 1024 * 1024).read_bytes())
         require(profile.get("schema") == "marty.functional-mixed-runtime/v2"
@@ -458,16 +461,16 @@ class D12CurrentHostBindings:
                 "D12_RESOURCE_VERIFIER_SOURCE_REQUIRED")
         require(read_ref(authority_ref, 65536).is_file(), "D12_EXACT_REVIEWED_AUTHORITY_REQUIRED")
         frozen = json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes())
-        self.save("d12-resource28-request.private.json", {"runId": self.inputs["runId"],
+        self.save(observation_prefix + "d12-resource28-request.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
             "runtimeBefore": self.inputs["runtimeBefore"], "scope": "FUNCTIONAL_ONLY"})
         result = bounded_run([str(self.node), "-e", RESOURCE_VERIFY_JS,
             source_ref["path"], source_ref["sha256"], profile_ref["path"],
             profile_ref["sha256"], str(self.docker)], env=self.environment,
             timeout=600, stdout_limit=1024 * 1024, stderr_limit=65536)
-        self.save_bytes("d12-resource28-stdout.private", result.stdout)
-        self.save_bytes("d12-resource28-stderr.private", result.stderr)
-        self.save("d12-resource28-terminal.private.json", {"exitCode": result.returncode,
+        self.save_bytes(observation_prefix + "d12-resource28-stdout.private", result.stdout)
+        self.save_bytes(observation_prefix + "d12-resource28-stderr.private", result.stderr)
+        self.save(observation_prefix + "d12-resource28-terminal.private.json", {"exitCode": result.returncode,
             "observation": result.observation})
         require(type(result.returncode) is int and result.returncode == 0
                 and result.observation["timedOut"] is False
@@ -478,11 +481,17 @@ class D12CurrentHostBindings:
         self.assert_inputs()
         require(self.lock.held(), "D12_CANONICAL_LOCK_LOST_DURING_RESOURCE_READ")
         read_ref(profile_ref, 2 * 1024 * 1024)
-        self.save("d12-resource28-bound.private.json", {"runId": self.inputs["runId"],
+        self.save(observation_prefix + "d12-resource28-bound.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
             "runtimeBefore": self.inputs["runtimeBefore"],
             "full28AncillaryVerifiedByReviewedRuntime": True,
-            "actualRoleCount": len(actual["roles"]), "releaseQualified": False})
+            "actualRoleCount": len(actual["roles"]), "releaseQualified": False,
+            "authorizationAttempt": attempt,
+            "observations": {name: ref(self.root / (observation_prefix + name)) for name in (
+                "d12-compose-version-stdout.private", "d12-compose-version-stderr.private",
+                "d12-compose-version-terminal.private.json", "d12-resource28-request.private.json",
+                "d12-resource28-stdout.private", "d12-resource28-stderr.private",
+                "d12-resource28-terminal.private.json")}})
         return True
 
     def save_bytes(self, name, data):
