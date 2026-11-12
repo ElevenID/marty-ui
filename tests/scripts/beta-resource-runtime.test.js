@@ -323,3 +323,30 @@ for(const kind of ['differentUpstream','runningGateway','differentProbe','differ
   assert.throws(()=>require('./functional-debug-runtime').validateMaintenanceResourceRows(f.a,f.generations,f.before,f.inspect(),f.resourceBefore,binding));
  }finally{f.cleanup();}
 });
+
+function maintenanceOpaqueMountFixture(source){
+ const f=maintenanceFixture(),row=f.live[f.a.cap.allRunningRoles.openbao.id];
+ // Actual recorded named-volume object shape; Source is opaque, not a host ELF path.
+ const mount={Type:'volume',Name:'5bcb71b76e57c0ac1a47b0b676a437dca3e14daa3d4b73db3a12d8fa0905c100',Source:source,Destination:'/openbao/file',Driver:'local',Mode:'rw',RW:true,Propagation:''};
+ row.Mounts=[mount];f.resourceBefore.find(item=>item.Id===row.Id).Mounts=structuredClone(row.Mounts);f.a.configs.rows.find(item=>item.cid===row.Id).mountsSha256=mountDigest(row);return {...f,row};
+}
+for(const source of ['5bcb71b76e57c0ac1a47b0b676a437dca3e14daa3d4b73db3a12d8fa0905c100','/run/desktop/mnt/host/wsl/docker-desktop-data/opaque-volume'])test('maintenance recovery generic opaque mount accepts exact source '+source,()=>{
+ const f=maintenanceOpaqueMountFixture(source),check=require('./functional-debug-runtime').validateMaintenanceResourceRows;
+ assert.equal(check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore).resources.length,28);
+ f.row.Mounts[0].Source+='-different';assert.throws(()=>check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore),/MAINTENANCE_FULL_MOUNTS_CHANGED/);
+});
+test('maintenance recovery generic mount retains fields and refuses duplicate destinations',()=>{
+ const f=maintenanceOpaqueMountFixture('/run/desktop/mnt/host/wsl/docker-desktop-data/opaque-volume'),check=require('./functional-debug-runtime').validateMaintenanceResourceRows;
+ f.row.Mounts[0].Mode='ro';assert.throws(()=>check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore),/MAINTENANCE_FULL_MOUNTS_CHANGED/);
+ f.row.Mounts[0].Mode='rw';f.row.Mounts.push(structuredClone(f.row.Mounts[0]));assert.throws(()=>check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore),/MAINTENANCE_FULL_MOUNT_DUPLICATE/);
+});
+test('maintenance recovery generic metadata does not widen executable host-source policy',()=>{
+ assert.throws(()=>require('./functional-debug-runtime').comparableBinaryMounts([{source:'/run/desktop/mnt/host/wsl/docker-desktop-data/opaque-volume'}]),/Unsupported host mount alias/);
+});
+
+test('maintenance recovery generic mount sorter ignores order only and requires absolute destinations',()=>{
+ const f=maintenanceOpaqueMountFixture('opaque-one'),check=require('./functional-debug-runtime').validateMaintenanceResourceRows;
+ const extra={...f.row.Mounts[0],Name:'opaque-two',Source:'opaque-two',Destination:'/openbao/logs'};f.row.Mounts.push(extra);f.resourceBefore.find(row=>row.Id===f.row.Id).Mounts=structuredClone(f.row.Mounts);f.a.configs.rows.find(row=>row.cid===f.row.Id).mountsSha256=mountDigest(f.row);f.row.Mounts.reverse();
+ const original=f.row.Mounts.map(row=>row.Destination);assert.equal(check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore).resources.length,28);assert.deepEqual(f.row.Mounts.map(row=>row.Destination),original);
+ f.row.Mounts[0].Destination='relative';assert.throws(()=>check(f.a,f.generations,f.before,f.inspect(),f.resourceBefore),/MAINTENANCE_FULL_MOUNT_DESTINATION/);
+});

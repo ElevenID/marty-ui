@@ -946,7 +946,13 @@ function validateMaintenanceResourceRows(a,generations,before,inspections,resour
   const projectedCaps=Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>{assert(Object.hasOwn(row.HostConfig,key),'MAINTENANCE_LIVE_CAP_MISSING:'+role);return [key,row.HostConfig[key]];}));
   assert.deepEqual(projectedCaps,previous.HostConfig,'MAINTENANCE_RECORDED_CAPS_CHANGED:'+role);
   assert.deepEqual(row.Config?.Labels||{},previous.Labels||{},'MAINTENANCE_LABELS_CHANGED:'+role);
-  const canonicalMounts=rows=>[...mdocMounts(rows,'Destination').values()].sort((a,b)=>a.Destination<b.Destination?-1:a.Destination>b.Destination?1:0);
+  // Same-engine Docker metadata: keep opaque volume/WSL sources and every
+  // mount field exact. Executable/MDOC host alias rules do not apply here.
+  const canonicalMounts=rows=>{
+   assert(Array.isArray(rows)&&rows.every(mount=>mount&&typeof mount==='object'&&typeof mount.Destination==='string'&&path.posix.isAbsolute(mount.Destination)&&!mount.Destination.startsWith('//')&&!/[\x00-\x1f\x7f]/.test(mount.Destination)&&mount.Destination.split('/').every(part=>part!=='.'&&part!=='..')),'MAINTENANCE_FULL_MOUNT_DESTINATION');
+   assert.equal(new Set(rows.map(mount=>mount.Destination)).size,rows.length,'MAINTENANCE_FULL_MOUNT_DUPLICATE');
+   return [...rows].sort((a,b)=>a.Destination<b.Destination?-1:a.Destination>b.Destination?1:0);
+  };
   assert.deepEqual(canonicalMounts(row.Mounts),canonicalMounts(previous.Mounts),'MAINTENANCE_FULL_MOUNTS_CHANGED:'+role);
   const image=role==='ui-prod'?(a.uiStarted.image||a.uiStarted.imageId):a.cap.allRunningRoles[role].image;
   assert.equal(row.Image,image,'MAINTENANCE_IMAGE_CHANGED:'+role);assert.equal(proof.image,image);
