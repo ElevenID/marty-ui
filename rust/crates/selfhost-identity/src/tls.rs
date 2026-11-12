@@ -14,6 +14,16 @@ pub struct TlsRole {
 
 pub const WORKLOAD_TLS_ROLES: &[TlsRole] = &[
     TlsRole {
+        name: "trust-profile-server",
+        file_prefix: "trust_profile_workload_server",
+        common_name: "trust-profile",
+        alt_names: "",
+        uri_sans: "",
+        ip_sans: "",
+        server: true,
+        client: false,
+    },
+    TlsRole {
         name: "passport-edge",
         file_prefix: "passport_edge_tls",
         common_name: "localhost",

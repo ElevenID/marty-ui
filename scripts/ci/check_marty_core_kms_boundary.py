@@ -7,7 +7,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "30bf57cd1246449cab8e0edd17fc61aaa889b8ac"
+CORE_REVISION = "aef09b1d100885784795f29e47a51d07ba371cfb"
 CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
@@ -18,7 +18,7 @@ ISOMDL_SOURCE = (
     "git+https://github.com/ElevenID/isomdl-elevenid"
     f"?rev={ISOMDL_REVISION}#{ISOMDL_REVISION}"
 )
-SSI_REVISION = "63a9bcce3daf6f45d1e38e43cf687738bb02cb53"
+SSI_REVISION = "8b546ef5dbcd6e806ec1c26a0c05296515798429"
 SSI_SOURCE = f"git+https://github.com/ElevenID/ssi-elevenid?rev={SSI_REVISION}#{SSI_REVISION}"
 LINKED_DATA_REVISION = "6f86efc1579033e14ff2ad7d115ca0857e16a67f"
 LINKED_DATA_SOURCE = (

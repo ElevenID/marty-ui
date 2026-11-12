@@ -81,6 +81,8 @@ pub enum FlowVerificationSubmissionError {
     PolicyRevisionMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_STATE_MISMATCH")]
     StateMismatch,
+    #[error("FLOW.VERIFICATION_SUBMISSION_RESPONSE_MODE_MISMATCH")]
+    ResponseModeMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_PRESENTATION_SUBMISSION")]
     InvalidPresentationSubmission,
     #[error("FLOW.VERIFICATION_SUBMISSION_CALLBACK_UNAVAILABLE")]
@@ -145,6 +147,93 @@ pub async fn decrypt_verification_response(
         return Err(FlowVerificationSubmissionError::InvalidEncryptedResponse);
     }
     Ok(value)
+}
+
+/// Accept only a fresh error response for the exact emitted direct-post request.
+/// `access_denied` is a wallet protocol outcome, not proof of a particular UI action.
+pub fn prepare_verification_decline(
+    mut instance: FlowInstanceRecord,
+    state: Option<&str>,
+    encrypted: bool,
+    now: DateTime<Utc>,
+) -> Result<FlowInstanceRecord, FlowVerificationSubmissionError> {
+    if !matches!(
+        instance.status,
+        FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+    ) || instance.expires_at.is_none_or(|expiry| now >= expiry)
+        || instance.completed_at.is_some()
+        || instance.subject_id.is_some()
+        || instance.result.as_ref().is_some_and(|result| {
+            [
+                "evaluation_result",
+                "decision",
+                "submission_digest",
+                marty_oid4vp_contract::VERIFICATION_RECEIPT,
+            ]
+            .iter()
+            .any(|field| result.get(*field).is_some())
+        })
+    {
+        return Err(FlowVerificationSubmissionError::InvalidState);
+    }
+    let context = instance
+        .context
+        .as_object()
+        .ok_or(FlowVerificationSubmissionError::InvalidContext("context"))?;
+    let expected_state = required_context_string(context, "oid4vp_expected_state")?;
+    // Both maintained direct-post emitters put instance.id in the actual state
+    // parameter. The MIP projection does not carry state; do not treat a changed
+    // context value as authority to accept a different wallet response.
+    if !constant_time_equal(expected_state, &instance.id)
+        || state.is_none_or(|value| value.is_empty() || !constant_time_equal(value, expected_state))
+    {
+        return Err(FlowVerificationSubmissionError::StateMismatch);
+    }
+    let message = &instance.context["mip_messages"]["presentation_request"];
+    let payload = &message["payload"];
+    if !matches!(
+        payload["response_mode"].as_str(),
+        Some("direct_post" | "direct_post.jwt")
+    ) || (encrypted && payload["response_mode"].as_str() != Some("direct_post.jwt"))
+    {
+        return Err(FlowVerificationSubmissionError::ResponseModeMismatch);
+    }
+    if context.get("flow_type").and_then(Value::as_str) != Some("verification")
+        || context.get("oid4vp_verifier_context") != Some(&Value::Bool(true))
+        || message["correlation_id"].as_str() != Some(instance.id.as_str())
+        || payload["mip_flow_instance_id"].as_str() != Some(instance.id.as_str())
+        || payload["response_type"].as_str() != Some("vp_token")
+        || payload["nonce"].as_str() != Some(required_context_string(context, "nonce")?)
+        || payload["client_id"].as_str()
+            != Some(required_context_string(context, "oid4vp_client_id")?)
+        || payload["response_uri"].as_str()
+            != Some(required_context_string(context, "oid4vp_response_uri")?)
+    {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_binding",
+        ));
+    }
+    load_frozen_flow_presentation_request(&instance)
+        .map_err(|_| FlowVerificationSubmissionError::RestartRequired)?;
+    let mut kernel = instance.kernel()?;
+    kernel
+        .transition_to(
+            FlowInstanceStatus::Cancelled,
+            Some("wallet_submission".into()),
+            Some("wallet_access_denied".into()),
+            u64::try_from(now.timestamp_millis())
+                .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?,
+        )
+        .map_err(|_| FlowVerificationSubmissionError::InvalidState)?;
+    transition(
+        &mut instance,
+        FlowInstanceStatus::Cancelled,
+        "wallet_access_denied",
+        now,
+    );
+    instance.error = Some("access_denied".into());
+    instance.kernel()?;
+    Ok(instance)
 }
 
 pub async fn prepare_verification_submission(
@@ -264,7 +353,7 @@ pub async fn prepare_verification_submission(
             response_jwk.as_deref(),
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
-        marty_iso18013::openid4vp::mdoc_binding_digests(
+        let binding = marty_iso18013::openid4vp::mdoc_binding_digests(
             &transcript,
             client_id,
             &nonce,
@@ -273,6 +362,18 @@ pub async fn prepare_verification_submission(
             &vp_token,
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
+        // Preserve the existing privacy-safe audit message inside tracing JSON.
+        // Only hashes cross the log boundary; request and credential bytes stay private.
+        tracing::info!(
+            "OID4VP mdoc binding flow_instance_sha256={} transcript_sha256={} client_id_sha256={} nonce_sha256={} response_uri_sha256={} response_key_thumbprint_sha256={} presentation_sha256={}",
+            sha256_hex(instance.id.as_bytes()),
+            binding.transcript_sha256,
+            binding.client_id_sha256,
+            binding.nonce_sha256,
+            binding.response_uri_sha256,
+            binding.response_key_thumbprint_sha256,
+            binding.presentation_sha256,
+        );
         evaluation_context.insert(
             "mdoc_session_transcript_b64url".into(),
             json!(URL_SAFE_NO_PAD.encode(transcript)),

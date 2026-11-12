@@ -17,7 +17,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from test_recover_kubernetes_legacy_credentials import recovery_flow, activate
+from test_recover_kubernetes_legacy_credentials import recovery_flow, activate, sealed_reload_fixture
 from test_inspect_kubernetes_legacy_credentials import flow, BAO_UID, NAMESPACE_UID
 import bootstrap_kubernetes_openbao as bootstrap
 import recover_kubernetes_legacy_credentials as recovery
@@ -285,6 +285,191 @@ def reload_flow(recovery_flow, monkeypatch, capsys):
 
 def run(item):
     return reload.reload_workloads(item.request, item.transport, item.freshness, item.guard)
+
+
+def test_early_preflight_only_reads_all_original_profiles_without_requiring_ready_pods(reload_flow, capsys):
+    item = reload_flow
+    result = reload.preflight_workloads(item.request.original, item.request.binding, item.transport)
+    assert result["status"] == "original-workload-profiles-admitted" and result["workloadCount"] == 16
+    assert set(result["workloads"]) == set(reload.WORKLOADS)
+    assert result["binding"] == item.bound and result["originalRuntime"] == item.request.original["release"]
+    assert result["credentialsIssued"] is result["activation"] is result["readinessAssessed"] is False
+    assert result["fullEnvironmentHealthAssessed"] is False
+    assert all(value["status"]["readyReplicas"] == 0 for value in item.deployments.values())
+    assert [args for args, _, _ in item.io] == [("get", "deployment", name, "-o", "json") for name in reload.WORKLOADS]
+    assert all(timeout <= 30 for _, timeout, _ in item.io)
+    assert not item.reload_patches and not item.execs and item.deployments == item.original_deployments
+    assert not item.request.output.exists() and capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("failure", ["replicas", "paused", "image", "security", "ownership", "release", "uid"])
+def test_last_workload_profile_refusal_has_no_mutations_or_partial_admission(reload_flow, failure):
+    item = reload_flow
+    value = item.deployments[reload.WORKLOADS[-1]]
+    if failure == "replicas":
+        value["spec"]["replicas"] = 0
+    elif failure == "paused":
+        value["spec"]["paused"] = True
+    elif failure == "image":
+        value["spec"]["template"]["spec"]["containers"][0]["image"] = "foreign@sha256:" + "f" * 64
+    elif failure == "security":
+        value["spec"]["template"]["spec"]["automountServiceAccountToken"] = True
+    elif failure == "ownership":
+        value["metadata"]["annotations"]["meta.helm.sh/release-name"] = "foreign"
+    elif failure == "release":
+        value["spec"]["template"]["metadata"]["annotations"]["marty.11id.dev/runtimeSourceSha"] = "f" * 40
+    else:
+        value["metadata"]["uid"] = item.deployments[reload.WORKLOADS[0]]["metadata"]["uid"]
+    with pytest.raises(bootstrap.BootstrapError):
+        reload.preflight_workloads(item.request.original, item.request.binding, item.transport)
+    assert len(item.io) == 16 and not item.reload_patches and not item.execs
+    assert not item.request.output.exists()
+
+
+def test_preflight_uses_one_global_observation_budget(reload_flow, monkeypatch):
+    item = reload_flow
+    original = item.transport.kubectl
+
+    def slow(*args, **kwargs):
+        result = original(*args, **kwargs)
+        item.clock.monotonic += 200
+        item.clock.wall += 200
+        return result
+
+    monkeypatch.setattr(item.transport, "kubectl", slow)
+    with pytest.raises(bootstrap.BootstrapError, match="reload budget expired"):
+        reload.preflight_workloads(item.request.original, item.request.binding, item.transport)
+    assert len(item.io) == 3 and not item.reload_patches and not item.execs
+
+
+def test_successful_early_preflight_cannot_replace_final_live_reload_admission(reload_flow):
+    item = reload_flow
+    assert reload.preflight_workloads(item.request.original, item.request.binding, item.transport)["workloadCount"] == 16
+    item.deployments[reload.WORKLOADS[-1]]["spec"]["replicas"] = 0
+    with pytest.raises(bootstrap.BootstrapError, match="original owned single-replica"):
+        run(item)
+    assert not item.reload_patches and not item.execs
+    assert not (item.request.output / "reload-complete.json").exists()
+    assert (item.request.output / "reload-stopped.json").exists()
+
+
+def test_fifth_restart_refreshes_controller_only_resource_version_without_retry(reload_flow, monkeypatch):
+    item = reload_flow
+    original_get, original_process = item.transport.kubectl, reload.subprocess.run
+    changed = False
+    target = reload.WORKLOADS[4]
+
+    def get(*args, **kwargs):
+        nonlocal changed
+        if len(item.reload_patches) == 4 and not changed:
+            value = item.deployments[target]
+            value["metadata"]["resourceVersion"] = "900004"
+            value["metadata"]["managedFields"] = [{"manager": "kube-controller-manager"}]
+            value["metadata"]["annotations"][reload.REVISION] = "2"
+            value["status"]["conditions"] = [{"type": "Available", "status": "False"}]
+            changed = True
+        return original_get(*args, **kwargs)
+
+    def process(command, **kwargs):
+        if command[7] == target:
+            patch = json.loads(kwargs["input"])
+            if patch[1]["value"] != item.deployments[target]["metadata"]["resourceVersion"]:
+                item.reload_patches.append(target)
+                return SimpleNamespace(returncode=1, stdout=b"", stderr=b"synthetic atomic resource-version refusal")
+        return original_process(command, **kwargs)
+
+    monkeypatch.setattr(item.transport, "kubectl", get)
+    monkeypatch.setattr(reload.subprocess, "run", process)
+    result = run(item)
+    assert changed and result["reloadCount"] == 16
+    assert item.reload_patches == list(reload.WORKLOADS)
+    before = json.loads((item.request.output / "deployment-before-04.json").read_bytes())
+    dispatch = json.loads((item.request.output / "deployment-dispatch-04.json").read_bytes())
+    intent = json.loads((item.request.output / "patch-intent-04.json").read_bytes())
+    assert before["metadata"]["resourceVersion"] == "104"
+    assert dispatch["metadata"]["resourceVersion"] == intent["resourceVersion"] == "900004"
+    assert before["metadata"]["uid"] == dispatch["metadata"]["uid"]
+    assert before["metadata"]["generation"] == dispatch["metadata"]["generation"]
+    assert before["spec"] == dispatch["spec"]
+    assert intent["dispatchPreimageSha256"] == recovery.sha256(
+        (item.request.output / "deployment-dispatch-04.json").read_bytes())
+    assert before["metadata"]["annotations"][reload.REVISION] == "1"
+    assert dispatch["metadata"]["annotations"][reload.REVISION] == "2"
+    reload.verify_completed_evidence(item.request.output, result, item.bound, item.request.qualified_plan_sha256)
+
+
+@pytest.mark.parametrize("field", ["uid", "generation", "generation-type", "template", "replicas", "ownership", "label"])
+def test_fresh_preimage_cannot_adopt_changes_to_frozen_deployment(reload_flow, monkeypatch, field):
+    item = reload_flow
+    original_get = item.transport.kubectl
+    changed = False
+
+    def get(*args, **kwargs):
+        nonlocal changed
+        if len(item.reload_patches) == 4 and not changed:
+            value = item.deployments[reload.WORKLOADS[4]]
+            value["metadata"]["resourceVersion"] = "900004"
+            if field == "uid":
+                value["metadata"]["uid"] = str(uuid.UUID(int=999997))
+            elif field == "generation":
+                value["metadata"]["generation"] += 1
+            elif field == "generation-type":
+                value["metadata"]["generation"] = True
+            elif field == "template":
+                value["spec"]["template"]["metadata"]["annotations"]["foreign"] = "changed"
+            elif field == "replicas":
+                value["spec"]["replicas"] = 0
+            elif field == "ownership":
+                value["metadata"]["annotations"]["meta.helm.sh/release-name"] = "foreign"
+            else:
+                value["metadata"]["labels"]["foreign"] = "changed"
+            changed = True
+        return original_get(*args, **kwargs)
+
+    monkeypatch.setattr(item.transport, "kubectl", get)
+    with pytest.raises(bootstrap.BootstrapError):
+        run(item)
+    assert changed and item.reload_patches == list(reload.WORKLOADS[:4])
+    assert not (item.request.output / "patch-intent-04.json").exists()
+    assert not item.execs
+
+
+@pytest.mark.parametrize("record", ["deployment-dispatch-04.json", "patch-request-04.json", "patch-intent-04.json",
+                                    "deployment-patched-04.json", "patch-response-04.json", "reload-plan.json"])
+def test_valid_journal_seal_cannot_hide_inconsistent_dispatch_bindings(reload_flow, monkeypatch, record):
+    item = reload_flow
+    original_write = reload.Evidence.write
+    changed = False
+
+    def write(evidence, name, raw, *args, **kwargs):
+        nonlocal changed
+        if name == record:
+            value = json.loads(raw)
+            if name == "patch-request-04.json":
+                value[1]["value"] = "unrelated-version"
+            elif name == "patch-intent-04.json":
+                value["dispatchPreimageSha256"] = "f" * 64
+            elif name == "patch-response-04.json":
+                value["stdoutBase64"] = base64.b64encode(b"PRIVATE_UNRELATED_RESPONSE").decode()
+            elif name == "reload-plan.json":
+                value["patches"][reload.WORKLOADS[4]][1]["value"] = "unrelated-version"
+            else:
+                value["metadata"]["resourceVersion"] = "unrelated-version"
+            raw = bootstrap.encoded(value)
+            changed = True
+        original_write(evidence, name, raw, *args, **kwargs)
+
+    monkeypatch.setattr(reload.Evidence, "write", write)
+    result = sealed_reload_fixture(item.request)
+    assert changed
+    completion = json.loads((item.request.output / "reload-complete.json").read_bytes())
+    journal = completion["journalBindings"]
+    files = {**journal["files"], "reload-complete.json": result["privateEvidence"]["completionRecord"]}
+    # Every stored byte and file identity legitimately matches this seal. The
+    # semantic cross-record check must still refuse the contradictory record.
+    reload.journal_recheck(item.request.output, journal["directories"], files, full=True)
+    with pytest.raises(bootstrap.BootstrapError):
+        reload.verify_completed_evidence(item.request.output, result, item.bound, item.request.qualified_plan_sha256)
 
 
 @pytest.mark.parametrize("build_run_id, annotation", [

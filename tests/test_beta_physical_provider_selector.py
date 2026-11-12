@@ -488,6 +488,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
     )
     required_names = (
         "FLOW_WEBHOOK_SECRET", "FLOW_SERVER_TLS_KMS_TOKEN_FILE",
+        "TRUST_PROFILE_TLS_KMS_TOKEN_FILE", "TRUST_PROFILE_WORKLOAD_SERVER_CERT_FILE",
         "VERIFICATION_TLS_KMS_TOKEN_FILE", "ISSUANCE_API_KEY",
         "FLOW_APPLICATION_EVENT_HMAC_KEY",
         "REDIS_PASSWORD", "FLOW_WORKLOAD_CLIENT_CERT_FILE", "PUBLIC_DOMAIN",
@@ -568,6 +569,9 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "COMPLIANCE_PROFILE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
         "COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME": "workload-tls-compliance-profile-client",
         "COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION": "1",
+        "TRUST_PROFILE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "TRUST_PROFILE_TLS_KMS_KEY_NAME": "workload-tls-trust-profile-server",
+        "TRUST_PROFILE_TLS_KMS_KEY_VERSION": "1",
         "DEPLOYMENT_PROFILE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
         "DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME": "workload-tls-deployment-profile-client",
         "DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION": "1",

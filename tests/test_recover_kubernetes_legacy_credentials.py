@@ -347,6 +347,38 @@ def sealed_reload_fixture(request):
     import reload_kubernetes_legacy_workloads as reload
     evidence = reload.Evidence(request.output)
     evidence.write("projection-proof-00.json", bootstrap.encoded({"syntheticCallerBoundary": True}))
+    evidence.write("qualified-plan.json", request.qualified_plan, recovery.REPORT_LIMIT + 1)
+    annotation = "marty.11id.dev/legacy-reload-012345abcdef"
+    evidence.write("reload-requested.json", bootstrap.encoded({"schema": reload.SCHEMA,
+        "binding": request.binding, "annotation": annotation, "privatePlanSha256": request.qualified_plan_sha256}))
+    patches = {}
+    for index, name in enumerate(reload.WORKLOADS):
+        # This fixture tests caller receipt handling; the real reload tests
+        # independently exercise complete original workload profile admission.
+        before = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {
+            "name": name, "namespace": request.binding["namespace"], "uid": str(uuid.UUID(int=10000 + index)),
+            "resourceVersion": str(100 + index), "generation": 1},
+            "spec": {"template": {"metadata": {"annotations": {}}, "spec": {}}}}
+        before_raw = bootstrap.encoded(before)
+        patches[name] = reload.restart_patch(before, annotation, request.qualified_plan_sha256)
+        patch_raw = bootstrap.encoded(patches[name])
+        evidence.write(f"deployment-before-{index:02}.json", before_raw)
+        evidence.write(f"deployment-dispatch-{index:02}.json", before_raw)
+        evidence.write(f"patch-request-{index:02}.json", patch_raw)
+        evidence.write(f"patch-intent-{index:02}.json", bootstrap.encoded({"name": name,
+            "uid": before["metadata"]["uid"], "resourceVersion": before["metadata"]["resourceVersion"],
+            "dispatchPreimageSha256": recovery.sha256(before_raw), "patchSha256": recovery.sha256(patch_raw),
+            "privatePlanSha256": request.qualified_plan_sha256,
+            "validBeforeUnixSeconds": json.loads(request.qualified_plan)["validBeforeUnixSeconds"]}))
+        after = deepcopy(before)
+        after["metadata"].update(generation=2, resourceVersion=str(1000 + index))
+        after["spec"]["template"]["metadata"]["annotations"][annotation] = request.qualified_plan_sha256
+        after_raw = bootstrap.encoded(after)
+        evidence.write(f"deployment-patched-{index:02}.json", after_raw)
+        evidence.write(f"patch-response-{index:02}.json", bootstrap.encoded({"completed": True, "exitCode": 0,
+            "bounded": True, "stdoutBase64": b64(after_raw), "stderrBase64": ""}))
+    evidence.write("reload-plan.json", bootstrap.encoded({"schema": reload.SCHEMA,
+        "binding": request.binding, "privatePlanSha256": request.qualified_plan_sha256, "patches": patches}), reload.LIST_LIMIT)
     private_evidence = evidence.complete({"schema": reload.SCHEMA, "binding": request.binding,
         "status": "new-ready-pods-with-matching-projected-credentials",
         "privatePlanSha256": request.qualified_plan_sha256, "reloadCount": 16,
@@ -356,7 +388,28 @@ def sealed_reload_fixture(request):
             "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False}
 
 
-def test_explicit_reload_receives_verified_postimages_after_durable_credential_completion(recovery_flow, monkeypatch, capsys):
+@pytest.fixture
+def admitted_reload_preflight(recovery_flow, monkeypatch):
+    """Isolate the caller boundary; real profile/transport cases live in reload tests."""
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    item.preflight_calls = []
+
+    def admitted(original, binding, transport):
+        assert original == item.original and binding == item.bound
+        assert transport.namespace == item.binding["namespace"]
+        assert not item.creates and not item.patch_calls
+        assert item.stage_calls == item.qualification_calls == 0
+        item.preflight_calls.append("admitted-before-producer-and-issuance")
+        return {"schema": "marty.kubernetes-legacy-workload-preflight/v1", "binding": binding,
+                "status": "original-workload-profiles-admitted", "credentialsIssued": False,
+                "activation": False, "readinessAssessed": False}
+
+    monkeypatch.setattr(reload, "preflight_workloads", admitted)
+
+
+def test_explicit_reload_receives_verified_postimages_after_durable_credential_completion(
+        recovery_flow, admitted_reload_preflight, monkeypatch, capsys):
     import reload_kubernetes_legacy_workloads as reload
     item = recovery_flow
     activate(item)
@@ -379,6 +432,9 @@ def test_explicit_reload_receives_verified_postimages_after_durable_credential_c
 
     monkeypatch.setattr(reload, "reload_workloads", run)
     recovery.recover(item.args)
+    assert item.preflight_calls == ["admitted-before-producer-and-issuance"]
+    preflight = json.loads((item.args.operation_dir / "reload-preflight.json").read_bytes())
+    assert preflight["credentialsIssued"] is False and preflight["readinessAssessed"] is False
     assert len(calls) == 1
     combined = json.loads((item.args.operation_dir / "recovery-reload-complete.json").read_bytes())
     assert combined["reload"]["reloadCount"] == 16 and combined["fullEnvironmentHealthAssessed"] is False
@@ -391,7 +447,8 @@ def test_explicit_reload_receives_verified_postimages_after_durable_credential_c
 
 
 @pytest.mark.parametrize("mutation", ["proof", "missing-proof", "extra-record", "proof-mode", "completion", "directory-mode"])
-def test_post_return_journal_drift_prevents_the_callers_combined_completion(recovery_flow, monkeypatch, capsys, mutation):
+def test_post_return_journal_drift_prevents_the_callers_combined_completion(
+        recovery_flow, admitted_reload_preflight, monkeypatch, capsys, mutation):
     import reload_kubernetes_legacy_workloads as reload
     item = recovery_flow
     activate(item)
@@ -438,7 +495,8 @@ def test_post_return_journal_drift_prevents_the_callers_combined_completion(reco
     assert stopped["automaticReplay"] is False and "16 new Ready Pods" not in capsys.readouterr().out
 
 
-def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(recovery_flow, monkeypatch, capsys):
+def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(
+        recovery_flow, admitted_reload_preflight, monkeypatch, capsys):
     import reload_kubernetes_legacy_workloads as reload
     item = recovery_flow
     activate(item)
@@ -461,7 +519,8 @@ def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(reco
     assert "16 new Ready Pods" not in capsys.readouterr().out
 
 
-def test_reload_failure_keeps_the_completed_credential_receipt_without_claiming_full_recovery(recovery_flow, monkeypatch, capsys):
+def test_reload_failure_keeps_the_completed_credential_receipt_without_claiming_full_recovery(
+        recovery_flow, admitted_reload_preflight, monkeypatch, capsys):
     import reload_kubernetes_legacy_workloads as reload
     item = recovery_flow
     activate(item)
@@ -481,10 +540,14 @@ def test_reload_failure_keeps_the_completed_credential_receipt_without_claiming_
     assert credential["workloadsRestarted"] is False and len(item.deletions) == 1
     assert (item.args.operation_dir / "reload/reload-stopped.json").is_file()
     assert not (item.args.operation_dir / "recovery-reload-complete.json").exists()
-    assert "Verified 34" not in capsys.readouterr().out
+    public = capsys.readouterr()
+    assert "Verified 34" not in public.out
+    assert public.err == ("Verified 34 existing Secret updates; workload reload is incomplete. "
+                          "Preserve private evidence; do not replay the attempt.\n")
+    assert "PRIVATE_" not in public.out + public.err
 
 
-def test_incomplete_secret_activation_never_calls_workload_reload(recovery_flow, monkeypatch):
+def test_incomplete_secret_activation_never_calls_workload_reload(recovery_flow, admitted_reload_preflight, monkeypatch):
     import reload_kubernetes_legacy_workloads as reload
     item = recovery_flow
     activate(item)
@@ -495,6 +558,85 @@ def test_incomplete_secret_activation_never_calls_workload_reload(recovery_flow,
         recovery.recover(item.args)
     assert not (item.args.operation_dir / "recovery-complete.json").exists()
     assert not (item.args.operation_dir / "recovery-reload-complete.json").exists()
+
+
+def test_workload_preflight_refusal_precedes_every_cluster_write_and_credential_request(recovery_flow, monkeypatch):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+
+    def refuse(original, binding, transport):
+        assert original == item.original and binding == item.bound
+        assert transport.namespace == item.binding["namespace"]
+        raise bootstrap.BootstrapError("synthetic incompatible last workload profile")
+
+    monkeypatch.setattr(reload, "preflight_workloads", refuse)
+    monkeypatch.setattr(reload, "reload_workloads", lambda *_: pytest.fail("preflight refusal cannot reload"))
+    with pytest.raises(bootstrap.BootstrapError, match="incompatible last workload"):
+        recovery.recover(item.args)
+    assert not item.creates and not item.deletions and not item.patch_calls
+    assert item.stage_calls == item.qualification_calls == 0
+    assert not (item.args.operation_dir / "candidate").exists()
+    assert not (item.args.operation_dir / "recovery-complete.json").exists()
+    stopped = json.loads((item.args.operation_dir / "recovery-stopped.json").read_bytes())
+    assert stopped["phase"] == "workload-preflight"
+    assert stopped["stageAttempted"] is stopped["activationAttempted"] is stopped["nativeMayStillRun"] is False
+    assert stopped["verifiedSecrets"] == [] and stopped["automaticReplay"] is False
+
+
+def test_preflight_evidence_remains_bound_during_credential_staging(
+        recovery_flow, admitted_reload_preflight, monkeypatch):
+    import reload_kubernetes_legacy_workloads as reload
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+
+    def changed(_item):
+        path = item.args.operation_dir / "reload-preflight.json"
+        path.write_bytes(path.read_bytes().replace(b"original-workload-profiles-admitted",
+                                                   b"tampered-workload-profiles-admitted"))
+
+    item.after_qualification = changed
+    monkeypatch.setattr(reload, "reload_workloads", lambda *_: pytest.fail("changed admission evidence cannot reload"))
+    with pytest.raises(bootstrap.BootstrapError, match="private recovery evidence"):
+        recovery.recover(item.args)
+    assert item.stage_calls == item.qualification_calls == 1 and not item.patch_calls
+    assert not (item.args.operation_dir / "recovery-complete.json").exists()
+
+
+@pytest.mark.parametrize("drift", ["namespace", "openbao-uid", "openbao-image"])
+def test_post_preflight_identity_drift_prevents_the_first_producer_write(
+        recovery_flow, admitted_reload_preflight, monkeypatch, drift):
+    item = recovery_flow
+    activate(item)
+    item.args.reload_owned_workloads = True
+    original = bootstrap.Transport.kubectl
+
+    def changed(transport, operation, *args, **kwargs):
+        raw = original(transport, operation, *args, **kwargs)
+        if item.preflight_calls and (
+            (drift == "namespace" and operation == "legacy namespace identity")
+            or (drift.startswith("openbao") and operation == "legacy OpenBao image identity")
+        ):
+            value = json.loads(raw)
+            if drift == "openbao-image":
+                value["spec"]["containers"][0]["image"] = "foreign@sha256:" + "f" * 64
+            else:
+                value["metadata"]["uid"] = str(uuid.UUID(int=999998))
+            return bootstrap.encoded(value)
+        return raw
+
+    monkeypatch.setattr(bootstrap.Transport, "kubectl", changed)
+    with pytest.raises(bootstrap.BootstrapError):
+        recovery.recover(item.args)
+    assert item.preflight_calls == ["admitted-before-producer-and-issuance"]
+    assert not item.creates and not item.deletions and not item.patch_calls
+    assert item.stage_calls == item.qualification_calls == 0
+    assert not (item.args.operation_dir / "producer-created.json").exists()
+    stopped = json.loads((item.args.operation_dir / "recovery-stopped.json").read_bytes())
+    assert stopped["phase"] == "workload-preflight"
+    assert stopped["stageAttempted"] is stopped["activationAttempted"] is False
 
 
 @pytest.mark.parametrize("reload_value", [True, 1, "yes"])

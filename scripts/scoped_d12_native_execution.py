@@ -24,14 +24,21 @@ MIGRATION_SHA256 = {
     "rust/services/issuance/migrations/0011_passport_administrative_cancellation.sql":
         "9842f5ea39aab254d41cf7bc936411b813b853352a1e2de668594926dd08f682",
 }
+D05_MIGRATION_SHA256 = {**MIGRATION_SHA256,
+    'rust/services/credential-template/migrations/0003_membership_achievement_criteria.sql': '8d4a006db83610c3253bf00504f779939e43069b9e45dde2074694891d9a0987',
+    'rust/services/issuance/migrations/0012_membership_achievement_criteria.sql': '2becfb8d83bfe775f75a95d6b1aa17b317cdcec825f1350e181e93347d67bb7e',
+}
 
 
-def exact_exported_sql(prepared, inputs):
+
+def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
+    from scoped_native_profiles import current_rollout_build
+    build = current_rollout_build(profile)
     """Use LF Git-exported source bytes, never a Windows checkout conversion."""
     from scoped_native_maintenance import operational_sql_sources
-    from scoped_native_runtime import MIGRATIONS
+    from scoped_native_runtime import migration_names
     source = prepared["sources"]["ui"]
-    require(source["revision"] == D12_PASSPORT_CURRENT.ui_revision,
+    require(source["revision"] == build.ui_revision,
             "D12_EXACT_SQL_SOURCE_REVISION_REQUIRED")
     root = Path(source["directory"]).resolve()
     expected = operational_sql_sources()
@@ -47,12 +54,13 @@ def exact_exported_sql(prepared, inputs):
             and read_ref(inputs["catalogSql"]).resolve()
                 == root / "scripts" / "sql" / "passport-beta-maintenance-catalog.sql",
             "D12_EXACT_GIT_EXPORTED_CATALOG_REQUIRED")
+    required_migrations = D05_MIGRATION_SHA256 if profile == "d05-membership-current-functional" else MIGRATION_SHA256
     migration_paths = {"rust/services/" + item.replace("/", "/migrations/", 1) + ".sql"
-                       for item in MIGRATIONS}
-    require(set(inputs["migrationSources"]) == migration_paths == set(MIGRATION_SHA256),
+                       for item in migration_names(profile)}
+    require(set(inputs["migrationSources"]) == migration_paths == set(required_migrations),
             "D12_EXACT_RUST_MIGRATION_SET_REQUIRED")
     for name, bound in inputs["migrationSources"].items():
-        require(bound["sha256"] == MIGRATION_SHA256[name]
+        require(bound["sha256"] == required_migrations[name]
                 and read_ref(bound).resolve() == root / name,
                 "D12_EXACT_GIT_EXPORTED_MIGRATION_REQUIRED")
 
@@ -60,11 +68,15 @@ def exact_exported_sql(prepared, inputs):
 class D12CurrentExecution:
     def __init__(self, context, inputs, journal):
         self.g, self.i, self.store = context, inputs, journal
-        self.roles = dict(D12_PASSPORT_CURRENT.roles)
+        from scoped_native_profiles import current_rollout_build
+        self.profile = inputs.get("rolloutProfile", CURRENT_PROFILE)
+        self.build_profile = current_rollout_build(self.profile)
+        self.roles = dict(self.build_profile.roles)
+        self.native_preimage = None
         self.state = {"schema": "marty.d12-current-native-operation/v1", "phase": "NOT_STARTED",
                       "runId": inputs["runId"], "scope": "FUNCTIONAL_ONLY",
-                      "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
-                      "coreRevision": D12_PASSPORT_CURRENT.core_revision,
+                      "sourceRevision": self.build_profile.ui_revision,
+                      "coreRevision": self.build_profile.core_revision,
                       "releaseQualified": False, "recordingQualified": False, "steps": []}
 
     def record(self, phase, **fields):
@@ -94,7 +106,7 @@ class D12CurrentExecution:
             snapshot = self.g["inspect_all22"]()
         else:
             snapshot = {"roles": [self.g["inspect_role"](role) for role in sorted(D12_CURRENT_RUNTIME_ROLES)]}
-        maintenance.exact_roles(snapshot, CURRENT_PROFILE)
+        maintenance.exact_roles(snapshot, self.profile)
         return snapshot
 
     def preflight(self):
@@ -102,7 +114,7 @@ class D12CurrentExecution:
         require(g["dispatch_enabled"] is True and g["operation_lock_held"]() is True
                 and g["recording_lock_held"]() is True,
                 "D12_EXCLUSIVE_AUTHORITY_REQUIRED")
-        selected_sources(i, CURRENT_PROFILE)
+        selected_sources(i, self.profile)
         require(i["roleBinaries"] == self.roles and i["scope"] == "FUNCTIONAL_ONLY"
                 and i["releaseQualified"] is False and i["recordingQualified"] is False,
                 "D12_CURRENT_FUNCTIONAL_SCOPE_REQUIRED")
@@ -125,11 +137,16 @@ class D12CurrentExecution:
                 and authority.get("approvedProfileSourceSha256")
                     == sha(Path(__file__).with_name("scoped_native_profiles.py")),
                 "D12_REVIEWED_AUTHORIZATION_REQUIRED")
-        selection = select_current_binaries(i["preparedSource"], i["canonicalBuildReceipt"], g["build_journal"])
-        exact_exported_sql(json.loads(read_ref(i["preparedSource"]).read_bytes()), i)
+        selection = (select_current_binaries(i["preparedSource"], i["canonicalBuildReceipt"], g["build_journal"])
+                     if self.profile == CURRENT_PROFILE else select_current_binaries(i["preparedSource"], i["canonicalBuildReceipt"], g["build_journal"], self.profile))
+        exact_exported_sql(json.loads(read_ref(i["preparedSource"]).read_bytes()), i, self.profile)
         require(selection == json.loads(read_ref(i["selection"]).read_bytes())
                 and authority.get("approvedSelectionSha256") == i["selection"]["sha256"],
                 "D12_EXACT_SELECTED_BUILD_REQUIRED")
+        if self.profile == "d05-membership-current-functional":
+            abi_plan=json.loads(read_ref(i["compatibility"]["plan"]).read_bytes())
+            require(abi_plan["beforeBinding"]["sha256"]==i["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
+            self.native_preimage={"binding":i["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
         before = g["observe22"]()
         require(before == json.loads(read_ref(i["runtimeBefore"]).read_bytes())
                 and authority.get("approvedRuntimeBeforeSha256") == i["runtimeBefore"]["sha256"],
@@ -145,17 +162,37 @@ class D12CurrentExecution:
                 and set(preview["allStopRoles"]) == D12_CURRENT_RUNTIME_ROLES,
                 "D12_ALL22_MAINTENANCE_REQUIRED")
         base = models["elevenid-beta"]
+        if self.profile == "d05-membership-current-functional":
+            from scoped_native_database import current_tenant
+            tenant = current_tenant(i, authority)
+            mixed_ref=i["composeProductBinding"]
+            mixed=json.loads(read_ref(mixed_ref,65536).read_bytes())
+            require(authority.get("approvedComposeProductBindingSha256")==mixed_ref["sha256"]
+                    and set(mixed)=={"binaryUiRevision","binaryCoreRevision","composeRevision","composeSource","modelSources"}
+                    and mixed["binaryUiRevision"]==self.build_profile.ui_revision
+                    and mixed["binaryCoreRevision"]==self.build_profile.core_revision
+                    and mixed["composeRevision"]=="82862f78876f2885a32353ba99a34ccba284faac"
+                    and mixed["composeSource"]["sha256"]=="8a5d929fc657dc0f80582ad140d10fbcc05eb90cc6a39e68fe85a4d4962231ab"
+                    and read_ref(mixed["composeSource"]).name=="docker-compose.beta.yml"
+                    and mixed["modelSources"]==i["composeSources"],
+                    "CURRENT_TEN_EXPLICIT_MIXED_COMPOSE_BINDING_REQUIRED")
+            for role,key in (("flow","MARTY_ORG_ID"),("issuance-native","MARTY_ORG_ID"),("organization","MARTY_ORG_ID"),("auth","CREDENTIAL_LOGIN_ORGANIZATION_ID")):
+                require(base["services"][role].get("environment",{}).get(key)==tenant,"CURRENT_TEN_COMPOSE_TENANT_CHANGED:"+role)
         require(g["compose_model"](i["composeArguments"], None) == base,
                 "D12_FRESH_COMPOSE_MODEL_REQUIRED")
-        replacement = overlay.binary_overlay(selection["binaries"], CURRENT_PROFILE, before=base)
+        replacement = overlay.binary_overlay(selection["binaries"], self.profile, before=base,native_preimage=self.native_preimage)
         overlay_ref = g["save"]("d12-current-overlay.private.json", replacement)
         after_model = g["compose_model"](i["composeArguments"], overlay_ref)
-        overlay.validate_delta(base, after_model, selection["binaries"], CURRENT_PROFILE)
+        overlay.validate_delta(base, after_model, selection["binaries"], self.profile,native_preimage=self.native_preimage)
         overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
-                                           CURRENT_PROFILE, list(self.roles), no_start=True)
+                                           self.profile, list(self.roles), no_start=True)
         database = D12CurrentDatabasePhase(g, i, self.store)
         database._check_current_compatibility(selection, i["compatibility"]["plan"],
                                                i["compatibility"]["result"])
+        if self.profile == "d05-membership-current-functional":
+            from scoped_native_database import current_ten_tenant_observation
+            tenant_observation = g["save"]("current-ten-tenant-preflight.json",current_ten_tenant_observation(database))
+            self.state["tenantPreflight"] = tenant_observation
         return database, before, preview, overlay_ref
 
     def run(self):
@@ -180,7 +217,7 @@ class D12CurrentExecution:
             self.state["steps"].append("STOP_" + role)
             self.record("STOP_TERMINAL")
         stopped = self.inspect_all22()
-        maintenance.validate_quiescent(before, stopped, outcomes, CURRENT_PROFILE)
+        maintenance.validate_quiescent(before, stopped, outcomes, self.profile)
         quiescence = g["save"]("d12-all22-quiescent.private.json", stopped)
         # This actual receipt cannot exist before the 22 stop outcomes. Keep
         # the frozen caller input immutable and pass a derived phase input to
@@ -193,24 +230,25 @@ class D12CurrentExecution:
         verified_database = database.node("verify", proof=database_proof,
             commands=database.commands, context={"runId": i["runId"],
                 "selectionSha256": i["selection"]["sha256"],
-                "executorSource": i["executorSource"], "rolloutProfile": CURRENT_PROFILE,
-                "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
-                "coreRevision": D12_PASSPORT_CURRENT.core_revision,
+                "executorSource": i["executorSource"], "rolloutProfile": self.profile,
+                "sourceRevision": self.build_profile.ui_revision,
+                "coreRevision": self.build_profile.core_revision,
                 "baseline": database.baseline_refs,
                 "approvedDatabaseBeforeSha256": i["databaseBefore"]["sha256"],
-                "approvedEngineId": database.engine_id})
-        require(verified_database["sourceCommit"] == D12_PASSPORT_CURRENT.ui_revision
+                "approvedEngineId": database.engine_id,
+                **({"tenantId":database.tenant_id} if self.profile == "d05-membership-current-functional" else {})})
+        require(verified_database["sourceCommit"] == self.build_profile.ui_revision
                 and verified_database["databaseIdentity"] == database.identity,
                 "D12_ACTUAL_DATABASE_PROOF_REQUIRED")
         self.record("DATABASE_MAINTENANCE_TERMINAL", databaseProof=g["save"]("d12-database-proof.private.json", database_proof),
                     verifiedDatabase=g["save"]("d12-database-verified.private.json", verified_database))
         recreate = overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
-                    CURRENT_PROFILE, list(self.roles), no_start=True)
+                    self.profile, list(self.roles), no_start=True)
         self.command(database, "CREATE_SELECTED", recreate)
         self.record("CREATE_INSPECTION_PENDING", pendingStep="INSPECT_CREATED")
         created = self.inspect_all22()
-        old_rows = maintenance.exact_roles(before, CURRENT_PROFILE)
-        new_rows = maintenance.exact_roles(created, CURRENT_PROFILE)
+        old_rows = maintenance.exact_roles(before, self.profile)
+        new_rows = maintenance.exact_roles(created, self.profile)
         for role in self.roles:
             old, new = old_rows[role], new_rows[role]
             require(new["containerId"] != old["containerId"] and new["state"] == "created"
@@ -219,16 +257,19 @@ class D12CurrentExecution:
             target = "/usr/local/bin/" + self.roles[role]
             prior_mounts = {row["destination"]: row for row in old["binaryMounts"]}
             mounts = {row["destination"]: row for row in new["binaryMounts"]}
+            image_owned=self.profile=="d05-membership-current-functional" and target not in prior_mounts
+            if image_owned:
+                overlay.image_owned_baseline(role,self.roles[role],self.native_preimage,old)
             require(len(prior_mounts) == len(old["binaryMounts"])
                     and len(mounts) == len(new["binaryMounts"])
-                    and set(mounts) == set(prior_mounts) and target in mounts
+                    and set(mounts) == (set(prior_mounts)|{target} if image_owned else set(prior_mounts)) and target in mounts
                     and all(mounts[key] == prior_mounts[key] for key in mounts if key != target)
                     and mounts[target]["type"] == "bind" and mounts[target]["writable"] is False
                     and daemon_source(mounts[target]["source"])
                     == daemon_source(database.selection["binaries"][role]["path"]),
                     "D12_CREATED_EXECUTABLE_BIND_CHANGED:" + role)
         for role in D12_CURRENT_RUNTIME_ROLES - set(self.roles):
-            require(new_rows[role] == maintenance.exact_roles(stopped, CURRENT_PROFILE)[role],
+            require(new_rows[role] == maintenance.exact_roles(stopped, self.profile)[role],
                     "D12_UNSELECTED_CREATE_CHANGED:" + role)
         created_ref = g["save"]("d12-created.private.json", {"runId": i["runId"], "roles": created["roles"]})
         self.record("SELECTED_CREATED", pendingStep=None, created=created_ref)
@@ -263,16 +304,34 @@ class D12CurrentExecution:
                     "created": created_ref, "startAcks": acks_ref,
                     "runId": i["runId"], "engineId": database.engine_id})
         proof = overlay.validate_runtime_after(before, after, database.selection["binaries"],
-                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), CURRENT_PROFILE)
+                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), self.profile,native_preimage=self.native_preimage)
         require(g["database_snapshot"]()["databaseIdentity"] == database.identity,
                 "D12_DATABASE_POSTFLIGHT_REQUIRED")
+        startup_schema = None
+        runtime_ref = None
+        if self.profile == "d05-membership-current-functional":
+            from scoped_native_database import current_ten_startup_schema_observation
+            self.record("NATIVE_STARTUP_SCHEMA_INSPECTION_PENDING")
+            runtime_ref = g["save"]("d12-runtime-after.private.json",proof)
+            observed_schema=current_ten_startup_schema_observation(database)
+            auth=next(row for row in proof["roles"] if row["role"]=="auth")
+            fresh_auth=g["inspect_role"]("auth")
+            require(all(fresh_auth[key]==auth[key] for key in ("containerId","startedAt","hostPid","imageId"))
+                    and fresh_auth.get("running") is True and fresh_auth.get("health")=="healthy",
+                    "CURRENT_TEN_AUTH_STARTUP_GENERATION_CHANGED")
+            observed_schema.update(nativeRuntime=runtime_ref,startupOwner={"role":"auth","containerId":auth["containerId"],"startedAt":auth["startedAt"],"sourceRevision":auth["source"],"elfSha256":auth["sha256"]})
+            startup_schema = g["save"]("current-ten-startup-schema-observation.json",observed_schema)
+            self.record("NATIVE_STARTUP_SCHEMA_OBSERVED",startupSchema=startup_schema)
         result = {"schema": "marty.d12-current-native-functional/v1", "runId": i["runId"],
-                  "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
-                  "coreRevision": D12_PASSPORT_CURRENT.core_revision,
+                  "sourceRevision": self.build_profile.ui_revision,
+                  "coreRevision": self.build_profile.core_revision,
                   "selection": i["selection"], "database": database_proof,
-                  "runtime": g["save"]("d12-runtime-after.private.json", proof),
+                  "runtime": runtime_ref if runtime_ref is not None else g["save"]("d12-runtime-after.private.json", proof),
                   "nativeRuntimeReady": True, "functionalReady": False,
                   "passportScenarioVerified": False, "physicalBookletVerified": False,
                   "releaseQualified": False, "recordingQualified": False}
+        if startup_schema is not None:
+            result["startupSchema"] = startup_schema
+            result["tenantId"] = database.tenant_id
         self.record("FUNCTIONAL_NATIVE_TERMINAL", result=g["save"]("d12-native-result.private.json", result))
         return result
