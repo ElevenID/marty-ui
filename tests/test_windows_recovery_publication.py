@@ -69,3 +69,24 @@ def test_changed_staging_evidence_cannot_be_published(monkeypatch,fault):
             recovery.publish_recovery_candidate(path,output)
         assert not (output/'publication.json').exists()
         assert selection.renewal.recovery_guard(cfg).exists()
+
+
+def test_changed_pending_after_second_proof_exit_is_not_promoted(monkeypatch):
+    with prepared(monkeypatch) as (path,cfg,output,events):
+        original=recovery._recovery_candidate_inputs
+        calls=[]
+        @contextmanager
+        def change_after_exit(*args,**kwargs):
+            with original(*args,**kwargs) as lease:yield lease
+            calls.append(True)
+            if len(calls)==2:
+                assert kwargs['_coordination'] is not None
+                lock=Path(cfg['current_secrets']).parent/f'.{cfg["project"]}.renewal.lock'
+                with pytest.raises(ValueError):
+                    with selection.renewal.hold_private_input(lock,exclusive=True):
+                        pytest.fail('Project lock released before promotion')
+                (output/'publication.pending.json').write_bytes(b'PUBLIC_TAMPERED')
+        monkeypatch.setattr(recovery,'_recovery_candidate_inputs',change_after_exit)
+        with pytest.raises(ValueError):recovery.publish_recovery_candidate(path,output)
+        assert len(calls)==2 and not (output/'publication.json').exists()
+        assert selection.renewal.recovery_guard(cfg).exists()

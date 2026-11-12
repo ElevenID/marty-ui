@@ -203,13 +203,15 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None):
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None):
     from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
         config = decode(raw_config);expected = binding(config)
         root = directory(config);parent = root.parent
-        stack.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
+        require(_coordination is None or isinstance(_coordination, ExitStack))
+        coordination=stack if _coordination is None else _coordination
+        coordination.enter_context(renewal.hold_private_input(parent/f'.{config["project"]}.renewal.lock', exclusive=True))
         product_guard = renewal.product_transition_guard(config)
         if _pending_product_sha256 is None:
             require(not renewal.namespace_entry_exists(product_guard))

@@ -5,7 +5,7 @@ check does not establish current credential validity or admit activation.
 """
 import hashlib
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 
 from selfhost_windows_selection import _stage_names, packed, require
@@ -71,7 +71,7 @@ def inspect_failed_current(config_path):
 
 
 @contextmanager
-def _failed_current_inputs(config_path, *, recovery_guard_sha256=None):
+def _failed_current_inputs(config_path, *, recovery_guard_sha256=None, _coordination=None):
     """Read-only held proof of the stopped phase, never credential admission.
 
     The result is published to the caller only after all input/namespace exit
@@ -81,7 +81,7 @@ def _failed_current_inputs(config_path, *, recovery_guard_sha256=None):
     from selfhost_windows_model import effective_config, history, immutable_binding, model_binding
     from selfhost_windows_continuation import CHECKPOINT, checkpoint
     renewal = selection.renewal
-    with selection._session(config_path) as (base, _, expected, _, raw, stack):
+    with selection._session(config_path,_coordination=_coordination) as (base, _, expected, _, raw, stack):
         if recovery_guard_sha256 is None:
             require(not renewal.namespace_entry_exists(renewal.recovery_guard(base)))
         else:
@@ -282,7 +282,7 @@ def stage_recovery_generation(config_path, output_dir, logical_project, *, opera
 
 
 @contextmanager
-def _recovery_candidate_inputs(config_path, output_dir, operator_successor):
+def _recovery_candidate_inputs(config_path, output_dir, operator_successor, *, _coordination=None):
     """Fresh candidate proof under both guards; never consumes a prior dict."""
     import selfhost_windows_selection as selection
     import selfhost_windows_renewal_native as native
@@ -290,7 +290,7 @@ def _recovery_candidate_inputs(config_path, output_dir, operator_successor):
     base = selection.decode(renewal.read_private_bytes(Path(config_path)))
     guard_raw = renewal.read_private_bytes(renewal.recovery_guard(base))
     guard_sha = selection.digest(guard_raw)
-    with _failed_current_inputs(config_path, recovery_guard_sha256=guard_sha) as lease:
+    with _failed_current_inputs(config_path, recovery_guard_sha256=guard_sha,_coordination=_coordination) as lease:
         cfg, record, observed, stack = (lease[name] for name in ('config','record','observed','stack'))
         intent = selection.decode(guard_raw)
         root = Path(output_dir)
@@ -357,7 +357,13 @@ def publish_recovery_candidate(config_path, output_dir, *, operator_successor=No
             selection._new_private(root/'publication.pending.json',packed(proof))
             lease['names'].add('publication.pending.json')
     if not published:
-        with _recovery_candidate_inputs(config_path,output_dir,operator_successor) as lease:
-            require(lease['proof']==proof and lease['markers']==['publication.pending.json'])
-        (root/'publication.pending.json').rename(root/'publication.json')
+        with ExitStack() as coordination:
+            with _recovery_candidate_inputs(config_path,output_dir,operator_successor,_coordination=coordination) as lease:
+                require(lease['proof']==proof and lease['markers']==['publication.pending.json'])
+            # All proof exits passed; exclusive project coordination still holds.
+            # Promote the same verified marker handle, never an unchecked path.
+            from selfhost_windows_inputs import _held_private_input
+            with selection.renewal.hold_storage_namespace(root):
+                with _held_private_input(root/'publication.pending.json',_rename_to=root/'publication.json') as marker:
+                    require(marker==packed(proof))
     return proof
