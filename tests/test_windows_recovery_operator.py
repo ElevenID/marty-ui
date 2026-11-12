@@ -10,7 +10,7 @@ from test_selfhost_windows_inputs import private_fixture
 import selfhost_windows_recovery_operator as recovery
 
 
-@pytest.mark.parametrize('fault',[None,'draft','failed-run','source','unsigned','capability','digest'])
+@pytest.mark.parametrize('fault',[None,'draft','failed-run','source','unsigned','capability','digest','published-digest'])
 def test_operator_admission_preserves_history_and_requires_fresh_proofs(monkeypatch,fault):
     with private_fixture() as (root, _):
         binary=root/'marty-deploy-linux-amd64'
@@ -27,7 +27,8 @@ def test_operator_admission_preserves_history_and_requires_fresh_proofs(monkeypa
             calls.append(args)
             if '/releases/' in args[-1]:
                 return json.dumps({'tag_name':'v1.2.3','draft':fault=='draft','prerelease':False,
-                    'published_at':'2026-01-01T00:00:00Z','assets':[{'name':binary.name,'size':binary.stat().st_size}]})
+                    'published_at':'2026-01-01T00:00:00Z','assets':[{'name':binary.name,'size':binary.stat().st_size,
+                    'digest':'sha256:'+('0'*64 if fault=='published-digest' else hashlib.sha256(binary.read_bytes()).hexdigest())}]})
             return json.dumps({'id':42,'run_attempt':2,'head_sha':'0'*40 if fault=='source' else '1'*40,
                 'status':'completed','conclusion':'failure' if fault=='failed-run' else 'success',
                 'path':'.github/workflows/cd.yml'})

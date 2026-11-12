@@ -40,7 +40,8 @@ def admitted_operator(config, assets, expected, *, gh, cosign, docker_prefix,
         require(published.get('tag_name') == expected['release_tag'] and published.get('draft') is False
                 and published.get('prerelease') is False and bool(published.get('published_at')))
         subjects = [asset for asset in published.get('assets',[]) if asset.get('name') == binary.name]
-        require(len(subjects)==1 and subjects[0].get('size')==len(payload))
+        require(len(subjects)==1 and subjects[0].get('size')==len(payload)
+                and subjects[0].get('digest')=='sha256:'+expected['binary_sha256'])
         run = json.loads(runner([str(gh),'api',f'repos/ElevenID/marty-ui/actions/runs/{expected["run_id"]}/attempts/{expected["run_attempt"]}']))
         require(run.get('id')==expected['run_id'] and run.get('run_attempt')==expected['run_attempt']
                 and run.get('head_sha')==expected['source_sha'] and run.get('status')=='completed'
