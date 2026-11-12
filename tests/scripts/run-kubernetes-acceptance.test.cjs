@@ -169,7 +169,11 @@ function fixture(t, organizationId = ORGANIZATION) {
       const signedHeader = { alg: 'ES256', kid: ISSUER + '#key-1' };
       const signedPayload = { iss: ISSUER, sub: proof.iss, jti: CREDENTIAL,
         vc: { id: CREDENTIAL, type: ['VerifiableCredential', 'OpenBadgeCredential'],
-          credentialSubject: { id: proof.iss, achievement: { id: VCT } } } };
+          credentialSubject: { id: proof.iss, achievement: { id: VCT,
+            criteria: jsonCopy(f.requests.find(entry => entry.method === 'POST'
+              && entry.route === '/v1/issuance').data.claims.achievement_criteria),
+          } } } };
+      f.mutateSignedCredential?.(signedPayload);
       const input = [signedHeader, signedPayload].map(value => Buffer.from(JSON.stringify(value)).toString('base64url')).join('.');
       const signed = crypto.sign('sha256', Buffer.from(input), { key: keys.privateKey, dsaEncoding: 'ieee-p1363' });
       const credential = input + '.' + signed.toString('base64url');
@@ -260,10 +264,28 @@ test('accept uses the public issuance contract and retains a verified credential
   }
   const stored = JSON.parse(fs.readFileSync(path.join(f.stateDir, 'credential-private.json')));
   assert.equal(hash(stored.credential), result.receipt.credentialSha256);
+  assert.deepEqual(stored.payload.vc.credentialSubject.achievement.criteria,
+    f.requests.find(entry => entry.method === 'POST' && entry.route === '/v1/issuance')
+      .data.claims.achievement_criteria);
   for (const privateValue of [PASSWORD, stored.credential, 'synthetic-pre-authorized-code']) {
     assert.equal(result.output.includes(privateValue), false);
   }
 });
+
+for (const [name, mutate] of [
+  ['omitted', payload => { delete payload.vc.credentialSubject.achievement.criteria; }],
+  ['changed', payload => { payload.vc.credentialSubject.achievement.criteria = { narrative: 'Unrelated criterion' }; }],
+]) {
+  test('accept refuses signature-valid ' + name + ' achievement criteria', async t => {
+    const f = fixture(t);
+    f.mutateSignedCredential = mutate;
+    const result = await run(f);
+    assert.equal(result.code, 1);
+    assert.equal(result.receipt.code, 'synthetic_achievement_criteria_changed');
+    assert.equal(f.redemptions, 1);
+    assert.equal(fs.existsSync(path.join(f.stateDir, 'accept-receipt.json')), false);
+  });
+}
 
 test('resume performs fresh login and signature/readback checks without another API mutation', async t => {
   const f = fixture(t);

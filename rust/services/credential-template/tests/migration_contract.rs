@@ -6,6 +6,9 @@ use marty_credential_template::migration::{
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "support/membership_criteria_repair.rs"]
+mod membership_criteria_repair;
+
 fn fixture() -> Value {
     serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

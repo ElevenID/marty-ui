@@ -31,7 +31,15 @@ fn fresh_install_login_badge_preserves_the_final_released_behavior() {
         badge.vct,
         "https://issuer.example/credentials/marty-verified-member-badge"
     );
-    assert_eq!(badge.claims.len(), 11);
+    assert_eq!(badge.claims.len(), 12);
+    let criteria = badge
+        .claims
+        .iter()
+        .find(|claim| claim.name == "achievement_criteria")
+        .expect("the stock membership badge requires achievement criteria");
+    assert_eq!(serde_json::to_value(criteria.claim_type).unwrap(), "object");
+    assert!(criteria.required);
+    assert!(!criteria.selectively_disclosable);
     assert!(badge.selective_disclosure_fields.is_empty());
     assert_eq!(
         badge.compliance_profile_id.as_deref(),
@@ -64,7 +72,7 @@ fn login_badge_keeps_primary_format_claims_and_explicit_governed_identity() {
         Some("did:web:beta.example.test:orgs:marty-identity-platform")
     );
     assert_eq!(badge.supported_formats[0].canonical(), "VC_JWT");
-    assert_eq!(badge.claims.len(), 11);
+    assert_eq!(badge.claims.len(), 12);
     assert_eq!(
         badge.trust_profile_id.as_deref(),
         Some("60000000-0000-0000-0000-000000000001")
