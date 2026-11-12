@@ -499,6 +499,18 @@
 			"optional": "Optional"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Legen Sie fest, wie aktuell Nachweise sein müssen.",
+					"maxCredentialAge": "Maximale Zeit seit der Ausstellung in Sekunden (1 Tag = 86.400 Sekunden)."
+				},
+				"units": {
+					"seconds": "Sekunden"
+				},
+				"validation": {
+					"maxCredentialAge": "Geben Sie eine gültige ganze Anzahl von Sekunden ein, die 0 oder größer ist."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Geben Sie einen Claim-Namen ein.",

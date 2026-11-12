@@ -499,6 +499,18 @@
 			"optional": "任意"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "資格情報の有効な古さを設定します。",
+					"maxCredentialAge": "発行からの最大経過時間を秒単位で指定します（1日 = 86,400秒）。"
+				},
+				"units": {
+					"seconds": "秒"
+				},
+				"validation": {
+					"maxCredentialAge": "0以上の有効な整数で秒数を入力してください。"
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "クレーム名を入力してください。",

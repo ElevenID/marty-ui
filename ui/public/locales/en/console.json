@@ -1906,8 +1906,8 @@
         },
         "helpers": {
           "holderBinding": "How should the presentation be bound to the credential holder?",
-          "freshness": "Control how recent credentials and proofs must be.",
-          "maxCredentialAge": "How old can the credential be? (1 year = 365 days)",
+          "freshness": "Control how recent credentials must be.",
+          "maxCredentialAge": "Maximum time since issuance in seconds (1 day = 86,400 seconds).",
           "maxProofAge": "How old can the proof be? (typically 5-10 minutes)",
           "revocationCheck": "Verify that credentials have not been revoked (recommended)",
           "compliance": "Track which standard version this policy targets for compliance audits.",
@@ -1921,7 +1921,11 @@
         },
         "units": {
           "days": "days",
-          "minutes": "minutes"
+          "minutes": "minutes",
+          "seconds": "seconds"
+        },
+        "validation": {
+          "maxCredentialAge": "Enter a valid whole number of seconds, 0 or greater."
         },
         "bindingOptions": {
           "device_key": {

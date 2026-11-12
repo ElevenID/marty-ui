@@ -216,6 +216,18 @@
       }
     },
     "presentationPolicy": {
+      "freshnessBindingStep": {
+        "helpers": {
+          "freshness": "Bepaal hoe recent credentials moeten zijn.",
+          "maxCredentialAge": "Maximale tijd sinds uitgifte in seconden (1 dag = 86.400 seconden)."
+        },
+        "units": {
+          "seconds": "seconden"
+        },
+        "validation": {
+          "maxCredentialAge": "Voer een geldig geheel aantal seconden in, 0 of hoger."
+        }
+      },
       "claimsConfigurationStep": {
         "validation": {
           "claimName": "Voer een claimnaam in.",

@@ -499,6 +499,18 @@
 			"optional": "Optionnel"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Définissez l’ancienneté maximale des attestations.",
+					"maxCredentialAge": "Durée maximale depuis l’émission, en secondes (1 jour = 86 400 secondes)."
+				},
+				"units": {
+					"seconds": "secondes"
+				},
+				"validation": {
+					"maxCredentialAge": "Saisissez un nombre entier valide de secondes, supérieur ou égal à 0."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Saisissez un nom d’attribut.",

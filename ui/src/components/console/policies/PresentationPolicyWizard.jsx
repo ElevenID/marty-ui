@@ -35,6 +35,7 @@ import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
 import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutomaticTemplateConfig } from './policyTemplateDefaults';
 import { isClaimsConfigurationComplete } from './policyClaimsValidation';
+import { isValidPolicyCredentialAge } from './policyFreshnessValidation';
 import { clearPreviousTemplateBinding, projectTemplatePolicyClaims, TemplatePolicyClaimsError } from './projectTemplatePolicyClaims';
 import {
   TrustProfileStep,
@@ -64,11 +65,9 @@ const INITIAL_DATA = {
     holder_binding: 'device_key',
     freshness_requirements: {
       max_credential_age_seconds: 31536000, // 1 year default
-      max_proof_age_seconds: 300, // 5 minutes default
       require_revocation_check: true,
     },
     prefer_predicates: true,
-    single_presentation: false,
     metadata: {},
   },
   activateImmediately: true,
@@ -116,9 +115,8 @@ const PresentationPolicyWizard = () => {
           return false;
         }
       case 3: // Freshness & Binding (optional)
-        return true;
       case 4: // Review
-        return true;
+        return isValidPolicyCredentialAge(stepData.policyConfig.freshness_requirements?.max_credential_age_seconds);
       default:
         return false;
     }
@@ -129,6 +127,9 @@ const PresentationPolicyWizard = () => {
     const isCurrent = () => epoch === scopeEpoch.current;
     if (!isClaimsConfigurationComplete(data.policyConfig)) {
       throw new Error(t('wizards.presentationPolicy.claimsConfigurationStep.validation.completeClaims'));
+    }
+    if (!isValidPolicyCredentialAge(data.policyConfig.freshness_requirements?.max_credential_age_seconds)) {
+      throw new Error(t('wizards.presentationPolicy.freshnessBindingStep.validation.maxCredentialAge'));
     }
     const credentialRequirements = projectClaims(data);
     await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
@@ -222,7 +223,6 @@ const PresentationPolicyWizard = () => {
         ...template.config,
         metadata: {
           ...(template.config.metadata || {}),
-          standard_reference: template.standardReference,
           template_id: template.id,
         },
       };
@@ -378,7 +378,7 @@ const PresentationPolicyWizard = () => {
             {getSteps(t)[wizard.activeStep].optional && (
               <Button
                 onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
-                disabled={wizard.loading}
+                disabled={wizard.loading || !wizard.isStepValid()}
                 data-testid="wizard.policy.skip"
               >
                 {t('wizards.presentationPolicy.buttons.skip')}

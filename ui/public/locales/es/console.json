@@ -499,6 +499,18 @@
 			"optional": "Opcional"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Controla la antigüedad máxima de las credenciales.",
+					"maxCredentialAge": "Tiempo máximo desde la emisión, en segundos (1 día = 86.400 segundos)."
+				},
+				"units": {
+					"seconds": "segundos"
+				},
+				"validation": {
+					"maxCredentialAge": "Introduce un número entero válido de segundos, igual o mayor que 0."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Introduce un nombre de atributo.",
