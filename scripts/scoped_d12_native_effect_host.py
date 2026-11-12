@@ -18,7 +18,7 @@ from scoped_d12_native_host import D12ReadOnlyHost
 from scoped_native_database import bounded_run
 from scoped_linux_journal import LinuxBuildJournal
 from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
-from scoped_passport_maintenance import exact_roles, observed_role_state
+from scoped_passport_maintenance import exact_roles, observed_role_state, same_full_role_snapshot
 from scoped_passport_successor import CURRENT_PROFILE
 from scoped_native_profiles import D12_PASSPORT_CURRENT, current_rollout_build
 
@@ -518,7 +518,8 @@ class D12CurrentHostBindings:
                 and state.get("quiescenceSha256") == bound["sha256"],
                 "D12_DURABLE_QUIESCENCE_NOT_BOUND")
         fresh = self.observer.inspect_all22()
-        require(fresh == frozen, "D12_QUIESCENCE_CHANGED_BEFORE_DATABASE")
+        require(same_full_role_snapshot(fresh, frozen, self.profile),
+                "D12_QUIESCENCE_CHANGED_BEFORE_DATABASE")
         require(all(row.get("state") == "exited" and row.get("running") is False
                     and row.get("paused") is False and row.get("oomKilled") is False
                     and row.get("hostPid") == 0 and type(row.get("containerExitCode")) is int

@@ -19,6 +19,18 @@ def exact_roles(observed, profile=None):
     return {row["role"]: row for row in rows}
 
 
+def same_full_role_snapshot(observed, expected, profile=None):
+    """Compare the exact cohort and every field, independent of role-list order.
+
+    State projections can retain a reviewed binding's UI-last order while the
+    effect observer emits lexical order. Neither order grants different scope.
+    Validate both cohorts before indexing so duplicates cannot hide a row.
+    """
+    actual_rows = exact_roles(observed, profile)
+    expected_rows = exact_roles(expected, profile)
+    return {**observed, "roles": actual_rows} == {**expected, "roles": expected_rows}
+
+
 def _ui_image_stop_contract(row, bound):
     import json
     role = "ui-prod"

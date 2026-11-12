@@ -148,7 +148,8 @@ class D12CurrentExecution:
             require(abi_plan["beforeBinding"]["sha256"]==i["runtimeBefore"]["sha256"],"CURRENT10_IMAGE_PREIMAGE_BINDING_CHANGED")
             self.native_preimage={"binding":i["runtimeBefore"],"inspections":abi_plan["nativeInspections"]}
         before = g["observe22"]()
-        require(before == json.loads(read_ref(i["runtimeBefore"]).read_bytes())
+        require(maintenance.same_full_role_snapshot(
+                    before, json.loads(read_ref(i["runtimeBefore"]).read_bytes()), self.profile)
                 and authority.get("approvedRuntimeBeforeSha256") == i["runtimeBefore"]["sha256"],
                 "D12_FRESH_ACTUAL22_PREIMAGE_REQUIRED")
         require(g["database_snapshot"]() == json.loads(read_ref(i["databaseBefore"]).read_bytes())
