@@ -489,6 +489,16 @@ authenticate the files, execute Compose, check helper identity, or grant any
 authority. The complete schema owner must bind the matching verified model and
 source, write durable intent before execution, and retain uncertain outcomes.
 
+The opt-in real Compose lifecycle test deliberately substitutes `exit 0` for
+the separately qualified native migration body. Even with `restart: always`
+and a declared dependency, the named one-off must have restart policy `no`,
+exit once and leave the dependency unstarted. It uses a new internal network,
+tmpfs only, and no database, host ports, bind mounts or volumes. An fsynced
+intent precedes creation; uncertain acknowledgements retain resources. Cleanup
+rechecks exact container/image/project/service/nonce identity, removes only the
+acknowledged helper, then verifies its owned network is empty before removal.
+This is flags/lifecycle evidence, not end-to-end migration or product admission.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured
