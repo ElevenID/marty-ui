@@ -85,7 +85,7 @@ def decision(marker, initial):
             'candidate_only': True}
 
 
-def resolve(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None):
+def resolve(config, root, raw, stack, *, pending_model=False, pending_continuation_sha256=None, ancestry=None, discover_pending=False, pending_product_sha256=None, pending_recovery_sha256=None):
     """Called under the shared project lock, including activation's existing lock.
 
     All sealed predecessor records/directories remain held through the caller's
@@ -104,26 +104,32 @@ def resolve(config, root, raw, stack, *, pending_model=False, pending_continuati
             require(all(raw.get(name) == body for name, body in expected_seed.items()))
         expected = owner_binding(raw, config)
         if not raw or set(raw) == {'owner.json'}:
-            require(expected_seed is None and pending_continuation_sha256 is None and pending_product_sha256 is None)
+            require(expected_seed is None and pending_continuation_sha256 is None and pending_product_sha256 is None
+                    and pending_recovery_sha256 is None)
             return expected, root, raw, [model_binding(expected)]
         has_link = INTENT in raw
         has_product = product.INTENT in raw
         has_recovery = recovery.INTENT in raw
         require(sum((has_link,has_product,has_recovery))<=1 and (product.DECISION not in raw or has_product)
                 and (recovery.DECISION not in raw or has_recovery))
+        require(recovery.PENDING not in raw or (has_recovery and recovery.DECISION not in raw))
         require(DECISION not in raw or has_link)
         intents, records = selection._parse(raw, expected, allow_pending_model=pending_model and not (has_link or has_product))
         current_model, models = hold_history(raw, expected, records, stack,
                                              allow_pending=pending_model and not (has_link or has_product))
         accepted.extend(models)
         if not has_link and not has_product and not has_recovery:
-            require(pending_continuation_sha256 is None and pending_product_sha256 is None)
+            require(pending_continuation_sha256 is None and pending_product_sha256 is None and pending_recovery_sha256 is None)
             require(model_binding(config) in accepted)
             return expected, root, raw, accepted
         require(len(intents) == len(records))
         if has_recovery:
             require(not pending_model and pending_continuation_sha256 is None and pending_product_sha256 is None)
             marker=recovery.validate_marker(raw,expected,current_model,root)
+            if pending_recovery_sha256 is not None:
+                require(type(pending_recovery_sha256) is str and re.fullmatch(r'[0-9a-f]{64}',pending_recovery_sha256)
+                        and selection.digest(raw[recovery.INTENT])==pending_recovery_sha256)
+                return expected,root,raw,accepted
             require(recovery.DECISION in raw)
             initial=recovery.seed(raw,expected,current_model,marker,stack)
             require(selection.decode(raw[recovery.DECISION])==recovery.decision(marker,initial))

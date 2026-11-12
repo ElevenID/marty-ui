@@ -8,7 +8,8 @@ import selfhost_windows_selection as selection
 SCHEMA = 'marty.windows-recovery-successor/v1'
 INTENT = 'recovery.intent.json'
 DECISION = 'recovery.selection.json'
-FILES = {INTENT, DECISION}
+PENDING = 'recovery.selection.pending.json'
+FILES = {INTENT, DECISION, PENDING}
 OPERATOR_FIELDS = {'binary','binary_sha256','source_sha','release_tag'}
 
 

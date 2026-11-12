@@ -15,7 +15,10 @@ from selfhost_windows_staging_recovery import RECOVERY_PHASES, RECOVERY_RECEIPTS
 
 @pytest.mark.parametrize('operator_successor',[False,True])
 @pytest.mark.parametrize('failed_fault',[None,'selected','config'])
-def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault):
+@pytest.mark.parametrize('commit_owner',['replay','finish','resume','proof-failure','guard-failure',
+                                      'namespace-race','pending-race','empty-pending'])
+def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkeypatch,operator_successor,failed_fault,commit_owner):
+    if failed_fault and commit_owner!='replay':pytest.skip('Replay integrity covered independently')
     with fixture(monkeypatch) as (root,phase,tx,outcome,path,cfg):
         model=selection.decode(Path(cfg['compose_file']).read_bytes())
         roles={row['Service'] for row in states(model)}
@@ -116,23 +119,128 @@ def test_full_held_seed_resolves_from_original_anchor_to_ordinary_current(monkey
         (attempt/'selection').mkdir()
         for file in [*(ordinary[n] for n in ('intent','result','new_log','rollback_log')),
                      *(p for step in ordinary['step_receipts'] for p in step.values())]:Path(file).write_bytes(b'')
-        target=root/('.'+cfg['project']+'.generation-recovery-'+'f'*32)
+        target=root/('.'+cfg['project']+'.generation-recovery-'+'e'*32)
         evidence={p.relative_to(attempt).as_posix():selection.digest(p.read_bytes()) for p in attempt.rglob('*') if p.is_file()}
         marker={'schema':recovery.SCHEMA,'project':cfg['project'],'engine_id':cfg['engine_id'],
             'source_dir':str(journal),'target_dir':str(target),'source_sha256':{n:selection.digest(b) for n,b in raw.items()},
             'attempt_dir':str(attempt),'config_sha256':stage['config_sha256'],'generation_sequence':1,
             'evidence_sha256':evidence,'candidate_only':True}
+        if commit_owner!='replay':
+            from contextlib import contextmanager
+            import selfhost_windows_recovery_finish as finisher
+            import selfhost_windows_recovery_operator as admission_owner
+            monkeypatch.setattr(native,'require_recovery_capability',lambda *args:None)
+            @contextmanager
+            def admitted(previous,*args,**kwargs):
+                successor=dict(previous)
+                for key in recovery.OPERATOR_FIELDS:successor[key]=staged['native'][key]
+                yield successor,admission
+            monkeypatch.setattr(admission_owner,'admitted_operator',admitted)
+            option=dict(assets='PUBLIC',expected={},gh='PUBLIC',cosign='PUBLIC',verifier_sha256={}) if operator_successor else None
+            guard=selection.renewal.recovery_guard(cfg)
+            failed_guard=selection.renewal.renewal_staging_guard(cfg)
+            guard.write_bytes(selection.packed(stage))
+            failed_guard.write_bytes((failed/'intent.json').read_bytes())
+            phase['active']=candidate
+            if commit_owner=='guard-failure':
+                failed_guard.write_bytes(b'PUBLIC_CHANGED_GUARD')
+                with pytest.raises(ValueError):finisher.finish(path,journal,attempt,operator_successor=option)
+                assert not (journal/recovery.INTENT).exists() and not target.exists()
+                return
+            if commit_owner=='proof-failure':
+                def refuse(*args,**kwargs):raise ValueError('PUBLIC_PROOF_REFUSAL')
+                monkeypatch.setattr(selection,'_prove',refuse)
+                with pytest.raises(ValueError):finisher.finish(path,journal,attempt,operator_successor=option)
+                assert not (journal/recovery.INTENT).exists() and not target.exists()
+                return
+            if commit_owner=='resume':
+                append=selection._append
+                def stop_pending(directory,raw,name,value,stack):
+                    if name==recovery.PENDING:raise RuntimeError('PUBLIC_INTERRUPTION')
+                    return append(directory,raw,name,value,stack)
+                monkeypatch.setattr(selection,'_append',stop_pending)
+                with pytest.raises(RuntimeError):finisher.finish(path,journal,attempt,operator_successor=option)
+                assert (journal/recovery.INTENT).is_file() and not (journal/recovery.DECISION).exists()
+                with pytest.raises(ValueError),selection.selected_inputs(path):pass
+                monkeypatch.setattr(selection,'_append',append)
+            if commit_owner=='empty-pending':
+                append=selection._append
+                def stop_empty(directory,raw,name,value,stack):
+                    if name==recovery.PENDING:
+                        (directory/name).write_bytes(b'')
+                        raw[name]=b''
+                        raise RuntimeError('PUBLIC_INTERRUPTED_EMPTY_WRITE')
+                    return append(directory,raw,name,value,stack)
+                monkeypatch.setattr(selection,'_append',stop_empty)
+                with pytest.raises(RuntimeError):finisher.finish(path,journal,attempt,operator_successor=option)
+                monkeypatch.setattr(selection,'_append',append)
+                with pytest.raises(ValueError):finisher.finish(path,journal,attempt,operator_successor=option)
+                assert guard.is_file() and failed_guard.is_file() and not (journal/recovery.DECISION).exists()
+                assert (journal/recovery.PENDING).read_bytes()==b''
+                return
+            if commit_owner in ('namespace-race','pending-race'):
+                session=selection._session
+                calls=[]
+                @contextmanager
+                def race(*args,**kwargs):
+                    with session(*args,**kwargs) as lease:yield lease
+                    calls.append(True)
+                    with pytest.raises(ValueError),selection.renewal.hold_private_input(
+                            root/f'.{cfg["project"]}.renewal.lock',exclusive=True):pass
+                    if commit_owner=='namespace-race':
+                        for directory in (journal,target):
+                            with pytest.raises(OSError):directory.rename(directory.with_name(directory.name+'-replaced'))
+                    else:(journal/recovery.PENDING).write_bytes(b'PUBLIC_CHANGED_PENDING')
+                monkeypatch.setattr(selection,'_session',race)
+                if commit_owner=='pending-race':
+                    with pytest.raises(ValueError):finisher.finish(path,journal,attempt,operator_successor=option)
+                    assert calls==[True] and guard.is_file() and failed_guard.is_file()
+                    assert not (journal/recovery.DECISION).exists()
+                    return
+            result=finisher.finish(path,journal,attempt,operator_successor=option)
+            if commit_owner=='namespace-race':monkeypatch.setattr(selection,'_session',session)
+            assert result['result']=='selected-guarded' and result['guards_retained']
+            assert finisher.finish(path,journal,attempt,operator_successor=option)==result
+            assert guard.is_file() and failed_guard.is_file() and not (journal/recovery.PENDING).exists()
+            if commit_owner=='finish':
+                prove=selection._prove
+                def fail_final_proof(*args,**kwargs):raise ValueError('PUBLIC_FINAL_PROOF_REFUSAL')
+                monkeypatch.setattr(selection,'_prove',fail_final_proof)
+                with pytest.raises(ValueError):finisher.finalize(path,journal,attempt,operator_successor=option)
+                assert guard.is_file() and failed_guard.is_file()
+                monkeypatch.setattr(selection,'_prove',prove)
+            if commit_owner=='resume':
+                import selfhost_windows_inputs as inputs
+                held=inputs._held_private_input
+                renames=[]
+                @contextmanager
+                def interrupt_second_archive(file,**kwargs):
+                    if kwargs.get('_rename_to') is not None:
+                        renames.append(file)
+                        if len(renames)==2:raise RuntimeError('PUBLIC_SECOND_ARCHIVE_INTERRUPTED')
+                    with held(file,**kwargs) as value:yield value
+                monkeypatch.setattr(inputs,'_held_private_input',interrupt_second_archive)
+                with pytest.raises(RuntimeError):finisher.finalize(path,journal,attempt,operator_successor=option)
+                assert not guard.exists() and failed_guard.is_file()
+                with pytest.raises(ValueError),selection.selected_inputs(path):pass
+                monkeypatch.setattr(inputs,'_held_private_input',held)
+            finalized=finisher.finalize(path,journal,attempt,operator_successor=option)
+            assert finalized['result']=='recovery-finalized'
+            assert finisher.finalize(path,journal,attempt,operator_successor=option)==finalized
+            assert not guard.exists() and not failed_guard.exists()
+            assert len(list(root.glob('.'+cfg['project']+'.*-retired-'+'e'*32+'.json')))==2
         raw[recovery.INTENT]=selection.packed(marker)
-        (journal/recovery.INTENT).write_bytes(raw[recovery.INTENT])
+        if commit_owner=='replay':(journal/recovery.INTENT).write_bytes(raw[recovery.INTENT])
         if failed_fault:
             with pytest.raises(ValueError), ExitStack() as held:
                 recovery.seed(raw,expected,{'compose_file':cfg['compose_file'],'compose_sha256':cfg['compose_sha256']},marker,held)
             assert not target.exists()
             return
         with ExitStack() as held:initial=recovery.seed(raw,expected,{'compose_file':cfg['compose_file'],'compose_sha256':cfg['compose_sha256']},marker,held)
-        target.mkdir()
-        for name,body in initial.items():(target/name).write_bytes(body)
-        (journal/recovery.DECISION).write_bytes(selection.packed(recovery.decision(marker,initial)))
+        if commit_owner=='replay':
+            target.mkdir()
+            for name,body in initial.items():(target/name).write_bytes(body)
+            (journal/recovery.DECISION).write_bytes(selection.packed(recovery.decision(marker,initial)))
         phase['active']=candidate
         with selection.selected_inputs(path) as lease:
             assert lease.secrets_dir==candidate and lease.sequence==1 and lease.generation_sequence==2

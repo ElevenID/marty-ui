@@ -205,7 +205,7 @@ def _append(root, raw, name, value, stack):
 
 
 @contextmanager
-def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None):
+def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_continuation_sha256=None, _preserve_history=None, _discover_continuation=False, _pending_product_sha256=None, _coordination=None, _pending_recovery_sha256=None):
     from selfhost_windows_continuation import resolve
     with ExitStack() as stack:
         raw_config = stack.enter_context(renewal.hold_private_input(Path(config_path)))
@@ -246,7 +246,8 @@ def _session(config_path, *, create=False, _pending_model_sha256=None, _pending_
         expected, root, raw, _accepted = resolve(config, root, raw, stack,
             pending_model=_pending_model_sha256 is not None,
             pending_continuation_sha256=_pending_continuation_sha256, ancestry=ancestry,
-            discover_pending=_discover_continuation, pending_product_sha256=_pending_product_sha256)
+            discover_pending=_discover_continuation, pending_product_sha256=_pending_product_sha256,
+            pending_recovery_sha256=_pending_recovery_sha256)
         if _discover_continuation:
             from selfhost_windows_continuation import INTENT, DECISION, validate_marker
             require(INTENT in raw and (DECISION not in raw or _pending_continuation_sha256 is not None))
