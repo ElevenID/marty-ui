@@ -356,13 +356,17 @@ uncertain outcome leaves the guard and receipts; never retry the deployment to
 repair it. A returned callback result is provisional until the entire selected
 lease exits and the new product selection is published.
 
-For backend source `b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34`, an additional
-read-only check refuses its three known pending migrations before any product
+For every candidate source, an additional read-only check requires the reviewed
+three-migration baseline before any product
 intent, fresh authority or recreation. Ledger/relation presence is only an
 early negative check: it grants no schema-transition authority and does not
 replace the unchanged catalog/ledger, custody and runtime proofs. A populated
 installation missing those migrations still needs a separately qualified exact
 schema transition; do not preapply SQL or relax the equality check to proceed.
+The earlier source-specific check was insufficient: descendants carry the same
+migrations. A new SHA cannot skip this check, and an older candidate cannot use
+this image-only path against a pre-baseline database. This is a minimum refusal
+gate, not a promise that a future source has no additional migrations.
 
 If execution completed but metadata publication was interrupted, an operator may
 use `--config ... --reconcile --authority-file /control/recovery-session-<uuid>/token`

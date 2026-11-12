@@ -21,17 +21,15 @@ from test_windows_product_journal import installed
 
 
 @contextmanager
-def runtime(monkeypatch, fault=None, *, extended=False):
+def runtime(monkeypatch, fault=None, *, extended=False, candidate_source=None):
     with installed(monkeypatch) as data:
         current = selection.decode((data['attempt']/'after.json').read_bytes())
-        if fault == 'pending-migrations':
-            for entry in current:
-                if product.renewal._service(entry) == 'postgres':
-                    entry['Config']['Env'] = ['POSTGRES_USER=postgres']
+        for entry in current:
+            if product.renewal._service(entry) == 'postgres':
+                entry['Config']['Env'] = ['POSTGRES_USER=postgres']
         old = selection.decode(Path(data['new_config']['compose_file']).read_bytes())
         admitted = selection.decode((data['attempt']/'inputs/web-composition.json').read_bytes())
-        if fault == 'pending-migrations':
-            admitted['backend']['source_sha'] = 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34'
+        admitted['backend']['source_sha'] = candidate_source or 'a'*40
         mutable = {'gateway', 'ui'} | ({'db-migrate', 'keycloak', 'openbao', 'openbao-unseal'} if extended else set())
         for role in mutable-product.PROVIDER_ROLES:
             admitted['images'][role] = admitted['images'][role].split('@')[0]+'@sha256:'+'5'*64
@@ -63,9 +61,10 @@ def runtime(monkeypatch, fault=None, *, extended=False):
                 model = selection.decode(Path(command[-1]).read_bytes())
                 return {role: ('6'*64 if model == new and role in mutable else '4'*64) for role in roles}
             def json(self, args):
-                if args[0] == 'exec' and fault == 'pending-migrations':
+                if args[0] == 'exec':
                     events.append('migration-presence')
-                    return dict(credential_template=False, issuance=False, trust_profile=False, authority_relation=False)
+                    return {key: fault != 'pending-migrations' for key in (
+                        'credential_template', 'issuance', 'trust_profile', 'authority_relation')}
                 if args[:2] == ['image', 'inspect']:
                     events.append('image-inspect')
                     if fault == 'missing-image':raise ValueError('PUBLIC_NO_CACHED_IMAGE')
@@ -153,8 +152,10 @@ def transition(lease, data):
                                     registry_config=Path('synthetic-registry'))
 
 
-def test_pending_migrations_refuse_before_intent_authority_or_any_runtime_write(monkeypatch):
-    with runtime(monkeypatch, 'pending-migrations') as data:
+@pytest.mark.parametrize('source', ['b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34',
+    '9a6925e3da770f5930e02a0f152eb8fefe948a78', 'a'*40])
+def test_pending_migrations_refuse_before_intent_authority_or_any_runtime_write(monkeypatch, source):
+    with runtime(monkeypatch, 'pending-migrations', candidate_source=source) as data:
         before = {path: path.read_bytes() for path in data['root'].rglob('*') if path.is_file()}
         with selection.selected_inputs(data['path']) as lease:
             with pytest.raises(ValueError):

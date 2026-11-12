@@ -234,14 +234,19 @@ def retained_rows_snapshot(docker, items, project, *, profile=LedgerProfile()):
 
 
 def refuse_pending_product_migrations(docker, items, project, admitted, *, profile=LedgerProfile()):
-    """Refuse one known schema-changing source before any product intent/write.
+    """Require the reviewed image-only baseline before any product intent/write.
 
     Presence is not migration qualification: the full catalog/ledger equality,
     native custody and runtime checks remain mandatory. This is an early
     negative check, not a migration executor or an authorization to preapply SQL.
     """
-    if admitted.get('backend', {}).get('source_sha') != 'b1723c527c1df9c2d2d8d7ed5ac02d362a96cd34':
-        return
+    # A source SHA is not a schema contract. Later descendants carry these
+    # migrations too; a new SHA must never bypass this baseline. Until the full
+    # schema owner is qualified, even an older candidate cannot use this tool to
+    # transition a pre-baseline database. Never preapply SQL to satisfy the gate.
+    require(type(admitted) is dict and type(admitted.get('backend')) is dict
+            and type(admitted['backend'].get('source_sha')) is str
+            and re.fullmatch(r'[0-9a-f]{40}', admitted['backend']['source_sha']))
     require(type(profile) is LedgerProfile)
     sql = """SELECT jsonb_build_object(
         'credential_template', EXISTS (SELECT 1 FROM credential_template_service.rust_schema_versions
