@@ -189,10 +189,12 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
 @contextmanager
 def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
-                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False):
+                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, mutable_directory=False):
     from ctypes import wintypes as w
 
     path = Path(path)
+    require(type(mutable_directory) is bool and (not mutable_directory or
+            (directory and not ancestor and write_value is None and not exclusive)))
     before = _path_identities(path, directory=directory)
     require(not directory or write_value is None)
     require(not ancestor or write_value is None)
@@ -353,7 +355,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                     and count.value == first.size_low)
         last = file_info()
         def stable(value):
-            if ancestor:
+            if ancestor or mutable_directory:
                 return (value.attributes, bytes(value.created), value.volume,
                         value.index_high, value.index_low)
             return (value.attributes, bytes(value.created), bytes(value.written),

@@ -5,6 +5,7 @@ check does not establish current credential validity or admit activation.
 """
 import hashlib
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 from selfhost_windows_selection import _stage_names, packed, require
@@ -33,6 +34,13 @@ def failed_current_receipts(raws):
 
 
 def inspect_failed_current(config_path):
+    with _failed_current_inputs(config_path) as lease:
+        result = lease['proof']
+    return result
+
+
+@contextmanager
+def _failed_current_inputs(config_path):
     """Read-only held proof of the stopped phase, never credential admission.
 
     The result is published to the caller only after all input/namespace exit
@@ -125,4 +133,91 @@ def inspect_failed_current(config_path):
                   'sequence': record['sequence'], 'guard_sha256': selection.digest(guard),
                   'receipt_sha256': receipt_hashes, 'data_sha256': record['data_sha256'],
                   'guard_retained': True, 'credential_admission': False}
-    return result
+        yield {'proof': result, 'config': config, 'record': record, 'values': values,
+               'observed': observed, 'stack': stack, 'failed_root': root}
+
+
+def stage_recovery_generation(config_path, output_dir, logical_project):
+    """Produce one guarded candidate; never publish, select, activate or retry.
+
+    Both the failed staging guard and a new recovery guard remain on success
+    and failure. The returned provisional proof requires a separate checked
+    publication and activation owner; it is not an activation capability.
+    """
+    import selfhost_windows_selection as selection
+    import selfhost_windows_renewal_native as native
+    renewal = selection.renewal
+    with _failed_current_inputs(config_path) as lease:
+        cfg, record, observed, stack = (lease[name] for name in ('config', 'record', 'observed', 'stack'))
+        require(re.fullmatch(r'marty-selfhost-[a-z0-9][a-z0-9-]{0,59}', logical_project))
+        root = Path(output_dir)
+        require(root.parent == Path(cfg['current_secrets']).parent
+                and re.fullmatch(r'windows-renewal-[0-9a-f]{32}', root.name)
+                and root != lease['failed_root'])
+        stack.enter_context(renewal.hold_storage_namespace(root))
+        stack.enter_context(selection._held_private_input(root, directory=True, mutable_directory=True))
+        require(not list(root.iterdir()))
+        layers = renewal.dependency_layers(observed['model'], observed['services'],
+                                           renewal.owned_roles(observed['model'], observed['services']))
+        config = selection._stage_configuration(cfg, record['choice'], record, root, layers)
+        cycle = root.name.removeprefix('windows-renewal-')
+        guard = renewal.recovery_guard(cfg)
+        intent = {'schema': 'marty.windows-expired-renewal-staging/v1',
+                  'failed_proof': lease['proof'], 'root': str(root),
+                  'logical_project': logical_project, 'config_sha256': selection.digest(packed(config)),
+                  'credential_admission': False, 'rollback_to_expired': False}
+        # Durable exclusion precedes directory allocation, reauthentication,
+        # credential producers, or any operation with an uncertain outcome.
+        selection._new_private(guard, packed(intent))
+        stack.enter_context(renewal.hold_private_input(guard))
+        selection._new_private(root/'intent.json', packed(intent))
+        stack.enter_context(renewal.hold_private_input(root/'intent.json'))
+        for phase in ('authority', 'prepare', 'tls', 'keycloak', 'export', 'materialize', 'candidate'):
+            for event in ('started', 'completed'):
+                selection._new_private(root/f'{phase}.{event}.json', b'')
+        for name in ('prepare.helper.json', 'tls.created.json', 'tls.helper.json', 'keycloak.helper.json'):
+            selection._new_private(root/name, b'')
+        selection._new_private(root/'config.private.json', packed(config))
+        stack.enter_context(renewal.hold_private_input(root/'config.private.json'))
+        expected_names = {'intent.json', 'config.private.json',
+            *(f'{phase}.{event}.json' for phase in ('authority','prepare','tls','keycloak','export','materialize','candidate')
+              for event in ('started','completed')),
+            'prepare.helper.json', 'tls.created.json', 'tls.helper.json', 'keycloak.helper.json'}
+        def output_membership():
+            require({path.name for path in root.iterdir()} == expected_names)
+        output_membership()
+        stack.callback(output_membership)
+        def checkpoint(phase, event, metadata):
+            path = root/f'{phase}.{event}.json'
+            renewal.write_empty_private_file(path, packed({'phase':phase,'event':event,'metadata':metadata}).decode())
+            stack.enter_context(renewal.hold_private_input(path))
+        checkpoint('authority', 'started', {})
+        authority = native.reauthenticate(config['native'], cfg['project'], observed['docker'].prefix,
+                                          '/control/recovery-session-'+cycle)
+        require(authority == config['native']['token_file'])
+        checkpoint('authority', 'completed', {})
+        observed['context'].check(before_intent=True)
+        candidate = Path(config['renewed_secrets'])
+        require(not renewal.namespace_entry_exists(candidate))
+        candidate.mkdir()
+        stack.enter_context(renewal.hold_storage_namespace(candidate))
+        stack.enter_context(selection._held_private_input(candidate, directory=True, mutable_directory=True))
+        renewed = native.produce_recovery_generation(config, lease['values'][record['choice']],
+            logical_project, cycle, observed['model']['services']['signing-keys']['image'], checkpoint)
+        require(set(renewed) == set(lease['values'][record['choice']]))
+        checkpoint('materialize', 'started', {})
+        for name, value in renewed.items():
+            selection._new_private(candidate/name, value)
+        held = stack.enter_context(renewal.hold_private_generation(candidate, sorted(renewed)))
+        require(held == renewed)
+        checkpoint('materialize', 'completed', {})
+        checkpoint('candidate', 'started', {})
+        native.preflight_recovery(config['native'], cfg['project'], lease['values'][record['choice']],
+                                  held, observed['docker'].prefix)
+        observed['context'].check(before_intent=True)
+        checkpoint('candidate', 'completed', {})
+        provisional = {'schema': intent['schema'], 'result': 'provisional-candidate',
+                       'root': str(root), 'guard_sha256': selection.digest(packed(intent)),
+                       'generation_sha256': selection.fingerprint(held),
+                       'credential_admission': False, 'guards_retained': True}
+    return provisional
