@@ -12,6 +12,21 @@ backup restore, or public browser qualification. Its reports continue to say
 `installation_ready: false`; enabling a timer is not release qualification.
 Existing v1 unit exports are not adopted or upgraded by this fresh-install release.
 
+Cold recovery validates the complete authenticated Compose model while starting
+only the explicit retained infrastructure dependency group. The ingress binding,
+application containers, and completed setup identities remain visible to policy
+and ownership checks; initialization cannot be replayed by this partial start.
+An interrupted start is reconciled against the exact model digest in its original
+intent before another lifecycle operation can proceed.
+
+An older retained operator can refuse this infrastructure-only start before any
+start intent is written because its reduced model omits the bound ingress. Preserve
+that installation and its evidence. The lifecycle configuration binds the original
+signed operator and inventory; replacing that binary is not a supported upgrade.
+Qualify this correction using a fresh installation from a signed release containing
+it. An unchanged generation or a refusal before a start intent is not a renewal
+or restart pass.
+
 Maintenance capabilities depend on the retained owners and selected generation.
 The recurring generation owner supports public ACME generations and
 installer-managed private-CA generations; imported foundation credentials remain
