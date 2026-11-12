@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn recovery_tokens_reject_normalized_reuse_and_cross_role_duplicates() {
+    let old = vec![b"old-a".to_vec(), b"old-b\n".to_vec()];
+    assert!(recovery_tokens_are_new(&old, &[b"new-a".to_vec(), b"new-b".to_vec()]).is_ok());
+    for new in [
+        vec![b"old-a\n".to_vec(), b"new-b".to_vec()],
+        vec![b"new-a".to_vec(), b" old-b \r\n".to_vec()],
+        vec![b"new-a".to_vec(), b"new-a\n".to_vec()],
+        vec![b"new-a".to_vec(), b" \n".to_vec()],
+    ] {
+        assert!(recovery_tokens_are_new(&old, &new).is_err());
+    }
+}
+
+#[test]
+fn recovery_candidate_requires_distinct_generations_and_closed_admission() {
+    let valid = json!({"token":"PUBLIC_SYNTHETIC","old":"/proof/old","new":"/proof/new","minimum_ttl":3600});
+    assert!(recovery_candidate_context(&valid).is_ok());
+    for (field, value) in [
+        ("new", json!("/proof/old")),
+        ("old", json!(null)),
+        ("minimum_ttl", json!(3599)),
+        ("minimum_ttl", json!(28801)),
+        ("minimum_ttl", json!(3600.0)),
+        ("require_orphan_new", json!(false)),
+        ("require_closed_new_metadata", json!(false)),
+        ("replacement", json!(null)),
+        ("retiring", json!(false)),
+        ("allow_expired_new", json!(true)),
+    ] {
+        let mut changed = valid.clone();
+        changed[field] = value;
+        assert!(recovery_candidate_context(&changed).is_err(), "{field}");
+    }
+}
+
+#[test]
+fn retained_certificate_evidence_refuses_activation_options_and_weak_ttl() {
+    let valid =
+        json!({"token":"PUBLIC_SYNTHETIC", "generation":"/proof/retained", "minimum_ttl":3600});
+    assert!(retained_certificate_context(&valid).is_ok());
+    for ttl in [0, 3599, 28801] {
+        let mut changed = valid.clone();
+        changed["minimum_ttl"] = json!(ttl);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+    for field in ["replacement", "retiring", "old", "new", "allow_expired"] {
+        let mut changed = valid.clone();
+        changed[field] = json!(false);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+    for field in ["token", "generation", "minimum_ttl"] {
+        let mut changed = valid.clone();
+        changed.as_object_mut().unwrap().remove(field);
+        assert!(retained_certificate_context(&changed).is_err());
+    }
+}
+
+#[test]
 fn closed_new_leaf_metadata_rejects_identity_grants_and_lifetime_expansion() {
     let original = json!({"type":"service","policies":["one-exact-policy"],"num_uses":0,
         "identity_policies":[],"period":0,"token_period":0,"ttl":28000,

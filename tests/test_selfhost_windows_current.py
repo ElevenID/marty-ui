@@ -77,9 +77,36 @@ def test_transition_still_refuses_unchanged_generation_and_current_requires_hour
     with pytest.raises(ValueError):native.preflight_current(cfg, PROJECT, {'leaf': b'X'}, [])
 
 
-@pytest.mark.parametrize('current_only,initial_current', [(False,False),(True,False),(True,True)])
+@pytest.mark.parametrize('receipt', [True, False])
+def test_recovery_transport_requires_explicit_candidate_proof(monkeypatch, receipt):
+    cfg = config()
+    @contextmanager
+    def held(*args, **kwargs):
+        yield b'PUBLIC_BINARY'
+    def run(args, *, stdin_bytes, timeout):
+        request = json.loads(stdin_bytes)
+        assert request['recovery'] is True and request['transition'] is True
+        assert request['initial_current'] is False and request['minimum_ttl'] >= 3600
+        assert f'type=volume,src={PROJECT}-renewal-control,dst=/control,readonly' in args
+        assert '/proof:rw,noexec,nosuid,nodev,size=128m,mode=0700' in args
+        result = {'authority': True, 'generation': True, 'tokens': True, 'certificates': True}
+        if receipt:result['recovery'] = True
+        return subprocess.CompletedProcess(args, 0, json.dumps(result).encode(), b'')
+    monkeypatch.setattr(native, 'hold_private_input', held)
+    monkeypatch.setattr(renewal, 'run_owned_mutation', run)
+    if receipt:
+        native.preflight_recovery(cfg, PROJECT, {'leaf': b'OLD'}, {'leaf': b'NEW'}, [])
+    else:
+        with pytest.raises(ValueError):
+            native.preflight_recovery(cfg, PROJECT, {'leaf': b'OLD'}, {'leaf': b'NEW'}, [])
+    cfg['minimum_ttl'] = 3599
+    with pytest.raises(ValueError):
+        native.preflight_recovery(cfg, PROJECT, {'leaf': b'OLD'}, {'leaf': b'NEW'}, [])
+
+
+@pytest.mark.parametrize('current_only,initial_current,recovery', [(False,False,False),(True,False,False),(True,True,False),(False,False,True)])
 @pytest.mark.skipif(os.name != 'posix', reason='Fixed worker executes only in the Linux helper')
-def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mutation(tmp_path, monkeypatch, capsys, current_only, initial_current):
+def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mutation(tmp_path, monkeypatch, capsys, current_only, initial_current, recovery):
     old = tmp_path/'old';new = old if current_only else tmp_path/'new';proof = tmp_path/'proof'
     old.mkdir();proof.mkdir()
     if new != old:new.mkdir()
@@ -92,6 +119,7 @@ def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mu
             'bao_addr': 'https://openbao:8200', 'minimum_ttl': 3600, 'count': 1,
             'changed': 0 if current_only else 1, 'transition': not current_only,
             'initial_current': initial_current,
+            'recovery': recovery,
             'bytes': {'old': {'leaf': base64.b64encode(b'PUBLIC_OLD').decode()},
                       'new': {'leaf': base64.b64encode(b'PUBLIC_OLD' if current_only else b'PUBLIC_NEW').decode()}}}
     operations = []
@@ -118,5 +146,6 @@ def test_worker_current_or_transition_checks_use_frozen_snapshot_after_mirror_mu
     previous = os.umask(0o077)
     try:exec(compile(code, '<fixed native snapshot worker>', 'exec'), {})
     finally:os.umask(previous)
-    assert operations == ['authority-check', *([] if current_only else ['generation']), 'activation-tokens', 'activation-certificates']
+    assert operations == ['authority-check', *([] if current_only else ['generation']),
+                          *(['recovery-candidate'] if recovery else ['activation-tokens', 'activation-certificates'])]
     assert json.loads(capsys.readouterr().out)['generation'] is not current_only

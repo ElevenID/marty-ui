@@ -20,6 +20,38 @@ from selfhost_windows_inputs import hold_private_input
 EXPORT_CHUNK_BYTES = 12000
 EXPORT_LIMIT_BYTES = 8 * 1024 * 1024
 
+RECOVERY_CONTRACT = {'schema':'marty.windows-recovery-operator/v1',
+    'retained_certificates':True,'recovery_candidate':True,
+    'expired_rollback':False,'automatic_activation':False}
+
+def require_recovery_capability(config, docker_prefix):
+    """Refuse unsupported pinned operators before authority or credential writes.
+
+    This checks compatibility only. Signed successor admission remains the
+    caller's separate responsibility; this never changes a historical binding.
+    """
+    from selfhost_windows_renewal import require, run_owned_mutation
+    with hold_private_input(Path(config['binary']), max_bytes=256*1024*1024) as raw:
+        require(hashlib.sha256(raw).hexdigest()==config['binary_sha256'])
+        worker = r'''
+import hashlib,json,pathlib,subprocess,sys
+d=json.load(sys.stdin);binary='/operator/tool'
+assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['sha256']
+p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
+assert p.returncode==0 and p.stdout.decode().strip()==d['identity']
+p=subprocess.run([binary,'operator','recovery-contract'],capture_output=True,timeout=20)
+assert p.returncode==0 and json.loads(p.stdout)==d['contract']
+print(json.dumps({'recovery_capable':True}))
+'''
+        args=[*docker_prefix,'run','--rm','--pull','never','-i','--read-only','--network','none',
+              '--memory','128m','--cpus','1','--cap-drop','ALL','--security-opt','no-new-privileges',
+              '--mount',f'type=bind,src={config["binary"]},dst=/operator/tool,readonly',
+              '--entrypoint','python',config['helper_image'],'-c',worker]
+        request={'sha256':config['binary_sha256'],'identity':config['source_sha']+':'+config['release_tag'],
+                 'contract':RECOVERY_CONTRACT}
+        result=run_owned_mutation(args,stdin_bytes=json.dumps(request).encode(),timeout=90)
+        require(result.returncode==0 and json.loads(result.stdout)=={'recovery_capable':True})
+
 PRODUCER_PREPARE = r'''
 import base64,json,os,pathlib,sys
 d=json.load(sys.stdin);os.umask(0o077);root=pathlib.Path(d['root'])
@@ -79,12 +111,20 @@ assert call('generation',{'operation':'verify','current':str(root/'source'),'can
  'ca_overlap':False,'ca_retire':False})=={'value':[d['files'],39]}
 body={'token':token,'old':str(root/'source'),'new':str(root/'generation'),'minimum_ttl':d['minimum_ttl'],
  'require_orphan_new':True,'require_orphan_old':False,'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
-print(json.dumps({'files':d['files'],'changed_files':39,'native_verified':True}))
+recovery=d.get('recovery',False);assert type(recovery) is bool
+if recovery:
+ assert d['minimum_ttl']>=3600
+ assert call('recovery-candidate',{'token':token,'old':str(root/'source'),'new':str(root/'generation'),
+                                  'minimum_ttl':d['minimum_ttl']},True)=={'value':None}
+else:
+ for op in ['activation-tokens','activation-certificates']:assert call(op,body,True)=={'value':None}
+result={'files':d['files'],'changed_files':39,'native_verified':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
-def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,_recovery=False):
     """Produce under the selected owner's durable guard; never activate here.
 
     The caller holds the selected lease, fresh authority and current native proof.
@@ -94,7 +134,7 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     from selfhost_windows_renewal import UncertainComposeMutation
     uncertain=False;zero=False
     try:
-        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint)
+        return _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,recovery=_recovery)
     except UncertainComposeMutation as error:
         uncertain=True;zero=getattr(error,'owned_processes_zero',False) is True
     except Exception:
@@ -107,10 +147,20 @@ def produce_generation(config,current,logical_project,cycle_id,services_image,ch
     raise ValueError('Windows renewal producer refused; preserve its guard and outputs')
 
 
-def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+def produce_recovery_generation(config,current,logical_project,cycle_id,services_image,checkpoint):
+    """Mint under the recovery owner's durable guard, never select or activate.
+
+    The caller must hold the failed-stage/runtime proofs and fresh scoped
+    authority. Old credentials are evidence only; rollback to them is forbidden.
+    """
+    return produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,_recovery=True)
+
+
+def _produce_generation(config,current,logical_project,cycle_id,services_image,checkpoint,*,recovery=False):
     from selfhost_windows_renewal import Docker, require, run_owned_mutation
     from selfhost_windows_selection import decode
     config=json.loads(json.dumps(config));project=config['project'];native=config['native']
+    require(type(recovery) is bool and (not recovery or native['minimum_ttl']>=3600))
     require(re.fullmatch(r'marty-(?:selfhost|production)-[a-z0-9][a-z0-9-]{0,59}',project))
     require(re.fullmatch(r'[a-z0-9./_-]+@sha256:[0-9a-f]{64}',native['helper_image']))
     require(re.fullmatch(r'[0-9a-f]{32}',cycle_id))
@@ -170,12 +220,15 @@ def _produce_generation(config,current,logical_project,cycle_id,services_image,c
             name=project+'-renew-keycloak-'+cycle_id
             request={k:native[k] for k in ['binary_sha256','source_sha','release_tag','bao_addr','minimum_ttl']}
             request.update(root=root,authority=native['token_file'],files=len(current))
+            if recovery:request['recovery']=True
             args=[*common,'--name',name,'--label','marty.windows.renewal='+cycle_id,'--network',native['network'],
                 '--mount',f'type=volume,src={native["control_volume"]},dst=/control,volume-nocopy',
                 '--mount',f'type=bind,src={native["binary"]},dst=/operator/tool,readonly',
                 '--mount',f'type=bind,src={native["ca_file"]},dst=/input/ca.crt,readonly',
                 '--entrypoint','python',native['helper_image'],'-c',PRODUCER_ASSEMBLE]
-            require(decode(command(args,json.dumps(request).encode()))=={'files':len(current),'changed_files':39,'native_verified':True})
+            expected={'files':len(current),'changed_files':39,'native_verified':True}
+            if recovery:expected['recovery']=True
+            require(decode(command(args,json.dumps(request).encode()))==expected)
             completed_helper('keycloak',name,native['helper_image']);checkpoint('keycloak','completed',{})
             checkpoint('export','started',{})
             values=export_generation(config,native['renewed'])
@@ -430,14 +483,28 @@ else:
 body={'token':token,'old':roots['old'],'new':roots['new'],'minimum_ttl':d['minimum_ttl'],
       'require_orphan_new':not d.get('initial_current',False),'require_orphan_old':False,
       'replacement':None,'retiring':False}
-for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
-print(json.dumps({'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}))
+recovery=d.get('recovery',False)
+assert type(recovery) is bool
+if recovery:
+ assert d['transition'] and not d.get('initial_current',False) and d['minimum_ttl']>=3600
+ assert native('recovery-candidate',{'token':token,'old':roots['old'],'new':roots['new'],
+                                   'minimum_ttl':d['minimum_ttl']},True) is None
+else:
+ for op in ['activation-tokens','activation-certificates']:assert native(op,body,True) is None
+result={'authority':True,'generation':d['transition'],'tokens':True,'certificates':True}
+if recovery:result['recovery']=True
+print(json.dumps(result))
 '''
 
 
 def preflight(config, project, old, new, docker_prefix):
     """Verify a changing generation; all transition checks remain mandatory."""
     return _preflight(config, project, old, new, docker_prefix, transition=True)
+
+
+def preflight_recovery(config, project, old, new, docker_prefix):
+    """Candidate proof for expired-current recovery, never activation authority."""
+    return _preflight(config, project, old, new, docker_prefix, transition=True, recovery=True)
 
 
 def preflight_current(config, project, current, docker_prefix):
@@ -460,7 +527,7 @@ def preflight_initial_current(config, project, current, docker_prefix):
 
 
 def _preflight(config, project, old, new, docker_prefix, *, transition,
-               initial_current=False):
+               initial_current=False, recovery=False):
     def require(value):
         if not value:
             raise ValueError('Windows native renewal preflight refused')
@@ -468,6 +535,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(all(re.fullmatch(r'[a-z][a-z0-9_]{0,127}', name) for name in old))
     changed = sum(old[name] != new[name] for name in old)
     require(type(initial_current) is bool and not (transition and initial_current))
+    require(type(recovery) is bool and (not recovery or (transition and not initial_current)))
     require(changed > 0 if transition else changed == 0)
     require(re.fullmatch(r'[0-9a-f]{64}', config['binary_sha256']))
     require(re.fullmatch(r'[0-9a-f]{40}', config['source_sha']))
@@ -478,6 +546,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
     require(config['bao_addr'] == 'https://openbao:8200')
     require(type(config['minimum_ttl']) is int and 60 <= config['minimum_ttl'] <= 28800)
     require(transition or config['minimum_ttl'] >= 3600)
+    require(not recovery or config['minimum_ttl'] >= 3600)
     for key in ['current', 'renewed', 'token_file']:
         p = PurePosixPath(config[key])
         require(p.is_relative_to('/control') and len(p.parts) >= 3
@@ -492,6 +561,7 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
                            initial_current=initial_current, bytes={
                 role: {name: base64.b64encode(raw).decode('ascii') for name, raw in values.items()}
                 for role, values in [('old', old), ('new', new)]})
+            if recovery:request['recovery']=True
             args = [*docker_prefix, 'run', '--rm', '--pull', 'never', '-i', '--read-only',
                     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
                     '--network', config['network'], '--tmpfs',
@@ -506,5 +576,6 @@ def _preflight(config, project, old, new, docker_prefix, *, transition,
             from selfhost_windows_renewal import run_owned_mutation
             p = run_owned_mutation(args, stdin_bytes=json.dumps(request).encode(), timeout=240)
             require(p.returncode == 0)
-            require(json.loads(p.stdout) == {'authority': True, 'generation': transition,
-                                            'tokens': True, 'certificates': True})
+            expected = {'authority': True, 'generation': transition, 'tokens': True, 'certificates': True}
+            if recovery:expected['recovery']=True
+            require(json.loads(p.stdout) == expected)
