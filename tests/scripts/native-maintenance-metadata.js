@@ -10,7 +10,7 @@ const D12_CORE='ffa24febcd0fb3fced15da7f28190af6d61ae0f9';
 const D12_CURRENT_SOURCE='449ab93ca80d147622ae61283f7d8084f7c62884';
 const D12_CURRENT_CORE='11655e38c2dbf69bfa5bc3c873f80c5fad628723';
 const D12_PROFILE='d12-passport-current-functional';
-const D05_PROFILE='d05-membership-current-functional',D05_SOURCE='1c4e58446728d45f7149d33de46659f088dc5f77',D05_CORE='ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca';
+const D05_PROFILE='d05-membership-current-functional',D05_SOURCE='47e42c7f61e150e1ece953e02b4041324b6bdea4',D05_CORE='ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca';
 function currentDatabaseBaseline(refs,approvedBefore,approvedEngine,profile=D12_PROFILE){
  assert([D12_PROFILE,D05_PROFILE].includes(profile),"UNREVIEWED_DATABASE_PROFILE");
  assert(refs&&Object.keys(refs).sort().join(',')==='catalog,job,proof','D12_CURRENT_BASELINE_REFS_REQUIRED');

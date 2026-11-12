@@ -113,7 +113,7 @@ D05_MEMBERSHIP_CURRENT = BuildProfile(
 # chain. Keep the historical six-role product/recipe available unchanged.
 D05_MEMBERSHIP_LATEST = BuildProfile(
     "d05-membership-current-native-ten-role",
-    "1c4e58446728d45f7149d33de46659f088dc5f77",
+    "47e42c7f61e150e1ece953e02b4041324b6bdea4",
     D05_MEMBERSHIP_CURRENT.roles + (("auth", "marty-auth"), ("flow", "marty-flow"),
                                   ("issuance-native", "marty-issuance-service"),
                                   ("organization", "marty-organization")),

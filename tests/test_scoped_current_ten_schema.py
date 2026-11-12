@@ -22,7 +22,7 @@ ISSUER = "rust/services/issuance/migrations/0012_membership_achievement_criteria
 
 @pytest.mark.parametrize("drift", [None, "missing-ct", "missing-issuer", "extra", "changed"])
 def test_current_ten_exact_sql_and_shared_digest_refuse_drift(tmp_path, monkeypatch, drift):
-    revision = "1c4e58446728d45f7149d33de46659f088dc5f77"
+    revision = "47e42c7f61e150e1ece953e02b4041324b6bdea4"
     monkeypatch.setattr(scoped_native_profiles, "current_rollout_build", lambda profile: SimpleNamespace(ui_revision=revision))
     names = set(D05_MIGRATION_SHA256) | {"scripts/sql/" + name for name in operational_sql_sources()} | {"scripts/sql/passport-beta-maintenance-catalog.sql"}
     refs = {}

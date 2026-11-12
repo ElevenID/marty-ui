@@ -72,7 +72,7 @@ class MembershipBuildTests(unittest.TestCase):
     def test_current_ten_role_scope_keeps_original_six_and_closes_login_chain(self):
         old = build.build_scope(build.D05_MEMBERSHIP_PROFILE)
         current = build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)
-        self.assertEqual(current['uiRevision'], '1c4e58446728d45f7149d33de46659f088dc5f77')
+        self.assertEqual(current['uiRevision'], '47e42c7f61e150e1ece953e02b4041324b6bdea4')
         self.assertEqual(current['coreRevision'], old['coreRevision'])
         self.assertEqual(current['volumes'], old['volumes'])
         self.assertEqual(current['roles'], {**old['roles'], 'auth': 'marty-auth', 'flow': 'marty-flow',

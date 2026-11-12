@@ -7,7 +7,7 @@ const runtime=require('./functional-debug-runtime');
 const SOURCE='6117cea9290f57406cf109eae56f64f7986e3783';
 const CORE='ffa24febcd0fb3fced15da7f28190af6d61ae0f9';
 const ROLES=Object.freeze({flow:'marty-flow',gateway:'marty-gateway','issuance-native':'marty-issuance-service'});
-const CURRENT10=Object.freeze({profile:'d05-membership-current-functional',source:'1c4e58446728d45f7149d33de46659f088dc5f77',core:'ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca',roles:Object.freeze({'presentation-policy':'marty-presentation-policy','credential-template':'marty-credential-template','trust-profile':'marty-trust-profile','compliance-profile':'marty-compliance-profile','signing-keys':'marty-signing-keys',gateway:'marty-gateway',auth:'marty-auth',flow:'marty-flow','issuance-native':'marty-issuance-service',organization:'marty-organization'})});
+const CURRENT10=Object.freeze({profile:'d05-membership-current-functional',source:'47e42c7f61e150e1ece953e02b4041324b6bdea4',core:'ab91a6fd97b2483965e8cb966c3b2e3ddeedf1ca',roles:Object.freeze({'presentation-policy':'marty-presentation-policy','credential-template':'marty-credential-template','trust-profile':'marty-trust-profile','compliance-profile':'marty-compliance-profile','signing-keys':'marty-signing-keys',gateway:'marty-gateway',auth:'marty-auth',flow:'marty-flow','issuance-native':'marty-issuance-service',organization:'marty-organization'})});
 const HASH=/^[a-f0-9]{64}$/;
 function observe({before:beforeRef,selection:selectionRef,created:createdRef,startAcks:acksRef,runId,engineId},{readDocker}={}){
  assert.equal(typeof readDocker,'function','ACTUAL_DOCKER_TRANSPORT_REQUIRED');
