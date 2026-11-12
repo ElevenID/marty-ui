@@ -568,3 +568,14 @@ witness, requires every other application ledger unchanged, and retains the
 entire Keycloak and applicants catalog/ledger profiles. It checks inventory and
 aggregate integrity. This ledger comparison does not qualify application
 catalog changes, ordinary rows, writer quiescence or product/native admission.
+
+`quiescence_snapshot` separately refuses any other PostgreSQL client session
+in the cluster, including idle clients and connections to the default database,
+as well as prepared transactions, configured subscriptions and replication
+sessions. Logical apply, parallel and unknown extension backend types are
+refused; only reviewed built-in maintenance types are exempt. Two fresh read-only
+observations require a primary server and the exact database inventory. Only
+counts, database names and clocks are returned. The enclosing owner must also
+prove its runtime writer cohort remains stopped and repeat this check before
+schema write boundaries. These observations do not block future external
+connections, disconnect clients, authorize SQL or replace runtime ownership.

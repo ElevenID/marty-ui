@@ -91,6 +91,58 @@ def test_detailed_snapshot_still_refuses_inter_observation_drift(monkeypatch):
     with pytest.raises(ValueError):probe.detailed_schema_snapshot(docker, [item('postgres')], PROJECT)
 
 
+def quiescent():
+    return {'database_clock': '2026-11-12T00:00:00+00:00', 'primary': True,
+            'databases': ['keycloak', 'marty', 'marty_applicants'], 'client_backends': 0,
+            'prepared_transactions': 0, 'replication_backends': 0, 'subscriptions': 0, 'unqualified_backends': 0}
+
+
+def test_quiescence_requires_two_fresh_readonly_cluster_observations(monkeypatch):
+    calls = []
+    def text(docker, args):
+        calls.append(args)
+        assert args[-1] == probe.QUIESCENCE_SQL and args[-3] == 'postgres'
+        assert probe.PG_OPTIONS in args
+        value = quiescent();value['database_clock'] = '2026-11-12T00:00:0'+str(len(calls))+'+00:00'
+        return json.dumps(value)
+    monkeypatch.setattr(probe, '_text', text)
+    result = probe.quiescence_snapshot(Postgres(), [item('postgres')], PROJECT)
+    assert len(calls) == len(result['observations']) == 2
+    assert result['product_transition_admission'] is False and result['native_admission'] is False
+    assert result['postgres_id'] == 'a'*64
+    assert 'pg_prepared_xacts' in probe.QUIESCENCE_SQL
+    assert 'pg_subscription' in probe.QUIESCENCE_SQL
+    assert 'backend_type NOT IN' in probe.QUIESCENCE_SQL
+    assert "'logical replication worker'" not in probe.QUIESCENCE_SQL  # Not maintenance-allowlisted.
+    assert "'parallel worker'" not in probe.QUIESCENCE_SQL
+    assert "backend_type='client backend'" in probe.QUIESCENCE_SQL
+    assert 'state=' not in probe.QUIESCENCE_SQL  # Idle connections are also refused.
+
+
+@pytest.mark.parametrize('fault', ['client_backends', 'prepared_transactions', 'replication_backends', 'subscriptions', 'unqualified_backends',
+    'boolean-count', 'negative-count', 'missing-count', 'standby', 'extra-database', 'duplicate-database',
+    'extra-evidence', 'clock', 'naive-clock', 'backward-clock', 'second-observation-client'])
+def test_quiescence_refuses_writers_or_malformed_evidence(monkeypatch, fault):
+    calls = []
+    def text(*_args):
+        calls.append(True);value = quiescent()
+        if fault in {'client_backends', 'prepared_transactions', 'replication_backends', 'subscriptions', 'unqualified_backends'}:value[fault] = 1
+        elif fault == 'boolean-count':value['client_backends'] = False
+        elif fault == 'negative-count':value['client_backends'] = -1
+        elif fault == 'missing-count':del value['prepared_transactions']
+        elif fault == 'standby':value['primary'] = False
+        elif fault == 'extra-database':value['databases'].append('unknown')
+        elif fault == 'duplicate-database':value['databases'].append('marty')
+        elif fault == 'extra-evidence':value['query'] = 'raw query must not be accepted'
+        elif fault == 'clock':value['database_clock'] = 'invalid'
+        elif fault == 'naive-clock':value['database_clock'] = '2026-11-12T00:00:00'
+        elif fault == 'backward-clock' and len(calls) == 2:value['database_clock'] = '2026-11-11T00:00:00+00:00'
+        elif fault == 'second-observation-client' and len(calls) == 2:value['client_backends'] = 1
+        return json.dumps(value)
+    monkeypatch.setattr(probe, '_text', text)
+    with pytest.raises(ValueError):probe.quiescence_snapshot(Postgres(), [item('postgres')], PROJECT)
+
+
 @pytest.mark.parametrize('fault', ['duplicate-database', 'database-shape', 'database-injection', 'raw-catalog',
                                   'no-ledger', 'ledger-injection', 'raw-ledger', 'alembic', 'flyway', 'snapshot-drift',
                                   'foreign-table', 'event-trigger'])

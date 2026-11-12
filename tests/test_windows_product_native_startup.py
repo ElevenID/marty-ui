@@ -449,6 +449,9 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             time.sleep(0.5)
         else:
             raise RuntimeError("Owned PostgreSQL did not become ready")
+        # Empty synthetic companion databases allow the cluster-wide quiet
+        # probe to use its exact three-database production profile shape.
+        sql('CREATE DATABASE keycloak; CREATE DATABASE marty_applicants;')
         redis = run(
             redis_image,
             "redis",
@@ -661,6 +664,16 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
         ).strip() == str(len(role_ids))
         before_columns = json.loads(sql(COLUMN_HASHES))
         items = [owned(cid)]
+        quiet_before = membership.probe.quiescence_snapshot(Docker(), items, PROJECT, profile=profile)
+        assert quiet_before['product_transition_admission'] is False
+        # Exercise the actual SQL classifier on synthetic backend rows without
+        # starting a subscriber or installing an extension/background worker.
+        for backend in ('logical replication worker', 'parallel worker', 'unreviewed extension worker'):
+            activity = "FROM (VALUES (pg_backend_pid()+1,'"+backend+"'::text)) AS synthetic_activity(pid,backend_type)"
+            classified = json.loads(sql(membership.probe.QUIESCENCE_SQL.replace('FROM pg_stat_activity', activity)))
+            assert classified['unqualified_backends'] == 1
+            assert classified['client_backends'] == classified['replication_backends'] == 0
+        REPORT['checks'].append('logical apply, parallel and unknown extension backend SQL classifier refuses')
         prior = {
             "membership": membership.capture(Docker(), items, PROJECT, profile=profile),
             "startup": startup.capture(
@@ -786,6 +799,9 @@ CREATE MATERIALIZED VIEW synthetic_retained.account_summary AS SELECT count(*) A
             ]
         }
         profile_after = detailed_fixture_ledgers()
+        quiet_after = membership.probe.quiescence_snapshot(Docker(), items, PROJECT, profile=profile)
+        assert quiet_after['product_transition_admission'] is False
+        REPORT['checks'].append('cluster quiescence observed twice before and after native changes')
         for name, witness in after['ledger']['ledgers'].items():
             assert profile_after['migration_ledgers'][name] == witness['rows_sha256']
         for name in fixture_ledgers:

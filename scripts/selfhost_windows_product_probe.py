@@ -6,6 +6,7 @@ Postgres computes catalog/ledger hashes inside read-only sessions; its ordinary
 application rows are not copied, backed up or migrated by these probes.
 """
 import hashlib
+import datetime
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -69,6 +70,19 @@ SCHEMA = 'marty.windows-postgres-schema/v2'
 PROBE = 'catalog-and-source-ledger-profile/v2'
 PROFILE_ID = 'marty-selfhost-ledgers/v1'
 CONSISTENCY = 'per-database-repeatable-read;two-equal-observations'
+QUIESCENCE_SQL = """SELECT jsonb_build_object(
+'database_clock',clock_timestamp(),'primary',NOT pg_is_in_recovery(),
+'databases',("""+DATABASES_SQL+"""),
+'client_backends',(SELECT count(*) FROM pg_stat_activity
+WHERE pid <> pg_backend_pid() AND backend_type='client backend'),
+'prepared_transactions',(SELECT count(*) FROM pg_prepared_xacts),
+'subscriptions',(SELECT count(*) FROM pg_subscription),
+'replication_backends',(SELECT count(*) FROM pg_stat_activity
+WHERE backend_type IN ('walsender','walreceiver')),
+'unqualified_backends',(SELECT count(*) FROM pg_stat_activity
+WHERE pid <> pg_backend_pid() AND (backend_type IS NULL OR backend_type NOT IN (
+'client backend','walsender','walreceiver','autovacuum launcher','autovacuum worker',
+'background writer','checkpointer','archiver','walwriter','walsummarizer','logical replication launcher'))))"""
 APPLICATION_LEDGERS = frozenset({
     ('auth_service', 'rust_schema_versions'), ('compliance_profile_service', 'native_migrations'),
     ('credential_template_service', 'rust_schema_versions'), ('deployment_profile_service', 'native_migrations'),
@@ -279,6 +293,47 @@ def detailed_schema_snapshot(docker, items, project, *, profile=LedgerProfile())
     keep exactly their former shape and meaning.
     """
     return _schema_snapshot(docker, items, project, profile=profile, detailed=True)
+
+
+def quiescence_snapshot(docker, items, project, *, profile=LedgerProfile()):
+    """Refuse remaining PostgreSQL writers; never stop or disconnect anyone.
+
+    The execution owner must also keep its exact runtime writer cohort stopped
+    and repeat this check at write boundaries. Zero observations do not prevent
+    future connections by an external administrator, nor grant SQL admission.
+    Client counts cover the whole cluster, including idle/default-DB clients.
+    Prepared transactions, subscriptions, replication sessions and unreviewed
+    background workers must also be absent. Only built-in maintenance types
+    are exempt; logical/parallel apply and extension workers are not exempt.
+    """
+    require(type(profile) is LedgerProfile)
+    postgres = owned_role(items, project, 'postgres')
+    base = _postgres_base(items, project)
+    observations = []
+    deadline = time.monotonic()+65
+    for _index in range(2):
+        require(time.monotonic() < deadline)
+        value = json.loads(_text(docker, [*base, '--dbname', 'postgres', '--command', QUIESCENCE_SQL]))
+        require(type(value) is dict and set(value) == {'database_clock', 'primary', 'databases',
+            'client_backends', 'prepared_transactions', 'replication_backends', 'subscriptions', 'unqualified_backends'})
+        require(value['primary'] is True and type(value['databases']) is list
+                and all(type(name) is str for name in value['databases'])
+                and len(value['databases']) == len(set(value['databases']))
+                and set(value['databases']) == set(profile.tables))
+        require(all(type(value[key]) is int and value[key] == 0
+                    for key in ('client_backends', 'prepared_transactions', 'replication_backends',
+                                'subscriptions', 'unqualified_backends')),
+                'Database is not quiescent; retain the guarded attempt')
+        require(type(value['database_clock']) is str)
+        clock = datetime.datetime.fromisoformat(value['database_clock'].replace('Z', '+00:00'))
+        require(clock.year > 1 and clock.tzinfo is not None)
+        require(not observations or clock >= datetime.datetime.fromisoformat(
+            observations[-1]['database_clock'].replace('Z', '+00:00')))
+        observations.append(value)
+    require(time.monotonic() < deadline)
+    return {'schema': 'marty.windows-postgres-quiescence/v1', 'project': project,
+            'postgres_id': postgres['Id'], 'observations': observations,
+            'product_transition_admission': False, 'native_admission': False}
 
 
 def _schema_snapshot(docker, items, project, *, profile, detailed):
