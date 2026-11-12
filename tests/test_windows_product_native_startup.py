@@ -4,7 +4,8 @@ Opt-in images and an exact local engine are required. Every database is new
 synthetic tmpfs storage on a private internal network, without host ports/binds.
 The once-started stock case must fail the membership-only proof because native
 legacy normalization also changes formats and display metadata. A previously
-reconciled stock case agrees with these three limited witnesses. Neither proves
+reconciled stock case agrees with the limited witnesses, including explicit
+system-catalog timestamp cohorts and retained customer-row checks. Neither proves
 all retained startup data or authorizes the product transition.
 """
 
@@ -25,6 +26,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import selfhost_windows_product_schema as membership  # noqa: E402
 import selfhost_windows_product_ledger as ledger  # noqa: E402
 import selfhost_windows_product_catalog as catalog  # noqa: E402
+import selfhost_windows_product_startup as startup  # noqa: E402
 
 
 @pytest.mark.skipif(
@@ -243,6 +245,34 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             input=s.encode(),
         ).decode()
 
+    def all_table_fingerprints():
+        # All native fixture processes are stopped at each observation. Ordinary
+        # row values remain inside this synthetic PostgreSQL instance.
+        tables = json.loads(
+            sql(
+                "SELECT coalesce(jsonb_agg(jsonb_build_object('schema',schemaname,'table',tablename) ORDER BY schemaname,tablename),'[]') FROM pg_tables WHERE schemaname IN ('credential_template_service','issuance_service','trust_profile_service','organization_service','synthetic_retained');"
+            )
+        )
+        require(len(tables) <= 256)
+        result = {}
+        for entry in tables:
+            require(
+                all(
+                    re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", entry[k])
+                    for k in ["schema", "table"]
+                )
+            )
+            table = '"' + entry["schema"] + '"."' + entry["table"] + '"'
+            query = (
+                "SELECT jsonb_build_object('rows',count(*),'sha256',encode(sha256(convert_to(coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb)::text,'UTF8')),'hex')) FROM "
+                + table
+                + " t;"
+            )
+            value = json.loads(sql(query))
+            require(value["rows"] <= 2048)
+            result[entry["schema"] + "." + entry["table"]] = value
+        return result
+
     class Docker:
         prefix = ["docker"]
 
@@ -421,10 +451,64 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         )
         remove(migration)
         REPORT["checks"].append("old issuance native migrate with seed")
+        # Customer rows must not inherit a built-in row's timestamp allowance.
+        for table, patch in [
+            (
+                "credential_template_service.wallet_registry",
+                {
+                    "id": "wr-fixture-customer",
+                    "name": "Customer fixture wallet",
+                    "organization_id": "00000000-0000-0000-0000-000000000002",
+                },
+            ),
+            (
+                "credential_template_service.delivery_destinations",
+                {
+                    "id": "dd-fixture-customer",
+                    "name": "Customer fixture destination",
+                    "organization_id": "00000000-0000-0000-0000-000000000002",
+                    "is_system": False,
+                },
+            ),
+            (
+                "trust_profile_service.issuer_entities",
+                {
+                    "id": "80000000-0000-0000-0000-000000000001",
+                    "issuer_id": "did:web:customer.startup-qa.invalid",
+                    "display_name": "Customer fixture issuer",
+                    "organization_id": "00000000-0000-0000-0000-000000000002",
+                    "metadata": {},
+                },
+            ),
+        ]:
+            literal = json.dumps(patch).replace("'", "''")
+            sql(
+                "INSERT INTO "
+                + table
+                + " SELECT (jsonb_populate_record(NULL::"
+                + table
+                + ",to_jsonb(candidate)||'"
+                + literal
+                + "'::jsonb)).* FROM "
+                + table
+                + " candidate ORDER BY id LIMIT 1;"
+            )
+        sql(
+            "CREATE SCHEMA synthetic_retained; CREATE TABLE synthetic_retained.accounts(id text PRIMARY KEY,email text NOT NULL,payload jsonb NOT NULL); INSERT INTO synthetic_retained.accounts VALUES('synthetic-account','qa-account@startup-qa.invalid','{\"keep\":true}');"
+        )
+        before_all = all_table_fingerprints()
         before_columns = json.loads(sql(COLUMN_HASHES))
         items = [owned(cid)]
         prior = {
             "membership": membership.capture(Docker(), items, PROJECT, profile=profile),
+            "startup": startup.capture(
+                Docker(),
+                items,
+                PROJECT,
+                organization_id="00000000-0000-0000-0000-000000000001",
+                issuer_did="did:web:startup-qa.invalid:orgs:marty",
+                profile=profile,
+            ),
             "ledger": ledger.capture(Docker(), items, PROJECT, profile=profile),
             "catalog": catalog.capture(Docker(), items, PROJECT, profile=profile),
         }
@@ -451,13 +535,14 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         after = {
             name: json.loads(
                 sql(
-                    membership.after_sql(prior[name])
-                    if name == "membership"
+                    module.after_sql(prior[name])
+                    if name in {"membership", "startup"}
                     else module.statement(prior[name])
                 )
             )
             for name, module in [
                 ("membership", membership),
+                ("startup", startup),
                 ("ledger", ledger),
                 ("catalog", catalog),
             ]
@@ -465,6 +550,95 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         (OPS / "synthetic-after-witnesses.json").write_text(
             json.dumps(after, indent=2), encoding="utf-8"
         )
+        after_all = all_table_fingerprints()
+        assert set(after_all) == set(before_all) | {
+            "trust_profile_service.credential_authority_revisions"
+        }
+        mutable = {
+            "credential_template_service.credential_templates",
+            "credential_template_service.wallet_registry",
+            "credential_template_service.delivery_destinations",
+            "credential_template_service.rust_schema_versions",
+            "issuance_service.application_templates",
+            "issuance_service.rust_schema_migrations",
+            "trust_profile_service.issuer_entities",
+            "trust_profile_service.native_migrations",
+            "trust_profile_service.credential_authority_revisions",
+        }
+        changed = {
+            table for table in after_all if before_all.get(table) != after_all[table]
+        }
+        assert changed == mutable
+        assert (
+            after_all["trust_profile_service.credential_authority_revisions"]["rows"]
+            == 0
+        )
+        for table in set(before_all) - mutable:
+            assert before_all[table] == after_all[table], table
+        REPORT["observed_tables"] = len(after_all)
+        REPORT["changed_tables"] = sorted(changed)
+        # The new witness must still refuse any non-timestamp/customer change.
+        for table, column, key in [
+            (
+                "credential_template_service.wallet_registry",
+                "name",
+                "wr-fixture-customer",
+            ),
+            (
+                "credential_template_service.delivery_destinations",
+                "name",
+                "dd-fixture-customer",
+            ),
+            (
+                "trust_profile_service.issuer_entities",
+                "display_name",
+                "80000000-0000-0000-0000-000000000001",
+            ),
+        ]:
+            sql(
+                "UPDATE "
+                + table
+                + " SET "
+                + column
+                + "="
+                + column
+                + "||' unexpected' WHERE id::text='"
+                + key
+                + "';"
+            )
+            with pytest.raises(ValueError):
+                startup.capture(
+                    Docker(),
+                    items,
+                    PROJECT,
+                    organization_id="00000000-0000-0000-0000-000000000001",
+                    issuer_did="did:web:startup-qa.invalid:orgs:marty",
+                    before=prior["startup"],
+                    profile=profile,
+                )
+            sql(
+                "UPDATE "
+                + table
+                + " SET "
+                + column
+                + "=left("
+                + column
+                + ",length("
+                + column
+                + ")-length(' unexpected')) WHERE id::text='"
+                + key
+                + "';"
+            )
+        startup.capture(
+            Docker(),
+            items,
+            PROJECT,
+            organization_id="00000000-0000-0000-0000-000000000001",
+            issuer_did="did:web:startup-qa.invalid:orgs:marty",
+            before=prior["startup"],
+            profile=profile,
+        )
+        REPORT["checks"].append("three customer payload mutations refused and restored")
         after_columns = json.loads(sql(COLUMN_HASHES))
         REPORT["membership_changed_columns"] = sorted(
             k for k in before_columns if before_columns[k] != after_columns.get(k)
@@ -472,6 +646,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         REPORT["witness_failures"] = []
         for name, module in [
             ("membership", membership),
+            ("startup", startup),
             ("ledger", ledger),
             ("catalog", catalog),
         ]:

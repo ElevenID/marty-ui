@@ -439,3 +439,14 @@ the `MARTY_PRODUCT_NATIVE_TEST_OLD_IMAGE`, `NEW_IMAGE`, `OLD_SOURCE`, and
 Images must already be cached immutable services references; source values must
 match their revision labels. Run only with disposable test state. This test
 never selects or deploys those images in production.
+
+
+`selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
+ten built-in wallets, four built-in delivery destinations and the configured
+tenant's Marty issuer. It masks only those existing rows' `updated_at`, requires
+exact row identities/counts and database-time bounds, and retains every other
+physical field and customer row in the opaque comparison. The native fixture
+also fingerprints all tables in its exercised schemas and tests customer-data
+tampering. This remains evidence for the full startup transition, not permission
+to run migrations or bypass product admission; the deployment owner does not
+consume this fragment yet.
