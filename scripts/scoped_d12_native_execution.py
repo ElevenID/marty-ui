@@ -66,8 +66,12 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
 
 
 class D12CurrentExecution:
-    def __init__(self, context, inputs, journal):
+    def __init__(self, context, inputs, journal, *, read_only_preflight=False):
         self.g, self.i, self.store = context, inputs, journal
+        require(type(read_only_preflight) is bool, "D12_PREFLIGHT_MODE_REQUIRED")
+        self.read_only_preflight = read_only_preflight
+        require(not read_only_preflight or getattr(journal, "read_only", False) is True,
+                "D12_READ_ONLY_OPERATION_JOURNAL_REQUIRED")
         from scoped_native_profiles import current_rollout_build
         self.profile = inputs.get("rolloutProfile", CURRENT_PROFILE)
         self.build_profile = current_rollout_build(self.profile)
@@ -80,6 +84,7 @@ class D12CurrentExecution:
                       "releaseQualified": False, "recordingQualified": False, "steps": []}
 
     def record(self, phase, **fields):
+        require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_INTENT")
         self.state.update(phase=phase, **fields)
         require(durable_barrier(self.store.state(self.state)), "D12_DURABLE_STATE_REQUIRED")
 
@@ -187,7 +192,8 @@ class D12CurrentExecution:
         overlay.validate_delta(base, after_model, selection["binaries"], self.profile,native_preimage=self.native_preimage)
         overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
                                            self.profile, list(self.roles), no_start=True)
-        database = D12CurrentDatabasePhase(g, i, self.store)
+        database = (D12CurrentDatabasePhase(g, i, self.store, read_only_preflight=True)
+                    if self.read_only_preflight else D12CurrentDatabasePhase(g, i, self.store))
         database._check_current_compatibility(selection, i["compatibility"]["plan"],
                                                i["compatibility"]["result"])
         if self.profile == "d05-membership-current-functional":
@@ -197,6 +203,7 @@ class D12CurrentExecution:
         return database, before, preview, overlay_ref
 
     def run(self):
+        require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
         database, before, preview, overlay_ref = self.preflight()
         i, g = self.i, self.g
         intent = {"schema": "marty.d12-current-apply-intent/v1", "runId": i["runId"],

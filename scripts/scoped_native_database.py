@@ -213,6 +213,8 @@ class NativeDatabasePhase:
         self.schema_records = {}
 
     def result(self, args, *, input=None):
+        if getattr(self, "read_only_preflight", False):
+            self._require_read_only_preflight_command(args, input)
         self.g["assert_inputs"](rollback=False)
         require(args and args[0] == "docker", "EXACT_DOCKER_COMMAND_REQUIRED")
         docker = read_executable_ref(self.i["executables"]["docker"])
@@ -230,6 +232,8 @@ class NativeDatabasePhase:
         return self.result(args, **kwargs).stdout
 
     def node(self, mode, **payload):
+        require(not getattr(self, "read_only_preflight", False) or mode == "baseline",
+                "D12_READ_ONLY_PREFLIGHT_METADATA_MODE_REFUSED")
         self.g["assert_inputs"](rollback=False)
         request = self.g["save"]("metadata-request-" + mode + "-" + str(len(self.state["operations"])) + ".json",
             {"mode": mode, "profile": self.rollout_profile,
@@ -258,6 +262,8 @@ class NativeDatabasePhase:
         return row
 
     def persist(self):
+        require(not getattr(self, "read_only_preflight", False),
+                "D12_READ_ONLY_PREFLIGHT_NO_DATABASE_INTENT")
         proof = self.store.state(self.state)
         require(durable_barrier(proof), "DURABLE_DATABASE_STATE_REQUIRED")
         return proof
@@ -518,7 +524,11 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
     scope_error = "CLOSED_D12_CURRENT_DATABASE_SCOPE_REQUIRED"
     selection_error = "EXACT_D12_CURRENT_SELECTION_REQUIRED"
 
-    def __init__(self, context, inputs, store):
+    def __init__(self, context, inputs, store, *, read_only_preflight=False):
+        require(type(read_only_preflight) is bool, "D12_PREFLIGHT_MODE_REQUIRED")
+        self.read_only_preflight = read_only_preflight
+        require(not read_only_preflight or getattr(store, "read_only", False) is True,
+                "D12_READ_ONLY_OPERATION_JOURNAL_REQUIRED")
         from scoped_native_profiles import current_rollout_build
         from scoped_passport_successor import CURRENT_PROFILE, select_current_binaries
         self.rollout_profile = inputs.get("rolloutProfile", CURRENT_PROFILE)
@@ -591,6 +601,18 @@ class D12CurrentDatabasePhase(NativeDatabasePhase):
                     "D12_RUNTIME_IMAGE_COMPATIBILITY_REQUIRED")
         return proof
 
+    def _require_read_only_preflight_command(self, args, stdin):
+        """Only the existing identity reads and exact tenant transaction may run."""
+        cid = self.identity["containerId"]
+        identity = args in (["docker", "info", "--format", "{{.ID}}"],
+                            ["docker", "inspect", cid]) and stdin is None
+        tenant = (self.rollout_profile == "d05-membership-current-functional"
+                  and args == ["docker", "exec", "-i", cid, "psql", "-X", "-qAt",
+                               "-U", "postgres", "-d", "marty", "-v", "ON_ERROR_STOP=1",
+                               "-v", "tenant=" + self.tenant_id, "-f", "-"]
+                  and stdin == CURRENT_TEN_TENANT_READ_ONLY_SQL)
+        require(identity or tenant, "D12_READ_ONLY_PREFLIGHT_COMMAND_REFUSED")
+
 
 def current_ten_startup_schema_observation(database):
     """Observe owned ledgers after the real native startup validators and health succeed."""
@@ -621,11 +643,14 @@ ROLLBACK;
             "stderr":database.g["save_bytes"]("current-ten-startup-schema.stderr",result.stderr),"projection":value}
 
 
+CURRENT_TEN_TENANT_READ_ONLY_SQL = b"BEGIN READ ONLY; SELECT json_build_object('tenantId', :'tenant', 'exists', EXISTS(SELECT 1 FROM organization_service.organizations WHERE id=:'tenant'::uuid)); ROLLBACK;\n"
+
+
 def current_ten_tenant_observation(database):
     """Refuse a missing selected tenant before the first mutation; no bootstrap inference."""
     require(database.rollout_profile=="d05-membership-current-functional", "CURRENT_TEN_PROFILE_REQUIRED")
     database.guard()
-    sql=b"BEGIN READ ONLY; SELECT json_build_object('tenantId', :'tenant', 'exists', EXISTS(SELECT 1 FROM organization_service.organizations WHERE id=:'tenant'::uuid)); ROLLBACK;\n"
+    sql=CURRENT_TEN_TENANT_READ_ONLY_SQL
     source=database.g["save_bytes"]("current-ten-tenant-preflight.sql",sql)
     result=database.result(["docker","exec","-i",database.identity["containerId"],"psql","-X","-qAt","-U","postgres","-d","marty","-v","ON_ERROR_STOP=1","-v","tenant="+database.tenant_id,"-f","-"],input=sql)
     database.guard()
