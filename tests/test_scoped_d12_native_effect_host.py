@@ -363,3 +363,44 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE28_VERIFIER_FAILED|D12_RESOURCE28_AND_NATIVE22_DIVERGED"):
             owner.context()["authorization_verified"](ref(authority))
         assert not (private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").exists()
+
+@pytest.mark.parametrize("shape", ["historical", "current", "extra", "wrong-engine", "writes-true", "writes-zero", "missing-engine", "missing-writes"])
+def test_database_preimage_closed_metadata_shape_preserves_observed_proof(tmp_path, shape):
+    from types import SimpleNamespace
+    engine = "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341"
+    identity = {"containerId": "a" * 64, "imageId": "sha256:" + "b" * 64,
+                "startedAt": "2026-11-11T14:54:24Z", "hostPid": 5202,
+                "project": "elevenid-beta", "service": "postgres"}
+    frozen = {"databaseIdentity": identity}
+    if shape != "historical":
+        frozen.update(engineId=engine, runtimeWrites=False)
+    if shape == "extra": frozen["unbound"] = True
+    if shape == "wrong-engine": frozen["engineId"] = "foreign"
+    if shape == "writes-true": frozen["runtimeWrites"] = True
+    if shape == "writes-zero": frozen["runtimeWrites"] = 0
+    if shape == "missing-engine": frozen.pop("engineId")
+    if shape == "missing-writes": frozen.pop("runtimeWrites")
+    path = tmp_path / "database.json"
+    path.write_text(json.dumps(frozen))
+    calls = []
+    def read(args):
+        calls.append(args)
+        if args == ["info", "--format", "{{.ID}}"]:
+            return engine.encode()
+        assert args == ["inspect", identity["containerId"]]
+        return json.dumps([{"Id": identity["containerId"], "Image": identity["imageId"],
+            "Config": {"Labels": {"com.docker.compose.project": "elevenid-beta",
+                                  "com.docker.compose.service": "postgres"}},
+            "State": {"StartedAt": identity["startedAt"], "Pid": identity["hostPid"],
+                      "Running": True, "Status": "running", "Paused": False,
+                      "OOMKilled": False, "Health": {"Status": "healthy"}}}]).encode()
+    observer = D12CurrentEffectObserver.__new__(D12CurrentEffectObserver)
+    observer.host = SimpleNamespace(engine_id=engine, _recheck_source=lambda: None, _docker=read)
+    if shape in ("historical", "current"):
+        assert observer.database_snapshot(ref(path)) == frozen
+        assert calls == [["info", "--format", "{{.ID}}"], ["inspect", identity["containerId"]],
+                         ["info", "--format", "{{.ID}}"]]
+    else:
+        with pytest.raises(ValueError, match="D12_DATABASE_PREIMAGE"):
+            observer.database_snapshot(ref(path))
+        assert not calls

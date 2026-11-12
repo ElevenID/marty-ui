@@ -171,8 +171,12 @@ class D12CurrentEffectObserver:
         This identity read does not substitute for resource or catalog proof.
         """
         frozen = json.loads(read_ref(database_ref).read_bytes())
-        require(isinstance(frozen, dict) and set(frozen) == {"databaseIdentity"},
+        require(isinstance(frozen, dict) and set(frozen) in (
+                    {"databaseIdentity"}, {"databaseIdentity", "engineId", "runtimeWrites"}),
                 "D12_DATABASE_PREIMAGE_REQUIRED")
+        if "engineId" in frozen:
+            require(frozen["engineId"] == self.host.engine_id and frozen["runtimeWrites"] is False,
+                    "D12_DATABASE_PREIMAGE_METADATA_CHANGED")
         bound = frozen["databaseIdentity"]
         require(isinstance(bound, dict) and set(bound) ==
                 {"containerId", "imageId", "startedAt", "hostPid", "project", "service"}
@@ -199,7 +203,7 @@ class D12CurrentEffectObserver:
                 and state.get("Health", {}).get("Status") == "healthy",
                 "D12_DATABASE_GENERATION_OR_HEALTH_CHANGED")
         self._engine()
-        return {"databaseIdentity": identity}
+        return {**frozen, "databaseIdentity": identity}
 
     def bind_created_after_ack(self, step, state):
         if step != "CREATE_SELECTED":

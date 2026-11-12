@@ -100,14 +100,21 @@ def hold_storage_namespace(path: Path):
     keep receiving normal application writes while their names are held.
     """
     require(os.name == 'nt')
+    body_error = None
     try:
         path = Path(path)
         with ExitStack() as stack:
             for parent in reversed(path.parents):
                 stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
             stack.enter_context(_held_private_input(path, directory=path.is_dir(), ancestor=True))
-            yield
-    except (OSError, ValueError, TypeError):
+            try:
+                yield
+            except BaseException as error:
+                body_error = error
+                raise
+    except (OSError, ValueError, TypeError) as error:
+        if error is body_error:
+            raise
         raise ValueError(REFUSAL) from None
 
 
@@ -120,6 +127,7 @@ def hold_private_input(path: Path, *, max_bytes: int = MAX_BYTES, exclusive: boo
     another coordinator cannot acquire it even when its lock file is empty.
     """
     require(os.name == "nt")
+    body_error = None
     try:
         path = Path(path)
         require(type(max_bytes) is int and 0 < max_bytes <= 256 * 1024 * 1024
@@ -129,8 +137,14 @@ def hold_private_input(path: Path, *, max_bytes: int = MAX_BYTES, exclusive: boo
                 stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
             data = stack.enter_context(_held_private_input(
                 path, max_bytes=max_bytes, exclusive=exclusive))
-            yield data
-    except (OSError, UnicodeError, ValueError, TypeError):
+            try:
+                yield data
+            except BaseException as error:
+                body_error = error
+                raise
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        if error is body_error:
+            raise
         raise ValueError(REFUSAL) from None
 
 
@@ -143,6 +157,7 @@ def hold_public_input(path: Path, *, max_bytes: int = MAX_BYTES):
     This API neither admits secrets nor changes an ACL.
     """
     require(os.name == "nt")
+    body_error = None
     try:
         path = Path(path)
         require(type(max_bytes) is int and 0 < max_bytes <= 256 * 1024 * 1024)
@@ -150,8 +165,14 @@ def hold_public_input(path: Path, *, max_bytes: int = MAX_BYTES):
             for parent in reversed(path.parents):
                 stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
             data = stack.enter_context(_held_private_input(path,max_bytes=max_bytes,public_file=True))
-            yield data
-    except (OSError, UnicodeError, ValueError, TypeError):
+            try:
+                yield data
+            except BaseException as error:
+                body_error = error
+                raise
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        if error is body_error:
+            raise
         raise ValueError("Windows public immutable input is absent or changed") from None
 
 
@@ -166,6 +187,7 @@ def hold_private_generation(root: Path, names: list[str]):
     No file is created or rewritten and no ACL is changed.
     """
     require(os.name == "nt")
+    body_error = None
     try:
         root = Path(root)
         require(isinstance(names, list) and 0 < len(names) <= 512
@@ -183,10 +205,16 @@ def hold_private_generation(root: Path, names: list[str]):
             data = {name: stack.enter_context(_held_private_input(root / name))
                     for name in names}
             try:
-                yield data
+                try:
+                    yield data
+                except BaseException as error:
+                    body_error = error
+                    raise
             finally:
                 require({p.name for p in root.iterdir()} == set(names))
-    except (OSError, UnicodeError, ValueError, TypeError):
+    except (OSError, UnicodeError, ValueError, TypeError) as error:
+        if error is body_error:
+            raise
         raise ValueError(REFUSAL) from None
 
 
