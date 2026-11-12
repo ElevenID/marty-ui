@@ -1,0 +1,6 @@
+{
+  "schema": "marty.immutable-source-authority/v1",
+  "repository": "ElevenID/marty-ui",
+  "scope": "release-program-and-policy/v1",
+  "history_limit": 128
+}
