@@ -10,6 +10,7 @@ all retained startup data or authorizes the product transition.
 """
 
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -82,6 +83,10 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         "production_admission": False,
         "production_data_used": False,
         "old_restart_before_baseline": RETAINED_RESTART,
+        "engine_id": ENGINE,
+        "native_sources": {"old": OLD_SOURCE, "new": NEW_SOURCE},
+        "native_images": {"old": OLD, "new": NEW},
+        "fixture_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "checks": [],
     }
 
@@ -181,7 +186,10 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "ES_GRPC_TARGET": "http://unavailable-events:9010",
             "ES_GRPC_TIMEOUT_SECONDS": "1",
             "MARTY_ORG_ADMIN_EMAIL": "startup-admin@startup-qa.invalid",
+            "DEPLOYMENT_PROFILE_DATABASE_MAX_CONNECTIONS": "2",
         }
+        if role in {"wrong-tenant-deployment", "wrong-tenant-flow"}:
+            env["MARTY_ORG_ID"] = "00000000-0000-0000-0000-000000000002"
         for k, v in env.items():
             options += ["--env", k + "=" + v]
         cid = cmd([*options, "--entrypoint", entry, image, *args]).decode().strip()
@@ -259,7 +267,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         # row values remain inside this synthetic PostgreSQL instance.
         tables = json.loads(
             sql(
-                "SELECT coalesce(jsonb_agg(jsonb_build_object('schema',schemaname,'table',tablename) ORDER BY schemaname,tablename),'[]') FROM pg_tables WHERE schemaname IN ('credential_template_service','issuance_service','trust_profile_service','organization_service','synthetic_retained');"
+                "SELECT coalesce(jsonb_agg(jsonb_build_object('schema',schemaname,'table',tablename) ORDER BY schemaname,tablename),'[]') FROM pg_tables WHERE schemaname IN ('credential_template_service','issuance_service','trust_profile_service','organization_service','flow_service','deployment_profile_service','synthetic_retained');"
             )
         )
         require(len(tables) <= 256)
@@ -328,6 +336,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         require("@sha256:" in pg_image)
         pg_info = json.loads(cmd(["image", "inspect", pg_image]))[0]
         IMAGE_IDS[pg_image] = pg_info["Id"]
+        REPORT["image_ids"] = dict(IMAGE_IDS)
         require(
             set(pg_info["Config"].get("Volumes") or {})
             <= {"/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"}
@@ -526,6 +535,17 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         )
         remove(migration)
         REPORT["checks"].append("old issuance native migrate with seed")
+        deployment = run(
+            OLD, "old-deployment", "/usr/local/bin/marty-deployment-profile"
+        )
+        ready(deployment, 8010)
+        remove(deployment)
+        REPORT["checks"].append("old deployment full startup")
+        flow = run(
+            OLD, "old-flow-migrate", "/usr/local/bin/marty-flow", ["migrate"], False
+        )
+        remove(flow)
+        REPORT["checks"].append("old Flow native migrate with retained bootstrap state")
         # Customer rows must not inherit a built-in row's timestamp allowance.
         for table, patch in [
             (
@@ -598,6 +618,19 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "FROM organization_service.roles t;"
         )
         roles_before = json.loads(sql(role_payload_sql))
+        deployment_cohort = (
+            "id='70000000-0000-0000-0000-000000000001' "
+            "AND organization_id='00000000-0000-0000-0000-000000000001'"
+        )
+        deployment_payload_sql = (
+            "SELECT jsonb_build_object('rows',count(*),'sha256',encode(sha256(convert_to("
+            "coalesce(jsonb_agg(CASE WHEN "
+            + deployment_cohort
+            + " THEN to_jsonb(t)-'updated_at' ELSE to_jsonb(t) END ORDER BY id),"
+            "'[]'::jsonb)::text,'UTF8')),'hex')) FROM deployment_profile_service.deployment_profiles t;"
+        )
+        deployment_before = json.loads(sql(deployment_payload_sql))
+        assert deployment_before["rows"] == 1
         assert roles_before["rows"] == len(role_ids)
         assert sql(
             "SELECT count(*) FROM organization_service.roles WHERE " + role_cohort
@@ -654,6 +687,53 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
         )
         remove(migration)
         REPORT["checks"].append("new issuance native migrate")
+        deployment_clock = json.loads(sql("SELECT to_json(clock_timestamp());"))
+        deployment = run(
+            NEW, "new-deployment", "/usr/local/bin/marty-deployment-profile"
+        )
+        ready(deployment, 8010)
+        remove(deployment)
+        assert json.loads(sql(deployment_payload_sql)) == deployment_before
+        assert (
+            json.loads(
+                sql(
+                    "SELECT to_json(count(*)=1 AND bool_and(updated_at >= '"
+                    + deployment_clock.replace("'", "''")
+                    + "'::timestamptz AND updated_at <= clock_timestamp())) FROM "
+                    "deployment_profile_service.deployment_profiles WHERE "
+                    + deployment_cohort
+                )
+            )
+            is True
+        )
+        REPORT["checks"].append(
+            "new deployment full startup retains payload with scoped timestamp"
+        )
+        flow = run(
+            NEW,
+            "new-flow-verify",
+            "/usr/local/bin/marty-flow",
+            ["verify-owned-schema"],
+            False,
+        )
+        remove(flow)
+        REPORT["checks"].append(
+            "new Flow verifies retained schema and tenant without provider startup"
+        )
+        retained_before_rejections = all_table_fingerprints()
+        for role, entry, arguments in [
+            ("wrong-tenant-deployment", "marty-deployment-profile", []),
+            ("wrong-tenant-flow", "marty-flow", ["verify-owned-schema"]),
+        ]:
+            rejected = run(NEW, role, "/usr/local/bin/" + entry, arguments)
+            assert cmd(["wait", rejected], timeout=90).decode().strip() == "1"
+            rejection_log = cmd(["logs", rejected])
+            (OPS / (role + ".log")).write_bytes(rejection_log)
+            assert b"belongs to a different organization" in rejection_log
+            assert owned(rejected)["State"]["OOMKilled"] is False
+            remove(rejected)
+            assert all_table_fingerprints() == retained_before_rejections
+            REPORT["checks"].append(role + " rejected without retained row changes")
         after = {
             name: json.loads(
                 sql(
@@ -677,6 +757,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             "trust_profile_service.credential_authority_revisions"
         }
         mutable = {
+            "deployment_profile_service.deployment_profiles",
             "organization_service.roles",
             "credential_template_service.credential_templates",
             "credential_template_service.wallet_registry",

@@ -450,6 +450,17 @@ change, within the observed database-clock window. Other exercised table rows
 remain in the full opaque comparison. This is retained synthetic data evidence,
 not authenticated console or production transition admission.
 
+Deployment Profile is also started with both native images. Its exact default
+tenant/profile row must retain every payload field except `updated_at`, bounded
+by database time. Flow uses the old native `migrate` command and the new native
+`verify-owned-schema` command; this exercises retained schema and tenant checks,
+not Flow's full provider startup. Both new binaries must reject a different
+configured tenant without changing any retained rows in the exercised schemas.
+The fixture includes Flow and Deployment tables in its opaque row inventory,
+and receipts record source revisions, image references/config IDs, engine ID
+and the executed fixture hash. These remain synthetic execution evidence,
+without production or release admission.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured
