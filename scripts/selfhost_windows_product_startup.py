@@ -1,9 +1,10 @@
-"""Read-only witnesses for three native system-catalog timestamp cohorts.
+"""Read-only witnesses for five native system-catalog timestamp cohorts.
 
 This complements membership, ledger and catalog witnesses. It never executes
 startup, migrations or deployment, and does not grant transition admission.
 Only existing built-in wallet/destination rows and the configured tenant's
-Marty issuer may change updated_at. Every other physical field and row remains
+Marty issuer, system roles and default deployment may change updated_at.
+Every other physical field and row remains
 in the opaque comparison, including customer rows and unknown columns.
 """
 
@@ -15,7 +16,7 @@ import uuid
 import selfhost_windows_product_probe as probe
 import selfhost_windows_product_schema as membership
 
-SCHEMA = "marty.windows-system-startup-timestamps/v1"
+SCHEMA = "marty.windows-system-startup-timestamps/v2"
 WALLETS = (
     "wr-spruce-001",
     "wr-marty-001",
@@ -38,9 +39,14 @@ TABLES = {
     "wallets": "credential_template_service.wallet_registry",
     "destinations": "credential_template_service.delivery_destinations",
     "issuer": "trust_profile_service.issuer_entities",
+    "roles": "organization_service.roles",
+    "deployment": "deployment_profile_service.deployment_profiles",
 }
-COUNTS = {"wallets": len(WALLETS), "destinations": len(DESTINATIONS), "issuer": 1}
+ROLE_NAMES = ("owner", "admin", "access_admin", "catalog_admin", "reviewer", "operator", "viewer", "applicant")
+COUNTS = {"wallets": len(WALLETS), "destinations": len(DESTINATIONS), "issuer": 1,
+          "roles": len(ROLE_NAMES), "deployment": 1}
 ISSUER_ID = "60000000-0000-0000-0000-000000000012"
+DEPLOYMENT_ID = "70000000-0000-0000-0000-000000000001"
 
 
 def require(value):
@@ -88,6 +94,7 @@ def _rows(name, predicate=None):
 
 def before_sql(organization_id, issuer_did):
     organization_id, issuer_did, scope = _scope(organization_id, issuer_did)
+    role_ids = [str(uuid.uuid5(uuid.UUID(organization_id), name)) for name in ROLE_NAMES]
     predicates = {
         "wallets": "candidate.id IN (" + ",".join(map(_literal, WALLETS)) + ")",
         "destinations": "candidate.id IN ("
@@ -102,6 +109,11 @@ def before_sql(organization_id, issuer_did):
         + " OR NOT EXISTS (SELECT 1 FROM trust_profile_service.issuer_entities WHERE id::text="
         + _literal(ISSUER_ID)
         + "))",
+        "roles": "candidate.organization_id::text=" + _literal(organization_id)
+        + " AND candidate.is_system IS TRUE AND candidate.id::text IN ("
+        + ",".join(map(_literal, role_ids)) + ")",
+        "deployment": "candidate.organization_id::text=" + _literal(organization_id)
+        + " AND candidate.id::text=" + _literal(DEPLOYMENT_ID),
     }
     ctes = [name + " AS (" + _rows(name, predicates[name]) + ")" for name in TABLES]
     parts = [
@@ -227,7 +239,7 @@ def validate_delta(before, after):
             and row["observed_sha256"] == prior["expected_after_sha256"]
         )
     return {
-        "schema": "marty.windows-system-startup-timestamp-delta/v1",
+        "schema": "marty.windows-system-startup-timestamp-delta/v2",
         "native_admission": False,
         "product_transition_admission": False,
     }

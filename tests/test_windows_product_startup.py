@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import uuid
 
 import pytest
 
@@ -55,11 +56,31 @@ def test_fixed_selects_scope_only_builtin_rows_and_the_configured_tenant_issuer(
     assert "candidate.organization_id::text='" + ORG + "'" in sql
     assert "candidate.issuer_id='did:web:quote''host'" in sql
     assert all(name in sql for name in (*startup.WALLETS, *startup.DESTINATIONS))
-    assert sql.count("to_jsonb(candidate) AS _cohort_row") == 3
+    assert sql.count("to_jsonb(candidate) AS _cohort_row") == 5
+    assert "candidate.is_system IS TRUE" in sql
+    assert startup.DEPLOYMENT_ID in sql
+    assert all(str(uuid.uuid5(uuid.UUID(ORG), name)) in sql for name in startup.ROLE_NAMES)
     assert not re.search(r"\b(UPDATE|DELETE|INSERT|CREATE|ALTER|DROP)\b", sql, re.I)
     final = startup.after_sql(before())
     assert "_cohort_row-'updated_at'" in final
     assert "updated_at >= '2026-11-12T00:00:00+00:00'::timestamptz" in final
+
+
+def test_role_cohort_is_derived_for_the_exact_configured_organization():
+    other = "00000000-0000-0000-0000-000000000002"
+    sql = startup.before_sql(other, ISSUER)
+    assert all(str(uuid.uuid5(uuid.UUID(other), name)) in sql for name in startup.ROLE_NAMES)
+    assert all(str(uuid.uuid5(uuid.UUID(ORG), name)) not in sql for name in startup.ROLE_NAMES)
+    assert "candidate.organization_id::text='" + other + "'" in sql
+
+
+def test_older_three_cohort_receipt_does_not_silently_admit_new_scope():
+    value = before()
+    value["schema"] = "marty.windows-system-startup-timestamps/v1"
+    value.pop("roles")
+    value.pop("deployment")
+    with pytest.raises(ValueError):
+        startup.after_sql(value)
 
 
 @pytest.mark.parametrize(

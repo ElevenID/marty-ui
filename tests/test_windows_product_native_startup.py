@@ -819,6 +819,8 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
                 "display_name",
                 "80000000-0000-0000-0000-000000000001",
             ),
+            ("organization_service.roles", "name", role_ids[0]),
+            ("deployment_profile_service.deployment_profiles", "name", startup.DEPLOYMENT_ID),
         ]:
             sql(
                 "UPDATE "
@@ -863,7 +865,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
             before=prior["startup"],
             profile=profile,
         )
-        REPORT["checks"].append("three customer payload mutations refused and restored")
+        REPORT["checks"].append("five customer and system payload mutations refused and restored")
         after_columns = json.loads(sql(COLUMN_HASHES))
         REPORT["membership_changed_columns"] = sorted(
             k for k in before_columns if before_columns[k] != after_columns.get(k)

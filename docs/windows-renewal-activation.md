@@ -476,7 +476,11 @@ the complete deployment transition.
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured
-tenant's Marty issuer. It masks only those existing rows' `updated_at`, requires
+tenant's Marty issuer, eight UUIDv5 system roles and exact default deployment.
+The v2 receipt requires all five cohorts and refuses the older three-cohort
+receipt. Role IDs derive from the configured organization; roles must also have
+that organization and `is_system=true`. The deployment must have both the exact
+default ID and configured organization. It masks only those existing rows' `updated_at`, requires
 exact row identities/counts and database-time bounds, and retains every other
 physical field and customer row in the opaque comparison. The native fixture
 also fingerprints all tables in its exercised schemas and tests customer-data
