@@ -109,6 +109,23 @@ D05_MEMBERSHIP_CURRENT = BuildProfile(
 )
 
 
+# Current D05 includes the owner-policy read endpoint and durable login callback
+# chain. Keep the historical six-role product/recipe available unchanged.
+D05_MEMBERSHIP_LATEST = BuildProfile(
+    "d05-membership-current-native-ten-role",
+    "47e42c7f61e150e1ece953e02b4041324b6bdea4",
+    D05_MEMBERSHIP_CURRENT.roles + (("auth", "marty-auth"), ("flow", "marty-flow"),
+                                  ("issuance-native", "marty-issuance-service"),
+                                  ("organization", "marty-organization")),
+    D05_MEMBERSHIP_CURRENT.packages + ("marty-auth", "marty-flow", "marty-issuance-service",
+                                     "marty-organization"),
+    "marty-d05-current-membership-",
+    "d05-current-membership-native",
+    D05_MEMBERSHIP_CURRENT.core_revision,
+    volumes=D05_MEMBERSHIP_CURRENT.volumes,
+)
+
+
 OFFICIAL_ALL_SERVICES = BuildProfile(
     "oid4vc-all-services",
     "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f",
@@ -147,7 +164,19 @@ LATEST_ALL_SERVICES = BuildProfile(
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, CANVAS_SCOPED_JOBS, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, D05_MEMBERSHIP_LATEST, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")
+
+
+D12_CURRENT_ROLLOUT = "d12-passport-current-functional"
+D05_CURRENT_ROLLOUT = "d05-membership-current-functional"
+
+def current_rollout_build(profile):
+    """Only these complete source-bound cohorts may use the current observer/overlay."""
+    if profile == D12_CURRENT_ROLLOUT:
+        return D12_PASSPORT_CURRENT
+    if profile == D05_CURRENT_ROLLOUT:
+        return D05_MEMBERSHIP_LATEST
+    raise ValueError("UNREVIEWED_CURRENT_ROLLOUT_PROFILE")

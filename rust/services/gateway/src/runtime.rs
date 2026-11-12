@@ -934,12 +934,45 @@ fn duplicate_start_idempotency_header(
         && headers.get_all("idempotency-key").iter().nth(1).is_some()
 }
 
+fn issuance_idempotency_key(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<String>, &'static str> {
+    let mut values = headers.get_all("idempotency-key").iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err("Idempotency-Key must occur once");
+    }
+    let value = value.to_str().map_err(|_| {
+        "Idempotency-Key must contain 1 to 128 ASCII letters, digits, '.', '_', ':', or '-'"
+    })?;
+    // Admit the exact durable issuance grammar from issuance-initiation.json.
+    // Trimming here would alias an invalid request to an existing cached key.
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(
+            "Idempotency-Key must contain 1 to 128 ASCII letters, digits, '.', '_', ':', or '-'",
+        );
+    }
+    Ok(Some(value.to_owned()))
+}
+
 async fn idempotency_middleware(
     State(state): State<Arc<GatewayRuntimeState>>,
     request: Request,
     next: Next,
 ) -> Response {
     // Validate before IdempotencyBegin::Replay, not just before proxying.
+    if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
+        if let Err(detail) = issuance_idempotency_key(request.headers()) {
+            return detail_response(422, detail);
+        }
+    }
     if invalid_passport_cancellation_key(
         request.method().as_str(),
         request.uri().path(),
@@ -3988,7 +4021,35 @@ pub async fn authorize_tenant_request(
             detail: "Authenticated organization context is required".into(),
         });
     }
-    authorize_required_tenant(required, organization_id, identity, memberships).await
+    let outcome = authorize_required_tenant(required, organization_id, identity, memberships).await;
+    // VC-API verification evaluates an existing presentation policy. Check the
+    // machine actor's second permission before idempotency can replay a result;
+    // the policy service retains its own tenant and permission enforcement.
+    if matches!(&outcome, TenantAuthorizationOutcome::Authorized(_))
+        && method == "POST"
+        && matches!(
+            path,
+            "/v1/vc-api/credentials/verify" | "/v1/vc-api/presentations/verify"
+        )
+    {
+        if let Some(identity) =
+            identity.filter(|actor| actor.source == AuthenticationSource::ApiKey)
+        {
+            if let Err(failure) = authorize_api_key(
+                "presentation-policy:view",
+                organization_id,
+                identity.session_organization_id.as_deref(),
+                &identity.api_key_scopes,
+            ) {
+                let mut error = map_failure(failure, "presentation-policy:view");
+                if failure == TenantAuthorizationFailure::ApiKeyPermissionMissing {
+                    error.detail = "VC-API verification also requires presentation-policy:view (trust:read or trust:write scope); credentials:read plus trust:read is the least-privilege scope pair".into();
+                }
+                return TenantAuthorizationOutcome::Denied(error);
+            }
+        }
+    }
+    outcome
 }
 
 async fn authorize_required_tenant(
@@ -4207,6 +4268,7 @@ mod tests {
     }
     include!("../tests/support/template_issuer_options_behavior.rs");
     include!("../tests/support/organization_defaults_behavior.rs");
+    include!("../tests/support/ob3_client_contract_behavior.rs");
     use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
@@ -4490,6 +4552,33 @@ mod tests {
             key: &str,
         ) -> Result<Option<ApiKeyIdentity>, SecurityError> {
             Ok(match key {
+                "verification-complete"
+                | "verification-alternative"
+                | "verification-admin"
+                | "verification-credentials-only"
+                | "verification-trust-only"
+                | "verification-other" => Some(ApiKeyIdentity {
+                    // Same principal exercises changed live scopes before cache replay.
+                    api_key_id: "verification-key-1".into(),
+                    organization_id: Some(
+                        if key == "verification-other" {
+                            "org-other"
+                        } else {
+                            "org-1"
+                        }
+                        .into(),
+                    ),
+                    key_prefix: None,
+                    scopes: match key {
+                        "verification-alternative" => {
+                            vec!["flows:execute".into(), "trust:write".into()]
+                        }
+                        "verification-admin" => vec!["admin:full".into()],
+                        "verification-credentials-only" => vec!["credentials:read".into()],
+                        "verification-trust-only" => vec!["trust:read".into()],
+                        _ => vec!["credentials:read".into(), "trust:read".into()],
+                    },
+                }),
                 "trust-writer" | "trust-reader" | "trust-other" => Some(ApiKeyIdentity {
                     api_key_id: "trust-key-1".into(),
                     organization_id: Some(

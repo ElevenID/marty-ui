@@ -37,9 +37,12 @@ def checked_acl(owner: str, user: str, aces: list[tuple[str, int, int, int]]) ->
     for sid, kind, flags, rights in aces:
         # Only ordinary effective ALLOW ACEs. Object/conditional/deny ACEs and
         # inherit-only ACEs are not interpreted as a private-file capability.
-        require(sid in allowed and sid not in seen and kind == 0
+        # MS-DTYP OWNER_RIGHTS denotes this object's owner, already proven
+        # equal to the current user above. Treat both spellings as one principal.
+        principal = user if sid == "S-1-3-4" else sid
+        require(principal in allowed and principal not in seen and kind == 0
                 and flags & ~0x13 == 0 and rights == FULL_CONTROL)
-        seen.add(sid)
+        seen.add(principal)
     require(user in seen)
 
 
@@ -132,6 +135,27 @@ def hold_private_input(path: Path, *, max_bytes: int = MAX_BYTES, exclusive: boo
 
 
 @contextmanager
+def hold_public_input(path: Path, *, max_bytes: int = MAX_BYTES):
+    """Hold an explicitly classified PUBLIC file immutable, without a privacy claim.
+
+    Preserve NTFS identity, no-reparse, single-link, bounded reads and read-only
+    sharing. The caller supplies the public classification and expected hash.
+    This API neither admits secrets nor changes an ACL.
+    """
+    require(os.name == "nt")
+    try:
+        path = Path(path)
+        require(type(max_bytes) is int and 0 < max_bytes <= 256 * 1024 * 1024)
+        with ExitStack() as stack:
+            for parent in reversed(path.parents):
+                stack.enter_context(_held_private_input(parent, directory=True, ancestor=True))
+            data = stack.enter_context(_held_private_input(path,max_bytes=max_bytes,public_file=True))
+            yield data
+    except (OSError, UnicodeError, ValueError, TypeError):
+        raise ValueError("Windows public immutable input is absent or changed") from None
+
+
+@contextmanager
 def hold_private_generation(root: Path, names: list[str]):
     """Hold every declared input and its private directory for one bounded action.
 
@@ -195,8 +219,8 @@ def _private_file_bytes(path: Path, write_value: bytes | None = None) -> bytes:
 
 @contextmanager
 def _held_private_input(path: Path, write_value: bytes | None = None, *, directory=False,
-                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, mutable_directory=False, _rename_to=None,
-                        _expected_identities=None):
+                        ancestor=False, max_bytes=MAX_BYTES, exclusive=False, public_file=False,
+                        mutable_directory=False, _rename_to=None, _expected_identities=None):
     from ctypes import wintypes as w
 
     path = Path(path)
@@ -210,6 +234,9 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
     if _expected_identities is not None:require(before==_expected_identities)
     require(not directory or write_value is None)
     require(not ancestor or write_value is None)
+    require(type(public_file) is bool and (not public_file or
+            (not directory and not ancestor and write_value is None and exclusive is False
+             and not mutable_directory and _rename_to is None)))
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     security = ctypes.WinDLL("advapi32", use_last_error=True)
     pointer = ctypes.c_void_p
@@ -346,7 +373,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
             finally:
                 free(allocated)
 
-        initial_acl = None if ancestor else prove_acl()
+        initial_acl = None if ancestor or public_file else prove_acl()
         if write_value is not None:
             require(first.size_low == 0 and _path_identities(path) == before)
             buffer = ctypes.create_string_buffer(write_value)
@@ -375,7 +402,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
                     value.volume, value.size_high, value.size_low, value.links,
                     value.index_high, value.index_low)
         require(stable(first) == stable(last) and file_identity(last) == identity
-                and (ancestor or prove_acl() == initial_acl)
+                and (ancestor or public_file or prove_acl() == initial_acl)
                 and _path_identities(path, directory=directory) == before)
         if write_value is not None:
             require(data.raw[:count.value] == write_value)
@@ -388,7 +415,7 @@ def _held_private_input(path: Path, write_value: bytes | None = None, *, directo
             # write/delete sharing was never granted in the interim.
             last = file_info()
             require(stable(first) == stable(last) and file_identity(last) == identity
-                    and (ancestor or prove_acl() == initial_acl)
+                    and (ancestor or public_file or prove_acl() == initial_acl)
                     and _path_identities(path, directory=directory) == before)
             if completed and _rename_to is not None:
                 destination=str(_rename_to)

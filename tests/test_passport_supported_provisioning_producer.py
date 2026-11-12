@@ -1338,3 +1338,42 @@ def test_producer_workflow_contract_rejects_unsafe_mutation(old: str, new: str) 
         assert 'and .head_sha == $sha' in run
         assert '.path == ".github/workflows/passport-supported-provisioning-plan.yml"' in run
         assert "scripts/passport_supported_protected_producer.py" in job["steps"][2]["run"]
+
+
+@pytest.mark.parametrize("defect", [None, "legacy-profile", "foreign-role", "extra", "missing", "other-ca", "native-chain-refused"])
+def test_selective_trust_tls_uses_typed_exact_inventory_and_native_issuer_owner(tmp_path, monkeypatch, defect):
+    from scripts import passport_remote_tls as tls
+    output = tmp_path / "repair-output"
+    output.mkdir(mode=0o700)
+    destination = tmp_path / "fresh-staging"
+    destination.mkdir(mode=0o700)
+    fixtures = Path(__file__).parents[1] / "rust/services/signing-keys/tests/fixtures/public_certificates"
+    certificate = (fixtures / "root-ca.pem").read_text(encoding="ascii")
+    expected = tmp_path / "approved-ca.pem"
+    expected.write_text(certificate, encoding="ascii")
+    names = {"workload_identity_ca_cert", "trust_profile_workload_server_cert", "trust_profile_workload_server_kms_token"}
+    for name in names:
+        (output / name).write_text(certificate if name.endswith("_cert") else "hvs.synthetic-scoped-trust-token", encoding="ascii")
+    options = {"profile": "passport-role-repair", "role": "trust-profile-server", "expected_workload_ca": expected}
+    if defect == "legacy-profile": options["profile"] = "passport"
+    if defect == "foreign-role": options["role"] = "issuance-server"
+    if defect == "extra": (output / "passport_edge_tls_cert").write_text(certificate)
+    if defect == "missing": (output / "trust_profile_workload_server_kms_token").unlink()
+    if defect == "other-ca": expected.write_text((fixtures / "intermediate-ca.pem").read_text())
+    calls = []
+    def native(root, *args, input):
+        calls.append(args)
+        if args == ("operator", "certificate-chain"):
+            if defect == "native-chain-refused": raise RuntimeError("native validation refused")
+            return b""
+        assert args == ("operator", "certificate-spki")
+        return b"public-fixture-spki"
+    monkeypatch.setattr(tls, "operator_bytes", native)
+    if defect:
+        with pytest.raises(ValueError): tls.accept_remote_tls(output, destination, "root-token-never-passed", **options)
+        assert list(destination.iterdir()) == []
+        assert output.exists()
+    else:
+        tls.accept_remote_tls(output, destination, "root-token-never-passed", **options)
+        assert {p.name for p in destination.iterdir()} == names
+        assert calls == [("operator", "certificate-spki"), ("operator", "certificate-spki"), ("operator", "certificate-chain")]

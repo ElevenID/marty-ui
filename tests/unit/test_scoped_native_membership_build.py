@@ -1,5 +1,6 @@
 """Closed D05 lifecycle controls; no daemon or compiler is invoked."""
 import copy
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -45,6 +46,64 @@ class Helper:
 
 
 class MembershipBuildTests(unittest.TestCase):
+    def test_current_actual_resource_trial_keeps_full_recipe_and_historical_caps(self):
+        self.test_profile_capacity_bounds_current_and_preserves_historical()
+        import scoped_native_profiles
+        for profile, expected in ((build.D05_MEMBERSHIP_PROFILE, '2g'),
+                                  (build.D05_MEMBERSHIP_LATEST_PROFILE, '1g')):
+            scope = build.build_scope(profile)
+            run = '11111111-1111-4111-8111-111111111111'
+            plan = {'buildProfile': profile, 'profileSourceSha256': build.sha(Path(scoped_native_profiles.__file__)),
+                    'uiRevision': scope['uiRevision'], 'coreRevision': scope['coreRevision'],
+                    'roleBinaries': scope['roles'], 'releaseQualified': False, 'recordingQualified': False,
+                    'runId': run, 'containerName': scope['prefix'] + run, 'builderImage': 'sha256:' + 'c' * 64,
+                    'sources': {'ui': {'directory': '/ui'}, 'core': {'directory': '/core'}},
+                    'outputDirectory': '/out', 'recipe': {'path': '/recipe'}, 'lockGuard': {'path': '/guard'}}
+            args = build.build_arguments(plan, profile)
+            for flag, value in (('--memory', expected), ('--memory-swap', '4g'), ('--cpus', '1'),
+                                ('--pids-limit', '128'), ('--network', 'none')):
+                self.assertEqual(args[args.index(flag) + 1], value)
+            self.assertEqual(build.membership_linux_memory_bytes(profile), int(expected[0]) * 1024 ** 3)
+        recipe = build.render_recipe(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertEqual(hashlib.sha256(recipe.encode()).hexdigest(),
+                         '535a7fda0cfeb2b02802ff94f1f7e5d9a00a292a8a62003d22d80590c9ab7ee0')
+        self.assertEqual(len(build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)['roles']), 10)
+
+    def test_current_ten_role_scope_keeps_original_six_and_closes_login_chain(self):
+        old = build.build_scope(build.D05_MEMBERSHIP_PROFILE)
+        current = build.build_scope(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertEqual(current['uiRevision'], '47e42c7f61e150e1ece953e02b4041324b6bdea4')
+        self.assertEqual(current['coreRevision'], old['coreRevision'])
+        self.assertEqual(current['volumes'], old['volumes'])
+        self.assertEqual(current['roles'], {**old['roles'], 'auth': 'marty-auth', 'flow': 'marty-flow',
+                         'issuance-native': 'marty-issuance-service', 'organization': 'marty-organization'})
+        recipe = build.render_recipe(build.D05_MEMBERSHIP_LATEST_PROFILE)
+        self.assertIn('--build-profile d05-membership-current-native-ten-role', recipe)
+        self.assertIn('assert len(services)==10', recipe)
+        self.assertEqual(set(current['packages']), set(current['roles'].values()))
+        self.assertEqual(build.cargo_arguments(build.D05_MEMBERSHIP_LATEST_PROFILE).count('--bin'), 10)
+
+    def test_profile_capacity_bounds_current_and_preserves_historical(self):
+        for profile, windows, current, parent in (
+                (build.D05_MEMBERSHIP_PROFILE, 1024 ** 3, 4362076160, 5435817984),
+                (build.D05_MEMBERSHIP_LATEST_PROFILE, 1024 ** 3, 3288334336, 3288334336)):
+            self.assertEqual(build.membership_windows_memory_bytes(profile), windows)
+            for before_parent, threshold in ((False, current), (True, parent)):
+                self.assertEqual(build.membership_required_free_bytes(profile, before_parent=before_parent), threshold)
+                for free, accepted in ((threshold, True), (threshold - 1024, False)):
+                    helper = SimpleNamespace(run=lambda *args: SimpleNamespace(stdout=str(free // 1024)))
+                    with self.subTest(profile=profile, before_parent=before_parent, free=free), \
+                         patch.object(build.shutil, 'disk_usage', return_value=SimpleNamespace(free=8 * 1024 ** 3)):
+                        if accepted:
+                            build.membership_capacity(helper, Path('.'), profile, before_parent=before_parent)
+                        else:
+                            with self.assertRaisesRegex(ValueError, f'freeBytes={free} requiredBytes={threshold}'):
+                                build.membership_capacity(helper, Path('.'), profile, before_parent=before_parent)
+        helper = SimpleNamespace(run=unittest.mock.Mock())
+        with self.assertRaisesRegex(ValueError, 'D05_BUILD_PROFILE_REQUIRED'):
+            build.membership_capacity(helper, Path('.'), 'unreviewed-profile')
+        helper.run.assert_not_called()
+
     def test_r5_terminal_mount_order_is_not_identity(self):
         row = terminal()
         expected = build.membership_terminal_cache_projection(row)
