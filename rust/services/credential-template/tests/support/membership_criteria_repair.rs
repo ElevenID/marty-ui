@@ -221,11 +221,20 @@ async fn stock_repairs_preserve_customer_criteria_mappings_and_repeat_without_ch
     }
     // Existing flat/nested claim definitions are owner-controlled, including a
     // custom description or type: a repair must not silently replace them.
-    for name in ["achievement_criteria", "achievement"] {
+    let nested = json!({"name":"achievement","claim_type":"object","description":"Customer-owned definition"});
+    let mut extended_criteria = fresh_criteria.clone();
+    extended_criteria["customer_extension"] = json!(true);
+    for definitions in [
+        vec![
+            json!({"name":"achievement_criteria","claim_type":"object","description":"Customer-owned definition"}),
+        ],
+        vec![nested.clone()],
+        vec![fresh_criteria.clone(), nested],
+        vec![fresh_criteria.clone(), fresh_criteria.clone()],
+        vec![extended_criteria],
+    ] {
         let mut custom_claims = prior_claims.clone();
-        custom_claims.as_array_mut().unwrap().push(
-            json!({"name":name,"claim_type":"object","description":"Customer-owned definition"}),
-        );
+        custom_claims.as_array_mut().unwrap().extend(definitions);
         sqlx::query(
             "UPDATE credential_template_service.credential_templates SET claims=$1 WHERE id=$2",
         )

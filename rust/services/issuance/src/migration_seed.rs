@@ -112,6 +112,9 @@ fn final_template_projection(
     organization_name: &str,
     membership_badge: bool,
 ) -> (Value, Value, Value, bool) {
+    // The stable identity alone does not authorize replacing a customer's
+    // claim definition. Only the unchanged v5 stock claim is issuer-supplied.
+    let membership_badge = membership_badge && uses_stock_membership_criteria(claims);
     let mut original_fields = Vec::new();
     let mut original_rules = Vec::new();
     let mut canonical_fields = Vec::new();
@@ -272,6 +275,47 @@ fn system_source(name: &str, organization_name: &str, membership_badge: bool) ->
     Some(json!({"system_field": system_field}))
 }
 
+fn stock_membership_criteria_definition() -> Value {
+    json!({
+        "id":"marty-ob-achievement-criteria",
+        "name":"achievement_criteria",
+        "display_name":"Badge Criteria",
+        "description":"Issuer-configured criteria for the membership achievement",
+        "claim_type":"object",
+        "required":true,
+        "selectively_disclosable":false,
+        "derivable":false,
+        "derived_from":null,
+        "pattern":null,
+        "enum_values":null,
+        "min_value":null,
+        "max_value":null,
+        "mdoc_namespace":null,
+        "mdoc_element_identifier":null,
+        "display_icon":null
+    })
+}
+
+fn uses_stock_membership_criteria(claims: &Value) -> bool {
+    let Some(claims) = claims.as_array() else {
+        return false;
+    };
+    let mut criteria = None;
+    for claim in claims {
+        match claim.get("name").and_then(Value::as_str) {
+            Some("achievement") => return false,
+            Some("achievement_criteria") => {
+                if criteria.is_some() {
+                    return false;
+                }
+                criteria = Some(claim);
+            }
+            _ => {}
+        }
+    }
+    criteria.is_some_and(|claim| claim == &stock_membership_criteria_definition())
+}
+
 fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
@@ -329,7 +373,7 @@ mod tests {
         let (fields, rules, _, valid) = final_template_projection(
             &json!([
                 {"name":"email","claim_type":"string","required":true},
-                {"name":"achievement_criteria","claim_type":"object","required":true}
+                stock_membership_criteria_definition()
             ]),
             "Marty Verified Member Badge",
             "Customer Organization",
@@ -419,5 +463,46 @@ mod tests {
             &[],
         );
         assert_eq!(claims["achievement_criteria"], form["achievement_criteria"]);
+    }
+
+    #[test]
+    fn fresh_issuance_projection_preserves_modified_and_partial_stock_catalogs() {
+        let stock = stock_membership_criteria_definition();
+        let mut custom = stock.clone();
+        custom["description"] = json!("Customer-owned criteria definition");
+        let mut extension = stock.clone();
+        extension["customer_extension"] = json!(true);
+        for definitions in [
+            json!([custom]),
+            json!([extension]),
+            json!([stock.clone(), {"name":"achievement","claim_type":"object"}]),
+            json!([stock.clone(), stock]),
+        ] {
+            assert!(!uses_stock_membership_criteria(&definitions));
+            let (_, rules, _, _) = final_template_projection(
+                &definitions,
+                "Marty Verified Member Badge",
+                "Customer Organization",
+                true,
+            );
+            assert!(rules
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|rule| rule["source"] == "FORM_FIELD"));
+        }
+        // A legacy catalog may migrate after the fresh issuance baseline.
+        // Projection does not invent a claim; forward repair supplies its rule.
+        let (_, rules, _, _) = final_template_projection(
+            &json!([{"name":"achievement_name","claim_type":"string"}]),
+            "Marty Verified Member Badge",
+            "Customer Organization",
+            true,
+        );
+        assert!(rules
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|rule| rule["claim_name"] != "achievement_criteria"));
     }
 }
