@@ -34,12 +34,12 @@ use futures_core::Stream;
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+#[cfg(test)]
+use marty_signing_grant::SigningOrigin;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     minter::{GrantMinter, GrantMinting},
 };
-#[cfg(test)]
-use marty_signing_grant::SigningOrigin;
 #[path = "runtime_organization_defaults.rs"]
 mod organization_defaults;
 #[path = "runtime_signing_ceremony.rs"]
