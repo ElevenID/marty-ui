@@ -741,6 +741,7 @@ fn credential_status(error: CredentialIssuanceError) -> Status {
         | Error::AudienceMismatch { .. }
         | Error::InvalidNonce
         | Error::InvalidProof(_)
+        | Error::InvalidCredentialRequest(_)
         | Error::MdocHolderKeyRequired
         | Error::UnsupportedFormat(_)
         | Error::RetiredOpenBadge
@@ -828,6 +829,20 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn invalid_credential_requests_are_caller_errors() {
+        let reason = "Open Badges achievement criteria is required and must be an object";
+        let status = credential_status(CredentialIssuanceError::InvalidCredentialRequest(
+            reason.to_owned(),
+        ));
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            status.message(),
+            format!("invalid credential request: {reason}")
+        );
+    }
+
     #[tokio::test]
     async fn remote_diagnostics_use_the_exact_existing_grpc_prefix_not_display() {
         use crate::signing_error_detail::SigningOperation;

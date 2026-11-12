@@ -3768,6 +3768,10 @@ impl IntoResponse for CredentialIssuanceHttpError {
                 StatusCode::BAD_REQUEST,
                 json!({"error": "invalid_proof", "error_description": description}),
             ),
+            Error::InvalidCredentialRequest(description) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_credential_request", "error_description": description}),
+            ),
             Error::NonceRepositoryUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({

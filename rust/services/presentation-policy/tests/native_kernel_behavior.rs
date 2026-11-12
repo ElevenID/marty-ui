@@ -232,7 +232,8 @@ async fn retired_ob2_is_rejected_before_every_native_route_and_key_resolution() 
 
 #[tokio::test]
 async fn retired_assertion_wrapper_cannot_redirect_to_ob3() {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
     for format in [
         DetectedCredentialFormat::Unknown,
         DetectedCredentialFormat::OpenbadgeV3,
@@ -251,7 +252,150 @@ async fn retired_assertion_wrapper_cannot_redirect_to_ob3() {
 
 #[tokio::test]
 async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
-    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/governed_ob3_with_criteria.json")).unwrap();
+
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+
+    // The generator independently recorded these proof/document RDF digests.
+    // Verify the original detached signature before varying only header order.
+    let canonical_digests = hex::decode(concat!(
+        "fb7782c709a22ba395265a00107930e7bf72a291426e1aae99f78a0428eed744",
+        "473e423da673544b947b56d6f9f285d996918cb958d69904ce38409713426fe4"
+    ))
+    .unwrap();
+    assert_eq!(canonical_digests.len(), 64);
+    let signing_input = |header: &str| {
+        let mut input = header.as_bytes().to_vec();
+        input.push(b'.');
+        input.extend_from_slice(&canonical_digests);
+        input
+    };
+    let original_jws = fixture["credential"]["proof"]["jws"].as_str().unwrap();
+    let (original_header, original_signature) = original_jws.split_once("..").unwrap();
+    let original_signature: [u8; 64] = URL_SAFE_NO_PAD
+        .decode(original_signature)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let public_key: [u8; 32] = URL_SAFE_NO_PAD
+        .decode(
+            fixture["governed_method"]["public_jwk"]["x"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let verifier = VerifyingKey::from_bytes(&public_key).unwrap();
+    verifier
+        .verify_strict(
+            &signing_input(original_header),
+            &Signature::from_bytes(&original_signature),
+        )
+        .unwrap();
+
+    // Public disposable unit-test seed, as pinned by the fixture generator.
+    let signer = SigningKey::from_bytes(&[71; 32]);
+    assert_eq!(signer.verifying_key().to_bytes(), public_key);
+    let reordered_header_bytes = br#"{"alg":"EdDSA","crit":["b64"],"b64":false}"#;
+    let reordered_header = URL_SAFE_NO_PAD.encode(reordered_header_bytes);
+    let original_header_json: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(original_header).unwrap()).unwrap();
+    let reordered_header_json: Value = serde_json::from_slice(reordered_header_bytes).unwrap();
+    assert_eq!(original_header_json, reordered_header_json);
+    assert_ne!(original_header, reordered_header);
+    let reordered_signature = signer.sign(&signing_input(&reordered_header)).to_bytes();
+    let headers = [original_header, reordered_header.as_str()];
+    let signatures = [original_signature, reordered_signature];
+    // Label, protected-header index, signature index, expected validity.
+    let cases = [
+        ("original", 0, 0, true),
+        ("reordered", 1, 1, true),
+        ("crossed_reordered", 1, 0, false),
+        ("crossed_original", 0, 1, false),
+    ];
+    let mut native_results = json!({});
+    let mut native_mismatch = false;
+    for (name, header_index, signature_index, expected) in cases {
+        let header = headers[header_index];
+        let signature = signatures[signature_index];
+        // Both swapped-signature controls must fail independent verification.
+        assert_eq!(
+            verifier
+                .verify_strict(&signing_input(header), &Signature::from_bytes(&signature))
+                .is_ok(),
+            expected,
+            "independent detached JWS case {name}"
+        );
+        let jws = format!("{}..{}", header, URL_SAFE_NO_PAD.encode(signature));
+        if name == "original" {
+            assert_eq!(jws, original_jws);
+        }
+        let mut credential = fixture["credential"].clone();
+        credential["proof"]["jws"] = json!(jws);
+        let raw = marty_verification::open_badges::verify_ob3_json_async(
+            &json!({"credential": credential,
+                "document_store": fixture["document_store"]})
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let verified: Value = serde_json::from_str(&raw).unwrap();
+        native_mismatch |= verified["valid"].as_bool() != Some(expected);
+        native_results[name] = json!({
+            "valid": verified["valid"],
+            "error_codes": verified["error_codes"],
+            "errors": verified["errors"]
+        });
+    }
+    let preparation_diagnostic = if native_mismatch {
+        let mut unsigned = fixture["credential"].clone();
+        unsigned.as_object_mut().unwrap().remove("proof");
+        // This API captures input using only a public key; it creates no real
+        // signature. Its eddsa-rdfc-2022 proof options are fresh, so the resulting
+        // input must not be compared wholesale with this fixture's JWS2020 proof.
+        let request = json!({
+            "credential": unsigned,
+            "issuer_did": fixture["governed_method"]["controller"],
+            "verification_method_id": fixture["governed_method"]["id"],
+            "public_jwk": fixture["governed_method"]["public_jwk"]
+        });
+        match marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json_async(
+            &request.to_string(),
+        )
+        .await
+        {
+            Ok(prepared) => {
+                let mut prepared: Value = serde_json::from_str(&prepared).unwrap();
+                prepared["credential"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("proof");
+                json!({
+                    "typed_unsigned_credential": prepared["credential"],
+                    "eddsa_rdfc_2022_signing_input_b64": prepared["signing_input_b64"]
+                })
+            }
+            Err(error) => json!({"preparation_error": error}),
+        }
+    } else {
+        Value::Null
+    };
+    // Collect all four native outcomes before retaining both positive and
+    // negative requirements. A reordered control never replaces the original.
+    for (name, _, _, expected) in cases {
+        assert_eq!(
+            native_results[name]["valid"].as_bool(),
+            Some(expected),
+            "public JWS2020 case {}: native_results={}; preparation={}",
+            name,
+            native_results,
+            preparation_diagnostic
+        );
+    }
+
     let mut input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV3, &fixture);
     assert!(RustCredentialKernel.verify(&input).await.unwrap().verified);
 
@@ -261,4 +405,34 @@ async fn ob3_ignores_token_keys_even_when_they_match_proof_method_id() {
 
     input.trust_profile.as_mut().unwrap().document["resolved_verification_methods"] = json!([]);
     assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
+}
+
+#[tokio::test]
+async fn historical_signed_ob3_without_criteria_is_denied_after_proof_authentication() {
+    // Preserve the historical signed bytes. E701 is the post-proof criteria
+    // failure; a signature failure would also report OPEN_BADGES_PROOF_INVALID.
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob3.json")).unwrap();
+    let raw = marty_verification::open_badges::verify_ob3_json_async(
+        &json!({"credential": fixture["credential"],
+            "document_store": fixture["document_store"]})
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    let verified: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(verified["valid"], false);
+    assert_eq!(
+        verified["error_codes"],
+        json!([marty_verification::error::codes::OPEN_BADGES_INVALID])
+    );
+    assert!(verified["errors"].as_array().unwrap().iter().any(|error| {
+        error
+            .as_str()
+            .is_some_and(|error| error.contains("achievement criteria"))
+    }));
+    let input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV3, &fixture);
+    let evidence = RustCredentialKernel.verify(&input).await.unwrap();
+    assert!(!evidence.verified);
+    assert!(evidence.claims.is_empty());
+    assert!(evidence.issuer_id.is_none());
 }
