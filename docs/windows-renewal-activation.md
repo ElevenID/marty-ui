@@ -422,3 +422,20 @@ all proofs and checking the exact archived bytes. A failed check after a rename
 is an uncertain outcome, not an undone rename. Normal later operations still
 perform their own native current admission. Local tests or a signed binary alone
 do not replace protected source integration and release/deployment approval.
+
+
+The opt-in `tests/test_windows_product_native_startup.py` regression exercises
+real Credential Template and Trust Profile startup plus the Issuance migration
+CLI against fresh synthetic tmpfs PostgreSQL. It checks both the expected
+membership-only refusal after one old startup and limited witness agreement
+after old startup reconciliation; neither grants full retained-data or deployment
+admission. It uses an isolated internal network, no host ports/binds, and
+identity-checked cleanup, including uncertain creation acknowledgements.
+
+Set `MARTY_RUN_PRODUCT_NATIVE_STARTUP_TEST=1`,
+`MARTY_PRODUCT_SCHEMA_TEST_ENGINE_ID`, `MARTY_PRODUCT_NATIVE_TEST_CONTEXT`, and
+the `MARTY_PRODUCT_NATIVE_TEST_OLD_IMAGE`, `NEW_IMAGE`, `OLD_SOURCE`, and
+`NEW_SOURCE` variables (each with the `MARTY_PRODUCT_NATIVE_TEST_` prefix).
+Images must already be cached immutable services references; source values must
+match their revision labels. Run only with disposable test state. This test
+never selects or deploys those images in production.

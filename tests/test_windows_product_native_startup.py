@@ -1,0 +1,634 @@
+"""Real native retained startup checks; fragment agreement is not deployment admission.
+
+Opt-in images and an exact local engine are required. Every database is new
+synthetic tmpfs storage on a private internal network, without host ports/binds.
+The once-started stock case must fail the membership-only proof because native
+legacy normalization also changes formats and display metadata. A previously
+reconciled stock case agrees with these three limited witnesses. Neither proves
+all retained startup data or authorizes the product transition.
+"""
+
+import datetime
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+import uuid
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import selfhost_windows_product_schema as membership  # noqa: E402
+import selfhost_windows_product_ledger as ledger  # noqa: E402
+import selfhost_windows_product_catalog as catalog  # noqa: E402
+
+
+@pytest.mark.skipif(
+    os.environ.get("MARTY_RUN_PRODUCT_NATIVE_STARTUP_TEST") != "1",
+    reason="explicit isolated native startup qualification",
+)
+@pytest.mark.parametrize("old_reconciled", [False, True])
+def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments(
+    old_reconciled, tmp_path
+):
+    OLD = os.environ["MARTY_PRODUCT_NATIVE_TEST_OLD_IMAGE"]
+    NEW = os.environ["MARTY_PRODUCT_NATIVE_TEST_NEW_IMAGE"]
+    OLD_SOURCE = os.environ["MARTY_PRODUCT_NATIVE_TEST_OLD_SOURCE"]
+    NEW_SOURCE = os.environ["MARTY_PRODUCT_NATIVE_TEST_NEW_SOURCE"]
+    OPS = tmp_path
+    OWNER = "native-startup-synthetic-test"
+    PROJECT = "marty-selfhost-native-schema-qa-" + uuid.uuid4().hex[:12]
+    OPS = OPS / PROJECT
+    OPS.mkdir()
+    NET = PROJECT + "-network"
+    PG = PROJECT + "-postgres"
+    ENGINE = os.environ.get("MARTY_PRODUCT_SCHEMA_TEST_ENGINE_ID")
+    require_engine = bool(ENGINE) and not os.environ.get("DOCKER_HOST")
+    if not require_engine:
+        raise RuntimeError("Explicit isolated engine required")
+    for image in [OLD, NEW]:
+        if (
+            re.fullmatch(
+                r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}", image
+            )
+            is None
+        ):
+            raise RuntimeError("Immutable native test image required")
+    for revision in [OLD_SOURCE, NEW_SOURCE]:
+        if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            raise RuntimeError("Exact native test source required")
+    RETAINED_RESTART = old_reconciled
+    CONTAINERS = []
+    IMAGE_IDS = {}
+    EXPECTED_CID_IMAGES = {}
+    DOCKER = ["docker"]
+    NETWORK_INTENDED = False
+    NETWORK_ID = None
+    ATTEMPT_ID = uuid.uuid4().hex
+    INTENDED_CONTAINERS = {}
+    ACK_IDS = {}
+    REPORT = {
+        "schema": "marty.windows-native-startup-fragment-test/v1",
+        "project": PROJECT,
+        "started_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "production_admission": False,
+        "production_data_used": False,
+        "old_restart_before_baseline": RETAINED_RESTART,
+        "checks": [],
+    }
+
+    def require(ok, message="Isolated native QA refused"):
+        if not ok:
+            raise RuntimeError(message)
+
+    def cmd(args, input=None, timeout=90):
+        return subprocess.check_output(
+            [*DOCKER, *args], input=input, stderr=subprocess.STDOUT, timeout=timeout
+        )
+
+    def owned(cid):
+        x = json.loads(cmd(["inspect", cid]))[0]
+        labels = x["Config"]["Labels"]
+        require(x["Image"] == EXPECTED_CID_IMAGES[cid])
+        names = [name for name, expected in ACK_IDS.items() if expected == cid]
+        require(len(names) == 1 and x["Name"] == "/" + names[0])
+        require(
+            labels.get("com.docker.compose.service")
+            == INTENDED_CONTAINERS[names[0]]["role"]
+        )
+        require(labels.get("elevenid.test.attempt") == ATTEMPT_ID)
+        require(
+            x["Id"] == cid
+            and labels.get("elevenid.owner") == OWNER
+            and labels.get("com.docker.compose.project") == PROJECT
+        )
+        require(
+            not x["HostConfig"].get("PortBindings") and not x["HostConfig"].get("Binds")
+        )
+        require(all(m["Type"] == "tmpfs" for m in x["Mounts"]))
+        require(set(x["NetworkSettings"]["Networks"]) == {NET})
+        return x
+
+    def remove(cid):
+        owned(cid)
+        cmd(["stop", "--time", "3", cid], timeout=15)
+        owned(cid)
+        cmd(["rm", cid])
+        CONTAINERS.remove(cid)
+        EXPECTED_CID_IMAGES.pop(cid)
+        require(not cmd(["ps", "-aq", "--no-trunc", "--filter", "id=" + cid]).strip())
+
+    def run(image, role, entry, args=(), background=True):
+        name = PROJECT + "-" + role
+        require(not cmd(["ps", "-aq", "--filter", "name=^/" + name + "$"]).strip())
+        INTENDED_CONTAINERS[name] = {"image_id": IMAGE_IDS[image], "role": role}
+        options = [
+            "run",
+            "--pull",
+            "never",
+            "--detach",
+            "--name",
+            name,
+            "--network",
+            NET,
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--pids-limit",
+            "128",
+            "--memory",
+            "256m",
+            "--cpus",
+            "1",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,size=33554432",
+            "--label",
+            "elevenid.owner=" + OWNER,
+            "--label",
+            "elevenid.test.attempt=" + ATTEMPT_ID,
+            "--label",
+            "com.docker.compose.project=" + PROJECT,
+            "--label",
+            "com.docker.compose.service=" + role,
+        ]
+        env = {
+            "DATABASE_URL": "postgresql://postgres@" + PG + "/marty_schema_test",
+            "ENVIRONMENT": "test",
+            "MARTY_MIGRATION_PROFILE": "selfhost-production",
+            "PUBLIC_API_URL": "https://startup-qa.invalid",
+            "PUBLIC_DOMAIN": "startup-qa.invalid",
+            "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
+            "MARTY_ISSUER_DID": "did:web:startup-qa.invalid:orgs:marty",
+            "MARTY_ISSUER_URL": "https://startup-qa.invalid/orgs/marty",
+            "ORG_GRPC_TARGET": "unavailable-organization:9002",
+            "RP_GRPC_TARGET": "unavailable-revocation:9013",
+            "CREDENTIAL_TEMPLATE_DATABASE_MAX_CONNECTIONS": "2",
+            "TRUST_PROFILE_DATABASE_MAX_CONNECTIONS": "2",
+        }
+        for k, v in env.items():
+            options += ["--env", k + "=" + v]
+        cid = cmd([*options, "--entrypoint", entry, image, *args]).decode().strip()
+        require(len(cid) == 64)
+        ACK_IDS[name] = cid
+        EXPECTED_CID_IMAGES[cid] = IMAGE_IDS[image]
+        CONTAINERS.append(cid)
+        owned(cid)
+        if not background:
+            code = cmd(["wait", cid], timeout=90).decode().strip()
+            logs = cmd(["logs", cid])
+            (OPS / (role + ".log")).write_bytes(logs)
+            require(code == "0", role + " failed; see owned synthetic log")
+        return cid
+
+    def ready(cid, port):
+        for _ in range(60):
+            row = owned(cid)
+            if not row["State"]["Running"]:
+                (OPS / "failed-startup.log").write_bytes(cmd(["logs", cid]))
+                raise RuntimeError("Native startup exited; see synthetic log")
+            r = subprocess.run(
+                [
+                    *DOCKER,
+                    "exec",
+                    cid,
+                    "curl",
+                    "--fail",
+                    "--silent",
+                    "--max-time",
+                    "2",
+                    "http://127.0.0.1:" + str(port) + "/health",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if r.returncode == 0:
+                return
+            time.sleep(0.5)
+        (OPS / "failed-startup.log").write_bytes(cmd(["logs", cid]))
+        raise RuntimeError("Native health timed out")
+
+    COLUMN_HASHES = "SELECT jsonb_object_agg(e.key,encode(sha256(convert_to(e.value::text,'UTF8')),'hex')) FROM credential_template_service.credential_templates t CROSS JOIN LATERAL jsonb_each(to_jsonb(t)) e WHERE t.id='50000000-0000-0000-0000-000000000040';"
+
+    def sql(s):
+        cid = next(
+            c
+            for c in CONTAINERS
+            if owned(c)["Config"]["Labels"].get("com.docker.compose.service")
+            == "postgres"
+        )
+        return cmd(
+            [
+                "exec",
+                "-i",
+                cid,
+                "psql",
+                "-X",
+                "-U",
+                "postgres",
+                "-d",
+                "marty_schema_test",
+                "-qAt",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-f",
+                "-",
+            ],
+            input=s.encode(),
+        ).decode()
+
+    class Docker:
+        prefix = ["docker"]
+
+    profile = membership.probe.LedgerProfile(application="marty_schema_test")
+    try:
+        context = cmd(["context", "show"]).decode().strip()
+        require(context == os.environ.get("MARTY_PRODUCT_NATIVE_TEST_CONTEXT"))
+        DOCKER = ["docker", "--context", context]
+        Docker.prefix = DOCKER
+        info = json.loads(cmd(["info", "--format", "{{json .}}"]))
+        require(info["ID"] == ENGINE and info["OSType"] == "linux")
+        for image, revision in [(OLD, OLD_SOURCE), (NEW, NEW_SOURCE)]:
+            row = json.loads(cmd(["image", "inspect", image]))[0]
+            IMAGE_IDS[image] = row["Id"]
+            require(
+                row["Config"]["Labels"]["org.opencontainers.image.revision"] == revision
+                and image in row["RepoDigests"]
+            )
+            require(
+                row.get("Os") == "linux"
+                and row.get("Architecture") == "amd64"
+                and not row["Config"].get("Volumes")
+            )
+        pg_image = json.loads(
+            (ROOT / "release/external-images.json").read_text(encoding="utf-8")
+        )["postgres"]
+        require("@sha256:" in pg_image)
+        pg_info = json.loads(cmd(["image", "inspect", pg_image]))[0]
+        IMAGE_IDS[pg_image] = pg_info["Id"]
+        require(
+            set(pg_info["Config"].get("Volumes") or {})
+            <= {"/var/lib/postgresql/data", "/var/run/postgresql", "/tmp"}
+        )
+        require(
+            not cmd(["network", "ls", "-q", "--filter", "name=^" + NET + "$"]).strip()
+        )
+        NETWORK_INTENDED = True
+        NETWORK_ID = cmd(
+            [
+                "network",
+                "create",
+                "--internal",
+                "--label",
+                "elevenid.owner=" + OWNER,
+                "--label",
+                "elevenid.test.attempt=" + ATTEMPT_ID,
+                "--label",
+                "com.docker.compose.project=" + PROJECT,
+                NET,
+            ]
+        )
+        NETWORK_ID = NETWORK_ID.decode().strip()
+        require(re.fullmatch(r"[0-9a-f]{64}", NETWORK_ID))
+        network = json.loads(cmd(["network", "inspect", NETWORK_ID]))[0]
+        require(
+            network["Id"] == NETWORK_ID
+            and network["Name"] == NET
+            and network["Internal"] is True
+            and network["Labels"].get("elevenid.owner") == OWNER
+            and network["Labels"].get("com.docker.compose.project") == PROJECT
+            and network["Labels"].get("elevenid.test.attempt") == ATTEMPT_ID
+        )
+        INTENDED_CONTAINERS[PG] = {"image_id": IMAGE_IDS[pg_image], "role": "postgres"}
+        cid = (
+            cmd(
+                [
+                    "run",
+                    "--pull",
+                    "never",
+                    "--detach",
+                    "--name",
+                    PG,
+                    "--network",
+                    NET,
+                    "--read-only",
+                    "--user",
+                    "postgres",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--pids-limit",
+                    "128",
+                    "--memory",
+                    "384m",
+                    "--cpus",
+                    "1",
+                    "--label",
+                    "elevenid.owner=" + OWNER,
+                    "--label",
+                    "elevenid.test.attempt=" + ATTEMPT_ID,
+                    "--label",
+                    "com.docker.compose.project=" + PROJECT,
+                    "--label",
+                    "com.docker.compose.service=postgres",
+                    "--env",
+                    "POSTGRES_DB=marty_schema_test",
+                    "--env",
+                    "POSTGRES_USER=postgres",
+                    "--env",
+                    "POSTGRES_HOST_AUTH_METHOD=trust",
+                    "--env",
+                    "PGDATA=/var/lib/postgresql/data/owned",
+                    "--tmpfs",
+                    "/var/lib/postgresql/data:rw,noexec,nosuid,size=268435456,mode=1777",
+                    "--tmpfs",
+                    "/var/run/postgresql:rw,noexec,nosuid,size=16777216,mode=1777",
+                    "--tmpfs",
+                    "/tmp:rw,noexec,nosuid,size=16777216,mode=1777",
+                    pg_image,
+                ]
+            )
+            .decode()
+            .strip()
+        )
+        require(len(cid) == 64)
+        ACK_IDS[PG] = cid
+        EXPECTED_CID_IMAGES[cid] = IMAGE_IDS[pg_image]
+        CONTAINERS.append(cid)
+        owned(cid)
+        for _ in range(60):
+            if (
+                subprocess.run(
+                    [
+                        *DOCKER,
+                        "exec",
+                        cid,
+                        "pg_isready",
+                        "-U",
+                        "postgres",
+                        "-d",
+                        "marty_schema_test",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                ).returncode
+                == 0
+            ):
+                break
+            time.sleep(0.5)
+        else:
+            raise RuntimeError("Owned PostgreSQL did not become ready")
+        migration = run(
+            OLD,
+            "old-organization-migrate",
+            "/usr/local/bin/marty-organization",
+            ["migrate"],
+            False,
+        )
+        remove(migration)
+        REPORT["checks"].append("old organization native schema prerequisite")
+        for role, entry, port in [
+            ("old-credential-template", "marty-credential-template", 8003),
+            ("old-trust-profile", "marty-trust-profile", 8004),
+        ]:
+            service = run(OLD, role, "/usr/local/bin/" + entry)
+            ready(service, port)
+            REPORT["checks"].append(role + " full startup")
+            remove(service)
+        if RETAINED_RESTART:
+            for role, entry, port in [
+                ("retained-old-credential-template", "marty-credential-template", 8003),
+                ("retained-old-trust-profile", "marty-trust-profile", 8004),
+            ]:
+                service = run(OLD, role, "/usr/local/bin/" + entry)
+                ready(service, port)
+                REPORT["checks"].append(role + " full startup")
+                remove(service)
+        migration = run(
+            OLD,
+            "old-issuance-migrate",
+            "/usr/local/bin/marty-issuance-service",
+            ["migrate"],
+            False,
+        )
+        remove(migration)
+        REPORT["checks"].append("old issuance native migrate with seed")
+        before_columns = json.loads(sql(COLUMN_HASHES))
+        items = [owned(cid)]
+        prior = {
+            "membership": membership.capture(Docker(), items, PROJECT, profile=profile),
+            "ledger": ledger.capture(Docker(), items, PROJECT, profile=profile),
+            "catalog": catalog.capture(Docker(), items, PROJECT, profile=profile),
+        }
+        (OPS / "synthetic-before-witnesses.json").write_text(
+            json.dumps(prior, indent=2), encoding="utf-8"
+        )
+        for role, entry, port in [
+            ("new-credential-template", "marty-credential-template", 8003),
+            ("new-trust-profile", "marty-trust-profile", 8004),
+        ]:
+            service = run(NEW, role, "/usr/local/bin/" + entry)
+            ready(service, port)
+            REPORT["checks"].append(role + " full startup")
+            remove(service)
+        migration = run(
+            NEW,
+            "new-issuance-migrate",
+            "/usr/local/bin/marty-issuance-service",
+            ["migrate"],
+            False,
+        )
+        remove(migration)
+        REPORT["checks"].append("new issuance native migrate")
+        after = {
+            name: json.loads(
+                sql(
+                    membership.after_sql(prior[name])
+                    if name == "membership"
+                    else module.statement(prior[name])
+                )
+            )
+            for name, module in [
+                ("membership", membership),
+                ("ledger", ledger),
+                ("catalog", catalog),
+            ]
+        }
+        (OPS / "synthetic-after-witnesses.json").write_text(
+            json.dumps(after, indent=2), encoding="utf-8"
+        )
+        after_columns = json.loads(sql(COLUMN_HASHES))
+        REPORT["membership_changed_columns"] = sorted(
+            k for k in before_columns if before_columns[k] != after_columns.get(k)
+        )
+        REPORT["witness_failures"] = []
+        for name, module in [
+            ("membership", membership),
+            ("ledger", ledger),
+            ("catalog", catalog),
+        ]:
+            try:
+                delta = module.validate_delta(prior[name], after[name])
+                assert (
+                    delta["native_admission"] is False
+                    and delta["product_transition_admission"] is False
+                )
+                REPORT["checks"].append(name + " retained-state witness agrees")
+            except ValueError as error:
+                REPORT["witness_failures"].append(
+                    {"witness": name, "error": str(error)}
+                )
+        expected = [] if old_reconciled else ["membership"]
+        assert [row["witness"] for row in REPORT["witness_failures"]] == expected
+        expected_columns = (
+            ["claims", "updated_at", "version"]
+            if old_reconciled
+            else [
+                "claims",
+                "display_style",
+                "supported_formats",
+                "updated_at",
+                "version",
+            ]
+        )
+        assert REPORT["membership_changed_columns"] == expected_columns
+        REPORT["fragment_validation_passed"] = not REPORT["witness_failures"]
+        assert REPORT["production_admission"] is False
+        REPORT["passed"] = True
+    except Exception as error:
+        REPORT.update(
+            passed=False, error_type=type(error).__name__, error=str(error)[:300]
+        )
+        raise
+    finally:
+        REPORT["cleanup_errors"] = []
+        REPORT["reconciled_unacknowledged_resources"] = []
+        if NETWORK_INTENDED:
+            try:
+                ids = (
+                    cmd(
+                        [
+                            "network",
+                            "ls",
+                            "-q",
+                            "--no-trunc",
+                            "--filter",
+                            "name=^" + NET + "$",
+                        ]
+                    )
+                    .decode()
+                    .split()
+                )
+                require(len(ids) == 1, "Uncertain or missing intended network: " + NET)
+                require(
+                    NETWORK_ID is None or ids[0] == NETWORK_ID,
+                    "Network name was replaced",
+                )
+                row = json.loads(cmd(["network", "inspect", ids[0]]))[0]
+                require(
+                    row["Id"] == ids[0]
+                    and row["Name"] == NET
+                    and row["Internal"] is True
+                    and row["Labels"].get("elevenid.owner") == OWNER
+                    and row["Labels"].get("com.docker.compose.project") == PROJECT
+                    and row["Labels"].get("elevenid.test.attempt") == ATTEMPT_ID
+                )
+                if NETWORK_ID is None:
+                    REPORT["reconciled_unacknowledged_resources"].append(
+                        {"kind": "network", "id": ids[0]}
+                    )
+                NETWORK_ID = ids[0]
+            except Exception as error:
+                REPORT["cleanup_errors"].append(
+                    type(error).__name__ + ":" + str(error)[:180]
+                )
+        # Intent is retained before each create. Lost stdout/timeout is not
+        # permission to replay creation or to claim that cleanup succeeded.
+        for name, intent in INTENDED_CONTAINERS.items():
+            try:
+                ids = (
+                    cmd(["ps", "-aq", "--no-trunc", "--filter", "name=^/" + name + "$"])
+                    .decode()
+                    .split()
+                )
+                require(len(ids) <= 1)
+                if not ids:
+                    require(
+                        name in ACK_IDS, "Uncertain intended container outcome: " + name
+                    )
+                    continue
+                cid = ids[0]
+                require(re.fullmatch(r"[0-9a-f]{64}", cid))
+                require(
+                    name not in ACK_IDS or ACK_IDS[name] == cid,
+                    "Container name was replaced",
+                )
+                unacknowledged = name not in ACK_IDS
+                ACK_IDS[name] = cid
+                EXPECTED_CID_IMAGES[cid] = intent["image_id"]
+                owned(cid)
+                if unacknowledged:
+                    REPORT["reconciled_unacknowledged_resources"].append(
+                        {"kind": "container", "id": cid}
+                    )
+                if cid not in CONTAINERS:
+                    CONTAINERS.append(cid)
+            except Exception as error:
+                REPORT["cleanup_errors"].append(
+                    type(error).__name__ + ":" + str(error)[:180]
+                )
+        for cid in list(reversed(CONTAINERS)):
+            try:
+                remove(cid)
+            except Exception as error:
+                REPORT["cleanup_errors"].append(
+                    type(error).__name__ + ":" + str(error)[:180]
+                )
+        if NETWORK_ID:
+            try:
+                row = json.loads(cmd(["network", "inspect", NETWORK_ID]))[0]
+                require(
+                    row["Id"] == NETWORK_ID
+                    and row["Name"] == NET
+                    and row["Internal"] is True
+                    and row["Labels"].get("elevenid.owner") == OWNER
+                    and row["Labels"].get("com.docker.compose.project") == PROJECT
+                    and row["Labels"].get("elevenid.test.attempt") == ATTEMPT_ID
+                    and not row.get("Containers")
+                )
+                cmd(["network", "rm", NETWORK_ID])
+                require(
+                    not cmd(
+                        [
+                            "network",
+                            "ls",
+                            "-q",
+                            "--no-trunc",
+                            "--filter",
+                            "id=" + NETWORK_ID,
+                        ]
+                    ).strip()
+                )
+            except Exception as error:
+                REPORT["cleanup_errors"].append(
+                    type(error).__name__ + ":" + str(error)[:180]
+                )
+        REPORT["finished_utc"] = datetime.datetime.now(
+            datetime.timezone.utc
+        ).isoformat()
+        (OPS / "exploration-result.json").write_text(
+            json.dumps(REPORT, indent=2) + "\n", encoding="utf-8"
+        )
+        print(json.dumps(REPORT))
+        require(
+            not REPORT["cleanup_errors"],
+            "Owned synthetic cleanup incomplete; inspect startup test receipt",
+        )
