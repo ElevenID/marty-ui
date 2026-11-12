@@ -21,6 +21,36 @@ renewal = product.renewal
 require = selection.require
 
 
+ISSUANCE_MIGRATION_SHELL = 'set -e; . /app/load-secrets-env.sh; exec /usr/local/bin/marty-issuance-service migrate'
+
+
+def issuance_migration_command(docker, project, env, source, model, cycle):
+    """Prepare the one exact native migration, never execute or authorize it.
+
+    The full schema owner must hold verified inputs, journal intent before the
+    producer, and qualify its helper identity/unknown outcome. The normal image
+    entrypoint ignores migration arguments, so override both entrypoint and Cmd.
+    No caller-supplied shell body, role, image or secret override is accepted.
+    """
+    require(type(project) is str and re.fullmatch(r'marty-(?:production|selfhost)-[a-z0-9][a-z0-9-]{0,59}', project))
+    require(type(cycle) is str and re.fullmatch(r'[0-9a-f]{32}', cycle))
+    require(isinstance(env, Path) and env.is_absolute() and isinstance(source, Path) and source.is_absolute())
+    require(type(model) is dict and type(model.get('services')) is dict)
+    service = model['services'].get('issuance-native')
+    require(type(service) is dict and type(service.get('image')) is str
+            and re.fullmatch(r'ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}', service['image']))
+    require(service.get('entrypoint') in (None, ['/app/services/entrypoint.sh'])
+            and service.get('command') in (None, [])
+            and type(service.get('environment')) is dict
+            and service['environment'].get('SERVICE_NAME') in ('issuance_native', 'issuance-native'))
+    name = project+'-issuance-migrate-'+cycle
+    command = docker.compose(project, env, source)
+    require(type(command) is list and command and all(type(part) is str and part for part in command))
+    return {'name': name, 'image': service['image'], 'command': [*command, 'run', '--pull', 'never',
+        '--detach', '--no-deps', '--no-tty', '--interactive=false', '--name', name,
+        '--entrypoint', '/bin/sh', 'issuance-native', '-c', ISSUANCE_MIGRATION_SHELL]}
+
+
 def qualified_images(docker, before, after, owned):
     """Require already cached exact amd64 subjects and existing volume targets."""
     by_role = {renewal._service(item): item for item in owned}

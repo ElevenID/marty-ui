@@ -477,6 +477,18 @@ fails this input. This qualifies the new native command and secret transport;
 it does not qualify Compose one-off ownership, durable migration receipts, or
 the complete deployment transition.
 
+The existing deploy module's `issuance_migration_command` now prepares that
+fixed shell body through the existing `Docker.compose` binding. It accepts only
+the native Issuance role, an immutable official services image, its supported
+wrapper/default command, selected absolute env/Compose paths and an attempt
+identifier. It overrides both entrypoint and command, disables dependency starts,
+pulls, TTY and interactive input, and retains the named container for later
+receipted ownership checks. The fixture executes the same shell constant; unit
+tests verify command preparation and refusals. This constructor does not read or
+authenticate the files, execute Compose, check helper identity, or grant any
+authority. The complete schema owner must bind the matching verified model and
+source, write durable intent before execution, and retain uncertain outcomes.
+
 
 `selfhost_windows_product_startup.py` adds a read-only timestamp witness for the
 ten built-in wallets, four built-in delivery destinations and the configured

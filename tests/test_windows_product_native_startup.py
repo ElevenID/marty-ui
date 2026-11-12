@@ -30,6 +30,7 @@ import selfhost_windows_product_ledger as ledger  # noqa: E402
 import selfhost_windows_product_catalog as catalog  # noqa: E402
 import selfhost_windows_product_startup as startup  # noqa: E402
 import selfhost_windows_product as product  # noqa: E402
+import selfhost_windows_product_deploy as deploy  # noqa: E402
 
 
 @pytest.mark.skipif(
@@ -81,7 +82,7 @@ def test_real_native_retained_startup_limits_membership_ledger_catalog_fragments
     # inherit the admitted service's existing secrets and override its entrypoint.
     issuance_shell = (
         'set -e; printf %s "$SYNTHETIC_DB_PASSWORD" > /tmp/synthetic-db-password; '
-        '. /app/load-secrets-env.sh; exec /usr/local/bin/marty-issuance-service migrate'
+        + deploy.ISSUANCE_MIGRATION_SHELL
     )
     INTENDED_CONTAINERS = {}
     ACK_IDS = {}
