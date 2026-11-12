@@ -16,10 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.parametrize('fault', [None, 'future-leaf', 'expired-issuer', 'wrong-signature',
                                    'wrong-key', 'exportable', 'authority', 'anchor'])
 def test_retained_certificate_evidence_over_https(tmp_path, fault):
-    ca_key, ec_key, rsa_key = key(), key(), key('RSA')
-    issuer = certificate('synthetic retained issuer', ca_key.public_key(), signer=ca_key, ca=True,
-                         before=-86400, after=-60 if fault == 'expired-issuer' else 86400)
-    issuer_pem = pem(issuer).decode()
+    ca_keys = [key(), key()]
+    issuers = [certificate(f'synthetic retained issuer {index}', signer.public_key(), signer=signer, ca=True,
+                           before=-86400, after=-60 if fault == 'expired-issuer' else 86400)
+               for index, signer in enumerate(ca_keys)]
     generation = tmp_path/'generation'
     generation.mkdir()
     roles = re.findall(r'key_name: "([^"]+)",\s*cert_file: "([^"]+)"',
@@ -28,9 +28,10 @@ def test_retained_certificate_evidence_over_https(tmp_path, fault):
     roles += [(f'keycloak-{realm}-rs256', f'keycloak_{realm}_rs256_cert') for realm in ('master', '11id')]
     metadata = {}
     for name, file in roles:
-        signing_key = rsa_key if name.startswith('keycloak-') else ec_key
-        leaf = certificate('synthetic retained leaf', signing_key.public_key(), issuer,
-                           key() if fault == 'wrong-signature' else ca_key,
+        issuer_index = int(name.startswith('keycloak-'))
+        signing_key = key('RSA' if issuer_index else 'EC')
+        leaf = certificate('synthetic retained leaf', signing_key.public_key(), issuers[issuer_index],
+                           key() if fault == 'wrong-signature' else ca_keys[issuer_index],
                            before=3600 if fault == 'future-leaf' else -7200,
                            after=7200 if fault == 'future-leaf' else -60)
         (generation/file).write_bytes(pem(leaf))
@@ -39,7 +40,7 @@ def test_retained_certificate_evidence_over_https(tmp_path, fault):
         metadata[name] = {'type': 'rsa-2048' if name.startswith('keycloak-') else 'ecdsa-p256',
                           'exportable': fault == 'exportable', 'allow_plaintext_backup': False,
                           'latest_version': 1, 'keys': {'1': {'public_key': public}}}
-    (generation/'workload_identity_ca_cert').write_bytes(b'PUBLIC_INVALID' if fault == 'anchor' else pem(issuer))
+    (generation/'workload_identity_ca_cert').write_bytes(b'PUBLIC_INVALID' if fault == 'anchor' else pem(issuers[0]))
     seen, errors = [], []
     def dispatch(method, path, body, token):
         seen.append((method, path))
@@ -51,7 +52,7 @@ def test_retained_certificate_evidence_over_https(tmp_path, fault):
                                   'ttl': 0 if fault == 'authority' else 7200}}
         assert method == 'GET'
         if path in ('workload-pki/cert/ca', 'keycloak-pki/cert/ca'):
-            return 200, {'data': {'certificate': issuer_pem}}
+            return 200, {'data': {'certificate': pem(issuers[int(path.startswith('keycloak-'))]).decode()}}
         assert path.startswith('transit/keys/')
         return 200, {'data': metadata[path.removeprefix('transit/keys/')]}
     with https_json_server(tmp_path, dispatch, errors) as transport:
@@ -69,3 +70,8 @@ def test_retained_certificate_evidence_over_https(tmp_path, fault):
                 invoke('activation-certificates', {'token': context['token'], 'old': str(generation),
                        'new': str(generation), 'minimum_ttl': 3600, 'replacement': None, 'retiring': False})
     assert seen and all(method == 'GET' or path == 'auth/token/lookup' for method, path in seen)
+
+    if fault is None:
+        assert {path for method, path in seen if method == 'GET'} == {
+            'workload-pki/cert/ca', 'keycloak-pki/cert/ca',
+            *(f'transit/keys/{name}' for name, _ in roles)}
