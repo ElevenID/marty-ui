@@ -71,31 +71,35 @@ excluded from this report.
 ## November 12 continuation — America/Denver
 
 The continuation resumed on **2026-11-12 America/Denver (MST, UTC−07:00)**.
-It used integrated source base `cef5524`, which includes the merge of main
-`a309bbc` with the consolidated UX changes. The local and AWS work continued
-without another PR-branch push or an extra CI run for each correction.
-Main subsequently advanced to `2a1b1a07`, changing three native compiler
-trial/documentation files with no overlap in UX or build inputs. That clean
-integration is being included in the next consolidated branch update; its
-final commit and tree will be recorded with that update.
+The initial integrated source base `cef5524` included main `a309bbc` and the
+consolidated UX changes. Source subsequently advanced to `bdfc0a6`, including
+main `2a1b1a07`, and was fast-forwarded cleanly onto the AWS live checkout.
+The incoming main changes affected only three native compiler trial and
+documentation files, with no overlap in UX or application build inputs.
+Related corrections remain in one PR, with live reload supporting the local
+iterations. The later policy draft navigation correction was applied directly
+to the live UI for its targeted replay below.
 
 ### Environment and visible live reload
 
 The same existing instance was restarted in the free-plan environment. The
 existing installer-managed certificate controller and retained ACME account
 obtained a valid production Let's Encrypt certificate for the new public IP.
-The served TLS connection passed normal certificate verification. Chrome then
-completed authenticated sign-in without a security warning. These observations
+The served TLS connection passed normal certificate verification. The current
+trusted certificate expires **November 19**. Chrome completed authenticated
+sign-in without a security warning. These observations
 resolve the current environment's TLS/access uncertainty from the earlier
 interruption; they do not claim a successful retest of the separate cloud
 browser that previously reported a certificate error.
 
 The supported native administrative refresh renewed the expired identities
 across exactly **34 Secrets**. The retained original installation state remained
-unchanged. The origin-only Helm reconciliation completed with all
-**20 application Deployments Ready**.
+unchanged. The origin-only Helm reconciliation completed, and the resumed
+source replay confirmed all **20 application Deployments Ready**.
 The existing Keycloak client was reconciled only in its callback, web-origin,
 and logout fields; PKCE remained **S256**.
+The current automatic-stop deadline is **November 12 at 17:15 America/Denver**
+(**November 13 at 00:15 UTC**); the earlier deadline above is historical.
 
 A temporary Dashboard label change appeared in the signed-in Chrome page
 through HMR, and restoring the source restored the original label. Both visible
@@ -109,50 +113,89 @@ check. It does not substitute for replaying each product fix below.
 | --- | --- | --- |
 | Organization Devices | Empty inventory, search with no match, Clear, and Refresh behaved correctly | There was no real device fixture; populated rows and deactivation were not manually exercised |
 | Applicant Devices and navigation | The Devices destination was discoverable | Registration status, inactive history, and deactivation still require a suitable disposable fixture |
-| Device page and navigation at 390 px | The inspected page and navigation drawer did not overflow the page | This result does not cover the later template and check-dialog layout defects |
+| Device page and navigation at 390 px | The inspected page and navigation drawer did not overflow the page | This covers the real empty inventory, not a populated device table |
 | Application Templates | An existing active template displayed four fields. A clearly named disposable draft with twelve fields was created, saved, and read back as valid `DRAFT` | This verifies the observed create/save/readback path; failure/retry and scope-transition scenarios remain separate checks |
-| Application preview links | The list initially omitted the selected organization while the detail-page preview included it. After the fix reached AWS, the list anchor's organization-scoped public URL was verified | The corrected link's presence was verified; delayed-response scope protection is covered by local tests |
-| Application preview interaction | The original preview loaded, Add to Wallet safely simulated completion, and Exit Preview closed its tab | The click exposed contradictory preview copy. The copy correction remains local and has not yet been replayed on AWS |
-| Check configuration | Add check was displayed. The pending-save guard correction was present in the AWS source | A pending-save dismissal/replacement race was not manually forced; controlled component tests cover the guard |
-| Check configuration at 390 px | The selector collapsed, the title/chip overflowed, and the combobox lacked an accessible name | The focused layout/name correction is local and awaiting HMR verification |
-| Dashboard | Health Overview showed zero active flows while Verify Setup Readiness reported one active flow | The status-normalization fix is present on AWS, but the dashboard has not yet been revisited to verify the corrected count |
-| Policy wizard | The actual Trust → organization credential template → eleven claims → Freshness path was exercised. Device binding, a credential age of `31536000` seconds, and the revocation check were visible; unsupported controls were absent | Invalid-age entry, zero handling, keyboard radio selection, and the resulting Review behavior were not exercised in this session |
+| Application preview links | The corrected active-template row link included `organization_id`, `target="_blank"`, and `rel="noopener noreferrer"`; a physical click opened its preview in a new tab | Delayed-response scope protection is covered by local tests |
+| One-click application preview | The banner explicitly described simulation. **Preview credential request** led to **Preview complete**; its explanation described receiving the credential in a wallet when ready in the live experience. The preview created no application or credential and opened no wallet. Exit Preview closed the popup tab | This verifies the popup path; Exit behavior for a directly opened preview was checked separately |
+| Ordinary application form preview | A `MANUAL` draft traversed Personal Information, Additional Information, and Review. Missing Member ID, Organization ID, Role, Badge Name, and Issued At each produced required-field feedback and blocked Next. Dummy values, including native date input, survived into Review. An unchecked confirmation blocked Preview Submit; after checking the simulation-only confirmation, completion stated that live submission follows the template's approval settings and displayed the collected form data | No application was submitted, credential issued, or wallet opened. Exit Preview from this directly opened page returned to the console template list |
+| Check configuration | One required Identity Verification check was saved on the disposable draft. The list displayed **1 check**, and reopening retained it | A pending-save dismissal/replacement race was not manually forced; controlled component tests cover the guard |
+| Check configuration at 390 px | After the layout correction, the measured dialog width and scroll width both equaled **260 px**, while page width remained **390 px**. The check selector and save flow were usable | Accessible label association is also covered by the focused component test |
+| Application Templates table access | The closed-dialog page measured **375/375 px** client/scroll width. The table region measured **343/720 px**, had `tabIndex=0`, and ArrowLeft moved its scroll position **361 → 321 → 281** | Confirms contained keyboard scrolling without outer-page overflow |
+| Dashboard | Health Overview now reported **3 active flows**, matching three active native definitions in the flow list. Verify Setup Readiness reported **1**, its narrower verification-flow count. Configuration and runtime-health explanations remained distinct | The counts have different scopes; this does not claim that all three definitions are verification flows or prove service availability |
+| Policy input and binding | The Trust → organization credential template → eleven claims → Freshness path was exercised. Blank, `-1`, `0.5`, and `1e3` blocked both Next and Skip. Zero was accepted, and Review displayed **0 seconds**. Keyboard selection worked for None, Device Key, and Authenticated Session; unsupported controls were absent | This records the tested numeric cases and radio options, not every possible input or keyboard sequence |
+| Policy durations and persistence | `43200` displayed **12 hours** and `86401` displayed **1 day 1 second**. Tested values survived Back. An inactive draft was saved, and its detail view read back **86401** with **`SESSION_BINDING`** | No policy was activated or used to qualify real credential verification |
+| Policy draft destination | The initial save exposed an unconditional redirect to Deployment Profiles. After the focused navigation correction, a second inactive draft landed on its actual detail URL and read back draft state, **43200**, and **`DEVICE_KEY`** | The initially exposed raw success-message key was corrected and replayed separately in the existing session |
+| Policy success text with a cached locale | A third inactive draft was created in the same browser session without reloading. Visible text confirmed **Presentation Policy Created**, the saved-as-draft explanation, and **Opening the saved policy draft...**. The subsequent detail URL matched the created draft and its draft state was visible | Readability and navigation were verified through visible text and page state; the stale compositor screenshot was discarded |
+| Native flow list | The three existing native definitions now showed green **Active** status, **Auto** approval, their provided template references, and **No applicant URL available**. Enter on the named Details link opened the matching flow detail page | Other lifecycle and approval values, absent references, unknown values, and supplied-URL cases have controlled-test coverage |
+| Flow list at 390 px | Page client/scroll width stayed **375/375 px**. Its focusable table region measured **311/720 px**; ArrowRight moved horizontal scroll from **0 to 40**, and Enter opened the matching Details destination | This verifies the observed native rows and contained keyboard scrolling |
+| Flow detail | After live reload, the page had a named level-one heading, accessible Credential Template and Presentation policy references with their existing destinations, and neutral **Share an available applicant link to start this flow** guidance. The empty Published by field was removed | This verifies the observed detail presentation and reference labels; it does not establish an applicant URL or runtime availability |
+| Flow detail back navigation with a cached locale | In the existing browser session, the corrected **Back to Flows** button was visible and named. Enter returned to the flow list, where its table region was visible | The generic key and default text were replayed after the earlier issuance-only label was found in the cached English catalog |
+| Verification-flow preview | The built-in login flow opened a Flow preview banner and **Credential verification preview** heading. The information described using existing credentials, the unavailable interactive preview, and that no verification had started. No application form appeared; Exit Preview closed the popup | This verifies the informational preview boundary, without starting real verification |
+| Issuance-flow preview boundary | A separate existing member-badge issuance flow still opened its linked credential template's three-step form | Only the form load was checked through this flow route; its completion is not inferred from the separately completed ordinary application preview above |
 
 ### Corrections added during the continuation
 
 | Correction | Local implementation and evidence | AWS/manual status |
 | --- | --- | --- |
-| Application Templates row preview | Uses the existing public-entry URL contract, encoded template ID and selected organization, with a new-tab `noopener` link. Regression coverage checks the public URL and organization changes without stale scope | Applied to AWS; the live anchor URL was verified |
+| Application Templates row preview | Uses the existing public-entry URL contract, encoded template ID and selected organization, with a new-tab `noopener noreferrer` link. Regression coverage checks the public URL and organization changes without stale scope | Applied to AWS; the URL, link attributes, and new-tab interaction were verified |
 | Check-configuration save lifetime | Guards the pending save and stale completion so dismissal or a replacement dialog cannot accept the old result; focused tests cover the race | Applied to AWS; the race itself was not manually forced |
-| Active resource counts | Normalizes authoritative status casing, including native flow-definition `ACTIVE`, consistently across Health Overview counts. Tests compare the observed flow case with Setup Readiness and exclude inactive states | Applied to AWS; dashboard replay remains pending |
-| Honest preview interaction and completion | The shared banner describes simulation. One-click preview uses a preview-specific button/helper, removes misleading placeholder form data, and explains receiving the credential in a wallet when ready. Ordinary form preview refers to the template's approval settings. English/Dutch copy follows the existing fallback pattern | Local only; not yet applied or manually verified on AWS |
-| Narrow check-dialog layout and accessible selector | A focused correction addresses the collapsed selector, title/chip overflow, and missing combobox name observed at 390 px | Local correction pending HMR verification |
-| Application Templates table access on narrow screens | Adds a focused horizontal scroll region and a 720 px minimum table width so the columns and row actions remain reachable, including by keyboard | Local correction pending HMR verification |
+| Active resource counts | Normalizes authoritative status casing, including native flow-definition `ACTIVE`, consistently across Health Overview counts. Tests compare the observed flow case with Setup Readiness and exclude inactive states | Applied to AWS; the total of three active definitions and the narrower count of one verification flow were reconciled in the browser |
+| Honest preview interaction and completion | The shared banner describes simulation. One-click preview uses a preview-specific button/helper, removes misleading placeholder form data, and explains receiving the credential in a wallet when ready. Ordinary form preview refers to the template's approval settings and retains its collected-data inspection. English/Dutch copy follows the existing fallback pattern | Applied to AWS; both preview paths, validation, completion, and their distinct Exit behavior were verified |
+| Narrow check-dialog layout and accessible selector | Stacks narrow layouts, bounds the template chip, and associates each check selector with its label | Applied to AWS; 390 px layout, save, and persisted readback were verified; label association has focused test coverage |
+| Application Templates table access on narrow screens | Adds a named, focusable horizontal scroll region and a 720 px minimum table width | Applied to AWS; keyboard scrolling and absence of outer-page overflow were verified |
+| Policy draft completion | Sends an inactive draft to its own detail page instead of unconditionally sending it to Deployment Profiles | Applied to AWS; a newly created draft reached its detail page with the expected stored duration and binding |
+| Cached policy success translation | Supplies readable default text when an already-loaded locale catalog lacks the new success-message keys | Applied live without a service restart; the existing session displayed the correct text and reached the saved draft without reloading |
+| Native flow list presentation and actions | Recognizes native lifecycle and approval values, uses actual template references, and separates activation from an explicitly provided applicant URL. Removes unsupported wallet/QR placeholders and legacy Publish/Disable table controls in favor of named Details links; unknown states remain unknown | Applied live without a restart; native Active/Auto rows, template references, absent URL copy, desktop/mobile keyboard Details, and contained mobile scrolling were verified |
+| Flow detail wording and accessibility | Provides a named heading and reference links, neutral entry guidance, and a generic Back to Flows control with readable default text; omits an empty Published by field | Applied to AWS; the detail presentation and cached-locale Back label were verified, and Enter returned to the flow list |
+| Verification-flow preview boundary | Distinguishes a verification flow from issuance when a linked credential template is present, showing an informational verification preview instead of an application form | Applied to AWS; the built-in login preview showed the informational boundary and closed on Exit, while a separate issuance flow retained its linked three-step form |
 
 The preview correction preserves both early-return guards. Its focused
 component coverage exercises ordinary, member-credential, and Open Badge
 previews and checks that simulation produces no applicant/application/evidence
 or issuance API operations, direct network request, wallet window, navigation,
-or claim dialog. The existing non-preview component test cases also pass. These
-are local controlled-response results, not evidence that the new copy has been observed
-in AWS. Independent review accepted the preview correction; locale JSON and
-whitespace checks passed.
+or claim dialog. The existing non-preview component test cases also pass.
+The later browser replay separately verified the new copy and completion
+behavior for both one-click and ordinary forms, including required-field and
+confirmation feedback. Independent review accepted the preview correction;
+locale JSON and whitespace checks passed.
 
 ### Consolidated local validation
 
-The current consolidated UX run passed **265 tests across 17 suites**. The
+The consolidated baseline run passed **265 tests across 17 suites**. The
 subsequent **`npm run build:application` passed**, with only the existing
 large-chunk warning. These results are separate from the historical batch counts
-below and do not establish the pending AWS browser outcomes.
+below. This count describes the tested baseline and does not qualify the later
+corrections to policy navigation, cached success text, flow-list status handling,
+flow detail, or verification-flow preview.
 
-### Second browser interruption
+The missing-catalog fallback regression passed in a separate **one-test run**.
+The earlier **30-test run** remains a separate result; these runs are not
+combined into a new aggregate or presented as a rerun of the baseline.
+
+The flow-list correction passed **40 tests across three focused suites**, with
+independent contract and source review. Targeted ESLint reported no errors and
+two pre-existing unused-icon warnings. The flow-detail correction passed a
+separate **27-test run**, and the flow-preview correction passed a separate
+**31-test run**. Independent native-contract and source review accepted these
+corrections. After the final Back-label wording change, the focused regression
+for the new generic key, default text, and actual English catalog passed in a
+**one-test run** with 26 tests unselected; the earlier 27-test result predates
+that last wording change. These focused results are not added to the baseline
+count or presented as one full rerun.
+
+The final **`npm run build:application` passed after all source changes**,
+including the flow detail, verification-preview, and final Back-label changes.
+Only the existing large-chunk warning remained.
+
+### Interruption and subsequent replay
 
 At approximately **2026-11-12 19:06 UTC / 12:06 MST**, the root browser connection
 was lost. The prepared invalid-age and keyboard-policy action script was
-**never dispatched**. In particular, blank, `-1`, `.5`, exponent notation, `0`,
-and radio-keyboard interactions remain untested in the live browser. No result
-for those actions is inferred from the earlier Freshness inspection or local
-tests. No additional browser actions succeeded after that interruption.
+**never dispatched in that session**. Those actions remained untested at the
+interruption. After reconnecting, the targeted replay recorded above completed
+the listed policy input, keyboard, persistence, dialog, table, preview, and
+dashboard checks. Those outcomes come from the resumed browser work, not from
+the earlier Freshness inspection or local tests.
 
 ## Corrections from the initial batch
 
@@ -180,8 +223,8 @@ Japanese, and Dutch.
 Further local source review identified controls and duration handling that did
 not agree with the native policy request. These locally validated corrections
 were included in the `408a0f1` checkout mounted on AWS during the initial
-session. The November 12 continuation above records the later live wizard
-inspection and the interactions still pending.
+session. The November 12 continuation above records the later live wizard,
+numeric-input, keyboard, and saved-policy readback results.
 
 | Area | Defect | Result |
 | --- | --- | --- |
@@ -278,33 +321,16 @@ continuation or every currently modified file.
 - The final TypeScript/Vite application build passed with all navigation and
   dashboard changes present. Its existing large-chunk warning is unchanged.
 
-## Remaining browser verification
+## Remaining coverage limits
 
-Current TLS verification, Chrome sign-in, service readiness, and the visible
-HMR edit/restore round trip succeeded during the November 12 continuation.
-Further live work requires reconnecting the browser and confirming the active
-source and automatic-stop deadline. Visible HMR and temporary-label restoration
-are completed checks; the product-specific replay below remains pending.
+The targeted live follow-ups are complete, including the flow detail,
+verification-preview boundary, and cached-locale Back label. The remaining
+manual coverage limits are:
 
-Final targeted browser replay covers the new mobile dialog/table layouts,
-preview copy, dashboard-count revisit, and policy input/Review behavior.
-Fixture-dependent device, scope-transition, controlled failure, and race
-scenarios remain documented coverage limits when suitable fixtures are
-unavailable.
-
-| Follow-up area | Targeted replay or recorded coverage limit |
-| --- | --- |
-| Remaining local corrections | Apply the preview-copy, check-dialog layout/name, and Application Templates scroll-region changes to the live checkout; observe their HMR result |
-| Preview copy | Repeat the one-click preview and ordinary form preview; verify the new helper, completion explanation, and Exit Preview behavior |
-| Narrow and keyboard layouts | At 390 px, recheck the check selector/title/chip and its accessible name; reach the table scroll region and row actions by keyboard without page overflow |
-| Dashboard counts | Revisit Health Overview and Verify Setup Readiness with the applied status-normalization fix; distinguish all active flow definitions from verification-flow definitions where their totals legitimately differ |
-| Check-dialog save race | If a controlled pending request is available, exercise dismissal and dialog replacement while saving. Until then, retain the component-test result as the only race verification |
-| Device records and deactivation | Populated rows, deactivation, inactive history, and action failure/retry remain manual coverage limits without a disposable real registration; the empty-inventory crawl does not establish these outcomes |
-| Template recovery and scope | Failure/retry, enrichment recovery, and account/organization switching remain controlled-test coverage unless suitable live fixtures are available; the successful draft create/save/readback is a separate result |
-| Policy input and keyboard handling | Dispatch the previously unrun blank, negative, fractional, exponent, and zero-age cases; exercise the binding radios with the keyboard; verify Freshness and Review behavior and exact duration preservation |
-
-Record each browser result separately from source review, controlled-response
-tests, infrastructure checks, and successful sign-in. Keep the PR in draft
-pending the final targeted browser replay of the new mobile dialog/table
-layouts, preview copy, dashboard counts, and policy input/Review behavior.
-Retain unavailable fixture-dependent scenarios as explicit coverage limits.
+- Populated device rows, deactivation, inactive history, and action failure/retry
+  were not exercised without a disposable real registration.
+- Template failure/retry, enrichment recovery, account/organization transitions,
+  and pending-save dismissal/replacement races retain their controlled-test
+  evidence; the successful live saves do not prove those failure or timing cases.
+- This crawl did not activate the disposable policy drafts, issue a credential,
+  or qualify credential login against the retained issuer DID at the new origin.

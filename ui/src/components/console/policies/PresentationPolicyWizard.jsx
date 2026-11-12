@@ -73,6 +73,8 @@ const INITIAL_DATA = {
   activateImmediately: true,
 };
 
+const isActivePolicy = (policy) => String(policy?.status || '').trim().toLowerCase() === 'active';
+
 const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
@@ -167,8 +169,10 @@ const PresentationPolicyWizard = () => {
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: submitReviewedData,
-    onComplete: () => {
-      navigate('/console/org/deploy/profiles');
+    onComplete: (policy) => {
+      navigate(isActivePolicy(policy)
+        ? '/console/org/deploy/profiles'
+        : `/console/org/policies/presentation/${encodeURIComponent(policy.id)}`);
     },
     onCancel: () => {
       navigate('/console/org/policies');
@@ -297,6 +301,7 @@ const PresentationPolicyWizard = () => {
 
   // Show success message
   if (wizard.success) {
+    const active = isActivePolicy(wizard.result);
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -305,12 +310,14 @@ const PresentationPolicyWizard = () => {
             {t('wizards.presentationPolicy.success.title')}
           </Typography>
           <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
-            {wizard.data.activateImmediately 
+            {active
               ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
               : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {t('wizards.presentationPolicy.success.redirecting')}
+            {active
+              ? t('wizards.presentationPolicy.success.redirecting')
+              : t('wizards.presentationPolicy.success.redirectingDraft', { defaultValue: 'Opening the saved policy draft...' })}
           </Typography>
         </Paper>
       </Container>

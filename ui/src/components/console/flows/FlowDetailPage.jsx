@@ -116,7 +116,7 @@ function EntryPoints({ publicUrl, onCopy, copying }) {
           {t('flows.flowDetail.entryPoints.title')}
         </Typography>
         <Typography variant="body2" color="text.secondary" gutterBottom sx={{ mb: 3 }}>
-          {t('flows.flowDetail.entryPoints.description')}
+          {t('flows.flowDetail.entryPoints.flowDescription', { defaultValue: 'Share an available applicant link to start this flow.' })}
         </Typography>
 
         {/* Application URL */}
@@ -265,6 +265,7 @@ function ConfigurationSummary({ flow }) {
                         <IconButton
                           component={RouterLink}
                           to={item.path}
+                          aria-label={item.label}
                           size="small"
                           sx={{ ml: 1 }}
                         >
@@ -503,7 +504,7 @@ function FlowDetailSession({ flowId }) {
           onClick={() => navigate('/console/org/flows/definitions')}
           sx={{ mt: 2 }}
         >
-          {t('flows.flowDetail.actions.backToFlowsButton')}
+          {t('flows.flowDetail.actions.backToFlows', { defaultValue: 'Back to Flows' })}
         </Button>
       </Box>
     );
@@ -512,29 +513,23 @@ function FlowDetailSession({ flowId }) {
   const isPublished = displayedFlow.status === 'ACTIVE';
   const statusKey = ['DRAFT', 'ACTIVE', 'PAUSED', 'ARCHIVED'].includes(displayedFlow.status)
     ? displayedFlow.status.toLowerCase() : 'unknown';
+  const publishedBy = typeof displayedFlow.published_by === 'string' ? displayedFlow.published_by.trim() : '';
 
   return (
     <ResourcePage
-      title=""
+      title={displayedFlow.name}
       breadcrumbs={getBreadcrumbs(t)}
-      hideTitle
+      actions={(
+        <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/console/org/flows/definitions')}>
+          {t('flows.flowDetail.actions.backToFlows', { defaultValue: 'Back to Flows' })}
+        </Button>
+      )}
     >
       {/* Hero Header */}
       <Paper sx={{ p: 3, mb: 3 }}>
         <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2 }}>
           <Box sx={{ flex: 1 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <IconButton
-                size="small"
-                onClick={() => navigate('/console/org/flows/definitions')}
-              >
-                <ArrowBackIcon />
-              </IconButton>
-              <Typography variant="h4" sx={{ fontWeight: 700 }}>
-                {displayedFlow.name}
-              </Typography>
-            </Box>
-            <Stack direction="row" spacing={1} sx={{ ml: 5 }}>
+            <Stack direction="row" spacing={1}>
               <Chip
                 label={t(`flows.flowDetail.statusChips.${statusKey}`)}
                 color={isPublished ? 'success' : displayedFlow.status === 'PAUSED' ? 'warning' : 'default'}
@@ -631,7 +626,7 @@ function FlowDetailSession({ flowId }) {
       <Paper sx={{ p: 2, mt: 3, bgcolor: 'grey.50' }}>
         <Typography variant="caption" color="text.secondary">
           <strong>{t('flows.flowDetail.audit.createdLabel')}:</strong> {new Date(displayedFlow.created_at).toLocaleString()} •{' '}
-          <strong>{t('flows.flowDetail.audit.publishedByLabel')}:</strong> {displayedFlow.published_by} •{' '}
+          {publishedBy && <><strong>{t('flows.flowDetail.audit.publishedByLabel')}:</strong> {publishedBy} •{' '}</>}
           <strong>{t('flows.flowDetail.audit.lastModifiedLabel')}:</strong> {new Date(displayedFlow.updated_at).toLocaleString()}
         </Typography>
       </Paper>
