@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 
 const VIDEO_SIZE = Object.freeze({ width: 1920, height: 1080 });
 
@@ -250,8 +252,145 @@ async function finalizeVideo(video, artifactDir, filename) {
   return finalPath;
 }
 
+// One finite source policy, reused by the browser init owner and pure controls.
+// Unknown labels remain withheld, including after mutations; unsupported surfaces fail closed.
+function privateReviewSurfaceDecision(fact) {
+  const labels=new Set(['Receive','Present','Approve','Cancel','Sign in','Sign In','Login','Continue','Email','Password','Credential offer URI','Presentation request URI','Credentials','Request','Membership badge','Marty Verified Member','Marty Verified Member Open Badge','Sign out','Log out','Create account','Use a credential','Sign in with a credential','Credential login','Try again','Back','Submit','Next','Select organization','Organizations','Applications','Dashboard','Account','Profile','Allow','Deny','Retry','Marty Test Wallet','Reset wallet','Wallet ready','Receive credential','Present credential','No credentials','Share a credential?','Approve sends a presentation for the entered request. Cancel sends your decision to decline.','Working\u2026','Credential received','Presentation accepted','Decline sent','Wallet reset','Sign in with Open Badge Credential','Select wallet app','Platform','Auto-detect','Android','iOS','Generic','Open wallet','Scan with your wallet app','Waiting for wallet response\u2026']);
+  const text=String(fact.text||'').trim(),tag=String(fact.tag||'').toUpperCase();
+  if(fact.shadow||tag.includes('-'))return {blocked:'UNSUPPORTED_SHADOW_OR_CUSTOM_ELEMENT'};
+  if(['IFRAME','FRAME','OBJECT','EMBED','VIDEO','AUDIO','MATH'].includes(tag))return {blocked:'UNSUPPORTED_OPAQUE_SURFACE'};
+  // These real page surfaces retain their DOM, layout and JS behavior, but
+  // their pixels are never authorized by a text label decision.
+  const hideSurface=['SVG','IMG','CANVAS'].includes(tag);
+  if(fact.backgroundImage&&fact.backgroundImage!=='none')return {blocked:'UNSUPPORTED_BACKGROUND'};
+  if([fact.beforeBackgroundImage,fact.afterBackgroundImage].some(value=>value&&value!=='none'))return {blocked:'UNSUPPORTED_PSEUDO_BACKGROUND'};
+  if([fact.beforeContent,fact.afterContent].some(value=>value&&!['none','normal','""',"''"].includes(value)))return {blocked:'UNSUPPORTED_PSEUDO_CONTENT'};
+  for(const [name,value]of Object.entries(fact.attributes||{})){
+    if(!value)continue;
+    if(['title','placeholder'].includes(name)&&!labels.has(value))return {blocked:'UNSAFE_VALUE_ATTRIBUTE'};
+    if(name==='alt'&&!hideSurface&&!labels.has(value))return {blocked:'UNSAFE_VALUE_ATTRIBUTE'};
+    // Only the current login owner's non-rendering protocol attributes are
+    // preserved here. They are not copied into labels or evidence.
+    const loginProtocol=fact.role==='login'&&((tag==='BODY'&&['data-nonce','data-dc-api-request-url','data-dc-api-submit-url','data-dc-api-protocol'].includes(name))||(tag==='OPTION'&&['data-link','data-android-link','data-ios-link','data-description'].includes(name))||(tag==='BUTTON'&&name==='data-action'&&['show-mobile','show-qr'].includes(value)));
+    if(name.startsWith('data-')&&!['true','false'].includes(value)&&!loginProtocol)return {blocked:'UNSUPPORTED_DATA_ATTRIBUTE'};
+    if(name==='srcdoc'||name==='style'&&/url\s*\(|attr\s*\(/i.test(value))return {blocked:'UNSUPPORTED_ATTRIBUTE_CONTENT'};
+  }
+  // Unknown dynamic text remains behind the same document-start veil.
+  // Never replace text, values or protocol DOM to create a substitute UI.
+  return {blocked:null,showLabel:Boolean(!hideSurface&&text&&labels.has(text)&&fact.leaf&&!['INPUT','TEXTAREA','SELECT'].includes(tag)),hideValue:['INPUT','TEXTAREA','SELECT'].includes(tag),hideSurface};
+}
+
+function installPrivateReviewPage({role},decide) {
+  let active=false,blocked=false,checking=false;const owned=new WeakSet(),ownedStyles=new WeakMap(),priorText=new WeakMap();
+  const emit=value=>globalThis.__martyPrivateReviewSurfaceEvent({role,...value}).catch(()=>{});
+  const stop=code=>{
+    if(blocked)return;blocked=true;
+    // Unsupported content is removed synchronously; this is a FAILED rerun,
+    // never substituted functional UI or a claim that raw pixels were qualified.
+    const root=document.documentElement;if(root){root.replaceChildren();for(const name of root.getAttributeNames())root.removeAttribute(name);root.style.cssText='display:none!important;opacity:0!important;background:#000!important;color:transparent!important';}
+    emit({state:'BLOCKED',code});
+  };
+  const set=(node,key,value)=>{if(node.style.getPropertyValue(key)!==value||node.style.getPropertyPriority(key)!=='important')node.style.setProperty(key,value,'important');};
+  const scan=dynamic=>{
+    if(blocked){const root=document.documentElement;if(root&&(root.style.getPropertyValue('display')!=='none'||root.style.getPropertyPriority('display')!=='important'))root.style.setProperty('display','none','important');return;}
+    if(checking||!document.documentElement)return;checking=true;
+    try{
+      const nodes=[...document.querySelectorAll('*')];if(nodes.length>5000){stop('SURFACE_BOUND_EXCEEDED');return;}
+      for(const node of nodes){
+        if(owned.has(node)||['SCRIPT','STYLE','LINK','META','HEAD','TITLE'].includes(node.tagName))continue;
+        const style=getComputedStyle(node),direct=[...node.childNodes].filter(child=>child.nodeType===3).map(child=>child.nodeValue||'').join('').trim();
+        const fact={role,tag:node.tagName,shadow:Boolean(node.shadowRoot),text:direct,leaf:node.children.length===0,dynamic:dynamic&&direct!==priorText.get(node),attributes:Object.fromEntries(node.getAttributeNames().filter(name=>name!=='style'||node.style.cssText!==ownedStyles.get(node)).map(name=>[name,node.getAttribute(name)])),backgroundImage:style.backgroundImage,beforeContent:getComputedStyle(node,'::before').content,afterContent:getComputedStyle(node,'::after').content,beforeBackgroundImage:getComputedStyle(node,'::before').backgroundImage,afterBackgroundImage:getComputedStyle(node,'::after').backgroundImage};
+        const decision=decide(fact);if(decision.blocked){stop(decision.blocked);return;}priorText.set(node,direct);
+        for(const [key,value]of [['color',decision.showLabel?'#f8fafc':'transparent'],['-webkit-text-fill-color',decision.showLabel?'#f8fafc':'transparent'],['text-shadow','none'],['background-image','none'],['animation','none'],['transition','none']])set(node,key,value);
+        if(decision.hideValue||decision.hideSurface)set(node,'opacity','0');
+        if(decision.hideSurface)set(node,'visibility','hidden');
+        ownedStyles.set(node,node.style.cssText);
+      }
+      if(!active&&document.body&&document.readyState!=='loading'){
+        active=true;const disclosure=document.createElement('div');owned.add(disclosure);disclosure.textContent='PRIVATE REVIEW ? Safe UI labels only ? Automated browser input ? Render privacy qualification pending';
+        disclosure.style.cssText='position:fixed;left:12px;top:8px;z-index:2147483647;background:#0f172a;padding:6px;pointer-events:none';
+        // Owned disclosure must override the universal veil, including its
+        // text-fill property; ordinary inline color loses to !important.
+        for(const [key,value]of [['color','#fff'],['-webkit-text-fill-color','#fff'],['font','12px Arial,sans-serif'],['line-height','1.4'],['visibility','visible'],['opacity','1']])set(disclosure,key,value);
+        document.body.append(disclosure);
+        const pointer=document.createElement('div');owned.add(pointer);pointer.style.cssText='position:fixed;display:none;width:14px;height:14px;border:2px solid #f59e0b;border-radius:50%;z-index:2147483647;pointer-events:none;transform:translate(-50%,-50%)';document.body.append(pointer);
+        for(const kind of ['pointermove','pointerdown','pointerup'])document.addEventListener(kind,event=>{if(blocked||event.isTrusted!==true)return;pointer.style.display='block';pointer.style.left=event.clientX+'px';pointer.style.top=event.clientY+'px';globalThis.__martyPrivateReviewPointerEvent({role,kind,trusted:true,x:event.clientX,y:event.clientY,button:event.button,elapsedMs:performance.now()}).catch(()=>{});},true);
+        emit({state:'POLICY_ACTIVE',code:null});
+      }
+    }catch{stop('UNINSPECTABLE_SURFACE');}finally{checking=false;}
+  };
+  // Closed shadow creation is caught before content can enter it. Frames and
+  // other opaque surfaces are denied by the same finite policy, not inspected.
+  const attach=Element.prototype.attachShadow;Element.prototype.attachShadow=function(...args){stop('UNSUPPORTED_SHADOW_OR_CUSTOM_ELEMENT');return Reflect.apply(attach,this,args);};
+  const observer=new MutationObserver(records=>{
+    const external=records.some(row=>!owned.has(row.target)&&!(row.type==='attributes'&&row.attributeName==='style'&&row.target.style.cssText===ownedStyles.get(row.target)));
+    if(external)scan(active);
+  });observer.observe(document,{childList:true,subtree:true,characterData:true,attributes:true});
+  document.addEventListener('DOMContentLoaded',()=>scan(false),true);document.addEventListener('load',()=>scan(active),true);document.addEventListener('input',()=>scan(active),true);document.addEventListener('change',()=>scan(active),true);
+  const tick=()=>{scan(active);if(!blocked)requestAnimationFrame(tick);};
+  // Apply the value/unknown-text veil at document start independently of body
+  // visibility. A body style override cannot expose leaf values or unknown text.
+  const veil=()=>{if(!document.documentElement)return;const style=document.createElement('style');owned.add(style);style.textContent='*{color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}input,textarea,select,svg,img,canvas{opacity:0!important}svg,img,canvas{visibility:hidden!important}';document.documentElement.append(style);scan(false);};
+  if(document.documentElement)veil();else new MutationObserver((_records,o)=>{if(document.documentElement){o.disconnect();veil();}}).observe(document,{childList:true});
+  requestAnimationFrame(tick);
+}
+
+function privateReviewPageInitScript(role) {
+  assert(['wallet','login','operator','applicant'].includes(role));
+  return '('+installPrivateReviewPage.toString()+')('+JSON.stringify({role})+','+privateReviewSurfaceDecision.toString()+');';
+}
+
+function createPrivateReviewRecording(binding,{artifactDir}={}) {
+  if(!binding)return null;
+  assert.equal(binding.scope,'PRIVATE_REVIEW_ONLY');assert.equal(binding.scenario,'membership-badge-login');
+  for(const key of ['releaseQualified','recordingQualified','publicationEligible'])assert.equal(binding[key],false);
+  const directory=path.resolve(binding.mediaDirectory);assert.equal(directory,binding.mediaDirectory);
+  assert(fs.statSync(directory).isDirectory());assert.equal(fs.realpathSync(directory),directory);
+  let current=path.parse(directory).root;
+  for(const part of directory.slice(current.length).split(/[\\/]/)){if(!part)continue;current=path.join(current,part);assert(!fs.lstatSync(current).isSymbolicLink());}
+  const within=(parent,child)=>{const relative=path.relative(parent,child);return relative===''||relative!=='..'&&!relative.startsWith('..'+path.sep)&&!path.isAbsolute(relative);};
+  assert(!within(path.resolve(artifactDir),directory)&&!within(directory,path.resolve(artifactDir)),'Private media and functional artifacts must be disjoint');
+  const contexts=new Map(),videos=new Map(),events=[],surfaceEvents=[],activeRoles=new Set(),pointerOrigin=performance.now();let finalized=false,eventOverflow=false,surfaceFailure=false;
+  return {
+    contextOptions:{viewport:VIDEO_SIZE,recordVideo:{dir:directory,size:VIDEO_SIZE}},
+    async prepareContext(context,role,{sensitiveTexts=[]}={}){
+      assert(['wallet','login','operator','applicant'].includes(role));assert(!contexts.has(context));assert.equal(context.pages().length,0,'Redaction must precede pages');contexts.set(context,role);
+      await context.exposeBinding('__martyPrivateReviewPointerEvent',({page},event)=>{
+        assert.equal(page.context(),context);assert.equal(event.role,role);assert.equal(event.trusted,true);
+        assert.deepEqual(Object.keys(event).sort(),['role','kind','trusted','x','y','button','elapsedMs'].sort());assert(['pointermove','pointerdown','pointerup'].includes(event.kind));
+        for(const key of ['x','y','button','elapsedMs'])assert(Number.isFinite(event[key]));assert(event.x>=0&&event.y>=0&&event.elapsedMs>=0);if(events.length>=4096){eventOverflow=true;return;}
+        // Driver-received monotonic elapsed time, not video-frame or OS timing.
+        events.push({role,type:event.kind,x:event.x,y:event.y,at:performance.now()-pointerOrigin});
+      });
+      await context.exposeBinding('__martyPrivateReviewSurfaceEvent',({page},event)=>{
+        try{assert.equal(page.context(),context);assert.equal(event.role,role);assert.deepEqual(Object.keys(event).sort(),['role','state','code'].sort());assert(['POLICY_ACTIVE','BLOCKED'].includes(event.state));assert(event.code===null||/^[A-Z_]{1,64}$/.test(event.code));assert(surfaceEvents.length<256);surfaceEvents.push({...event});if(event.state==='POLICY_ACTIVE')activeRoles.add(role);}
+        catch(error){surfaceFailure=true;throw error;}
+      });
+      // The same pure policy body is injected, without a second implementation.
+      await context.addInitScript({content:privateReviewPageInitScript(role)});
+    },
+    trackPage(role,page){assert.equal(contexts.get(page.context()),role);assert(!videos.has(role),'One captured page per role');const video=page.video();assert(video,'Private captured video required');videos.set(role,video);},
+    async finish({ready,cleanupComplete}){
+      assert(!finalized);assert(!surfaceFailure,'Private surface evidence invalid or overflowed');assert(!surfaceEvents.some(event=>event.state==='BLOCKED'),'Private visible-surface policy refused');assert([...videos.keys()].every(role=>activeRoles.has(role)),'Each page requires an active visible-surface policy');assert(!eventOverflow,'Private cursor evidence bound exceeded');assert.equal(ready,true,'Current functional rerun must pass');assert.equal(cleanupComplete,true,'Owned cleanup must pass');assert(videos.has('wallet')&&videos.has('login'));assert(events.some(event=>event.type==='pointerdown'),'Actual delivered browser clicks required');assert(events.every(event=>videos.has(event.role)),'Cursor event role requires its actual captured video');
+      const rawMedia={},seenMedia=new Set();
+      for(const [role,video]of videos){
+        const filename=path.resolve(await video.path());assert.equal(path.dirname(filename),directory);assert(!seenMedia.has(filename),'Captured roles require distinct page videos');seenMedia.add(filename);const stat=fs.lstatSync(filename);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size>0&&stat.size<=2**31);assert.equal(path.extname(filename),'.webm');
+        const hash=crypto.createHash('sha256');for await(const chunk of fs.createReadStream(filename))hash.update(chunk);
+        rawMedia[role]={path:filename,sha256:hash.digest('hex'),bytes:stat.size};
+      }
+      const cursorPath=path.join(directory,'cursor-evidence.json');const cursor={captureId:binding.captureId,runId:binding.runId,telemetry:'ACTUAL_TRUSTED_DOM_POINTER_EVENTS_NOT_OS',events};
+      fs.writeFileSync(cursorPath,JSON.stringify(cursor)+'\n',{flag:'wx',mode:0o600});const bytes=fs.readFileSync(cursorPath);finalized=true;
+      const policyPath=path.join(directory,'surface-policy-evidence.json'),policy={captureId:binding.captureId,runId:binding.runId,policy:'FAIL_CLOSED_SAFE_UI_LABELS_ONLY',renderedPrivacyQualified:false,events:surfaceEvents};fs.writeFileSync(policyPath,JSON.stringify(policy)+'\n',{flag:'wx',mode:0o600});const policyBytes=fs.readFileSync(policyPath);
+      return {scope:'PRIVATE_REVIEW_ONLY',captureId:binding.captureId,runId:binding.runId,rawMedia,cursorEvidence:{path:cursorPath,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length},visibleSurfacePolicy:'FAIL_CLOSED_SAFE_UI_LABELS_ONLY',surfacePolicyEstablishedBeforePages:true,surfacePolicyEvidence:{path:policyPath,sha256:crypto.createHash('sha256').update(policyBytes).digest('hex'),bytes:policyBytes.length},renderedPrivacyQualified:false,cursorTelemetry:'ACTUAL_TRUSTED_DOM_POINTER_EVENTS_NOT_OS',releaseQualified:false,recordingQualified:false,publicationEligible:false};
+    },
+  };
+}
+
 module.exports = {
   VIDEO_SIZE,
+  createPrivateReviewRecording,
+  privateReviewPageInitScript,
+  privateReviewSurfaceDecision,
   buildVerificationDisplay,
   createActionRecording,
   createArtifactDir,

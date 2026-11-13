@@ -371,6 +371,45 @@ function assertions(lane, checks) {
   return result;
 }
 
-module.exports = { directPostRequestReference, directPostLoginBinding, holderDeclineEvidence, freshDirectPostLogin, GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
+function validateFunctionalSupportReport(report,lane,{wallet,fixtureSha256,entrypointSha256}={}) {
+  assert(['expired-offer','untrusted-issuer'].includes(lane),'Explicit supporting report lane required');
+  assert.equal(report?.lane,lane);assert.equal(report.scenario,'D05 support: '+lane);
+  assert.equal(report.classification,'FIRST_PARTY_CONTROL');assert.equal(report.independentWalletQualification,false);
+  assert.equal(report.releaseReady,false);assert.equal(report.functionalReady,true);assert.equal(report.operations_verified,true);
+  assert.equal(report.qualification,'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS');assert(!report.failure&&!report.error);
+  assert(Array.isArray(report.finalizationFailures)&&report.finalizationFailures.length===0);
+  assert.equal(report.localFunctionalRuntime?.scope,'FUNCTIONAL_ONLY');assert.equal(report.localFunctionalRuntime?.releaseQualified,false);assert.equal(report.localFunctionalRuntime?.recordingQualified,false);
+  assert(wallet&&wallet.runId===report.runId,'Exact owned wallet run required');assert.deepEqual(report.localFunctionalWallet,wallet);
+  assert.equal(report.walletSession?.instanceId,wallet.instanceId);assert.equal(report.walletSession?.runId,report.runId);assert.equal(report.walletSession.closed,true);
+  const closed=report.closedWalletSession;assert(closed&&closed.status===410&&closed.scope==='CLOSED_SESSION_REJECTION');
+  for(const key of ['instanceId','sessionId','runId'])assert.equal(closed[key],report.walletSession[key]);
+  assert.equal(report.authoringSessionsRetired,true);assert.equal(report.originalSessionRetirement?.complete,true);
+  assert(report.originalSessionRetirement.sessions.length>=2&&report.originalSessionRetirement.sessions.every(row=>row.originalCookieVerified===true&&row.custodyRetired===true&&row.oldCookieAuthenticated===false));
+  assert.equal(report.cleanup?.ok,true);assert.equal(report.cleanup.complete,true);
+  const configuration=report.observed?.configurationReadback;assert.equal(configuration?.ok,true);assert.match(configuration.beforeSha256,/^[a-f0-9]{64}$/);assert.equal(configuration.beforeSha256,configuration.afterSha256);assert.equal(configuration.beforeSha256,report.observed.preflight?.configurationSha256);
+  const owned=report.ownedApplications,cleaned=report.cleanup.applications;
+  assert(Array.isArray(owned)&&owned.length===(lane==='expired-offer'?1:2));assert(Array.isArray(cleaned)&&cleaned.length===owned.length);
+  assert.equal(new Set(owned.map(row=>row.applicationId)).size,owned.length);
+  assert(owned.every(row=>UUID.test(row.applicationId)&&Array.isArray(row.uncertainMutations)&&row.uncertainMutations.length===0));
+  assert(cleaned.every(row=>row.ok===true&&owned.some(item=>item.applicationId===row.applicationId)));
+  assert.equal(new Set(cleaned.map(row=>row.applicationId)).size,owned.length);
+  assert.match(report.fixtureSha256||'',/^[a-f0-9]{64}$/);assert.equal(report.fixtureSha256,fixtureSha256);
+  assert.equal(report.source?.entrypoint,'tests/scripts/audit-beta-membership-support.js');assert.match(report.source.sha256,/^[a-f0-9]{64}$/);if(entrypointSha256)assert.equal(report.source.sha256,entrypointSha256);
+  assert.deepEqual(report.behaviorAssertions,assertions(lane,report.checks));assert(Object.values(report.behaviorAssertions).every(value=>value===true));
+  const recovery=report.observed?.recovery;assert(recovery&&recovery.authenticated===true&&recovery.status==='completed'&&recovery.browserFinalizeVerified===true);
+  assert(recovery.browserFinalize?.verified===true&&recovery.browserFinalize.exactNonce===true&&recovery.browserFinalize.expectedUi===true&&recovery.browserFinalize.sessionCookieSet===true&&recovery.browserFinalize.redirectStatus===302);
+  assert(recovery.result?.signatureValid===true&&recovery.result.trustCheckPassed===true&&recovery.result.decision==='allow');
+  if(lane==='expired-offer'){
+    assert.equal(report.observed.expiration?.expiredOfferHttpStatus,410);assert.equal(report.observed.cachedCode?.httpStatus,400);assert.equal(report.observed.cachedCode?.error,'invalid_grant');
+    assert(report.observed.expiredReceipt?.ok===false&&report.observed.expiredReceipt.visibleMessage===true&&report.observed.expiredReceipt.responseHasError===true);
+    assert.equal(report.observed.expiredOfferCleanup?.ok,true);assert(UUID.test(report.observed.expiryWindow?.transactionId));assert.notEqual(owned[0].transactionId,report.observed.expiryWindow.transactionId);
+  }else{
+    const denied=report.observed.denial;assert(denied&&denied.status==='failed'&&denied.reasonCode==='issuer_not_trusted'&&denied.authenticated===false&&denied.finalizeSetCookie===false&&denied.authFailureVisible===true);
+    assert(denied.result?.signatureValid===true&&denied.result.trustCheckPassed===false&&denied.result.decision==='deny');assert.notEqual(denied.result.instanceId,recovery.result.instanceId);
+  }
+  return true;
+}
+
+module.exports = { validateFunctionalSupportReport, directPostRequestReference, directPostLoginBinding, holderDeclineEvidence, freshDirectPostLogin, GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
   credentialContract, expiryWindow, hash, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture,
   validateIssuerSetup, validateLoginSetup };

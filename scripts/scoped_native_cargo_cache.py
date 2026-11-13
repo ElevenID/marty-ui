@@ -17,6 +17,8 @@ import sys
 import tomllib
 import time
 
+from scoped_native_runtime import available_physical_memory_bytes
+
 
 REV = re.compile(r"git\+https://github\.com/ElevenID/([A-Za-z0-9_-]+)\?rev=([0-9a-f]{40})#([0-9a-f]{40})\Z")
 REGISTRY_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
@@ -602,8 +604,7 @@ def hydrate(plan: dict, helper, journal) -> dict:
     require(getattr(journal, "run_id", None) == run_id
             and getattr(journal, "specification", {}).get("backend") == "DOCKER_DESKTOP_PRIVATE_JOURNAL_V1",
             "NATIVE_CACHE_EXACT_DESKTOP_JOURNAL_REQUIRED")
-    host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                              "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
+    host_kib = available_physical_memory_bytes() // 1024
     require(host_kib >= budget["hostFloorKiB"]
             and shutil.disk_usage(output).free >= 1024 ** 3,
             "NATIVE_CACHE_CAPACITY_NOT_ADMITTED")

@@ -307,6 +307,24 @@ def assert_consumer_worker(
         expected = shared_worker_model(expected, shared_image)
     if isolated:
         expected.pop("container_name", None)
+        # The conformance stack includes beta. The pinned renderer may omit
+        # this override under --no-env-resolution; when present, require its
+        # exact declared expression.
+        conformance_environment = environment_mapping(
+            actual["services"][WORKER].get("environment", {})
+        )
+        if "GRPC_SERVICE_TOKEN" in conformance_environment:
+            assert (
+                conformance_environment["GRPC_SERVICE_TOKEN"]
+                == BETA_WORKER_ENVIRONMENT["GRPC_SERVICE_TOKEN"]
+            )
+            expected["environment"].update(BETA_WORKER_ENVIRONMENT)
+    if isolated or beta:
+        # Both paths include the beta layer's signing readiness dependency.
+        expected["depends_on"]["signing-keys"] = {
+            "condition": "service_healthy",
+            "required": True,
+        }
     if beta:
         expected["environment"].update(BETA_WORKER_ENVIRONMENT)
     observed = deepcopy(actual["services"][WORKER])

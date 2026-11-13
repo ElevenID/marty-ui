@@ -21,7 +21,7 @@ import sys
 import traceback
 import uuid
 from scoped_native_database import NativeDatabasePhase, schema_url, ENGINE, BUILD_RECEIPT_SHA, bounded_run, schema_input_contract
-from scoped_native_runtime import read_executable_ref, read_ref, ref, require, save_state, MIGRATIONS
+from scoped_native_runtime import available_physical_memory_bytes, read_executable_ref, read_ref, ref, require, save_state, MIGRATIONS
 from scoped_signing_successor import environment
 from scoped_native_maintenance import SOURCE, CORE, operational_sql_sources
 from prepare_local_official_native_build import git
@@ -608,18 +608,18 @@ def private_failure_diagnostic(error):
 
 
 def capacity(context, inputs):
-    command = "$o=Get-CimInstance Win32_OperatingSystem;[long]$o.FreePhysicalMemory*1024"
-    result = bounded_run([inputs["executables"]["powershell"]["path"], "-NoProfile", "-NonInteractive", "-Command", command],
-        env=context["env"], timeout=20, stdout_limit=4096, stderr_limit=4096)
-    text = result.stdout.decode("utf-8", errors="replace").strip()
-    free = int(text) if text.isascii() and text.isdigit() else None
+    error = None
+    try:
+        free = available_physical_memory_bytes()
+    except OSError as failure:
+        free, error = None, failure
     context["capacityObservation"] = context["save"]("capacity-observation.private.json", {
         "observedAtUtc": datetime.now(timezone.utc).isoformat(),
-        "exitCode": result.returncode, "observation": result.observation,
-        "stdout": text, "stderr": result.stderr.decode("utf-8", errors="replace"),
+        "api": "GlobalMemoryStatusEx", "errorClass": type(error).__name__ if error else None,
         "freePhysicalBytes": free, "requiredPhysicalBytes": 4 * 1024 ** 3})
-    require(result.returncode == 0 and not result.observation["failures"] and not result.observation["timedOut"]
-            and free is not None, "PHYSICAL_CAPACITY_UNKNOWN")
+    if error is not None:
+        raise ValueError("PHYSICAL_CAPACITY_UNKNOWN") from error
+    require(type(free) is int and free >= 0, "PHYSICAL_CAPACITY_UNKNOWN")
     require(free >= 4 * 1024 ** 3, "PHYSICAL_4GIB_REQUIRED")
     return free
 

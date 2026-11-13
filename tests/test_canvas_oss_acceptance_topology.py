@@ -317,3 +317,76 @@ def test_stack_cd_uses_released_credentials_and_public_migration_contract() -> N
     assert "scripts/extract_verified_source.py" in workflow
     assert "pytest tests/oss_stack" in workflow
     assert "repository: ElevenID/marty-credentials" not in workflow
+
+
+def test_remote_redis_cache_data_is_bounded_ephemeral_without_anonymous_volume() -> None:
+    import yaml
+
+    compose = yaml.safe_load((ROOT / "docker-compose.canvas-oss-remote.yml").read_text(encoding="utf-8"))
+    redis = compose["services"]["canvas-redis"]
+    assert "tmpfs" not in redis and "command" not in redis
+    assert redis["volumes"] == [{"type": "tmpfs", "target": "/data", "tmpfs": {"size": 67108864, "mode": 1023}}]
+    # Mode is decimal1023 (=octal01777), never decimal1777. This is the effective
+    # Compose->Moby TmpfsOptions numeric contract, not a daemon qualification.
+    tmpfs = redis["volumes"][0]["tmpfs"]
+    assert type(tmpfs["mode"]) is int and tmpfs["mode"] == 0o1777
+    assert type(tmpfs["size"]) is int and tmpfs["size"] == 64 * 1024 * 1024
+    assert redis["mem_limit"] == "128m" and redis["memswap_limit"] == "256m"
+    assert set(compose["volumes"]) == {"canvas_oss_files", "canvas_oss_log", "canvas_oss_postgres"}
+    assert compose["services"]["canvas-postgres"]["volumes"] == ["canvas_oss_postgres:/var/lib/postgresql/data"]
+    assert compose["services"]["canvas-jobs"]["command"] == ["bundle", "exec", "script/delayed_job", "run"]
+    configuration = (ROOT / "scripts/canvas-oss/runtime-config-contract.mjs").read_text(encoding="utf-8")
+    assert "cache_store: redis_cache_store" in configuration
+    assert "session_store: encrypted_cookie_store" in configuration
+    assert "adapter: postgresql" in configuration
+
+
+def test_remote_redis_cache_real_compose_render_contract(tmp_path: Path) -> None:
+    """Normal interpolated Compose serialization: public values, no daemon/services."""
+    import os
+
+    renderer = os.environ.get("MARTY_COMPOSE_RENDERER")
+    if renderer is not None:
+        assert Path(renderer).is_file(), "selected Compose renderer is missing"
+        command = [renderer]
+    else:
+        command = ["docker", "compose"]
+
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("", encoding="utf-8")
+    docker_config = tmp_path / "docker-config"
+    docker_config.mkdir()
+    allowed = {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "PATHEXT", "PROGRAMFILES", "PROGRAMFILES(X86)"}
+    environment = {key: value for key, value in os.environ.items() if key.upper() in allowed}
+    lock = json.loads((ROOT / "deploy-config/catalog/canvas-oss.lock.json").read_text(encoding="utf-8"))
+    dependencies = lock["runtime_dependencies"]
+    environment.update(
+        DOCKER_CONFIG=str(docker_config), COMPOSE_DISABLE_ENV_FILE="true",
+        CANVAS_OSS_IMAGE=lock["image"]["repository"] + "@" + lock["image"]["digest"],
+        CANVAS_OSS_POSTGRES_IMAGE=dependencies["postgres"],
+        CANVAS_OSS_REDIS_IMAGE=dependencies["redis"],
+        CANVAS_OSS_MAILPIT_IMAGE=dependencies["mailpit"],
+        CANVAS_OSS_EDGE_IMAGE=dependencies["edge"],
+        CANVAS_OSS_ADMIN_EMAIL="render-only@example.invalid",
+        CANVAS_OSS_CONFIG_DIR="/render-only/config",
+        CANVAS_OSS_SECRET_DIR="/render-only/secrets",
+        CANVAS_OSS_TLS_DIR="/render-only/tls",
+        CANVAS_OSS_ACME_DIR="/render-only/acme",
+    )
+    rendered = subprocess.run(
+        [*command, "--project-name", "canvas-oss-remote",
+         "--project-directory", str(ROOT), "--env-file", str(empty_env),
+         "--file", str(ROOT / "docker-compose.canvas-oss-remote.yml"),
+         "config", "--no-path-resolution", "--format", "json"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert rendered.returncode == 0, "Real Compose source render failed; captured output is private"
+    model = json.loads(rendered.stdout)
+    redis = model["services"]["canvas-redis"]
+    assert "tmpfs" not in redis
+    # Normal interpolation/schema route (not --no-interpolate): actual Compose5.4 UnitBytes serializes as a decimal
+    # STRING at this boundary; Moby TmpfsOptions.SizeBytes remains numeric64MiB.
+    assert redis["volumes"] == [{"type": "tmpfs", "target": "/data", "tmpfs": {"size": "67108864", "mode": 1023}}]
+    assert int(redis["volumes"][0]["tmpfs"]["size"]) == 64 * 1024 * 1024
+    assert redis["volumes"][0]["tmpfs"]["mode"] == 0o1777
+    assert set(model["volumes"]) == {"canvas_oss_files", "canvas_oss_log", "canvas_oss_postgres"}

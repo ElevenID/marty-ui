@@ -91,8 +91,9 @@ class MembershipBuildTests(unittest.TestCase):
             for before_parent, threshold in ((False, current), (True, parent)):
                 self.assertEqual(build.membership_required_free_bytes(profile, before_parent=before_parent), threshold)
                 for free, accepted in ((threshold, True), (threshold - 1024, False)):
-                    helper = SimpleNamespace(run=lambda *args: SimpleNamespace(stdout=str(free // 1024)))
+                    helper = SimpleNamespace(run=unittest.mock.Mock(side_effect=AssertionError('No memory subprocess')))
                     with self.subTest(profile=profile, before_parent=before_parent, free=free), \
+                         patch.object(build, 'available_physical_memory_bytes', return_value=free), \
                          patch.object(build.shutil, 'disk_usage', return_value=SimpleNamespace(free=8 * 1024 ** 3)):
                         if accepted:
                             build.membership_capacity(helper, Path('.'), profile, before_parent=before_parent)

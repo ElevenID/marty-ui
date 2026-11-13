@@ -1019,3 +1019,56 @@ def test_d10_uses_only_exact_acknowledged_inputs_for_feature_actions():
     scenario["signing"]["keyReference"] = "substituted-key"
     with pytest.raises(ValueError, match="differ from recorder-acknowledged"):
         audit.bound_recorder_inputs(capture, signing, False, 1300)
+
+
+def test_functional_snapshot_never_writes_png_or_redaction_placeholder(monkeypatch, tmp_path):
+    audit = _load_audit_module()
+    monkeypatch.setenv("RECORD_VIDEO", "0")
+    class Page:
+        url = "https://beta.elevenidllc.com/fixture"
+        def screenshot(self, **_options):
+            raise AssertionError("functional screenshot must never be called")
+        def evaluate(self, *_args):
+            raise AssertionError("diagnostic screenshot scrolling must not run")
+    monkeypatch.setattr(audit, "first_heading", lambda _page: "Fixture heading")
+    monkeypatch.setattr(audit, "body_excerpt", lambda _page: "Structured diagnostic fixture")
+    def no_placeholder(*_args):
+        raise AssertionError("functional placeholder must not create a PNG")
+    monkeypatch.setattr(audit, "write_redacted_screenshot_placeholder", no_placeholder)
+    owner = audit.Audit(Page(), tmp_path, "https://beta.elevenidllc.com")
+    owner.snapshot("ordinary", "step retained")
+    owner.snapshot("api-key-created", "sensitive step retained", {"api_key_secret_screenshot_redacted": True}, redact_screenshot=True)
+    assert list(tmp_path.iterdir()) == []
+    assert len(owner.steps) == 2
+    assert all(step["screenshot"] is None for step in owner.steps)
+    assert all(step["screenshot_status"] == "NOT_CAPTURED_FUNCTIONAL" for step in owner.steps)
+    assert owner.steps[-1]["api_key_secret_screenshot_redacted"] is False
+    assert owner.steps[-1]["api_key_secret_screenshot_omitted"] is True
+    assert owner.steps[0]["note"] == "step retained"
+
+
+def test_functional_screenshot_omission_requires_closed_zero_screenshot_metadata():
+    audit = _load_audit_module()
+    steps = _required_steps()
+    secret = next(step for step in steps if step["label"] == "api-key-created")
+    secret.update(api_key_secret_screenshot_redacted=False, api_key_secret_screenshot_omitted=True,
+                  screenshot=None, screenshot_status="NOT_CAPTURED_FUNCTIONAL")
+    report = {"capture_mode": "FUNCTIONAL_ONLY_METADATA", "screenshots": [], "summary": {"screenshots": 0},
+              "steps": steps, **_cleanup_fixture(), "bad_responses": [], "failed_requests": [], "page_errors": []}
+    assert audit.evaluate_release_checks(report)["status"] == "pass"
+    for change in [{"capture_mode": "RECORDED_VISUAL_AUDIT"}, {"screenshots": ["foreign.png"]}, {"summary": {"screenshots": 1}}]:
+        blocked = audit.evaluate_release_checks({**report, **change})
+        assert "api_key_screenshot_not_redacted" in [row["code"] for row in blocked["blockers"]]
+
+
+def test_recording_mode_and_ack_refuse_functional_video_contradiction():
+    audit = _load_audit_module()
+    assert audit.recording_mode(True, {"RECORD_VIDEO": "0"}) == (True, False, True)
+    assert audit.recording_mode(True, {"RECORD_VIDEO": "1"}) == (False, True, True)
+    signing = {"endpoint": "https://kms.example.invalid", "mount": "transit", "namespace": "", "key_reference": "fixture", "validator_sha256": "a" * 64}
+    scenario = {"runId": "20260101000000-1234abcd", "recordVideo": False, "recordingPauseMs": 1300,
+                "signing": {"endpoint": signing["endpoint"], "mount": "transit", "namespace": "", "keyReference": "fixture", "caCertFile": "", "validatorSha256": "a" * 64}}
+    capture = SimpleNamespace(inputs={"origin": "https://beta.elevenidllc.com", "scenario": scenario})
+    assert audit.bound_recorder_inputs(capture, signing, False, 1300) is scenario
+    with pytest.raises(ValueError, match="differ from recorder-acknowledged"):
+        audit.bound_recorder_inputs(capture, signing, True, 1300)

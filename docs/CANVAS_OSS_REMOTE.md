@@ -22,12 +22,43 @@ bootstrap. The remote Compose excludes the browser/contract/monitor workloads;
 existing synthetic-fixture adapters run separately and keep their ownership,
 OAuth/LTI, cleanup, recording and editorial requirements.
 
+Redis is an ephemeral cache in this profile: `cache_store.yml` uses
+`redis_cache_store`, sessions use encrypted cookies, and the stock delayed-job
+worker uses the PostgreSQL application database. Its `/data` mount uses explicit
+long-syntax `type: tmpfs`, size 67108864 and mode 1023 (decimal for octal 01777).
+This selects the Docker Mount API with `TmpfsOptions.SizeBytes=67108864` and
+`Mode=1023`; Docker applies its default noexec/nosuid/nodev tmpfs protections.
+Its pages count against the unchanged Redis 128 MiB RAM cap, not extra capacity.
+Cache/RDB contents disappear when Redis is replaced. Uploads, logs and PostgreSQL
+remain the exact three named persistent volumes. No Redis image/command or
+Canvas source changes. Actual cold-cache/reconnect/workload checks remain required.
+
+For an existing deployment, the reviewed Redis-only recreation must also use
+`--renew-anon-volumes` with `--no-deps --no-build --pull never --force-recreate
+canvas-redis`. Compose 5.4 otherwise inherits the image's old anonymous `/data`
+volume and can discard even an explicit empty-source tmpfs declaration while
+processing that inheritance. Renew disables inheritance only for the selected
+Redis recreation. The explicit tmpfs mount then suppresses the image's anonymous
+volume allocation; this does not renew or remove any of the three durable volumes.
+A legacy `tmpfs:` map alone is insufficient evidence: `HostConfig.Tmpfs` may be
+present while `Mounts` still contains the inherited disk volume.
+
+Before any old-volume retirement, verify the actual new Redis `/data` entry is
+`Type=tmpfs`, its `HostConfig.Mounts` has the exact size/mode options, no
+`HostConfig.Tmpfs` legacy map or inherited volume/bind remains, and Redis is
+healthy under UID 999. Verify public health/web reconnect and the other five
+unchanged generations. Preserve the exact old anonymous volume until it has
+zero consumers, including stopped containers. Then retire only that exact
+unchanged volume through the reviewed owner; never prune, use `down --volumes`,
+`--remove-orphans`, or broad volume deletion. Preserve failures and use the
+explicit recovery review; never automatically retry or roll back.
+
 All six steady services restart unless explicitly stopped; the lifecycle
 one-shot is excluded. Actual bootstrap and workload checks must still account
 for OOM/restart/generation observations rather than treating a restart as a pass.
 
 The pilot applies **real** RAM hard caps: web3GiB, one jobs process1GiB,
-Postgres512MiB, Redis128MiB, mail64MiB, edge64MiB; steady total4.75GiB.
+Postgres512MiB, Redis 128 MiB, mail64MiB, edge64MiB; steady total4.75GiB.
 The separate lifecycle cap is4GiB, run before web/jobs start; bootstrap total
 4.6875GiB. Passenger min/max workers are1 using the base image's documented
 environment controls; the stock delayed-job configuration has one worker.

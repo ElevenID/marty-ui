@@ -176,6 +176,22 @@ def test_rejects_staged_tracked_mutation(source) -> None:
         attestation.build_attestation(env, event, repo)
 
 
+def test_dirty_checkout_diagnostic_reports_bounded_paths_without_contents(source) -> None:
+    repo, env, event = source
+    secret_marker = "file-content-never-in-log"
+    (repo / "feature.txt").write_text(secret_marker + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="tracked checkout changed") as failure:
+        attestation.build_attestation(env, event, repo)
+    message = str(failure.value)
+    assert '"tracked_change_count":1' in message
+    assert "feature.txt" in message
+    assert secret_marker not in message
+    bounded = attestation.tracked_change_diagnostic("\n".join(f" M file-{i}" for i in range(40)))
+    assert '"tracked_change_count":40' in bounded
+    assert "file-11" in bounded
+    assert "file-12" not in bounded
+
+
 def test_untracked_build_output_does_not_change_recorded_tree(source) -> None:
     repo, env, event = source
     (repo / "rust/target").mkdir(parents=True)
