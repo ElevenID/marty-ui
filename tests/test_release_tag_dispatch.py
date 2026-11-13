@@ -24,6 +24,14 @@ INTENT_OBJECT = "d" * 40
 
 class OperatorDispatchTests(unittest.TestCase):
     def setUp(self) -> None:
+        def source_policy(github, source, executable, **kwargs):
+            handoff.require(source == SOURCE and executable in {SOURCE, MAIN}
+                            and self.main["protected"] is True and self.main["name"] == "main"
+                            and self.main["commit"]["sha"] == MAIN, "Protected main changed")
+            return MAIN
+        patch = mock.patch.object(handoff, "candidate_main", side_effect=source_policy)
+        patch.start()
+        self.addCleanup(patch.stop)
         self.start = datetime.now(timezone.utc).replace(microsecond=0)
         self.deadline = self.start + timedelta(seconds=900)
         self.request = {
@@ -129,7 +137,7 @@ class OperatorDispatchTests(unittest.TestCase):
 
     def test_returned_run_must_match_original_workflow_source_attempt_and_window(self) -> None:
         mutations = [{"id": 790}, {"path": handoff.CD_WORKFLOW}, {"event": "push"},
-                     {"head_branch": "feature"}, {"head_sha": SOURCE}, {"run_attempt": 2},
+                     {"head_branch": "feature"}, {"head_sha": "f" * 40}, {"run_attempt": 2},
                      {"run_attempt": True}, {"repository": {"id": 9, "full_name": handoff.REPOSITORY}},
                      {"status": "completed", "conclusion": "failure"},
                      {"created_at": (self.start - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
@@ -217,6 +225,8 @@ class OperatorDispatchTests(unittest.TestCase):
                     held.enter_context(mock.patch.object(github, "artifact", return_value=self.artifact))
                     held.enter_context(mock.patch.object(github, "main", return_value=self.main))
                     held.enter_context(mock.patch.object(github, "run", side_effect=run))
+                    held.enter_context(mock.patch.object(handoff, "candidate_run",
+                        side_effect=lambda api, run_id, workflow, source: run(run_id, workflow, MAIN)))
                     held.enter_context(mock.patch.object(handoff, "wait_for_dispatch_step"))
                     dispatch = held.enter_context(mock.patch.object(handoff, "dispatch_operator_once", return_value=789))
                     held.enter_context(mock.patch.object(handoff, "annotated_tag", side_effect=[None, None, tag, tag]))

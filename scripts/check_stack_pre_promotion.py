@@ -142,13 +142,11 @@ def check(
         )
     except (ValueError, KeyError, TypeError):
         raise PrePromotionError("Official gate differs from the qualified transaction") from None
-    expected_main = authority["protected_main_commit"]
-    if main_lookup(repository) != expected_main:
-        raise PrePromotionError("Protected main changed after official qualification")
+    expected_main = main_lookup(repository)
     git_command("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
     main_sha = git_command("rev-parse", "refs/remotes/origin/main^{commit}")
     if main_sha != expected_main:
-        raise PrePromotionError("Fetched main differs from authenticated review authority")
+        raise PrePromotionError("Fetched main differs from the authenticated protected-main observation")
     try:
         history_check(
             source_sha, main_sha, run_id, authority["origin_attempt"],

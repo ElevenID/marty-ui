@@ -35,7 +35,8 @@ PATHS = (".github", "scripts", "release", ".gitattributes",
          ".cargo", "rust/.cargo", "rust-toolchain", "rust-toolchain.toml",
          "rust/rust-toolchain", "rust/rust-toolchain.toml", "Cargo.toml", "Cargo.lock",
          "rust/Cargo.toml", "rust/Cargo.lock", "rust/crates/release-evidence",
-         "rust/crates/oid4vp-contract", "config/envoy")
+         "rust/crates/oid4vp-contract", "config/envoy", "rust/.gitattributes",
+         "rust/crates/.gitattributes", "config/.gitattributes")
 EXCLUDED = frozenset({"release/stack-lock.json"})
 MAX_FILES = 4096
 MAX_BYTES = 24 * 1024 * 1024
@@ -132,7 +133,34 @@ class History:
             raise SourceAuthorityError("source archive could not be verified") from error
         require(set(observed) == set(inventory), "source archive omits release policy inputs")
         return "sha256:" + hashlib.sha256(json.dumps(
-            observed, sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
+            {"files": observed, "stack_lock_policy": self.lock_policy(source)},
+            sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
+
+    def lock_policy(self, source: str) -> tuple[str, str]:
+        """Permit a later version field while retaining eligibility and pins."""
+        entry = self.git("ls-tree", "-z", source, "--", "release/stack-lock.json")
+        require(entry.startswith((b"100644 blob ", b"100755 blob "))
+                and entry.endswith(b"\trelease/stack-lock.json\0") and entry.count(b"\0") == 1,
+                "candidate version lock must be one ordinary file")
+        raw = self.git("cat-file", "blob", f"{source}:release/stack-lock.json")
+        require(0 < len(raw) <= 1024 * 1024, "candidate stack lock exceeds its bound")
+        def pairs(rows):
+            result = {}
+            for key, value in rows:
+                require(key not in result, "candidate version lock has duplicate keys")
+                result[key] = value
+            return result
+        def reject_constant(_):
+            raise SourceAuthorityError("candidate version lock has a non-finite number")
+        try:
+            lock = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=reject_constant)
+            require(type(lock) is dict and type(lock.get("release")) is str and bool(lock["release"]),
+                    "candidate version lock is malformed")
+            projection = {key: value for key, value in lock.items() if key != "release"}
+            encoded = json.dumps(projection, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+        except (UnicodeError, ValueError, RecursionError) as error:
+            raise SourceAuthorityError("candidate version lock is malformed") from error
+        return entry[:6].decode("ascii"), hashlib.sha256(encoded).hexdigest()
 
 
 def policy_bytes() -> bytes:
@@ -164,12 +192,14 @@ def require_compatible_source(source: str, executable: str, protected_main: str,
         history.git("merge-base", "--is-ancestor", ancestor, protected_main)
     history.git("merge-base", "--is-ancestor", source, executable)
     expected = history.inventory(source)
+    lock_policy = history.lock_policy(source)
     fingerprint = history.fingerprint(source, expected)
     commits = history.git("rev-list", f"--max-count={POLICY['history_limit'] + 1}",
                           f"{source}..{protected_main}").splitlines()
     require(len(commits) <= POLICY["history_limit"], "source history exceeds its complete bound")
     for commit in {executable, protected_main, *(row.decode("ascii") for row in commits)}:
-        require(SHA.fullmatch(commit) is not None and history.inventory(commit) == expected,
+        require(SHA.fullmatch(commit) is not None and history.inventory(commit) == expected
+                and history.lock_policy(commit) == lock_policy,
                 "release program or policy changed after candidate admission")
     return fingerprint
 
@@ -206,3 +236,11 @@ def authenticated_current(github, source: str, executable: str, *, repository: P
         if verified is not None:
             verified.add(key)
     return main
+
+
+def stack_lock_bytes(source: str, *, repository: Path = ROOT, timeout_seconds: float = 30) -> bytes:
+    """Read the original candidate's lock without substituting the executor's."""
+    require(type(source) is str and SHA.fullmatch(source) is not None, "source identity is malformed")
+    raw = History(repository, timeout_seconds).git("cat-file", "blob", f"{source}:release/stack-lock.json")
+    require(0 < len(raw) <= 1024 * 1024, "candidate stack lock exceeds its bound")
+    return raw

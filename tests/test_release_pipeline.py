@@ -104,7 +104,8 @@ class FakeGitHub:
         assert match is not None, path
         run_id = int(match[1])
         return [{"id": 10000 + index, "name": name, "run_id": run_id, "run_attempt": 1,
-                 "head_sha": SOURCE, "status": "completed", "conclusion": "skipped" if name == self.skipped_job else "success"}
+                 "head_sha": self.runs[run_id]["head_sha"], "status": "completed",
+                 "conclusion": "skipped" if name == self.skipped_job else "success"}
                 for index, name in enumerate(self.job_names[run_id])]
 
 

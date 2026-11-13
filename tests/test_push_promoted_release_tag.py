@@ -763,7 +763,17 @@ class ProductionReservationTests(unittest.TestCase):
                 self.gates.append(name)
             return verify
 
+        def source_policy(github, source, executable):
+            handoff.remaining(github.deadline)
+            handoff.require(source == SOURCE and executable == SOURCE
+                            and github.main()["commit"]["sha"] == SOURCE,
+                            "Protected main changed in synthetic source proof")
+            return SOURCE
+
         with ExitStack() as held:
+            held.enter_context(mock.patch.object(handoff, "candidate_main", side_effect=source_policy))
+            held.enter_context(mock.patch.object(operator.source_authority, "stack_lock_bytes",
+                side_effect=lambda source, **kwargs: (self.source_root / "release/stack-lock.json").read_bytes()))
             held.enter_context(mock.patch.object(github, "json", side_effect=self.json))
             held.enter_context(mock.patch.object(github, "pages", return_value=jobs))
             held.enter_context(mock.patch.object(github, "artifacts", side_effect=lambda run: [self.artifacts[run]]))
@@ -774,7 +784,7 @@ class ProductionReservationTests(unittest.TestCase):
             held.enter_context(mock.patch.object(operator, "require_review_only_history", side_effect=gate("review")))
             held.enter_context(mock.patch.object(operator, "verify_crypto", side_effect=gate("crypto")))
             held.enter_context(mock.patch.object(operator, "promoted_digests", side_effect=gate("digests")))
-            held.enter_context(mock.patch.object(operator, "inspect_repository", side_effect=lambda _: (operator_run, SOURCE, self.inspection)))
+            held.enter_context(mock.patch.object(operator, "inspect_repository", side_effect=lambda _, **kwargs: (operator_run, SOURCE, self.inspection)))
             return operator.create_qualified_tag(github, self.native, operator_run, SOURCE, self.fixtures.RUN,
                 self.fixtures.CLAIM, self.fixture.base / "gh", self.fixture.base / "cosign", inspection)
 

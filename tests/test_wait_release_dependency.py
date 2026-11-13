@@ -45,6 +45,20 @@ def test_waits_only_for_the_definite_original_identity():
     assert github.mutations == []
 
 
+def test_existing_scheduled_full_ci_policy_remains_eligible_for_a_manual_claim():
+    github = GitHub([{**run_record(), "event": "schedule"}])
+    assert wait(github)["event"] == "schedule"
+    assert github.mutations == []
+
+
+def test_scheduled_event_cannot_substitute_for_the_original_manual_claim():
+    workflow = module.DEPENDENCIES["stable-claim"][1]
+    github = GitHub([{**run_record(), "event": "schedule", "path": workflow}])
+    with pytest.raises(module.h.HandoffError):
+        module.wait_for_original(github, 123, workflow, SOURCE, deadline=NOW + timedelta(minutes=1), now=lambda: NOW)
+    assert github.mutations == []
+
+
 @pytest.mark.parametrize("changes", [
     {"run_attempt": 2}, {"id": 124}, {"head_sha": "b" * 40}, {"head_branch": "other"},
     {"path": ".github/workflows/other.yml"}, {"event": "push"},

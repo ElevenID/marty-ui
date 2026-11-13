@@ -82,6 +82,7 @@ def run_check(
     review_main: str | None = None, gate_override: bytes | None = None,
     current_attempt: int = 1, history_invalid: bool = False,
     main_after_coordinates: str | None = None,
+    compatible_main: bool = False,
 ) -> tuple[dict[str, bool], list[tuple[str, ...]]]:
     calls: list[tuple[str, ...]] = []
 
@@ -120,7 +121,7 @@ def run_check(
 
     def fake_history(source, target, run_id, origin, reviewed, **kwargs) -> None:
         calls.append(("history", source, target, str(run_id), str(origin), str(reviewed)))
-        if not source_is_ancestor or history_invalid:
+        if not source_is_ancestor or history_invalid or target != source and not compatible_main:
             raise ValueError("unrelated or incomplete history")
 
     result = check(
@@ -148,11 +149,18 @@ def test_fresh_claim_rechecks_main_tag_release_and_all_images() -> None:
 
 
 def test_automatic_qualification_cannot_advance_main_even_with_a_legacy_review() -> None:
-    with pytest.raises(PrePromotionError, match="changed after official qualification"):
+    with pytest.raises(PrePromotionError, match="permitted review history"):
         run_check(transaction(), main="b" * 40)
     reviewed = "b" * 40
     with pytest.raises(PrePromotionError, match="Official gate differs"):
         run_check(transaction(review_main=reviewed), main=reviewed, review_main=reviewed)
+
+
+def test_future_compatible_main_uses_original_candidate_without_changing_qualification() -> None:
+    current = "b" * 40
+    existing, calls = run_check(transaction(), main=current, compatible_main=True)
+    assert existing == {role: False for role in REQUIRED_IMAGE_ROLES}
+    assert ("history", SOURCE, current, str(RUN_ID), "1", "False") in calls
 
 
 @pytest.mark.parametrize("change,match", [

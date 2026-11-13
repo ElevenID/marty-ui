@@ -15,15 +15,17 @@ from pathlib import Path
 
 import release_tag_handoff as h
 import stable_publication_checkpoint as cp
+import release_source_authority as source_authority
 
 SCHEMA = "elevenid.stable-publication-candidate/v2"
 PUBLISHER_WORKFLOW = ".github/workflows/publish-stable-candidate.yml"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = "release/stable-publication-policy.json"
-POLICY = {"schema": "elevenid.stable-publication-policy/v3", "repository": h.REPOSITORY,
+POLICY = {"schema": "elevenid.stable-publication-policy/v4", "repository": h.REPOSITORY,
           "producer_workflow": h.CD_WORKFLOW, "publisher_workflow": PUBLISHER_WORKFLOW,
           "candidate_lifetime_seconds": 86400, "authorization_lifetime_seconds": 900,
-          "tag_handoff_contract": h.TAG_HANDOFF_CONTRACT}
+          "tag_handoff_contract": h.TAG_HANDOFF_CONTRACT,
+          "source_authority_policy": "marty.immutable-source-authority/v1"}
 FIELDS = {"schema", "repository", "producer_workflow", "source_sha", "run_id", "run_attempt", "tag",
           "created_at", "not_after", "policy_sha256", "files", "candidate_id"}
 LIMITS = {"checkpoint/" + name: size for name, size in cp.MAX_FILE_BYTES.items()}
@@ -40,7 +42,16 @@ def utc(now: datetime | None = None) -> datetime:
 def policy_digest(root: Path = ROOT) -> str:
     raw = h.bounded_file(root / POLICY_PATH, 65536)
     h.require(h.decode(raw) == POLICY, "publication policy differs from the supported v2 contract")
-    return h.sha256(raw)
+    return h.sha256(h.encoded({"policy_sha256": h.sha256(raw),
+                               "program_sha256": program_digest(root)}))
+
+
+def program_digest(root: Path) -> str:
+    """Bind policy to the clean, actual release program, including native inputs."""
+    history = source_authority.History(root, 30)
+    source = history.git("rev-parse", "HEAD^{commit}").decode("ascii").strip()
+    history.git("diff", "--exit-code", "HEAD", "--", *source_authority.PATHS)
+    return source_authority.require_compatible_source(source, source, source, repository=root)
 
 
 def candidate_identity(value: dict) -> str:

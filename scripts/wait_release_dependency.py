@@ -32,9 +32,14 @@ def wait_for_original(github: h.GitHub, run_id: int, workflow: str, source: str,
     github.deadline = deadline
     while True:
         h.require(now() < deadline, "Original dependency deadline expired")
-        # GitHub.run verifies repository ID/name, exact workflow, main dispatch,
-        # source SHA, run ID and first attempt on EVERY observation.
-        run = github.run(run_id, workflow, source)
+        # Keep the configured scheduled/manual full-CI policy. The claim itself
+        # remains manual-main only. Both paths authenticate the original ID,
+        # repository, workflow, main source and first attempt on EVERY read.
+        if workflow == ".github/workflows/ci.yml":
+            run = h.original_run_identity(github.json(f"repos/{h.REPOSITORY}/actions/runs/{run_id}"),
+                run_id, workflow, source, events=frozenset({"workflow_dispatch", "schedule"}))
+        else:
+            run = github.run(run_id, workflow, source)
         created = h.timestamp(run["created_at"])
         h.require(issued - timedelta(seconds=MAX_SECONDS) <= created <= now(),
                   "Original dependency falls outside its admission window")

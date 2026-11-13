@@ -468,7 +468,7 @@ class InitialVisibilityTests(unittest.TestCase):
 
     def test_automatic_publisher_listing_and_observed_run_have_no_allowance(self) -> None:
         listing = BASE + "/actions/workflows/publish-stable-candidate.yml/runs"
-        listing += f"?event=workflow_run&head_sha={SOURCE}&branch=main&per_page=100"
+        listing += "?event=workflow_run&branch=main&created=%3E%3D2025-01-01T00%3A00%3A00Z&per_page=100"
         for kind in ("listing", "observed-run"):
             with self.subTest(kind=kind):
                 self.fresh_case()

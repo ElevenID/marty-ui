@@ -211,7 +211,16 @@ def require_review_only_history(
         _require(git("cat-file", "-t", commit).strip() == b"commit", "release review source must be a commit")
     _require(git.record(source_sha, path) is None, "candidate source already contains its review record")
     if not review_required:
-        _require(main_sha == source_sha, "an automatically qualified candidate requires unchanged protected main")
+        if main_sha != source_sha:
+            if __package__:
+                from .release_source_authority import require_compatible_source
+            else:
+                from release_source_authority import require_compatible_source
+            try:
+                require_compatible_source(source_sha, main_sha, main_sha, repository=repository,
+                                          timeout_seconds=timeout_seconds or HISTORY_TIMEOUT_SECONDS)
+            except ValueError:
+                raise ReviewMainError("advanced protected main does not preserve admitted release policy") from None
         return
     if main_sha == source_sha:
         _require(record_sha256 is None, "accepted review record is absent from candidate source")

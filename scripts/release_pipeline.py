@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
+from urllib.parse import quote
 
 if __package__:
     from . import release_tag_handoff as transport
@@ -290,14 +291,22 @@ class Pipeline:
     def _validate_run(self, value: object, run_id: int, workflow: str, *,
                       event: str = "workflow_dispatch", title: str | None = None) -> dict:
         self.operation = "validate_child_run"
+        expected_source = self.source
+        if workflow == PUBLISHER:
+            require(isinstance(value, dict) and isinstance(value.get("head_sha"), str)
+                    and transport.SHA.fullmatch(value["head_sha"]) is not None, "child_identity_mismatch")
+            expected_source = value["head_sha"]
         require(isinstance(value, dict) and type(value.get("id")) is int and value["id"] == run_id
                 and value.get("path") == workflow and value.get("event") == event
-                and value.get("head_branch") == "main" and value.get("head_sha") == self.source
+                and value.get("head_branch") == "main" and value.get("head_sha") == expected_source
                 and type(value.get("run_attempt")) is int and value["run_attempt"] == 1
                 and isinstance(value.get("repository"), dict)
                 and value["repository"].get("id") == transport.REPOSITORY_ID
                 and value["repository"].get("full_name") == transport.REPOSITORY,
                 "child_identity_mismatch")
+        if workflow == PUBLISHER and expected_source != self.source:
+            source_authority.authenticated_current(self.github, self.source, expected_source,
+                deadline=self.deadline, verified=self.verified_sources)
         require(self.created <= transport.timestamp(value["created_at"]) <= self.deadline,
                 "child_outside_stage_window")
         require(title is None or value.get("display_title") == title,
@@ -359,13 +368,13 @@ class Pipeline:
         finally:
             self.github.deadline = prior_deadline
 
-    def jobs_succeeded(self, run_id: int, required: set[str]) -> bool:
+    def jobs_succeeded(self, run_id: int, required: set[str], *, source: str | None = None) -> bool:
         self.operation = "read_child_jobs"
         jobs = self.github.pages(f"repos/{transport.REPOSITORY}/actions/runs/{run_id}/attempts/1/jobs", "jobs")
         self.operation = "validate_child_jobs"
         require(jobs and all(type(job.get("run_id")) is int and job["run_id"] == run_id
                             and type(job.get("run_attempt")) is int and job["run_attempt"] == 1
-                            and job.get("head_sha") == self.source for job in jobs),
+                            and job.get("head_sha") == (source or self.source) for job in jobs),
                 "child_jobs_mismatch")
         ready = True
         for name in required:
@@ -404,7 +413,7 @@ class Pipeline:
             self.operation = "wait_child"
             if run.get("status") == "completed":
                 require(run.get("conclusion") == "success", "child_workflow_failed")
-                if self.jobs_succeeded(run_id, jobs):
+                if self.jobs_succeeded(run_id, jobs, source=run["head_sha"]):
                     return run
             else:
                 require(run.get("status") in ACTIVE and run.get("conclusion") is None,
@@ -471,7 +480,8 @@ class Pipeline:
         # Reuse a unique existing automatic continuation, but do not depend on
         # a completion event from a token-dispatched workflow being delivered.
         listing = self.github.json(f"repos/{transport.REPOSITORY}/actions/workflows/{Path(PUBLISHER).name}/runs"
-                                   f"?event=workflow_run&head_sha={self.source}&branch=main&per_page=100")
+                                   f"?event=workflow_run&branch=main&created="
+                                   f"{quote('>=' + self.created.strftime('%Y-%m-%dT%H:%M:%SZ'), safe='')}&per_page=100")
         require(isinstance(listing, dict) and type(listing.get("total_count")) is int
                 and 0 <= listing["total_count"] <= 100 and isinstance(listing.get("workflow_runs"), list)
                 and len(listing["workflow_runs"]) == listing["total_count"]
