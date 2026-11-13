@@ -349,7 +349,14 @@ def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend
     rows=maintenance.exact_roles(load(state["created"]),inputs["rolloutProfile"])
     plan=load(original["maintenancePlan"]);before=load(original["runtimeBefore"])
     models={name:load(reference) for name,reference in plan["composeModels"].items()}
-    order=maintenance.preview(plan,before,models)["restoreOrder"]
+    from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
+    startup=ob3_startup_prerequisites(previous["startupPrerequisites"],
+        historical_execution_source=original["executionSource"])
+    cohort=set(maintenance.exact_roles(before,inputs["rolloutProfile"]))
+    edges=_reviewed_cross_edges(plan,cohort)
+    edges|={(row["dependentRole"],row["prerequisiteRole"])
+            for row in startup["requirements"]}
+    order=_restore_order(models,maintenance.exact_roles(before,inputs["rolloutProfile"]),edges,cohort)
     prefix=order[:order.index("flow")]
     require(len(prefix)==17 and state.get("steps")==["START_"+role for role in prefix]
             and set(state.get("startAcks",{}))==set(prefix)

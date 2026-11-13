@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/"scripts"))
 import scoped_d12_native_execution as execution
+import scoped_passport_maintenance as maintenance
 from scoped_native_database import RECOVERY_SOURCE_FIELDS
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES,journal_readback,ref
 
@@ -44,7 +45,8 @@ def case(tmp_path,monkeypatch):
     previous={"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1",
               "operation":"REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
               "originalOperationState":save("ancestor.json",{}),"originalApplyIntent":intent_ref,
-              "databaseProof":proof,"verifiedDatabase":verified,"quiescence":save("historical-quiescence.json",{})}
+              "databaseProof":proof,"verifiedDatabase":verified,"quiescence":save("historical-quiescence.json",{}),
+              "startupPrerequisites":save("startup-prerequisites.json",{})}
     previous_ref=save("previous.json",previous)
     created=save("created.json",{"roles":[]})
     state={"schema":"marty.d12-current-native-operation/v1","phase":"START_INSPECTION_PENDING",
@@ -126,7 +128,9 @@ def case(tmp_path,monkeypatch):
     monkeypatch.setattr(execution,"created_recovery_checkpoint",
                         lambda *args,**kwargs:(original,proof,verified))
     monkeypatch.setattr(execution.maintenance,"exact_roles",lambda *args:rows)
-    monkeypatch.setattr(execution.maintenance,"preview",lambda *args:{"restoreOrder":order})
+    monkeypatch.setattr(execution,"ob3_startup_prerequisites",lambda *args,**kwargs:{"requirements":[]})
+    monkeypatch.setattr(maintenance,"_reviewed_cross_edges",lambda *args:set())
+    monkeypatch.setattr(maintenance,"_restore_order",lambda *args:order)
     return inputs,state,intent,recovery,save,{"rootProof":root}
 
 
