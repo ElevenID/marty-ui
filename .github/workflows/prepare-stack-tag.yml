@@ -92,7 +92,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           tag_refs="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
           if [[ -n "$tag_refs" ]]; then
             echo "::error::Immutable tag $TAG already exists; it will not be moved or reused"
