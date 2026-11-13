@@ -134,3 +134,32 @@ for(const fault of ['missing-role','foreign-image','wrong-native-source','uid','
  const f=observerFixture(t),out=f.invoke(),first=out.roles.find(row=>row.role==='auth'),bureau=out.roles.find(row=>row.role==='passport-beta-bureau');
  if(fault==='retained-kind')out.roles.find(row=>row.role==='retained-0').kind='FOREIGN_KIND';if(fault==='gid')first.effectiveGid=0;if(fault==='missing-role')out.roles.pop();if(fault==='foreign-image')first.imageId='sha256:'+'f'.repeat(64);if(fault==='wrong-native-source')first.source='f'.repeat(40);if(fault==='uid')first.effectiveUid=0;if(fault==='elf')first.processExecutableSha256='f'.repeat(64);if(fault==='healthy-bureau')bureau.health='healthy';if(fault==='bureau-pid')bureau.hostPid=123;if(fault==='fake-bureau-elf')bureau.processExecutableSha256=bureau.sha256;if(fault==='unknown-schema')out.schema='marty.other/v1';if(fault==='fullstack')out.fullStackQualified=true;assert.throws(()=>f.observer.validateOb3Observation(out));
 });
+
+function recursivelySorted(value){
+ if(Array.isArray(value))return value.map(recursivelySorted);
+ if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,recursivelySorted(value[key])]));
+ return value;
+}
+for(const drift of ['none','host-value','host-extra','mount-value','mount-extra'])test('bound quiescent full objects survive sorted capture and refuse '+drift,t=>{
+ const f=fixture(t),load=ref=>JSON.parse(fs.readFileSync(ref.path)),prior=load(f.authority.currentOwned22);
+ prior.auth.HostConfig={Z:{Nested:1,Earlier:false},A:67108864};
+ prior.auth.Mounts=[{Type:'bind',Source:'/source',Destination:'/bound',RW:false,Propagation:'rprivate'}];
+ const hostSha=sha(JSON.stringify(prior.auth.HostConfig)),mountSha=sha(JSON.stringify(prior.auth.Mounts));
+ for(const rows of [f.quiescence.roles,f.quiescence.resources])Object.assign(rows.find(row=>row.role==='auth'),{hostConfigSha256:hostSha,mountsSha256:mountSha});
+ const authority={...f.authority,currentOwned22:f.file('ordered-prestop.json',prior)};
+ f.post.authority=f.file('ordered-authority.json',authority);f.state.recoveryAuthority=f.post.authority;
+ f.post.quiescence=f.file('original-raw-hash-proof.json',f.quiescence);f.state.ob3Quiescence=f.post.quiescence;
+ const sorted=recursivelySorted(prior);assert.notEqual(sha(JSON.stringify(sorted.auth.HostConfig)),hostSha);assert.notEqual(sha(JSON.stringify(sorted.auth.Mounts)),mountSha);
+ if(drift==='host-value')sorted.auth.HostConfig.Z.Nested=2;
+ if(drift==='host-extra')sorted.auth.HostConfig.Extra=true;
+ if(drift==='mount-value')sorted.auth.Mounts[0].RW=true;
+ if(drift==='mount-extra')sorted.auth.Mounts[0].Extra=true;
+ f.post.current22=f.file('sorted-readonly-capture.json',sorted);
+ if(drift==='none'){
+  f.invoke();assert.equal(load(f.post.quiescence).roles.find(row=>row.role==='auth').hostConfigSha256,hostSha);
+  f.live[prior.auth.Id].HostConfig=structuredClone(prior.auth.HostConfig);f.live[prior.auth.Id].Mounts=structuredClone(prior.auth.Mounts);
+  const fresh=verifyOb3ContainmentRuntime({}, {recoveryRef:f.post.authority,readDocker:f.read,phase:'QUIESCENT',outcomes:f.outcomes});
+  assert.deepEqual(fresh,f.quiescence,'Original raw-order Q2 receipt still matches the live producer');
+ }
+ else assert.throws(f.invoke);
+});

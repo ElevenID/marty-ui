@@ -1243,13 +1243,22 @@ function maintenanceOb3QuiescentContext(recovery,state){
  assert.equal(quiescence.readinessScope,'OB3_FUNCTIONAL_ONLY');assert.equal(quiescence.currentJobNormalClosureNotYetQualified,true);assert.deepEqual(quiescence.deferredFailure,authority.deferredFailure);
  assert.equal(quiescence.roles.length,22);assert.equal(quiescence.resources.length,28);
  const roles=new Map(quiescence.roles.map(row=>[row.role,row]));assert.equal(roles.size,22);assert.equal(new Set(quiescence.resources.map(row=>row.containerId)).size,28);
+ const preStop=boundJson(authority.currentOwned22);
+ assert.deepEqual(Object.keys(preStop).sort(),[...roles.keys()].sort(),'MAINTENANCE_OB3_PRESTOP22_SET');
  assert.deepEqual(Object.keys(current).sort(),[...roles.keys()].sort(),'MAINTENANCE_OB3_CURRENT22_SET');
  for(const [role,row]of Object.entries(current)){
   const observed=roles.get(role);assert.equal(row.Id,observed.containerId);assert.equal(row.Image,observed.imageId);
   assert.equal(row.State.Status,observed.status);assert(['created','exited'].includes(row.State.Status));assert.equal(row.State.Running,false);assert.equal(row.State.Pid,0);assert.equal(row.State.Paused,false);assert.equal(row.State.OOMKilled,false);
   assert.equal(row.State.StartedAt,observed.startedAt);assert.equal(row.State.ExitCode,observed.containerExitCode);
   assert.equal(row.State.ExitCode,role==='passport-beta-bureau'?outcomes[role].observedExitCode:0);
-  assert.equal(digest(JSON.stringify(row.HostConfig)),observed.hostConfigSha256);assert.equal(digest(JSON.stringify(maintenanceFullMounts(row.Mounts))),observed.mountsSha256);
+  // The bound read-only snapshot recursively sorts object keys; the original
+  // Q2 receipt hashes Docker's property order. Compare complete immutable
+  // objects to the bound pre-stop snapshot here, without relabelling its hashes.
+  // The live maintenance reader still regenerates and compares the entire Q2
+  // containment receipt, including its original raw-order hashes.
+  const prior=preStop[role];assert.equal(prior.Id,row.Id);assert.equal(prior.Image,row.Image);
+  assert.deepEqual(row.HostConfig,prior.HostConfig,'MAINTENANCE_OB3_FULL_HOST_CONFIG_CHANGED:'+role);
+  assert.deepEqual(maintenanceFullMounts(row.Mounts),maintenanceFullMounts(prior.Mounts),'MAINTENANCE_OB3_FULL_MOUNTS_CHANGED:'+role);
  }
  assert.deepEqual(quiescence.startedRoles,Object.keys(partial.startAcks));
  assert.deepEqual(quiescence.notStartedInCurrentAttempt,[...roles.keys()].filter(role=>role!=='passport-beta-bureau'&&!Object.hasOwn(partial.startAcks,role)));
