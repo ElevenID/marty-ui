@@ -478,7 +478,7 @@ def test_ob3_historical_startup_source_requires_exact_sibling_and_current_bytes(
     prior_execution=historical/"scoped_d12_native_execution.py"
     prior_execution.write_bytes(b"historical execution source")
     prior_startup=historical/current.name
-    prior_startup.write_bytes(current.read_bytes().replace(b"\r\n",b"\n").replace(b"\n",b"\r\n"))
+    prior_startup.write_bytes(current.read_bytes())
     assert execution.ob3_startup_prerequisites(ref(prior_startup),historical_execution_source=ref(prior_execution))
     foreign=tmp_path/current.name;foreign.write_bytes(current.read_bytes())
     with pytest.raises(ValueError,match="D12_OB3_STARTUP_SOURCE_PATH_REQUIRED"):

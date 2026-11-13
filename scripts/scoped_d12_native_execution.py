@@ -101,12 +101,13 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                     and recovery.get("scope")==previous.get("scope")=="OB3_FUNCTIONAL_ONLY"
                     and recovery.get("deferredRoles")==previous.get("deferredRoles")==[OB3_DEFERRED_ROLE]
                     and recovery.get("allowedScenarios")==previous.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
+                    and recovery.get("startupPrerequisites",{}).get("sha256")==previous.get("startupPrerequisites",{}).get("sha256")
+                    and recovery.get("startupPrerequisites",{}).get("bytes")==previous.get("startupPrerequisites",{}).get("bytes")
                     and recovery.get("replaceCredentialGeneration") is ob3_second_replacement,
                     "D12_OB3_ACKNOWLEDGED_PRIOR_AUTHORITY_REQUIRED")
-            current_startup=ob3_startup_prerequisites(recovery["startupPrerequisites"])
-            historical_startup=ob3_startup_prerequisites(previous["startupPrerequisites"],
+            ob3_startup_prerequisites(recovery["startupPrerequisites"])
+            ob3_startup_prerequisites(previous["startupPrerequisites"],
                 historical_execution_source=original["executionSource"])
-            require(current_startup==historical_startup,"D12_OB3_STARTUP_SEMANTICS_CHANGED")
             _ob3_acknowledged_failed_job_lineage(inputs,state,recovery,load)
             database_original, _, _=ob3_quiescent_checkpoint(original,
                 load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend,
@@ -419,7 +420,7 @@ def ob3_startup_prerequisites(reference, *, historical_execution_source=None):
     require(read_ref(reference,65536).resolve()==source,"D12_OB3_STARTUP_SOURCE_PATH_REQUIRED")
     if historical_execution_source is not None:
         current=Path(__file__).resolve().with_name("ob3-startup-prerequisites.json")
-        require(source.read_bytes().replace(b"\r\n",b"\n")==current.read_bytes().replace(b"\r\n",b"\n"),
+        require(sha(source)==sha(current) and source.stat().st_size==current.stat().st_size,
                 "D12_OB3_HISTORICAL_STARTUP_CONTENT_CHANGED")
     proof=json.loads(source.read_bytes())
     require(proof.get("schema")=="marty.ob3-startup-prerequisites/v1" and proof.get("composeSourcePath")=="docker-compose.beta.yml"
