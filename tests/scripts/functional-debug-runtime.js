@@ -1060,10 +1060,15 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
  assert.equal(proof.schema,'marty.d12-owned-created-cids/v1');assert.equal(proof.runId,input.runId);assert.equal(ack.runId,input.runId);assert.deepEqual(proof.selection,input.selection);assert.deepEqual(proof.durableCreateAck,{phase:ack.phase,acknowledgedStep:ack.acknowledgedStep});
  assert.deepEqual(Object.keys(proof.selectedContainerIds).sort(),[...MAINTENANCE_CREATED_ROLES]);
  const previousCreated=ack.acknowledgedStep==='REPLACE_CREATED_CREDENTIAL_GENERATION'?boundJson(ack.priorCreatedSnapshot):null;
- let ob3=null;
+ let ob3=null,thirdFencedReplacement=false;
  if(Object.hasOwn(input,'ob3Authority')){
-  const {legacy,current}=createdTargetOb3Authority(input,ack);
+  const {legacy,current,third}=createdTargetOb3Authority(input,ack);
   ob3=maintenanceOb3QuiescentContext(boundJson(legacy.maintenanceResourceRecovery),boundJson(legacy.originalOperationState));assert.deepEqual(legacy.selected22,ob3.post.current22);assert.deepEqual(input.plannedModels,current.trustDataMap.plannedModels.recovery);assert.deepEqual(input.composeArguments,current.trustDataMap.composeArguments.recovery);
+  thirdFencedReplacement=third;
+  if(third){
+   const services=boundJson(input.plannedModels['elevenid-beta']).services;
+   for(const role of ['flow','issuance-native'])assert.equal(services?.[role]?.environment?.MARTY_SCHEMA_STARTUP_MODE,'validate','OB3_PREMIGRATED_SCHEMA_STARTUP_REQUIRED:'+role);
+  }
  }
 
  const ids=new Map(before.roles.map(row=>[row.role,proof.selectedContainerIds[row.role]||row.containerId]));assert.equal(ids.size,22);assert.equal(new Set(ids.values()).size,22);
@@ -1077,6 +1082,8 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
   const a={configs:{rows:before.roles.map(row=>({cid:row.containerId}))},cap:{allRunningRoles:Object.fromEntries(before.roles.map(row=>[row.role,{id:row.containerId}]))}},generations=new Map(before.roles.map(row=>[row.role,{cid:row.containerId,startedAt:row.startedAt,pid:row.hostPid}]));
   const context=maintenanceCreatedContext({a,generations},before,baseline,{selection:input.selection,selected22:null,selected22Job:null,plannedModels:input.plannedModels},readDocker,{ack,rows});
   for(const [role,row]of raw){
+   if(thirdFencedReplacement&&['flow','issuance-native'].includes(role))
+    assert((row.Config?.Env||[]).includes('MARTY_SCHEMA_STARTUP_MODE=validate'),'OB3_ACTUAL_SCHEMA_STARTUP_REQUIRED:'+role);
    assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.Paused,false);assert.equal(row.State?.OOMKilled,false);assert.equal(row.State?.ExitCode,ob3&&role==='passport-beta-bureau'?ob3.current[role].State.ExitCode:0);assert.equal(row.State?.Status,context.created.has(role)?'created':'exited');
    if(previousCreated){
     const prior=previousCreated[role];assert(prior&&prior.Image===row.Image);

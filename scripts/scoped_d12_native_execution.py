@@ -65,6 +65,16 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
                 "D12_EXACT_GIT_EXPORTED_MIGRATION_REQUIRED")
 
 
+def require_ob3_premigrated_schema_startup(model):
+    """A fenced beta Flow/issuance schema must be validated, not migrated at service start."""
+    services = model.get("services", {}) if isinstance(model, dict) else {}
+    require(all(isinstance(services.get(role), dict)
+                and isinstance(services[role].get("environment"), dict)
+                and services[role]["environment"].get("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+                for role in ("flow", "issuance-native")),
+            "D12_OB3_PREMIGRATED_SCHEMA_STARTUP_REQUIRED")
+
+
 def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_backend, historical_source=False):
     """Bind a Root-reconciled acknowledged create, never repeat its commands."""
     from scoped_native_database import RECOVERY_SOURCE_FIELDS, RECOVERY_TRUST_FIELDS, _recovery_trust_models
@@ -185,6 +195,9 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
     require({k:v for k,v in original.items() if k not in ignored} == {k:v for k,v in inputs.items() if k not in ignored},
             "D12_CREATED_RECOVERY_INPUT_DRIFT")
     _recovery_trust_models(original, inputs)
+    if (not historical_source and recovery.get("scope") == "OB3_FUNCTIONAL_ONLY"
+            and recovery.get("operation") == "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"):
+        require_ob3_premigrated_schema_startup(load(inputs["plannedModels"]["elevenid-beta"]))
     old_lease,new_lease=load(original["runScopedTrustLeaseProof"]),load(inputs["runScopedTrustLeaseProof"])
     replacing=recovery["operation"] in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",

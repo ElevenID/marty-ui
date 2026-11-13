@@ -12,6 +12,21 @@ from scoped_native_runtime import ref, journal_readback
 from test_scoped_native_database import recovery_fixture
 
 
+def test_ob3_premigrated_startup_requires_both_fenced_services():
+    model = {"services": {role: {"environment": {"MARTY_SCHEMA_STARTUP_MODE": "validate"}}
+                          for role in ("flow", "issuance-native")}}
+    execution.require_ob3_premigrated_schema_startup(model)
+    for role in ("flow", "issuance-native"):
+        for mode in (None, "migrate"):
+            changed = deepcopy(model)
+            if mode is None:
+                del changed["services"][role]["environment"]["MARTY_SCHEMA_STARTUP_MODE"]
+            else:
+                changed["services"][role]["environment"]["MARTY_SCHEMA_STARTUP_MODE"] = mode
+            with pytest.raises(ValueError, match="D12_OB3_PREMIGRATED_SCHEMA_STARTUP_REQUIRED"):
+                execution.require_ob3_premigrated_schema_startup(changed)
+
+
 def created_fixture(tmp_path,quiescence=None):
     original,_old_state,intent,previous,saved=recovery_fixture(tmp_path)
     if quiescence is not None:previous["quiescence"]=quiescence
