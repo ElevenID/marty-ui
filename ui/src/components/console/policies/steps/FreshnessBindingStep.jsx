@@ -2,9 +2,9 @@
  * Freshness & Binding Step
  * 
  * Configure freshness requirements and holder binding methods.
- * Includes standard version tracking for compliance.
  */
 
+import { useId } from 'react';
 import {
   Box,
   Typography,
@@ -17,7 +17,6 @@ import {
   Radio,
   Switch,
   InputAdornment,
-  Alert,
   Chip,
 } from '@mui/material';
 import TimerIcon from '@mui/icons-material/Timer';
@@ -25,9 +24,13 @@ import KeyIcon from '@mui/icons-material/Key';
 import SecurityIcon from '@mui/icons-material/Security';
 import VerifiedIcon from '@mui/icons-material/Verified';
 import { useTranslation } from 'react-i18next';
+import { isValidPolicyCredentialAge } from '../policyFreshnessValidation';
 
 const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
   const { t } = useTranslation('console');
+  const bindingId = useId();
+  const credentialAge = policyConfig.freshness_requirements?.max_credential_age_seconds ?? '';
+  const validCredentialAge = isValidPolicyCredentialAge(credentialAge);
 
   const HOLDER_BINDING_OPTIONS = [
     {
@@ -73,26 +76,6 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
     });
   };
 
-  const handleMetadataChange = (field, value) => {
-    onConfigChange({
-      ...policyConfig,
-      metadata: {
-        ...policyConfig.metadata,
-        [field]: value,
-      },
-    });
-  };
-
-  // Convert seconds to days for display
-  const secondsToDays = (seconds) => {
-    return Math.floor(seconds / 86400);
-  };
-
-  // Convert days to seconds
-  const daysToSeconds = (days) => {
-    return days * 86400;
-  };
-
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -104,16 +87,18 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
       {/* Holder Binding */}
       <Card sx={{ mb: 3 }}>
         <CardContent>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
+          <Typography id={`${bindingId}-label`} variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.sections.holderBinding')}
           </Typography>
 
-          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
+          <Typography id={`${bindingId}-description`} variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.holderBinding')}
           </Typography>
 
           <FormControl component="fieldset" fullWidth>
             <RadioGroup
+              aria-labelledby={`${bindingId}-label`}
+              aria-describedby={`${bindingId}-description`}
               value={policyConfig.holder_binding}
               onChange={(e) => handleFieldChange('holder_binding', e.target.value)}
             >
@@ -130,34 +115,36 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
                       borderColor: 'primary.light',
                     },
                   }}
-                  onClick={() => handleFieldChange('holder_binding', option.value)}
                 >
-                  <CardContent sx={{ py: 1.5 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center' }}>
-                      <FormControlLabel
-                        value={option.value}
-                        control={<Radio />}
-                        label=""
-                        sx={{ mr: 1 }}
-                      />
-                      {option.icon && (
-                        <Box sx={{ mr: 1.5, display: 'flex', color: 'primary.main' }}>
-                          {option.icon}
+                  <FormControlLabel
+                    value={option.value}
+                    control={<Radio slotProps={{ input: {
+                      'aria-labelledby': `${bindingId}-${option.value}-label`,
+                      'aria-describedby': `${bindingId}-${option.value}-description`,
+                    } }} />}
+                    disableTypography
+                    label={
+                      <Box component="span" sx={{ display: 'flex', alignItems: 'center', flex: 1, minWidth: 0, flexWrap: 'wrap', gap: 1 }}>
+                        {option.icon && (
+                          <Box component="span" sx={{ display: 'flex', color: 'primary.main' }}>
+                            {option.icon}
+                          </Box>
+                        )}
+                        <Box component="span" sx={{ flex: '1 1 140px', minWidth: 0 }}>
+                          <Typography id={`${bindingId}-${option.value}-label`} component="span" variant="body1" sx={{ display: 'block', fontWeight: 500 }}>
+                            {option.label}
+                          </Typography>
+                          <Typography id={`${bindingId}-${option.value}-description`} component="span" variant="caption" color="text.secondary">
+                            {option.description}
+                          </Typography>
                         </Box>
-                      )}
-                      <Box sx={{ flex: 1 }}>
-                        <Typography variant="body1" sx={{ fontWeight: 500 }}>
-                          {option.label}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {option.description}
-                        </Typography>
+                        {option.value === 'device_key' && (
+                          <Chip label={t('wizards.presentationPolicy.freshnessBindingStep.recommendedChip')} component="span" size="small" color="success" />
+                        )}
                       </Box>
-                      {option.value === 'device_key' && (
-                        <Chip label={t('wizards.presentationPolicy.freshnessBindingStep.recommendedChip')} size="small" color="success" />
-                      )}
-                    </Box>
-                  </CardContent>
+                    }
+                    sx={{ m: 0, px: 2, py: 1.5, width: '100%', boxSizing: 'border-box' }}
+                  />
                 </Card>
               ))}
             </RadioGroup>
@@ -179,29 +166,18 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
             fullWidth
             type="number"
             label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxCredentialAge')}
-            value={secondsToDays(policyConfig.freshness_requirements.max_credential_age_seconds)}
-            onChange={(e) => handleFreshnessChange('max_credential_age_seconds', daysToSeconds(parseInt(e.target.value) || 0))}
-            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxCredentialAge')}
+            value={credentialAge}
+            onChange={(e) => handleFreshnessChange('max_credential_age_seconds', e.target.value)}
+            error={!validCredentialAge}
+            helperText={t(validCredentialAge
+              ? 'wizards.presentationPolicy.freshnessBindingStep.helpers.maxCredentialAge'
+              : 'wizards.presentationPolicy.freshnessBindingStep.validation.maxCredentialAge')}
             sx={{ mb: 2 }}
             slotProps={{
               input: {
-                endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.days')}</InputAdornment>,
-              }
-            }}
-          />
-
-          <TextField
-            fullWidth
-            type="number"
-            label={t('wizards.presentationPolicy.freshnessBindingStep.fields.maxProofAge')}
-            value={Math.floor(policyConfig.freshness_requirements.max_proof_age_seconds / 60)}
-            onChange={(e) => handleFreshnessChange('max_proof_age_seconds', parseInt(e.target.value) * 60 || 300)}
-            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.maxProofAge')}
-            sx={{ mb: 2 }}
-            slotProps={{
-              input: {
-                endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.minutes')}</InputAdornment>,
-              }
+                endAdornment: <InputAdornment position="end">{t('wizards.presentationPolicy.freshnessBindingStep.units.seconds')}</InputAdornment>,
+              },
+              htmlInput: { min: 0, step: 1, inputMode: 'numeric' },
             }}
           />
 
@@ -222,38 +198,6 @@ const FreshnessBindingStep = ({ policyConfig, onConfigChange }) => {
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
             {t('wizards.presentationPolicy.freshnessBindingStep.helpers.revocationCheck')}
           </Typography>
-        </CardContent>
-      </Card>
-      {/* Standard Version Tracking */}
-      <Card>
-        <CardContent>
-          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 600 }}>
-            {t('wizards.presentationPolicy.freshnessBindingStep.sections.compliance')}
-          </Typography>
-
-          <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
-            {t('wizards.presentationPolicy.freshnessBindingStep.helpers.compliance')}
-          </Typography>
-
-          <TextField
-            fullWidth
-            label={t('wizards.presentationPolicy.freshnessBindingStep.fields.standardReference')}
-            value={policyConfig.metadata?.standard_reference || ''}
-            onChange={(e) => handleMetadataChange('standard_reference', e.target.value)}
-            placeholder={t('wizards.presentationPolicy.freshnessBindingStep.standardReferencePlaceholder')}
-            helperText={t('wizards.presentationPolicy.freshnessBindingStep.helpers.standardReference')}
-            sx={{ mb: 2 }}
-          />
-
-          {policyConfig.metadata?.standard_reference && (
-            <Alert severity="info" icon={<VerifiedIcon />}>
-              <Typography variant="body2">
-                {t('wizards.presentationPolicy.freshnessBindingStep.standardReferenceInfo', {
-                  standard: policyConfig.metadata.standard_reference,
-                })}
-              </Typography>
-            </Alert>
-          )}
         </CardContent>
       </Card>
     </Box>

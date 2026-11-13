@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind an automatically qualified release candidate to unchanged protected main.
+"""Bind automatically qualified releases to admitted protected-main history.
 
 The shared Rust gate owns official protocol and browser outcome requirements.
 Production consumers accept only its automated v2 receipt. Historical review
@@ -186,7 +186,7 @@ def require_review_only_history(
     repository: Path = ROOT, record_sha256: str | None = None,
     timeout_seconds: float | None = None,
 ) -> None:
-    """Permit only the exact original-run disposition on top of candidate S.
+    """Permit the original disposition or the future immutable-source policy.
 
     A pending review may observe S itself while the record is still absent.
     Once a record digest is supplied, S itself cannot be an accepted review.
@@ -211,7 +211,16 @@ def require_review_only_history(
         _require(git("cat-file", "-t", commit).strip() == b"commit", "release review source must be a commit")
     _require(git.record(source_sha, path) is None, "candidate source already contains its review record")
     if not review_required:
-        _require(main_sha == source_sha, "an automatically qualified candidate requires unchanged protected main")
+        if main_sha != source_sha:
+            if __package__:
+                from .release_source_authority import require_compatible_source
+            else:
+                from release_source_authority import require_compatible_source
+            try:
+                require_compatible_source(source_sha, main_sha, main_sha, repository=repository,
+                                          timeout_seconds=timeout_seconds or HISTORY_TIMEOUT_SECONDS)
+            except ValueError:
+                raise ReviewMainError("advanced protected main does not preserve admitted release policy") from None
         return
     if main_sha == source_sha:
         _require(record_sha256 is None, "accepted review record is absent from candidate source")

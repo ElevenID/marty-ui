@@ -573,6 +573,18 @@ fn run() -> Result<(), String> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "published-acquisition-observe")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::observe_acquisition(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("published acquisition observation requires Linux amd64".into());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "fetch-published-candidate")
     {
         #[cfg(target_os = "linux")]
@@ -653,6 +665,39 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer ACME status currently requires Linux".into());
     }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "operator-upgrade-contract")
+    {
+        if args.len() != 1 {
+            return Err("operator-upgrade-contract takes no arguments".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_operator_upgrade::contract()
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator-only successors require Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "operator-upgrade") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_operator_upgrade::run(
+                    &args[1..],
+                    env!("MARTY_DEPLOY_BUILD_IDENTITY")
+                )?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator-only successors require Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "status") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());
@@ -664,12 +709,17 @@ fn run() -> Result<(), String> {
             )?;
             let journal = inspection.journal();
             let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
+            let operator_owner =
+                marty_deployment_catalog::installer_operator_upgrade::status_locked(
+                    &inspection,
+                    std::path::Path::new(&args[2]),
+                )?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
                 serde_json::json!({
                     "scope": "installation-journal", "runtime_observed": false, "journal": journal,
-                    "cleanup": cleanup,
+                    "cleanup": cleanup, "operator_owner": operator_owner,
                 })
             );
             return Ok(());
@@ -1027,6 +1077,38 @@ fn run() -> Result<(), String> {
                 let mut output = std::io::stdout().lock();
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-renewal-adoption-verify") if args.len() == 5 => {
+                use std::{io::IsTerminal, path::Path};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_renewal_adoption::verify(
+                            &args[2],
+                            Path::new(&args[3]),
+                            Path::new(&args[4]),
+                            &context,
+                            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+                        ),
+                    )?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &result).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
             }
             Some(
                 "kubernetes-renewal-enroll"

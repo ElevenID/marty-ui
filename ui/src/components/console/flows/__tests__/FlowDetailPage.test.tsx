@@ -3,6 +3,7 @@ import { act, fireEvent, renderWithRouter, screen, waitFor } from '@test/utils'
 import { Link, Route, Routes } from 'react-router'
 import FlowDetailPage from '../FlowDetailPage'
 import * as publicEntry from '../../../../application/routing/publicEntry'
+import englishConsole from '../../../../../public/locales/en/console.json'
 
 const { mockGetFlow, mockPublishFlow, mockNavigate, route } = vi.hoisted(() => ({
   mockGetFlow: vi.fn(),
@@ -16,10 +17,11 @@ vi.mock('react-i18next', async (importOriginal) => {
   return {
     ...actual,
     useTranslation: () => ({
-      t: (key: string) => {
+      t: (key: string, options?: { defaultValue?: string }) => {
         const translations: Record<string, string> = {
           'flows.flowDetail.runtime.notAvailable': 'N/A',
           'flows.flowDetail.configuration.notAvailable': 'N/A',
+          'flows.flowDetail.configuration.credentialTemplateLabel': 'Credential Template',
           'flows.flowDetail.entryPoints.downloadQrButton': 'Download QR Code',
           'flows.flowDetail.actions.downloadQr': 'Download QR',
           'flows.flowDetail.actions.previewButton': 'Preview applicant experience',
@@ -36,7 +38,7 @@ vi.mock('react-i18next', async (importOriginal) => {
           'flows.flowDetail.errors.copyFailed': 'The link could not be copied. Try again.',
           'flows.flowDetail.errors.invalidActivation': 'The activation response did not match this flow.',
         }
-        return translations[key] || key
+        return translations[key] || options?.defaultValue || key
       },
     }),
   }
@@ -97,8 +99,8 @@ describe('FlowDetailPage', () => {
 
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('does not invent runtime metrics when the API omits stats', async () => {
-    renderWithRouter(<FlowDetailPage />, {
+  it('provides named navigation and omits unavailable native metrics and publication metadata', async () => {
+    const { user } = renderWithRouter(<FlowDetailPage />, {
       initialEntries: ['/console/org/flows/definitions/flow-1'],
     })
 
@@ -113,10 +115,24 @@ describe('FlowDetailPage', () => {
     expect(screen.queryByText('Employee email required (domain: example.com)')).not.toBeInTheDocument()
     expect(screen.queryByText('Open Badge 2.0, EUDI-ready')).not.toBeInTheDocument()
     expect(screen.getAllByText('N/A').length).toBeGreaterThanOrEqual(8)
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { level: 1, name: nativeFlow.name })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '' })).not.toBeInTheDocument()
+    expect(screen.getByText('Share an available applicant link to start this flow.')).toBeInTheDocument()
+    expect(screen.queryByText(/flows\.flowDetail\.audit\.publishedByLabel/)).not.toBeInTheDocument()
+    // The loaded mock catalog omits the new key, as an existing browser session can.
+    expect(englishConsole.flows.flowDetail.actions.backToFlows).toBe('Back to Flows')
+    await user.click(screen.getByRole('button', { name: 'Back to Flows' }))
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/console/org/flows/definitions')
   })
 
-  it('keeps QR download disabled until a real QR payload exists', async () => {
-    mockGetFlow.mockResolvedValue({ ...nativeFlow, public_url: 'https://example.test/apply/flow-1' })
+  it('names linked configuration and keeps QR download disabled until a real QR payload exists', async () => {
+    mockGetFlow.mockResolvedValue({
+      ...nativeFlow,
+      public_url: 'https://example.test/apply/flow-1',
+      credential_template_id: 'credential-template-1',
+      presentation_policy_id: 'presentation-policy-1',
+    })
     renderWithRouter(<FlowDetailPage />, {
       initialEntries: ['/console/org/flows/definitions/flow-1'],
     })
@@ -127,6 +143,8 @@ describe('FlowDetailPage', () => {
 
     expect(screen.getByRole('button', { name: 'Download QR' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Download QR Code' })).toBeDisabled()
+    expect(screen.getByRole('link', { name: 'Credential Template' })).toHaveAttribute('href', '/console/org/templates/credentials/credential-template-1')
+    expect(screen.getByRole('link', { name: 'Presentation policy' })).toHaveAttribute('href', '/console/org/policies/presentation/presentation-policy-1')
   })
 
   it.each(['DRAFT', 'ACTIVE', 'PAUSED', 'ARCHIVED'])('opens the native %s definition in its owned preview without a public URL', async status => {

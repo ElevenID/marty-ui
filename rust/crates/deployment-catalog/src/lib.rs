@@ -78,6 +78,8 @@ pub(crate) mod installer_openbao_control;
 pub(crate) mod installer_openbao_owner_transition;
 pub(crate) mod installer_openbao_recovery;
 pub(crate) mod installer_openbao_seal;
+#[cfg(target_os = "linux")]
+pub mod installer_operator_upgrade;
 pub mod installer_prepare;
 pub mod installer_public_ingress;
 pub(crate) mod installer_purge_host;
@@ -111,6 +113,8 @@ pub mod kubernetes_application;
 pub mod kubernetes_legacy_recovery;
 pub mod kubernetes_renewal;
 pub mod kubernetes_renewal_activation;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_renewal_adoption;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 

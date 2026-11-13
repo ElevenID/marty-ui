@@ -26,6 +26,7 @@ import time
 
 import bootstrap_kubernetes_openbao as bootstrap
 import kubernetes_application_state as application_state
+import kubernetes_renewal_adoption_state as adoption
 import stage_kubernetes_application_credentials as application
 
 
@@ -136,21 +137,10 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     retained_images = application.record(state / "marty-images.json")
     bootstrap.require(complete.get("status") == "openbao-and-application-credentials-ready",
                       "original Kubernetes bootstrap is not complete")
-    authority = complete.get("renewalAuthority")
-    bootstrap.require(isinstance(authority, dict) and set(authority) == {
-        "schema", "binding", "identityDirectory", "files", "bindingFile",
-    } and authority["schema"] == "marty.kubernetes-renewal-authority/v1"
-       and authority["identityDirectory"] == "renewal-identity"
-       and authority["files"] == sorted(bootstrap.RENEWAL_IDENTITY_FILES)
-       and authority["bindingFile"] == "renewal-binding.json",
-       "original bootstrap has no supported Renewal authority; fresh bootstrap enrollment is required")
-    binding = bootstrap.application_binding(authority["binding"])
+    binding, identity_path = adoption.authority(state, complete, "renewal")
+    adoption.operation_allowed(state, operation)
     lifecycle = complete["credentialLifecycle"]
-    bootstrap.require(binding == {
-        "namespace": complete["namespace"], "namespaceUid": lifecycle["namespaceUid"],
-        "openbaoClusterId": complete["openbaoClusterId"], "workloadProject": lifecycle["workloadProject"],
-    }, "retained bootstrap Renewal binding differs")
-    binding_raw, _ = application.private_bytes(state / "renewal-binding.json", 4096, {0o600})
+    binding_raw, _ = application.private_bytes(adoption.binding_path(state), 4096, {0o600})
     receipt = bootstrap.renewal_binding(
         json_object(binding_raw, 4096, "retained Renewal binding"), binding)
     bootstrap.require(lifecycle.get("producerNonce") == receipt["producerNonce"],
@@ -161,18 +151,17 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
         current, state / "credentials", state / "application-identity", state / "renewal-identity")),
         "operation directory overlaps retained credential inputs")
     bootstrap.private_directory(operation)
-    pull_secrets = complete.get("imagePullSecrets")
+    pull_secrets = adoption.pull_secrets(state, complete)
     bootstrap.require(isinstance(pull_secrets, list) and all(
         isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]|[a-z0-9]", name)
         for name in pull_secrets), "retained image pull Secret names are invalid")
     operator, operator_bytes, values, _publication, _application = application.admitted_runtime(
         args, complete, retained_images, operation)
     contract = bootstrap.renewal_contract(operator)
-    same_metadata(complete.get("renewalContract"), contract,
+    same_metadata(adoption.contract(state, complete, "renewal"), contract,
                   "retained bootstrap Renewal capability differs; fresh bootstrap enrollment is required")
     snapshot = application.current_snapshot(current)
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "original OpenBao trust is unavailable")
-    identity_path = state / "renewal-identity"
     application.existing_private_directory(identity_path)
     bootstrap.require({path.name for path in identity_path.iterdir()} == bootstrap.RENEWAL_IDENTITY_FILES,
                       "retained Renewal identity inventory differs")
@@ -209,7 +198,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     # Recheck retained namespace/cluster identity before authority upload and
     # immediately before login. The transport nonce never changes TLS identity.
     bootstrap.check_application_binding(transport, binding)
-    pod = bootstrap.create_producer_pod(transport, image=values["images"]["services"],
+    pod = bootstrap.create_producer_pod(transport, image=adoption.producer_image(args, values),
         nonce=nonce, pull_secrets=pull_secrets, purpose="renewal-stage")
     remote_ready = False
     native_outcome_uncertain = False
@@ -238,7 +227,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
         bootstrap.check_application_binding(transport, binding)
         held.require_current(binding, expected=selected)
         bootstrap.require(application.current_snapshot(current) == snapshot
-                          and application.private_bytes(state / "renewal-binding.json", 4096, {0o600})[0]
+                          and application.private_bytes(adoption.binding_path(state), 4096, {0o600})[0]
                           == binding_raw
                           and application.current_snapshot(identity_path) == identity_snapshot,
                           "retained Renewal inputs changed before issuance")
@@ -305,7 +294,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
                       and application.current_snapshot(candidate) == exported
                       and application.current_snapshot(identity_path) == identity_snapshot
                       and application.current_snapshot(identity_copy) == identity_snapshot
-                      and application.private_bytes(state / "renewal-binding.json", 4096, {0o600})[0]
+                      and application.private_bytes(adoption.binding_path(state), 4096, {0o600})[0]
                       == binding_raw
                       and application.private_bytes(operation / "renewal-binding.json", 4096, {0o600})[0]
                       == binding_raw,
@@ -329,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + name, required=True)
     for name in ("build-run-id", "build-run-attempt"):
         parser.add_argument("--" + name, required=True, type=int)
+    adoption.add_operator_arguments(parser)
     try:
         stage(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, subprocess.TimeoutExpired,

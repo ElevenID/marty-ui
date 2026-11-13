@@ -79,10 +79,12 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // Reviewed policy transport, credential-template schema, additive auth_time,
     // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
     // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
-    // additive saved-policy revision and managed prerequisite authority fields.
+    // additive saved-policy revision and managed prerequisite authority fields,
+    // direct jwt_vc_profile_json template fields (create 28/update 24/response 34),
+    // and PolicyResponse holder_binding_required bool field 16.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "784e407604510c45a68234a8d8cb84a57e26db297117b4ae37ed4557a3d5ab60"
+        "7199f0e1da2c506cc0c22f951b6876314afec921b82b97275f34d7a61da2ecb3"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set

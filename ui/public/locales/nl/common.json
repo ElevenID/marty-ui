@@ -141,7 +141,7 @@
   },
   "previewMode": {
     "title": "Voorbeeldmodus",
-    "description": "Dit is wat een aanvrager ziet. Acties zijn uitgeschakeld en er wordt niets ingediend.",
+    "description": "Verken de ervaring van de aanvrager. Het indienen van formulieren wordt gesimuleerd; er wordt geen aanvraag aangemaakt of credential uitgegeven.",
     "exitPreview": "Voorbeeld sluiten",
     "org": "Org: {{organizationName}}"
   },

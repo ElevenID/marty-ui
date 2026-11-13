@@ -22,11 +22,13 @@ from pathlib import Path
 
 if __package__:
     from . import release_tag_handoff as handoff
+    from . import release_source_authority as source_authority
     from . import release_git_atomic as atomic
     from .release_review_main import gate_authority, require_review_only_history
     from .release_transaction import IMAGE_URIS, validate_resume
 else:
     import release_tag_handoff as handoff
+    import release_source_authority as source_authority
     import release_git_atomic as atomic
     from release_review_main import gate_authority, require_review_only_history
     from release_transaction import IMAGE_URIS, validate_resume
@@ -181,7 +183,7 @@ def transaction_summary(value: dict) -> dict:
             "decision": value["decision"]}
 
 
-def inspect_repository(github: handoff.GitHub) -> tuple[int, str, dict]:
+def inspect_repository(github: handoff.GitHub, *, allow_advanced_main: bool = False) -> tuple[int, str, dict]:
     operator_run, source = handoff.exact_context(handoff.OPERATOR_WORKFLOW)
     repository = github.json(f"repos/{REPOSITORY}")
     handoff.require(isinstance(repository, dict) and repository.get("id") == handoff.REPOSITORY_ID
@@ -189,8 +191,12 @@ def inspect_repository(github: handoff.GitHub) -> tuple[int, str, dict]:
                     and repository.get("full_name") == REPOSITORY,
                     "Operator repository identity differs")
     main = github.main()["commit"]["sha"]
-    handoff.require(source == main and handoff.git("rev-parse", "HEAD^{commit}", deadline=github.deadline) == source,
-                    "Operator checkout is not the dispatched current protected main")
+    handoff.require(handoff.git("rev-parse", "HEAD^{commit}", deadline=github.deadline) == source,
+                    "Operator checkout differs from its actual workflow source")
+    handoff.git("diff", "--exit-code", "HEAD", "--", deadline=github.deadline)
+    if source != main:
+        handoff.require(allow_advanced_main, "Operator checkout is not the dispatched current protected main")
+        handoff.candidate_main(github, source, source)
     run = github.run(operator_run, handoff.OPERATOR_WORKFLOW, source)
     handoff.require(run.get("status") == "in_progress", "Operator invocation is no longer running")
     rules = github.array_pages(f"repos/{REPOSITORY}/rulesets?includes_parents=true")
@@ -552,8 +558,12 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         request_deadline = handoff.timestamp(request["not_after"])
         github.deadline = min(github.deadline, request_deadline) if github.deadline is not None else request_deadline
         handoff.require(request["run_id"] == cd_run and request["source_sha"] == source
-                        and request["claim_run_id"] == claim_run and request["protected_main_commit"] == main,
-                        "Publication checkpoint differs from this candidate, claim or protected main")
+                        and request["claim_run_id"] == claim_run and request["protected_main_commit"] == source,
+                        "Publication checkpoint differs from this original candidate or claim")
+        handoff.candidate_main(github, source, main)
+        held_lock = directory / "source-stack-lock.json"
+        held_lock.write_bytes(source_authority.stack_lock_bytes(source, repository=ROOT,
+            timeout_seconds=handoff.remaining(github.deadline, 30)))
         request_sha = request_digest(checkpoint)
         intent_tag = handoff.release_intent_tag(request["tag"])
         # This permanent per-version owner fences all later production writes,
@@ -563,7 +573,7 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
                         "A retained original operator already owns this release version")
         transaction = validate_resume(
             handoff.decode(handoff.bounded_file(checkpoint / "assets/release-transaction.json", 65536)),
-            repository=REPOSITORY, source_sha=source, stack_lock=ROOT / "release/stack-lock.json",
+            repository=REPOSITORY, source_sha=source, stack_lock=held_lock,
             claim_run_id=claim_run, required_state="promoted")
         authority = gate_authority(handoff.bounded_file(checkpoint / "official-interoperability.json"),
                                    transaction, run_id=cd_run, current_attempt=1)
@@ -580,7 +590,7 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         handoff.extract_archive(directory / "claim.zip", directory / "claim",
                                 {"release-transaction.json", "stack-tag-evidence.json"}, maximum=1024 * 1024)
         seed = validate_resume(handoff.decode(handoff.bounded_file(directory / "claim/release-transaction.json", 65536)),
-                               repository=REPOSITORY, source_sha=source, stack_lock=ROOT / "release/stack-lock.json",
+                               repository=REPOSITORY, source_sha=source, stack_lock=held_lock,
                                claim_run_id=claim_run, required_state="claimed")
         handoff.require(seed["transaction_id"] == transaction["transaction_id"], "Original claim transaction differs")
         verify_crypto(checkpoint / "assets", request, gh, cosign, github.deadline, github.crypto)
@@ -592,12 +602,12 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         handoff.require(github.artifact(cd_run, artifact_name, source) == artifact,
                         "Publication checkpoint changed during verification")
         waiting_run(github, cd_run, source)
-        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before tag creation")
+        main_before = handoff.candidate_main(github, source, main)
         handoff.remaining(github.deadline)
         intent_message = handoff.intent_message(request, request_sha, artifact, operator_run)
         intent_object = create_tag_object(github, intent_tag, source, intent_message)
         waiting_run(github, cd_run, source)
-        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before intent reservation")
+        handoff.candidate_main(github, source, main)
         intent_reservation = github.create_tag_ref(intent_tag, intent_object["sha"])
         read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
         handoff.remaining(github.deadline)
@@ -605,8 +615,8 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         # THIS invocation and confirmed. An unknown owner acquisition stops
         # here; it cannot have sent the production reference request.
         waiting_run(github, cd_run, source)
-        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed after intent reservation")
-        handoff.require(inspect_repository(github) == (operator_run, main, inspection),
+        handoff.candidate_main(github, source, main)
+        handoff.require(inspect_repository(github, allow_advanced_main=True) == (operator_run, main, inspection),
                         "Operator context or repository rules changed after intent reservation")
         message = handoff.tag_message(request, request_sha, artifact, operator_run,
                                       intent_object_sha=intent_object["sha"])
@@ -614,14 +624,14 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
         # No automatic retry. If the result is lost, preserve the immutable
         # object/ref and require exact API inspection before any later action.
         waiting_run(github, cd_run, source)
-        handoff.require(github.main()["commit"]["sha"] == main, "Protected main changed before tag reservation")
+        handoff.candidate_main(github, source, main)
         read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
         reservation = github.create_tag_ref(request["tag"], tag_object["sha"])
         read_exact_tag(github, request["tag"], tag_object["sha"], source, message)
         read_exact_tag(github, intent_tag, intent_object["sha"], source, intent_message)
-        handoff.require(github.main()["commit"]["sha"] == main, "Main changed after tag reservation")
+        main_after = handoff.candidate_main(github, source, main)
         waiting_run(github, cd_run, source)
-        final_run, final_source, final_inspection = inspect_repository(github)
+        final_run, final_source, final_inspection = inspect_repository(github, allow_advanced_main=True)
         handoff.require((final_run, final_source, final_inspection) == (operator_run, main, inspection),
                         "Operator context or repository rules changed during tag creation")
         handoff.remaining(github.deadline)
@@ -635,10 +645,11 @@ def create_qualified_tag(github: handoff.GitHub, native: atomic.NativeGit, opera
             "repository": REPOSITORY, "operator_run_id": operator_run, "operator_run_attempt": 1,
             "operator_source_sha": main, "source_sha": source, "candidate_run_id": cd_run,
             "candidate_run_attempt": 1, "claim_run_id": claim_run, "tag": request["tag"],
-            "protected_main_commit": main, "request_sha256": request_sha,
+            "protected_main_commit": request["protected_main_commit"], "request_sha256": request_sha,
             "checkpoint_artifact_id": artifact["id"], "checkpoint_artifact_sha256": artifact["digest"],
             "tag_object_sha": tag_object["sha"], "tag_commit_sha": source,
-            "completed_at": utc_now(), "crypto_verified": True, "main_before_sha": main, "main_after_sha": main,
+            "completed_at": utc_now(), "crypto_verified": True,
+            "main_before_sha": main_before, "main_after_sha": main_after,
         }
 
 
@@ -684,7 +695,8 @@ def main() -> int:
         github.observer = persist
         persist()
         diagnostics.enter("repository_inspection")
-        operator_run, source, inspection = inspect_repository(github)
+        operator_run, source, inspection = (inspect_repository(github, allow_advanced_main=True)
+            if args.mode == "create-qualified-tag" else inspect_repository(github))
         diagnostics.enter("mode_validation")
         if args.mode in {"inspect", "qualify-capability"}:
             handoff.require(not args.promotion_run_id and not args.claim_run_id and args.gh is None and args.cosign is None,

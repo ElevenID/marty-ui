@@ -1624,7 +1624,16 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
 
     insert_legacy_application(pool, "application-legacy-reuse", Some("legacy-reuse")).await;
     sqlx::query(
-        "INSERT INTO issuance_service.issuance_transactions
+        "INSERT INTO issuance_service.issuance_transactions (
+            id, organization_id, credential_template_id, revocation_profile_id,
+            renewal_of_credential_id, applicant_id, application_id, subject_did,
+            idempotency_key_hash, idempotency_request_hash, status, pre_auth_code,
+            c_nonce, claims, credential_type, selective_disclosure_claims,
+            zk_predicate_claims, credential_payload_format, wallet_configs,
+            validity_days, renewable, renewal_window_days, delivery_mode,
+            issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
+            signing_service_id, reserved_credential_id, oid4vci_client_id,
+            created_at, expires_at)
          SELECT 'legacy-reuse', organization_id, credential_template_id,
                 revocation_profile_id, renewal_of_credential_id, applicant_id,
                 'application-legacy-reuse', subject_did, NULL, NULL,
@@ -1726,7 +1735,16 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
     )
     .await;
     sqlx::query(
-        "INSERT INTO issuance_service.issuance_transactions
+        "INSERT INTO issuance_service.issuance_transactions (
+            id, organization_id, credential_template_id, revocation_profile_id,
+            renewal_of_credential_id, applicant_id, application_id, subject_did,
+            idempotency_key_hash, idempotency_request_hash, status, pre_auth_code,
+            c_nonce, claims, credential_type, selective_disclosure_claims,
+            zk_predicate_claims, credential_payload_format, wallet_configs,
+            validity_days, renewable, renewal_window_days, delivery_mode,
+            issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
+            signing_service_id, reserved_credential_id, oid4vci_client_id,
+            created_at, expires_at)
          SELECT 'legacy-authorized', organization_id, credential_template_id,
                 revocation_profile_id, renewal_of_credential_id, applicant_id,
                 'application-legacy-authorized', subject_did, NULL, NULL,
@@ -1781,7 +1799,16 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
 
     insert_legacy_application(pool, "application-legacy-issued", Some("legacy-issued")).await;
     sqlx::query(
-        "INSERT INTO issuance_service.issuance_transactions
+        "INSERT INTO issuance_service.issuance_transactions (
+            id, organization_id, credential_template_id, revocation_profile_id,
+            renewal_of_credential_id, applicant_id, application_id, subject_did,
+            idempotency_key_hash, idempotency_request_hash, status, pre_auth_code,
+            c_nonce, claims, credential_type, selective_disclosure_claims,
+            zk_predicate_claims, credential_payload_format, wallet_configs,
+            validity_days, renewable, renewal_window_days, delivery_mode,
+            issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
+            signing_service_id, reserved_credential_id, oid4vci_client_id,
+            created_at, expires_at)
          SELECT 'legacy-issued', organization_id, credential_template_id,
                 revocation_profile_id, renewal_of_credential_id, applicant_id,
                 'application-legacy-issued', subject_did, NULL, NULL,

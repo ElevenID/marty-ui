@@ -96,18 +96,24 @@ class Proof:
         self.sources = []
         self.verified = []
 
-    def source(self, request, deadline):
+    def source(self, request, deadline, executable):
+        assert executable == getattr(self, "executable_source", SOURCE)
         self.sources.append((copy.deepcopy(request), deadline))
 
     def assets(self, directory, request, deadline, observations):
         self.verified.append((directory, copy.deepcopy(request), deadline))
 
+    def stack_lock(self, request, deadline):
+        assert request["source_sha"] == SOURCE
+        return self.source_lock.read_bytes()
+
 
 class Owner:
-    def sign(self, receipt):
+    def sign(self, receipt, source_sha=None):
         return {"synthetic_not_crypto": p.h.sha256(p.h.encoded(receipt))}
 
-    def verify(self, receipt, bundle):
+    def verify(self, receipt, bundle, source_sha):
+        assert source_sha == SOURCE
         p.h.require(bundle == self.sign(receipt), "synthetic owner verification refused")
 
 
@@ -120,6 +126,13 @@ def setup(sealed, monkeypatch):
     (root / p.c.POLICY_PATH).write_bytes((p.ROOT / p.c.POLICY_PATH).read_bytes())
     (root / "release/stack-lock.json").write_bytes((fixture.control / "stack-lock.json").read_bytes())
     proof = Proof(root)
+    proof.source_lock = fixture.control / "stack-lock.json"
+    def synthetic_source_main(github, request, executable, root):
+        p.h.require(request["source_sha"] == SOURCE and executable == SOURCE
+                    and github.main()["commit"]["sha"] == SOURCE, "protected main changed or synthetic source policy refused")
+        return SOURCE
+    monkeypatch.setattr(p, "source_main", synthetic_source_main)
+    monkeypatch.setattr(p, "execution_source", lambda root: SOURCE)
     admission = json.loads((directory / "tag-admission.json").read_bytes())
     tag = {"sha": admission["tag_object_sha"], "object": {"type": "commit", "sha": SOURCE},
            "message": p.h.tag_message(fixture.request(), manifest["files"]["checkpoint/request.json"]["sha256"],
@@ -139,7 +152,8 @@ def authorization(setup, now=NOW + timedelta(hours=1)):
 
 def publisher(setup, *, clock=lambda: NOW + timedelta(hours=1)):
     _, directory, _, api, proof, _ = setup
-    return p.Publisher(api, directory, authorization(setup, clock()), Owner(), root=proof.root, clock=clock)
+    return p.Publisher(api, directory, authorization(setup, clock()), Owner(), root=proof.root, clock=clock,
+                       environment=ENV)
 
 
 def test_fresh_authorization_authenticates_original_success_and_caps_expiry(setup):
@@ -167,17 +181,58 @@ def test_reruns_and_foreign_publisher_contexts_have_no_authority(setup, field, v
 
 @pytest.mark.parametrize("mutation", ["failed", "in_progress", "rerun", "main", "policy", "lock", "tag", "artifact"])
 def test_changed_original_authority_is_rejected(setup, mutation):
-    _, _, _, api, proof, tag = setup
+    fixture, _, _, api, proof, tag = setup
     if mutation == "failed": api.run_value["conclusion"] = "failure"
     elif mutation == "in_progress": api.run_value["status"] = "in_progress"
     elif mutation == "rerun": api.run_value["run_attempt"] = 2
     elif mutation == "main": api.main_sha = "b" * 40
     elif mutation == "policy": (proof.root / p.c.POLICY_PATH).write_text("{}")
-    elif mutation == "lock": (proof.root / "release/stack-lock.json").write_text("{}")
+    elif mutation == "lock": (fixture.control / "stack-lock.json").write_text("{}")
     elif mutation == "tag": tag["sha"] = "e" * 40
     elif mutation == "artifact": api.items[0]["expired"] = True
     with pytest.raises(ValueError): authorization(setup)
     assert not api.writes
+
+
+def test_executor_next_version_lock_cannot_replace_the_held_candidate_lock(setup):
+    _, _, _, _, proof, _ = setup
+    (proof.root / "release/stack-lock.json").write_text('{"release":"marty-ui@9.9.9"}')
+    assert authorization(setup)["publisher_source_sha"] == SOURCE
+
+
+def test_publisher_uses_its_actual_source_while_signed_candidate_stays_fixed(setup, monkeypatch):
+    _, directory, _, api, proof, _ = setup
+    executable, current = "b" * 40, "c" * 40
+    api.publisher["head_sha"] = executable
+    api.main_sha = current
+    proof.executable_source = executable
+    checks = []
+    def admitted(github, request, observed, root):
+        assert request["source_sha"] == SOURCE and observed == executable
+        assert github.main()["commit"]["sha"] == current
+        checks.append((SOURCE, observed, current))
+        return current
+    monkeypatch.setattr(p, "source_main", admitted)
+    monkeypatch.setattr(p, "execution_source", lambda root: executable)
+    environment = {**ENV, "GITHUB_SHA": executable}
+    authorized = p.authorize(api, directory, api.items[0], proof=proof,
+                             environment=environment, now=NOW + timedelta(hours=1))
+    assert authorized["publisher_source_sha"] == executable
+    pub = p.Publisher(api, directory, authorized, Owner(), root=proof.root,
+                      clock=lambda: NOW + timedelta(hours=1), environment=environment)
+    assert pub.publish()["status"] == "published"
+    body = api.releases[0]["body"]
+    owner = p.h.decode(body[len(p.OWNER_PREFIX):-len(p.OWNER_SUFFIX)].encode())["receipt"]
+    assert owner["publisher_source_sha"] == executable and owner["original_run_id"] == api.run_value["id"]
+    assert api.run_value["head_sha"] == SOURCE and checks
+
+
+def test_authorization_cannot_be_used_by_a_different_actual_publisher_invocation(setup):
+    pub = publisher(setup)
+    pub.environment = {**ENV, "GITHUB_RUN_ID": str(PUBLISHER + 1)}
+    with pytest.raises(ValueError, match="different actual workflow"):
+        pub.publish()
+    assert setup[3].writes == []
 
 
 @pytest.mark.parametrize("mutation", ["absent", "object", "source", "operator", "checkpoint"])
@@ -284,7 +339,7 @@ def test_authorization_expiry_during_api_read_prevents_mutation(setup):
 
 def test_signing_failure_leaves_unowned_draft_for_explicit_incident(setup):
     pub = publisher(setup); api = setup[3]
-    pub.ownership.sign = lambda _: (_ for _ in ()).throw(ValueError("signing refused"))
+    pub.ownership.sign = lambda *_: (_ for _ in ()).throw(ValueError("signing refused"))
     with pytest.raises(ValueError, match="signing refused"): pub.publish()
     assert len(api.writes) == 1 and api.releases[0]["body"] == ""
     before = copy.deepcopy(api.writes)
@@ -342,9 +397,10 @@ def test_owner_crypto_command_binds_exact_publisher_run_and_custom_predicate(mon
     api = p.GitHub("/pinned/gh"); calls = []; certificates = []
     receipt = {"publisher_run_id": PUBLISHER, "publisher_source_sha": SOURCE}
     monkeypatch.setattr(p, "publisher_run", lambda *args, **kwargs: {})
+    monkeypatch.setattr(p.h, "candidate_main", lambda github, source, executable: SOURCE)
     monkeypatch.setattr(p.h, "command", lambda arguments, **kwargs: (calls.append(arguments) or 0, b"[]"))
     monkeypatch.setattr(p.provenance, "verified_certificate", lambda *args, **kwargs: certificates.append(kwargs))
-    p.Ownership(Path("/pinned/gh"), Path("/pinned/cosign"), api).verify(receipt, {})
+    p.Ownership(Path("/pinned/gh"), Path("/pinned/cosign"), api).verify(receipt, {}, SOURCE)
     assert "--deny-self-hosted-runners" in calls[0]
     assert calls[0][calls[0].index("--predicate-type") + 1] == p.OWNER_TYPE
     assert certificates == [{"workflow": p.c.PUBLISHER_WORKFLOW, "source_sha": SOURCE,

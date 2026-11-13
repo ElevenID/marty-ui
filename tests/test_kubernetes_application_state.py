@@ -915,3 +915,212 @@ def test_finish_failed_unlink_sync_restores_pending_without_reverting_selected_g
         assert held.current(state.binding, pending_operation=state.operation, domain=domain) == previous
         held.finish(state.binding, state.operation, domain=domain)
         assert held.current(state.binding).directory == state.candidate
+
+
+@pytest.fixture
+def adopted(state):
+    from tests.kubernetes_renewal_adoption_fixture import retained
+    return retained(state.root, state.current, state.binding, state.runtime)
+
+
+def test_adoption_selects_only_complete_pair_and_preserves_historical_bootstrap(state, adopted):
+    import kubernetes_renewal_adoption_state as adoption
+    from tests.kubernetes_renewal_adoption_fixture import publish
+    before = {name: (state.root / name).read_bytes()
+              for name in ("bootstrap-complete.json", "marty-images.json")}
+    old = (state.current / "retained").read_bytes()
+    with selection.locked(state.root) as held:
+        with pytest.raises(bootstrap.BootstrapError):
+            held.current(state.binding)
+    publish(state.root, adopted)
+    with selection.locked(state.root) as held:
+        selected = held.current(state.binding)
+    assert selected.directory == adopted.candidate
+    assert selected.activation_id is None and selected.renewal_activation_id is None
+    assert selected.generation_activation_id == adopted.intent["adoptionId"]
+    assert adoption.authority(state.root, json.loads(before["bootstrap-complete.json"]), "application")[1] == adopted.operation / "application-identity"
+    assert adoption.authority(state.root, json.loads(before["bootstrap-complete.json"]), "renewal")[1] == adopted.operation / "renewal-identity"
+    assert {name: (state.root / name).read_bytes() for name in before} == before
+    assert (state.current / "retained").read_bytes() == old
+    assert not (state.root / adoption.PENDING).exists()
+
+
+@pytest.mark.parametrize("fault", ["partial-pair", "namespace", "cluster", "operator", "owner",
+                                  "candidate", "identity", "native-evidence", "delivery-evidence", "observation"])
+def test_adoption_refuses_partial_mismatched_and_tampered_evidence(state, adopted, fault):
+    import kubernetes_renewal_adoption_state as adoption
+    from tests.kubernetes_renewal_adoption_fixture import publish
+    if fault == "partial-pair":
+        (adopted.operation / "renewal-enrolled.json").unlink()
+    elif fault in {"namespace", "cluster"}:
+        value = json.loads((adopted.operation / "adoption-requested.json").read_bytes())
+        value["binding"]["namespace" if fault == "namespace" else "openbaoClusterId"] = "different-owner"
+        write(adopted.operation / "adoption-requested.json", value)
+    elif fault == "operator":
+        (adopted.operation / "marty-deploy").write_bytes(b"different authenticated operator")
+    elif fault == "owner":
+        (adopted.operation / "renewal-identity").chmod(0o755)
+    elif fault == "candidate":
+        write(adopted.candidate / "retained", b"foreign-generation")
+    elif fault == "identity":
+        write(adopted.operation / "application-identity/application-secret-id", b"foreign-identity-material")
+    else:
+        path = {"native-evidence": adopted.verification / "verified.json",
+                "delivery-evidence": adopted.verification / "delivery.json",
+                "observation": adopted.verification / "delivery/observation-000.json"}[fault]
+        write(path, {"tampered": True})
+    with pytest.raises((bootstrap.BootstrapError, OSError, KeyError)):
+        publish(state.root, adopted)
+    assert not (state.root / adoption.SELECTOR).exists()
+    assert (state.root / adoption.PENDING).exists()
+
+
+def test_adoption_rejects_expired_live_proof_even_with_self_consistent_receipt_hashes(state, adopted):
+    import time
+    import kubernetes_renewal_adoption_state as adoption
+    from tests.kubernetes_renewal_adoption_fixture import publish
+    native = json.loads((adopted.verification / "verified.json").read_bytes())
+    native["verification"]["verificationStartedAtUnixSeconds"] = int(time.time()) - 1000
+    native["verification"]["validBeforeUnixSeconds"] = int(time.time()) - 100
+    write(adopted.verification / "verified.json", native)
+    completed = json.loads((adopted.verification / "adoption-complete.json").read_bytes())
+    completed["selectedAtUnixSeconds"] = int(time.time()) - 999
+    completed["verificationSha256"] = adoption.digest((adopted.verification / "verified.json").read_bytes())
+    write(adopted.verification / "adoption-complete.json", completed)
+    with pytest.raises(bootstrap.BootstrapError):
+        publish(state.root, adopted)
+    assert not (state.root / adoption.SELECTOR).exists()
+
+
+@pytest.mark.parametrize("domain", ["application", "renewal"])
+def test_first_routine_domain_after_adoption_keeps_other_domain_and_full_history(state, adopted, domain):
+    import kubernetes_renewal_adoption_state as adoption
+    from tests.kubernetes_renewal_adoption_fixture import publish
+    publish(state.root, adopted)
+    if domain == "application":
+        _, selected = activate(state)
+    else:
+        with selection.locked(state.root) as held:
+            state.renewal_names = sorted(held.renewal_secret_names())
+        _, selected = activate_renewal(state)
+    assert selected.directory == state.candidate
+    assert selected.activation_id == (state.activation_id if domain == "application" else None)
+    assert selected.renewal_activation_id == (state.activation_id if domain == "renewal" else None)
+    selector = json.loads((state.root / selection.SELECTOR).read_bytes())
+    assert selector["schema"] == selection.GENERATION_SELECTOR_SCHEMA
+    # The other domain's original identity and generation remain a verified predecessor.
+    assert (adopted.candidate / "retained").read_bytes() == (state.current / "retained").read_bytes()
+    write(adopted.operation / "renewal-identity/renewal-secret-id", b"different-identity-material")
+    with selection.locked(state.root) as held:
+        with pytest.raises(bootstrap.BootstrapError):
+            held.current(state.binding)
+    assert (state.root / adoption.SELECTOR).exists()
+
+
+@pytest.mark.parametrize("domain", ["application", "renewal"])
+def test_adoption_reopen_uncertain_domain_reconciles_only_retained_complete_identity(state, adopted, monkeypatch, domain):
+    import adopt_kubernetes_renewal as coordinator
+    for name in ("application", "renewal"):
+        (adopted.operation / (name + "-enrolled.json")).unlink()
+        write(adopted.operation / (name + "-authority-requested.json"), {"attempted": True})
+    # Complete retained enrollment evidence must reconcile without even reading
+    # initialization authority, which is no longer needed for either domain.
+    assert not (state.root / "openbao-initialization.json").exists()
+    def no_enrollment(*_args, **_kwargs):
+        raise AssertionError("reconciliation must never replay enrollment")
+    monkeypatch.setattr(bootstrap, "enroll_application_authority", no_enrollment)
+    monkeypatch.setattr(bootstrap, "enroll_renewal_authority", no_enrollment)
+    monkeypatch.setattr(coordinator, "producer", no_enrollment)
+    args = SimpleNamespace(state_dir=state.root, operation_dir=adopted.operation, reconcile=True)
+    coordinator.enroll_domains(args, adopted.intent, b"operator", {}, {}, lambda: None)
+    assert (adopted.operation / (domain + "-enrolled.json")).is_file()
+    assert not (state.root / "renewal-adoption.json").exists()
+    (adopted.operation / (domain + "-enrolled.json")).unlink()
+    (adopted.operation / (domain + "-identity") / (domain + "-secret-id")).unlink()
+    with pytest.raises((bootstrap.BootstrapError, OSError)):
+        coordinator.enroll_domains(args, adopted.intent, b"operator", {}, {}, lambda: None)
+    assert not (adopted.operation / (domain + "-enrolled.json")).exists()
+
+
+def test_adoption_refuses_running_or_foreign_producer_when_reopening(state, adopted):
+    import adopt_kubernetes_renewal as coordinator
+    producer = private_directory(adopted.operation / "transport-012345abcdef")
+    write(producer / "producer.json", {"pod": {"metadata": {"name": "retained-producer"}}, "uid": "owned-uid"})
+    class Transport:
+        namespace = state.binding["namespace"]
+        def kubectl(self, *_args, **_kwargs):
+            return bootstrap.encoded(self.value)
+    transport = Transport()
+    for uid, phase in [("owned-uid", "Running"), ("foreign-uid", "Failed")]:
+        transport.value = {"metadata": {"uid": uid, "namespace": transport.namespace},
+            "status": {"phase": phase, "containerStatuses": [{"state": {"terminated": {}}}]}}
+        with pytest.raises(bootstrap.BootstrapError):
+            coordinator.quiescent_attempts(adopted.operation, transport)
+    transport.value["metadata"]["uid"] = "owned-uid"
+    coordinator.quiescent_attempts(adopted.operation, transport)
+
+
+@pytest.mark.parametrize("fault", ["selector-publication", "selector-sync", "pending-sync", "lifetime-after-unlink"])
+def test_adoption_interrupted_publication_stays_blocked_until_fresh_proof(state, adopted, monkeypatch, fault):
+    import shutil
+    import time
+    import kubernetes_renewal_adoption_state as adoption
+    from tests.kubernetes_renewal_adoption_fixture import publish
+    pending = (state.root / adoption.PENDING).read_bytes()
+    original_fsync, original_validate = adoption.os.fsync, adoption.validate
+    original_link, original_replace = adoption.os.link, adoption.os.replace
+    with selection.locked(state.root) as held:
+        with monkeypatch.context() as patch:
+            def interrupted_publication(publish):
+                def execute(source, destination, *args, **kwargs):
+                    publish(source, destination, *args, **kwargs)
+                    if fault == "selector-publication" and destination == adoption.SELECTOR:
+                        raise OSError("synthetic interrupted publication")
+                return execute
+
+            def interrupted_sync(descriptor):
+                selected = (state.root / adoption.SELECTOR).exists()
+                blocked = (state.root / adoption.PENDING).exists()
+                if descriptor == held.descriptor and selected and (
+                        (fault == "selector-sync" and blocked) or (fault == "pending-sync" and not blocked)):
+                    raise OSError("synthetic interrupted publication")
+                return original_fsync(descriptor)
+
+            def expired_after_unlink(*args, **kwargs):
+                if fault == "lifetime-after-unlink" and not (state.root / adoption.PENDING).exists():
+                    raise bootstrap.BootstrapError("synthetic lifetime expired")
+                return original_validate(*args, **kwargs)
+
+            patch.setattr(adoption.os, "fsync", interrupted_sync)
+            patch.setattr(adoption.os, "link", interrupted_publication(original_link))
+            patch.setattr(adoption.os, "replace", interrupted_publication(original_replace))
+            patch.setattr(adoption, "validate", expired_after_unlink)
+            with pytest.raises((bootstrap.BootstrapError, OSError)):
+                adoption.publish(held, adopted.operation, adopted.verification)
+        assert (state.root / adoption.PENDING).read_bytes() == pending
+        assert (state.root / adoption.SELECTOR).stat().st_nlink == 1
+        with pytest.raises(bootstrap.BootstrapError):
+            held.current(state.binding)
+    # Reopening cannot clear the blocker using an expired earlier proof. The
+    # coordinator retains both enrollments and creates fresh verification only.
+    with monkeypatch.context() as patch:
+        patch.setattr(adoption.time, "time", lambda: adopted.native["validBeforeUnixSeconds"])
+        with pytest.raises(bootstrap.BootstrapError):
+            publish(state.root, adopted)
+    newer = adopted.operation / "verification-fedcba987654"
+    shutil.copytree(adopted.verification, newer)
+    native = json.loads((newer / "verified.json").read_bytes())
+    now = int(time.time())
+    native["verification"]["verificationStartedAtUnixSeconds"] = now
+    native["verification"]["validBeforeUnixSeconds"] = now + 900
+    write(newer / "verified.json", native)
+    completed = json.loads((newer / "adoption-complete.json").read_bytes())
+    completed.update(verificationDirectory=str(newer), selectedAtUnixSeconds=now,
+        verificationSha256=adoption.digest((newer / "verified.json").read_bytes()))
+    write(newer / "adoption-complete.json", completed)
+    with selection.locked(state.root) as held:
+        adoption.publish(held, adopted.operation, newer)
+        assert held.current(state.binding).directory == adopted.candidate
+    assert not (state.root / adoption.PENDING).exists()
+    assert json.loads((state.root / adoption.SELECTOR).read_bytes())["completionDirectory"] == str(newer)
+    assert (adopted.verification / "adoption-complete.json").exists()

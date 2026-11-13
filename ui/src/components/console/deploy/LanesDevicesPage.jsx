@@ -1,41 +1,17 @@
-/**
- * Lanes & Devices Page
- * 
- * Manages lanes and devices across all deployment profiles.
- */
+/** The current user's native device registrations in the selected organization. */
 
-import { useState } from 'react';
-import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
-  Box,
-  Paper,
-  Typography,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Chip,
-  IconButton,
-  Tooltip,
-  Alert,
-  LinearProgress,
-  TextField,
-  InputAdornment,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
+  Alert, Box, Button, Chip, InputAdornment, LinearProgress, Paper,
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  TextField, Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
-import VisibilityIcon from '@mui/icons-material/Visibility';
-import SettingsIcon from '@mui/icons-material/Settings';
-import DevicesIcon from '@mui/icons-material/Devices';
-import { Link } from 'react-router';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 
-import { ResourcePage, AddButton } from '../../common';
+import { ResourcePage } from '../../common';
+import { useAsyncData } from '../../../hooks/useAsyncData';
 import { listOrganizationDevices } from '../../../services/devicesApi';
 import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -53,183 +29,107 @@ const getBreadcrumbs = (t) => [
   { label: t('deploy.breadcrumbs.lanesDevices'), path: '/console/org/deploy/lanes' },
 ];
 
+function RegisteredDevices({ organizationId, principalId }) {
+  const { t } = useTranslation('applicant');
+  const active = useRef(false);
+  const request = useRef(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; request.current += 1; };
+  }, []);
+  const { data, loading, error, reload } = useAsyncData(async () => {
+    const generation = ++request.current;
+    return listOrganizationDevices(organizationId, {
+      userId: principalId,
+      isCurrent: () => active.current && request.current === generation,
+    });
+  }, [organizationId, principalId]);
+  const devices = data || [];
+  const query = searchQuery.trim().toLocaleLowerCase();
+  const filteredDevices = devices.filter(device => [device.device_id, device.device_model, device.platform]
+    .some(value => typeof value === 'string' && value.toLocaleLowerCase().includes(query)));
+  const formatDate = (value) => {
+    const parsed = value ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleString() : t('devices.notReported');
+  };
+
+  return (
+    <>
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 3, alignItems: 'center' }}>
+        <TextField
+          label={t('devices.searchLabel')}
+          value={searchQuery}
+          onChange={event => setSearchQuery(event.target.value)}
+          size="small"
+          sx={{ width: '100%', maxWidth: 440 }}
+          slotProps={{ input: { startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment> } }}
+        />
+        <Button startIcon={<RefreshIcon />} onClick={reload} disabled={loading}>
+          {t('devices.refresh')}
+        </Button>
+      </Box>
+      {loading ? <LinearProgress aria-label={t('devices.loading')} /> : error ? (
+        <Alert severity="error" action={<Button color="inherit" onClick={reload}>{t('actions.retry', { ns: 'common' })}</Button>}>
+          {error?.message?.trim() || t('devices.errorLoading')}
+        </Alert>
+      ) : filteredDevices.length === 0 ? (
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <Typography color="text.secondary">
+            {query ? t('devices.noMatches') : t('deploy.lanesDevicesPage.noDevices', { ns: 'console' })}
+          </Typography>
+          {query && <Button onClick={() => setSearchQuery('')} sx={{ mt: 1 }}>{t('devices.clearSearch')}</Button>}
+        </Paper>
+      ) : (
+        <TableContainer component={Paper} role="region" aria-label={t('devices.tableLabel')} tabIndex={0} sx={{ maxWidth: '100%' }}>
+          <Table sx={{ minWidth: 680 }}>
+            <TableHead>
+              <TableRow>
+                {['device', 'platform', 'appVersion', 'registered', 'lastSeen', 'status'].map(field => (
+                  <TableCell key={field}>{t(`devices.tableHeaders.${field}`)}</TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {filteredDevices.map(device => (
+                <TableRow key={device.id}>
+                  <TableCell sx={{ overflowWrap: 'anywhere', maxWidth: 280 }}>
+                    {device.device_model && <Typography variant="body2" sx={{ fontWeight: 500 }}>{device.device_model}</Typography>}
+                    <Typography variant="body2">{device.device_id}</Typography>
+                  </TableCell>
+                  <TableCell>{device.platform.toUpperCase()}</TableCell>
+                  <TableCell>{device.app_version || t('devices.notReported')}</TableCell>
+                  <TableCell>{formatDate(device.created_at)}</TableCell>
+                  <TableCell>{formatDate(device.last_seen_at)}</TableCell>
+                  <TableCell>
+                    <Chip size="small" label={t(device.is_active ? 'devices.status.active' : 'devices.status.inactive')} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+    </>
+  );
+}
+
 function LanesDevicesPage() {
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const { activeOrgId } = useConsole();
-  const organizationId = activeOrgId;
-  const { data: lanes = [], loading, error } = useAsyncData(
-    () => listOrganizationDevices(organizationId),
-    [organizationId]
-  );
-  const [searchQuery, setSearchQuery] = useState('');
-  const [deploymentFilter, setDeploymentFilter] = useState('all');
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'online':
-        return 'success';
-      case 'degraded':
-        return 'warning';
-      case 'offline':
-        return 'error';
-      default:
-        return 'default';
-    }
-  };
-
-  const getStatusLabel = (status) => {
-    switch (status) {
-      case 'online':
-        return t('deploy.lanesDevicesPage.status.online');
-      case 'degraded':
-        return t('deploy.lanesDevicesPage.status.degraded');
-      case 'offline':
-        return t('deploy.lanesDevicesPage.status.offline');
-      default:
-        return status;
-    }
-  };
-
-  const filteredLanes = lanes.filter((lane) => {
-    const matchesSearch = lane.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lane.deployment.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesDeployment = deploymentFilter === 'all' || lane.deploymentId === deploymentFilter;
-    return matchesSearch && matchesDeployment;
-  });
-
-  const deployments = [...new Set(lanes.map((l) => ({ id: l.deploymentId, name: l.deployment })))];
-
+  const principalId = user?.user_id || user?.sub || user?.id || null;
   return (
     <ResourcePage
       title={t('deploy.lanesDevicesPage.title')}
       description={t('deploy.lanesDevicesPage.description')}
       tabs={getDeployTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
-      actions={
-        <AddButton 
-          label={t('deploy.lanesDevicesPage.addLane')} 
-          path="/console/org/deploy/lanes/new" 
-        />
-      }
     >
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error?.message || String(error)}
-        </Alert>
-      )}
-      {/* Filters */}
-      <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-        <TextField
-          placeholder={t('deploy.lanesDevicesPage.searchPlaceholder')}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          size="small"
-          sx={{ width: 300 }}
-          slotProps={{
-            input: {
-              startAdornment: (
-                <InputAdornment position="start">
-                  <SearchIcon color="action" />
-                </InputAdornment>
-              ),
-            }
-          }}
-        />
-        <FormControl size="small" sx={{ minWidth: 200 }}>
-          <InputLabel>{t('deploy.lanesDevicesPage.deploymentFilter')}</InputLabel>
-          <Select
-            value={deploymentFilter}
-            label={t('deploy.lanesDevicesPage.deploymentFilter')}
-            onChange={(e) => setDeploymentFilter(e.target.value)}
-          >
-            <MenuItem value="all">{t('deploy.lanesDevicesPage.allDeploymentProfiles')}</MenuItem>
-            {deployments.map((d) => (
-              <MenuItem key={d.id} value={d.id}>{d.name}</MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      </Box>
-      {loading ? (
-        <LinearProgress />
-      ) : (
-        <TableContainer component={Paper}>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.lane')}</TableCell>
-                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.deployment')}</TableCell>
-                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.devices')}</TableCell>
-                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.lastActivity')}</TableCell>
-                <TableCell>{t('deploy.lanesDevicesPage.tableHeaders.status')}</TableCell>
-                <TableCell align="right">{t('deploy.lanesDevicesPage.tableHeaders.actions')}</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filteredLanes.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} align="center">
-                    <Typography color="text.secondary" sx={{ py: 4 }}>
-                      {searchQuery || deploymentFilter !== 'all' 
-                        ? t('deploy.lanesDevicesPage.noMatchingLanes') 
-                        : t('deploy.lanesDevicesPage.noLanes')}
-                    </Typography>
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredLanes.map((lane) => (
-                  <TableRow key={lane.id} hover>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                        <DevicesIcon color="action" fontSize="small" />
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                          {lane.name}
-                        </Typography>
-                      </Box>
-                    </TableCell>
-                    <TableCell>{lane.deployment}</TableCell>
-                    <TableCell>
-                      <Typography variant="body2">
-                        {t('deploy.lanesDevicesPage.devicesActive', { active: lane.activeDevices, total: lane.deviceCount })}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      {new Date(lane.lastActivity).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      <Chip 
-                        label={getStatusLabel(lane.status)} 
-                        color={getStatusColor(lane.status)}
-                        size="small" 
-                      />
-                    </TableCell>
-                    <TableCell align="right">
-                      <Tooltip title={t('deploy.lanesDevicesPage.actions.viewDevices')}>
-                        <IconButton
-                          component={Link}
-                          to={`/console/deploy/lanes/${lane.id}`}
-                          size="small"
-                        >
-                          <VisibilityIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={t('deploy.lanesDevicesPage.actions.configure')}>
-                        <IconButton
-                          component={Link}
-                          to={`/console/deploy/lanes/${lane.id}/settings`}
-                          size="small"
-                        >
-                          <SettingsIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
+      {isLoading ? <LinearProgress aria-label={t('devices.loading', { ns: 'applicant' })} />
+        : !isAuthenticated || !principalId ? <Alert severity="info">{t('devices.signInRequired', { ns: 'applicant' })}</Alert>
+          : !activeOrgId ? <Alert severity="info">{t('deploy.lanesDevicesPage.selectOrganization')}</Alert>
+            : <RegisteredDevices key={JSON.stringify([principalId, activeOrgId])} organizationId={activeOrgId} principalId={principalId} />}
     </ResourcePage>
   );
 }

@@ -53,6 +53,12 @@ function StatCard({ icon: Icon, label, count, color = 'primary' }) {
   );
 }
 
+function countActiveResources(resources) {
+  if (!Array.isArray(resources)) return 0;
+  // Flow definitions use ACTIVE; other resource adapters return active.
+  return resources.filter(resource => String(resource?.status || '').trim().toLowerCase() === 'active').length;
+}
+
 /**
  * Organization Health Panel Component
  */
@@ -60,11 +66,11 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
   const { t } = useTranslation('console');
   
   // Calculate counts of active resources
-  const activeTrustProfiles = data?.trustProfiles?.filter(t => t.status === 'active')?.length || 0;
-  const activeTemplates = data?.templates?.filter(t => t.status === 'active')?.length || 0;
-  const activePolicies = data?.policies?.filter(p => p.status === 'active')?.length || 0;
-  const activeDeployments = data?.deployments?.filter(d => d.status === 'active')?.length || 0;
-  const activeFlows = data?.flows?.filter(f => f.status === 'active')?.length || 0;
+  const activeTrustProfiles = countActiveResources(data?.trustProfiles);
+  const activeTemplates = countActiveResources(data?.templates);
+  const activePolicies = countActiveResources(data?.policies);
+  const activeDeployments = countActiveResources(data?.deployments);
+  const activeFlows = countActiveResources(data?.flows);
 
   // Determine if org is operationally ready
   const isOperational = activeTrustProfiles > 0 && 

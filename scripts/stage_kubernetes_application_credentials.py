@@ -28,6 +28,7 @@ import tarfile
 
 import bootstrap_kubernetes_openbao as bootstrap
 import kubernetes_application_state as application_state
+import kubernetes_renewal_adoption_state as adoption
 
 
 FILE_MODES = {0o400, 0o440, 0o444, 0o600, 0o640, 0o644}
@@ -182,17 +183,19 @@ def admitted_runtime(args: argparse.Namespace, complete: dict, retained_images: 
     retained_operator, _ = private_bytes(args.state_dir / "marty-deploy", OPERATOR_LIMIT, {0o700})
     bootstrap.require(retained_operator == operator_bytes and len(operator_bytes) <= OPERATOR_LIMIT,
                       "retained signed operator differs or exceeds transport bounds")
+    operator_bytes, build_identity = adoption.authenticated_operator(
+        args, complete, operation, values, operator_bytes)
     operator = operation / "marty-deploy"
     bootstrap.write_new(operator, operator_bytes, 0o700)
     identity = subprocess.run([str(operator), "--build-identity"], stdin=subprocess.DEVNULL,
                              capture_output=True, check=False, timeout=10, env={})
     bootstrap.require(identity.returncode == 0 and identity.stdout.strip().decode()
-                      == args.runtime_source_sha + ":" + args.release_tag,
+                      == build_identity,
                       "signed operator build identity differs")
     publication = bootstrap.publication_contract(operator)
     application = bootstrap.application_token_contract(operator)
-    bootstrap.require(bootstrap.encoded(complete["credentialPublication"]) == bootstrap.encoded(publication)
-                      and bootstrap.encoded(complete["applicationTokenContract"]) == bootstrap.encoded(application),
+    bootstrap.require(bootstrap.encoded(adoption.contract(args.state_dir, complete, "publication")) == bootstrap.encoded(publication)
+                      and bootstrap.encoded(adoption.contract(args.state_dir, complete, "application")) == bootstrap.encoded(application),
                       "original bootstrap compiled contracts differ")
     return operator, operator_bytes, values, publication, application
 
@@ -210,19 +213,8 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     retained_images = record(state / "marty-images.json")
     bootstrap.require(complete.get("status") == "openbao-and-application-credentials-ready",
                       "original Kubernetes bootstrap is not complete")
-    authority = complete.get("applicationAuthority")
-    bootstrap.require(isinstance(authority, dict) and set(authority) == {
-        "schema", "binding", "identityDirectory", "files",
-    } and authority["schema"] == "marty.kubernetes-application-authority/v1"
-       and authority["identityDirectory"] == "application-identity"
-       and authority["files"] == sorted(bootstrap.APPLICATION_IDENTITY_FILES),
-       "original bootstrap has no supported application authority")
-    binding = bootstrap.application_binding(authority["binding"])
-    lifecycle = complete["credentialLifecycle"]
-    bootstrap.require(binding == {
-        "namespace": complete["namespace"], "namespaceUid": lifecycle["namespaceUid"],
-        "openbaoClusterId": complete["openbaoClusterId"], "workloadProject": lifecycle["workloadProject"],
-    }, "retained bootstrap application binding differs")
+    binding, identity_path = adoption.authority(state, complete, "application")
+    adoption.operation_allowed(state, operation)
     selected = held.current(binding)
     current = selected.directory
     bootstrap.require(not operation.is_relative_to(current)
@@ -234,7 +226,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     bootstrap.require(complete["runtimeSourceSha"] == args.runtime_source_sha
                       and complete["chartSourceSha"] == args.chart_source_sha,
                       "explicit runtime or chart identity differs from original bootstrap")
-    pull_secrets = complete.get("imagePullSecrets")
+    pull_secrets = adoption.pull_secrets(state, complete)
     bootstrap.require(isinstance(pull_secrets, list) and all(
         isinstance(name, str) and re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,251}[a-z0-9]|[a-z0-9]", name)
         for name in pull_secrets), "retained image pull Secret names are invalid")
@@ -242,7 +234,6 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
         args, complete, retained_images, operation)
     snapshot = current_snapshot(current)
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "original OpenBao trust is unavailable")
-    identity_path = state / "application-identity"
     existing_private_directory(identity_path)
     bootstrap.require({path.name for path in identity_path.iterdir()} == bootstrap.APPLICATION_IDENTITY_FILES,
                       "retained application identity inventory differs")
@@ -277,7 +268,7 @@ def _stage_locked(args: argparse.Namespace, held: application_state.LockedState)
     # Observe the retained binding before uploading any authority or current
     # credential material, and again immediately before the native login.
     bootstrap.check_application_binding(transport, binding)
-    pod = bootstrap.create_producer_pod(transport, image=values["images"]["services"],
+    pod = bootstrap.create_producer_pod(transport, image=adoption.producer_image(args, values),
         nonce=nonce, pull_secrets=pull_secrets, purpose="application-stage")
     remote_ready = False
     native_outcome_uncertain = False
@@ -388,6 +379,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + name, required=True)
     for name in ("build-run-id", "build-run-attempt"):
         parser.add_argument("--" + name, required=True, type=int)
+    adoption.add_operator_arguments(parser)
     try:
         stage(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, subprocess.TimeoutExpired,

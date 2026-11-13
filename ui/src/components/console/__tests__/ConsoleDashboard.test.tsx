@@ -288,7 +288,7 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText('Role: Organization Reader')).toBeVisible()
       expect(screen.queryByText('Role: Vendor')).not.toBeInTheDocument()
       expect(screen.getByText(/This dashboard shows the sections available to your role/)).toBeVisible()
-      for (const title of ['Applicant Lifecycle', 'Team', 'Recent Activity', 'Runtime Operational Status', 'Critical Signals (24h)']) {
+      for (const title of ['Applicant Lifecycle', 'Team', 'Recent Activity', 'Credential Operation Configuration', 'Critical Signals (24h)']) {
         expect(screen.queryByText(title)).not.toBeInTheDocument()
       }
       expect(screen.queryByText(/Setup Readiness/)).not.toBeInTheDocument()
@@ -358,7 +358,7 @@ describe('ConsoleDashboard', () => {
 
     it('should show setup readiness as incomplete', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Setup Readiness/i })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: /Verify credentials/i })).toBeInTheDocument()
       expect(screen.getByRole('tab', { name: /Issue credentials/i })).toBeInTheDocument()
       expect(screen.getAllByText(/Trust Profile/i).length).toBeGreaterThanOrEqual(1)
@@ -385,7 +385,7 @@ describe('ConsoleDashboard', () => {
 
     it('should show system status', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/System Status/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /System Status/i })).toBeInTheDocument()
     })
   })
 
@@ -396,7 +396,7 @@ describe('ConsoleDashboard', () => {
 
     it('should show partial setup progress', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Setup Readiness/i })).toBeInTheDocument()
 
       // Trust is ready — should have at least one CheckCircleIcon
       const checkmarks = screen.getAllByTestId('CheckCircleIcon')
@@ -433,14 +433,14 @@ describe('ConsoleDashboard', () => {
 
     it('should show all setup items as complete', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Setup Readiness/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /Setup Readiness/i })).toBeInTheDocument()
       const checkmarks = screen.getAllByTestId('CheckCircleIcon')
       expect(checkmarks.length).toBeGreaterThanOrEqual(5)
     })
 
     it('should show runtime readiness', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/Runtime Operational Status/i)).toBeInTheDocument()
+      expect(screen.getByText(/Credential Operation Configuration/i)).toBeInTheDocument()
     })
 
     it('should show operational action buttons', () => {
@@ -707,7 +707,7 @@ describe('ConsoleDashboard', () => {
   describe('System Health', () => {
     it('should show system status bar', () => {
       render(<ConsoleDashboard />)
-      expect(screen.getByText(/System Status/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /System Status/i })).toBeInTheDocument()
       expect(screen.getByText(/API Gateway/i)).toBeInTheDocument()
     })
 

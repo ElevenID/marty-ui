@@ -168,7 +168,7 @@ class TestReviewHistory(unittest.TestCase):
         self.check(main, digest="sha256:" + hashlib.sha256(self.record.read_bytes()).hexdigest())
 
     def test_all_pass_cannot_use_a_descendant(self) -> None:
-        with self.assertRaisesRegex(policy.ReviewMainError, "unchanged"):
+        with self.assertRaisesRegex(policy.ReviewMainError, "admitted release policy"):
             self.check(self.add_record(), False)
 
     def test_changed_then_reverted_product_cannot_hide_in_history(self) -> None:
