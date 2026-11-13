@@ -934,7 +934,8 @@ function maintenanceFullMounts(rows){
 const MAINTENANCE_CREATED_ROLES=Object.freeze(['auth','compliance-profile','credential-template','flow','gateway','issuance-native','organization','presentation-policy','signing-keys','trust-profile']);
 function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker,liveCapture=null){
  const actualMode=Object.hasOwn(post,'actualRuntimeBefore');
- assert.deepEqual(Object.keys(post).sort(),['selection','selected22','selected22Job','plannedModels',...(actualMode?['actualRuntimeBefore','actualResourceBefore','acknowledgedState']:[])].sort(),'MAINTENANCE_CREATED_SCHEMA');
+ assert.deepEqual(Object.keys(post).sort(),['selection','selected22','selected22Job','plannedModels',...(actualMode?['actualRuntimeBefore','actualResourceBefore','acknowledgedState']:[]),...(Object.hasOwn(post,'ob3Authority')?['ob3Authority']:[])].sort(),'MAINTENANCE_CREATED_SCHEMA');
+ assert(!Object.hasOwn(post,'ob3Authority')||actualMode,'MAINTENANCE_CREATED_OB3_AUTHORITY_SCOPE');
  assert(!liveCapture||!actualMode,'MAINTENANCE_CREATED_LIVE_ACTUAL_PREIMAGE_FORBIDDEN');
  if(liveCapture){assert.equal(post.selected22,null);assert.equal(post.selected22Job,null);assert.equal(liveCapture.ack.schema,'marty.d12-current-native-operation/v1');assert.equal(liveCapture.ack.phase,'EFFECT_ACKNOWLEDGED');assert.equal(liveCapture.ack.pendingStep,null);assert.equal(liveCapture.ack.pendingArgv,null);assert(['CREATE_SELECTED','REPLACE_CREATED_CREDENTIAL_GENERATION'].includes(liveCapture.ack.acknowledgedStep));}
  else {const job=boundJson(post.selected22Job);assert.equal(job.state,'COMPLETE');assert.equal(job.exitCode,0);assert.equal(job.jobClosed,true);assert.equal(job.terminalActiveProcesses,0);for(const key of ['forcedTermination','timedOut','cancelled','hostMarginBreached'])assert.equal(job[key],false);}
@@ -942,7 +943,7 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
  assert.deepEqual(Object.keys(selected.binaries).sort(),[...MAINTENANCE_CREATED_ROLES],'MAINTENANCE_CREATED_CLOSED10');
  assert.deepEqual(Object.keys(saved).sort(),before.roles.map(row=>row.role).sort(),'MAINTENANCE_CREATED_SAVED22');
  const actual=actualMode?boundJson(post.actualRuntimeBefore):null,actualBaseline=actualMode?boundJson(post.actualResourceBefore):null;
- let previousCreated=null;
+ let previousCreated=null,deferredExitCodes=new Map();
  if(actualMode){
   const ack=boundJson(post.acknowledgedState);
   assert.equal(ack.phase,'EFFECT_ACKNOWLEDGED');assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
@@ -955,6 +956,15 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
    if(!MAINTENANCE_CREATED_ROLES.includes(row.role))assert.equal(row.containerId,historical.containerId,'MAINTENANCE_CREATED_RETAINED_HISTORICAL_CID_CHANGED:'+row.role);
    assert.equal(row.imageId,historical.imageId,'MAINTENANCE_CREATED_PREIMAGE_IMAGE_CHANGED:'+row.role);
    assert.equal(row.startedAt,prior.State.StartedAt,'MAINTENANCE_CREATED_PREIMAGE_STARTED_AT_CHANGED:'+row.role);
+  }
+  if(Object.hasOwn(post,'ob3Authority')){
+   const authority=boundJson(post.ob3Authority),bureau=previousCreated['passport-beta-bureau'];
+   assert.equal(authority.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(authority.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
+   assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);assert.deepEqual(ack.replacementAuthority,post.ob3Authority);
+   const failure=boundJson(authority.deferredFailure);
+   assert.equal(failure.containerId,bureau?.Id);assert.equal(failure.sqlstate42501Observed,true);assert.equal(failure.permissionDeniedForSchemaObserved,true);
+   assert.equal(bureau.State.Status,'exited');assert.equal(bureau.State.ExitCode,1);
+   deferredExitCodes=new Map([['passport-beta-bureau',1]]);
   }
   assert(Array.isArray(actualBaseline)&&actualBaseline.length===28&&new Set(actualBaseline.map(row=>row.Id)).size===28,'MAINTENANCE_CREATED_ACTUAL_RESOURCE28_REQUIRED');
  }
@@ -1006,7 +1016,7 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
     generation.startedAt=recorded.StartedAt;
    }
   }
-  return {a,generations,before:next,resourceBefore:baseline,created,saved};
+  return {a,generations,before:next,resourceBefore:baseline,created,saved,deferredExitCodes};
 }
 function createdDependencySet(value){
  assert.equal(typeof value,'string','MAINTENANCE_CREATED_DEPENDENCY_LABEL_REQUIRED');
@@ -1122,10 +1132,10 @@ function validateMaintenanceResourceRows(a,generations,before,inspections,resour
   if(frozen){
    assert.equal(frozen.containerId,cid);assert.equal(frozen.imageId,image);assert.equal(frozen.startedAt,generation.startedAt);
    assert.equal(row.State?.Status,createdContext?.created.has(role)?'created':'exited','MAINTENANCE_MANAGED_NOT_EXITED:'+role);
-   assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.ExitCode,0);
+    assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.ExitCode,createdContext?.deferredExitCodes?.get(role)||0);
    if(frozen.configuredRuntimeUid!==undefined)assert.equal(configuredUid(row.Config?.User||''),frozen.configuredRuntimeUid,'MAINTENANCE_CONFIGURED_UID_CHANGED:'+role);
    if(createdContext?.created.has(role)){const saved=createdContext.saved[role];for(const key of ['Cmd','Entrypoint','User','WorkingDir'])assert.deepEqual(row.Config[key]??null,saved[key]??null,'MAINTENANCE_CREATED_CONFIG_CHANGED:'+role);assert.deepEqual(row.HostConfig,saved.HostConfig,'MAINTENANCE_CREATED_FULL_CAPS_CHANGED:'+role);}
-   roles.push({...frozen,health:row.State?.Health?.Status||null,hostPid:0,running:false,paused:false,state:createdContext?.created.has(role)?'created':'exited',containerExitCode:0,oomKilled:false});
+    roles.push({...frozen,health:row.State?.Health?.Status||null,hostPid:0,running:false,paused:false,state:createdContext?.created.has(role)?'created':'exited',containerExitCode:createdContext?.deferredExitCodes?.get(role)||0,oomKilled:false});
   }else{
    assert.equal(row.State?.Status,'running','MAINTENANCE_ANCILLARY_NOT_RUNNING:'+role);
    assert.equal(row.State?.Running,true);assert.equal(row.State?.Pid,generation.pid);

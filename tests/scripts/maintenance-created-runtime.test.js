@@ -58,6 +58,31 @@ test('postCREATE actual preimage refuses an unacknowledged ref',t=>{
 test('postCREATE actual preimage refuses retained timestamp drift',t=>{
  const f=actualPreimageFixture(t);f.saved['retained-0'].State.StartedAt='2026-01-03T00:00:00Z';f.post.selected22=f.file('selected-tampered.json',f.saved);assert.throws(f.invoke,/MAINTENANCE_CREATED_RETAINED_STARTED_AT/);
 });
+function deferredBureauFixture(t){
+ const f=actualPreimageFixture(t),old='retained-0',role='passport-beta-bureau';
+ f.before.roles.find(row=>row.role===old).role=role;f.actual.roles.find(row=>row.role===old).role=role;
+ f.saved[role]=f.saved[old];delete f.saved[old];f.saved[role].State.ExitCode=1;
+ f.restart.a.cap.allRunningRoles[role]=f.restart.a.cap.allRunningRoles[old];delete f.restart.a.cap.allRunningRoles[old];
+ f.restart.generations.set(role,f.restart.generations.get(old));f.restart.generations.delete(old);
+ f.post.selected22=f.file('bureau-selected.json',f.saved);f.post.actualRuntimeBefore=f.file('bureau-actual.json',f.actual);
+ const prior=JSON.parse(fs.readFileSync(JSON.parse(fs.readFileSync(f.post.acknowledgedState.path)).priorCreatedSnapshot.path));
+ prior[role]=prior[old];delete prior[old];prior[role].State={StartedAt:f.newTime,Status:'exited',ExitCode:1};
+ const failure=f.file('bureau-deferred-failure.json',{containerId:prior[role].Id,sqlstate42501Observed:true,permissionDeniedForSchemaObserved:true});
+ f.post.ob3Authority=f.file('bureau-authority.json',{schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',deferredRoles:[role],deferredFailure:failure});
+ f.post.acknowledgedState=f.file('bureau-ack.json',{phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore,priorCreatedSnapshot:f.file('bureau-prior.json',prior),replacementAuthority:f.post.ob3Authority});
+ return f;
+}
+test('postCREATE OB3 retains the specifically acknowledged deferred bureau failure',t=>{
+ const f=deferredBureauFixture(t),out=f.invoke();assert.equal(out.deferredExitCodes.get('passport-beta-bureau'),1);
+});
+test('postCREATE OB3 refuses a foreign deferred bureau failure',t=>{
+ const f=deferredBureauFixture(t),authority=JSON.parse(fs.readFileSync(f.post.ob3Authority.path));
+ authority.deferredFailure=f.file('foreign-bureau-failure.json',{containerId:'f'.repeat(64),sqlstate42501Observed:true,permissionDeniedForSchemaObserved:true});
+ f.post.ob3Authority=f.file('foreign-bureau-authority.json',authority);
+ const ack=JSON.parse(fs.readFileSync(f.post.acknowledgedState.path));ack.replacementAuthority=f.post.ob3Authority;
+ f.post.acknowledgedState=f.file('foreign-bureau-ack.json',ack);
+ assert.throws(f.invoke);
+});
 for(const fault of ['role','reusedCid','image','command','mount','writable','cap','job'])test('postCREATE refuses '+fault,t=>{
  const f=fixture(t),role=selectedRoles[0];
  if(fault==='role'){delete f.selection.binaries[role];f.post.selection=f.file('bad-selection.json',f.selection);}
