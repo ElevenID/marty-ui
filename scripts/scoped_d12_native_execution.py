@@ -65,7 +65,7 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
                 "D12_EXACT_GIT_EXPORTED_MIGRATION_REQUIRED")
 
 
-def created_recovery_checkpoint(inputs, state, intent, recovery):
+def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_backend):
     """Bind a Root-reconciled acknowledged create, never repeat its commands."""
     from scoped_native_database import RECOVERY_SOURCE_FIELDS, RECOVERY_TRUST_FIELDS, _recovery_trust_models
     from scoped_native_runtime import validate_journal_readback
@@ -136,7 +136,9 @@ def created_recovery_checkpoint(inputs, state, intent, recovery):
                 "D12_CREATED_CHECKPOINT_READ_CHANGED")
     require(all(files[name].get("present") is False for name in ("build-receipt.json","configuration-receipt.json")),
             "D12_CREATED_CHECKPOINT_ALREADY_CONSUMED")
-    backend=load(inputs["operationJournal"])
+    require(isinstance(operation_backend, dict) and isinstance(operation_backend.get("rootProof"), dict),
+            "D12_CREATED_JOURNAL_BACKEND_REQUIRED")
+    backend=operation_backend
     require(all(observed[0]["root"][key]==backend["rootProof"][key] for key in ("device","inode","uid","mode")),
             "D12_CREATED_JOURNAL_ROOT_CHANGED")
     proof, verified = load(recovery["databaseProof"]), load(recovery["verifiedDatabase"])
@@ -360,11 +362,11 @@ class D12CurrentExecution:
         require(recovery.get("operation")==("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME" if replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),"D12_CREATED_RECOVERY_OPERATION_CHANGED")
         original, proof, verified=created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
-            self.store.read("build-apply-intent.json"), recovery)
+            self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database, before, preview, overlay_ref = self.recovery_preflight(recovery_ref)
         # Recheck after all fresh reads and before the first new durable write.
         created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
-            self.store.read("build-apply-intent.json"), recovery)
+            self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database.i={**self.i,"quiescence":recovery["quiescence"]}
         dbstate=json.loads(read_ref(proof["operationState"]).read_bytes())
         from scoped_native_database import schema_steps

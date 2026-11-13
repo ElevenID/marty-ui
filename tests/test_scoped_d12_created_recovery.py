@@ -17,7 +17,8 @@ def created_fixture(tmp_path):
     original.pop("quiescence")
     previous_ref=saved("previous-authority.json",previous)
     root={"device":1,"inode":2,"uid":1000,"mode":448}
-    original["operationJournal"]=saved("created-backend.json",{"rootProof":root})
+    saved("created-backend.json",{"rootProof":root})
+    original["operationJournal"]=None
     dbstate={"phase":"DATABASE_MAINTENANCE_COMPLETED","runId":original["runId"],"executorSource":original["executorSource"],
              "databaseIdentity":{"containerId":"SYNTHETIC_DATABASE"},"quiescenceSha256":previous["quiescence"]["sha256"],"operations":[{"stepId":step,"receipt":saved("command-"+step+".json",{"role":role,"command":command})}
                  for command in ("migrate","verify-owned-schema") for step,role in database.schema_steps(True,command)]}
@@ -52,7 +53,7 @@ def created_fixture(tmp_path):
 def test_created_checkpoint_accepts_exact_bytes_without_mutating_original(tmp_path):
     inputs,state,intent,recovery,_,_=created_fixture(tmp_path)
     before=deepcopy((state,intent,recovery))
-    original,proof,verified=execution.created_recovery_checkpoint(inputs,state,intent,recovery)
+    original,proof,verified=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=json.loads((tmp_path/"created-backend.json").read_bytes()))
     assert original["runId"]==inputs["runId"]
     assert json.loads(Path(proof["operationState"]["path"]).read_bytes())==verified["operationState"]
     assert (state,intent,recovery)==before
@@ -69,7 +70,7 @@ def test_created_checkpoint_refuses_drift_before_any_effect(tmp_path,change):
     elif change=="db-proof":recovery["databaseProof"]=saved("foreign-proof.json",{})
     elif change=="job":recovery["selected22Job"]=saved("bad-job.json",{"state":"FAILED"})
     elif change=="foreign-root":observed[0]["root"]["inode"]=3;recovery["journalRead"]=saved("changed-read.json",observed)
-    with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery)
+    with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=json.loads((tmp_path/"created-backend.json").read_bytes()))
 
 
 @pytest.mark.parametrize("replace",[False,True])
@@ -122,7 +123,7 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
     value=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
     value.i=inputs;value.profile=profile;value.roles=selected;value.native_preimage=None;value.read_only_preflight=False
     value.build_profile=SimpleNamespace(ui_revision="source",core_revision="core")
-    value.store=SimpleNamespace(read=lambda name:state if name=="build-state.json" else intent,
+    value.store=SimpleNamespace(specification=json.loads((tmp_path/"created-backend.json").read_bytes()),read=lambda name:state if name=="build-state.json" else intent,
         state=lambda data:{"fileFsync":True,"parentDirectory":{"supported":True,"synced":True}})
     calls=[]
     def node(mode,**kwargs):
@@ -151,7 +152,7 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
         assert calls[0]=="VERIFY_COMPLETED_DB" and len(calls)==2
     assert value.state["phase"]=="SELECTED_CREATED"
     with pytest.raises(ValueError,match="D12_ONLY_ACKNOWLEDGED_CREATE_RECOVERABLE"):
-        execution.created_recovery_checkpoint(inputs,value.state,intent,recovery)
+        execution.created_recovery_checkpoint(inputs,value.state,intent,recovery,operation_backend=value.store.specification)
 
 
 @pytest.mark.parametrize("change",[None,"reused-current-cid","missing-prepare"])
@@ -239,3 +240,11 @@ def test_host_ack_verifies_new_target_model_without_borrowing_old_job(tmp_path,m
     else:
         binding.effect_acknowledged(state["acknowledgedStep"],state)
         assert calls==["INPUTS","CURRENT_ACK_TARGET_MODEL","INPUTS"]
+
+
+@pytest.mark.parametrize("backend",[None,{}, {"rootProof":None}, {"rootProof":{"device":1,"inode":999,"uid":1000,"mode":448}}])
+def test_created_checkpoint_requires_separately_bound_backend_root(tmp_path,backend):
+    inputs,state,intent,recovery,_,_=created_fixture(tmp_path)
+    assert inputs["operationJournal"] is None
+    with pytest.raises(ValueError,match="D12_CREATED_JOURNAL_(BACKEND_REQUIRED|ROOT_CHANGED)"):
+        execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
