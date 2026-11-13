@@ -80,9 +80,11 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
     // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
     // additive saved-policy revision and managed prerequisite authority fields.
+    // Direct template jwt_vc_profile_json uses CreateTemplateRequest field 28,
+    // UpdateTemplateRequest field 24, and TemplateResponse field 34.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "784e407604510c45a68234a8d8cb84a57e26db297117b4ae37ed4557a3d5ab60"
+        "e346ede9739e55f430feb9a74fe314d9d259ead9d632c5637c73676e0fef2959"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
