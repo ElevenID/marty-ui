@@ -225,9 +225,10 @@ class D12CurrentEffectObserver:
     def prepare_credential_replacement(self,recovery_ref):
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
         state=self.store.read("build-state.json")
-        require(self.profile=="d05-membership-current-functional" and self.created_ref is not None and recovery.get("schema") in ("marty.d12-created-recovery/v1","marty.d12-ob3-quiescent-recovery/v1")
+        require(self.profile=="d05-membership-current-functional" and self.created_ref is not None and recovery.get("schema") in ("marty.d12-created-recovery/v1","marty.d12-ob3-quiescent-recovery/v1","marty.d12-ob3-acknowledged-replacement-recovery/v1")
                 and recovery.get("operation") in ("REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME","REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
-                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                    "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
                 and recovery.get("replaceCredentialGeneration") is True
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
@@ -235,12 +236,26 @@ class D12CurrentEffectObserver:
         snapshot=self.inspect_all22();rows=exact_roles(snapshot,self.profile)
         selected=dict(self.build_profile.roles)
         ob3=recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+        ob3_acknowledged=recovery.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1"
         if ob3:
             require(state.get("phase")=="OB3_PARTIAL_QUIESCENT","D12_OB3_REPLACEMENT_QUIESCENCE_REQUIRED")
             saved=json.loads(read_ref(recovery["selected22"]).read_bytes())
             require(set(saved)==set(rows) and all(row["containerId"]==saved[role]["Id"] and row["state"]==saved[role]["State"]["Status"]
                     and row.get("running") is False and row.get("hostPid")==0 and row.get("paused") is False and row.get("oomKilled") is False
                     and row.get("containerExitCode")==saved[role]["State"]["ExitCode"] for role,row in rows.items()),"D12_OB3_REPLACEMENT_PREIMAGE_REQUIRED")
+        elif ob3_acknowledged:
+            require(state.get("phase")=="EFFECT_ACKNOWLEDGED" and state.get("acknowledgedStep")=="REPLACE_CREATED_CREDENTIAL_GENERATION"
+                    and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"]
+                    and state.get("ob3StopOutcomes",{}).get("passport-beta-bureau",{}).get("observedExitCode")==1,
+                    "D12_OB3_ACKNOWLEDGED_PREIMAGE_REQUIRED")
+            saved=json.loads(read_ref(recovery["selected22"]).read_bytes())
+            require(set(saved)==set(rows) and all(row["containerId"]==saved[role]["Id"]
+                    and row.get("state")==("created" if role in selected else "exited")
+                    and row.get("running") is False and row.get("hostPid")==0
+                    and row.get("paused") is False and row.get("oomKilled") is False
+                    and row.get("containerExitCode")== (1 if role=="passport-beta-bureau" else 0)
+                    and saved[role]["State"]["ExitCode"]==row["containerExitCode"]
+                    for role,row in rows.items()),"D12_OB3_ACKNOWLEDGED_CIDS_OR_EXIT_CHANGED")
         else:
             require(all(row.get("state")==("created" if role in selected else "exited")
                     and row.get("running") is False and row.get("hostPid")==0
@@ -308,7 +323,8 @@ class D12CurrentEffectObserver:
                         "marty.d12-ob3-acknowledged-replacement-recovery/v1")
                     and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
                         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
-                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
                     and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"],
@@ -630,7 +646,8 @@ class D12CurrentHostBindings:
         from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
         recovery=json.loads(read_ref(recovery_ref).read_bytes());source=recovery["startupPrerequisites"]
         require(recovery.get("operation") in ("QUIESCE_OB3_PARTIAL_STARTS","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME",
-                    "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+                    "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                    "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False,"D12_OB3_STARTUP_AUTHORITY_REQUIRED")
         registered=self.host._source_files.get("scripts/ob3-startup-prerequisites.json")
         require(isinstance(registered,dict) and read_ref(source).resolve()==self.host._root/"scripts/ob3-startup-prerequisites.json"
@@ -699,7 +716,8 @@ class D12CurrentHostBindings:
                     ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
                     ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
                     ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
-                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"))
+                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
+                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"))
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and recovery.get("runId") == self.inputs["runId"],
                 "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
@@ -754,12 +772,14 @@ class D12CurrentHostBindings:
                     state=self.store.read("build-state.json")
                     if recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
                         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
-                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"):
+                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"):
                         created=self.observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,
                             reconciled_replacement=recovery_ref)
                         self._verify_created_target("REPLACE_CREATED_CREDENTIAL_GENERATION",state,created,
                             recovery_ref=recovery_ref,prefix=observation_prefix+"d12-reconciled-replacement-target",
-                            use_installed_model=recovery.get("operation")=="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+                            use_installed_model=recovery.get("operation") in ("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                                "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"))
                     else:
                         self.observer.bind_created_after_ack("CREATE_SELECTED",state)
             frozen_ref = recovery["quiescence"]
@@ -956,7 +976,8 @@ class D12CurrentHostBindings:
         require(type(use_installed_model) is bool,"D12_CREATED_TARGET_MODEL_MODE_REQUIRED")
         target_inputs=self.inputs
         if use_installed_model:
-            require(recovery.get("operation")=="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"
+            require(recovery.get("operation") in ("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
                     "D12_CREATED_INSTALLED_MODEL_AUTHORITY_REQUIRED")

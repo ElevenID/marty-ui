@@ -42,6 +42,87 @@ def test_acknowledged_ob3_replacement_continues_without_recreate_or_sql(tmp_path
     assert value.resume_ob3_acknowledged_credential_replacement(recovery_ref)==recovery_ref
     assert calls==["CHECKPOINT","CHECKPOINT","POST_CREATE_RECOVERY_VERIFIED","CONTINUE_STARTS"]
 
+
+def test_second_ob3_replacement_journals_only_new_credential_create(tmp_path,monkeypatch):
+    from scoped_native_runtime import ref
+    def save(name,value):
+        p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
+    inputs={"runId":"SYNTHETIC","rolloutProfile":"d05-membership-current-functional",
+            "runScopedTrustLeaseProof":{"sha256":"new-generation"},"selection":{"sha256":"selected"},
+            "databaseBefore":{"sha256":"database-before"},"executorSource":{"sha256":"reviewed-executor"},
+            "composeArguments":["reviewed-compose"]}
+    original={**inputs,"runScopedTrustLeaseProof":{"sha256":"prior-generation"}}
+    commands=[{"stepId":step,"receipt":save("sql-"+step+".json",{"stepId":step})}
+              for command in ("migrate","verify-owned-schema") for step,_role in database.schema_steps(True,command)]
+    proof={"operationState":save("database-state.json",{"operations":commands})}
+    verified={"state":"SYNTHETIC_VERIFIED_DATABASE"}
+    recovery={"operation":"REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+              "quiescence":{"sha256":"quiescent"},"originalInputs":save("prior-inputs.json",original),
+              "originalOperationState":save("ack.json",{"phase":"EFFECT_ACKNOWLEDGED"}),
+              "selected22":save("current-cids.json",{"synthetic":"preimage"})}
+    recovery_ref=save("recovery.json",recovery)
+    value=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
+    value.i=inputs;value.profile="d05-membership-current-functional";value.read_only_preflight=False
+    value.store=SimpleNamespace(specification={},read=lambda name:{"phase":"EFFECT_ACKNOWLEDGED"})
+    value.build_profile=SimpleNamespace(ui_revision="source",core_revision="core")
+    value.roles={"auth":"marty-auth"}
+    calls=[]
+    monkeypatch.setattr(execution,"created_recovery_checkpoint",
+        lambda *args,**kwargs:calls.append("CHECKPOINT") or (original,proof,verified))
+    monkeypatch.setattr(execution.overlay,"compose_recreate_arguments",
+        lambda *args,**kwargs:calls.append("COMPOSE_NEW_GENERATION") or ["compose","up","--no-start"])
+    db=SimpleNamespace(i={},commands=[],baseline_refs={},engine_id="SYNTHETIC",tenant_id="SYNTHETIC",
+                       node=lambda mode,**kwargs:verified if mode=="verify" else pytest.fail("SQL replay"))
+    value.recovery_preflight=lambda ref:(db,{}, {"restoreOrder":[]}, {"path":"synthetic-overlay"})
+    value.g={"ob3_startup_plan":lambda ref:{"order":[]},
+             "prepare_created_credential_replacement":lambda ref:calls.append("PREPARE_CURRENT_CIDS") or recovery["selected22"]}
+    value.record=lambda phase,**kwargs:calls.append(phase)
+    value.command=lambda database,step,argv:calls.append(step) if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else pytest.fail("SQL or prior create replay")
+    value._finish_after_create=lambda *args,**kwargs:calls.append("CONTINUE_STARTS") or kwargs["ob3_recovery"]
+    assert value.replace_ob3_acknowledged_credential_replacement_and_resume(recovery_ref)==recovery_ref
+    assert calls==["CHECKPOINT","CHECKPOINT","PREPARE_CURRENT_CIDS","POST_CREATE_RECOVERY_VERIFIED",
+                   "CREATED_CREDENTIAL_REPLACEMENT_AUTHORIZED","COMPOSE_NEW_GENERATION",
+                   "REPLACE_CREATED_CREDENTIAL_GENERATION","CONTINUE_STARTS"]
+
+
+@pytest.mark.parametrize("fault",[None,"stale-cid","bureau-exit"])
+def test_second_ob3_replacement_preimage_is_current_and_deferred(tmp_path,monkeypatch,fault):
+    import scoped_d12_native_effect_host as host
+    from scoped_native_runtime import ref
+    def save_file(name,value):
+        p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
+    state={"phase":"EFFECT_ACKNOWLEDGED","acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION",
+           "ob3StopOutcomes":{"passport-beta-bureau":{"observedExitCode":1}}}
+    prior=save_file("prior.json",{"operation":"REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"})
+    state["replacementAuthority"]=prior
+    if fault=="bureau-exit":state["ob3StopOutcomes"]["passport-beta-bureau"]["observedExitCode"]=0
+    state_ref=save_file("ack.json",state)
+    rows={"auth":{"containerId":"a"*64,"state":"created","running":False,"hostPid":0,
+                  "paused":False,"oomKilled":False,"containerExitCode":0},
+          "passport-beta-bureau":{"containerId":"b"*64,"state":"exited","running":False,"hostPid":0,
+                                  "paused":False,"oomKilled":False,"containerExitCode":1}}
+    saved={role:{"Id":row["containerId"],"State":{"ExitCode":row["containerExitCode"]}}
+           for role,row in rows.items()}
+    if fault=="stale-cid":saved["auth"]["Id"]="f"*64
+    recovery={"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1",
+              "operation":"REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+              "replaceCredentialGeneration":True,"dispatchAuthorized":True,"draftOnly":False,
+              "originalOperationState":state_ref,"previousRecoveryAuthority":prior,
+              "selected22":save_file("current22.json",saved)}
+    recovery_ref=save_file("recovery.json",recovery)
+    observer=host.D12CurrentEffectObserver.__new__(host.D12CurrentEffectObserver)
+    observer.profile="d05-membership-current-functional";observer.created_ref={"sha256":"current-created"}
+    observer.store=SimpleNamespace(read=lambda _:state)
+    observer.build_profile=SimpleNamespace(roles={"auth":"marty-auth"})
+    observer.inspect_all22=lambda:rows
+    observer.save=lambda name,value:save_file(name,value)
+    monkeypatch.setattr(host,"exact_roles",lambda snapshot,profile:snapshot)
+    if fault:
+        with pytest.raises(ValueError):observer.prepare_credential_replacement(recovery_ref)
+    else:
+        preimage=observer.prepare_credential_replacement(recovery_ref)
+        assert json.loads(Path(preimage["path"]).read_bytes())==rows
+
 def startup_fixture(tmp_path,monkeypatch):
     """Controlled source namespace; Git verification belongs to Host construction."""
     import scoped_d12_native_effect_host as host

@@ -99,8 +99,9 @@ def acknowledged_replacement_fixture(tmp_path,quiescence=None):
     return inputs,state,intent,recovery,saved,observed
 
 
-@pytest.mark.parametrize("fault", [None, "wrong-prior", "new-generation", "changed-ack", "old-schema", "job-request", "current-cid"])
-def test_ob3_acknowledged_replacement_reuses_created_checkpoint_without_recreating(tmp_path,monkeypatch,fault):
+@pytest.mark.parametrize("fault", [None, "wrong-prior", "new-generation", "changed-model", "changed-ack", "old-schema", "job-request", "current-cid"])
+@pytest.mark.parametrize("mode", ["resume", "replace"])
+def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_lineage(tmp_path,monkeypatch,fault,mode):
     inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path)
     original=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
     original["roleBinaries"]={"auth":"marty-auth"};inputs["roleBinaries"]=original["roleBinaries"]
@@ -118,12 +119,23 @@ def test_ob3_acknowledged_replacement_reuses_created_checkpoint_without_recreati
     observed[0]["files"]["build-state.json"]={"present":True,"document":state,"bytes":state_ref["bytes"],
         **journal_readback(Path(state_ref["path"]).read_bytes())}
     recovery.update(schema="marty.d12-ob3-acknowledged-replacement-recovery/v1",
-                    operation="RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                    operation=("RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if mode=="resume" else
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
                     scope="OB3_FUNCTIONAL_ONLY",deferredRoles=["passport-beta-bureau"],
                     allowedScenarios=list(execution.OB3_ALLOWED_SCENARIOS),
-                    startupPrerequisites=previous["startupPrerequisites"],replaceCredentialGeneration=False,
+                    startupPrerequisites=previous["startupPrerequisites"],replaceCredentialGeneration=mode=="replace",
                     previousRecoveryAuthority=previous_ref,originalOperationState=state_ref,
                     journalRead=saved("ob3-replacement-journal.json",observed))
+    if mode=="replace":
+        next_generation=tmp_path/"next-ob3-generation"
+        model=json.loads(Path(original["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+        for secret,name in (("trust_profile_workload_server_cert","trust_profile_workload_server_cert"),
+                            ("trust_profile_tls_kms_token","trust_profile_workload_server_kms_token")):
+            model["secrets"][secret]["file"]=str(next_generation/name)
+        inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("next-ob3-model.json",model)}
+        inputs["runScopedTrustLeaseProof"]=saved("next-ob3-lease.json",{"generationDirectory":str(next_generation),"actualNativeGrantExpiryUnixSeconds":4000000000})
+        for key in ("plannedModels","runScopedTrustLeaseProof"):
+            recovery["trustDataMap"][key]["recovery"]=inputs[key]
     recovery["selected22"]=saved("ob3-current-selected22.json",{"auth":{"Id":"a"*64}})
     failed=tmp_path/"failed"/"cutover";outputs=failed/"outputs";outputs.mkdir(parents=True)
     def failed_ref(name,value):
@@ -156,8 +168,14 @@ def test_ob3_acknowledged_replacement_reuses_created_checkpoint_without_recreati
     monkeypatch.setattr(execution,"ob3_startup_prerequisites",lambda ref:called.append(ref))
     if fault=="wrong-prior":recovery["previousRecoveryAuthority"]=saved("foreign-ob3-authority.json",{**previous,"operation":"UNREVIEWED"})
     if fault=="new-generation":
-        inputs["runScopedTrustLeaseProof"]=saved("unapproved-new-lease.json",{"generationDirectory":"C:/different"})
+        generation="C:/different" if mode=="resume" else json.loads(Path(original["runScopedTrustLeaseProof"]["path"]).read_bytes())["generationDirectory"]
+        inputs["runScopedTrustLeaseProof"]=saved("unapproved-new-lease.json",{"generationDirectory":generation})
         recovery["trustDataMap"]["runScopedTrustLeaseProof"]["recovery"]=inputs["runScopedTrustLeaseProof"]
+    if fault=="changed-model":
+        model=json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+        model["name"]="foreign-project"
+        inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("foreign-ob3-model.json",model)}
+        recovery["trustDataMap"]["plannedModels"]["recovery"]=inputs["plannedModels"]
     if fault=="changed-ack":state["replacementAuthority"]={"sha256":"foreign"}
     if fault=="old-schema":recovery["schema"]="marty.d12-created-recovery/v1"
     if fault=="job-request":
