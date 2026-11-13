@@ -37,10 +37,10 @@ test('labels-only policy precedes pages, masks fields independently of body visi
  page.listeners.pointerdown({isTrusted:true,clientX:10,clientY:20,button:0});assert.equal(page.sent.length,1);assert.equal(page.sent[0].trusted,true);
  const late=context();late.addPage('wallet','unused');await assert.rejects(capture.prepareContext(late,'wallet'),/precede pages/);
 });
-for(const [fault,patch]of Object.entries({secretText:{text:'new arbitrary protocol state nonce'},secretAttribute:{attributes:{title:'SECRET_TOKEN'}},dataAttribute:{attributes:{'data-state':'unbounded-state'}},iframe:{tag:'IFRAME'},background:{backgroundImage:'url(https://private.invalid/SECRET)'},pseudo:{beforeContent:'"SECRET"'},pseudoBeforeBackground:{beforeContent:'""',beforeBackgroundImage:'url(secret)'},pseudoAfterBackground:{afterContent:'""',afterBackgroundImage:'url(secret)'},shadow:{shadow:true}}))test('finite visible-surface policy rejects '+fault,()=>{
+for(const [fault,patch]of Object.entries({secretAttribute:{attributes:{title:'SECRET_TOKEN'}},dataAttribute:{attributes:{'data-state':'unbounded-state'}},iframe:{tag:'IFRAME'},background:{backgroundImage:'url(https://private.invalid/SECRET)'},pseudo:{beforeContent:'"SECRET"'},pseudoBeforeBackground:{beforeContent:'""',beforeBackgroundImage:'url(secret)'},pseudoAfterBackground:{afterContent:'""',afterBackgroundImage:'url(secret)'},shadow:{shadow:true}}))test('finite visible-surface policy rejects '+fault,()=>{
  assert(privateReviewSurfaceDecision({tag:'DIV',leaf:true,dynamic:true,...patch}).blocked);
 });
-for(const fault of ['late-text','late-attribute','late-background','pseudo-background','closed-shadow','iframe'])test('browser guard blanks and records a failed policy for '+fault,async t=>{
+for(const fault of ['late-attribute','late-background','pseudo-background','closed-shadow','iframe'])test('browser guard blanks and records a failed policy for '+fault,async t=>{
  const root=temp(t),capture=createPrivateReviewRecording(binding(root),{artifactDir:path.join(root,'artifacts')}),c=context();await capture.prepareContext(c,'wallet');const page=pageHarness(c,{extra:[{tag:'BUTTON',text:'Approve'}]});
  if(fault==='closed-shadow')page.shadow();else page.mutate(2,fault==='late-text'?{text:'SECRET'}:fault==='late-attribute'?{attributes:{title:'SECRET'}}:fault==='late-background'?{backgroundImage:'url(secret)'}:fault==='pseudo-background'?{beforeContent:'""',beforeBackgroundImage:'url(secret)'}:{tag:'IFRAME'});
  // Tag mutation uses the same actual element tag in the DOM model.
@@ -97,4 +97,27 @@ test('private cursor refuses prepared but uncaptured source role instead of misa
   c.surface({page},{role,state:'POLICY_ACTIVE',code:null});c.transport({page},{role,kind:'pointerdown',trusted:true,x:10,y:20,button:0,elapsedMs:42});
  }
  await assert.rejects(capture.finish({ready:true,cleanupComplete:true}),/actual captured video/);assert(!fs.existsSync(path.join(root,'media/cursor-evidence.json')));
+});
+
+// Controlled DOM only: these tests do not qualify actual paint timing or pages.
+test('source-literal wallet statuses and consent stay visible while arbitrary dynamic values stay masked',async t=>{
+ const root=temp(t),capture=createPrivateReviewRecording(binding(root),{artifactDir:path.join(root,'artifacts')}),c=context();await capture.prepareContext(c,'wallet');const page=pageHarness(c,{extra:[{tag:'P',text:'Working\u2026'},{tag:'H2',text:'Share a credential?'},{tag:'STRONG',text:'SECRET CREDENTIAL CLAIM'}]});
+ assert.equal(page.nodes[2].style.getPropertyValue('color'),'#f8fafc');assert.equal(page.nodes[3].style.getPropertyValue('color'),'#f8fafc');assert.equal(page.nodes[4].style.getPropertyValue('color'),'transparent');
+ page.mutate(2,{text:'LIVE SECRET NONCE'});assert(!page.surface.some(e=>e.state==='BLOCKED'));assert.equal(page.nodes[2].style.getPropertyValue('color'),'transparent');assert.equal(page.nodes[2].style.getPropertyPriority('color'),'important');assert.equal(page.nodes[2].childNodes[0].nodeValue,'LIVE SECRET NONCE');
+});
+test('current login protocol attributes and option links remain exact without being displayed or copied',()=>{
+ for(const fact of [{role:'login',tag:'BODY',attributes:{'data-nonce':'SOURCE NONCE','data-dc-api-request-url':'SOURCE URL','data-dc-api-submit-url':'SOURCE URL','data-dc-api-protocol':'SOURCE PROTOCOL'}},{role:'login',tag:'OPTION',attributes:{'data-link':'SOURCE LINK','data-android-link':'SOURCE ANDROID','data-ios-link':'SOURCE IOS','data-description':'SOURCE DESCRIPTION'}},{role:'login',tag:'BUTTON',attributes:{'data-action':'show-mobile'}},{tag:'A',attributes:{'aria-label':'SOURCE ACCESSIBILITY LABEL'}}]){
+  const before=structuredClone(fact),decision=privateReviewSurfaceDecision(fact);assert.equal(decision.blocked,null);assert.equal(decision.showLabel,false);assert.deepEqual(fact,before);assert(!JSON.stringify(decision).includes('SOURCE'));
+ }
+ assert(privateReviewSurfaceDecision({role:'wallet',tag:'BODY',attributes:{'data-nonce':'SOURCE'}}).blocked);assert(privateReviewSurfaceDecision({role:'login',tag:'DIV',attributes:{'data-nonce':'SOURCE'}}).blocked);assert(privateReviewSurfaceDecision({role:'login',tag:'BUTTON',attributes:{'data-action':'FOREIGN'}}).blocked);
+});
+test('SVG QR image and canvas are visually withheld without deleting their nodes or attributes',async t=>{
+ const root=temp(t),capture=createPrivateReviewRecording(binding(root),{artifactDir:path.join(root,'artifacts')}),c=context();await capture.prepareContext(c,'login');const page=pageHarness(c,{extra:[{tag:'SVG',attributes:{viewBox:'0 0 48 48'}},{tag:'IMG',attributes:{src:'SOURCE QR URL',alt:'SOURCE QR LABEL'}},{tag:'CANVAS'}]});
+ const veil=page.created.find(node=>node.tagName==='STYLE');assert(veil.textContent.includes('svg,img,canvas{visibility:hidden!important}'));
+ for(const node of page.nodes.slice(2)){assert.equal(node.style.getPropertyValue('opacity'),'0');assert.equal(node.style.getPropertyPriority('opacity'),'important');assert.equal(node.style.getPropertyValue('visibility'),'hidden');assert(!node.replaced);assert.equal(node.style.getPropertyValue('display'),'');}
+ assert.equal(page.nodes[2].getAttribute('viewBox'),'0 0 48 48');assert.equal(page.nodes[3].getAttribute('src'),'SOURCE QR URL');assert(!page.surface.some(e=>e.state==='BLOCKED'));
+});
+test('preserved protocol attributes cannot authorize CSS-generated text or opaque backgrounds',()=>{
+ const base={role:'login',tag:'BODY',attributes:{'data-nonce':'SOURCE NONCE'}};
+ for(const extra of [{beforeContent:'"SOURCE NONCE"'},{afterContent:'"SOURCE NONCE"'},{beforeBackgroundImage:'url(source)'},{backgroundImage:'url(source)'},{attributes:{'data-nonce':'SOURCE NONCE',style:'content:attr(data-nonce)'}}])assert(privateReviewSurfaceDecision({...base,...extra}).blocked);
 });

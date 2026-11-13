@@ -253,23 +253,31 @@ async function finalizeVideo(video, artifactDir, filename) {
 }
 
 // One finite source policy, reused by the browser init owner and pure controls.
-// Unknown labels are withheld initially; unsupported/dynamic surfaces fail closed.
+// Unknown labels remain withheld, including after mutations; unsupported surfaces fail closed.
 function privateReviewSurfaceDecision(fact) {
-  const labels=new Set(['Receive','Present','Approve','Cancel','Sign in','Sign In','Login','Continue','Email','Password','Credential offer URI','Presentation request URI','Credentials','Request','Membership badge','Marty Verified Member','Marty Verified Member Open Badge','Sign out','Log out','Create account','Use a credential','Sign in with a credential','Credential login','Try again','Back','Submit','Next','Select organization','Organizations','Applications','Dashboard','Account','Profile','Allow','Deny','Retry']);
+  const labels=new Set(['Receive','Present','Approve','Cancel','Sign in','Sign In','Login','Continue','Email','Password','Credential offer URI','Presentation request URI','Credentials','Request','Membership badge','Marty Verified Member','Marty Verified Member Open Badge','Sign out','Log out','Create account','Use a credential','Sign in with a credential','Credential login','Try again','Back','Submit','Next','Select organization','Organizations','Applications','Dashboard','Account','Profile','Allow','Deny','Retry','Marty Test Wallet','Reset wallet','Wallet ready','Receive credential','Present credential','No credentials','Share a credential?','Approve sends a presentation for the entered request. Cancel sends your decision to decline.','Working\u2026','Credential received','Presentation accepted','Decline sent','Wallet reset','Sign in with Open Badge Credential','Select wallet app','Platform','Auto-detect','Android','iOS','Generic','Open wallet','Scan with your wallet app','Waiting for wallet response\u2026']);
   const text=String(fact.text||'').trim(),tag=String(fact.tag||'').toUpperCase();
   if(fact.shadow||tag.includes('-'))return {blocked:'UNSUPPORTED_SHADOW_OR_CUSTOM_ELEMENT'};
-  if(['IFRAME','FRAME','OBJECT','EMBED','CANVAS','SVG','IMG','VIDEO','AUDIO','MATH'].includes(tag))return {blocked:'UNSUPPORTED_OPAQUE_SURFACE'};
+  if(['IFRAME','FRAME','OBJECT','EMBED','VIDEO','AUDIO','MATH'].includes(tag))return {blocked:'UNSUPPORTED_OPAQUE_SURFACE'};
+  // These real page surfaces retain their DOM, layout and JS behavior, but
+  // their pixels are never authorized by a text label decision.
+  const hideSurface=['SVG','IMG','CANVAS'].includes(tag);
   if(fact.backgroundImage&&fact.backgroundImage!=='none')return {blocked:'UNSUPPORTED_BACKGROUND'};
   if([fact.beforeBackgroundImage,fact.afterBackgroundImage].some(value=>value&&value!=='none'))return {blocked:'UNSUPPORTED_PSEUDO_BACKGROUND'};
   if([fact.beforeContent,fact.afterContent].some(value=>value&&!['none','normal','""',"''"].includes(value)))return {blocked:'UNSUPPORTED_PSEUDO_CONTENT'};
   for(const [name,value]of Object.entries(fact.attributes||{})){
     if(!value)continue;
-    if(['title','alt','placeholder','aria-label','aria-description','aria-valuetext'].includes(name)&&!labels.has(value))return {blocked:'UNSAFE_VALUE_ATTRIBUTE'};
-    if(name.startsWith('data-')&&!['true','false'].includes(value))return {blocked:'UNSUPPORTED_DATA_ATTRIBUTE'};
+    if(['title','placeholder'].includes(name)&&!labels.has(value))return {blocked:'UNSAFE_VALUE_ATTRIBUTE'};
+    if(name==='alt'&&!hideSurface&&!labels.has(value))return {blocked:'UNSAFE_VALUE_ATTRIBUTE'};
+    // Only the current login owner's non-rendering protocol attributes are
+    // preserved here. They are not copied into labels or evidence.
+    const loginProtocol=fact.role==='login'&&((tag==='BODY'&&['data-nonce','data-dc-api-request-url','data-dc-api-submit-url','data-dc-api-protocol'].includes(name))||(tag==='OPTION'&&['data-link','data-android-link','data-ios-link','data-description'].includes(name))||(tag==='BUTTON'&&name==='data-action'&&['show-mobile','show-qr'].includes(value)));
+    if(name.startsWith('data-')&&!['true','false'].includes(value)&&!loginProtocol)return {blocked:'UNSUPPORTED_DATA_ATTRIBUTE'};
     if(name==='srcdoc'||name==='style'&&/url\s*\(|attr\s*\(/i.test(value))return {blocked:'UNSUPPORTED_ATTRIBUTE_CONTENT'};
   }
-  if(fact.dynamic&&text&&!labels.has(text))return {blocked:'DYNAMIC_UNKNOWN_TEXT'};
-  return {blocked:null,showLabel:Boolean(text&&labels.has(text)&&fact.leaf&&!['INPUT','TEXTAREA','SELECT'].includes(tag)),hideValue:['INPUT','TEXTAREA','SELECT'].includes(tag)};
+  // Unknown dynamic text remains behind the same document-start veil.
+  // Never replace text, values or protocol DOM to create a substitute UI.
+  return {blocked:null,showLabel:Boolean(!hideSurface&&text&&labels.has(text)&&fact.leaf&&!['INPUT','TEXTAREA','SELECT'].includes(tag)),hideValue:['INPUT','TEXTAREA','SELECT'].includes(tag),hideSurface};
 }
 
 function installPrivateReviewPage({role},decide) {
@@ -291,10 +299,11 @@ function installPrivateReviewPage({role},decide) {
       for(const node of nodes){
         if(owned.has(node)||['SCRIPT','STYLE','LINK','META','HEAD','TITLE'].includes(node.tagName))continue;
         const style=getComputedStyle(node),direct=[...node.childNodes].filter(child=>child.nodeType===3).map(child=>child.nodeValue||'').join('').trim();
-        const fact={tag:node.tagName,shadow:Boolean(node.shadowRoot),text:direct,leaf:node.children.length===0,dynamic:dynamic&&direct!==priorText.get(node),attributes:Object.fromEntries(node.getAttributeNames().filter(name=>name!=='style'||node.style.cssText!==ownedStyles.get(node)).map(name=>[name,node.getAttribute(name)])),backgroundImage:style.backgroundImage,beforeContent:getComputedStyle(node,'::before').content,afterContent:getComputedStyle(node,'::after').content,beforeBackgroundImage:getComputedStyle(node,'::before').backgroundImage,afterBackgroundImage:getComputedStyle(node,'::after').backgroundImage};
+        const fact={role,tag:node.tagName,shadow:Boolean(node.shadowRoot),text:direct,leaf:node.children.length===0,dynamic:dynamic&&direct!==priorText.get(node),attributes:Object.fromEntries(node.getAttributeNames().filter(name=>name!=='style'||node.style.cssText!==ownedStyles.get(node)).map(name=>[name,node.getAttribute(name)])),backgroundImage:style.backgroundImage,beforeContent:getComputedStyle(node,'::before').content,afterContent:getComputedStyle(node,'::after').content,beforeBackgroundImage:getComputedStyle(node,'::before').backgroundImage,afterBackgroundImage:getComputedStyle(node,'::after').backgroundImage};
         const decision=decide(fact);if(decision.blocked){stop(decision.blocked);return;}priorText.set(node,direct);
         for(const [key,value]of [['color',decision.showLabel?'#f8fafc':'transparent'],['-webkit-text-fill-color',decision.showLabel?'#f8fafc':'transparent'],['text-shadow','none'],['background-image','none'],['animation','none'],['transition','none']])set(node,key,value);
-        if(decision.hideValue)set(node,'opacity','0');
+        if(decision.hideValue||decision.hideSurface)set(node,'opacity','0');
+        if(decision.hideSurface)set(node,'visibility','hidden');
         ownedStyles.set(node,node.style.cssText);
       }
       if(!active&&document.body&&document.readyState!=='loading'){
@@ -321,7 +330,7 @@ function installPrivateReviewPage({role},decide) {
   const tick=()=>{scan(active);if(!blocked)requestAnimationFrame(tick);};
   // Apply the value/unknown-text veil at document start independently of body
   // visibility. A body style override cannot expose leaf values or unknown text.
-  const veil=()=>{if(!document.documentElement)return;const style=document.createElement('style');owned.add(style);style.textContent='*{color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}input,textarea,select{opacity:0!important}';document.documentElement.append(style);scan(false);};
+  const veil=()=>{if(!document.documentElement)return;const style=document.createElement('style');owned.add(style);style.textContent='*{color:transparent!important;-webkit-text-fill-color:transparent!important;text-shadow:none!important}input,textarea,select,svg,img,canvas{opacity:0!important}svg,img,canvas{visibility:hidden!important}';document.documentElement.append(style);scan(false);};
   if(document.documentElement)veil();else new MutationObserver((_records,o)=>{if(document.documentElement){o.disconnect();veil();}}).observe(document,{childList:true});
   requestAnimationFrame(tick);
 }
