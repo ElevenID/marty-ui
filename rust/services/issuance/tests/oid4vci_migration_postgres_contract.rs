@@ -235,6 +235,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, claims jsonb NOT NULL DEFAULT '{}'::jsonb);
          CREATE TABLE issuance_service.authorization_sessions (
@@ -304,6 +305,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, access_token_expires_at text,
              claims jsonb NOT NULL DEFAULT '{}'::jsonb);
@@ -334,6 +336,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, access_token_expires_at timestamptz,
              claims jsonb NOT NULL DEFAULT '{}'::jsonb);
@@ -402,6 +405,7 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
              created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
              PRIMARY KEY (organization_id, client_id));
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL,
              application_id text, status text NOT NULL,
              reserved_credential_id text,

@@ -44,7 +44,7 @@ macro_rules! transaction_columns {
      zk_predicate_claims, credential_payload_format, wallet_configs, validity_days,
      renewable, renewal_window_days, delivery_mode, issuer_profile_id,
      issuer_mode, issuer_did_override, issuer_algorithm, signing_service_id,
-     reserved_credential_id, oid4vci_client_id, created_at, expires_at"
+     reserved_credential_id, oid4vci_client_id, created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing"
     };
 }
 
@@ -185,7 +185,7 @@ const CLAIM_FOR_SIGNING: &str = concat!(
     "UPDATE issuance_service.issuance_transactions
      SET status = 'signing', reserved_credential_id = $5, credential_type = $6,
          issuer_profile_id = $7, issuer_mode = $8, issuer_did_override = $9,
-         issuer_algorithm = $10, signing_service_id = $11
+         issuer_algorithm = $10, signing_service_id = $11, jwt_vc_signing_timing = $12
      WHERE status = 'authorized' AND ",
     signing_authority_predicate!(),
     " RETURNING ",
@@ -212,10 +212,10 @@ const RESERVE_INITIATION: &str = concat!(
           validity_days, renewable, renewal_window_days, delivery_mode,
           issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
           signing_service_id, reserved_credential_id, oid4vci_client_id,
-          created_at, expires_at)
+          created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
              $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-             $26, $27, $28, $29, $30, $31, $32)
+             $26, $27, $28, $29, $30, $31, $32, $33, $34)
      ON CONFLICT (organization_id, idempotency_key_hash) DO NOTHING
      RETURNING ",
     transaction_columns!()
@@ -244,6 +244,7 @@ pub(crate) async fn insert_issuance_transaction<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    transaction.validate_jwt_vc_profile()?;
     if transaction_contains_private_material(transaction) {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
@@ -284,6 +285,13 @@ where
         .bind(&transaction.oid4vci_client_id)
         .bind(transaction.created_at)
         .bind(transaction.expires_at)
+        .bind(
+            transaction
+                .jwt_vc_profile
+                .as_ref()
+                .map(|value| json!(value)),
+        )
+        .bind(transaction.jwt_vc_signing_timing.map(|value| json!(value)))
         .fetch_optional(executor)
         .await
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
@@ -553,6 +561,15 @@ impl CredentialRepository for PostgresCredentialRepository {
         session: &CredentialAuthorizationSession,
         access_token: &str,
     ) -> Result<CredentialTransaction, CredentialIssuanceError> {
+        if session
+            .credential_configuration_ids
+            .iter()
+            .any(|id| id.ends_with(marty_jwt_vc_issuance::DIRECT_CONFIGURATION_SUFFIX))
+        {
+            return Err(CredentialIssuanceError::UnsupportedFormat(
+                "direct JWT-VC authorization-code issuance is unavailable".into(),
+            ));
+        }
         if let Some(issuer_state) = session.issuer_state.as_deref() {
             if let Some(transaction) = sqlx::query(BIND_AUTHORIZATION_TRANSACTION)
                 .bind(issuer_state)
@@ -818,6 +835,21 @@ impl CredentialRepository for PostgresCredentialRepository {
         if current != *authorization.transaction {
             return Err(CredentialIssuanceError::InvalidTransactionState);
         }
+        transaction.validate_jwt_vc_profile()?;
+        let jwt_vc_signing_timing = if let Some(selection) = &transaction.jwt_vc_profile {
+            let issued_at: DateTime<Utc> =
+                sqlx::query_scalar("SELECT date_trunc('second', clock_timestamp())")
+                    .fetch_one(&mut *database)
+                    .await
+                    .map_err(repository_error)?;
+            Some(
+                selection
+                    .timing_at(issued_at.timestamp())
+                    .map_err(|_| CredentialIssuanceError::InvalidTransactionState)?,
+            )
+        } else {
+            None
+        };
         let claimed = sqlx::query(CLAIM_FOR_SIGNING)
             .bind(&authorization.transaction.id)
             .bind(&authorization.transaction.organization_id)
@@ -834,6 +866,7 @@ impl CredentialRepository for PostgresCredentialRepository {
             .bind(&transaction.issuer_did)
             .bind(&transaction.issuer_algorithm)
             .bind(&transaction.signing_service_id)
+            .bind(jwt_vc_signing_timing.map(|value| json!(value)))
             .fetch_optional(&mut *database)
             .await
             .map_err(repository_error)?
@@ -1420,6 +1453,14 @@ pub(crate) fn transaction_row(
         selective_disclosure_claims: json_vec(&row, "selective_disclosure_claims")?,
         zk_predicate_claims: json_vec(&row, "zk_predicate_claims")?,
         credential_payload_format: get(&row, "credential_payload_format")?,
+        jwt_vc_profile: get::<Option<Value>>(&row, "jwt_vc_profile")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
+        jwt_vc_signing_timing: get::<Option<Value>>(&row, "jwt_vc_signing_timing")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
         wallet_configs: json_vec(&row, "wallet_configs")?,
         validity_days: i64::from(get::<i32>(&row, "validity_days")?),
         renewable: get(&row, "renewable")?,
@@ -1435,6 +1476,7 @@ pub(crate) fn transaction_row(
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
     };
+    transaction.validate_jwt_vc_profile()?;
     if transaction_contains_private_material(&transaction) {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }

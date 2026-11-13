@@ -2499,21 +2499,21 @@ async fn apple_wallet_authorization_server_metadata(
 async fn organization_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::Default).await
 }
 
 async fn credential_manager_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::CredentialManager).await
 }
 
 async fn apple_wallet_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::AppleWallet).await
 }
 
@@ -2521,12 +2521,12 @@ async fn tenant_issuer_metadata(
     state: IssuanceState,
     organization_id: String,
     variant: IssuerVariant,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     let tenant = state
         .tenant
         .ok_or(TenantDiscoveryError::RepositoryUnavailable)?;
     tenant
-        .metadata(&organization_id, variant)
+        .metadata_with_profiles(&organization_id, variant)
         .await
         .map(Json)
         .map_err(Into::into)

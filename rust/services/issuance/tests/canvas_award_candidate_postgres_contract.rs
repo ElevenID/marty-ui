@@ -2443,6 +2443,7 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             reviewed_at timestamptz, issuance_transaction_id text, credential_id text,
             updated_at timestamptz NOT NULL DEFAULT clock_timestamp())",
         "CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
             id text PRIMARY KEY, organization_id text NOT NULL,
             credential_template_id text NOT NULL, revocation_profile_id text,
             renewal_of_credential_id text, applicant_id text, application_id text,

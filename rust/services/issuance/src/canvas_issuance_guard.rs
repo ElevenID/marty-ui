@@ -1346,6 +1346,9 @@ mod tests {
 
     fn transaction() -> CredentialTransaction {
         CredentialTransaction {
+            jwt_vc_profile: None,
+            jwt_vc_signing_timing: None,
+
             id: "transaction-1".to_owned(),
             organization_id: "org-1".to_owned(),
             credential_template_id: "credential-template-1".to_owned(),

@@ -29,6 +29,9 @@ use serde_json::{json, Map};
 
 fn transaction() -> CredentialTransaction {
     CredentialTransaction {
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
+
         id: "transaction-atomicity".to_owned(),
         organization_id: "organization-atomicity".to_owned(),
         credential_template_id: "template-atomicity".to_owned(),

@@ -11,7 +11,7 @@ macro_rules! transaction_query {
     ($predicate:literal) => {
         concat!(
             "SELECT id, organization_id, credential_template_id, applicant_id, application_id,
-                    subject_did, status, pre_auth_code, credential_type, credential_payload_format,
+                    subject_did, status, pre_auth_code, credential_type, credential_payload_format, jwt_vc_profile, jwt_vc_signing_timing,
                     created_at, expires_at,
                     issued_at, revoked_at, revocation_reason
              FROM issuance_service.issuance_transactions ",
@@ -75,7 +75,7 @@ impl TransactionReadRepository for PostgresTransactionReadRepository {
 
 fn transaction_row(row: PgRow) -> Result<IssuanceTransactionRecord, TransactionReadError> {
     let status: String = row.try_get("status").map_err(row_error)?;
-    Ok(IssuanceTransactionRecord {
+    let record = IssuanceTransactionRecord {
         id: get(&row, "id")?,
         organization_id: get(&row, "organization_id")?,
         credential_template_id: get(&row, "credential_template_id")?,
@@ -86,12 +86,36 @@ fn transaction_row(row: PgRow) -> Result<IssuanceTransactionRecord, TransactionR
         pre_auth_code: get(&row, "pre_auth_code")?,
         credential_type: get(&row, "credential_type")?,
         credential_payload_format: get(&row, "credential_payload_format")?,
+        jwt_vc_profile: get::<Option<serde_json::Value>>(&row, "jwt_vc_profile")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| TransactionReadError::RepositoryUnavailable)?,
         created_at: get::<DateTime<Utc>>(&row, "created_at")?,
         expires_at: get::<DateTime<Utc>>(&row, "expires_at")?,
         issued_at: get::<Option<DateTime<Utc>>>(&row, "issued_at")?,
         revoked_at: get::<Option<DateTime<Utc>>>(&row, "revoked_at")?,
         revocation_reason: get(&row, "revocation_reason")?,
-    })
+    };
+    let timing: Option<marty_oid4vci::JwtVcProfileTiming> =
+        get::<Option<serde_json::Value>>(&row, "jwt_vc_signing_timing")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| TransactionReadError::RepositoryUnavailable)?;
+    marty_jwt_vc_issuance::validate_selection(
+        &record.credential_payload_format,
+        &record.credential_template_id,
+        record.credential_type.as_deref(),
+        record.jwt_vc_profile.as_ref(),
+        timing,
+    )
+    .map_err(|_| TransactionReadError::RepositoryUnavailable)?;
+    if record.jwt_vc_profile.is_some()
+        && ((matches!(status.as_str(), "signing" | "issued") && timing.is_none())
+            || (matches!(status.as_str(), "pending" | "authorized") && timing.is_some()))
+    {
+        return Err(TransactionReadError::RepositoryUnavailable);
+    }
+    Ok(record)
 }
 
 fn get<'row, T>(row: &'row PgRow, name: &str) -> Result<T, TransactionReadError>

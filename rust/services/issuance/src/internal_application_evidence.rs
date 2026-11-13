@@ -684,6 +684,9 @@ mod tests {
         ) -> Result<CredentialTransaction, InternalApplicationApprovalError> {
             let now = Utc::now();
             Ok(CredentialTransaction {
+                jwt_vc_profile: None,
+                jwt_vc_signing_timing: None,
+
                 id: "transaction-1".to_owned(),
                 organization_id: application.organization_id.clone(),
                 credential_template_id: "credential-template-1".to_owned(),

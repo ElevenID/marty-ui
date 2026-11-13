@@ -90,16 +90,25 @@ impl InitiationOfferProjector {
         request: &InitiationRequest,
     ) -> Result<InitiationOfferResponse, InitiationOfferProjectionError> {
         let transaction = reservation.transaction;
+        transaction
+            .validate_jwt_vc_profile()
+            .map_err(|_| InitiationOfferProjectionError::OfferUnavailable)?;
         let mut response_status = transaction.status;
         let credential_type = transaction
             .credential_type
             .as_deref()
             .filter(|value| !value.is_empty())
             .unwrap_or("default");
-        let default_configuration_id = credential_configuration_id_for_format(
-            credential_type,
-            &transaction.credential_payload_format,
-        );
+        let default_configuration_id = transaction
+            .jwt_vc_profile
+            .as_ref()
+            .map(|selection| selection.configuration_id().to_owned())
+            .unwrap_or_else(|| {
+                credential_configuration_id_for_format(
+                    credential_type,
+                    &transaction.credential_payload_format,
+                )
+            });
         let offer = self.offer_json(
             &transaction.organization_id,
             None,
@@ -319,6 +328,9 @@ mod tests {
         InitiationReservation {
             created: true,
             transaction: CredentialTransaction {
+                jwt_vc_profile: None,
+                jwt_vc_signing_timing: None,
+
                 id: "transaction-1".into(),
                 organization_id: "org-1".into(),
                 credential_template_id: "template-1".into(),
@@ -546,5 +558,55 @@ mod tests {
             python_quote(r#"{"issuer":"https://issuer.example/org/1","value":"a b"}"#),
             "%7B%22issuer%22%3A%22https%3A//issuer.example/org/1%22%2C%22value%22%3A%22a%20b%22%7D"
         );
+    }
+    #[tokio::test]
+    async fn explicit_profile_offer_uses_exact_frozen_config_and_has_no_legacy_wallet_variant() {
+        let projector = InitiationOfferProjector::new(
+            "https://issuer.example",
+            Arc::new(TestDidcomm {
+                receipt: Ok(InitiationDidcommDeliveryReceipt {
+                    service_endpoint: "unused.example".into(),
+                    delivered: true,
+                }),
+            }),
+        )
+        .unwrap();
+        let mut reserved = reservation(vec![]);
+        reserved.transaction.credential_payload_format = "VC_JWT_DIRECT_V1".into();
+        let credential_type = reserved.transaction.credential_type.clone().unwrap();
+        reserved.transaction.jwt_vc_profile = Some(
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                &credential_type,
+                &reserved.transaction.credential_template_id,
+                4,
+                86400,
+                -30,
+            )
+            .unwrap(),
+        );
+        let expected = reserved
+            .transaction
+            .jwt_vc_profile
+            .as_ref()
+            .unwrap()
+            .configuration_id()
+            .to_owned();
+        let response = projector.project(reserved, &request()).await.unwrap();
+        let uri = url::Url::parse(&response.credential_offer_uri).unwrap();
+        let offer: serde_json::Value = serde_json::from_str(
+            &uri.query_pairs()
+                .find(|(name, _)| name == "credential_offer")
+                .unwrap()
+                .1,
+        )
+        .unwrap();
+        assert_eq!(offer["credential_configuration_ids"], json!([expected]));
+        assert_eq!(
+            offer["credential_issuer"],
+            "https://issuer.example/org/org-1"
+        );
+        assert!(response.credential_offer_uris.is_empty());
+        assert!(response.credential_offer_labels.is_empty());
     }
 }

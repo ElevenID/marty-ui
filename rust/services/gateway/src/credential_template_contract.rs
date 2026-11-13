@@ -16,6 +16,7 @@ const PUBLIC_FIELDS: &[&str] = &[
     "vct",
     "doctype",
     "credential_payload_format",
+    "jwt_vc_profile",
     "issuance_protocol",
     "application_template_id",
     "trust_profile_id",
@@ -54,6 +55,7 @@ const CREATE_FIELDS: &[&str] = &[
     "zk_predicate_claims",
     "schema_uri",
     "credential_payload_format",
+    "jwt_vc_profile",
     "issuance_protocol",
 ];
 
@@ -241,6 +243,7 @@ pub fn public_response(value: Value) -> Result<Value, CredentialTemplateContract
 
 fn public_template(value: Value) -> Result<Value, CredentialTemplateContractError> {
     let value = value.as_object().ok_or(CredentialTemplateContractError)?;
+    validate_explicit_profile(value)?;
     let mut public = value
         .iter()
         .filter(|(key, _)| PUBLIC_FIELDS.contains(&key.as_str()))
@@ -306,6 +309,7 @@ fn reject_private_parameters(
 fn validate_write_parameters(
     value: &Map<String, Value>,
 ) -> Result<(), CredentialTemplateContractError> {
+    validate_explicit_profile(value)?;
     if let Some(attributes) = value.get("derived_attributes").filter(|v| !v.is_null()) {
         for attribute in attributes
             .as_array()
@@ -315,6 +319,16 @@ fn validate_write_parameters(
                 reject_private_parameters(parameters, 0)?;
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_explicit_profile(
+    value: &Map<String, Value>,
+) -> Result<(), CredentialTemplateContractError> {
+    if let Some(profile) = value.get("jwt_vc_profile") {
+        serde_json::from_value::<marty_jwt_vc_issuance::JwtVcTemplatePolicy>(profile.clone())
+            .map_err(|_| CredentialTemplateContractError)?;
     }
     Ok(())
 }
@@ -374,6 +388,44 @@ pub fn response_route(method: &str, path: &str) -> bool {
 mod tests {
     use super::*;
     use serde::Deserialize;
+    #[test]
+    fn explicit_profile_survives_public_create_update_and_read_without_legacy_defaults() {
+        let profile = serde_json::json!({
+            "contract":"marty.jwt-vc-template-profile/v1",
+            "securing_profile":"w3c_vc2_jose_2026_v1",
+            "signature_lifetime_seconds":3600
+        });
+        let input = serde_json::json!({
+            "organization_id":"org-public", "name":"Synthetic direct credential",
+            "credential_type":"EmployeeCredential", "compliance_profile_id":"direct-compliance",
+            "issuer_did":"did:example:issuer", "credential_payload_format":"VC_JWT_DIRECT_V1",
+            "supported_formats":["VC_JWT_DIRECT_V1"], "privacy_posture":"standard",
+            "claims":[{"name":"employee_id", "type":"STRING", "required":true}],
+            "revocation_profile_id":"status-profile",
+            "validity_rules":{"default_validity_days":2, "not_before_offset_seconds":-30, "renewable":false},
+            "issuance_protocol":"OID4VCI_PRE_AUTH", "jwt_vc_profile":profile
+        });
+        let created = canonicalize_create(&serde_json::to_vec(&input).unwrap()).unwrap();
+        assert_eq!(created["jwt_vc_profile"], profile);
+        assert_eq!(created["credential_payload_format"], "VC_JWT_DIRECT_V1");
+        assert_eq!(public_response(created).unwrap()["jwt_vc_profile"], profile);
+        let patch = serde_json::json!({"jwt_vc_profile":profile});
+        let updated: Value = serde_json::from_slice(
+            &canonicalize_update(&serde_json::to_vec(&patch).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(updated, patch);
+        for invalid in [Value::Null, serde_json::json!({"contract":"unknown"})] {
+            let mut rejected = input.clone();
+            rejected["jwt_vc_profile"] = invalid;
+            let bytes = serde_json::to_vec(&rejected).unwrap();
+            assert!(canonicalize_create(&bytes).is_err());
+            assert!(canonicalize_update(&bytes).is_err());
+            assert!(public_response(rejected).is_err());
+        }
+        let legacy = serde_json::json!({"id":"legacy", "credential_payload_format":"VC_JWT"});
+        assert_eq!(public_response(legacy.clone()).unwrap(), legacy);
+    }
     #[test]
     fn shared_write_fixtures_match_actual_gateway_canonicalization() {
         let fixtures: Value = serde_json::from_str(include_str!(

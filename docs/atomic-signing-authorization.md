@@ -80,6 +80,20 @@ This change does not replace the existing replay path for a request initially
 admitted as already issued. It hardens the claim and concurrent recovery paths
 for a request admitted for new issuance.
 
+## Explicit JWT-VC extension
+
+The [explicit direct-profile issuance path](explicit-jwt-vc-issuance.md) freezes
+its profile/configuration, independent timing policy, and issuer target at
+reservation. Its refresh must retain the selected issuer profile, DID, algorithm,
+and signing service. Legacy issuer refresh remains as described above.
+
+The winning claim creates concrete direct-profile timing after the existing
+locks and fresh authority checks. Concurrent target comparison may account for
+that newly created timing only when the original snapshot had none; an already
+concrete timing must compare exactly. The entire profile selection and policy
+remain part of the comparison. Completed direct replay validates the original
+configuration selection and returns stored bytes without refreshing time.
+
 ## Verification
 
 The following commands were run from `rust/` with Rust 1.97.1 and the project's

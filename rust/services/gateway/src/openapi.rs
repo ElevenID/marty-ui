@@ -1134,6 +1134,34 @@ mod tests {
     #[test]
     fn template_readback_schema_covers_native_response_operations() {
         let schemas = schemas();
+        let profile_ref = "#/components/schemas/runtime__credential_template_jwt_vc_profile";
+        assert_eq!(
+            schemas["schemas__credential_template"]["properties"]["jwt_vc_profile"]["$ref"],
+            profile_ref
+        );
+        for name in [
+            "runtime__credential_template_create_request",
+            "runtime__credential_template_update_request",
+        ] {
+            assert_eq!(
+                schemas[name]["properties"]["jwt_vc_profile"]["$ref"],
+                profile_ref
+            );
+        }
+        let profile = &schemas["runtime__credential_template_jwt_vc_profile"];
+        assert_eq!(profile["additionalProperties"], false);
+        assert_eq!(
+            profile["properties"]["securing_profile"]["const"],
+            "w3c_vc2_jose_2026_v1"
+        );
+        assert_eq!(
+            profile["properties"]["signature_lifetime_seconds"]["minimum"],
+            1
+        );
+        assert_eq!(
+            profile["properties"]["signature_lifetime_seconds"]["maximum"],
+            marty_jwt_vc_issuance::MAX_SIGNATURE_LIFETIME_SECONDS
+        );
         assert!(schemas["schemas__credential_template"]["properties"]["display_style"].is_object());
         assert!(schemas["schemas__credential_template"]["x-marty-runtime-extension"].is_string());
         for (method, path) in [
