@@ -536,7 +536,7 @@ class D12CurrentHostBindings:
             if created_recovery:
                 from scoped_d12_native_execution import created_recovery_checkpoint
                 created_recovery_checkpoint(self.inputs,self.store.read("build-state.json"),
-                    self.store.read("build-apply-intent.json"),recovery)
+                    self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
                 if self.observer.created_ref is None:
                     self.observer.bind_created_after_ack("CREATE_SELECTED",self.store.read("build-state.json"))
             frozen_ref = recovery["quiescence"]
@@ -618,7 +618,7 @@ class D12CurrentHostBindings:
         if recovery.get("schema")=="marty.d12-created-recovery/v1":
             from scoped_d12_native_execution import created_recovery_checkpoint
             created_recovery_checkpoint(self.inputs,self.store.read("build-state.json"),
-                self.store.read("build-apply-intent.json"),recovery)
+                self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
             require(self.observer.created_ref is not None,"D12_CREATED_OBSERVER_NOT_BOUND")
             fresh=exact_roles(self.observer.inspect_all22(),self.profile)
             selected=dict(self.observer.build_profile.roles)

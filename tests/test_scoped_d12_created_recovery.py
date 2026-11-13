@@ -248,3 +248,42 @@ def test_created_checkpoint_requires_separately_bound_backend_root(tmp_path,back
     assert inputs["operationJournal"] is None
     with pytest.raises(ValueError,match="D12_CREATED_JOURNAL_(BACKEND_REQUIRED|ROOT_CHANGED)"):
         execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+
+
+@pytest.mark.parametrize("gate",["authorization","quiescence"])
+@pytest.mark.parametrize("foreign_root",[False,True])
+def test_created_host_gates_pass_actual_separate_backend(tmp_path,gate,foreign_root):
+    from scoped_d12_native_effect_host import D12CurrentHostBindings
+    inputs,state,intent,recovery,saved,_=created_fixture(tmp_path)
+    assert inputs["operationJournal"] is None
+    owner=D12CurrentHostBindings.__new__(D12CurrentHostBindings)
+    owner.inputs=inputs;owner.assert_inputs=lambda:None
+    backend=json.loads((tmp_path/"created-backend.json").read_bytes())
+    if foreign_root:backend["rootProof"]["inode"]+=1
+    owner.store=SimpleNamespace(specification=backend,read=lambda name:state if name=="build-state.json" else intent)
+    class ReachedObserverAfterRealCheckpoint(Exception):pass
+    class Observer:
+        @property
+        def created_ref(self):raise ReachedObserverAfterRealCheckpoint
+    owner.observer=Observer()
+    authority=saved("host-authority.json",{})
+    inputs["d12Authority"]=authority
+    if gate=="authorization":
+        module=tmp_path/"tests/scripts/functional-debug-runtime.js"
+        module.parent.mkdir(parents=True);module.write_text("// source-only fixture")
+        inputs["functionalRuntimeModule"]=ref(module)
+        recovery["sourceMap"]["functionalRuntimeModule"]["recovery"]=ref(module)
+        owner.host=SimpleNamespace(_root=tmp_path,_source_files={"tests/scripts/functional-debug-runtime.js":ref(module)})
+        owner.lock=SimpleNamespace(held=lambda:True)
+        owner.dispatch_permit={"authority":authority,"resourceProfile":saved("host-profile.json",{
+            "schema":"marty.functional-mixed-runtime/v2","scope":"FUNCTIONAL_ONLY",
+            "releaseQualified":False,"recordingQualified":False,"resourceRestart":{}})}
+        owner._probe_compose_discovery=lambda prefix:None
+    recovery_ref=saved("host-recovery.json",recovery)
+    def check():
+        if gate=="authorization":owner._authorization_verified(authority,recovery_ref)
+        else:owner.verify_recovery_quiescent(recovery_ref)
+    if foreign_root:
+        with pytest.raises(ValueError,match="D12_CREATED_JOURNAL_ROOT_CHANGED"):check()
+    else:
+        with pytest.raises(ReachedObserverAfterRealCheckpoint):check()
