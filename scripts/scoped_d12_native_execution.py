@@ -356,7 +356,9 @@ def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend
     edges=_reviewed_cross_edges(plan,cohort)
     edges|={(row["dependentRole"],row["prerequisiteRole"])
             for row in startup["requirements"]}
-    order=_restore_order(models,maintenance.exact_roles(before,inputs["rolloutProfile"]),edges,cohort)
+    order=[role for role in _restore_order(models,
+        maintenance.exact_roles(before,inputs["rolloutProfile"]),edges,cohort)
+        if role!=OB3_DEFERRED_ROLE]
     prefix=order[:order.index("flow")]
     require(len(prefix)==17 and state.get("steps")==["START_"+role for role in prefix]
             and set(state.get("startAcks",{}))==set(prefix)

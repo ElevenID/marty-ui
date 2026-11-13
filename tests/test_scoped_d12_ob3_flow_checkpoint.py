@@ -21,7 +21,7 @@ def case(tmp_path,monkeypatch):
         return ref(path)
     roles=sorted(D12_CURRENT_RUNTIME_ROLES)
     prefix=[role for role in roles if role not in ("flow","auth","gateway","verification","passport-beta-bureau")]
-    order=[*prefix,"flow","auth","gateway","verification","passport-beta-bureau"]
+    order=[*prefix[:11],"passport-beta-bureau",*prefix[11:],"flow","auth","gateway","verification"]
     rows={role:{"containerId":f"{n+1:064x}","imageId":"sha256:"+"a"*64,
                 "source":"synthetic-source","sha256":"b"*64}
           for n,role in enumerate(roles)}
