@@ -8,7 +8,7 @@ consume a durable private intent, and authenticate every actual observation.
 from __future__ import annotations
 from copy import deepcopy
 import re
-from scoped_native_runtime import RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES, read_ref, require, runtime_roles, selected_sources
+from scoped_native_runtime import RUNTIME_ROLES, D12_CURRENT_RUNTIME_ROLES, daemon_source, read_ref, require, runtime_roles, selected_sources
 
 
 def exact_roles(observed, profile=None):
@@ -238,7 +238,7 @@ def observed_role_state(bound, actual):
     require(actual["Image"] == row["imageId"], "BASELINE_IMAGE_CHANGED")
     for mount in row["binaryMounts"]:
         matches = [item for item in actual["Mounts"] if item["Destination"] == mount["destination"]]
-        require(len(matches) == 1 and matches[0]["Type"] == mount["type"] and matches[0]["Source"] == mount["source"]
+        require(len(matches) == 1 and matches[0]["Type"] == mount["type"] and daemon_source(matches[0]["Source"]) == daemon_source(mount["source"])
                 and matches[0]["RW"] == mount["writable"], "OBSERVED_EXECUTABLE_MOUNT_CHANGED")
     state = actual["State"]
     row.update(startedAt=state["StartedAt"], health=state.get("Health", {}).get("Status"), running=state["Running"], paused=state["Paused"], hostPid=state["Pid"], state=state["Status"],
