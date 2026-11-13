@@ -5828,21 +5828,28 @@ def _dev_dependency_packages(
     )
 
 
-def _assert_signing_keys_fixture_dependency(
-    manifest: dict, workspace_dependencies: dict, path: str
+def _assert_service_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, dependency: str, path: str
 ) -> None:
-    # The real registered DIDComm fixture is shared by live Issuance and Canvas
-    # tests. Its service dependency must never reach production or build scripts,
+    # Registered composition fixtures must never reach production or build scripts,
     # including renamed, workspace-inherited, or target-specific declarations.
-    assert manifest["dev-dependencies"]["marty-signing-keys"] == {"path": path}
-    assert "marty-signing-keys" not in _dependency_packages(
+    assert manifest["dev-dependencies"][dependency] == {"path": path}
+    assert dependency not in _dependency_packages(
         manifest,
         workspace_dependencies,
         ("dependencies", "build-dependencies", "build_dependencies"),
     )
 
 
-def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -> (
+def _assert_signing_keys_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, path: str
+) -> None:
+    _assert_service_fixture_dependency(
+        manifest, workspace_dependencies, "marty-signing-keys", path
+    )
+
+
+def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     None
 ):
     rust = ROOT / "rust"
@@ -5860,9 +5867,22 @@ def test_service_dev_dependencies_only_allow_registered_didcomm_signing_edge() -
         for dependency in _dev_dependency_packages(document, workspace_dependencies)
         if dependency in service_packages
     }
-    assert edges == {("marty-issuance-service", "marty-signing-keys")}, (
-        "Only the shared registered DIDComm fixture may add a service test edge: "
+    # DIDComm exercises the real signing service; the existing issuance_credential
+    # PostgreSQL contract exercises template storage and the explicit-profile
+    # migration together. No other service composition is admitted here.
+    assert edges == {
+        ("marty-issuance-service", "marty-signing-keys"),
+        ("marty-issuance-service", "marty-credential-template"),
+    }, (
+        "Only the registered DIDComm and explicit-profile fixtures may add service test edges: "
         f"{sorted(edges)}"
+    )
+    issuance = documents[rust / "services/issuance/Cargo.toml"]
+    _assert_signing_keys_fixture_dependency(
+        issuance, workspace_dependencies, "../signing-keys"
+    )
+    _assert_service_fixture_dependency(
+        issuance, workspace_dependencies, "marty-credential-template", "../credential-template"
     )
 
 
@@ -5903,24 +5923,28 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
 
 @pytest.mark.parametrize("kind", ["dependencies", "build-dependencies", "build_dependencies"])
 @pytest.mark.parametrize("target_specific", [False, True])
-def test_signing_keys_fixture_dependency_rejects_production_edges(
-    kind: str, target_specific: bool
+@pytest.mark.parametrize("dependency,path", [
+    ("marty-signing-keys", "../signing-keys"),
+    ("marty-credential-template", "../credential-template"),
+])
+def test_service_fixture_dependencies_reject_production_edges(
+    kind: str, target_specific: bool, dependency: str, path: str
 ) -> None:
     manifest = {
-        "dev-dependencies": {"marty-signing-keys": {"path": "../signing-keys"}}
+        "dev-dependencies": {dependency: {"path": path}}
     }
     owner = manifest
     if target_specific:
         owner = manifest.setdefault("target", {}).setdefault("cfg(unix)", {})
-    owner[kind] = {"renamed_signing_keys": {"workspace": True}}
+    owner[kind] = {"renamed_service": {"workspace": True}}
     workspace_dependencies = {
-        "renamed_signing_keys": {
-            "package": "marty-signing-keys", "path": "services/signing-keys"
+        "renamed_service": {
+            "package": dependency, "path": f"services/{path.removeprefix('../')}"
         }
     }
     with pytest.raises(AssertionError):
-        _assert_signing_keys_fixture_dependency(
-            manifest, workspace_dependencies, "../signing-keys"
+        _assert_service_fixture_dependency(
+            manifest, workspace_dependencies, dependency, path
         )
 
 

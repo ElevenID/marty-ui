@@ -109,7 +109,7 @@ async fn kubernetes_profile_gateway_composition_isolated() {
         "linux",
         "Kubernetes gateway acceptance requires Linux artifacts"
     );
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
@@ -150,7 +150,7 @@ async fn kubernetes_resolved_native_profile_delivers_both_encryption_modes() {
         eprintln!("Kubernetes native-only profile requires configured owned fixtures");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
@@ -195,7 +195,7 @@ async fn base_profile_envoy_composition_isolated() {
         "linux",
         "Actual Envoy composition cannot be qualified with Windows executables"
     );
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     let redis = base_runtime_redis::OwnedRedis::start_in_published_namespace(&owned)
@@ -268,7 +268,7 @@ async fn base_profile_gateway_composition_isolated() {
         "linux",
         "required isolated composition cannot be qualified with Windows artifacts"
     );
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     base_runtime_redis::OwnedRedis::assert_constructor_timeout_cleanup(&owned)
@@ -314,7 +314,7 @@ async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
         eprintln!("Rendered base native process requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     base_runtime_redis::OwnedRedis::assert_constructor_timeout_cleanup(&owned)
@@ -353,7 +353,7 @@ async fn didcomm_renewal_canvas_preserves_real_association_and_delivery_phases()
         eprintln!("Canvas renewal requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_renewal_canvas(&owned.url)
@@ -378,7 +378,7 @@ async fn renewal_fresh_packaged_main_delivers_both_encryption_modes() {
         eprintln!("Fresh renewal packaged main requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     renewal_fresh_main::run(&owned.url).await;
@@ -391,7 +391,7 @@ async fn renewal_packaged_main_recovers_historical_keyed_offer() {
         eprintln!("Renewal packaged main requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     renewal_main_replay::run(&owned.url).await;
@@ -404,7 +404,7 @@ async fn didcomm_renewal_gateway_selects_native_with_required_owner_read() {
         eprintln!("Renewal gateway requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_renewal_gateway(&owned.url).await;
@@ -417,7 +417,7 @@ async fn renewal_postgres_binding_and_same_successor_recovery_are_fenced() {
         eprintln!("Renewal binding/recovery requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     renewal_binding_postgres::run(&owned.url).await;
@@ -430,7 +430,7 @@ async fn didcomm_renewal_http_composes_real_delivery_and_renewal_links() {
         eprintln!("Renewal delivery requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_renewal_http(&owned.url).await;
@@ -443,7 +443,7 @@ async fn didcomm_renewal_private_ip_refusal_preserves_published_rows() {
         eprintln!("Renewal private-IP refusal requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_renewal_private_ip_refusal(&owned.url).await;
@@ -461,7 +461,7 @@ async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
         eprintln!("Unkeyed native RPC delivery requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_fresh_grpc(&owned.url).await;
@@ -486,7 +486,7 @@ async fn didcomm_historical_keyed_http_recovers_before_fresh_admission_guard() {
         eprintln!("Historical DIDComm recovery requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_historical_http(&owned.url).await;
@@ -499,7 +499,7 @@ async fn didcomm_fresh_gateway_admission_preserves_public_projection_without_leg
         eprintln!("Gateway admission requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_fresh_gateway(&owned.url).await;
@@ -512,7 +512,7 @@ async fn didcomm_fresh_http_admission_composes_reservation_and_delivery() {
         eprintln!("Fresh DIDComm HTTP admission requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_fresh_http(&owned.url).await;
@@ -540,7 +540,7 @@ async fn didcomm_gateway_candidate_preserves_real_delivery_without_legacy_fallba
         eprintln!("DIDComm gateway test requires the explicit owned Docker gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_composed_delivery::run_gateway(&owned.url).await;
@@ -553,7 +553,7 @@ async fn didcomm_native_composes_crypto_https_and_published_durability() {
         eprintln!("DIDComm composed test requires the explicit owned Docker gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .expect("start exact-owned published-schema DIDComm database");
     didcomm_composed_delivery::run(&owned.url).await;
