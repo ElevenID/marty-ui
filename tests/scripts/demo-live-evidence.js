@@ -65,6 +65,30 @@ function ownedWalletBinding(client, environment, functional) {
   return acknowledged;
 }
 
+// Optional Recorder-owned capability; RECORD_VIDEO=0 remains the functional mode.
+function privateReviewCaptureContext(client, {scenario, supportingLane=null}, environment=process.env) {
+  const binding=client.privateReviewCaptureBinding;
+  if (!binding) return null;
+  assert.equal(environment.RECORD_VIDEO,'0','Private review requires the functional no-release-media mode');
+  const functional=functionalBinding(client,environment),wallet=ownedWalletBinding(client,environment,functional);
+  assert(functional&&wallet,'Private review requires owned functional runtime and wallet');
+  const directory=path.dirname(regularSource(environment.DEMO_EXECUTION_EVIDENCE_HELPER));
+  const {validatePrivateReviewCaptureContext}=require(regularSource(path.join(directory,'externalLiveEvidence.js')));
+  assert.equal(typeof validatePrivateReviewCaptureContext,'function','Recorder private-review capability owner required');
+  const acknowledged=validatePrivateReviewCaptureContext(binding);
+  assert.equal(acknowledged.runId,environment.DEMO_EXECUTION_EVIDENCE_RUN_ID);
+  assert.equal(acknowledged.scenario,scenario);assert.equal(acknowledged.supportingLane,supportingLane);
+  assert.equal(acknowledged.runtimeProfileSha256,functional.profileSha256);
+  assert.equal(acknowledged.runtimeReceiptSha256,functional.receiptSha256);
+  assert.equal(acknowledged.walletInstanceId,wallet.instanceId);
+  assert.equal(functional.ob3Readiness?.readinessScope,'OB3_FUNCTIONAL_ONLY');assert.equal(functional.ob3Readiness.fullStackQualified,false);
+  assert.deepEqual(acknowledged.configuration,functional.ob3Configuration,'Private review configuration differs from current OB3 runtime');
+  const prior=regularSource(acknowledged.priorFunctionalReport.path);
+  assert.equal(fs.statSync(prior).size,acknowledged.priorFunctionalReport.bytes);
+  assert.equal(createHash('sha256').update(fs.readFileSync(prior)).digest('hex'),acknowledged.priorFunctionalReport.sha256);
+  return Object.freeze(acknowledged);
+}
+
 async function createDemoLiveEvidence() {
   assert.equal(process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com', 'https://beta.elevenidllc.com');
   assert.notEqual(process.env.BETA_LOCAL_PROXY, '1');
@@ -144,4 +168,4 @@ async function acknowledgeDemoInputs(artifactDir, file, expected, client) {
   return actual;
 }
 
-module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness };
+module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness, privateReviewCaptureContext };

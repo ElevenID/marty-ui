@@ -17,8 +17,8 @@ const {
   selectCurrentCredential, submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin, presentWalletRequest } = require('./demo-wallet-session');
-const { VIDEO_SIZE, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
-const { applyLocalNativeReadiness } = require('./demo-live-evidence');
+const { VIDEO_SIZE, createPrivateReviewRecording, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
+const { applyLocalNativeReadiness, privateReviewCaptureContext } = require('./demo-live-evidence');
 const {
   GRANT, assertions, validateFunctionalSupportReport, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
   loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
@@ -448,7 +448,7 @@ async function main(lane = process.argv[2], env = process.env) {
     source: { entrypoint: 'tests/scripts/audit-beta-membership-support.js', sha256: sha256(fs.readFileSync(__filename)) },
     observed: {}, cleanup: { ok: false }, finalizationFailures: [], recording: env.RECORD_VIDEO === '1' };
   let browser, evidence, controller, walletSession, walletContext, authContext,adminContext,applicantContext,sessionRetirement,closeOwnedWallet;
-  let walletVideo, authVideo, fixture, settings;
+  let walletVideo, authVideo, fixture, settings,privateReview;
   let walletAcquisitionAttempted = false;
   const contexts = [];
   try {
@@ -458,6 +458,9 @@ async function main(lane = process.argv[2], env = process.env) {
       'Recorder evidence helper digest mismatch');
     evidence = await require(env.DEMO_EXECUTION_EVIDENCE_HELPER).createLiveEvidenceClient();
     if(!settings.record)assert(evidence.functionalRuntimeBinding&&evidence.ownedWalletBinding,'Functional support requires owned runtime/wallet');
+    privateReview=evidence.privateReviewCaptureBinding?createPrivateReviewRecording(privateReviewCaptureContext(evidence,{scenario:'membership-badge-login',supportingLane:lane},env),{artifactDir:dir}):null;
+    settings.media=settings.record||Boolean(privateReview);
+    const privateRedactions={sensitiveTexts:[env.TEST_ADMIN_EMAIL,env.TEST_APPLICANT_EMAIL,env.TEST_SECONDARY_APPLICANT_EMAIL]};
     const ownedSessions=require('./verify-beta-credential-login');sessionRetirement=ownedSessions.membershipSessionRetirement(report.runId);closeOwnedWallet=ownedSessions.closeControlSession;
     report.stage = 'fixture_schema';
     const input = await prepareFixture(dir, env, lane, evidence);
@@ -465,10 +468,14 @@ async function main(lane = process.argv[2], env = process.env) {
     const { chromium } = require('@playwright/test');
     const { login, waitFor } = require('./audit-beta-credential-lifecycle');
     browser = await chromium.launch({ headless: env.HEADED !== '1' });
-    adminContext = await browser.newContext(); contexts.push(adminContext);
-    applicantContext = await browser.newContext(); contexts.push(applicantContext);
+    adminContext = await browser.newContext(privateReview?.contextOptions||{}); contexts.push(adminContext);
+    if(privateReview)await privateReview.prepareContext(adminContext,'operator',privateRedactions);
+    applicantContext = await browser.newContext(privateReview?.contextOptions||{}); contexts.push(applicantContext);
+    if(privateReview)await privateReview.prepareContext(applicantContext,'applicant',privateRedactions);
     const operator = await adminContext.newPage(); evidence.bindPage(operator);
+    if(privateReview)privateReview.trackPage('operator',operator);
     const applicantPage = await applicantContext.newPage(); evidence.bindPage(applicantPage);
+    if(privateReview)privateReview.trackPage('applicant',applicantPage);
     report.stage = 'browser_authentication';
     await login(operator, env.TEST_ADMIN_EMAIL, env.TEST_ADMIN_PASSWORD);
     await sessionRetirement.capture('operator',adminContext);
@@ -481,14 +488,16 @@ async function main(lane = process.argv[2], env = process.env) {
     report.checks.login_trust_excludes_foreign = lane === 'untrusted-issuer';
     report.stage = 'wallet_isolation';
     walletContext = await browser.newContext({ viewport: VIDEO_SIZE,
-      ...(settings.record ? { recordVideo: { dir, size: VIDEO_SIZE } } : {}) });
+      ...(privateReview?.contextOptions||(settings.record ? { recordVideo: { dir, size: VIDEO_SIZE } } : {})) });
     contexts.push(walletContext);
+    if(privateReview)await privateReview.prepareContext(walletContext,'wallet',privateRedactions);
     walletAcquisitionAttempted = true;
     walletSession = await acquireWalletSession(walletContext, { origin: settings.wallet, runId: report.runId });
     report.walletSession = walletSession.evidence;
     authContext = await browser.newContext({ viewport: VIDEO_SIZE,
-      ...(settings.record ? { recordVideo: { dir, size: VIDEO_SIZE } } : {}) });
+      ...(privateReview?.contextOptions||(settings.record ? { recordVideo: { dir, size: VIDEO_SIZE } } : {})) });
     contexts.push(authContext);
+    if(privateReview)await privateReview.prepareContext(authContext,'login',privateRedactions);
     // Redact only the transient QR carrier; never replace an authentication or
     // verification response. No Playwright trace spans protocol secret input.
     await authContext.route('https://api.qrserver.com/**', (route) => route.fulfill({ contentType: 'image/svg+xml',
@@ -496,8 +505,10 @@ async function main(lane = process.argv[2], env = process.env) {
     await authContext.addInitScript(() => Object.defineProperty(globalThis, 'DigitalCredential', { value: undefined, configurable: false }));
     report.captureRedactions = ['Protocol fields masked for recordings', 'Transient QR carrier replaced by labeled redaction'];
     const walletPage = await walletContext.newPage(); evidence.bindPage(walletPage); walletVideo = walletPage.video();
+    if(privateReview)privateReview.trackPage('wallet',walletPage);
     const authPage = await authContext.newPage(); evidence.bindPage(authPage); authVideo = authPage.video();
-    const step = (page, title, detail) => showStep(page, title, detail, { enabled: settings.record,
+    if(privateReview)privateReview.trackPage('login',authPage);
+    const step = (page, title, detail) => showStep(page, title, detail, { enabled: settings.media,
       eyebrow: 'D05 supporting evidence - First-party Rust test wallet' });
     const inventory = () => walletInventory(walletContext, walletSession);
     assert.equal((await inventory()).length, 0);
@@ -532,7 +543,7 @@ async function main(lane = process.argv[2], env = process.env) {
       assert.equal(token.status(), 400); assert.equal(tokenBody?.error, 'invalid_grant');
       report.observed.cachedCode = { httpStatus: token.status(), error: tokenBody.error };
       report.checks.cached_code_denied = true;
-      const denial = await receive(walletPage, settings.wallet, expired.offerUri, settings.record);
+      const denial = await receive(walletPage, settings.wallet, expired.offerUri, settings.media);
       assert.ok(!denial.ok && denial.visibleMessage && denial.responseHasError);
       report.observed.expiredReceipt = denial; report.checks.wallet_error_visible = true;
       report.checks.no_credential_on_denial = (await inventory()).length === 0
@@ -548,7 +559,7 @@ async function main(lane = process.argv[2], env = process.env) {
     } else {
       report.stage = 'foreign_issuance';
       const foreign = await controller.issue(fixture.foreign, 'foreign-issuer');
-      const received = await receive(walletPage, settings.wallet, foreign.offerUri, settings.record);
+      const received = await receive(walletPage, settings.wallet, foreign.offerUri, settings.media);
       assert.ok(received.ok);
       report.observed.foreignCredential = await controller.issuedCredential(foreign, fixture.foreign);
       const inventoryBefore = await inventory();
@@ -557,7 +568,7 @@ async function main(lane = process.argv[2], env = process.env) {
       await step(walletPage, '1. Receive the foreign issuer badge',
         'The authorized fixture uses a real signing service. Receipt alone is not signature or login-trust proof; the native verifier checks both next.');
       report.stage = 'untrusted_login';
-      const denied = await present({ authPage, walletPage, authContext, operator, fixture, ...settings,
+      const denied = await present({ authPage, walletPage, authContext, operator, fixture, ...settings,record:settings.media,
         waitFor, issuerDid: fixture.foreign.issuerDid, allowed: false, step });
       report.observed.denial = denied;
       report.checks.foreign_signature_valid = denied.result.signatureValid === true;
@@ -571,7 +582,7 @@ async function main(lane = process.argv[2], env = process.env) {
       report.stage = 'trusted_reissue';
       recovery = await controller.issue(fixture.trusted, 'trusted-recovery');
     }
-    const received = await receive(walletPage, settings.wallet, recovery.offerUri, settings.record);
+    const received = await receive(walletPage, settings.wallet, recovery.offerUri, settings.media);
     assert.ok(received.ok);
     const credentials = await inventory();
     assert.equal(credentials.length, 1);
@@ -584,7 +595,7 @@ async function main(lane = process.argv[2], env = process.env) {
     await step(walletPage, '3. Receive a fresh trusted badge',
       'A new offer succeeds. Receiving the badge does not create an ElevenID login session.');
     report.stage = 'trusted_login_recovery';
-    report.observed.recovery = await present({ authPage, walletPage, authContext, operator, fixture, ...settings,
+    report.observed.recovery = await present({ authPage, walletPage, authContext, operator, fixture, ...settings,record:settings.media,
       waitFor, issuerDid: fixture.trusted.issuerDid, allowed: true, step });
     await sessionRetirement.capture('credential-login',authContext);
     report.checks.trusted_login_recovery = report.observed.recovery.authenticated === true;
@@ -646,6 +657,10 @@ async function main(lane = process.argv[2], env = process.env) {
     report.cleanup.complete=report.cleanup.ok===true&&authClosed&&walletClosed&&report.authoringSessionsRetired===true&&report.finalizationFailures.length===0;
     try{finalizeSupportReport(report,evidence,{record:settings?.record,cleanupComplete:report.cleanup.complete},env);}
     catch(error){report.releaseReady=false;report.functionalReady=false;report.operations_verified=false;report.status='BLOCKED';report.finalizationFailures.push({operation:'functional_report',type:error.name});}
+    if(privateReview&&report.functionalReady){
+      try{report.privateReviewCapture=await privateReview.finish({ready:report.functionalReady,cleanupComplete:report.cleanup.complete});}
+      catch(error){report.releaseReady=false;report.functionalReady=false;report.operations_verified=false;report.status='BLOCKED';report.finalizationFailures.push({operation:'private_review_capture',type:error.name});}
+    }
     report.finishedAt = new Date().toISOString();
     const save = () => {
       fs.writeFileSync(path.join(dir, EVIDENCE_FILE), `${JSON.stringify({ schemaVersion: 1, kind: 'd05-support-evidence',

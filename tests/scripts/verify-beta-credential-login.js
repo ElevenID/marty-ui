@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const assert = require('node:assert/strict');
-const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness } = require('./demo-live-evidence');
+const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness, privateReviewCaptureContext } = require('./demo-live-evidence');
 const { createOwnedMembership } = require('./demo-owned-membership');
 const { requireJson } = require('./beta-demo-resource-helpers');
 const { directPostRequestReference, directPostLoginBinding, loginInstanceOwnership, holderDeclineEvidence, freshDirectPostLogin } = require('./beta-membership-support-contract');
@@ -20,6 +20,7 @@ const {
 } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
+  createPrivateReviewRecording,
   createArtifactDir,
   finalizeVideo,
   maskProtocolField: maskRecordingProtocolField,
@@ -257,6 +258,9 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
   const uiCandidate = resolveUiCandidateDist(ROOT);
+  assert(!evidence?.privateReviewCaptureBinding||retainedMembership,'Private review is scoped to the retained membership scenario');
+  const privateReview=evidence?.privateReviewCaptureBinding?createPrivateReviewRecording(privateReviewCaptureContext(evidence,{scenario:'membership-badge-login',supportingLane:null}),{artifactDir}):null;
+  const privateRedactions={sensitiveTexts:[process.env.TEST_ADMIN_EMAIL,process.env.TEST_APPLICANT_EMAIL]};
   if (ownedMembership && (!['0', '1'].includes(process.env.RECORD_VIDEO) || LOCAL_BETA_PROXY || uiCandidate
     || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || new URL(BETA_ORIGIN).protocol !== 'https:')) {
     throw new Error('Retained first-party control requires explicit recording mode and authenticated deployed HTTPS');
@@ -279,7 +283,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
   }
   const explain = ownedMembership
     ? (page, title, detail) => showRecordingStep(page, title, detail, {
-      enabled: RECORD_VIDEO, eyebrow: 'First-party browser wallet control',
+      enabled: RECORD_VIDEO||Boolean(privateReview), eyebrow: 'First-party browser wallet control',
     }) : showStep;
 
   const browser = await chromium.launch({
@@ -328,8 +332,10 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
   const sessionRetirement = ownedMembership ? membershipSessionRetirement(inputs.runId) : null;
   try {
     if (ownedMembership) {
-      adminContext = await browser.newContext({ viewport: VIDEO_SIZE });
+      adminContext = await browser.newContext({ viewport: VIDEO_SIZE,...(privateReview?.contextOptions||{}) });
+      if(privateReview)await privateReview.prepareContext(adminContext,'operator',privateRedactions);
       adminPage = await adminContext.newPage();
+      if(privateReview)privateReview.trackPage('operator',adminPage);
       evidence.bindPage(adminPage);
       await login(adminPage, process.env.TEST_ADMIN_EMAIL, process.env.TEST_ADMIN_PASSWORD);
       await sessionRetirement.capture('admin', adminContext);
@@ -342,8 +348,9 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     walletContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
-      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+      ...(privateReview?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
     });
+    if(privateReview)await privateReview.prepareContext(walletContext,'wallet',privateRedactions);
     walletSession = await acquireWalletSession(walletContext, { origin: TEST_WALLET_ORIGIN });
     report.walletSession = walletSession.evidence;
 
@@ -355,10 +362,11 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
         await sessionRetirement.capture('claim', page.context());
         return control.prepare(page);
       } : null,
-      onPage: evidence ? (page) => evidence.bindPage(page) : null,
-      contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
+      onPage: evidence ? (page) => {evidence.bindPage(page);if(privateReview)privateReview.trackPage('login',page);} : null,
+      contextOptions: privateReview?.contextOptions||(RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
       onStep: explain,
       setupContext: async (context) => {
+        if(privateReview)await privateReview.prepareContext(context,'login',privateRedactions);
         if (ownedMembership) holderContext = context;
         await installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN);
       },
@@ -371,6 +379,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     await installUiCandidateRoute(walletContext, uiCandidate, BETA_ORIGIN);
     const walletPage = await walletContext.newPage();
     if (evidence) evidence.bindPage(walletPage);
+    if(privateReview)privateReview.trackPage('wallet',walletPage);
     walletPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     walletPage.on('console', (message) => {
       if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
@@ -396,13 +405,14 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
       'Membership badge received',
       'The wallet now contains the Marty Verified Member Open Badge issued by the canonical claim endpoint.',
     );
-    await walletPage.screenshot({ path: path.join(artifactDir, '01-wallet-with-badge.png'), fullPage: true });
+    if(RECORD_VIDEO||!ownedMembership)await walletPage.screenshot({ path: path.join(artifactDir, '01-wallet-with-badge.png'), fullPage: true });
 
     loginContext = holderContext || await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
-      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+      ...(privateReview?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
     });
+    if(privateReview&&!holderContext)await privateReview.prepareContext(loginContext,'login',privateRedactions);
     if (!holderContext) await installUiCandidateRoute(loginContext, uiCandidate, BETA_ORIGIN);
     // This lane drives presentation through the deterministic local wallet.
     // Keep Chromium's platform-wallet prefetch from racing the same request URI.
@@ -415,6 +425,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     const loginPage = holderPage || await loginContext.newPage();
     loginVideo = holderVideo || loginPage.video();
     if (evidence && !holderPage) evidence.bindPage(loginPage);
+    if(privateReview&&!holderPage)privateReview.trackPage('login',loginPage);
     loginPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     loginPage.on('console', (message) => {
       if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
@@ -533,7 +544,7 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
       const response = await fetch('/v1/auth/me', { credentials: 'include' });
       return { status: response.status, body: await response.json().catch(() => null) };
     });
-    await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
+    if(RECORD_VIDEO||!ownedMembership)await loginPage.screenshot({ path: path.join(artifactDir, '02-login-complete.png'), fullPage: true });
 
     report.completion = {
       ...nonceEvidence,
@@ -656,6 +667,10 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
         holder: path.relative(ROOT, await finalizeVideo(loginVideo, artifactDir, 'open-badge-holder-and-login.webm')),
         wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm')),
       }; } catch (error) { report.engineeringReady = false; report.releaseReady = false; report.error = redact(error.message); }
+    }
+    if(privateReview&&report.engineeringReady){
+      try{report.privateReviewCapture=await privateReview.finish({ready:report.functionalReady===true,cleanupComplete:report.cleanup?.complete===true});}
+      catch(error){report.engineeringReady=false;report.releaseReady=false;report.functionalReady=false;report.operations_verified=false;report.privateReviewCaptureFailure={scope:'PRIVATE_REVIEW_ONLY',type:error.name};}
     }
     if (evidence && report.engineeringReady) {
       try { await evidence.complete(); } catch (error) {
