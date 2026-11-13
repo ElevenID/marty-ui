@@ -152,6 +152,7 @@ impl ExistingTrustRole {
         key: &str,
         mount: &str,
         restore: bool,
+        token_max_seconds: u64,
     ) -> Result<(), Box<dyn Error>> {
         let parent = output.parent().ok_or("renewal output parent is absent")?;
         let expected_parent = format!("renewal-{}", self.cycle_id);
@@ -182,11 +183,11 @@ impl ExistingTrustRole {
         }
         #[cfg(unix)]
         {
-            self.note("operation-intent.safe.json", &serde_json::json!({"schema":"marty.trust-role-renewal-operation/v1","cycleId":self.cycle_id,"project":project,"keyName":key,"role":"trust-profile-server","pkiMount":mount,"previousCertificateSha256":self.previous_certificate_sha256,"caSha256":self.ca_sha256,"roleDataSha256":self.role_sha256,"ownedPolicyRestore":restore,"tokenMaxSeconds":3600,"automaticRetry":false,"keyRoleIssuerCreation":false}))
+            self.note("operation-intent.safe.json", &serde_json::json!({"schema":"marty.trust-role-renewal-operation/v1","cycleId":self.cycle_id,"project":project,"keyName":key,"role":"trust-profile-server","pkiMount":mount,"previousCertificateSha256":self.previous_certificate_sha256,"caSha256":self.ca_sha256,"roleDataSha256":self.role_sha256,"ownedPolicyRestore":restore,"tokenMaxSeconds":token_max_seconds,"automaticRetry":false,"keyRoleIssuerCreation":false}))
         }
         #[cfg(not(unix))]
         {
-            let _ = (project, key, mount, restore);
+            let _ = (project, key, mount, restore, token_max_seconds);
             Err("native renewal recovery requires Unix custody".into())
         }
     }
@@ -331,6 +332,7 @@ impl ExistingTrustRole {
         &self,
         certificate: &str,
         previous_spki: &[u8],
+        token_max_seconds: u64,
     ) -> Result<(), Box<dyn Error>> {
         let der = cert_der(certificate.as_bytes())?;
         let parsed = certificate::load_certificate_der(&der)?;
@@ -338,6 +340,7 @@ impl ExistingTrustRole {
             parsed.tbs_certificate.validity.not_before.to_system_time(),
             parsed.tbs_certificate.validity.not_after.to_system_time(),
             std::time::SystemTime::now(),
+            token_max_seconds,
         )?;
         if certificate::get_certificate_public_key(&der)? != previous_spki {
             return Err("existing-key renewal leaf SPKI changed".into());
@@ -350,10 +353,12 @@ fn checked_leaf_window(
     before: std::time::SystemTime,
     after: std::time::SystemTime,
     now: std::time::SystemTime,
+    token_max_seconds: u64,
 ) -> Result<(), Box<dyn Error>> {
     if before > now
         || !after.duration_since(now).is_ok_and(|remaining| {
-            (std::time::Duration::from_secs(1800)..=std::time::Duration::from_secs(3600))
+            (std::time::Duration::from_secs(token_max_seconds / 2)
+                ..=std::time::Duration::from_secs(token_max_seconds))
                 .contains(&remaining)
         })
     {
@@ -372,17 +377,38 @@ mod tests {
         use std::time::{Duration, SystemTime};
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10000);
         for seconds in [1800, 3599, 3600] {
-            assert!(checked_leaf_window(now, now + Duration::from_secs(seconds), now).is_ok());
+            assert!(
+                checked_leaf_window(now, now + Duration::from_secs(seconds), now, 3600).is_ok()
+            );
         }
         for seconds in [0, 1799, 3601, 28800] {
-            assert!(checked_leaf_window(now, now + Duration::from_secs(seconds), now).is_err());
+            assert!(
+                checked_leaf_window(now, now + Duration::from_secs(seconds), now, 3600).is_err()
+            );
         }
         assert!(checked_leaf_window(
             now + Duration::from_secs(1),
             now + Duration::from_secs(3600),
-            now
+            now,
+            3600,
         )
         .is_err());
+    }
+    #[test]
+    fn beta_eight_hour_leaf_window_is_bounded_and_separate() {
+        use std::time::{Duration, SystemTime};
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10000);
+        for seconds in [14400, 28799, 28800] {
+            assert!(
+                checked_leaf_window(now, now + Duration::from_secs(seconds), now, 28800).is_ok()
+            );
+        }
+        for seconds in [0, 14399, 28801, 86400] {
+            assert!(
+                checked_leaf_window(now, now + Duration::from_secs(seconds), now, 28800).is_err()
+            );
+        }
+        assert!(checked_leaf_window(now, now + Duration::from_secs(28800), now, 3600).is_err());
     }
     #[test]
     fn existing_key_renew_fault_receipt_preserves_unknown_without_credential_output() {
@@ -419,11 +445,11 @@ mod tests {
         let mut c = config(true);
         c.recovery = recovery.clone();
         assert!(c
-            .prepare_recovery(&output, "project", "key", "workload-pki", true)
+            .prepare_recovery(&output, "project", "key", "workload-pki", true, 3600)
             .is_ok());
         let intent = fs::read(recovery.join("operation-intent.safe.json")).unwrap();
         assert!(c
-            .prepare_recovery(&output, "project", "key", "workload-pki", true)
+            .prepare_recovery(&output, "project", "key", "workload-pki", true, 3600)
             .is_err());
         assert_eq!(
             fs::read(recovery.join("operation-intent.safe.json")).unwrap(),
@@ -483,11 +509,11 @@ mod tests {
         assert!(c.issuer(&file, CERT).is_ok());
         assert!(c.key(&key(), &spki()).is_ok());
         // Historical public fixture is not a fresh one-hour lease.
-        assert!(c.leaf(CERT, &spki()).is_err());
+        assert!(c.leaf(CERT, &spki(), 3600).is_err());
         c.previous_certificate_sha256 = "1".repeat(64);
         assert!(c.previous_spki().is_err());
         assert!(config(false).key(&key(), &[0; 91]).is_err());
-        assert!(config(false).leaf(CERT, &[0; 91]).is_err());
+        assert!(config(false).leaf(CERT, &[0; 91], 3600).is_err());
         for (field, value) in [
             ("latest_version", json!(2)),
             ("exportable", json!(true)),
@@ -556,7 +582,7 @@ mod tests {
     #[test]
     fn existing_key_renew_keeps_one_hour_nonrenewable_orphan_bounds() {
         let token = json!({"data":{"policies":["owned"],"ttl":3590,"creation_ttl":3600,"explicit_max_ttl":3600,"renewable":false,"orphan":true,"type":"service","path":"auth/token/create-orphan"}});
-        assert!(super::super::checked_selective_signer(&token, "owned", true).is_ok());
+        assert!(super::super::checked_selective_signer(&token, "owned", true, 3600).is_ok());
         for (name, value) in [
             ("ttl", json!(1799)),
             ("creation_ttl", json!(28800)),
@@ -568,7 +594,29 @@ mod tests {
         ] {
             let mut t = token.clone();
             t["data"][name] = value;
-            assert!(super::super::checked_selective_signer(&t, "owned", true).is_err());
+            assert!(super::super::checked_selective_signer(&t, "owned", true, 3600).is_err());
+        }
+    }
+    #[test]
+    fn beta_eight_hour_signer_rejects_wrong_scope_and_one_hour_cross_admission() {
+        let token = json!({"data":{"policies":["owned"],"ttl":28790,"creation_ttl":28800,
+            "explicit_max_ttl":28800,"renewable":false,"orphan":true,"type":"service",
+            "path":"auth/token/create-orphan"}});
+        assert!(super::super::checked_selective_signer(&token, "owned", true, 28800).is_ok());
+        assert!(super::super::checked_selective_signer(&token, "owned", true, 3600).is_err());
+        for (name, value) in [
+            ("ttl", json!(14399)),
+            ("creation_ttl", json!(3600)),
+            ("explicit_max_ttl", json!(3600)),
+            ("renewable", json!(true)),
+            ("orphan", json!(false)),
+            ("policies", json!(["other"])),
+        ] {
+            let mut changed = token.clone();
+            changed["data"][name] = value;
+            assert!(
+                super::super::checked_selective_signer(&changed, "owned", true, 28800).is_err()
+            );
         }
     }
 }
