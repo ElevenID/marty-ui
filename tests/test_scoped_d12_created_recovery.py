@@ -12,8 +12,9 @@ from scoped_native_runtime import ref, journal_readback
 from test_scoped_native_database import recovery_fixture
 
 
-def created_fixture(tmp_path):
+def created_fixture(tmp_path,quiescence=None):
     original,_old_state,intent,previous,saved=recovery_fixture(tmp_path)
+    if quiescence is not None:previous["quiescence"]=quiescence
     original.pop("quiescence")
     previous_ref=saved("previous-authority.json",previous)
     root={"device":1,"inode":2,"uid":1000,"mode":448}
@@ -50,6 +51,61 @@ def created_fixture(tmp_path):
     return inputs,state,intent,recovery,saved,observed
 
 
+def replacement_checkpoint_fixture(tmp_path,quiescence=None):
+    inputs,old_state,intent,prior,saved,_=created_fixture(tmp_path,quiescence)
+    prior.update(operation="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
+    generation=tmp_path/"executed-replacement-generation"
+    model=json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+    for secret,name in (("trust_profile_workload_server_cert","trust_profile_workload_server_cert"),
+                        ("trust_profile_tls_kms_token","trust_profile_workload_server_kms_token")):
+        model["secrets"][secret]["file"]=str(generation/name)
+    inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("executed-replacement-model.json",model)}
+    inputs["runScopedTrustLeaseProof"]=saved("executed-replacement-lease.json",{"generationDirectory":str(generation)})
+    for key in ("plannedModels","runScopedTrustLeaseProof"):prior["trustDataMap"][key]["recovery"]=inputs[key]
+    prior_ref=saved("executed-replacement-authority.json",prior)
+    original=deepcopy(inputs)
+    state=deepcopy(old_state);state.update(acknowledgedStep="REPLACE_CREATED_CREDENTIAL_GENERATION",
+        recoveryAuthority=prior_ref,replacementAuthority=prior_ref,originalOperationState=prior["originalOperationState"],
+        priorCreatedSnapshot=prior["selected22"],replacementPreimage=saved("replacement-preimage.json",{}),
+        priorCredentialGeneration=json.loads(Path(prior["originalInputs"]["path"]).read_bytes())["runScopedTrustLeaseProof"],
+        nextCredentialGeneration=original["runScopedTrustLeaseProof"])
+    state_ref=saved("replacement-ack-state.json",state)
+    for key in database.RECOVERY_SOURCE_FIELDS:inputs[key]={"sha256":"resume-"+key}
+    recovery=deepcopy(prior);recovery.update(operation="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",replaceCredentialGeneration=False,
+        originalInputs=saved("executed-replacement-inputs.json",original),originalOperationState=state_ref,previousRecoveryAuthority=prior_ref,
+        sourceMap={k:{"original":original[k],"recovery":inputs[k]} for k in database.RECOVERY_SOURCE_FIELDS},
+        trustDataMap={k:{"original":original.get(k),"recovery":inputs.get(k)} for k in database.RECOVERY_TRUST_FIELDS})
+    observed=json.loads(Path(prior["journalRead"]["path"]).read_bytes())
+    observed[0]["files"]["build-state.json"]={"present":True,"document":state,"bytes":state_ref["bytes"],
+        **journal_readback(Path(state_ref["path"]).read_bytes())}
+    recovery["journalRead"]=saved("replacement-journal.json",observed)
+    return inputs,state,intent,recovery,saved,observed
+
+
+@pytest.mark.parametrize("change",[None,"pending","wrong-ack","lease","authority","target","consumed"])
+def test_replacement_checkpoint_requires_exact_chain_and_same_executed_target(tmp_path,change):
+    inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path)
+    if change=="pending":state["pendingStep"]="START_auth"
+    elif change=="wrong-ack":state["acknowledgedStep"]="CREATE_SELECTED"
+    elif change=="lease":state["nextCredentialGeneration"]={"sha256":"foreign"}
+    elif change=="authority":state["replacementAuthority"]={"sha256":"foreign"}
+    elif change=="target":
+        inputs["composeArguments"]=["foreign-target"]
+        recovery["trustDataMap"]["composeArguments"]["recovery"]=inputs["composeArguments"]
+    elif change=="consumed":
+        observed[0]["files"]["configuration-receipt.json"]={"present":True}
+        recovery["journalRead"]=saved("replacement-consumed.json",observed)
+    backend=json.loads((tmp_path/"created-backend.json").read_bytes())
+    if change:
+        with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+    else:
+        deepest,proof,verified=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+        dbstate=json.loads(Path(proof["operationState"]["path"]).read_bytes())
+        assert deepest["executorSource"]==dbstate["executorSource"]
+        assert deepest["executorSource"]!=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())["executorSource"]
+        assert verified["operationState"]==dbstate
+
+
 def test_created_checkpoint_accepts_exact_bytes_without_mutating_original(tmp_path):
     inputs,state,intent,recovery,_,_=created_fixture(tmp_path)
     before=deepcopy((state,intent,recovery))
@@ -73,12 +129,13 @@ def test_created_checkpoint_refuses_drift_before_any_effect(tmp_path,change):
     with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=json.loads((tmp_path/"created-backend.json").read_bytes()))
 
 
-@pytest.mark.parametrize("replace",[False,True])
-def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recreate(tmp_path,replace):
+@pytest.mark.parametrize("mode",["create","replace","replacement-ack"])
+def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recreate(tmp_path,mode):
+    replace=mode=="replace"
     import hashlib
     from scoped_native_profiles import current_rollout_build
     from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES
-    inputs,state,intent,recovery,saved,_observed=created_fixture(tmp_path)
+    inputs,state,intent,recovery,saved,_observed=(replacement_checkpoint_fixture(tmp_path) if mode=="replacement-ack" else created_fixture(tmp_path))
     if replace:
         recovery.update(operation="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
         generation=tmp_path/"new-synthetic-generation"
@@ -103,18 +160,23 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
     stopped=deepcopy(before)
     for row in stopped["roles"]:row.update(state="exited",running=False,hostPid=0)
     q=saved("actual-test-quiescence.json",stopped)
-    # Rebind the synthetic predecessor and completed proof consistently.
-    previous=json.loads(Path(recovery["previousRecoveryAuthority"]["path"]).read_bytes());previous["quiescence"]=q
-    recovery["previousRecoveryAuthority"]=saved("updated-previous.json",previous);recovery["quiescence"]=q
-    state["recoveryAuthority"]=recovery["previousRecoveryAuthority"]
-    proof=json.loads(Path(recovery["databaseProof"]["path"]).read_bytes());dbstate=json.loads(Path(proof["operationState"]["path"]).read_bytes());dbstate["quiescenceSha256"]=q["sha256"]
-    proof["operationState"]=saved("updated-completed.json",dbstate);verified={"operationState":dbstate,"databaseIdentity":dbstate["databaseIdentity"]}
-    state["databaseProof"]=recovery["databaseProof"]=saved("updated-proof.json",proof)
-    state["verifiedDatabase"]=recovery["verifiedDatabase"]=saved("updated-verified.json",verified)
-    recovery["originalOperationState"]=saved("updated-state.json",state)
-    observed=json.loads(Path(recovery["journalRead"]["path"]).read_bytes());raw=Path(recovery["originalOperationState"]["path"]).read_bytes()
-    observed[0]["files"]["build-state.json"]={"present":True,"document":state,"bytes":len(raw),**journal_readback(raw)}
-    recovery["journalRead"]=saved("updated-journal.json",observed)
+    if mode=="replacement-ack":
+        inputs,state,intent,recovery,saved,_observed=replacement_checkpoint_fixture(tmp_path,quiescence=q)
+        proof=json.loads(Path(recovery["databaseProof"]["path"]).read_bytes())
+        verified=json.loads(Path(recovery["verifiedDatabase"]["path"]).read_bytes())
+    else:
+        # Rebind the synthetic predecessor and completed proof consistently.
+        previous=json.loads(Path(recovery["previousRecoveryAuthority"]["path"]).read_bytes());previous["quiescence"]=q
+        recovery["previousRecoveryAuthority"]=saved("updated-previous.json",previous);recovery["quiescence"]=q
+        state["recoveryAuthority"]=recovery["previousRecoveryAuthority"]
+        proof=json.loads(Path(recovery["databaseProof"]["path"]).read_bytes());dbstate=json.loads(Path(proof["operationState"]["path"]).read_bytes());dbstate["quiescenceSha256"]=q["sha256"]
+        proof["operationState"]=saved("updated-completed.json",dbstate);verified={"operationState":dbstate,"databaseIdentity":dbstate["databaseIdentity"]}
+        state["databaseProof"]=recovery["databaseProof"]=saved("updated-proof.json",proof)
+        state["verifiedDatabase"]=recovery["verifiedDatabase"]=saved("updated-verified.json",verified)
+        recovery["originalOperationState"]=saved("updated-state.json",state)
+        observed=json.loads(Path(recovery["journalRead"]["path"]).read_bytes());raw=Path(recovery["originalOperationState"]["path"]).read_bytes()
+        observed[0]["files"]["build-state.json"]={"present":True,"document":state,"bytes":len(raw),**journal_readback(raw)}
+        recovery["journalRead"]=saved("updated-journal.json",observed)
     created=deepcopy(stopped)
     for row in created["roles"]:
         if row["role"] in selected:
@@ -128,7 +190,7 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
     calls=[]
     def node(mode,**kwargs):
         assert mode=="verify";assert len(kwargs["commands"])==len(database.schema_steps(True,"migrate"))+len(database.schema_steps(True,"verify-owned-schema"))
-        assert kwargs["context"]["executorSource"]==json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())["executorSource"]
+        assert kwargs["context"]["executorSource"]==json.loads(Path(proof["operationState"]["path"]).read_bytes())["executorSource"]
         calls.append("VERIFY_COMPLETED_DB");return verified
     db=SimpleNamespace(i={},commands=[],baseline_refs={},engine_id="synthetic",tenant_id="synthetic",node=node,selection={"binaries":binaries})
     value.recovery_preflight=lambda ref:(db,before,{"restoreOrder":sorted(D12_CURRENT_RUNTIME_ROLES)},None)
@@ -148,15 +210,17 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
             with pytest.raises(ReachedFirstStart):value.replace_created_credentials_and_resume(saved("recovery.json",recovery))
         assert calls[:3]==["VERIFY_COMPLETED_DB","PREPARE_REPLACEMENT","REPLACE_CREATED_CREDENTIAL_GENERATION"] and len(calls)==4
     else:
-        with pytest.raises(ReachedFirstStart):value.resume_after_create_selected(saved("recovery.json",recovery))
+        with pytest.raises(ReachedFirstStart):
+            (value.resume_after_created_credential_replacement if mode=="replacement-ack" else value.resume_after_create_selected)(saved("recovery.json",recovery))
         assert calls[0]=="VERIFY_COMPLETED_DB" and len(calls)==2
     assert value.state["phase"]=="SELECTED_CREATED"
     with pytest.raises(ValueError,match="D12_ONLY_ACKNOWLEDGED_CREATE_RECOVERABLE"):
         execution.created_recovery_checkpoint(inputs,value.state,intent,recovery,operation_backend=value.store.specification)
 
 
+@pytest.mark.parametrize("reconciled",[False,True])
 @pytest.mark.parametrize("change",[None,"reused-current-cid","missing-prepare"])
-def test_replacement_observer_requires_new_cids_against_current_created_preimage(tmp_path,change):
+def test_replacement_observer_requires_new_cids_against_current_created_preimage(tmp_path,change,reconciled):
     from scoped_d12_native_effect_host import D12CurrentEffectObserver
     from scoped_d12_native_host import D12ReadOnlyHost
     from scoped_linux_journal import LinuxBuildJournal
@@ -199,13 +263,27 @@ def test_replacement_observer_requires_new_cids_against_current_created_preimage
     current.update(second)
     if change=="reused-current-cid":current["auth"]=first["auth"]
     state.update(acknowledgedStep="REPLACE_CREATED_CREDENTIAL_GENERATION",replacementAuthority=recovery)
+    options={}
+    if reconciled:
+        prior=saved("reconciled-prior-authority.json",{"operation":"REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+            "selected22":saved("reconciled-prior22.json",{role:{"Id":first.get(role,old[role])} for role in old})})
+        state["replacementAuthority"]=prior
+        resume=saved("reconciled-resume-authority.json",{"schema":"marty.d12-created-recovery/v1",
+            "operation":"RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT","dispatchAuthorized":True,
+            "draftOnly":change=="missing-prepare","previousRecoveryAuthority":prior,
+            "originalOperationState":saved("reconciled-state.json",state),
+            "selected22":saved("reconciled-selected22.json",{role:{"Id":second.get(role,old[role])} for role in old})})
+        observer=D12CurrentEffectObserver(host,selection,journal,saved,profile)
+        options={"reconciled_replacement":resume}
     if change:
-        with pytest.raises(ValueError):observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state)
+        with pytest.raises(ValueError):observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,**options)
     else:
-        observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state)
+        observed_ref=observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,**options)
         assert {role:observer.current[role]["containerId"] for role in selected}==second
         assert all(observer.current[role]["containerId"]==old[role] for role in set(old)-set(selected))
         assert observer._replacement_ready_authority is None
+        assert json.loads(Path(observed_ref["path"]).read_bytes())["runtimeWrites"] is (not reconciled)
+
 
 
 @pytest.mark.parametrize("changed",[False,True])
@@ -221,7 +299,7 @@ def test_host_ack_verifies_new_target_model_without_borrowing_old_job(tmp_path,m
     binding.observer=SimpleNamespace(bind_created_after_ack=lambda *args:{"sha256":"actual-new-cids"})
     binding.store=SimpleNamespace(read=lambda name:{**state,"acknowledgedStep":"foreign"} if changed else state)
     calls=[];binding.assert_inputs=lambda:calls.append("INPUTS")
-    binding.inputs={"runId":"SYNTHETIC","selection":{"sha256":"selection"},"plannedModels":{"elevenid-beta":{"sha256":"NEW_TARGET_MODEL"}},
+    binding.inputs={"composeArguments":["docker","compose","--env-file","C:/reviewed/current.env"],"runId":"SYNTHETIC","selection":{"sha256":"selection"},"plannedModels":{"elevenid-beta":{"sha256":"NEW_TARGET_MODEL"}},
                     "runtimeBefore":{"sha256":"old-native"},"functionalRuntimeModule":{"path":"source-runtime.js","sha256":"bound"}}
     binding.host=SimpleNamespace(engine_id="synthetic-engine");binding.node=Path("node.exe");binding.docker=Path("docker.exe");binding.environment={}
     def run(argv,**kwargs):
@@ -250,11 +328,12 @@ def test_created_checkpoint_requires_separately_bound_backend_root(tmp_path,back
         execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
 
 
+@pytest.mark.parametrize("checkpoint",["create","replacement"])
 @pytest.mark.parametrize("gate",["authorization","quiescence"])
 @pytest.mark.parametrize("foreign_root",[False,True])
-def test_created_host_gates_pass_actual_separate_backend(tmp_path,gate,foreign_root):
+def test_created_host_gates_pass_actual_separate_backend(tmp_path,gate,foreign_root,checkpoint):
     from scoped_d12_native_effect_host import D12CurrentHostBindings
-    inputs,state,intent,recovery,saved,_=created_fixture(tmp_path)
+    inputs,state,intent,recovery,saved,_=(replacement_checkpoint_fixture(tmp_path) if checkpoint=="replacement" else created_fixture(tmp_path))
     assert inputs["operationJournal"] is None
     owner=D12CurrentHostBindings.__new__(D12CurrentHostBindings)
     owner.inputs=inputs;owner.assert_inputs=lambda:None

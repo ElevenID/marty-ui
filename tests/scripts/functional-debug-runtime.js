@@ -969,8 +969,23 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
  }
  return {a,generations,before:next,resourceBefore:baseline,created,saved};
 }
+function createdDependencySet(value){
+ assert.equal(typeof value,'string','MAINTENANCE_CREATED_DEPENDENCY_LABEL_REQUIRED');
+ if(value==='')return [];
+ const rows=value.split(',').map(item=>{assert(/^[a-zA-Z0-9][a-zA-Z0-9_.-]*:(service_started|service_healthy|service_completed_successfully):(true|false)$/.test(item),'MAINTENANCE_CREATED_DEPENDENCY_LABEL_SHAPE');return item;});
+ assert.equal(new Set(rows.map(row=>row.split(':')[0])).size,rows.length,'MAINTENANCE_CREATED_DEPENDENCY_DUPLICATE');return rows.sort();
+}
+function createdComposeLabels(input,role,labels){
+ const project='elevenid-beta',args=input.composeArguments;
+ assert(Array.isArray(args)&&args[0]==='docker'&&args[1]==='compose'&&['-p','--project-name'].includes(args[2])&&args[3]===project&&(args.length-4)%2===0,'MAINTENANCE_CREATED_COMPOSE_ARGUMENTS');
+ const values={'-f':[],'--env-file':[],'--project-directory':[]};
+ for(let i=4;i<args.length;i+=2){assert(Object.hasOwn(values,args[i])&&typeof args[i+1]==='string'&&(path.win32.isAbsolute(args[i+1])||path.posix.isAbsolute(args[i+1])),'MAINTENANCE_CREATED_COMPOSE_ARGUMENTS');values[args[i]].push(args[i+1]);}
+ assert(values['-f'].length>0&&values['--project-directory'].length===1,'MAINTENANCE_CREATED_COMPOSE_ARGUMENTS');
+ assert.equal(labels['com.docker.compose.project.environment_file']||'',values['--env-file'].join(','),'MAINTENANCE_CREATED_ENVIRONMENT_FILE_CHANGED:'+role);
+
+}
 function verifyCreatedTargetModel(input,{readDocker}={}){
- assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState'].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');
+ assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState','composeArguments'].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');
  const proof=boundJson(input.createdCids),ack=boundJson(input.acknowledgedState),before=boundJson(input.runtimeBefore),baseline=boundJson(input.resourceBefore);
  assert.equal(proof.schema,'marty.d12-owned-created-cids/v1');assert.equal(proof.runId,input.runId);assert.equal(ack.runId,input.runId);assert.deepEqual(proof.selection,input.selection);assert.deepEqual(proof.durableCreateAck,{phase:ack.phase,acknowledgedStep:ack.acknowledgedStep});
  assert.deepEqual(Object.keys(proof.selectedContainerIds).sort(),[...MAINTENANCE_CREATED_ROLES]);
@@ -990,7 +1005,13 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
    if(previousCreated){
     const prior=previousCreated[role];assert(prior&&prior.Image===row.Image);
     const oldCaps=structuredClone(prior.HostConfig),newCaps=structuredClone(row.HostConfig);for(const key of ['Binds','Mounts']){delete oldCaps[key];delete newCaps[key];}assert.deepEqual(newCaps,oldCaps,'MAINTENANCE_CREATED_UNRELATED_CAP_CHANGED:'+role);
-    const oldLabels=structuredClone(prior.Labels||{}),newLabels=structuredClone(row.Config?.Labels||{});for(const key of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir']){delete oldLabels[key];delete newLabels[key];}assert.deepEqual(newLabels,oldLabels,'MAINTENANCE_CREATED_UNRELATED_LABEL_CHANGED:'+role);
+    const oldLabels=structuredClone(prior.Labels||{}),newLabels=structuredClone(row.Config?.Labels||{});
+    if(context.created.has(role)){
+     createdComposeLabels(input,role,newLabels);
+     assert.deepEqual(createdDependencySet(newLabels['com.docker.compose.depends_on']??''),createdDependencySet(oldLabels['com.docker.compose.depends_on']??''),'MAINTENANCE_CREATED_DEPENDENCIES_CHANGED:'+role);
+     for(const key of ['com.docker.compose.config-hash','com.docker.compose.project.config_files','com.docker.compose.project.working_dir','com.docker.compose.project.environment_file','com.docker.compose.depends_on']){delete oldLabels[key];delete newLabels[key];}
+    }
+    assert.deepEqual(newLabels,oldLabels,'MAINTENANCE_CREATED_UNRELATED_LABEL_CHANGED:'+role);
     assert.equal(row.Config?.StopSignal||'',prior.StopSignal||'','MAINTENANCE_CREATED_STOP_SIGNAL_CHANGED:'+role);
     const previousMounts=maintenanceFullMounts(prior.Mounts).map(mount=>({...mount})),currentMounts=maintenanceFullMounts(row.Mounts);
     assert.deepEqual(previousMounts.map(mount=>mount.Destination),currentMounts.map(mount=>mount.Destination),'MAINTENANCE_CREATED_FULL_MOUNT_SET_CHANGED:'+role);

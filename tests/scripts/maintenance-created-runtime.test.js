@@ -57,8 +57,18 @@ function acknowledgedFixture(t,replacement=false){
  const ack={schema:'marty.d12-current-native-operation/v1',runId,phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:replacement?'REPLACE_CREATED_CREDENTIAL_GENERATION':'CREATE_SELECTED',pendingStep:null,pendingArgv:null};
  if(replacement){const previous=structuredClone(f.saved);for(const [i,role]of selectedRoles.entries())previous[role].Id=(i+501).toString(16).padStart(64,'0');ack.priorCreatedSnapshot=f.file('previous-created.json',previous);}
  const created=f.file('actual-unit-ack-proof.json',{schema:'marty.d12-owned-created-cids/v1',runId,selection:f.post.selection,durableCreateAck:{phase:ack.phase,acknowledgedStep:ack.acknowledgedStep},selectedContainerIds});
- const input={runId,engineId,selection:f.post.selection,plannedModels:f.post.plannedModels,runtimeBefore:f.file('original-running.json',f.before),resourceBefore:f.file('baseline-resource.json',f.resourceBefore),createdCids:created,acknowledgedState:f.file('ack.json',ack)};
+ const composeArguments=['docker','compose','-p','elevenid-beta','--project-directory','C:/reviewed','-f','C:/reviewed/target.json','--env-file','C:/reviewed/current10.env'];
+ const input={composeArguments,runId,engineId,selection:f.post.selection,plannedModels:f.post.plannedModels,runtimeBefore:f.file('original-running.json',f.before),resourceBefore:f.file('baseline-resource.json',f.resourceBefore),createdCids:created,acknowledgedState:f.file('ack.json',ack)};
  const live=Object.fromEntries(Object.entries(f.saved).map(([role,row])=>[row.Id,{Id:row.Id,Image:row.Image,State:structuredClone(row.State),HostConfig:structuredClone(row.HostConfig),Mounts:structuredClone(row.Mounts),Config:{Env:selectedRoles.includes(role)?['BASE=1','ROLE='+role]:['UNCHANGED=1'],Labels:structuredClone(row.Labels),Cmd:row.Cmd,Entrypoint:row.Entrypoint,User:row.User,WorkingDir:row.WorkingDir}}]));
+ if(replacement){
+  const previous=JSON.parse(fs.readFileSync(ack.priorCreatedSnapshot.path));
+  for(const role of selectedRoles){
+   const labels=live[selectedContainerIds[role]].Config.Labels;
+   Object.assign(labels,{'com.docker.compose.project.config_files':'C:/reviewed/target.json','com.docker.compose.project.working_dir':'C:/reviewed','com.docker.compose.project.environment_file':'C:/reviewed/current10.env','com.docker.compose.depends_on':'flow:service_healthy:false,issuance-native:service_healthy:false'});
+   Object.assign(previous[role].Labels,labels,{'com.docker.compose.project.environment_file':'C:/old/current10.env','com.docker.compose.depends_on':'issuance-native:service_healthy:false,flow:service_healthy:false'});
+  }
+  ack.priorCreatedSnapshot=f.file('prior-labels.json',previous);input.acknowledgedState=f.file('ack-labels.json',ack);
+ }
  let inspected=0;
  const read=argv=>{
   if(JSON.stringify(argv)===JSON.stringify(['info','--format','{{json .}}']))return JSON.stringify({ID:engineId});
@@ -102,4 +112,20 @@ for(const field of ['Propagation','UnexpectedField'])test('replacement refuses c
 test('replacement retains exact raw sources for every noncredential mount',t=>{
  const f=credentialReplacementFixture(t),auth=JSON.parse(fs.readFileSync(f.input.createdCids.path)).selectedContainerIds.auth;
  f.live[auth].Mounts[0].Source=f.live[auth].Mounts[0].Source.replaceAll('\\','/');assert.throws(f.invoke,/MAINTENANCE_CREATED_FULL_MOUNTS_CHANGED:auth/);
+});
+
+for(const [field,value]of [
+ ['com.docker.compose.project.environment_file','C:/foreign/current10.env'],
+ ['com.docker.compose.depends_on','flow:service_started:false,issuance-native:service_healthy:false'],
+ ['com.docker.compose.depends_on','flow:service_healthy:false,flow:service_healthy:false'],
+ ['com.docker.compose.depends_on','flow:service_healthy:false,issuance-native:service_healthy:false,extra:service_started:false'],
+ ['com.docker.compose.depends_on','flow:service_healthy:maybe'],
+ ['unrelated.label','changed']
+])test('replacement refuses unapproved Compose label '+field+' '+value,t=>{
+ const f=acknowledgedFixture(t,true),ids=JSON.parse(fs.readFileSync(f.input.createdCids.path)).selectedContainerIds;
+ f.live[ids.auth].Config.Labels[field]=value;assert.throws(f.invoke);
+});
+test('retained service labels cannot change even to approved generated values',t=>{
+ const f=acknowledgedFixture(t,true),retained=Object.entries(f.live).find(([,v])=>v.State.Status==='exited')[1];
+ retained.Config.Labels['com.docker.compose.project.environment_file']='C:/reviewed/current10.env';assert.throws(f.invoke,/MAINTENANCE_CREATED_UNRELATED_LABEL_CHANGED/);
 });
