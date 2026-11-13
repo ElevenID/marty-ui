@@ -195,6 +195,7 @@ class GitHub:
         self.mutations: list[dict] = []
         self.crypto: list[dict] = []
         self.observer = observer
+        self.verified_sources: set[tuple[str, str, str]] = set()
         # Consume before dispatch, including when journaling or the request
         # fails. A caught exception must never turn an uncertain creation into
         # another write or adoption attempt in the same operator process.
@@ -345,14 +346,59 @@ class GitHub:
     def run(self, run_id: int, workflow: str, source: str) -> dict:
         require(positive(run_id), "Invalid workflow run ID")
         run = self.json(f"repos/{REPOSITORY}/actions/runs/{run_id}")
-        require(isinstance(run, dict) and positive(run.get("id")) and run["id"] == run_id
-                and run.get("path") == workflow and run.get("event") == "workflow_dispatch"
-                and run.get("head_branch") == "main" and run.get("head_sha") == source
-                and type(run.get("run_attempt")) is int and run["run_attempt"] == 1
-                and run.get("repository", {}).get("id") == REPOSITORY_ID
-                and run.get("repository", {}).get("full_name") == REPOSITORY,
-                "Workflow invocation differs from its authenticated first-attempt identity")
-        return run
+        return original_run_identity(run, run_id, workflow, source)
+
+
+def original_run_identity(run: object, run_id: int, workflow: str, source: str, *,
+                          events: frozenset[str] = frozenset({"workflow_dispatch"})) -> dict:
+    require(type(events) is frozenset and (events == frozenset({"workflow_dispatch"})
+            or workflow == ".github/workflows/ci.yml" and events == frozenset({"workflow_dispatch", "schedule"})),
+            "Original workflow event policy is unsupported")
+    require(positive(run_id) and isinstance(run, dict) and positive(run.get("id")) and run["id"] == run_id
+            and run.get("path") == workflow and run.get("event") in events
+            and run.get("head_branch") == "main" and run.get("head_sha") == source
+            and type(run.get("run_attempt")) is int and run["run_attempt"] == 1
+            and isinstance(run.get("repository"), dict)
+            and run["repository"].get("id") == REPOSITORY_ID
+            and run["repository"].get("full_name") == REPOSITORY,
+            "Workflow invocation differs from its authenticated first-attempt identity")
+    return run
+
+
+def candidate_main(github: GitHub, source: str, executable: str, *, repository: Path = ROOT) -> str:
+    """Fresh protected-main proof for a future candidate and actual executor."""
+    if __package__:
+        from . import release_source_authority as authority
+    else:
+        import release_source_authority as authority
+    return authority.authenticated_current(github, source, executable, repository=repository, deadline=github.deadline,
+        verified=getattr(github, "verified_sources", None))
+
+
+def candidate_run(github: GitHub, run_id: int, workflow: str, source: str, *, repository: Path = ROOT) -> dict:
+    """Authenticate actual O without pretending that its workflow SHA is S."""
+    require(workflow == OPERATOR_WORKFLOW
+            and positive(run_id), "Candidate executor identity is invalid")
+    raw = github.json(f"repos/{REPOSITORY}/actions/runs/{run_id}")
+    require(isinstance(raw, dict) and isinstance(raw.get("head_sha"), str)
+            and SHA.fullmatch(raw["head_sha"]) is not None, "Candidate executor source is unavailable")
+    # Retain the ordinary repository/workflow/event/main-ref/first-attempt
+    # authentication against the ACTUAL workflow SHA on every observation.
+    run = original_run_identity(raw, run_id, workflow, raw["head_sha"])
+    candidate_main(github, source, run["head_sha"], repository=repository)
+    return run
+
+
+def candidate_main_observations(github: GitHub, source: str, executable: str,
+                                before: str, after: str, *, repository: Path = ROOT) -> None:
+    if __package__:
+        from .release_source_authority import require_compatible_source
+    else:
+        from release_source_authority import require_compatible_source
+    current_main = candidate_main(github, source, executable, repository=repository)
+    for executor, observed in ((executable, before), (before, after), (after, current_main)):
+        require_compatible_source(source, executor, observed, repository=repository,
+                                  timeout_seconds=remaining(github.deadline, 30))
 
 
 def extract_archive(archive: Path, output: Path, names: set[str], *, maximum: int = MAX_ARCHIVE,
@@ -506,7 +552,7 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
                       checkpoint: dict, tag: dict, directory: Path) -> dict | None:
     require(request.get("tag_handoff_contract") == TAG_HANDOFF_CONTRACT,
             "Operator admission uses a different tag handoff contract")
-    run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
+    run = candidate_run(github, run_id, OPERATOR_WORKFLOW, request["source_sha"])
     require(timestamp(run["created_at"]) >= timestamp(request["created_at"]),
             "Operator invocation predates the immutable handoff")
     if run.get("status") != "completed":
@@ -515,7 +561,7 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
         return None
     require(run.get("conclusion") == "success", "Operator invocation did not complete successfully")
     name = f"stack-release-tag-handoff-{run_id}-1"
-    artifact = github.artifact(run_id, name, request["protected_main_commit"])
+    artifact = github.artifact(run_id, name, run["head_sha"])
     require(artifact["size_in_bytes"] <= 1024 * 1024, "Operator result artifact is oversized")
     archive = directory / "operator-result.zip"
     github.download(artifact, archive)
@@ -543,7 +589,7 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
         "intent_tag": release_intent_tag(request["tag"]), "intent_object_sha": intent["sha"],
         "intent_ref_creation": tag_ref_creation(release_intent_tag(request["tag"]), intent["sha"]),
         "repository": REPOSITORY, "operator_run_id": run_id, "operator_run_attempt": 1,
-        "operator_source_sha": request["protected_main_commit"], "source_sha": request["source_sha"],
+        "operator_source_sha": run["head_sha"], "source_sha": request["source_sha"],
         "candidate_run_id": request["run_id"], "candidate_run_attempt": 1,
         "claim_run_id": request["claim_run_id"], "tag": request["tag"],
         "protected_main_commit": request["protected_main_commit"], "request_sha256": request_sha,
@@ -554,15 +600,18 @@ def successful_result(github: GitHub, run_id: int, request: dict, request_sha: s
             "Operator result does not bind this exact candidate, tag and checkpoint")
     require(set(value) == set(expected) | {"completed_at", "crypto_verified", "main_before_sha", "main_after_sha"}
             and value["crypto_verified"] is True
-            and value["main_before_sha"] == request["protected_main_commit"]
-            and value["main_after_sha"] == request["protected_main_commit"],
+            and isinstance(value["main_before_sha"], str) and SHA.fullmatch(value["main_before_sha"])
+            and isinstance(value["main_after_sha"], str) and SHA.fullmatch(value["main_after_sha"]),
             "Operator result schema or explicit verification result is invalid")
+    candidate_main_observations(github, request["source_sha"], run["head_sha"],
+                                value["main_before_sha"], value["main_after_sha"])
     require(timestamp(request["created_at"]) <= timestamp(value["completed_at"]) <= timestamp(request["not_after"]),
             "Operator result is outside the bounded handoff")
-    require(github.artifact(run_id, name, request["protected_main_commit"]) == artifact,
+    require(github.artifact(run_id, name, run["head_sha"]) == artifact,
             "Operator result artifact changed while reading")
-    final_run = github.run(run_id, OPERATOR_WORKFLOW, request["protected_main_commit"])
-    require(final_run.get("status") == "completed" and final_run.get("conclusion") == "success",
+    final_run = candidate_run(github, run_id, OPERATOR_WORKFLOW, request["source_sha"])
+    require(final_run.get("status") == "completed" and final_run.get("conclusion") == "success"
+            and final_run["head_sha"] == run["head_sha"],
             "Operator invocation changed while reading its result")
     return {"schema": TAG_ADMISSION_SCHEMA, "tag_handoff_contract": TAG_HANDOFF_CONTRACT,
             "operator_run_id": run_id, "operator_run_attempt": 1,
@@ -587,8 +636,7 @@ def wait_for_dispatch_step(github: GitHub, request: dict, *,
         run = github.run(request["run_id"], CD_WORKFLOW, request["source_sha"])
         require(run.get("status") == "in_progress" and run.get("conclusion") is None,
                 "Original CD attempt is no longer running")
-        require(github.main()["commit"]["sha"] == request["protected_main_commit"],
-                "Protected main changed before tag dispatch")
+        candidate_main(github, request["source_sha"], request["source_sha"])
         jobs = github.pages(f"repos/{REPOSITORY}/actions/runs/{request['run_id']}/attempts/1/jobs", "jobs")
         publishers = [job for job in jobs if job.get("name") == "publish-manifest"]
         require(len(publishers) == 1, "Tag dispatch requires one original publisher")
@@ -657,6 +705,7 @@ def dispatch_operator_once(github: GitHub, request: dict, request_sha: str,
             os.fsync(stream.fileno())
 
         persist()
+        candidate_main(github, request["source_sha"], request["source_sha"])
         status, raw = github.response(endpoint, method="POST", payload=payload)
         if type(status) is int:
             receipt["http_status"] = status
@@ -673,17 +722,17 @@ def dispatch_operator_once(github: GitHub, request: dict, request_sha: str,
                 "Tag operator dispatch returned foreign run URLs; do not retry")
         receipt.update(outcome="dispatch_confirmed", operator_run_id=operator_run)
         persist()
-        run = github.run(operator_run, OPERATOR_WORKFLOW, request["protected_main_commit"])
+        run = candidate_run(github, operator_run, OPERATOR_WORKFLOW, request["source_sha"])
         require(timestamp(request["created_at"]) <= timestamp(run["created_at"]) <= deadline,
                 "Dispatched tag operator is outside the original checkpoint window")
         require((run.get("status") in {"queued", "in_progress", "waiting", "pending"}
                  and run.get("conclusion") is None)
                 or (run.get("status") == "completed" and run.get("conclusion") == "success"),
                 "Dispatched tag operator has already failed or has an unknown status")
-        require(github.main()["commit"]["sha"] == request["protected_main_commit"],
-                "Protected main changed during tag dispatch")
+        candidate_main(github, request["source_sha"], request["source_sha"])
         require(now() < deadline, "Tag dispatch exceeded the original checkpoint deadline")
         receipt["run_identity_verified"] = True
+        receipt["operator_source_sha"] = run["head_sha"]
         persist()
     return operator_run
 
@@ -714,8 +763,7 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
     authority = gate_authority(bounded_file(checkpoint_directory / "official-interoperability.json"),
                                transaction, run_id=run_id, current_attempt=1)
     require(not output.exists() and not output.is_symlink(), "Tag handoff result already exists")
-    admitted_main = github.main()["commit"]["sha"]
-    require(admitted_main == request["protected_main_commit"], "Protected main differs from the handoff")
+    admitted_main = candidate_main(github, source, source)
     git("fetch", "--no-tags", "origin", admitted_main, deadline=github.deadline)
     require_review_only_history(source, admitted_main, run_id, 1, authority["review_required"],
                                 record_sha256=authority["record_sha256"],
@@ -732,9 +780,8 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
             require(now() < timestamp(request["not_after"]), "Operator tag handoff deadline expired")
             current = github.run(run_id, CD_WORKFLOW, source)
             require(current.get("status") == "in_progress", "Original CD attempt is no longer running")
-            main = github.main()["commit"]["sha"]
-            require(main == request["protected_main_commit"], "Protected main changed during tag handoff")
-            operator = github.run(operator_run, OPERATOR_WORKFLOW, request["protected_main_commit"])
+            candidate_main(github, source, source)
+            operator = candidate_run(github, operator_run, OPERATOR_WORKFLOW, source)
             require((operator.get("status") in {"queued", "in_progress", "waiting", "pending"}
                      and operator.get("conclusion") is None)
                     or (operator.get("status") == "completed" and operator.get("conclusion") == "success"),
@@ -754,7 +801,7 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
                 if result is not None:
                     # An immutable tag is never sufficient by itself. This read
                     # follows successful operator completion and its bound ZIP.
-                    require(github.main()["commit"]["sha"] == main, "Protected main changed before publication")
+                    candidate_main(github, source, source)
                     require(annotated_tag(github, request["tag"]) == tag, "Tag changed during result admission")
                     require(owned_intent(github, request, request_sha, artifact, operator_run,
                                          expected_sha=intent["sha"]) == intent,

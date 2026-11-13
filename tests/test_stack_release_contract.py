@@ -1340,7 +1340,8 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert '"tag_alone_authorizes_publication": False' in operator
     assert 'SCHEMA = "elevenid.stable-publication-checkpoint/v2"' in _text("scripts/stable_publication_checkpoint.py")
     policy = json.loads(_text("release/stable-publication-policy.json"))
-    assert policy["schema"] == "elevenid.stable-publication-policy/v3"
+    assert policy["schema"] == "elevenid.stable-publication-policy/v4"
+    assert policy["source_authority_policy"] == "marty.immutable-source-authority/v1"
     assert policy["tag_handoff_contract"] == "marty.create-only-annotated-tag/v1"
 
     capability = operator.split("def qualify_capability(", 1)[1].split("\ndef verify_crypto(", 1)[0]
@@ -1361,13 +1362,13 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     for gate in (
         "require_capability_main_protection(inspection)", "request = load_checkpoint(checkpoint)",
         'request["run_id"] == cd_run', 'request["source_sha"] == source',
-        'request["claim_run_id"] == claim_run', 'request["protected_main_commit"] == main',
+        'request["claim_run_id"] == claim_run', 'request["protected_main_commit"] == source',
         'required_state="promoted"', "authority = gate_authority(", "require_review_only_history(",
         'claim.get("conclusion") == "success"', 'required_state="claimed"',
         'seed["transaction_id"] == transaction["transaction_id"]', "verify_crypto(",
         "promoted_digests(", 'git/ref/tags/{intent_tag}', 'releases/tags/{request[\'tag\']}',
         "github.artifact(cd_run, artifact_name, source) == artifact", "waiting_run(github, cd_run, source)",
-        'github.main()["commit"]["sha"] == main', "handoff.remaining(github.deadline)",
+        "handoff.candidate_main(github, source, main)", "handoff.remaining(github.deadline)",
     ):
         assert production.index(gate) < first_write, gate
     assert production.count("load_checkpoint(checkpoint)") == 2
@@ -1380,7 +1381,11 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert len(owner_reads) == 3
     assert first_write < owner_write < owner_reads[0] < production_object < owner_reads[1] < production_write < owner_reads[2]
     assert production_write < production.index('read_exact_tag(github, request["tag"],')
-    assert production_write < production.index("Main changed after tag reservation")
+    source_reads = [match.start() for match in re.finditer(re.escape("handoff.candidate_main(github, source, main)"), production)]
+    assert len(source_reads) == 6
+    assert source_reads[0] < source_reads[1] < first_write < source_reads[2] < owner_write
+    assert owner_reads[0] < source_reads[3] < production_object < source_reads[4] < production_write < source_reads[5]
+    assert production_write < production.index("main_after = handoff.candidate_main(github, source, main)")
     assert production_write < production.index("final_run, final_source, final_inspection = inspect_repository(")
     for field in ('"intent_tag"', '"intent_object_sha"', '"intent_ref_creation"', '"tag_ref_creation"'):
         assert field in production

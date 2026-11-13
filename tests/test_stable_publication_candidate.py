@@ -17,7 +17,10 @@ import test_stable_publication_checkpoint as fixtures
 
 
 @pytest.fixture
-def sealed():
+def sealed(monkeypatch):
+    # Synthetic custody fixtures do not attest a Git program. Real Git closure
+    # and dirty/excluded-source behavior have separate source-authority tests.
+    monkeypatch.setattr(candidate, "program_digest", lambda root: "sha256:" + "7" * 64)
     fixture = fixtures.CheckpointTests()
     fixture.setUp()
     fixture.prepare()

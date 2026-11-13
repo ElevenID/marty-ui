@@ -4,6 +4,8 @@
 docker/canvas-oss/source-policy.json text eol=lf
 rust/crates/canvas-demo-seed/assets/*.rb text eol=lf
 release/stack-lock*.json text eol=lf
+release/stable-publication-policy.json text eol=lf
+release/source-authority-policy.json text eol=lf
 contracts/canvas-worker-body-timeout-oracle.json text eol=lf
 contracts/canvas-worker-lease-expiry-oracle.json text eol=lf
 scripts/sql/passport-beta-fence-*.sql text eol=lf
@@ -21,3 +23,4 @@ docs/demo-audit/2026-10-20-vc-api-auth/*.json -text
 
 # Preserve the exact signed public image-lock fixture bytes on Windows.
 tests/fixtures/nightly263-images.json text eol=lf
+tests/fixtures/release-tag-inspection-41791774863.json text eol=lf

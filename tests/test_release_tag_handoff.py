@@ -266,6 +266,19 @@ class CreateOnlyReservationTests(unittest.TestCase):
 
 class OperatorReceiptTests(unittest.TestCase):
     def setUp(self) -> None:
+        # Receipt custody uses synthetic Git proof adapters. Actual S/O/M
+        # invocation and history checks are exercised separately.
+        def candidate_run(github, run_id, workflow, source):
+            self.assertEqual((run_id, workflow, source), (789, handoff.OPERATOR_WORKFLOW, SOURCE))
+            return {**github.run(run_id, workflow, MAIN), "head_sha": MAIN}
+        def observations(github, source, executable, before, after):
+            handoff.require((source, executable, before, after) == (SOURCE, MAIN, MAIN, MAIN),
+                            "synthetic main observations differ")
+        for target, replacement in (("candidate_run", candidate_run),
+                                     ("candidate_main_observations", observations)):
+            patch = mock.patch.object(handoff, target, side_effect=replacement)
+            patch.start()
+            self.addCleanup(patch.stop)
         start = datetime.now(timezone.utc).replace(microsecond=0)
         self.request = {"tag": "v1.2.3", "tag_handoff_contract": handoff.TAG_HANDOFF_CONTRACT,
                         "transaction_id": "synthetic-transaction", "claim_run_id": "456",

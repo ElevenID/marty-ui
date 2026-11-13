@@ -13,6 +13,10 @@ on:
         description: Exact protected-main commit to validate and claim
         required: true
         type: string
+      qualification_run_id:
+        description: Definite original full-CI run admitted at the same source
+        required: true
+        type: string
 
 concurrency:
   group: ui-stack-release-claim-${{ inputs.tag }}
@@ -40,6 +44,7 @@ jobs:
     name: Validate exact main and persist the no-write claim
     needs: release-environment-preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     permissions:
       actions: read
       contents: read
@@ -59,11 +64,17 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
+
+      - name: Wait for the admitted original full CI before claiming
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+        run: python scripts/wait_release_dependency.py full-ci --run-id "$QUALIFICATION_RUN_ID"
 
       - name: Require valid eligible release inputs before external work
         env:
@@ -81,7 +92,7 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           tag_refs="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
           if [[ -n "$tag_refs" ]]; then
             echo "::error::Immutable tag $TAG already exists; it will not be moved or reused"
@@ -102,8 +113,10 @@ jobs:
       - name: Require every configured exact-main gate
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           COMMIT: ${{ inputs.source_sha }}
           TAG: ${{ inputs.tag }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
         run: >-
           python scripts/stack_tag_gate.py prepare
           --repository .
@@ -111,6 +124,7 @@ jobs:
           --tag "$TAG"
           --commit "$COMMIT"
           --run-id "$GITHUB_RUN_ID"
+          --qualification-run-id "$QUALIFICATION_RUN_ID"
           --runs-json workflow-runs.json
           --policy .github/stack-tag-policy.json
           --evidence stack-tag-evidence.json

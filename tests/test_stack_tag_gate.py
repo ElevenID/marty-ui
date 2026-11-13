@@ -129,6 +129,20 @@ def test_exact_head_terminal_workflows_pass() -> None:
     assert [item["run_id"] for item in accepted] == [10, 11, 12, 13]
 
 
+@pytest.mark.parametrize(("admitted", "attempt", "accepted"),
+                         [(13, 1, True), (14, 1, False), (13, 2, False), (13, True, False),
+                          (True, 1, False), (0, 1, False)])
+def test_claim_is_bound_to_the_admitted_original_full_ci(admitted, attempt, accepted) -> None:
+    document = payload()
+    document["workflow_runs"][-1]["run_attempt"] = attempt
+    if accepted:
+        result = stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99, admitted)
+        assert result[-1]["run_id"] == 13
+    else:
+        with pytest.raises(stack_tag_gate.StackTagGateError, match="admitted original run"):
+            stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99, admitted)
+
+
 def test_required_workflow_uses_latest_attempt_and_still_rejects_pending() -> None:
     document = payload()
     workflow_runs = document["workflow_runs"]
