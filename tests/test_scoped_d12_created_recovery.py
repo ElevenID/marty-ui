@@ -493,6 +493,38 @@ def test_ob3_historical_startup_source_requires_exact_sibling_and_current_bytes(
         execution.ob3_startup_prerequisites(ref(prior_startup),historical_execution_source=ref(prior_execution))
 
 
+def test_ob3_created_resource_binding_accepts_only_exact_acknowledged_extension(tmp_path):
+    from scoped_d12_native_effect_host import created_resource_binding
+    def saved(name, value):
+        path=tmp_path/name;path.write_text(json.dumps(value));return ref(path)
+    original=saved("original.json", {"plannedModels":{"elevenid-beta":{"sha256":"model"}}})
+    preimage=saved("preimage.json",{"role":"synthetic"})
+    resource=saved("resource.json",{"resources":28})
+    previous=saved("previous.json",{"scope":"OB3_FUNCTIONAL_ONLY"})
+    ack=saved("ack.json",{"replacementPreimage":preimage})
+    inputs={"selection":saved("selection.json",{})}
+    recovery={"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1",
+        "originalInputs":original,"selected22":saved("selected.json",{}),
+        "selected22Job":saved("job.json",{}),"acknowledgedReplacement":ack,
+        "previousRecoveryAuthority":previous}
+    post={"selection":inputs["selection"],"selected22":recovery["selected22"],
+        "selected22Job":recovery["selected22Job"],"plannedModels":{"elevenid-beta":{"sha256":"model"}},
+        "actualRuntimeBefore":preimage,"actualResourceBefore":resource,
+        "acknowledgedState":ack,"ob3Authority":previous}
+    created_resource_binding(inputs,recovery,{"postCreate":post})
+    for changed in ({**post,"acknowledgedState":previous},
+                    {**post,"ob3Authority":ack},
+                    {**post,"unexpected":"new"},
+                    {**post,"actualRuntimeBefore":resource}):
+        with pytest.raises(ValueError,match="D12_CREATED_RESOURCE_BINDING_CHANGED"):
+            created_resource_binding(inputs,recovery,{"postCreate":changed})
+    with pytest.raises(ValueError,match="D12_CREATED_RESOURCE_BINDING_CHANGED"):
+        created_resource_binding(inputs,recovery,{"postCreate":{k:v for k,v in post.items() if k!="actualResourceBefore"}})
+    with pytest.raises(ValueError):
+        created_resource_binding(inputs,recovery,{"postCreate":{**post,
+            "actualResourceBefore":{**resource,"sha256":"0"*64}}})
+
+
 @pytest.mark.parametrize("checkpoint",["create","replacement"])
 @pytest.mark.parametrize("gate",["authorization","quiescence"])
 @pytest.mark.parametrize("foreign_root",[False,True])

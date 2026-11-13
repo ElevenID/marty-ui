@@ -54,6 +54,27 @@ CREATED_TARGET_VERIFY_JS = RESOURCE_VERIFY_JS.replace(
 )
 
 
+def created_resource_binding(inputs, recovery, resource_recovery):
+    """Bind the original created target and the exact acknowledged OB3 extension."""
+    post = resource_recovery.get("postCreate")
+    original = json.loads(read_ref(recovery["originalInputs"]).read_bytes())
+    expected = {"selection": inputs["selection"], "selected22": recovery["selected22"],
+                "selected22Job": recovery["selected22Job"], "plannedModels": original["plannedModels"]}
+    if recovery.get("schema") == "marty.d12-ob3-acknowledged-replacement-recovery/v1":
+        ack = json.loads(read_ref(recovery["acknowledgedReplacement"]).read_bytes())
+        require(isinstance(post, dict) and isinstance(post.get("actualResourceBefore"), dict)
+                and post.get("actualRuntimeBefore") == ack.get("replacementPreimage")
+                and post.get("acknowledgedState") == recovery["acknowledgedReplacement"]
+                and post.get("ob3Authority") == recovery["previousRecoveryAuthority"],
+                "D12_CREATED_RESOURCE_BINDING_CHANGED")
+        read_ref(post["actualResourceBefore"])
+        expected.update(actualRuntimeBefore=ack["replacementPreimage"],
+            actualResourceBefore=post["actualResourceBefore"],
+            acknowledgedState=recovery["acknowledgedReplacement"],
+            ob3Authority=recovery["previousRecoveryAuthority"])
+    require(post == expected, "D12_CREATED_RESOURCE_BINDING_CHANGED")
+
+
 class D12HeldCanonicalLock:
     """Hold the existing beta_operation_lock owner on the canonical recorder lock.
 
@@ -788,10 +809,7 @@ class D12CurrentHostBindings:
         frozen = self.observer.inspect_all22() if created_recovery or ob3_recovery else json.loads(read_ref(frozen_ref).read_bytes())
         if created_recovery:
             resource_recovery=json.loads(read_ref(resource_recovery_ref).read_bytes())
-            require(resource_recovery.get("postCreate")=={
-                "selection":self.inputs["selection"],"selected22":recovery["selected22"],
-                "selected22Job":recovery["selected22Job"],"plannedModels":json.loads(read_ref(recovery["originalInputs"]).read_bytes())["plannedModels"]},
-                "D12_CREATED_RESOURCE_BINDING_CHANGED")
+            created_resource_binding(self.inputs,recovery,resource_recovery)
         if ob3_recovery:
             resource_recovery=json.loads(read_ref(resource_recovery_ref).read_bytes());state=self.store.read("build-state.json")
             require(resource_recovery.get("ob3Quiescent")=={"authority":recovery["previousRecoveryAuthority"],"quiescence":state["ob3Quiescence"],
