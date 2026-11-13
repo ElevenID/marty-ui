@@ -180,6 +180,115 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
     return database_original, proof, verified
 
 
+OB3_DEFERRED_ROLE="passport-beta-bureau"
+OB3_ALLOWED_SCENARIOS=("D01_ORGANIZATION_OB3","D05_MEMBERSHIP_OB3","D05_MEMBERSHIP_EXPIRED_NEGATIVE",
+    "D05_MEMBERSHIP_UNTRUSTED_NEGATIVE","D07_CANVAS_OB3")
+
+
+def _closed_ob3_scope(recovery,inputs,operations):
+    require(recovery.get("schema")=="marty.d12-ob3-partial-start-recovery/v1"
+            and recovery.get("operation") in operations and recovery.get("scope")=="OB3_FUNCTIONAL_ONLY"
+            and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
+            and recovery.get("runId")==inputs["runId"] and recovery.get("deferredRoles")==[OB3_DEFERRED_ROLE]
+            and recovery.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS),"D12_CLOSED_OB3_AUTHORITY_REQUIRED")
+
+
+def partial_start_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend):
+    """Bind only the known Bureau failed-start checkpoint, not a successful start."""
+    from scoped_native_database import RECOVERY_SOURCE_FIELDS,RECOVERY_TRUST_FIELDS
+    from scoped_native_runtime import validate_journal_readback
+    def load(reference):return json.loads(read_ref(reference).read_bytes())
+    _closed_ob3_scope(recovery,inputs,("RESUME_OB3_AFTER_RECONCILED_PARTIAL_STARTS","QUIESCE_OB3_PARTIAL_STARTS"))
+    original=load(recovery["originalInputs"]);previous=load(recovery["previousRecoveryAuthority"])
+    require(previous.get("operation")=="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"
+            and state.get("recoveryAuthority")==recovery["previousRecoveryAuthority"]
+            and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"],"D12_OB3_PARTIAL_PRIOR_AUTHORITY_CHANGED")
+    deepest,proof,verified=created_recovery_checkpoint(original,load(previous["originalOperationState"]),intent,
+        previous,operation_backend=operation_backend)
+    require(state==load(recovery["originalOperationState"]) and state.get("schema")=="marty.d12-current-native-operation/v1"
+            and state.get("phase")=="START_INSPECTION_PENDING" and state.get("scope")=="FUNCTIONAL_ONLY"
+            and state.get("pendingStep")=="INSPECT_START_"+OB3_DEFERRED_ROLE
+            and state.get("acknowledgedStep")=="START_"+OB3_DEFERRED_ROLE and state.get("pendingArgv") is None
+            and state.get("pendingRequest") is None
+            and state.get("runId")==inputs["runId"] and state.get("sourceRevision")==inputs["uiRevision"]
+            and state.get("coreRevision")==inputs["coreRevision"] and state.get("databaseProof")==previous["databaseProof"]
+            and state.get("verifiedDatabase")==previous["verifiedDatabase"],"D12_EXACT_OB3_PARTIAL_CHECKPOINT_REQUIRED")
+    created=load(state["created"]);rows=maintenance.exact_roles(created,inputs["rolloutProfile"])
+    require(recovery.get("runtimeBefore")==inputs["runtimeBefore"] and recovery.get("selection")==inputs["selection"]
+            and recovery.get("created")==state["created"],"D12_OB3_CONTAINMENT_INPUT_REFS_CHANGED")
+    target_request=load(recovery["createdTargetRequest"]);target=load(recovery["createdTargetVerification"])
+    target_terminal=load(recovery["createdTargetTerminal"])
+    require(target_request.get("runId")==inputs["runId"] and target_request.get("selection")==inputs["selection"]
+            and target_request.get("runtimeBefore")==inputs["runtimeBefore"] and target_request.get("plannedModels")==inputs["plannedModels"]
+            and target_request.get("composeArguments")==inputs["composeArguments"]
+            and target_request.get("engineId")==recovery.get("engineId"),"D12_OB3_INSTALLED_TARGET_BINDING_CHANGED")
+    require(target_terminal.get("exitCode")==0 and type(target_terminal.get("exitCode")) is int
+            and target_terminal.get("observation",{}).get("timedOut") is False
+            and target_terminal.get("observation",{}).get("failures")==[],"D12_OB3_TARGET_READ_NOT_ACKNOWLEDGED")
+    target_ack=load(target_request["acknowledgedState"]);cid_proof=load(target_request["createdCids"])
+    require(target.get("state")=="ACTUAL_CREATED_TARGET_MODEL_BOUND_BY_CURRENT_OWNER"
+            and target.get("runId")==inputs["runId"] and target.get("acknowledgedStep")=="REPLACE_CREATED_CREDENTIAL_GENERATION"
+            and target.get("currentJobNormalClosureNotYetQualified") is True
+            and target_ack.get("phase")=="EFFECT_ACKNOWLEDGED" and target_ack.get("acknowledgedStep")==target["acknowledgedStep"]
+            and target_ack.get("replacementAuthority")==recovery["previousRecoveryAuthority"]
+            and cid_proof.get("selection")==inputs["selection"],"D12_OB3_TARGET_ACK_LINEAGE_CHANGED")
+    expected={role:row["containerId"] for role,row in rows.items()}
+    require({row["role"]:row["containerId"] for row in target.get("roles",[])}==expected
+            and cid_proof.get("selectedContainerIds")=={role:expected[role] for role in inputs["roleBinaries"]},
+            "D12_OB3_TARGET_CURRENT22_CHANGED")
+    parent=read_ref(state["created"]).parent
+    require(all(read_ref(recovery[key]).parent==parent for key in
+            ("createdTargetRequest","createdTargetVerification","createdTargetTerminal")),"D12_OB3_TARGET_CAPTURE_NAMESPACE_CHANGED")
+    lease=load(inputs["runScopedTrustLeaseProof"]);sdk_metadata=load(lease["validationRequest"])
+    require(recovery.get("ancillaryResourceBinding")==sdk_metadata["recoveryPrerequisites"]["resourceObservation"],
+            "D12_OB3_ANCILLARY_BASELINE_CHANGED")
+    require(recovery["deferredFailureJob"]==recovery["reconciliationJob"]
+            and read_ref(recovery["currentOwned22"]).parent==read_ref(recovery["currentAncillary6"]).parent==read_ref(recovery["deferredFailure"]).parent,
+            "D12_OB3_PARTIAL_CAPTURE_NAMESPACE_CHANGED")
+    require(state.get("pendingContainerId")==rows[OB3_DEFERRED_ROLE]["containerId"],"D12_OB3_PENDING_CID_CHANGED")
+    plan=load(inputs["maintenancePlan"]);before=load(inputs["runtimeBefore"])
+    models={project:load(ref) for project,ref in plan["composeModels"].items()}
+    order=maintenance.preview(plan,before,models)["restoreOrder"];prefix=order[:order.index(OB3_DEFERRED_ROLE)]
+    require(state.get("steps")==["START_"+role for role in prefix] and set(state.get("startAcks",{}))==set(prefix),
+            "D12_OB3_OBSERVED_START_PREFIX_CHANGED")
+    for role,ack in state["startAcks"].items():
+        require(set(ack)=={"containerId","startedAt","hostPid","imageId"} and ack["containerId"]==rows[role]["containerId"]
+                and ack["imageId"]==rows[role]["imageId"] and type(ack["hostPid"]) is int and ack["hostPid"]>0,
+                "D12_OB3_START_ACK_CHANGED:"+role)
+    require(recovery.get("sourceMap")=={key:{"original":original[key],"recovery":inputs[key]} for key in RECOVERY_SOURCE_FIELDS}
+            and all(previous["sourceMap"][key]["recovery"]==original[key] for key in RECOVERY_SOURCE_FIELDS),
+            "D12_OB3_PARTIAL_SOURCE_MAP_CHANGED")
+    require(all(original.get(key)==inputs.get(key) for key in RECOVERY_TRUST_FIELDS)
+            and {k:v for k,v in original.items() if k not in RECOVERY_SOURCE_FIELDS|{"d12Authority"}}
+                =={k:v for k,v in inputs.items() if k not in RECOVERY_SOURCE_FIELDS|{"d12Authority"}},
+            "D12_OB3_PARTIAL_INPUTS_CHANGED")
+    observed=load(recovery["journalRead"]);require(isinstance(observed,list) and len(observed)==1
+        and observed[0].get("state")=="EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE" and observed[0].get("mountReadOnly") is True,
+        "D12_OB3_AUTHORITATIVE_JOURNAL_REQUIRED")
+    for name,ref,value in (("build-state.json",recovery["originalOperationState"],state),
+                           ("build-apply-intent.json",recovery["originalApplyIntent"],intent)):
+        file=observed[0]["files"][name]
+        exact=validate_journal_readback({"storedBytesBase64":file.get("storedBytesBase64"),"sha256":file.get("sha256"),"value":file.get("document")})
+        require(file.get("present") is True and exact==read_ref(ref).read_bytes() and file.get("document")==value
+                and file.get("sha256")==ref["sha256"] and file.get("bytes")==ref["bytes"],"D12_OB3_PARTIAL_READBACK_CHANGED")
+    require(all(observed[0]["files"][name].get("present") is False for name in ("build-receipt.json","configuration-receipt.json"))
+            and all(observed[0]["root"][k]==operation_backend["rootProof"][k] for k in ("device","inode","uid","mode")),
+            "D12_OB3_PARTIAL_ROOT_OR_RECEIPT_CHANGED")
+    require(recovery["originalApplyIntent"]==previous["originalApplyIntent"],"D12_OB3_ORIGINAL_INTENT_CHANGED")
+    for key in ("reconciliationJob","deferredFailureJob","failedCutoverJob"):
+        expected="FAILED" if key=="failedCutoverJob" else "COMPLETE"
+        job=load(recovery[key]);require(job.get("state")==expected and type(job.get("exitCode")) is int and job.get("exitCode")== (1 if expected=="FAILED" else 0)
+            and job.get("jobClosed") is True and job.get("terminalActiveProcesses")==0
+            and all(job.get(k) is False for k in ("timedOut","forcedTermination","cancelled","hostMarginBreached")),
+            "D12_OB3_PARTIAL_CLOSED_READ_REQUIRED")
+    failure=load(recovery["deferredFailure"])
+    require(failure.get("containerId")==rows[OB3_DEFERRED_ROLE]["containerId"] and failure.get("qualification") is False
+            and all(failure.get(k) is True for k in
+            ("sqlstate42501Observed","permissionDeniedForSchemaObserved","issuanceServiceSchemaObserved")),
+            "D12_OB3_EXACT_DEFERRED_FAILURE_REQUIRED")
+    return deepest,proof,verified
+
+
 class D12CurrentExecution:
     def __init__(self, context, inputs, journal, *, read_only_preflight=False):
         self.g, self.i, self.store = context, inputs, journal
@@ -332,6 +441,56 @@ class D12CurrentExecution:
             tenant_observation = g["save"]("current-ten-tenant-preflight.json",current_ten_tenant_observation(database))
             self.state["tenantPreflight"] = tenant_observation
         return database, before, preview, overlay_ref
+
+    def quiesce_ob3_partial_starts(self,recovery_ref):
+        require(not self.read_only_preflight and self.profile=="d05-membership-current-functional",
+                "D12_OB3_QUIESCE_CURRENT10_REQUIRED")
+        selected_sources(self.i,self.profile)
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        require(recovery.get("operation")=="QUIESCE_OB3_PARTIAL_STARTS","D12_OB3_QUIESCE_AUTHORITY_REQUIRED")
+        original_state=self.store.read("build-state.json")
+        partial_start_ob3_checkpoint(self.i,original_state,self.store.read("build-apply-intent.json"),recovery,
+            operation_backend=self.store.specification)
+        g=self.g
+        require(g["operation_lock_held"]() is True and g["recording_lock_held"]() is True
+                and g["ob3_quiesce_authorization_verified"](self.i["d12Authority"],recovery_ref) is True,
+                "D12_OB3_QUIESCE_FULL_OWNERSHIP_REQUIRED")
+        # The callback returns source-policy checked exact stop steps for only
+        # the actual observed running prefix and the failed Bureau restart loop.
+        steps=g["ob3_quiesce_steps"](recovery_ref)
+        expected=set(original_state["startAcks"])|{OB3_DEFERRED_ROLE}
+        require(len(steps)==len(expected) and {row["role"] for row in steps}==expected,
+                "D12_OB3_EXACT_QUIESCE_STOP_SET_REQUIRED")
+        self.state=json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
+        self.record("OB3_QUIESCE_AUTHORIZED",recoveryAuthority=recovery_ref,originalOperationState=recovery["originalOperationState"],
+            priorPartialStartState=recovery["originalOperationState"],readinessScope="OB3_FUNCTIONAL_ONLY",fullStackQualified=False)
+        deferred_stop=json.loads(read_ref(recovery["deferredStopContract"]).read_bytes())
+        require(deferred_stop.get("schema")=="marty.reviewed-deferred-startup-stop/v1"
+                and deferred_stop.get("role")==OB3_DEFERRED_ROLE
+                and deferred_stop.get("containerId")==original_state["pendingContainerId"]
+                and deferred_stop.get("allowedExitCodes")==[0,1,143]
+                and deferred_stop.get("signal")=="SIGTERM" and deferred_stop.get("noAutomaticSigkill") is True
+                and deferred_stop.get("gracefulShutdownVerified") is False,
+                "D12_OB3_EXACT_FAILED_ROLE_STOP_CONTRACT_REQUIRED")
+        outcomes={}
+        for step in steps:
+            role=step["role"];self.record("OB3_STOP_PENDING",pendingStep="OB3_STOP_"+role,pendingArgv=step["argv"])
+            observed=g["ob3_stop_owned_role"](recovery_ref,step)
+            require(observed["containerId"]==step["containerId"] and observed["state"]=="exited"
+                    and observed["running"] is False and observed["hostPid"]==0 and observed["oomKilled"] is False
+                    and observed["containerExitCode"] in (deferred_stop["allowedExitCodes"] if role==OB3_DEFERRED_ROLE else [0]),
+                    "D12_OB3_STOP_NOT_RECONCILED:"+role)
+            outcomes[role]={"observedExitCode":observed["containerExitCode"],"deferred":role==OB3_DEFERRED_ROLE}
+            self.record("OB3_STOP_TERMINAL",pendingStep=None,pendingArgv=None,ob3StopOutcomes=dict(outcomes))
+        quiescence=g["observe_ob3_quiescence"](recovery_ref,outcomes)
+        require(read_ref(quiescence).is_file(),"D12_OB3_ACTUAL_QUIESCENCE_REQUIRED")
+        self.record("OB3_PARTIAL_QUIESCENT",pendingStep=None,pendingArgv=None,pendingContainerId=None,
+            ob3Quiescence=quiescence,priorStartAcks=original_state["startAcks"],startAcks={},
+            deferredRoles=[OB3_DEFERRED_ROLE],deferredFailure=recovery["deferredFailure"],fullStackQualified=False,
+            readinessScope="OB3_FUNCTIONAL_ONLY",allowedScenarios=list(OB3_ALLOWED_SCENARIOS))
+        return {"schema":"marty.d12-ob3-quiescence/v1","runId":self.i["runId"],"quiescence":quiescence,
+            "readinessScope":"OB3_FUNCTIONAL_ONLY","fullStackQualified":False,"runningProcessQualified":False,
+            "priorStartAcksAreHistorical":True,"deferredFailure":recovery["deferredFailure"]}
 
     def run(self):
         require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")

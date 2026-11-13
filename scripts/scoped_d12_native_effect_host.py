@@ -17,7 +17,7 @@ from pathlib import Path
 from scoped_d12_native_host import D12ReadOnlyHost
 from scoped_native_database import bounded_run, require_bound_quiescence, fence_install_recovery_checkpoint
 from scoped_linux_journal import LinuxBuildJournal
-from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha
+from scoped_native_runtime import daemon_source, read_executable_ref, read_ref, ref, require, sha, selected_sources
 from scoped_passport_maintenance import exact_roles, observed_role_state, same_full_role_snapshot
 from scoped_passport_successor import CURRENT_PROFILE
 from scoped_native_profiles import D12_PASSPORT_CURRENT, current_rollout_build
@@ -243,6 +243,51 @@ class D12CurrentEffectObserver:
         self._replacement_preimage_ids={row["containerId"] for row in rows.values()}
         return self.save("d12-created-credential-replacement-preimage.private.json",snapshot)
 
+    def _created_projection(self,selection,newly):
+        roles=dict(self.build_profile.roles)
+        proposed = deepcopy(self.original)
+        for role, cid in newly.items():
+            binary = selection["binaries"][role]
+            require(Path(binary.get("path", "")).name == roles[role]
+                    and re.fullmatch(r"[a-f0-9]{64}", binary.get("sha256", "")),
+                    "D12_SELECTED_BINARY_CHANGED:" + role)
+            read_executable_ref(binary)
+            target = "/usr/local/bin/" + roles[role]
+            mounts = proposed[role]["binaryMounts"]
+            matches = [row for row in mounts if row["destination"] == target]
+            if self.profile=="d05-membership-current-functional" and not matches:
+                from scoped_beta_binary_overlay import image_owned_baseline
+                image_owned_baseline(role,roles[role],self.native_preimage,self.original[role])
+                mounts.append({"type":"bind","source":daemon_source(binary["path"]),"destination":target,"writable":False})
+            else:
+                require(len(matches) == 1 and matches[0]["type"] == "bind"
+                        and matches[0]["writable"] is False and binary.get("path"),
+                        "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
+                matches[0]["source"] = daemon_source(binary["path"])
+            proposed[role]["containerId"] = cid
+        return proposed
+
+    def bind_ob3_partial_created(self,recovery_ref):
+        recovery=json.loads(read_ref(recovery_ref).read_bytes());state=self.store.read("build-state.json")
+        require(state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
+                and state.get("phase")=="START_INSPECTION_PENDING","D12_OB3_PARTIAL_OBSERVER_STATE_CHANGED")
+        created=json.loads(read_ref(state["created"]).read_bytes());rows=exact_roles(created,self.profile)
+        selection=json.loads(read_ref(self.selection_ref).read_bytes());roles=dict(self.build_profile.roles)
+        require(set(selection["binaries"])==set(roles) and selection["sourceRevision"]==self.build_profile.ui_revision
+                and selection["coreRevision"]==self.build_profile.core_revision,"D12_OB3_SELECTED_SOURCE_CHANGED")
+        newly={role:rows[role]["containerId"] for role in roles}
+        require(len(set(newly.values()))==10 and not set(newly.values())&{row["containerId"] for row in self.original.values()},
+                "D12_OB3_CREATED_CID_CHANGED")
+        proposed=self._created_projection(selection,newly)
+        for role,row in rows.items():
+            require(row["containerId"]==proposed[role]["containerId"] and row["imageId"]==proposed[role]["imageId"],
+                    "D12_OB3_CREATED_IDENTITY_CHANGED:"+role)
+        for role in roles:
+            proposed[role].update(source=selection["sourceRevision"],coreSource=selection["coreRevision"],
+                sha256=selection["binaries"][role]["sha256"],kind="SCOPED_NATIVE_FUNCTIONAL_OVERLAY")
+        self.current=proposed;self.created_ref=state["created"]
+        return self.created_ref
+
     def bind_created_after_ack(self, step, state, *, reconciled_replacement=None):
         if step not in ("CREATE_SELECTED","REPLACE_CREATED_CREDENTIAL_GENERATION"):
             return None
@@ -306,26 +351,7 @@ class D12CurrentEffectObserver:
                     and all(selected22[role].get("Id")==self.original[role]["containerId"]
                         for role in set(self.original)-set(roles)),
                     "D12_RECONCILED_REPLACEMENT_CIDS_CHANGED")
-        proposed = deepcopy(self.original)
-        for role, cid in newly.items():
-            binary = selection["binaries"][role]
-            require(Path(binary.get("path", "")).name == roles[role]
-                    and re.fullmatch(r"[a-f0-9]{64}", binary.get("sha256", "")),
-                    "D12_SELECTED_BINARY_CHANGED:" + role)
-            read_executable_ref(binary)
-            target = "/usr/local/bin/" + roles[role]
-            mounts = proposed[role]["binaryMounts"]
-            matches = [row for row in mounts if row["destination"] == target]
-            if self.profile=="d05-membership-current-functional" and not matches:
-                from scoped_beta_binary_overlay import image_owned_baseline
-                image_owned_baseline(role,roles[role],self.native_preimage,self.original[role])
-                mounts.append({"type":"bind","source":daemon_source(binary["path"]),"destination":target,"writable":False})
-            else:
-                require(len(matches) == 1 and matches[0]["type"] == "bind"
-                        and matches[0]["writable"] is False and binary.get("path"),
-                        "D12_SELECTED_MOUNT_SOURCE_REQUIRED:" + role)
-                matches[0]["source"] = daemon_source(binary["path"])
-            proposed[role]["containerId"] = cid
+        proposed=self._created_projection(selection,newly)
         # Inspect every role against the proposed immutable lineage before
         # switching the observer. A foreign same-image CID or mount is refused.
         current = self.current
@@ -432,7 +458,7 @@ class D12CurrentHostBindings:
             require(permit.get("schema") == "marty.d12-current-dispatch-intent/v1"
                     and permit.get("dispatchAuthorized") is True
                     and permit.get("runId") == self.inputs.get("runId")
-                    and permit.get("scope") == "FUNCTIONAL_ONLY"
+                    and permit.get("scope") in ("FUNCTIONAL_ONLY","OB3_FUNCTIONAL_ONLY")
                     and permit.get("releaseQualified") is False
                     and permit.get("recordingQualified") is False
                     and permit.get("inputs") == inputs_ref
@@ -518,6 +544,118 @@ class D12CurrentHostBindings:
 
     def authorization_verified(self, authority_ref):
         return self._authorization_verified(authority_ref)
+
+    def _ob3_containment_read(self,recovery_ref,phase,outcomes):
+        self.assert_inputs();require(self.lock is not None and self.lock.held(),"D12_OB3_CANONICAL_LOCK_REQUIRED")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        source=self.inputs["functionalRuntimeModule"];profile=self.inputs["resourceProfile"]
+        require(read_ref(source).resolve()==self.host._root/"tests/scripts/functional-debug-runtime.js"
+                and source["sha256"]==self.host._source_files["tests/scripts/functional-debug-runtime.js"]["sha256"],
+                "D12_OB3_CONTAINMENT_SOURCE_REQUIRED")
+        script=RESOURCE_VERIFY_JS.replace("const result=runtime.verifyFunctionalRuntime(profile,{qualification:'FUNCTIONAL_ONLY',readDocker});",
+            "const result=runtime.verifyOb3ContainmentRuntime(profile,{readDocker,recoveryRef:JSON.parse(process.argv[6]),phase:process.argv[7],outcomes:JSON.parse(process.argv[8])});")
+        require("verifyOb3ContainmentRuntime" in script and "verifyFunctionalRuntime(profile" not in script,
+                "D12_OB3_CONTAINMENT_ROUTING_REQUIRED")
+        prefix="ob3-containment-"+phase.lower()
+        result=bounded_run([str(self.node),"-e",script,source["path"],source["sha256"],profile["path"],profile["sha256"],
+            str(self.docker),json.dumps(recovery_ref),phase,json.dumps(outcomes)],env=self.environment,
+            timeout=420,stdout_limit=1024*1024,stderr_limit=65536)
+        self.save_bytes(prefix+"-stdout.private",result.stdout);self.save_bytes(prefix+"-stderr.private",result.stderr)
+        self.save(prefix+"-terminal.safe.json",{"exitCode":result.returncode,"observation":result.observation})
+        require(result.returncode==0 and result.observation["timedOut"] is False and not result.observation["failures"],
+                "D12_OB3_CURRENT28_CONTAINMENT_READ_FAILED")
+        proof=json.loads(result.stdout)
+        require(proof.get("schema")=="marty.ob3-containment-observation/v1" and proof.get("runId")==self.inputs["runId"]
+                and proof.get("fullStackQualified") is False and len(proof.get("resources",[]))==28
+                and len(proof.get("roles",[]))==22 and proof.get("phase")==("OB3_PARTIAL_STARTS_OWNED" if phase=="PARTIAL" else "OB3_PARTIAL_QUIESCENT"),
+                "D12_OB3_CONTAINMENT_DTO_CHANGED")
+        self.assert_inputs();require(self.lock.held(),"D12_OB3_LOCK_LOST_DURING_READ")
+        return proof
+
+    def ob3_quiesce_authorization_verified(self,authority_ref,recovery_ref):
+        from scoped_d12_native_execution import partial_start_ob3_checkpoint,OB3_ALLOWED_SCENARIOS,D12CurrentExecution
+        self.assert_inputs();selected_sources(self.inputs,self.profile)
+        execution_source=Path(D12CurrentExecution.__init__.__code__.co_filename).resolve()
+        require(self.profile=="d05-membership-current-functional" and self.inputs.get("dispatchEnabled") is True
+                and self.inputs.get("applyAuthorized") is True
+                and read_ref(self.inputs["executionSource"]).resolve()==execution_source
+                and execution_source==self.host._root/"scripts/scoped_d12_native_execution.py"
+                and self.inputs["executionSource"]["sha256"]==self.host._source_files.get(
+                    "scripts/scoped_d12_native_execution.py",{}).get("sha256"),
+                "D12_OB3_CURRENT_EXECUTION_AND_ENABLED_INPUTS_REQUIRED")
+        authority=json.loads(read_ref(authority_ref).read_bytes());recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        require(self.dispatch_permit is not None and self.dispatch_permit["scope"]=="OB3_FUNCTIONAL_ONLY"
+                and self.dispatch_permit["authority"]==authority_ref==self.inputs["d12Authority"]
+                and authority.get("schema")=="marty.d12-current-native-authority/v1"
+                and authority.get("scope")=="OB3_FUNCTIONAL_ONLY" and authority.get("dispatchAuthorized") is True
+                and authority.get("draftOnly") is False and authority.get("runId")==self.inputs["runId"]
+                and authority.get("approvedRecoveryAuthoritySha256")==recovery_ref["sha256"]
+                and authority.get("approvedExecutionSourceSha256")==self.inputs["executionSource"]["sha256"]
+                and authority.get("approvedFunctionalRuntimeSha256")==self.inputs["functionalRuntimeModule"]["sha256"]
+                and authority.get("approvedRuntimeReaderSha256")==self.inputs["d12RuntimeModule"]["sha256"]
+                and authority.get("approvedProfileSourceSha256")==sha(self.host._root/"scripts/scoped_native_profiles.py")
+                and authority.get("approvedSelectionSha256")==self.inputs["selection"]["sha256"]
+                and authority.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
+                and authority.get("deferredRoles")==["passport-beta-bureau"]
+                and recovery.get("engineId")==self.host.engine_id,"D12_EXPLICIT_OB3_CONTAINMENT_AUTHORITY_REQUIRED")
+        require(self.lock is not None and self.lock.held(),"D12_OB3_CANONICAL_LOCK_REQUIRED")
+        partial_start_ob3_checkpoint(self.inputs,self.store.read("build-state.json"),self.store.read("build-apply-intent.json"),
+            recovery,operation_backend=self.store.specification)
+        self.observer.bind_ob3_partial_created(recovery_ref)
+        # Only source ownership is established here. Expired SDK5 credentials
+        # are not used or described as a valid lease by this containment path.
+        self._ob3_quiesce_approval=recovery_ref
+        self._ob3_containment_before=self._ob3_containment_read(recovery_ref,"PARTIAL",{})
+        return True
+
+    def ob3_quiesce_steps(self,recovery_ref):
+        from scoped_passport_maintenance import _stop_contract
+        require(getattr(self,"_ob3_quiesce_approval",None)==recovery_ref,"D12_OB3_CONTAINMENT_NOT_AUTHORIZED")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes());state=self.store.read("build-state.json")
+        require(state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),"D12_OB3_STOP_PREIMAGE_CHANGED")
+        roles=set(state["startAcks"])|{"passport-beta-bureau"};require(set(recovery["stopContracts"])==set(state["startAcks"]),
+            "D12_OB3_EXACT_SOURCE_STOP_CONTRACT_SET_REQUIRED")
+        plan=json.loads(read_ref(self.inputs["maintenancePlan"]).read_bytes())
+        before=json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes());models={k:json.loads(read_ref(v).read_bytes()) for k,v in plan["composeModels"].items()}
+        from scoped_passport_maintenance import preview
+        order=[step["role"] for step in preview(plan,before,models)["stopSteps"] if step["role"] in roles]
+        result=[]
+        for role in order:
+            row=self.observer.inspect_role(role)
+            if role=="passport-beta-bureau":
+                policy=json.loads(read_ref(recovery["deferredStopContract"]).read_bytes())
+                require(policy.get("containerId")==row["containerId"] and policy.get("imageId")==row["imageId"]
+                        and policy.get("gracefulShutdownVerified") is False,"D12_OB3_FAILED_ROLE_STOP_IDENTITY_CHANGED")
+            else:policy=_stop_contract(role,self.observer.current[role],recovery["stopContracts"][role])
+            result.append({"role":role,"containerId":row["containerId"],"imageId":row["imageId"],
+                "argv":["docker","stop","--signal",policy["signal"],"--time","-1",row["containerId"]]})
+        self._ob3_stop_steps={step["role"]:step for step in result}
+        return result
+
+    def ob3_stop_owned_role(self,recovery_ref,step):
+        self.assert_inputs();require(self.lock is not None and self.lock.held()
+            and getattr(self,"_ob3_quiesce_approval",None)==recovery_ref
+            and getattr(self,"_ob3_stop_steps",{}).get(step["role"])==step,"D12_OB3_EXACT_STOP_STEP_REQUIRED")
+        state=self.store.read("build-state.json")
+        require(state.get("phase")=="OB3_STOP_PENDING" and state.get("pendingStep")=="OB3_STOP_"+step["role"]
+                and state.get("pendingArgv")==step["argv"] and state.get("recoveryAuthority")==recovery_ref,
+                "D12_OB3_DURABLE_STOP_INTENT_REQUIRED")
+        row=self.observer.inspect_role(step["role"])
+        require(row["containerId"]==step["containerId"] and row["imageId"]==step["imageId"],"D12_OB3_STOP_CID_CHANGED")
+        result=bounded_run([str(self.docker),"--context","desktop-linux",*step["argv"][1:]],env=self.environment,
+            timeout=180,stdout_limit=65536,stderr_limit=65536)
+        name="ob3-stop-"+step["role"]
+        self.save_bytes(name+".stdout",result.stdout);self.save_bytes(name+".stderr",result.stderr)
+        self.save(name+".terminal.json",{"exitCode":result.returncode,"observation":result.observation})
+        require(result.returncode==0 and result.observation["timedOut"] is False and not result.observation["failures"],
+                "D12_OB3_STOP_UNKNOWN_NO_RETRY")
+        return self.observer.inspect_role(step["role"])
+
+    def observe_ob3_quiescence(self,recovery_ref,outcomes):
+        require(getattr(self,"_ob3_quiesce_approval",None)==recovery_ref,"D12_OB3_CONTAINMENT_NOT_AUTHORIZED")
+        proof=self._ob3_containment_read(recovery_ref,"QUIESCENT",outcomes)
+        require(all(not row["running"] and row["hostPid"]==0 for row in proof["roles"]),"D12_OB3_NOT_QUIESCENT")
+        return self.save("ob3-owned22-quiescence.private.json",proof)
 
     def recovery_authorization_verified(self, authority_ref, recovery_ref):
         authority = json.loads(read_ref(authority_ref, 65536).read_bytes())
@@ -776,6 +914,10 @@ class D12CurrentHostBindings:
                 "verify_recovery_quiescent": self.verify_recovery_quiescent,
                 "recovery_authorization_verified": self.recovery_authorization_verified,
                 "wait_all22_healthy": self.wait_all22_healthy,
+                "ob3_quiesce_authorization_verified": self.ob3_quiesce_authorization_verified,
+                "ob3_quiesce_steps": self.ob3_quiesce_steps,
+                "ob3_stop_owned_role": self.ob3_stop_owned_role,
+                "observe_ob3_quiescence": self.observe_ob3_quiescence,
                 "save": self.save, "save_bytes": self.save_bytes, "ref": ref,
                 "assert_inputs": self.assert_inputs, "root": self.root,
                 "env": self.environment, "nodeExecutable": str(self.node),
