@@ -75,6 +75,19 @@ def created_resource_binding(inputs, recovery, resource_recovery):
     require(post == expected, "D12_CREATED_RESOURCE_BINDING_CHANGED")
 
 
+def created_target_ob3_authority(recovery_ref, recovery, state):
+    if recovery.get("schema") == "marty.d12-ob3-quiescent-recovery/v1":
+        require(state.get("replacementAuthority") == recovery_ref,
+                "D12_CREATED_TARGET_OB3_AUTHORITY_CHANGED")
+        return recovery_ref
+    if recovery.get("schema") == "marty.d12-ob3-acknowledged-replacement-recovery/v1":
+        current = state.get("replacementAuthority")
+        require(current in (recovery_ref, recovery.get("previousRecoveryAuthority")),
+                "D12_CREATED_TARGET_OB3_AUTHORITY_CHANGED")
+        return current
+    return None
+
+
 class D12HeldCanonicalLock:
     """Hold the existing beta_operation_lock owner on the canonical recorder lock.
 
@@ -1005,8 +1018,7 @@ class D12CurrentHostBindings:
         resource=json.loads(read_ref(recovery["maintenanceResourceRecovery"]).read_bytes())
         prefix=prefix or ("d12-created-replacement-target" if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else "d12-created-target")
         acknowledgement=self.save(prefix+"-ack.private.json",durable)
-        ob3_authority=(recovery_ref if recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
-            else recovery["previousRecoveryAuthority"] if recovery.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1" else None)
+        ob3_authority=created_target_ob3_authority(recovery_ref,recovery,state)
         request=self.save(prefix+"-request.private.json",{"runId":self.inputs["runId"],"engineId":self.host.engine_id,
             "selection":self.inputs["selection"],"plannedModels":target_inputs["plannedModels"],
             "composeArguments":target_inputs["composeArguments"],

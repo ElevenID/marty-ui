@@ -1035,6 +1035,21 @@ function createdComposeLabels(input,role,labels){
  assert.equal(labels['com.docker.compose.project.environment_file']||'',values['--env-file'].join(','),'MAINTENANCE_CREATED_ENVIRONMENT_FILE_CHANGED:'+role);
 
 }
+function createdTargetOb3Authority(input,ack,load=boundJson){
+ const authority=load(input.ob3Authority),second=authority.schema==='marty.d12-ob3-acknowledged-replacement-recovery/v1';
+ const legacy=second?load(authority.previousRecoveryAuthority):authority;
+ assert.equal(legacy.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(legacy.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
+ assert.equal(legacy.dispatchAuthorized,true);assert.equal(legacy.draftOnly,false);assert.equal(legacy.replaceCredentialGeneration,true);
+ assert.equal(legacy.runId,input.runId);assert.deepEqual(legacy.deferredRoles,['passport-beta-bureau']);
+ assert.deepEqual(ack.replacementAuthority,input.ob3Authority);assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
+ if(second){
+  assert.equal(authority.operation,'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME');
+  assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);
+  assert.equal(authority.runId,input.runId);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);
+  assert.deepEqual(authority.selected22,ack.priorCreatedSnapshot);
+ }
+ return {legacy,current:authority,second};
+}
 function verifyCreatedTargetModel(input,{readDocker}={}){
  assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState','composeArguments',...(Object.hasOwn(input,'ob3Authority')?['ob3Authority']:[])].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');
  const proof=boundJson(input.createdCids),ack=boundJson(input.acknowledgedState),before=boundJson(input.runtimeBefore),baseline=boundJson(input.resourceBefore);
@@ -1043,8 +1058,8 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
  const previousCreated=ack.acknowledgedStep==='REPLACE_CREATED_CREDENTIAL_GENERATION'?boundJson(ack.priorCreatedSnapshot):null;
  let ob3=null;
  if(Object.hasOwn(input,'ob3Authority')){
-  const authority=boundJson(input.ob3Authority);assert.equal(authority.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(authority.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);assert.equal(authority.runId,input.runId);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);assert.deepEqual(ack.replacementAuthority,input.ob3Authority);assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
-  ob3=maintenanceOb3QuiescentContext(boundJson(authority.maintenanceResourceRecovery),boundJson(authority.originalOperationState));assert.deepEqual(authority.selected22,ob3.post.current22);assert.deepEqual(input.plannedModels,authority.trustDataMap.plannedModels.recovery);assert.deepEqual(input.composeArguments,authority.trustDataMap.composeArguments.recovery);
+  const {legacy,current}=createdTargetOb3Authority(input,ack);
+  ob3=maintenanceOb3QuiescentContext(boundJson(legacy.maintenanceResourceRecovery),boundJson(legacy.originalOperationState));assert.deepEqual(legacy.selected22,ob3.post.current22);assert.deepEqual(input.plannedModels,current.trustDataMap.plannedModels.recovery);assert.deepEqual(input.composeArguments,current.trustDataMap.composeArguments.recovery);
  }
 
  const ids=new Map(before.roles.map(row=>[row.role,proof.selectedContainerIds[row.role]||row.containerId]));assert.equal(ids.size,22);assert.equal(new Set(ids.values()).size,22);
@@ -1407,4 +1422,4 @@ function retainedBetaOffAuthority(profile){
  return {snapshot:plan.sources.retainedAfter,rows:rows.map(row=>({role:row.role,cid:row.cid}))};
 }
 
-module.exports={maintenanceOb3QuiescentContext,verifyOb3ContainmentRuntime,verifyCreatedTargetModel,maintenanceCreatedContext,maintenanceProxyEvidence,verifyMaintenanceRuntime,validateMaintenanceResourceRows,produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,freshExactAncillaryRead,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};
+module.exports={maintenanceOb3QuiescentContext,verifyOb3ContainmentRuntime,createdTargetOb3Authority,verifyCreatedTargetModel,maintenanceCreatedContext,maintenanceProxyEvidence,verifyMaintenanceRuntime,validateMaintenanceResourceRows,produceResourceRestart,retainedBetaOffAuthority,verifyResourceAncillary:(profile,readDocker)=>require('./beta-resource-runtime').verifyAncillary(profile,readDocker,{boundJson,expectedRuntime,receiptDigests}),resourceRecreationSuccessor,canonicalHostMountRepresentations:mdocHostRepresentations,validateMdocJournalRead:mdocJournalRead,produceMdocConfigurationSuccessor,validateMdocConfigContainer,validateMdocKnownOutcome,produceSignedImageObservation:(profile,{readDocker=defaultDockerRead}={})=>require('./nightly-functional-runtime').produce(profile,{readDocker,boundJson,verifyBoundFile,boundBytes,observeDocker,validateRuntimeObservation,validateRestartObservation}),verifyCommandOutput,verifyBoundFile,boundBytes,comparableBinaryMounts,freshExactAncillaryRead,verifyCanvasIssuerPreimage,expectedCanvasIssuerPreimage,expectedHeaderSuccessorPreimage,applyNativeOverlayObservedRows:applyNativeOverlayObservations,validateSigningDomainTransition,validateHeaderSuccessorGate,expectedUnqualifiedNativePreimage,applyNativeOverlayRows,validateRuntimeIdentity,validateRuntimeObservation,validateRestartObservation,observeDocker,DOCKER_READ_TRANSPORT_SCHEMA:'marty.functional-runtime-docker-read/v1',boundJson,expectedRuntime,verifyFunctionalRuntime,produceMaintenanceRestart,DEBUG_ROLES,RETAINED_ROLES,ISSUANCE_SOURCE,ISSUANCE_CORE};

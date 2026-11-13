@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
-const {maintenanceCreatedContext,verifyCreatedTargetModel}=require('./functional-debug-runtime');
+const {maintenanceCreatedContext,createdTargetOb3Authority,verifyCreatedTargetModel}=require('./functional-debug-runtime');
 const selectedRoles=['auth','compliance-profile','credential-template','flow','gateway','issuance-native','organization','presentation-policy','signing-keys','trust-profile'];
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 function fixture(t){
@@ -204,4 +204,22 @@ test('created target mount digest accepts only destination reordering',t=>{
 test('created target mount digest retains every field and refuses propagation drift',t=>{
  const f=credentialReplacementFixture(t);f.changeMounts(mounts=>{if(mounts.length>1)mounts[0].Propagation='changed-propagation';});
  assert.throws(f.invoke,/MAINTENANCE_CREATED_FULL_MOUNTS_CHANGED|MAINTENANCE_CREATED_TARGET_CHANGED_DURING_READ/);
+});
+
+test('second OB3 target binds current ack authority and historical T5 lineage',()=>{
+ const oldRef={sha256:'old'},newRef={sha256:'new'},selected={sha256:'selected'};
+ const old={schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',
+  dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,runId:'run',deferredRoles:['passport-beta-bureau']};
+ const current={schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',
+  operation:'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',
+  previousRecoveryAuthority:oldRef,dispatchAuthorized:true,draftOnly:false,
+  replaceCredentialGeneration:true,runId:'run',deferredRoles:['passport-beta-bureau'],selected22:selected};
+ const load=ref=>ref===newRef?current:ref===oldRef?old:assert.fail('foreign authority');
+ const input={runId:'run',ob3Authority:newRef},ack={acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementAuthority:newRef,priorCreatedSnapshot:selected};
+ assert.deepEqual(createdTargetOb3Authority(input,ack,load),{legacy:old,current,second:true});
+ assert.throws(()=>createdTargetOb3Authority(input,{...ack,replacementAuthority:oldRef},load));
+ assert.throws(()=>createdTargetOb3Authority(input,{...ack,priorCreatedSnapshot:oldRef},load));
+ assert.throws(()=>createdTargetOb3Authority(input,ack,ref=>ref===newRef?{...current,previousRecoveryAuthority:newRef}:old));
+ assert.deepEqual(createdTargetOb3Authority({...input,ob3Authority:oldRef},{...ack,replacementAuthority:oldRef},load),
+  {legacy:old,current:old,second:false});
 });

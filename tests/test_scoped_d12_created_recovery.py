@@ -525,6 +525,19 @@ def test_ob3_created_resource_binding_accepts_only_exact_acknowledged_extension(
             "actualResourceBefore":{**resource,"sha256":"0"*64}}})
 
 
+def test_created_target_ob3_authority_uses_durable_ack_for_t5_and_second_replacement():
+    from scoped_d12_native_effect_host import created_target_ob3_authority
+    t5={"sha256":"t5"};second={"sha256":"second"};resume={"sha256":"resume"}
+    recovery={"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1",
+              "previousRecoveryAuthority":t5}
+    assert created_target_ob3_authority(second,recovery,{"replacementAuthority":t5})==t5
+    assert created_target_ob3_authority(second,recovery,{"replacementAuthority":second})==second
+    next_recovery={**recovery,"previousRecoveryAuthority":second}
+    assert created_target_ob3_authority(resume,next_recovery,{"replacementAuthority":second})==second
+    with pytest.raises(ValueError,match="D12_CREATED_TARGET_OB3_AUTHORITY_CHANGED"):
+        created_target_ob3_authority(resume,next_recovery,{"replacementAuthority":t5})
+
+
 @pytest.mark.parametrize("checkpoint",["create","replacement"])
 @pytest.mark.parametrize("gate",["authorization","quiescence"])
 @pytest.mark.parametrize("foreign_root",[False,True])
