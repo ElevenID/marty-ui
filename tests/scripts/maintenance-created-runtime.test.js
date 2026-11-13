@@ -33,6 +33,29 @@ test('postCREATE closed10 rebinds source-owned created generations and retains o
  for(const row of out.before.roles)assert.equal(row.containerId,f.saved[row.role].Id);
  assert.deepEqual(f.before.roles.map(row=>row.containerId),f.resourceBefore.map(row=>row.Id)); // caller inputs never mutated
 });
+function actualPreimageFixture(t){
+ const f=fixture(t),actual=structuredClone(f.before),newTime='2026-01-02T00:00:00Z';
+ const retained=actual.roles.find(row=>row.role==='retained-0');retained.startedAt=newTime;f.saved['retained-0'].State.StartedAt=newTime;
+ f.post.selected22=f.file('selected-after-restart.json',f.saved);
+ const current=Object.values(f.saved).map(row=>({Id:row.Id,Image:row.Image,StartedAt:row.State.StartedAt,Labels:row.Labels,
+  HostConfig:structuredClone(row.HostConfig),Mounts:structuredClone(row.Mounts)}));
+ for(let i=0;i<6;i++)current.push({Id:(i+201).toString(16).padStart(64,'0'),Image:f.before.roles[0].imageId,StartedAt:newTime,Labels:{},HostConfig:structuredClone(f.resourceBefore[0].HostConfig),Mounts:[]});
+ f.post.actualRuntimeBefore=f.file('actual-before.json',actual);
+ f.post.actualResourceBefore=f.file('actual-resource28.json',current);
+ f.post.acknowledgedState=f.file('acknowledged.json',{phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore});
+ return {...f,actual,current,newTime,invoke:()=>maintenanceCreatedContext(f.restart,f.before,f.resourceBefore,f.post,argv=>{assert.deepEqual(argv,['image','inspect',f.before.roles[0].imageId]);return JSON.stringify([{Id:argv[2],Config:f.imageConfig}]);})};
+}
+test('postCREATE actual acknowledged preimage rebinds retained process time',t=>{
+ const f=actualPreimageFixture(t),out=f.invoke();assert.equal(out.generations.get('retained-0').startedAt,f.newTime);
+ assert.equal(out.resourceBefore.length,28);assert.equal(out.before.roles.find(row=>row.role==='retained-0').startedAt,f.newTime);
+});
+test('postCREATE actual preimage refuses an unacknowledged ref',t=>{
+ const f=actualPreimageFixture(t),ack={phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.file('foreign.json',{})};
+ f.post.acknowledgedState=f.file('wrong-ack.json',ack);assert.throws(f.invoke,/MAINTENANCE_CREATED_ACTUAL_PREIMAGE_ACK_CHANGED/);
+});
+test('postCREATE actual preimage refuses retained timestamp drift',t=>{
+ const f=actualPreimageFixture(t);f.saved['retained-0'].State.StartedAt='2026-01-03T00:00:00Z';f.post.selected22=f.file('selected-tampered.json',f.saved);assert.throws(f.invoke,/MAINTENANCE_CREATED_RETAINED_STARTED_AT/);
+});
 for(const fault of ['role','reusedCid','image','command','mount','writable','cap','job'])test('postCREATE refuses '+fault,t=>{
  const f=fixture(t),role=selectedRoles[0];
  if(fault==='role'){delete f.selection.binaries[role];f.post.selection=f.file('bad-selection.json',f.selection);}

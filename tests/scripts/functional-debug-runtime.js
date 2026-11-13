@@ -933,17 +933,32 @@ function maintenanceFullMounts(rows){
 // Only the acknowledged current10 create transition may rebind these CIDs.
 const MAINTENANCE_CREATED_ROLES=Object.freeze(['auth','compliance-profile','credential-template','flow','gateway','issuance-native','organization','presentation-policy','signing-keys','trust-profile']);
 function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker,liveCapture=null){
- assert.deepEqual(Object.keys(post).sort(),['selection','selected22','selected22Job','plannedModels'].sort(),'MAINTENANCE_CREATED_SCHEMA');
+ const actualMode=Object.hasOwn(post,'actualRuntimeBefore');
+ assert.deepEqual(Object.keys(post).sort(),['selection','selected22','selected22Job','plannedModels',...(actualMode?['actualRuntimeBefore','actualResourceBefore','acknowledgedState']:[])].sort(),'MAINTENANCE_CREATED_SCHEMA');
+ assert(!liveCapture||!actualMode,'MAINTENANCE_CREATED_LIVE_ACTUAL_PREIMAGE_FORBIDDEN');
  if(liveCapture){assert.equal(post.selected22,null);assert.equal(post.selected22Job,null);assert.equal(liveCapture.ack.schema,'marty.d12-current-native-operation/v1');assert.equal(liveCapture.ack.phase,'EFFECT_ACKNOWLEDGED');assert.equal(liveCapture.ack.pendingStep,null);assert.equal(liveCapture.ack.pendingArgv,null);assert(['CREATE_SELECTED','REPLACE_CREATED_CREDENTIAL_GENERATION'].includes(liveCapture.ack.acknowledgedStep));}
  else {const job=boundJson(post.selected22Job);assert.equal(job.state,'COMPLETE');assert.equal(job.exitCode,0);assert.equal(job.jobClosed,true);assert.equal(job.terminalActiveProcesses,0);for(const key of ['forcedTermination','timedOut','cancelled','hostMarginBreached'])assert.equal(job[key],false);}
  const selected=boundJson(post.selection),saved=liveCapture?liveCapture.rows:boundJson(post.selected22),model=boundJson(post.plannedModels['elevenid-beta']);
  assert.deepEqual(Object.keys(selected.binaries).sort(),[...MAINTENANCE_CREATED_ROLES],'MAINTENANCE_CREATED_CLOSED10');
  assert.deepEqual(Object.keys(saved).sort(),before.roles.map(row=>row.role).sort(),'MAINTENANCE_CREATED_SAVED22');
- const a=structuredClone(restart.a),generations=new Map([...restart.generations].map(([role,value])=>[role,structuredClone(value)])),next=structuredClone(before),baseline=structuredClone(resourceBefore),created=new Set(MAINTENANCE_CREATED_ROLES);
+ const actual=actualMode?boundJson(post.actualRuntimeBefore):null,actualBaseline=actualMode?boundJson(post.actualResourceBefore):null;
+ if(actualMode){
+  const ack=boundJson(post.acknowledgedState);
+  assert.equal(ack.phase,'EFFECT_ACKNOWLEDGED');assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
+  assert.deepEqual(ack.replacementPreimage,post.actualRuntimeBefore,'MAINTENANCE_CREATED_ACTUAL_PREIMAGE_ACK_CHANGED');
+  assert.equal(actual.roles.length,22);assert.deepEqual(actual.roles.map(row=>row.role).sort(),before.roles.map(row=>row.role).sort());
+  for(const row of actual.roles){const historical=before.roles.find(old=>old.role===row.role);assert.equal(row.containerId,historical.containerId,'MAINTENANCE_CREATED_PREIMAGE_CID_CHANGED:'+row.role);assert.equal(row.imageId,historical.imageId,'MAINTENANCE_CREATED_PREIMAGE_IMAGE_CHANGED:'+row.role);}
+  assert(Array.isArray(actualBaseline)&&actualBaseline.length===28&&new Set(actualBaseline.map(row=>row.Id)).size===28,'MAINTENANCE_CREATED_ACTUAL_RESOURCE28_REQUIRED');
+ }
+ const a=structuredClone(restart.a),generations=new Map([...restart.generations].map(([role,value])=>[role,structuredClone(value)])),next=structuredClone(actual||before),baseline=structuredClone(actualBaseline||resourceBefore),created=new Set(MAINTENANCE_CREATED_ROLES);
  const owner=require('./beta-resource-runtime'),oldIds=new Set(before.roles.map(row=>row.containerId)),newIds=new Set();
  for(const frozen of next.roles){
   const role=frozen.role,snap=saved[role];assert(snap&&snap.Id&&snap.Image===frozen.imageId,'MAINTENANCE_CREATED_IMAGE:'+role);
-  if(!created.has(role)){assert.equal(snap.Id,frozen.containerId,'MAINTENANCE_CREATED_RETAINED_ID:'+role);continue;}
+   if(!created.has(role)){
+    assert.equal(snap.Id,frozen.containerId,'MAINTENANCE_CREATED_RETAINED_ID:'+role);
+    if(actualMode)assert.equal(snap.State.StartedAt,frozen.startedAt,'MAINTENANCE_CREATED_RETAINED_STARTED_AT:'+role);
+    continue;
+   }
   assert.equal(snap.Labels?.['com.docker.compose.service'],role,'MAINTENANCE_CREATED_ROLE_LABEL:'+role);assert.equal(snap.Labels?.['com.docker.compose.project'],frozen.project,'MAINTENANCE_CREATED_PROJECT_LABEL:'+role);
   assert(!oldIds.has(snap.Id)&&!newIds.has(snap.Id),'MAINTENANCE_CREATED_CID_REUSE:'+role);newIds.add(snap.Id);
   assert.equal(snap.State.Status,'created');assert.equal(snap.State.Pid,0);assert.equal(snap.State.Running,false);assert.equal(snap.State.OOMKilled,false);
@@ -962,15 +977,26 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
   const command=service.command===null||service.command===undefined?image.Cmd:service.command,entrypoint=service.entrypoint===null||service.entrypoint===undefined?image.Entrypoint:service.entrypoint;
   assert.deepEqual(snap.Cmd||null,command||null,'MAINTENANCE_CREATED_SOURCE_COMMAND:'+role);assert.deepEqual(snap.Entrypoint||null,entrypoint||null,'MAINTENANCE_CREATED_SOURCE_ENTRYPOINT:'+role);
   assert.equal(snap.User,service.user===undefined?(image.User||''):service.user,'MAINTENANCE_CREATED_SOURCE_USER:'+role);assert.equal(snap.WorkingDir,service.working_dir===undefined?(image.WorkingDir||''):service.working_dir,'MAINTENANCE_CREATED_SOURCE_WORKDIR:'+role);
-  const oldId=frozen.containerId,index=baseline.findIndex(row=>row.Id===oldId);assert(index>=0);
-  baseline[index]={Id:snap.Id,Image:snap.Image,StartedAt:snap.State.StartedAt,Labels:snap.Labels,HostConfig:Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>[key,snap.HostConfig[key]])),Mounts:snap.Mounts};
-  const priorCaps=resourceBefore.find(row=>row.Id===oldId).HostConfig;assert.deepEqual(baseline[index].HostConfig,priorCaps,'MAINTENANCE_CREATED_BASELINE_CAPS_CHANGED:'+role);
+   const oldId=frozen.containerId,index=baseline.findIndex(row=>row.Id===oldId);
+   if(!actualMode)assert(index>=0);
+   const expectedResource={Id:snap.Id,Image:snap.Image,StartedAt:snap.State.StartedAt,Labels:snap.Labels,HostConfig:Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>[key,snap.HostConfig[key]])),Mounts:snap.Mounts};
+   if(actualMode){const current=baseline.find(row=>row.Id===snap.Id);assert(current,'MAINTENANCE_CREATED_ACTUAL_BASELINE_ID:'+role);assert.equal(current.Image,expectedResource.Image);assert.equal(current.StartedAt,expectedResource.StartedAt);assert.deepEqual(current.Labels,expectedResource.Labels);assert.deepEqual(current.HostConfig,expectedResource.HostConfig);assert.deepEqual(maintenanceFullMounts(current.Mounts),maintenanceFullMounts(expectedResource.Mounts));}
+   else baseline[index]=expectedResource;
+   const priorCaps=resourceBefore.find(row=>row.Id===oldId).HostConfig;assert.deepEqual(expectedResource.HostConfig,priorCaps,'MAINTENANCE_CREATED_BASELINE_CAPS_CHANGED:'+role);
   const config=a.configs.rows.find(row=>row.cid===oldId);assert(config);config.cid=snap.Id;config.envSha256=digest(JSON.stringify(Object.entries(env).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)));config.mountsSha256=owner.mountDigest(snap);config.modelPath=snap.Labels['com.docker.compose.project.config_files']||null;
   a.cap.allRunningRoles[role].id=snap.Id;generations.set(role,{...generations.get(role),cid:snap.Id,startedAt:snap.State.StartedAt,pid:0});
   frozen.containerId=snap.Id;frozen.startedAt=snap.State.StartedAt;
   const mount=frozen.binaryMounts.find(mount=>mount.destination===target);if(mount)mount.source=binary.path;else frozen.binaryMounts.push({type:'bind',source:binary.path,destination:target,writable:false});
  }
- return {a,generations,before:next,resourceBefore:baseline,created,saved};
+  if(actualMode){
+   for(const [role,generation] of generations){
+    if(created.has(role))continue;
+    const recorded=baseline.find(row=>row.Id===generation.cid);assert(recorded,'MAINTENANCE_CREATED_ACTUAL_RETAINED_RESOURCE:'+role);
+    if(saved[role])assert.equal(recorded.StartedAt,saved[role].State.StartedAt,'MAINTENANCE_CREATED_ACTUAL_RETAINED_STARTED_AT:'+role);
+    generation.startedAt=recorded.StartedAt;
+   }
+  }
+  return {a,generations,before:next,resourceBefore:baseline,created,saved};
 }
 function createdDependencySet(value){
  assert.equal(typeof value,'string','MAINTENANCE_CREATED_DEPENDENCY_LABEL_REQUIRED');
