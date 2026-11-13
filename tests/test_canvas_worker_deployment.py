@@ -427,6 +427,11 @@ def test_consumer_comparison_preserves_complete_worker_with_only_reviewed_differ
         del changed["container_name"]
     if variant == "beta":
         changed["environment"].update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
+    if variant in ("isolated", "beta"):
+        changed["depends_on"]["signing-keys"] = {
+            "condition": "service_healthy",
+            "required": True,
+        }
     if field is not None:
         if field == "environment":
             changed[field].pop("SERVICE_NAME")
@@ -466,6 +471,10 @@ def test_beta_environment_list_is_semantically_compared_without_dropping_fields(
     model = deepcopy(base)
     environment = model["services"]["canvas-sync-worker"]["environment"]
     environment.update(compose_worker_gate["BETA_WORKER_ENVIRONMENT"])
+    model["services"]["canvas-sync-worker"]["depends_on"]["signing-keys"] = {
+        "condition": "service_healthy",
+        "required": True,
+    }
     values = [f"{name}={value}" for name, value in environment.items()]
     if invalid:
         values.append("SERVICE_NAME=unexpected-duplicate")

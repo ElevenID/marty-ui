@@ -66,11 +66,14 @@ def created_fixture(tmp_path,quiescence=None):
     return inputs,state,intent,recovery,saved,observed
 
 
-def replacement_checkpoint_fixture(tmp_path,quiescence=None,expired_prior=False):
+def replacement_checkpoint_fixture(tmp_path,quiescence=None,expired_prior=False,ob3_premigrated=False):
     inputs,old_state,intent,prior,saved,_=created_fixture(tmp_path,quiescence)
     prior.update(operation="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
     generation=tmp_path/"executed-replacement-generation"
     model=json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+    if ob3_premigrated:
+        for role in ("flow", "issuance-native"):
+            model["services"].setdefault(role, {}).setdefault("environment", {})["MARTY_SCHEMA_STARTUP_MODE"]="validate"
     for secret,name in (("trust_profile_workload_server_cert","trust_profile_workload_server_cert"),
                         ("trust_profile_tls_kms_token","trust_profile_workload_server_kms_token")):
         model["secrets"][secret]["file"]=str(generation/name)
@@ -117,7 +120,7 @@ def acknowledged_replacement_fixture(tmp_path,quiescence=None):
 @pytest.mark.parametrize("fault", [None, "wrong-prior", "new-generation", "changed-model", "changed-ack", "old-schema", "job-request", "current-cid"])
 @pytest.mark.parametrize("mode", ["resume", "replace", "third"])
 def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_lineage(tmp_path,monkeypatch,fault,mode):
-    inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path)
+    inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path,ob3_premigrated=mode=="third")
     original=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
     original["roleBinaries"]={"auth":"marty-auth"};inputs["roleBinaries"]=original["roleBinaries"]
     recovery["originalInputs"]=saved("ob3-executed-inputs.json",original)
