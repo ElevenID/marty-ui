@@ -233,8 +233,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
     let schema_mode = SchemaStartupMode::from_env()?;
     let schema_result = match schema_mode {
-        SchemaStartupMode::Migrate => migration::migrate(&pool).await,
-        SchemaStartupMode::Validate => migration::validate(&pool).await,
+        SchemaStartupMode::Migrate => {
+            async {
+                migration::migrate(&pool).await?;
+                migration::migrate_jwt_vc_profile(&pool).await
+            }
+            .await
+        }
+        SchemaStartupMode::Validate => {
+            async {
+                migration::validate(&pool).await?;
+                migration::validate_jwt_vc_profile(&pool).await
+            }
+            .await
+        }
     };
     schema_result.map_err(|error| {
         if error

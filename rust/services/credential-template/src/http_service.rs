@@ -227,6 +227,8 @@ struct CreateTemplateRequest {
     compliance_profile_id: String,
     issuer_did: Option<String>,
     credential_payload_format: Option<String>,
+    #[serde(default, deserialize_with = "marty_jwt_vc_issuance::optional_policy")]
+    jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     issuance_protocol: Option<String>,
     #[serde(default, rename = "schema_uri")]
     _schema_uri: Option<Value>,
@@ -280,6 +282,7 @@ impl CreateTemplateRequest {
             compliance_profile_id: input.compliance_profile_id,
             issuer_did: input.issuer_did,
             credential_payload_format: input.credential_payload_format,
+            jwt_vc_profile: input.jwt_vc_profile,
             issuance_protocol: input.issuance_protocol,
             now: Utc::now(),
         })
@@ -304,6 +307,8 @@ struct UpdateTemplateRequest {
     revocation_profile_id: Option<String>,
     issuer_did: Option<String>,
     credential_payload_format: Option<String>,
+    #[serde(default, deserialize_with = "marty_jwt_vc_issuance::optional_policy")]
+    jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     issuance_protocol: Option<String>,
 }
 
@@ -662,6 +667,7 @@ async fn update_template(
         revocation_profile_id: input.revocation_profile_id,
         issuer_did: input.issuer_did,
         credential_payload_format: input.credential_payload_format,
+        jwt_vc_profile: input.jwt_vc_profile,
         issuance_protocol: input.issuance_protocol,
     };
     let template = state
@@ -1425,6 +1431,9 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "created_at":template.created_at.to_rfc3339(),
         "updated_at":template.updated_at.to_rfc3339()
     });
+    if let Some(profile) = &template.jwt_vc_profile {
+        response["jwt_vc_profile"] = json!(profile);
+    }
     response
         .as_object_mut()
         .expect("template response is an object")
@@ -1785,5 +1794,34 @@ mod write_contract_tests {
                 case["name"]
             );
         }
+    }
+    #[test]
+    fn explicit_profile_http_input_distinguishes_omission_from_null_or_unknown_policy() {
+        let base = serde_json::json!({"organization_id":"org-synthetic","name":"Synthetic credential","credential_type":"EmployeeCredential","compliance_profile_id":"public-compliance"});
+        let omitted: CreateTemplateRequest = serde_json::from_value(base.clone()).unwrap();
+        assert!(omitted.jwt_vc_profile.is_none());
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({"contract":"marty.jwt-vc-template-profile/v1","securing_profile":"unknown","signature_lifetime_seconds":3600}),
+        ] {
+            let mut request = base.clone();
+            request["jwt_vc_profile"] = invalid;
+            assert!(serde_json::from_value::<CreateTemplateRequest>(request).is_err());
+        }
+        let mut valid = base;
+        valid["jwt_vc_profile"] =
+            serde_json::to_value(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap())
+                .unwrap();
+        assert!(serde_json::from_value::<CreateTemplateRequest>(valid)
+            .unwrap()
+            .jwt_vc_profile
+            .is_some());
+        assert!(
+            serde_json::from_value::<UpdateTemplateRequest>(serde_json::json!({
+                "jwt_vc_profile":marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                "compliance_profile_id":"different-legacy-profile"
+            }))
+            .is_err()
+        );
     }
 }

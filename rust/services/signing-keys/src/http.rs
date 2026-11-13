@@ -3373,6 +3373,11 @@ async fn registered_service(
 }
 
 fn service_supports_issuer_value(service: &Value, field: &str, requested: &str) -> bool {
+    if field == "credential_formats"
+        && !crate::domain::explicit_format_allowed(service.get(field), requested)
+    {
+        return false;
+    }
     service
         .get(field)
         .and_then(Value::as_array)
@@ -9776,6 +9781,35 @@ mod public_contract_tests {
             None,
             Some("vc_jwt_issuer"),
             Some("ES256")
+        ));
+    }
+    #[test]
+    fn explicit_jwt_vc_http_custody_rejects_missing_empty_or_historical_format_capability() {
+        for service in [
+            json!({}),
+            json!({"credential_formats":[]}),
+            json!({"credential_formats":["jwt_vc_json"]}),
+        ] {
+            assert!(!service_supports_issuer_value(
+                &service,
+                "credential_formats",
+                "application/vc+jwt"
+            ));
+        }
+        assert!(service_supports_issuer_value(
+            &json!({"credential_formats":["application/vc+jwt"]}),
+            "credential_formats",
+            "application/vc+jwt"
+        ));
+        assert!(service_supports_issuer_value(
+            &json!({}),
+            "credential_formats",
+            "jwt_vc_json"
+        ));
+        assert!(service_supports_issuer_value(
+            &json!({"credential_formats":[]}),
+            "credential_formats",
+            "jwt_vc_json"
         ));
     }
 }

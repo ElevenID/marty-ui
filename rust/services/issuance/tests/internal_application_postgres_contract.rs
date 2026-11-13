@@ -131,6 +131,7 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
             expires_at TIMESTAMPTZ NOT NULL
         )",
         "CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
             id TEXT PRIMARY KEY,
             organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL,
@@ -1490,6 +1491,9 @@ fn approval_transaction(
     now: chrono::DateTime<Utc>,
 ) -> CredentialTransaction {
     CredentialTransaction {
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
+
         id: id.to_owned(),
         organization_id: application.organization_id.clone(),
         credential_template_id: "credential-template-1".to_owned(),

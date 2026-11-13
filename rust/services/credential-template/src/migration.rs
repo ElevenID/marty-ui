@@ -5,6 +5,7 @@ const MIGRATION_VERSIONS: &[&str] = &[
     "rust_credential_template_0001",
     "rust_credential_template_0002",
     "rust_credential_template_0003",
+    "rust_credential_template_0004",
 ];
 const ADVISORY_LOCK_ID: i64 = 718_431_214;
 
@@ -57,6 +58,11 @@ pub async fn migrate_credential_template_schema(
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0004_explicit_jwt_vc_profile.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -65,8 +71,13 @@ pub async fn migrate_credential_template_schema(
 pub async fn validate_credential_template_schema(
     pool: &PgPool,
 ) -> Result<(), CredentialTemplateMigrationError> {
-    let mut connection = pool.acquire().await?;
-    validate_connection(&mut connection).await
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    validate_connection(&mut transaction).await?;
+    transaction.commit().await?;
+    Ok(())
 }
 
 pub async fn reconcile_credential_template_data(
@@ -295,6 +306,10 @@ fn validate_reconciliation_config(
 async fn validate_connection(
     connection: &mut PgConnection,
 ) -> Result<(), CredentialTemplateMigrationError> {
+    sqlx::query("SET LOCAL search_path = pg_catalog")
+        .execute(&mut *connection)
+        .await?;
+
     for migration_version in MIGRATION_VERSIONS {
         let version: Option<String> = sqlx::query_scalar(
             "SELECT version FROM credential_template_service.rust_schema_versions WHERE version=$1",
@@ -332,6 +347,7 @@ async fn validate_connection(
     let expected_columns = [
         ("credential_templates", "zk_predicate_claims"),
         ("credential_templates", "credential_payload_format"),
+        ("credential_templates", "jwt_vc_profile"),
         ("credential_templates", "wallet_configs"),
         ("credential_templates", "compliance_profile"),
         ("credential_templates", "compliance_profile_id"),
@@ -390,9 +406,75 @@ async fn validate_connection(
             "credential_templates.compliance_profile_id must be required",
         ));
     }
+    let source = include_str!("../migrations/0004_explicit_jwt_vc_profile.sql");
+    let expected = source
+        .split_once("RETURNS trigger LANGUAGE plpgsql AS $$")
+        .and_then(|(_, rest)| rest.split_once("$$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| incompatible("explicit JWT-VC readiness source is invalid"))?;
+    let valid: bool = sqlx::query_scalar("SELECT
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='credential_template_service'
+            AND table_name='credential_templates' AND column_name='jwt_vc_profile' AND udt_name='jsonb'
+            AND is_nullable='YES' AND column_default IS NULL)
+        AND EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid=to_regclass('credential_template_service.credential_templates')
+            AND conname='ck_template_explicit_jwt_vc_profile' AND contype='c' AND convalidated)
+        AND EXISTS (SELECT 1 FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid
+            JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass('credential_template_service.credential_templates')
+            AND t.tgname='guard_jwt_vc_profile_readiness' AND t.tgenabled='O' AND t.tgtype=23
+            AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgattr::text='' AND t.tgnargs=0 AND n.nspname='credential_template_service'
+            AND p.proname='guard_jwt_vc_profile_readiness' AND p.pronargs=0 AND NOT p.prosecdef
+            AND p.proconfig IS NULL AND p.prorettype='trigger'::regtype AND p.prokind='f' AND p.provolatile='v' AND NOT p.proisstrict
+            AND l.lanname='plpgsql' AND p.prosrc=$1)")
+        .bind(expected).fetch_one(&mut *connection).await?;
+    if !valid {
+        return Err(incompatible(
+            "explicit JWT-VC readiness boundary is missing or changed",
+        ));
+    }
+    let expected_body = source
+        .split_once("AS $profile_check$")
+        .and_then(|(_, rest)| rest.split_once("$profile_check$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| incompatible("explicit JWT-VC predicate source is invalid"))?;
+    let function_valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+        WHERE p.oid=to_regprocedure('credential_template_service.template_explicit_jwt_vc_profile_valid(jsonb,text,text,text,jsonb,jsonb,jsonb)')
+        AND p.proargnames=ARRAY['jwt_vc_profile','credential_payload_format','status','issuance_protocol','supported_formats','wallet_configs','validity_rules']::text[] AND p.proargmodes IS NULL AND p.pronargdefaults=0 AND p.provariadic=0
+        AND p.prosrc=$1 AND p.prorettype='boolean'::regtype AND p.provolatile='i' AND NOT p.proisstrict
+        AND NOT p.prosecdef AND p.proconfig IS NULL AND p.prokind='f' AND l.lanname='plpgsql')")
+        .bind(expected_body).fetch_one(&mut *connection).await?;
+    let dependency_valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_depend d
+        ON d.classid='pg_constraint'::regclass AND d.objid=c.oid
+        WHERE c.conrelid=to_regclass('credential_template_service.credential_templates') AND c.conname='ck_template_explicit_jwt_vc_profile'
+        AND d.refclassid='pg_proc'::regclass AND d.refobjid=to_regprocedure('credential_template_service.template_explicit_jwt_vc_profile_valid(jsonb,text,text,text,jsonb,jsonb,jsonb)'))")
+        .fetch_one(&mut *connection).await?;
+    let actual_call: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid=to_regclass('credential_template_service.credential_templates') AND conname='ck_template_explicit_jwt_vc_profile'")
+        .fetch_one(&mut *connection).await?;
+    let expected_call = source
+        .split_once("ADD CONSTRAINT ck_template_explicit_jwt_vc_profile ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .map(|(call, _)| call)
+        .ok_or_else(|| incompatible("explicit JWT-VC check source is invalid"))?;
+    if !function_valid
+        || !dependency_valid
+        || normalize_profile_check_call(&actual_call) != normalize_profile_check_call(expected_call)
+    {
+        return Err(incompatible("explicit JWT-VC check changed"));
+    }
     Ok(())
 }
 
 fn incompatible(message: &str) -> CredentialTemplateMigrationError {
     CredentialTemplateMigrationError::Incompatible(message.to_owned())
+}
+
+// A single fixed call, with only formatting and built-in column casts normalized.
+fn normalize_profile_check_call(value: &str) -> String {
+    value
+        .replace("::text", "")
+        .replace("::jsonb", "")
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
+        .collect()
 }

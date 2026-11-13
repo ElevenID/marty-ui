@@ -2108,6 +2108,11 @@ fn service_for(registry: &Value, service_id: &str) -> Option<Map<String, Value>>
 }
 
 fn supports(service: &Map<String, Value>, field: &str, requested: &str) -> bool {
+    if field == "credential_formats"
+        && !crate::domain::explicit_format_allowed(service.get(field), requested)
+    {
+        return false;
+    }
     service
         .get(field)
         .and_then(Value::as_array)
@@ -3490,5 +3495,110 @@ mod tests {
                 assert_eq!(status, expected["status"], "{}", case.name);
             }
         }
+    }
+    #[test]
+    fn explicit_jwt_vc_public_context_and_custody_require_exact_capability() {
+        for formats in [
+            None,
+            Some(json!([])),
+            Some(json!(["jwt_vc_json"])),
+            Some(json!(["application/vc+jwt"])),
+        ] {
+            let mut contract: Contract = serde_json::from_str(include_str!(
+                "../../../../contracts/gateway-issuer-context-behavior.json"
+            ))
+            .unwrap();
+            contract.request.credential_format = Some("application/vc+jwt".into());
+            contract.profile_document["profiles"][0]["credential_format"] =
+                json!("VC_JWT_DIRECT_V1");
+            let allowed = formats
+                .as_ref()
+                .is_some_and(|v| v == &json!(["application/vc+jwt"]));
+            let service = contract.registry["services"][0].as_object_mut().unwrap();
+            service.remove("credential_formats");
+            if let Some(formats) = formats {
+                service.insert("credential_formats".into(), formats);
+            }
+            assert_eq!(
+                resolve_issuer_context(
+                    &contract.profile_document,
+                    &contract.registry,
+                    &contract.certificates,
+                    &contract.request
+                )
+                .is_ok(),
+                allowed
+            );
+            assert_eq!(
+                select_identity_custody(
+                    &contract.registry,
+                    "VC_JWT_DIRECT_V1",
+                    "vc_jwt_issuer",
+                    "ES256",
+                    "issuer-key"
+                )
+                .is_ok(),
+                allowed
+            );
+            assert_eq!(
+                supports(
+                    contract.registry["services"][0].as_object().unwrap(),
+                    "credential_formats",
+                    "application/vc+jwt"
+                ),
+                allowed
+            );
+            if allowed {
+                contract.profile_document["profiles"][0]["algorithm"] = json!("ES512");
+                contract.registry["services"][0]["algorithms"] = json!(["ES512"]);
+                assert!(resolve_issuer_context(
+                    &contract.profile_document,
+                    &contract.registry,
+                    &contract.certificates,
+                    &contract.request
+                )
+                .is_err());
+                assert!(select_identity_custody(
+                    &contract.registry,
+                    "VC_JWT_DIRECT_V1",
+                    "vc_jwt_issuer",
+                    "ES512",
+                    "issuer-key"
+                )
+                .is_err());
+            }
+        }
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .unwrap();
+        for format in [
+            "application/vc+jwt",
+            "VC_JWT_DIRECT_V1",
+            " vc-jwt-direct-v1 ",
+        ] {
+            for purpose in ["oid4vp_request_signing", "lti_tool_signing"] {
+                assert!(profiles::custody_format(&CustodyFormatRequest {
+                    credential_format: format.into(),
+                    key_purpose: purpose.into(),
+                })
+                .is_err());
+                assert!(select_identity_custody(
+                    &contract.registry,
+                    format,
+                    purpose,
+                    "ES256",
+                    "issuer-key"
+                )
+                .is_err());
+            }
+        }
+        // Wildcard semantics are retained only for historical formats.
+        assert!(supports(&Map::new(), "credential_formats", "jwt_vc_json"));
+        assert!(supports(
+            json!({"credential_formats":[]}).as_object().unwrap(),
+            "credential_formats",
+            "jwt_vc_json"
+        ));
     }
 }

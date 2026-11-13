@@ -179,7 +179,7 @@ fn renewal_request(
     {
         return Err(RenewalError::SourceTransactionMissing);
     }
-    if !transaction.renewable {
+    if transaction.jwt_vc_profile.is_some() || !transaction.renewable {
         return Err(RenewalError::NotRenewable);
     }
     let issuer_did = transaction

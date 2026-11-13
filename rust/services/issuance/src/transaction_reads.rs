@@ -53,6 +53,7 @@ pub struct IssuanceTransactionRecord {
     pub pre_auth_code: String,
     pub credential_type: Option<String>,
     pub credential_payload_format: String,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcIssuanceSelection>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub issued_at: Option<DateTime<Utc>>,
@@ -171,10 +172,24 @@ impl TransactionReadService {
             .as_deref()
             .filter(|value| !value.is_empty())
             .unwrap_or("default");
-        let configuration_id = credential_configuration_id_for_format(
-            credential_type,
+        marty_jwt_vc_issuance::validate_selection(
             &transaction.credential_payload_format,
-        );
+            &transaction.credential_template_id,
+            transaction.credential_type.as_deref(),
+            transaction.jwt_vc_profile.as_ref(),
+            None,
+        )
+        .map_err(|_| TransactionReadError::OfferUnavailable)?;
+        let configuration_id = transaction
+            .jwt_vc_profile
+            .as_ref()
+            .map(|selection| selection.configuration_id().to_owned())
+            .unwrap_or_else(|| {
+                credential_configuration_id_for_format(
+                    credential_type,
+                    &transaction.credential_payload_format,
+                )
+            });
         let issuer_url = format!(
             "{}/org/{}",
             self.issuer_base_url, transaction.organization_id
@@ -352,6 +367,8 @@ mod tests {
         ] {
             let now = Utc::now();
             let transaction = IssuanceTransactionRecord {
+                jwt_vc_profile: None,
+
                 id: "owned-tx".to_owned(),
                 organization_id: "owned-org".to_owned(),
                 credential_template_id: "owned-template".to_owned(),

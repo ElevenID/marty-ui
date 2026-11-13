@@ -800,6 +800,8 @@ fn transaction_record(value: &Value) -> IssuanceTransactionRecord {
             .map(|time| DateTime::parse_from_rfc3339(time).expect("time").to_utc())
     };
     IssuanceTransactionRecord {
+        jwt_vc_profile: None,
+
         id: value["id"].as_str().expect("id").to_owned(),
         organization_id: value["organization_id"]
             .as_str()
@@ -1582,5 +1584,113 @@ async fn native_credential_lifecycle_http_request_schema_is_strict_optional_and_
                 "emit-event:suspended",
             ]
         );
+    }
+}
+
+#[tokio::test]
+async fn explicit_profile_tenant_http_metadata_keeps_marker_exact_capability_and_variant_boundaries(
+) {
+    #[derive(Clone)]
+    struct ProfileRepository {
+        duplicate: bool,
+    }
+    #[async_trait]
+    impl TenantDiscoveryRepository for ProfileRepository {
+        async fn templates(
+            &self,
+            _: &str,
+        ) -> Result<Vec<TenantCredentialTemplate>, TenantDiscoveryError> {
+            Ok(vec![])
+        }
+        async fn profiled_templates(
+            &self,
+            _: &str,
+        ) -> Result<
+            Vec<marty_issuance_service::tenant_discovery::ProfiledTenantTemplate>,
+            TenantDiscoveryError,
+        > {
+            let profile = marty_issuance_service::tenant_discovery::ProfiledTenantTemplate {
+                policy: marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                template: TenantCredentialTemplate {
+                    credential_type: "EmployeeCredential".into(),
+                    supported_formats: vec!["jwt_vc_json".into()],
+                    metadata: TenantCredentialMetadata {
+                        name: Some("Public synthetic employee credential".into()),
+                        issuer_did: Some("did:web:issuer.example".into()),
+                        ..Default::default()
+                    },
+                },
+            };
+            Ok(if self.duplicate {
+                vec![profile.clone(), profile]
+            } else {
+                vec![profile]
+            })
+        }
+    }
+    for duplicate in [false, true] {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let policies = ContractProofPolicies {
+            requirements: BTreeMap::new(),
+            calls: calls.clone(),
+            unavailable: false,
+        };
+        let documents = StaticDiscoveryDocuments::new("https://issuer.example", "Synthetic issuer");
+        let config =
+            IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>()).unwrap();
+        let runtime = IssuanceRuntime::new(&config).unwrap();
+        let app = router_with_tenant_discovery(
+            runtime.state(),
+            documents.clone(),
+            TransportPolicy::new(config.cors_allowed_origins),
+            TenantDiscoveryService::new(
+                documents,
+                Arc::new(ProfileRepository { duplicate }),
+                Arc::new(policies),
+            ),
+        );
+        for suffix in ["", "/credential-manager", "/apple-wallet"] {
+            calls.lock().unwrap().clear();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get(format!(
+                        "/.well-known/openid-credential-issuer/org/org-1{suffix}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            if duplicate && suffix.is_empty() {
+                assert_eq!(response.status(), 503);
+                continue;
+            }
+            assert_eq!(response.status(), 200);
+            let metadata = json_body(response).await;
+            let configurations = metadata["credential_configurations_supported"]
+                .as_object()
+                .unwrap();
+            assert!(!configurations.contains_key("EmployeeCredential"));
+            assert!(!configurations.contains_key("EmployeeCredential#credential-manager"));
+            assert!(!configurations.contains_key("EmployeeCredential#apple-wallet"));
+            if suffix.is_empty() {
+                let profile = &configurations["EmployeeCredential#vc2-jose-2026-v1"];
+                assert_eq!(profile["format"], "application/vc+jwt");
+                assert_eq!(profile["marty_securing_profile"], "w3c_vc2_jose_2026_v1");
+                assert_eq!(calls.lock().unwrap().len(), 1);
+                assert_eq!(
+                    calls.lock().unwrap()[0].credential_format,
+                    "application/vc+jwt"
+                );
+            } else {
+                assert!(!configurations.contains_key("EmployeeCredential#vc2-jose-2026-v1"));
+                assert!(calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|request| request.credential_format != "application/vc+jwt"));
+            }
+        }
     }
 }

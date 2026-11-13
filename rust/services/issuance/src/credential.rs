@@ -214,6 +214,8 @@ pub struct CredentialTransaction {
     pub selective_disclosure_claims: Vec<String>,
     pub zk_predicate_claims: Vec<String>,
     pub credential_payload_format: String,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcIssuanceSelection>,
+    pub jwt_vc_signing_timing: Option<marty_oid4vci::JwtVcProfileTiming>,
     pub wallet_configs: Vec<Value>,
     pub validity_days: i64,
     pub renewable: bool,
@@ -228,6 +230,37 @@ pub struct CredentialTransaction {
     pub oid4vci_client_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+impl CredentialTransaction {
+    pub(crate) fn validate_jwt_vc_profile(&self) -> Result<(), CredentialIssuanceError> {
+        marty_jwt_vc_issuance::validate_selection(
+            &self.credential_payload_format,
+            &self.credential_template_id,
+            self.credential_type.as_deref(),
+            self.jwt_vc_profile.as_ref(),
+            self.jwt_vc_signing_timing,
+        )
+        .map_err(|_| CredentialIssuanceError::InvalidTransactionState)?;
+        if self.jwt_vc_profile.is_some()
+            && (self.delivery_mode != "wallet_only"
+                || !self.wallet_configs.is_empty()
+                || self.renewable
+                || self.application_id.is_some()
+                || self.renewal_of_credential_id.is_some()
+                || (matches!(
+                    self.status,
+                    CredentialTransactionStatus::Pending | CredentialTransactionStatus::Authorized
+                ) && self.jwt_vc_signing_timing.is_some())
+                || (matches!(
+                    self.status,
+                    CredentialTransactionStatus::Signing | CredentialTransactionStatus::Issued
+                ) && self.jwt_vc_signing_timing.is_none()))
+        {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for CredentialTransaction {
@@ -284,7 +317,19 @@ pub(crate) fn same_signing_target(
     expected: &CredentialTransaction,
     current: &CredentialTransaction,
 ) -> bool {
+    if expected.validate_jwt_vc_profile().is_err() || current.validate_jwt_vc_profile().is_err() {
+        return false;
+    }
     let mut current = current.clone();
+    if expected.jwt_vc_profile.is_some()
+        && expected.jwt_vc_signing_timing.is_none()
+        && matches!(
+            current.status,
+            CredentialTransactionStatus::Signing | CredentialTransactionStatus::Issued
+        )
+    {
+        current.jwt_vc_signing_timing = None;
+    }
     current.status = expected.status;
     current.nonce = expected.nonce.clone();
     current.reserved_credential_id = expected.reserved_credential_id.clone();
@@ -433,6 +478,7 @@ pub struct CredentialBuildRequest {
     pub credential_document: Option<Value>,
     pub selective_disclosure_claims: Vec<String>,
     pub validity_seconds: i64,
+    pub jwt_vc_signing_timing: Option<marty_oid4vci::JwtVcProfileTiming>,
     pub issuer: IssuerContext,
     pub status_list_entries: Vec<Value>,
 }
@@ -670,6 +716,8 @@ impl CredentialIssuanceService {
             endpoint_url,
         )?;
         validate_selector(request)?;
+        transaction.validate_jwt_vc_profile()?;
+        validate_profile_selection(request, &transaction)?;
         if transaction.status == CredentialTransactionStatus::Issued {
             return self.existing_response(request, &transaction).await;
         }
@@ -689,6 +737,7 @@ impl CredentialIssuanceService {
             .issuer_resolver
             .resolve(&transaction, &policy.remote_format, false)
             .await?;
+        validate_profile_issuer(&transaction, &issuer)?;
         apply_issuer_context(&mut transaction, &issuer);
         let proof_jwt = proof_jwt(request).ok_or(CredentialIssuanceError::ProofRequired)?;
         let proof_claims = unverified_proof_claims(proof_jwt)?;
@@ -719,6 +768,7 @@ impl CredentialIssuanceService {
             .issuer_resolver
             .resolve(&transaction, &policy.remote_format, true)
             .await?;
+        validate_profile_issuer(&transaction, &issuer)?;
         apply_issuer_context(&mut transaction, &issuer);
         self.ports
             .lifecycle
@@ -987,6 +1037,23 @@ pub(crate) async fn materialize_credential(
     proof: VerifiedCredentialProof,
 ) -> Result<IssuedCredential, CredentialIssuanceError> {
     reject_retired_open_badge(transaction, None)?;
+    transaction.validate_jwt_vc_profile()?;
+    if transaction.jwt_vc_profile.is_some()
+        && (transaction.claims.contains_key("_credential_document")
+            || [
+                "iat",
+                "exp",
+                "nbf",
+                "validFrom",
+                "validUntil",
+                "issuanceDate",
+                "expirationDate",
+            ]
+            .iter()
+            .any(|key| transaction.claims.contains_key(*key)))
+    {
+        return Err(CredentialIssuanceError::InvalidTransactionState);
+    }
     let status = context
         .lifecycle
         .allocate_status(transaction, credential_id, &policy.remote_format)
@@ -1025,6 +1092,7 @@ pub(crate) async fn materialize_credential(
         credential_document: transaction.claims.get("_credential_document").cloned(),
         selective_disclosure_claims: disclosures,
         validity_seconds: transaction.validity_days.saturating_mul(86_400),
+        jwt_vc_signing_timing: transaction.jwt_vc_signing_timing,
         issuer: issuer.clone(),
         status_list_entries: status.entries.clone(),
     };
@@ -1033,8 +1101,21 @@ pub(crate) async fn materialize_credential(
         return Err(CredentialIssuanceError::BuilderChangedCredentialId);
     }
     reject_retired_open_badge(transaction, Some(&built.credential))?;
-    let issued_at = Utc::now();
-    let expires_at = issued_at + Duration::days(transaction.validity_days);
+    let (issued_at, expires_at) = if let Some(timing) = transaction.jwt_vc_signing_timing {
+        (
+            DateTime::from_timestamp(timing.signature_issued_at(), 0)
+                .ok_or(CredentialIssuanceError::InvalidTransactionState)?,
+            timing
+                .credential_valid_until()
+                .ok_or(CredentialIssuanceError::InvalidTransactionState)?,
+        )
+    } else {
+        let issued_at = Utc::now();
+        (
+            issued_at,
+            issued_at + Duration::days(transaction.validity_days),
+        )
+    };
     Ok(IssuedCredential {
         id: credential_id.to_owned(),
         transaction_id: transaction.id.clone(),
@@ -1085,6 +1166,13 @@ fn validate_selection(
     transaction: &mut CredentialTransaction,
     session: Option<&CredentialAuthorizationSession>,
 ) -> Result<(), CredentialIssuanceError> {
+    validate_profile_selection(request, transaction)?;
+    if transaction.jwt_vc_profile.is_some() {
+        if session.is_some() {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        return Ok(());
+    }
     if let Some(configuration_id) = &request.credential_configuration_id {
         let valid = if let Some(session) = session {
             session
@@ -1140,10 +1228,50 @@ fn validate_selection(
     Ok(())
 }
 
+fn validate_profile_selection(
+    request: &CredentialRequest,
+    transaction: &CredentialTransaction,
+) -> Result<(), CredentialIssuanceError> {
+    if let Some(selection) = &transaction.jwt_vc_profile {
+        if request.credential_configuration_id.as_deref() != Some(selection.configuration_id())
+            || request.credential_identifier.is_some()
+            || request.legacy_format.is_some()
+        {
+            return Err(CredentialIssuanceError::UnknownIdentifier(
+                request
+                    .credential_configuration_id
+                    .clone()
+                    .unwrap_or_default(),
+            ));
+        }
+    } else if request
+        .credential_configuration_id
+        .as_deref()
+        .is_some_and(|id| id.ends_with(marty_jwt_vc_issuance::DIRECT_CONFIGURATION_SUFFIX))
+    {
+        return Err(CredentialIssuanceError::UnknownIdentifier(
+            request
+                .credential_configuration_id
+                .clone()
+                .unwrap_or_default(),
+        ));
+    }
+    Ok(())
+}
+
 fn format_policy(
     request: &CredentialRequest,
     transaction: &CredentialTransaction,
 ) -> Result<FormatPolicy, CredentialIssuanceError> {
+    transaction.validate_jwt_vc_profile()?;
+    validate_profile_selection(request, transaction)?;
+    if transaction.jwt_vc_profile.is_some() {
+        return Ok(FormatPolicy {
+            kind: CredentialBuilderKind::JwtVcJson,
+            response_format: marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT.into(),
+            remote_format: marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT.into(),
+        });
+    }
     let response_format = request.legacy_format.clone().unwrap_or_else(|| {
         request
             .credential_configuration_id
@@ -1191,6 +1319,9 @@ pub(crate) fn remote_credential_format(
     payload_format: &str,
 ) -> Result<String, CredentialIssuanceError> {
     let normalized = normalize_format(payload_format);
+    if payload_format == marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT {
+        return Ok(marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT.into());
+    }
     if MDOC_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
         Ok("mso_mdoc".to_owned())
     } else if DATA_INTEGRITY_PAYLOAD_FORMATS.contains(&normalized.as_str()) {
@@ -1400,6 +1531,22 @@ fn is_open_badge_type(value: Option<&str>) -> bool {
     )
 }
 
+fn validate_profile_issuer(
+    transaction: &CredentialTransaction,
+    issuer: &IssuerContext,
+) -> Result<(), CredentialIssuanceError> {
+    if transaction.jwt_vc_profile.is_some()
+        && (transaction.issuer_profile_id.as_deref() != Some(issuer.issuer_profile_id.as_str())
+            || transaction.issuer_did.as_deref() != Some(issuer.issuer_did.as_str())
+            || transaction.issuer_algorithm.as_deref() != Some(issuer.algorithm.as_str())
+            || transaction.signing_service_id.as_deref()
+                != Some(issuer.signing_service_id.as_str()))
+    {
+        return Err(CredentialIssuanceError::InvalidTransactionState);
+    }
+    Ok(())
+}
+
 pub(crate) fn apply_issuer_context(
     transaction: &mut CredentialTransaction,
     issuer: &IssuerContext,
@@ -1553,15 +1700,19 @@ mod tests {
 
     use super::{
         clean_claims, credential_configuration_id_for_format, format_policy,
-        reserved_credential_id, validate_audience, validate_selector, AllocatedCredentialStatus,
-        BuiltCredential, CredentialAuthorizationSession, CredentialBuildRequest,
-        CredentialBuilderKind, CredentialIssuanceDisposition, CredentialIssuanceOutcome,
-        CredentialRequest, CredentialResponse, CredentialTransaction, CredentialTransactionStatus,
-        ExistingCredential, IssuedCredential, IssuerContext, VerifiedCredentialProof,
+        reserved_credential_id, same_signing_target, validate_audience, validate_selector,
+        AllocatedCredentialStatus, BuiltCredential, CredentialAuthorizationSession,
+        CredentialBuildRequest, CredentialBuilderKind, CredentialIssuanceDisposition,
+        CredentialIssuanceOutcome, CredentialRequest, CredentialResponse, CredentialTransaction,
+        CredentialTransactionStatus, ExistingCredential, IssuedCredential, IssuerContext,
+        VerifiedCredentialProof,
     };
 
     fn transaction() -> CredentialTransaction {
         CredentialTransaction {
+            jwt_vc_profile: None,
+            jwt_vc_signing_timing: None,
+
             id: "tx-signing-contract".to_owned(),
             organization_id: "org-a".to_owned(),
             credential_template_id: "template-a".to_owned(),
@@ -1713,6 +1864,8 @@ mod tests {
             "request-issuer-jwk-k-canary",
         ];
         let request = CredentialBuildRequest {
+            jwt_vc_signing_timing: None,
+
             organization_id: REQUEST_CANARIES[0].to_owned(),
             kind: CredentialBuilderKind::SdJwt,
             response_format: REQUEST_CANARIES[1].to_owned(),
@@ -2170,5 +2323,67 @@ mod tests {
         }))
         .unwrap_err();
         assert!(format_error.to_string().contains("removed 'format'"));
+    }
+    #[test]
+    fn explicit_profile_concurrent_recovery_normalizes_only_a_new_valid_winning_time() {
+        let mut expected = transaction();
+        expected.credential_payload_format = "VC_JWT_DIRECT_V1".into();
+        expected.jwt_vc_profile = Some(
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                "OpenBadgeCredential",
+                "template-a",
+                1,
+                86400,
+                -30,
+            )
+            .unwrap(),
+        );
+        let mut winner = expected.clone();
+        winner.status = CredentialTransactionStatus::Signing;
+        winner.jwt_vc_signing_timing = Some(
+            winner
+                .jwt_vc_profile
+                .as_ref()
+                .unwrap()
+                .timing_at(1800000000)
+                .unwrap(),
+        );
+        assert!(same_signing_target(&expected, &winner));
+        assert!(!same_signing_target(&winner, &expected));
+        let mut another_time = winner.clone();
+        another_time.jwt_vc_signing_timing = Some(
+            another_time
+                .jwt_vc_profile
+                .as_ref()
+                .unwrap()
+                .timing_at(1800000001)
+                .unwrap(),
+        );
+        assert!(!same_signing_target(&winner, &another_time));
+        let mut changed_policy = winner.clone();
+        changed_policy.jwt_vc_profile = Some(
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3601).unwrap(),
+                "OpenBadgeCredential",
+                "template-a",
+                1,
+                86400,
+                -30,
+            )
+            .unwrap(),
+        );
+        changed_policy.jwt_vc_signing_timing = Some(
+            changed_policy
+                .jwt_vc_profile
+                .as_ref()
+                .unwrap()
+                .timing_at(1800000000)
+                .unwrap(),
+        );
+        assert!(!same_signing_target(&expected, &changed_policy));
+        let mut premature = expected.clone();
+        premature.jwt_vc_signing_timing = winner.jwt_vc_signing_timing;
+        assert!(premature.validate_jwt_vc_profile().is_err());
     }
 }

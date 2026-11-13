@@ -55,6 +55,9 @@ impl ContractRepository {
                 setup: setup.to_owned(),
                 notification_id: inputs["notification_id"].as_str().unwrap().to_owned(),
                 transaction: CredentialTransaction {
+                    jwt_vc_profile: None,
+                    jwt_vc_signing_timing: None,
+
                     id: inputs["transaction_id"].as_str().unwrap().to_owned(),
                     organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),
                     credential_template_id: "template-credential".to_owned(),

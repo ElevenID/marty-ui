@@ -2849,6 +2849,9 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
     let key_hash = "a".repeat(64);
     let request_hash = "b".repeat(64);
     let transaction = CredentialTransaction {
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
+
         id: Uuid::new_v4().to_string(),
         organization_id: "org-initiation-race".to_owned(),
         credential_template_id: "template-initiation".to_owned(),
@@ -3653,6 +3656,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
             credential_type TEXT, selective_disclosure_claims JSONB DEFAULT '[]'::jsonb,
             zk_predicate_claims JSONB DEFAULT '[]'::jsonb,
             credential_payload_format TEXT NOT NULL DEFAULT 'w3c_vcdm_v2_sd_jwt',
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
             wallet_configs JSONB DEFAULT '[]'::jsonb, validity_days INTEGER NOT NULL DEFAULT 365,
             renewable BOOLEAN NOT NULL DEFAULT false,
             renewal_window_days INTEGER NOT NULL DEFAULT 30,
@@ -3773,3 +3777,6 @@ async fn drop_contract_schema(pool: &sqlx::PgPool) {
         sqlx::query(statement).execute(pool).await.unwrap();
     }
 }
+
+#[path = "support/explicit_jwt_vc_profile_contract.rs"]
+mod explicit_jwt_vc_profile_contract;

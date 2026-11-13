@@ -181,7 +181,7 @@ impl HttpCredentialBuilder {
         if open_badge {
             validate_open_badge_request_criteria(request, &claims)?;
         }
-        let prepared = prepare_remote_jwt_vc(RemoteJwtVcRequest {
+        let remote_request = RemoteJwtVcRequest {
             issuer_id: request.issuer.issuer_did.clone(),
             verification_method_id: verification_method(request)?.to_owned(),
             algorithm: request.issuer.algorithm.clone(),
@@ -189,7 +189,10 @@ impl HttpCredentialBuilder {
             subject_id: request.subject_did.clone(),
             credential_type: request.credential_type.clone(),
             claims,
-            expiration_seconds: Some(request.validity_seconds),
+            expiration_seconds: request
+                .jwt_vc_signing_timing
+                .is_none()
+                .then_some(request.validity_seconds),
             credential_id: Some(request.credential_id.clone()),
             credential_subject: request.credential_subject.clone(),
             credential_profile: open_badge.then(|| "open_badge_v3".to_owned()),
@@ -198,8 +201,36 @@ impl HttpCredentialBuilder {
             } else {
                 None
             },
-        })
-        .map_err(native_error)?;
+        };
+        if let Some(timing) = request.jwt_vc_signing_timing {
+            if request.remote_credential_format != marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT
+                || request.response_format != marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT
+                || request.credential_document.is_some()
+            {
+                return Err(signing_error("explicit JWT-VC signing binding is invalid"));
+            }
+            let prepared = marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(
+                remote_request,
+                marty_oid4vci::JwtVcPreparationProfile::DirectVc2Jose(timing),
+            )
+            .map_err(native_error)?;
+            let signature = self
+                .sign(
+                    request,
+                    prepared.signing_input().as_bytes(),
+                    &request.issuer.algorithm,
+                )
+                .await?;
+            let signed = prepared.complete(&signature).map_err(native_error)?;
+            return Ok(BuiltCredential {
+                credential_id: signed.credential_id().into(),
+                credential: signed.credential().into(),
+            });
+        }
+        if request.remote_credential_format == marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT {
+            return Err(signing_error("explicit JWT-VC signing timing is missing"));
+        }
+        let prepared = prepare_remote_jwt_vc(remote_request).map_err(native_error)?;
         let signature = self
             .sign(
                 request,
@@ -1250,6 +1281,8 @@ mod tests {
 
     fn request(kind: CredentialBuilderKind) -> CredentialBuildRequest {
         CredentialBuildRequest {
+            jwt_vc_signing_timing: None,
+
             organization_id: "org-a".to_owned(),
             kind,
             response_format: match kind {
@@ -1412,7 +1445,7 @@ mod tests {
     #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn jwt_vc_preserves_open_badge_profile_and_reserved_id() {
         let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
-        let builder = HttpCredentialBuilder::with_signer(signer);
+        let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::JwtVcJson);
         request.issuer.public_jwk = Some(public_jwk);
         request.credential_type = "open_badge".to_owned();
@@ -1447,6 +1480,84 @@ mod tests {
             payload["vc"]["credentialSubject"]["achievement"]["id"],
             request.achievement_id.as_deref().expect("achievement")
         );
+        let now = Utc::now().timestamp();
+        let selection = marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+            marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+            "open_badge",
+            "public-synthetic-template",
+            1,
+            2 * 86400,
+            -30,
+        )
+        .unwrap();
+        let timing = selection.timing_at(now).unwrap();
+        request.response_format = "application/vc+jwt".into();
+        request.remote_credential_format = "application/vc+jwt".into();
+        request.jwt_vc_signing_timing = Some(timing);
+        let direct = builder
+            .build(&request)
+            .await
+            .expect("genuine direct-profile remote JWT-VC");
+        let proof_input = json!({
+            "token":direct.credential, "expected_issuer":request.issuer.issuer_did,
+            "expected_verification_method":request.issuer.verification_method_id,
+            "expected_algorithm":request.issuer.algorithm,
+            "issuer_public_jwk":request.issuer.public_jwk,
+            "expected_securing_profile":"w3c_vc2_jose_2026_v1", "evaluated_at":now,
+        });
+        let verify = |input: &Value| -> Value {
+            serde_json::from_str(
+                &marty_verification::vcdm::verify_open_badge_v3_jwt_with_profile_json(
+                    &input.to_string(),
+                ),
+            )
+            .unwrap()
+        };
+        let authenticated = verify(&proof_input);
+        assert_eq!(authenticated["valid"], true, "{authenticated}");
+        assert_eq!(authenticated["issuer_trust"], "not_checked");
+        assert_eq!(authenticated["credential_status"], "not_checked");
+        assert_eq!(authenticated["holder_binding"], "not_checked");
+        assert_eq!(authenticated["claims"]["iat"], now);
+        assert_eq!(authenticated["claims"]["exp"], now + 3600);
+        assert!(authenticated["claims"].get("nbf").is_none());
+        assert!(authenticated["claims"].get("vc").is_none());
+        assert_eq!(authenticated["credential"]["id"], request.credential_id);
+        assert_eq!(
+            authenticated["credential"]["type"],
+            json!(["VerifiableCredential", "OpenBadgeCredential"])
+        );
+        assert_eq!(
+            authenticated["credential_valid_from"],
+            serde_json::to_value(timing.credential_valid_from()).unwrap()
+        );
+        assert_eq!(
+            authenticated["credential_valid_until"],
+            serde_json::to_value(timing.credential_valid_until()).unwrap()
+        );
+        let requests = signer.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].2,
+            direct.credential.rsplit_once('.').unwrap().0.as_bytes()
+        );
+        drop(requests);
+        for failure in ["signature", "profile", "signature_expiry"] {
+            let mut invalid = proof_input.clone();
+            match failure {
+                "signature" => {
+                    let mut parts: Vec<String> =
+                        direct.credential.split('.').map(str::to_owned).collect();
+                    parts[2] = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+                    invalid["token"] = json!(parts.join("."));
+                }
+                "profile" => {
+                    invalid["expected_securing_profile"] = json!("marty_nested_vc2_jwt_v1")
+                }
+                _ => invalid["evaluated_at"] = json!(now + 3600),
+            }
+            assert_eq!(verify(&invalid)["valid"], false, "{failure}");
+        }
     }
 
     fn open_badge_request() -> CredentialBuildRequest {

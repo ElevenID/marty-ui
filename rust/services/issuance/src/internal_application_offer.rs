@@ -158,7 +158,13 @@ impl InternalApplicationOfferProjector {
         credential_template_id: Option<&str>,
         transaction: &CredentialTransaction,
     ) -> Result<IssuanceOfferResponse, InternalApplicationOfferProjectionError> {
-        if organization_id.is_empty() || transaction.organization_id != organization_id {
+        if transaction.jwt_vc_profile.is_some()
+            || transaction
+                .credential_payload_format
+                .eq_ignore_ascii_case(marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT)
+            || organization_id.is_empty()
+            || transaction.organization_id != organization_id
+        {
             return Err(InternalApplicationOfferProjectionError::Unavailable);
         }
         let credential_type = transaction
@@ -740,6 +746,9 @@ mod tests {
 
     fn transaction(now: DateTime<Utc>) -> CredentialTransaction {
         CredentialTransaction {
+            jwt_vc_profile: None,
+            jwt_vc_signing_timing: None,
+
             id: "transaction-1".into(),
             organization_id: "org-123".into(),
             credential_template_id: "credential-template-1".into(),

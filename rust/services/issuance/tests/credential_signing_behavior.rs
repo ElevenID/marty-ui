@@ -88,6 +88,9 @@ impl SigningHarness {
         Self {
             state: Arc::new(Mutex::new(SigningState {
                 transaction: CredentialTransaction {
+                    jwt_vc_profile: None,
+                    jwt_vc_signing_timing: None,
+
                     id: inputs["transaction_id"].as_str().unwrap().to_owned(),
                     organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),
                     credential_template_id: "template-signing-contract".to_owned(),
@@ -259,6 +262,10 @@ impl CredentialRepository for SigningHarness {
         }
         state.transaction = transaction.clone();
         state.transaction.status = CredentialTransactionStatus::Signing;
+        if let Some(selection) = &state.transaction.jwt_vc_profile {
+            state.transaction.jwt_vc_signing_timing =
+                Some(selection.timing_at(chrono::Utc::now().timestamp()).unwrap());
+        }
         state.transaction.reserved_credential_id = Some(credential_id.to_owned());
         Ok(Some(state.transaction.clone()))
     }
@@ -1316,4 +1323,150 @@ async fn concurrent_recovery_rejects_a_credential_for_a_changed_dataset() {
         })
     );
     assert_eq!(harness.state.lock().unwrap().builder_count, 0);
+}
+
+fn direct_signing_case() -> (Value, Value, SigningHarness) {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let mut case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["builder"] == "jwt_vc")
+        .unwrap()
+        .clone();
+    case["credential_type"] = json!("EmployeeCredential");
+    case["payload_format"] = json!("VC_JWT_DIRECT_V1");
+    case["credential_configuration_id"] = json!("EmployeeCredential#vc2-jose-2026-v1");
+    let harness = SigningHarness::new(&case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.transaction.application_id = None;
+        state.transaction.claims.remove("_credential_document");
+        state.transaction.issuer_did = Some("did:web:issuer.example".into());
+        state.transaction.jwt_vc_profile = Some(
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                "EmployeeCredential",
+                "template-signing-contract",
+                3,
+                2 * 86400,
+                -30,
+            )
+            .unwrap(),
+        );
+    }
+    (case, contract, harness)
+}
+
+#[tokio::test]
+async fn explicit_profile_redemption_uses_frozen_timing_and_exact_replay_without_resigning() {
+    let (case, contract, harness) = direct_signing_case();
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    let first = body(response).await;
+    let timing = {
+        let state = harness.state.lock().unwrap();
+        assert_eq!(state.builder_count, 1);
+        assert!(state
+            .remote_formats
+            .iter()
+            .all(|format| format == "application/vc+jwt"));
+        let built = state.build_request.as_ref().unwrap();
+        assert_eq!(built.remote_credential_format, "application/vc+jwt");
+        assert_eq!(built.response_format, "application/vc+jwt");
+        let timing = built.jwt_vc_signing_timing.unwrap();
+        assert_eq!(
+            timing.signature_expires_at() - timing.signature_issued_at(),
+            3600
+        );
+        assert_eq!(
+            timing.credential_valid_from().timestamp(),
+            timing.signature_issued_at() - 30
+        );
+        assert_eq!(
+            timing.credential_valid_until().unwrap().timestamp(),
+            timing.signature_issued_at() - 30 + 2 * 86400
+        );
+        timing
+    };
+    // Advancing the offer state clock beyond expiry must not refresh a completed issuance.
+    harness.state.lock().unwrap().transaction.expires_at =
+        chrono::Utc::now() - chrono::Duration::days(1);
+    let replay = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(replay.status().as_u16(), 200);
+    assert_eq!(body(replay).await, first);
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 1);
+    assert_eq!(state.transaction.jwt_vc_signing_timing, Some(timing));
+}
+
+#[tokio::test]
+async fn explicit_profile_rejects_wrong_config_on_fresh_and_completed_transactions() {
+    for issued in [false, true] {
+        for id in [
+            "EmployeeCredential",
+            "EmployeeCredential#jwt_vc_json",
+            "Other#vc2-jose-2026-v1",
+            "",
+        ] {
+            let (mut case, contract, harness) = direct_signing_case();
+            if issued {
+                let mut state = harness.state.lock().unwrap();
+                state.transaction.status = CredentialTransactionStatus::Issued;
+                state.transaction.jwt_vc_signing_timing = Some(
+                    state
+                        .transaction
+                        .jwt_vc_profile
+                        .as_ref()
+                        .unwrap()
+                        .timing_at(1800000000)
+                        .unwrap(),
+                );
+                state.existing = Some(ExistingCredential {
+                    id: "original".into(),
+                    credential: "original-exact-bytes".into(),
+                    notification_id: "original-notification".into(),
+                });
+            }
+            case["credential_configuration_id"] = json!(id);
+            let response = app(harness.clone(), &contract)
+                .oneshot(request(&case, &contract))
+                .await
+                .unwrap();
+            assert!(
+                response.status().is_client_error(),
+                "issued={issued}, id={id}"
+            );
+            let state = harness.state.lock().unwrap();
+            assert_eq!(state.builder_count, 0);
+            assert!(state.remote_formats.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn explicit_profile_rejects_changed_issuer_target_before_claim_or_signing() {
+    let (case, contract, harness) = direct_signing_case();
+    harness.state.lock().unwrap().transaction.signing_service_id =
+        Some("different-frozen-service".into());
+    let response = app(harness.clone(), &contract)
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert!(response.status().is_client_error());
+    let state = harness.state.lock().unwrap();
+    assert_eq!(state.builder_count, 0);
+    assert!(!state
+        .events
+        .iter()
+        .any(|event| event == "claim_transaction_for_signing"));
 }

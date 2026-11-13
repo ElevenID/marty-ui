@@ -31,6 +31,7 @@ marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-deployment-profile = { path = "../deployment-profile" }
 marty-credential-template = { path = "../credential-template" }
+marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
 mmf-platform.workspace = true
 mmf-security.workspace = true
 percent-encoding.workspace = true

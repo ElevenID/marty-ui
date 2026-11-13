@@ -115,6 +115,32 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
 
     migration::migrate(&pool).await.unwrap();
     migration::migrate(&pool).await.unwrap();
+    let legacy_transactions_before: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM issuance_service.issuance_transactions t",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    // Exercise the same additive profile migration used by ordinary service
+    // startup against the shared pre-upgrade fixture, including repeat startup.
+    migration::migrate_jwt_vc_profile(&pool).await.unwrap();
+    migration::migrate_jwt_vc_profile(&pool).await.unwrap();
+    let legacy_transactions_after: Value = sqlx::query_scalar(
+        "SELECT jsonb_agg(to_jsonb(t) - ARRAY['jwt_vc_profile','jwt_vc_signing_timing'] ORDER BY id)
+         FROM issuance_service.issuance_transactions t",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_transactions_after, legacy_transactions_before);
+    let profiled_legacy_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.issuance_transactions
+         WHERE jwt_vc_profile IS NOT NULL OR jwt_vc_signing_timing IS NOT NULL",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(profiled_legacy_rows, 0);
     let private_key_tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name FROM information_schema.tables
          WHERE table_schema = 'issuance_service' AND table_type = 'BASE TABLE'
@@ -156,7 +182,13 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
         .unwrap();
     assert_eq!(read_only, "on");
     migration::validate(&read_only_pool).await.unwrap();
+    migration::validate_jwt_vc_profile(&read_only_pool)
+        .await
+        .unwrap();
     assert!(migration::migrate(&read_only_pool).await.is_err());
+    assert!(migration::migrate_jwt_vc_profile(&read_only_pool)
+        .await
+        .is_err());
     read_only_pool.close().await;
     let transaction_remaining: f64 = sqlx::query_scalar(
         "SELECT extract(epoch FROM access_token_expires_at - clock_timestamp())::double precision
@@ -235,6 +267,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, claims jsonb NOT NULL DEFAULT '{}'::jsonb);
          CREATE TABLE issuance_service.authorization_sessions (
@@ -248,6 +281,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
              event_type text NOT NULL, metadata json NOT NULL,
              created_at timestamptz NOT NULL);
          INSERT INTO issuance_service.issuance_transactions
+             (id, organization_id, application_id, access_token, claims)
              VALUES ('tx-corrupt', 'org-a', 'application-a', 'digest-corrupt', '{}'::jsonb);
          INSERT INTO issuance_service.issued_credentials
              VALUES ('credential-a', 'tx-corrupt', 'org-a');
@@ -304,6 +338,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, access_token_expires_at text,
              claims jsonb NOT NULL DEFAULT '{}'::jsonb);
@@ -334,6 +369,7 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
          DROP TABLE issuance_service.authorization_sessions;
          DROP TABLE issuance_service.issuance_transactions;
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL, application_id text,
              access_token text, access_token_expires_at timestamptz,
              claims jsonb NOT NULL DEFAULT '{}'::jsonb);
@@ -402,6 +438,7 @@ async fn management_repository_preserves_registration_and_idempotent_revocation_
              created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
              PRIMARY KEY (organization_id, client_id));
          CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
              id text PRIMARY KEY, organization_id text NOT NULL,
              application_id text, status text NOT NULL,
              reserved_credential_id text,

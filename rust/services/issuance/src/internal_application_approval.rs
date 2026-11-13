@@ -340,6 +340,14 @@ impl OrdinaryInternalApplicationApprover {
                 "Credential Template must define a credential type".to_owned(),
             ));
         }
+        if template
+            .credential_payload_format
+            .eq_ignore_ascii_case(marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT)
+        {
+            return Err(InternalApplicationApprovalError::CredentialTemplateInvalid(
+                "explicit JWT-VC application issuance is unavailable".into(),
+            ));
+        }
         if template.credential_payload_format.trim().is_empty() {
             return Err(InternalApplicationApprovalError::CredentialTemplateInvalid(
                 "Credential Template must define a credential payload format".to_owned(),
@@ -384,6 +392,9 @@ impl OrdinaryInternalApplicationApprover {
             .filter(|value| !value.is_empty())
             .ok_or(InternalApplicationApprovalError::Unavailable)?;
         Ok(CredentialTransaction {
+            jwt_vc_profile: None,
+            jwt_vc_signing_timing: None,
+
             id: seed.transaction_id,
             organization_id: application.organization_id.clone(),
             credential_template_id: credential_template_id.to_owned(),

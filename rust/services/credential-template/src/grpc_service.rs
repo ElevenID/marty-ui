@@ -113,6 +113,10 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
                 compliance_profile_id: input.compliance_profile_id,
                 issuer_did: optional_text(input.issuer_did),
                 credential_payload_format: optional_text(input.credential_payload_format),
+                jwt_vc_profile: marty_jwt_vc_issuance::parse_optional_policy_json(
+                    &input.jwt_vc_profile_json,
+                )
+                .map_err(|_| Status::invalid_argument("jwt_vc_profile_json"))?,
                 issuance_protocol: optional_text(input.issuance_protocol),
                 now: Utc::now(),
             })
@@ -226,6 +230,17 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
                 "credential_payload_format",
                 input.credential_payload_format,
             ),
+            jwt_vc_profile: if mask.is_empty() || mask.iter().any(|field| field == "jwt_vc_profile")
+            {
+                marty_jwt_vc_issuance::parse_optional_policy_json(&input.jwt_vc_profile_json)
+                    .map_err(|_| Status::invalid_argument("jwt_vc_profile_json"))?
+            } else if input.jwt_vc_profile_json.is_empty() {
+                None
+            } else {
+                return Err(Status::invalid_argument(
+                    "jwt_vc_profile must be in update_mask",
+                ));
+            },
             issuance_protocol: masked_text(mask, "issuance_protocol", input.issuance_protocol),
         };
         let template = self
@@ -392,6 +407,13 @@ fn template_message(template: &CredentialTemplate) -> Result<TemplateResponse, S
         version: template.version,
         created_at: template.created_at.to_rfc3339(),
         updated_at: template.updated_at.to_rfc3339(),
+        jwt_vc_profile_json: template
+            .jwt_vc_profile
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| Status::internal("CREDENTIAL_TEMPLATE.SERIALIZATION_FAILED"))?
+            .unwrap_or_default(),
         wallet_configs_json: serde_json::to_string(&template.wallet_configs)
             .map_err(|_| Status::internal("CREDENTIAL_TEMPLATE.SERIALIZATION_FAILED"))?,
         issuer_algorithm: template.issuer_algorithm.clone().unwrap_or_default(),
@@ -689,5 +711,54 @@ const fn claim_type_wire(value: ClaimType) -> &'static str {
         ClaimType::Array => "array",
         ClaimType::Image => "image",
         ClaimType::Binary => "binary",
+    }
+}
+
+#[cfg(test)]
+mod explicit_profile_wire_tests {
+    use super::*;
+    use prost::Message;
+    mod released_issuer {
+        include!("../tests/support/legacy_issuer_format.rs");
+    }
+
+    // The released field14 and field17 tags, with unknown new fields omitted.
+    #[derive(Clone, PartialEq, prost::Message)]
+    struct ReleasedTemplateProjection {
+        #[prost(string, tag = "14")]
+        credential_payload_format: String,
+        #[prost(string, tag = "17")]
+        status: String,
+    }
+
+    #[test]
+    fn new_profile_response_keeps_nonempty_discriminator_for_the_old_protobuf_reader() {
+        let mut template = crate::catalog::marty_login_badge(
+            chrono::Utc::now(),
+            "org-synthetic",
+            "https://issuer.example",
+            "did:web:issuer.example",
+        );
+        template.credential_payload_format = "VC_JWT_DIRECT_V1".into();
+        template.jwt_vc_profile =
+            Some(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap());
+        template.supported_formats = vec![CredentialFormat::VcJwtDirectV1];
+        template.validity_rules.renewable = false;
+        template.wallet_configs.clear();
+        template.selective_disclosure_fields.clear();
+        template.zk_predicate_claims.clear();
+        template.issuance_protocol = "OID4VCI_PRE_AUTH".into();
+        template.validate_jwt_vc_profile().unwrap();
+        let new_response = template_message(&template).unwrap();
+        assert!(!new_response.jwt_vc_profile_json.is_empty());
+        let old =
+            ReleasedTemplateProjection::decode(new_response.encode_to_vec().as_slice()).unwrap();
+        assert_eq!(old.credential_payload_format, "vc_jwt_direct_v1");
+        assert_eq!(old.status, "active");
+        assert!(released_issuer::remote_credential_format(&old.credential_payload_format).is_err());
+        assert_eq!(
+            released_issuer::remote_credential_format("w3c_vcdm_v2_jwt_vc").unwrap(),
+            "jwt_vc_json"
+        );
     }
 }
