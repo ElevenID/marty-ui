@@ -83,6 +83,16 @@ def require_base_ancestry(
         raise ValueError("PR base ancestry unavailable") from error
 
 
+def tracked_change_diagnostic(status: str) -> str:
+    """Bounded path-only context; never log changed file contents."""
+    rows = status.splitlines()
+    return json.dumps(
+        {"tracked_change_count": len(rows), "tracked_paths": [row[:180] for row in rows[:12]]},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+
+
 def build_attestation(
     env: Mapping[str, str], event: object, repo: Path
 ) -> dict[str, object]:
@@ -147,9 +157,11 @@ def build_attestation(
     require(parents[1] == head_sha, "PR merge head parent mismatch")
     require_base_ancestry(repo, base_sha, checkout_base_sha, checkout_sha)
     require(git(repo, "rev-parse", "HEAD") == checkout_sha, "checkout HEAD changed during ancestry read")
+    tracked_status = git(repo, "status", "--porcelain", "--untracked-files=no")
     require(
-        git(repo, "status", "--porcelain", "--untracked-files=no") == "",
-        "tracked checkout changed during Rust tests",
+        tracked_status == "",
+        "tracked checkout changed during Rust tests: "
+        + tracked_change_diagnostic(tracked_status),
     )
     tree_sha = sha(git(repo, "rev-parse", "HEAD^{tree}"), "checkout tree SHA")
     workflow_blob_sha = sha(
