@@ -29,8 +29,15 @@ const REFUSED: &str = "Acceptance-only candidate execution refused or incomplete
 #[path = "installer_candidate_scope.rs"]
 mod scope;
 pub(crate) use scope::require_retained as require_retained_scope;
+#[path = "installer_candidate_acquisition.rs"]
+mod acquisition;
 #[path = "installer_candidate_files.rs"]
 mod files;
+
+/// A separate read-only component owner; never complete installed acceptance.
+pub fn observe_acquisition(args: &[String], build_identity: &str) -> Result<()> {
+    acquisition::observe(args, build_identity).map_err(|_| REFUSED.into())
+}
 
 struct Options {
     authorization: PathBuf,
@@ -264,20 +271,17 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
     }
     hosting.check()?;
     let context_hash = release::candidate_context_sha256(&expected)?;
-    durable_new(
-        &held_base,
-        base,
-        "public-acquisition-intent.json",
-        &serde_json::to_vec(&serde_json::json!({
-            "schema": "elevenid.installer-public-acquisition-intent/v1",
-            "context_sha256": context_hash,
-            "authorization_sha256": release::sha256(auth),
-            "controller_consumption_sha256": release::sha256(controller),
-            "started_at": now()?,
-            "installation_ready": false
-        }))
-        .map_err(|_| REFUSED)?,
-    )?;
+    let intent = serde_json::to_vec(&serde_json::json!({
+        "schema": "elevenid.installer-public-acquisition-intent/v1",
+        "context_sha256": context_hash,
+        "authorization_sha256": release::sha256(auth),
+        "controller_consumption_sha256": release::sha256(controller),
+        "started_at": now()?,
+        "installation_ready": false
+    }))
+    .map_err(|_| REFUSED)?;
+    durable_new(&held_base, base, "public-acquisition-intent.json", &intent)?;
+    let held_intent = files::HeldInput::open(&base.join("public-acquisition-intent.json"), 65_536)?;
     let runtime = tokio::runtime::Runtime::new().map_err(|_| REFUSED)?;
     let receipts = runtime.block_on(crate::installer_candidate_prepare::fetch_published_inputs(
         &o.authorization,
@@ -301,20 +305,25 @@ fn fetch_published_inner(args: &[String], build_identity: &str) -> Result<()> {
     authorization_files.check()?;
     controller_files.check()?;
     hosting.check()?;
+    held_intent.check()?;
+    require(held_intent.bytes() == intent)?;
+    let completed = acquisition::completion(
+        &acquisition::Context {
+            expected: &expected,
+            engine: &o.engine,
+            authorization: auth,
+            controller,
+            inventory: &inventory,
+        },
+        &intent,
+        receipts,
+        now()?,
+    )?;
     durable_new(
         &held_base,
         base,
         "public-acquisition-result.json",
-        &serde_json::to_vec(&serde_json::json!({
-            "schema": "elevenid.installer-public-acquisition-result/v1",
-            "context_sha256": context_hash,
-            "authorization_sha256": release::sha256(auth),
-            "controller_consumption_sha256": release::sha256(controller),
-            "inventory_sha256": release::sha256(&inventory),
-            "receipts": receipts,
-            "installation_ready": false
-        }))
-        .map_err(|_| REFUSED)?,
+        &completed,
     )?;
     Ok(())
 }

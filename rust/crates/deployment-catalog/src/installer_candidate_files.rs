@@ -55,10 +55,13 @@ impl DirectoryBinding {
 }
 impl Binding {
     fn observe(metadata: Metadata, maximum: usize) -> Result<Self> {
+        Self::observe_mode(metadata, maximum, 0o600)
+    }
+    fn observe_mode(metadata: Metadata, maximum: usize, mode: u32) -> Result<Self> {
         require(
             metadata.is_file()
                 && metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.mode() & 0o7777 == 0o600
+                && metadata.mode() & 0o7777 == mode
                 && metadata.nlink() == 1
                 && metadata.len() > 0
                 && metadata.len() <= maximum as u64,
@@ -74,6 +77,100 @@ impl Binding {
             modified: (metadata.mtime(), metadata.mtime_nsec()),
             changed: (metadata.ctime(), metadata.ctime_nsec()),
         })
+    }
+}
+
+/// Retain a large public payload's inode and private parent throughout a read-only
+/// observation. Hash through that descriptor; never load executable/bundle bytes
+/// into an evidence record or accept a same-byte inode replacement.
+pub(super) struct HeldAsset {
+    path: PathBuf,
+    parent: File,
+    parent_binding: DirectoryBinding,
+    file: File,
+    binding: Binding,
+    digest: String,
+    mode: u32,
+    deadline: std::time::Instant,
+}
+impl HeldAsset {
+    pub(super) fn open(
+        path: &Path,
+        digest: &str,
+        size: u64,
+        executable: bool,
+        deadline: std::time::Instant,
+    ) -> Result<Self> {
+        require(super::hex(digest, 64) && (1..=536_870_912).contains(&size))?;
+        let parent_path = path.parent().ok_or(REFUSED)?;
+        crate::installer_runtime::private_parent(parent_path)?;
+        let parent = fs::directory(parent_path, REFUSED)?;
+        let parent_binding = DirectoryBinding::observe(&parent)?;
+        let name = path.file_name().and_then(|v| v.to_str()).ok_or(REFUSED)?;
+        let file = fs::open_child(&parent, name, libc::O_RDONLY | libc::O_NONBLOCK, REFUSED)?;
+        let mode = if executable { 0o700 } else { 0o600 };
+        let binding =
+            Binding::observe_mode(file.metadata().map_err(|_| REFUSED)?, size as usize, mode)?;
+        require(binding.length == size)?;
+        let held = Self {
+            path: path.into(),
+            parent,
+            parent_binding,
+            file,
+            binding,
+            digest: digest.into(),
+            mode,
+            deadline,
+        };
+        held.check()?;
+        Ok(held)
+    }
+    pub(super) fn check(&self) -> Result<()> {
+        use sha2::{Digest, Sha256};
+        let parent_path = self.path.parent().ok_or(REFUSED)?;
+        crate::installer_runtime::private_parent(parent_path)?;
+        fs::require_directory_binding(parent_path, &self.parent, REFUSED)?;
+        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)?;
+        let named = fs::open_child(
+            &self.parent,
+            self.path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .ok_or(REFUSED)?,
+            libc::O_RDONLY | libc::O_NONBLOCK,
+            REFUSED,
+        )?;
+        for file in [&self.file, &named] {
+            require(
+                Binding::observe_mode(
+                    file.metadata().map_err(|_| REFUSED)?,
+                    self.binding.length as usize,
+                    self.mode,
+                )? == self.binding,
+            )?;
+        }
+        let mut hash = Sha256::new();
+        let mut offset = 0;
+        let mut buffer = [0u8; 65_536];
+        while offset < self.binding.length {
+            require(std::time::Instant::now() < self.deadline)?;
+            let length = (self.binding.length - offset).min(buffer.len() as u64) as usize;
+            self.file
+                .read_exact_at(&mut buffer[..length], offset)
+                .map_err(|_| REFUSED)?;
+            hash.update(&buffer[..length]);
+            offset += length as u64;
+        }
+        require(format!("{:x}", hash.finalize()) == self.digest)?;
+        require(
+            Binding::observe_mode(
+                self.file.metadata().map_err(|_| REFUSED)?,
+                self.binding.length as usize,
+                self.mode,
+            )? == self.binding,
+        )?;
+        fs::require_directory_binding(parent_path, &self.parent, REFUSED)?;
+        require(DirectoryBinding::observe(&self.parent)? == self.parent_binding)
     }
 }
 

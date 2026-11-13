@@ -313,3 +313,53 @@ profile and real installed proof owners. Startup reports cannot promote. The
 v1 report limits, original 23 cases, historical 32 GiB policy and existing signed
 publication/provenance gates are unchanged. No release, channel or AWS deployment
 was published or qualified by these source and fixture tests.
+
+## Published guest acquisition component
+
+The signed controller runner can additionally use
+`--observe-published-acquisition` for an original **published** rootless candidate
+invocation. The flag is opt-in on `scripts/installer_acceptance_runner.py`; it
+requires the original signed dispatch to return and its original workflow and
+grant to remain active. It does not dispatch, retry, download again or extend the
+grant. Staged candidates are refused before guest action.
+
+Run the collector from the protected Git checkout at the exact signed harness
+source, with the complete source closure required by `HarnessSources`. An
+extracted selfhost bundle does not supply that protected harness environment.
+
+The controller invokes the exact signed bootstrap operator's
+`published-acquisition-observe --install-dir <original-installation>
+--observation-id <fresh-uuid> --challenge <fresh-hex>` command. The native owner
+is executed through the source-pinned guest bootstrap's explicit read-only mode.
+That mode hashes and rebinds an open operator descriptor, then executes that
+descriptor without reopening its pathname. It skips the normal bootstrap,
+permission changes, download and install path. The native owner
+uses the fixed dispatch directory for that account and installation. It rebinds
+the retained `AcceptanceOnly` scope, the original bootstrap records, all 15
+native download receipts and the corresponding input bytes. Bootstrap inventory
+and executable bytes and sidecars are checked separately. Held descriptors,
+private ownership, inode and parent identities, link counts and metadata prevent
+replaced or changed inputs from becoming evidence. Only public identities,
+hashes and bounded records are exported; credentials are not read into this
+component.
+
+New native acquisitions write a version 2 completion with the exact intent hash
+and actual start/completion times. Historical version 1 completion records remain
+historical and cannot produce this observation. Partial or uncertain acquisitions
+retain their existing intent and bytes; no completion is inferred and no replay
+is authorized.
+
+The controller validates the fresh challenge, original source/operator/build and
+workflow attempts, target guest/disk/engine/installation, unexpired grant, and
+every receipt against its independently verified candidate files. It retains
+`installer-published-acquisition-observation.json` exclusively under private file
+custody. A repeated output name is refused. Without the separate startup observer,
+the runner still returns an incomplete checkpoint and its existing incomplete
+exit status; this additional file is a component observation only.
+
+This feature advances the published `anonymous-download` evidence owner. It does
+not establish staged anonymous acquisition, add a sixth startup case, change the
+full 37-case profile, mark a global writer implemented, grant `Ready`, create
+accepted admission or authorize a retained operator upgrade. Source and synthetic
+public-fixture tests do not demonstrate a live guest download. That result needs
+the actual freshly signed published invocation and its protected owner output.
