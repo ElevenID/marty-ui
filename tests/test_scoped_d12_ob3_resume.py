@@ -43,12 +43,13 @@ def test_acknowledged_ob3_replacement_continues_without_recreate_or_sql(tmp_path
     assert calls==["CHECKPOINT","CHECKPOINT","POST_CREATE_RECOVERY_VERIFIED","CONTINUE_STARTS"]
 
 
-@pytest.mark.parametrize("generation",["second","third"])
+@pytest.mark.parametrize("generation",["second","third","flow-fourth"])
 def test_ob3_acknowledged_replacement_journals_only_new_credential_create(tmp_path,monkeypatch,generation):
     from scoped_native_runtime import ref
     def save(name,value):
         p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
     inputs={"runId":"SYNTHETIC","rolloutProfile":"d05-membership-current-functional",
+            "uiRevision":"source","coreRevision":"core",
             "runScopedTrustLeaseProof":{"sha256":"new-generation"},"selection":{"sha256":"selected"},
             "databaseBefore":{"sha256":"database-before"},"executorSource":{"sha256":"reviewed-executor"},
             "composeArguments":["reviewed-compose"]}
@@ -57,11 +58,13 @@ def test_ob3_acknowledged_replacement_journals_only_new_credential_create(tmp_pa
               for command in ("migrate","verify-owned-schema") for step,_role in database.schema_steps(True,command)]
     proof={"operationState":save("database-state.json",{"operations":commands})}
     verified={"state":"SYNTHETIC_VERIFIED_DATABASE"}
-    recovery={"operation":("REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if generation=="third" else
+    recovery={"operation":("REPLACE_OB3_FLOW_QUIESCENT_CREDENTIALS_AND_RESUME" if generation=="flow-fourth" else
+                           "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if generation=="third" else
                            "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
               "quiescence":{"sha256":"quiescent"},"originalInputs":save("prior-inputs.json",original),
               "originalOperationState":save("ack.json",{"phase":"EFFECT_ACKNOWLEDGED"}),
-              "selected22":save("current-cids.json",{"synthetic":"preimage"})}
+              "selected22":save("current-cids.json",{"synthetic":"preimage"}),
+              "postStopOwned22":save("post-stop-cids.json",{"synthetic":"flow-preimage"})}
     recovery_ref=save("recovery.json",recovery)
     value=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
     value.i=inputs;value.profile="d05-membership-current-functional";value.read_only_preflight=False
@@ -71,17 +74,25 @@ def test_ob3_acknowledged_replacement_journals_only_new_credential_create(tmp_pa
     calls=[]
     monkeypatch.setattr(execution,"created_recovery_checkpoint",
         lambda *args,**kwargs:calls.append("CHECKPOINT") or (original,proof,verified))
+    monkeypatch.setattr(execution,"flow_quiescent_ob3_checkpoint",
+        lambda *args,**kwargs:calls.append("CHECKPOINT") or (original,proof,verified))
     monkeypatch.setattr(execution.overlay,"compose_recreate_arguments",
         lambda *args,**kwargs:calls.append("COMPOSE_NEW_GENERATION") or ["compose","up","--no-start"])
     db=SimpleNamespace(i={},commands=[],baseline_refs={},engine_id="SYNTHETIC",tenant_id="SYNTHETIC",
                        node=lambda mode,**kwargs:verified if mode=="verify" else pytest.fail("SQL replay"))
     value.recovery_preflight=lambda ref:(db,{}, {"restoreOrder":[]}, {"path":"synthetic-overlay"})
     value.g={"ob3_startup_plan":lambda ref:{"order":[]},
-             "prepare_created_credential_replacement":lambda ref:calls.append("PREPARE_CURRENT_CIDS") or recovery["selected22"]}
-    value.record=lambda phase,**kwargs:calls.append(phase)
+             "prepare_created_credential_replacement":lambda ref:calls.append("PREPARE_CURRENT_CIDS") or
+                 recovery["postStopOwned22" if generation=="flow-fourth" else "selected22"]}
+    def record(phase,**kwargs):
+        if phase=="CREATED_CREDENTIAL_REPLACEMENT_AUTHORIZED":
+            assert kwargs["priorCreatedSnapshot"]==recovery["postStopOwned22" if generation=="flow-fourth" else "selected22"]
+        calls.append(phase)
+    value.record=record
     value.command=lambda database,step,argv:calls.append(step) if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else pytest.fail("SQL or prior create replay")
     value._finish_after_create=lambda *args,**kwargs:calls.append("CONTINUE_STARTS") or kwargs["ob3_recovery"]
-    method=(value.replace_ob3_second_acknowledged_credential_replacement_and_resume if generation=="third" else
+    method=(value.replace_ob3_flow_quiescent_credentials_and_resume if generation=="flow-fourth" else
+            value.replace_ob3_second_acknowledged_credential_replacement_and_resume if generation=="third" else
             value.replace_ob3_acknowledged_credential_replacement_and_resume)
     assert method(recovery_ref)==recovery_ref
     assert calls==["CHECKPOINT","CHECKPOINT","PREPARE_CURRENT_CIDS","POST_CREATE_RECOVERY_VERIFIED",

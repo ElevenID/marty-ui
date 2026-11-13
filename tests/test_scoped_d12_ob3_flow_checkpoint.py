@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/"scripts"))
 import scoped_d12_native_execution as execution
 import scoped_passport_maintenance as maintenance
-from scoped_native_database import RECOVERY_SOURCE_FIELDS
+from scoped_native_database import RECOVERY_SOURCE_FIELDS,RECOVERY_TRUST_FIELDS
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES,journal_readback,ref
 
 
@@ -40,6 +40,12 @@ def case(tmp_path,monkeypatch):
               "plannedModels":{"elevenid-beta":model},"composeArguments":["docker","compose"],
               "runScopedTrustLeaseProof":old_lease}
     for key in RECOVERY_SOURCE_FIELDS:original[key]=save("old-"+key+".json",{})
+    old_grant=save("old-grant.json",{"policyName":"same-key-policy","keyVersion":1})
+    old_admission=save("old-admission.json",{"currentGrantObservation":{"originalGrant":old_grant}})
+    old_actor=save("old-actor.json",{"admissionResult":old_admission})
+    old_closed=save("old-closed.json",{"actorResult":old_actor})
+    original["runScopedTrustLeaseProof"]=save("old-bound-lease.json",{
+        "generationDirectory":"old","actualClosedAdmission":old_closed})
     original_ref=save("original-inputs.json",original)
     inputs=deepcopy(original)
     for key in RECOVERY_SOURCE_FIELDS:inputs[key]=save("new-"+key+".json",{})
@@ -173,3 +179,132 @@ def test_exact_flow_checkpoint_and_refusals(tmp_path,monkeypatch,fault):
     else:
         result=execution.flow_pending_ob3_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
         assert len(result[3])==17
+
+
+@pytest.mark.parametrize("fault",[None,"post-cid","post-job","old-generation","stop-outcome",
+    "foreign-historical-quiescence","foreign-input-quiescence",
+                                  "one-hour","renewable","different-key","expired"])
+def test_flow_quiescent_replacement_source_gate(tmp_path,monkeypatch,fault):
+    original,failed,intent,phase_a,save,backend=case(tmp_path,monkeypatch)
+    prefix=[step.removeprefix("START_") for step in failed["steps"]]
+    previous_ancillary={str(n):{"Id":f"{n+100:064x}"} for n in range(6)}
+    phase_a["currentAncillary6"]=save("capture/ancillary-with-ids.json",previous_ancillary)
+    phase_a_ref=save("phase-a-authority.json",phase_a)
+    current=json.loads(pathlib.Path(phase_a["currentOwned22"]["path"]).read_bytes())
+    outcomes={role:{"observedExitCode":1 if role=="flow" else 0}
+              for role in [*prefix,"flow"]}
+    stopped={role:{**row,"State":{**row["State"],"Status":"exited",
+                "Running":False,"Pid":0,"ExitCode":outcomes.get(role,{}).get("observedExitCode",0),
+                "Paused":False,"OOMKilled":False}} for role,row in current.items()}
+    observation={"schema":"marty.ob3-flow-quiescence/v1","authority":phase_a_ref,
+        "roles":[{"role":role,"containerId":row["Id"],"imageId":row["Image"],
+                  "state":"exited","running":False,"hostPid":0,
+                  "containerExitCode":row["State"]["ExitCode"],"paused":False,"oomKilled":False}
+                 for role,row in stopped.items()],"stopOutcomes":outcomes,
+        "fullStackQualified":False,"releaseQualified":False,"recordingQualified":False}
+    quiescence=save("phase-a-quiescence.json",observation)
+    state={**failed,"phase":"OB3_FLOW_PARTIAL_QUIESCENT",
+        "recoveryAuthority":phase_a_ref,"originalOperationState":phase_a["originalOperationState"],
+        "priorStartAcks":failed["startAcks"],"startAcks":{},"steps":[],
+        "pendingStep":None,"pendingArgv":None,"pendingContainerId":None,
+        "ob3StopOutcomes":outcomes,"ob3Quiescence":quiescence}
+    state_ref=save("post-stop-state.json",state)
+    job_fields={"state":"COMPLETE","exitCode":0,"jobClosed":True,"terminalActiveProcesses":0,
+        **{key:False for key in ("timedOut","forcedTermination","cancelled","hostMarginBreached")}}
+    phase_a_job=save("phase-a-job.json",job_fields)
+    phase_a_result=save("phase-a-result.json",{"schema":"marty.d12-ob3-flow-quiescence/v1",
+        "quiescence":quiescence,"fullStackQualified":False})
+    post_job=save("post-stop-job.json",job_fields)
+    post_owned=save("post-stop/current22.json",stopped)
+    post_ancillary=save("post-stop/ancillary6.json",previous_ancillary)
+    post_result=save("post-stop/result.json",{
+        "state":"OB3_FLOW_POSTSTOP_JOURNAL_AND_CURRENT28_CAPTURE_COMPLETE",
+        "quiescenceJob":phase_a_job,"serviceWrites":False,"sqlWrites":False,
+        "journalContentRead":True,"identity28StableDuringRead":True})
+    files={}
+    for name,reference,value in (("build-state.json",state_ref,state),
+                                 ("build-apply-intent.json",phase_a["originalApplyIntent"],intent)):
+        raw=pathlib.Path(reference["path"]).read_bytes()
+        files[name]={"present":True,"document":value,"bytes":len(raw),**journal_readback(raw)}
+    files["build-receipt.json"]={"present":False}
+    files["configuration-receipt.json"]={"present":False}
+    post_journal=save("post-stop/journal.json",[{
+        "state":"EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE","mountReadOnly":True,
+        "root":backend["rootProof"],"files":files}])
+    inputs=deepcopy(original)
+    for key in RECOVERY_SOURCE_FIELDS:inputs[key]=save("next-"+key+".json",{})
+    owner=save("beta8h-validator.py",{})
+    request=save("beta8h-validation-request.json",{"generationDirectory":"new"})
+    grant=save("beta8h-grant.json",{"renewable":fault=="renewable","orphan":True,
+        "creationTtlSeconds":28800,"explicitMaxTtlSeconds":28800,
+        "policyName":"other-policy" if fault=="different-key" else "same-key-policy","keyVersion":1})
+    proposal={"trust":{"nativeProfile":"passport-role-renew" if fault=="one-hour" else "passport-role-renew-beta-8h",
+        "certificateTtlSeconds":28800,"tokenMaxTtlSeconds":28800,
+        "existingKeyRequired":True,"tokenRenewable":False,"tokenOrphan":True,
+        "policyName":"same-key-policy","nativeKeyVersion":1}}
+    armed_plan=save("beta8h-plan.json",{"proposal":proposal})
+    producer=save("beta8h-producer.json",{"armedPlan":armed_plan})
+    admission=save("beta8h-admission.json",{"profile":"passport-role-renew-beta-8h",
+        "certificateAndTokenMaxTtlSeconds":28800,
+        "currentGrantObservation":{"originalProducer":producer,"originalGrant":grant,
+            "nativeSpkiMatchesLeaf":True,"retainedKeySpkiMatchesPinnedPreviousLeaf":True}})
+    actor=save("beta8h-actor.json",{"admissionResult":admission})
+    closed=save("beta8h-closed.json",{"schema":"marty.passport-role-repair-execution/v1",
+        "actorResult":actor,"jobResult":save("beta8h-job.json",job_fields)})
+    materialized=save("beta8h-materialized.json",{
+        "state":"WINDOWS_THREE_FILE_MATERIALIZATION_PASS",
+        "files":{name:{} for name in ("trust_profile_workload_server_cert",
+            "trust_profile_workload_server_kms_token","workload_identity_ca_cert")}})
+    inputs["runScopedTrustLeaseProof"]=save("next-lease.json",{
+        "schema":"marty.current10-run-scoped-trust-lease/v1",
+        "generationDirectory":"new","validationOwner":owner,"validationRequest":request,
+        "minimumRemainingSeconds":1200,"actualNativeGrantExpiryUnixSeconds":0 if fault=="expired" else 2_000_000_000,
+        "actualClosedAdmission":closed,
+        "actualMaterialization":materialized})
+    recovery={"schema":"marty.d12-ob3-flow-quiescent-recovery/v1",
+        "operation":"REPLACE_OB3_FLOW_QUIESCENT_CREDENTIALS_AND_RESUME",
+        "scope":"OB3_FUNCTIONAL_ONLY","replaceCredentialGeneration":True,
+        "draftOnly":False,"dispatchAuthorized":True,"runId":inputs["runId"],
+        "deferredRoles":[execution.OB3_DEFERRED_ROLE],
+        "allowedScenarios":list(execution.OB3_ALLOWED_SCENARIOS),
+        "originalInputs":save("phase-a-inputs.json",original),
+        "previousRecoveryAuthority":phase_a_ref,
+        "originalOperationState":state_ref,"originalApplyIntent":phase_a["originalApplyIntent"],
+        "quiescenceJob":phase_a_job,"quiescenceResult":phase_a_result,
+        "postStopJob":post_job,"postStopResult":post_result,
+        "postStopOwned22":post_owned,"postStopAncillary6":post_ancillary,
+        "postStopJournalRead":post_journal,
+        "betaEightHourValidationOwner":owner,"betaEightHourValidationRequest":request,
+        "sourceMap":{key:{"original":original[key],"recovery":inputs[key]}
+                     for key in RECOVERY_SOURCE_FIELDS},
+        "trustDataMap":{key:{"original":original.get(key),"recovery":inputs.get(key)}
+                        for key in RECOVERY_TRUST_FIELDS}}
+    prior=json.loads(pathlib.Path(phase_a["previousRecoveryAuthority"]["path"]).read_bytes())
+    recovery["quiescence"]=prior["quiescence"]
+    recovery["maintenanceResourceRecovery"]=save("flow-resource.json",{
+        "schema":"marty.d12-maintenance-resource-recovery/v1",
+        "ob3FlowQuiescent":{"authority":phase_a_ref,"quiescence":quiescence,
+            "quiescenceJob":phase_a_job,"current22":post_owned,"current22Job":post_job,
+            "ancillary6":post_ancillary,"journalRead":post_journal,"result":post_result}})
+    monkeypatch.setattr(execution,"flow_pending_ob3_checkpoint",
+                        lambda *args,**kwargs:(original,{}, {},prefix))
+    monkeypatch.setattr(execution,"_recovery_trust_models",lambda *args,**kwargs:None,raising=False)
+    import scoped_native_database as database
+    monkeypatch.setattr(database,"_recovery_trust_models",lambda *args,**kwargs:None)
+    if fault=="post-cid":
+        bad=deepcopy(stopped);bad["flow"]["Id"]="f"*64
+        recovery["postStopOwned22"]=save("post-stop/foreign22.json",bad)
+    elif fault=="post-job":recovery["postStopJob"]=save("post-stop/open-job.json",{"state":"COMPLETE"})
+    elif fault=="old-generation":inputs["runScopedTrustLeaseProof"]=original["runScopedTrustLeaseProof"]
+    elif fault=="foreign-historical-quiescence":
+        recovery["quiescence"]=save("foreign-historical-quiescence.json",{})
+    elif fault=="foreign-input-quiescence":
+        inputs["quiescence"]=save("foreign-input-quiescence.json",{})
+    elif fault=="stop-outcome":
+        bad=deepcopy(state);bad["ob3StopOutcomes"].pop("flow")
+        recovery["originalOperationState"]=save("bad-state.json",bad)
+    if fault:
+        with pytest.raises((ValueError,KeyError,AssertionError)):
+            execution.flow_quiescent_ob3_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+    else:
+        execution.flow_quiescent_ob3_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
