@@ -31,9 +31,12 @@ def case(tmp_path,monkeypatch):
     before=save("before.json",{"roles":[]})
     model=save("model.json",{})
     plan=save("plan.json",{"composeModels":{"elevenid-beta":model}})
+    selected_sha="c"*64
+    selection=save("selection.json",{"sourceRevision":"selected-ui",
+        "binaries":{"flow":{"sha256":selected_sha}}})
     original={"runId":"SYNTHETIC","uiRevision":"old-ui","coreRevision":"old-core",
               "rolloutProfile":"d05-membership-current-functional","runtimeBefore":before,
-              "maintenancePlan":plan,"selection":save("selection.json",{}),
+              "maintenancePlan":plan,"selection":selection,
               "plannedModels":{"elevenid-beta":model},"composeArguments":["docker","compose"],
               "runScopedTrustLeaseProof":old_lease}
     for key in RECOVERY_SOURCE_FIELDS:original[key]=save("old-"+key+".json",{})
@@ -104,13 +107,15 @@ def case(tmp_path,monkeypatch):
     contracts={role:save("contracts/"+role+".json",{
         "schema":"marty.reviewed-flow-crash-stop/v1" if role=="flow" else "marty.reviewed-graceful-stop/v1",
         "role":role,"containerId":rows[role]["containerId"],"imageId":rows[role]["imageId"],
-        "sourceRevision":rows[role]["source"],"elfSha256":rows[role]["sha256"],
+        "sourceRevision":"selected-ui" if role=="flow" else rows[role]["source"],
+        "elfSha256":selected_sha if role=="flow" else rows[role]["sha256"],
         "signal":"SIGTERM","allowedExitCodes":[0,1,143] if role=="flow" else [0],
         "noAutomaticSigkill":True,"gracefulShutdownVerified":False,
         "observedExitCode":1,"failedStart":state_ref,
         "sourceProof":save("proofs/"+role+".json",{
             "schema":"marty.graceful-shutdown-source-proof/v1","role":role,
-            "sourceRevision":rows[role]["source"],"elfSha256":rows[role]["sha256"],
+            "sourceRevision":"selected-ui" if role=="flow" else rows[role]["source"],
+            "elfSha256":selected_sha if role=="flow" else rows[role]["sha256"],
             "supportedSignals":["SIGTERM"]})}) for role in [*prefix,"flow"]}
     recovery={"schema":"marty.d12-ob3-flow-pending-recovery/v1",
         "operation":"QUIESCE_OB3_FLOW_PENDING_STARTS","scope":"OB3_FUNCTIONAL_ONLY",
@@ -134,7 +139,7 @@ def case(tmp_path,monkeypatch):
     return inputs,state,intent,recovery,save,{"rootProof":root}
 
 
-@pytest.mark.parametrize("fault",[None,"operation","cid","prefix","journal","job","trust-drift","stop-contract","failed-mode","failed-request"])
+@pytest.mark.parametrize("fault",[None,"operation","cid","prefix","journal","job","trust-drift","stop-contract","flow-source","flow-elf","failed-mode","failed-request"])
 def test_exact_flow_checkpoint_and_refusals(tmp_path,monkeypatch,fault):
     inputs,state,intent,recovery,save,backend=case(tmp_path,monkeypatch)
     if fault=="operation":recovery["operation"]="RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
@@ -150,6 +155,10 @@ def test_exact_flow_checkpoint_and_refusals(tmp_path,monkeypatch,fault):
     elif fault=="job":recovery["reconciliationJob"]=save("open-job.json",{"state":"COMPLETE","exitCode":0})
     elif fault=="trust-drift":inputs["runScopedTrustLeaseProof"]=save("foreign-lease.json",{})
     elif fault=="stop-contract":recovery["stopContracts"].pop("flow")
+    elif fault in ("flow-source","flow-elf"):
+        contract=json.loads(pathlib.Path(recovery["stopContracts"]["flow"]["path"]).read_bytes())
+        contract["sourceRevision" if fault=="flow-source" else "elfSha256"]="foreign"
+        recovery["stopContracts"]["flow"]=save("contracts/foreign-flow.json",contract)
     elif fault=="failed-mode":
         invocation=json.loads(pathlib.Path(recovery["failedCutoverInvocation"]["path"]).read_bytes())
         invocation["executionMode"]="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"

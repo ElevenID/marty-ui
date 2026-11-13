@@ -347,6 +347,7 @@ def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend
             and recovery.get("originalApplyIntent")==previous["originalApplyIntent"],
             "D12_OB3_FLOW_PENDING_STATE_CHANGED")
     rows=maintenance.exact_roles(load(state["created"]),inputs["rolloutProfile"])
+    selected=load(inputs["selection"])
     plan=load(original["maintenancePlan"]);before=load(original["runtimeBefore"])
     models={name:load(reference) for name,reference in plan["composeModels"].items()}
     from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
@@ -391,16 +392,24 @@ def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend
             "D12_OB3_FLOW_STOP_SET_CHANGED")
     for role,reference in recovery["stopContracts"].items():
         contract=load(reference)
+        source=(selected["sourceRevision"] if role in selected["binaries"]
+                else rows[role]["source"])
+        elf=(selected["binaries"][role]["sha256"] if role in selected["binaries"]
+             else rows[role]["sha256"])
         require(contract.get("role")==role and contract.get("containerId")==rows[role]["containerId"]
+                and contract.get("sourceRevision")==source and contract.get("elfSha256")==elf
                 and contract.get("noAutomaticSigkill") is True
                 and isinstance(contract.get("sourceProof"),dict),
                 "D12_OB3_FLOW_STOP_CONTRACT_CHANGED:"+role)
         proof_source=load(contract["sourceProof"])
+        require(proof_source.get("role")==role and proof_source.get("sourceRevision")==source
+                and proof_source.get("elfSha256")==elf,
+                "D12_OB3_FLOW_STOP_PROOF_CHANGED:"+role)
         if role=="flow":
             require(contract.get("schema")=="marty.reviewed-flow-crash-stop/v1"
                     and contract.get("imageId")==rows[role]["imageId"]
-                    and contract.get("sourceRevision")==rows[role]["source"]
-                    and contract.get("elfSha256")==rows[role]["sha256"]
+                    and contract.get("sourceRevision")==selected["sourceRevision"]
+                    and contract.get("elfSha256")==selected["binaries"][role]["sha256"]
                     and contract.get("signal")=="SIGTERM"
                     and contract.get("allowedExitCodes")==[0,1,143]
                     and contract.get("gracefulShutdownVerified") is False
@@ -408,8 +417,8 @@ def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend
                     and contract.get("failedStart")==recovery["originalOperationState"]
                     and proof_source.get("schema")=="marty.graceful-shutdown-source-proof/v1"
                     and proof_source.get("role")=="flow"
-                    and proof_source.get("sourceRevision")==rows[role]["source"]
-                    and proof_source.get("elfSha256")==rows[role]["sha256"]
+                    and proof_source.get("sourceRevision")==selected["sourceRevision"]
+                    and proof_source.get("elfSha256")==selected["binaries"][role]["sha256"]
                     and "SIGTERM" in proof_source.get("supportedSignals",[]),
                     "D12_OB3_FLOW_CRASH_STOP_PROOF_REQUIRED")
     journal=load(recovery["journalRead"])
