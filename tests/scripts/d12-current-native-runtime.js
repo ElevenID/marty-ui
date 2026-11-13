@@ -81,15 +81,40 @@ function observeOwned({before:beforeRef,selection:selectionRef,created:createdRe
 const OB3_SCENARIOS=Object.freeze(['D01_ORGANIZATION_OB3','D05_MEMBERSHIP_OB3','D05_MEMBERSHIP_EXPIRED_NEGATIVE','D05_MEMBERSHIP_UNTRUSTED_NEGATIVE','D07_CANVAS_OB3']);
 function ob3Context(inputs){
  const authority=runtime.boundJson(inputs.ob3Authority);
- assert.equal(authority.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(authority.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
+ const flow=authority.schema==='marty.d12-ob3-flow-quiescent-recovery/v1';
+ assert.equal(authority.schema,flow?'marty.d12-ob3-flow-quiescent-recovery/v1':'marty.d12-ob3-quiescent-recovery/v1');
+ assert.equal(authority.operation,flow?'REPLACE_OB3_FLOW_QUIESCENT_CREDENTIALS_AND_RESUME':'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
  assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);assert.equal(authority.runId,inputs.runId);assert.equal(authority.scope,'OB3_FUNCTIONAL_ONLY');
  assert.equal(authority.engineId,inputs.engineId);assert.deepEqual(Object.keys(inputs).sort(),['before','selection','created','startAcks','runId','engineId','ob3Authority'].sort());assert.deepEqual(authority.allowedScenarios,OB3_SCENARIOS);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);
  const original=runtime.boundJson(authority.originalInputs);assert.deepEqual(original.runtimeBefore,inputs.before);assert.deepEqual(original.selection,inputs.selection);
  const state=runtime.boundJson(authority.originalOperationState),resource=runtime.boundJson(authority.maintenanceResourceRecovery);
+ if(flow){
+  const context=runtime.maintenanceOb3FlowQuiescentContext(resource,state);
+  assert.deepEqual(context.post.authority,authority.previousRecoveryAuthority);
+  assert.deepEqual(context.post.current22,authority.postStopOwned22);
+  assert.deepEqual(context.post.current22Job,authority.postStopJob);
+  assert.deepEqual(context.post.quiescenceJob,authority.quiescenceJob);
+  const pending=runtime.boundJson(authority.previousRecoveryAuthority);
+  assert.equal(pending.schema,'marty.d12-ob3-flow-pending-recovery/v1');
+  assert.equal(pending.operation,'QUIESCE_OB3_FLOW_PENDING_STARTS');assert.equal(pending.runId,inputs.runId);
+  const third=runtime.boundJson(pending.previousRecoveryAuthority);
+  assert.equal(third.schema,'marty.d12-ob3-acknowledged-replacement-recovery/v1');
+  assert.equal(third.operation,'REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME');assert.equal(third.runId,inputs.runId);
+  const second=runtime.boundJson(third.previousRecoveryAuthority);
+  assert.equal(second.schema,'marty.d12-ob3-acknowledged-replacement-recovery/v1');
+  assert.equal(second.operation,'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME');assert.equal(second.runId,inputs.runId);
+  const legacy=runtime.boundJson(second.previousRecoveryAuthority);
+  assert.equal(legacy.schema,'marty.d12-ob3-quiescent-recovery/v1');
+  assert.equal(legacy.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');assert.equal(legacy.runId,inputs.runId);
+  const historical=runtime.maintenanceOb3QuiescentContext(runtime.boundJson(legacy.maintenanceResourceRecovery),runtime.boundJson(legacy.originalOperationState));
+  assert.equal(context.current['passport-beta-bureau'].Id,historical.current['passport-beta-bureau'].Id);
+  assert.deepEqual(authority.quiescence,legacy.quiescence);
+  return {...context,quiescence:historical.quiescence,deferredFailure:legacy.deferredFailure,authority};
+ }
  const context=runtime.maintenanceOb3QuiescentContext(resource,state);
  assert.deepEqual(resource.ob3Quiescent.authority,authority.previousRecoveryAuthority);assert.deepEqual(resource.ob3Quiescent.current22,authority.selected22);assert.deepEqual(resource.ob3Quiescent.current22Job,authority.selected22Job);assert.deepEqual(resource.ob3Quiescent.quiescenceJob,authority.quiescenceJob);
  assert.deepEqual(authority.deferredFailure,state.deferredFailure);runtime.boundJson(authority.deferredFailure);
- return {...context,authority};
+ return {...context,deferredFailure:authority.deferredFailure,authority};
 }
 function observeDeferredBureau(prior,created,context,readDocker){
  const saved=context.current['passport-beta-bureau'];assert.equal(saved.Id,prior.containerId);assert.equal(created.containerId,prior.containerId);
@@ -109,7 +134,7 @@ function observeDeferredBureau(prior,created,context,readDocker){
 function observeOb3(inputs,transport={}){
  const context=ob3Context(inputs),selection=runtime.boundJson(inputs.selection);assert.equal(selection.profile,CURRENT10.profile);
  const observed=observeOwned(inputs,transport,context);
- const result={...observed,schema:'marty.d12-current-native-ob3-observation/v1',scope:'FUNCTIONAL_ONLY',readinessScope:'OB3_FUNCTIONAL_ONLY',fullStackQualified:false,ob3RuntimeReady:true,nativeRuntimeReady:false,deferredRoles:['passport-beta-bureau'],deferredFailure:context.authority.deferredFailure,allowedScenarios:[...OB3_SCENARIOS],inputs};
+ const result={...observed,schema:'marty.d12-current-native-ob3-observation/v1',scope:'FUNCTIONAL_ONLY',readinessScope:'OB3_FUNCTIONAL_ONLY',fullStackQualified:false,ob3RuntimeReady:true,nativeRuntimeReady:false,deferredRoles:['passport-beta-bureau'],deferredFailure:context.deferredFailure,allowedScenarios:[...OB3_SCENARIOS],inputs};
  validateOb3Observation(result);return result;
 }
 function validateOb3Observation(value){
@@ -119,7 +144,7 @@ function validateOb3Observation(value){
  assert.deepEqual(value.deferredRoles,['passport-beta-bureau']);assert.deepEqual(value.allowedScenarios,OB3_SCENARIOS);
  const context=ob3Context(value.inputs),before=runtime.boundJson(value.inputs.before),selection=runtime.boundJson(value.inputs.selection),created=runtime.boundJson(value.inputs.created),starts=runtime.boundJson(value.inputs.startAcks);
  assert.equal(selection.profile,CURRENT10.profile);assert.equal(selection.sourceRevision,CURRENT10.source);assert.equal(selection.coreRevision,CURRENT10.core);assert.deepEqual(selection.roleBinaries,CURRENT10.roles);assert.deepEqual(Object.keys(selection.binaries).sort(),Object.keys(CURRENT10.roles).sort());
- assert.deepEqual(value.deferredFailure,context.authority.deferredFailure);assert.equal(before.roles.length,22);assert.equal(value.roles.length,22);assert.equal(new Set(value.roles.map(row=>row.role)).size,22);assert.equal(new Set(value.roles.map(row=>row.containerId)).size,22);assert.deepEqual(value.roles.map(row=>row.role).sort(),before.roles.map(row=>row.role).sort());
+ assert.deepEqual(value.deferredFailure,context.deferredFailure);assert.equal(before.roles.length,22);assert.equal(value.roles.length,22);assert.equal(new Set(value.roles.map(row=>row.role)).size,22);assert.equal(new Set(value.roles.map(row=>row.containerId)).size,22);assert.deepEqual(value.roles.map(row=>row.role).sort(),before.roles.map(row=>row.role).sort());
  assert.equal(created.runId,value.inputs.runId);assert.equal(created.roles.length,22);assert.equal(new Set(created.roles.map(row=>row.role)).size,22);assert.equal(new Set(created.roles.map(row=>row.containerId)).size,22);assert.deepEqual(created.roles.map(row=>row.role).sort(),before.roles.map(row=>row.role).sort());assert.equal(new Set(before.roles.map(row=>row.containerId)).size,22);assert.equal(starts.runId,value.inputs.runId);assert.deepEqual(Object.keys(starts.acks).sort(),before.roles.map(row=>row.role).filter(role=>role!=='passport-beta-bureau').sort());
  for(const prior of before.roles){
   const row=value.roles.find(value=>value.role===prior.role),owned=created.roles.find(value=>value.role===prior.role);assert(row&&owned);assert.equal(row.imageId,prior.imageId);assert.equal(owned.imageId,prior.imageId);assert.equal(owned.state,CURRENT10.roles[prior.role]?'created':'exited');assert.equal(owned.hostPid,0);assert.equal(row.project,prior.project);assert.equal(row.containerId,owned.containerId);assert(HASH.test(row.containerId));

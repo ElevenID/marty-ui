@@ -218,13 +218,16 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
     deferred=None
     if ob3_authority is not None:
         authority=json.loads(read_ref(ob3_authority).read_bytes())
-        require(profile=="d05-membership-current-functional" and authority.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
-                and authority.get("operation")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+        flow=authority.get("schema")=="marty.d12-ob3-flow-quiescent-recovery/v1"
+        require(profile=="d05-membership-current-functional"
+                and (authority.get("schema"),authority.get("operation")) in (
+                    ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
+                    ("marty.d12-ob3-flow-quiescent-recovery/v1","REPLACE_OB3_FLOW_QUIESCENT_CREDENTIALS_AND_RESUME"))
                 and authority.get("dispatchAuthorized") is True and authority.get("draftOnly") is False
                 and authority.get("deferredRoles")==["passport-beta-bureau"] and after.get("readinessScope")=="OB3_FUNCTIONAL_ONLY"
                 and after.get("fullStackQualified") is False and after.get("nativeRuntimeReady") is False and after.get("ob3RuntimeReady") is True,
                 "D12_CLOSED_OB3_RUNTIME_AUTHORITY_REQUIRED")
-        deferred=json.loads(read_ref(authority["selected22"]).read_bytes())["passport-beta-bureau"]
+        deferred=json.loads(read_ref(authority["postStopOwned22" if flow else "selected22"]).read_bytes())["passport-beta-bureau"]
     changes = []
     for role, prior in old.items():
         actual = new[role]

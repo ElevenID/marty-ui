@@ -129,7 +129,7 @@ function observerFixture(t){
   if(argv[2]==='sha256sum')return hashById[argv[1]]+'  '+argv[3];
   assert.deepEqual(argv.slice(2),['cat','/proc/1/status']);return 'Uid:\t10001\t10001\t10001\t10001\nGid:\t10001\t10001\t10001\t10001\n';
  };
- return {observer,inputs,transport,live,execs:()=>execs,invoke:()=>observer.observeOb3(inputs,{readDocker:transport})};
+ return {observer,inputs,transport,live,file:f.file,read,post,nextAuthority,execs:()=>execs,invoke:()=>observer.observeOb3(inputs,{readDocker:transport})};
 }
 test('controlled OB3 transport requests process facts for21 roles and validates both cached shapes',t=>{
  const f=observerFixture(t),out=f.invoke();assert.equal(out.roles.length,22);assert(f.execs()>0);assert.equal(out.fullStackQualified,false);assert.equal(out.nativeRuntimeReady,false);assert.equal(out.ob3RuntimeReady,true);
@@ -187,4 +187,29 @@ for(const fault of ['none','wrong-upstream','wrong-health-cause'])test('controll
  const result=invoke();assert.equal(result.ob3QuiescentCheckpoint,true);assert.equal(result.fullStackQualified,false);assert.equal(result.functionalRuntimeQualified,false);
  assert.equal(result.dependencyHealthObservations.length,1);const classification=result.resources.find(row=>row.role==='nginx-proxy').maintenanceHealthClassification;
  assert.equal(classification.state,'EXPECTED_MAINTENANCE_UPSTREAM_STOPPED');assert.equal(classification.functionalReadiness,false);assert.equal(classification.evidenceSha256,f.recovery.proxyDependencyHealth.sha256);
+});
+
+test('controlled Flow successor observes 21 roles with historical Bureau proof',t=>{
+ const f=observerFixture(t),save=f.file,legacy={...f.nextAuthority,quiescence:f.post.quiescence};
+ const legacyRef=save('flow-legacy.json',legacy);
+ const secondRef=save('flow-second.json',{schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',operation:'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',runId:f.inputs.runId,previousRecoveryAuthority:legacyRef});
+ const thirdRef=save('flow-third.json',{schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',operation:'REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',runId:f.inputs.runId,previousRecoveryAuthority:secondRef});
+ const pendingRef=save('flow-pending.json',{schema:'marty.d12-ob3-flow-pending-recovery/v1',operation:'QUIESCE_OB3_FLOW_PENDING_STARTS',runId:f.inputs.runId,dispatchAuthorized:true,draftOnly:false,previousRecoveryAuthority:thirdRef});
+ const current=f.read(f.post.current22),roles=Object.entries(current).map(([role,row])=>({role,containerId:row.Id,imageId:row.Image,state:row.State.Status,containerExitCode:row.State.ExitCode}));
+ const prefix=roles.filter(row=>!['passport-beta-bureau','flow'].includes(row.role)).slice(0,17);
+ const outcomes=Object.fromEntries([...prefix,roles.find(row=>row.role==='flow')].map(row=>[row.role,{observedExitCode:row.containerExitCode}]));
+ const observationRef=save('flow-quiescence.json',{schema:'marty.ob3-flow-quiescence/v1',runId:f.inputs.runId,authority:pendingRef,roles,stopOutcomes:outcomes,fullStackQualified:false,releaseQualified:false,recordingQualified:false});
+ const stateRef=save('flow-state.json',{schema:'marty.d12-current-native-operation/v1',phase:'OB3_FLOW_PARTIAL_QUIESCENT',runId:f.inputs.runId,recoveryAuthority:pendingRef,ob3Quiescence:observationRef,ob3StopOutcomes:outcomes,priorStartAcks:Object.fromEntries(prefix.map(row=>[row.role,{}])),pendingStep:null,pendingArgv:null,pendingContainerId:null});
+ const ancillary6=save('flow-ancillary.json',Object.fromEntries(['docs','nginx-proxy','openbao','postgres','redis','keycloak'].map(role=>[role,{Id:role}])));
+ const job=save('flow-job.json',{schema:'marty.windows-job-result/v1',state:'COMPLETE',exitCode:0,jobClosed:true,terminalActiveProcesses:0,forcedTermination:false,timedOut:false,cancelled:false,hostMarginBreached:false});
+ const result=save('flow-result.json',{state:'OB3_FLOW_POSTSTOP_JOURNAL_AND_CURRENT28_CAPTURE_COMPLETE',quiescenceJob:job,serviceWrites:false,sqlWrites:false,identity28StableDuringRead:true,journalContentRead:true});
+ const post={authority:pendingRef,quiescence:observationRef,quiescenceJob:job,current22:f.post.current22,current22Job:job,ancillary6,journalRead:save('flow-journal.json',{}),result};
+ const resource=save('flow-resource.json',{...f.read(legacy.maintenanceResourceRecovery),ob3Quiescent:undefined,ob3FlowQuiescent:post});
+ const authority={...legacy,schema:'marty.d12-ob3-flow-quiescent-recovery/v1',operation:'REPLACE_OB3_FLOW_QUIESCENT_CREDENTIALS_AND_RESUME',previousRecoveryAuthority:pendingRef,originalOperationState:stateRef,maintenanceResourceRecovery:resource,postStopOwned22:post.current22,postStopJob:post.current22Job,quiescenceJob:post.quiescenceJob};
+ f.inputs.ob3Authority=save('flow-current-authority.json',authority);
+ const out=f.invoke();assert.equal(out.roles.length,22);assert.equal(out.deferredFailure.sha256,legacy.deferredFailure.sha256);assert.equal(out.roles.find(row=>row.role==='passport-beta-bureau').processObserved,false);
+ f.observer.validateOb3Observation(out);
+ const wrongParent=save('flow-wrong-parent.json',{schema:'marty.d12-ob3-flow-pending-recovery/v1',operation:'QUIESCE_OB3_FLOW_PENDING_STARTS',runId:'foreign-run',dispatchAuthorized:true,draftOnly:false,previousRecoveryAuthority:thirdRef});
+ authority.previousRecoveryAuthority=wrongParent;f.inputs.ob3Authority=save('flow-wrong-parent-authority.json',authority);assert.throws(f.invoke);
+ authority.previousRecoveryAuthority=pendingRef;authority.operation='UNREVIEWED_FLOW_MODE';f.inputs.ob3Authority=save('flow-wrong-authority.json',authority);assert.throws(f.invoke);
 });
