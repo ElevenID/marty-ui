@@ -326,6 +326,11 @@ function installPrivateReviewPage({role},decide) {
   requestAnimationFrame(tick);
 }
 
+function privateReviewPageInitScript(role) {
+  assert(['wallet','login','operator','applicant'].includes(role));
+  return '('+installPrivateReviewPage.toString()+')('+JSON.stringify({role})+','+privateReviewSurfaceDecision.toString()+');';
+}
+
 function createPrivateReviewRecording(binding,{artifactDir}={}) {
   if(!binding)return null;
   assert.equal(binding.scope,'PRIVATE_REVIEW_ONLY');assert.equal(binding.scenario,'membership-badge-login');
@@ -346,18 +351,18 @@ function createPrivateReviewRecording(binding,{artifactDir}={}) {
         assert.deepEqual(Object.keys(event).sort(),['role','kind','trusted','x','y','button','elapsedMs'].sort());assert(['pointermove','pointerdown','pointerup'].includes(event.kind));
         for(const key of ['x','y','button','elapsedMs'])assert(Number.isFinite(event[key]));assert(event.x>=0&&event.y>=0&&event.elapsedMs>=0);if(events.length>=4096){eventOverflow=true;return;}
         // Driver-received monotonic elapsed time, not video-frame or OS timing.
-        events.push({type:event.kind,x:event.x,y:event.y,at:performance.now()-pointerOrigin});
+        events.push({role,type:event.kind,x:event.x,y:event.y,at:performance.now()-pointerOrigin});
       });
       await context.exposeBinding('__martyPrivateReviewSurfaceEvent',({page},event)=>{
         try{assert.equal(page.context(),context);assert.equal(event.role,role);assert.deepEqual(Object.keys(event).sort(),['role','state','code'].sort());assert(['POLICY_ACTIVE','BLOCKED'].includes(event.state));assert(event.code===null||/^[A-Z_]{1,64}$/.test(event.code));assert(surfaceEvents.length<256);surfaceEvents.push({...event});if(event.state==='POLICY_ACTIVE')activeRoles.add(role);}
         catch(error){surfaceFailure=true;throw error;}
       });
       // The same pure policy body is injected, without a second implementation.
-      await context.addInitScript({content:'('+installPrivateReviewPage.toString()+')('+JSON.stringify({role})+','+privateReviewSurfaceDecision.toString()+');'});
+      await context.addInitScript({content:privateReviewPageInitScript(role)});
     },
     trackPage(role,page){assert.equal(contexts.get(page.context()),role);assert(!videos.has(role),'One captured page per role');const video=page.video();assert(video,'Private captured video required');videos.set(role,video);},
     async finish({ready,cleanupComplete}){
-      assert(!finalized);assert(!surfaceFailure,'Private surface evidence invalid or overflowed');assert(!surfaceEvents.some(event=>event.state==='BLOCKED'),'Private visible-surface policy refused');assert([...videos.keys()].every(role=>activeRoles.has(role)),'Each page requires an active visible-surface policy');assert(!eventOverflow,'Private cursor evidence bound exceeded');assert.equal(ready,true,'Current functional rerun must pass');assert.equal(cleanupComplete,true,'Owned cleanup must pass');assert(videos.has('wallet')&&videos.has('login'));assert(events.some(event=>event.type==='pointerdown'),'Actual delivered browser clicks required');
+      assert(!finalized);assert(!surfaceFailure,'Private surface evidence invalid or overflowed');assert(!surfaceEvents.some(event=>event.state==='BLOCKED'),'Private visible-surface policy refused');assert([...videos.keys()].every(role=>activeRoles.has(role)),'Each page requires an active visible-surface policy');assert(!eventOverflow,'Private cursor evidence bound exceeded');assert.equal(ready,true,'Current functional rerun must pass');assert.equal(cleanupComplete,true,'Owned cleanup must pass');assert(videos.has('wallet')&&videos.has('login'));assert(events.some(event=>event.type==='pointerdown'),'Actual delivered browser clicks required');assert(events.every(event=>videos.has(event.role)),'Cursor event role requires its actual captured video');
       const rawMedia={},seenMedia=new Set();
       for(const [role,video]of videos){
         const filename=path.resolve(await video.path());assert.equal(path.dirname(filename),directory);assert(!seenMedia.has(filename),'Captured roles require distinct page videos');seenMedia.add(filename);const stat=fs.lstatSync(filename);assert(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1&&stat.size>0&&stat.size<=2**31);assert.equal(path.extname(filename),'.webm');
@@ -375,6 +380,7 @@ function createPrivateReviewRecording(binding,{artifactDir}={}) {
 module.exports = {
   VIDEO_SIZE,
   createPrivateReviewRecording,
+  privateReviewPageInitScript,
   privateReviewSurfaceDecision,
   buildVerificationDisplay,
   createActionRecording,

@@ -78,3 +78,23 @@ for(const fault of ['none','wallet','runtime','run','prior-hash','record-video',
  else assert.throws(()=>b.api.privateReviewCaptureContext(b.client,args,b.environment));
 });
 test('environment alone cannot enable private review capture',()=>{const b=bridge({ack:false});b.environment.DEMO_PRIVATE_REVIEW_CAPTURE='PRIVATE_REVIEW_ONLY';assert.equal(b.api.privateReviewCaptureContext(b.client,{scenario:'membership-badge-login'},b.environment),null);});
+
+// Synthetic delivery/bytes only; these controls do not align a video clock.
+test('private cursor evidence retains each exact captured source role without video-frame qualification',async t=>{
+ const root=temp(t),capture=createPrivateReviewRecording(binding(root),{artifactDir:path.join(root,'artifacts')}),contexts={};
+ for(const role of ['wallet','login']){
+  const c=context();contexts[role]=c;await capture.prepareContext(c,role);
+  const file=path.join(root,'media',role+'.webm');fs.writeFileSync(file,'SYNTHETIC DUMMY NOT VIDEO');const page=c.addPage(role,file);capture.trackPage(role,page);
+  c.surface({page},{role,state:'POLICY_ACTIVE',code:null});c.transport({page},{role,kind:'pointerdown',trusted:true,x:10,y:20,button:0,elapsedMs:42});
+ }
+ const report=await capture.finish({ready:true,cleanupComplete:true}),cursor=JSON.parse(fs.readFileSync(report.cursorEvidence.path));
+ assert.deepEqual(cursor.events.map(event=>event.role),['wallet','login']);assert(cursor.events.every(event=>Object.hasOwn(report.rawMedia,event.role)));assert.equal(cursor.telemetry,'ACTUAL_TRUSTED_DOM_POINTER_EVENTS_NOT_OS');assert.equal(report.renderedPrivacyQualified,false);assert.equal(report.recordingQualified,false);
+});
+test('private cursor refuses prepared but uncaptured source role instead of misassigning its coordinates',async t=>{
+ const root=temp(t),capture=createPrivateReviewRecording(binding(root),{artifactDir:path.join(root,'artifacts')});
+ for(const role of ['wallet','login','operator']){
+  const c=context();await capture.prepareContext(c,role);const file=path.join(root,'media',role+'.webm');if(role!=='operator')fs.writeFileSync(file,'SYNTHETIC DUMMY NOT VIDEO');const page=c.addPage(role,file);if(role!=='operator')capture.trackPage(role,page);
+  c.surface({page},{role,state:'POLICY_ACTIVE',code:null});c.transport({page},{role,kind:'pointerdown',trusted:true,x:10,y:20,button:0,elapsedMs:42});
+ }
+ await assert.rejects(capture.finish({ready:true,cleanupComplete:true}),/actual captured video/);assert(!fs.existsSync(path.join(root,'media/cursor-evidence.json')));
+});
