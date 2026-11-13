@@ -85,6 +85,16 @@ test('postCREATE OB3 retains deferred bureau failure after a second acknowledged
  f.post.ob3Authority=second;f.post.acknowledgedState=f.file('second-ob3-ack.json',{...ack,replacementAuthority:second});
  const out=f.invoke();assert.equal(out.deferredExitCodes.get('passport-beta-bureau'),1);
 });
+test('postCREATE OB3 refuses a second authority with a foreign T5 parent',t=>{
+ const f=deferredBureauFixture(t),ack=JSON.parse(fs.readFileSync(f.post.acknowledgedState.path));
+ const foreign=f.file('foreign-t5-parent.json',{schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'UNREVIEWED'});
+ const second=f.file('foreign-second-ob3-authority.json',{schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',
+  operation:'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',previousRecoveryAuthority:foreign,
+  selected22:ack.priorCreatedSnapshot,runId:'SYNTHETIC_RUN',dispatchAuthorized:true,draftOnly:false,
+  replaceCredentialGeneration:true,deferredRoles:['passport-beta-bureau']});
+ f.post.ob3Authority=second;f.post.acknowledgedState=f.file('foreign-second-ack.json',{...ack,replacementAuthority:second});
+ assert.throws(f.invoke);
+});
 test('postCREATE OB3 refuses a foreign deferred bureau failure',t=>{
  const f=deferredBureauFixture(t),authority=JSON.parse(fs.readFileSync(f.post.ob3Authority.path));
  authority.deferredFailure=f.file('foreign-bureau-failure.json',{containerId:'f'.repeat(64),sqlstate42501Observed:true,permissionDeniedForSchemaObserved:true});
@@ -225,10 +235,28 @@ test('second OB3 target binds current ack authority and historical T5 lineage',(
   replaceCredentialGeneration:true,runId:'run',deferredRoles:['passport-beta-bureau'],selected22:selected};
  const load=ref=>ref===newRef?current:ref===oldRef?old:assert.fail('foreign authority');
  const input={runId:'run',ob3Authority:newRef},ack={acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementAuthority:newRef,priorCreatedSnapshot:selected};
- assert.deepEqual(createdTargetOb3Authority(input,ack,load),{legacy:old,current,second:true});
+ assert.deepEqual(createdTargetOb3Authority(input,ack,load),{legacy:old,current,second:true,third:false});
  assert.throws(()=>createdTargetOb3Authority(input,{...ack,replacementAuthority:oldRef},load));
  assert.throws(()=>createdTargetOb3Authority(input,{...ack,priorCreatedSnapshot:oldRef},load));
  assert.throws(()=>createdTargetOb3Authority(input,ack,ref=>ref===newRef?{...current,previousRecoveryAuthority:newRef}:old));
  assert.deepEqual(createdTargetOb3Authority({...input,ob3Authority:oldRef},{...ack,replacementAuthority:oldRef},load),
-  {legacy:old,current:old,second:false});
+  {legacy:old,current:old,second:false,third:false});
+});
+
+test('third OB3 target binds exactly second authority and T5 ancestor',()=>{
+ const oldRef={sha256:'old'},secondRef={sha256:'second'},thirdRef={sha256:'third'},selected={sha256:'selected'};
+ const old={schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',
+  dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,runId:'run',deferredRoles:['passport-beta-bureau']};
+ const second={schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',
+  operation:'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',previousRecoveryAuthority:oldRef,
+  dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,runId:'run',deferredRoles:['passport-beta-bureau']};
+ const third={...second,operation:'REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',
+  previousRecoveryAuthority:secondRef,selected22:selected};
+ const docs=new Map([[oldRef,old],[secondRef,second],[thirdRef,third]]),load=ref=>docs.get(ref)||assert.fail('foreign authority');
+ const input={runId:'run',ob3Authority:thirdRef},ack={acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',
+  replacementAuthority:thirdRef,priorCreatedSnapshot:selected};
+ assert.deepEqual(createdTargetOb3Authority(input,ack,load),{legacy:old,current:third,second:true,third:true});
+ assert.throws(()=>createdTargetOb3Authority(input,{...ack,replacementAuthority:secondRef},load));
+ docs.set(secondRef,{...second,operation:'UNREVIEWED'});
+ assert.throws(()=>createdTargetOb3Authority(input,ack,load));
 });

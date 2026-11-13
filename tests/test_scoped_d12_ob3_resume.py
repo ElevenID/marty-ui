@@ -43,7 +43,8 @@ def test_acknowledged_ob3_replacement_continues_without_recreate_or_sql(tmp_path
     assert calls==["CHECKPOINT","CHECKPOINT","POST_CREATE_RECOVERY_VERIFIED","CONTINUE_STARTS"]
 
 
-def test_second_ob3_replacement_journals_only_new_credential_create(tmp_path,monkeypatch):
+@pytest.mark.parametrize("generation",["second","third"])
+def test_ob3_acknowledged_replacement_journals_only_new_credential_create(tmp_path,monkeypatch,generation):
     from scoped_native_runtime import ref
     def save(name,value):
         p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
@@ -56,7 +57,8 @@ def test_second_ob3_replacement_journals_only_new_credential_create(tmp_path,mon
               for command in ("migrate","verify-owned-schema") for step,_role in database.schema_steps(True,command)]
     proof={"operationState":save("database-state.json",{"operations":commands})}
     verified={"state":"SYNTHETIC_VERIFIED_DATABASE"}
-    recovery={"operation":"REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+    recovery={"operation":("REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if generation=="third" else
+                           "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
               "quiescence":{"sha256":"quiescent"},"originalInputs":save("prior-inputs.json",original),
               "originalOperationState":save("ack.json",{"phase":"EFFECT_ACKNOWLEDGED"}),
               "selected22":save("current-cids.json",{"synthetic":"preimage"})}
@@ -79,21 +81,25 @@ def test_second_ob3_replacement_journals_only_new_credential_create(tmp_path,mon
     value.record=lambda phase,**kwargs:calls.append(phase)
     value.command=lambda database,step,argv:calls.append(step) if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else pytest.fail("SQL or prior create replay")
     value._finish_after_create=lambda *args,**kwargs:calls.append("CONTINUE_STARTS") or kwargs["ob3_recovery"]
-    assert value.replace_ob3_acknowledged_credential_replacement_and_resume(recovery_ref)==recovery_ref
+    method=(value.replace_ob3_second_acknowledged_credential_replacement_and_resume if generation=="third" else
+            value.replace_ob3_acknowledged_credential_replacement_and_resume)
+    assert method(recovery_ref)==recovery_ref
     assert calls==["CHECKPOINT","CHECKPOINT","PREPARE_CURRENT_CIDS","POST_CREATE_RECOVERY_VERIFIED",
                    "CREATED_CREDENTIAL_REPLACEMENT_AUTHORIZED","COMPOSE_NEW_GENERATION",
                    "REPLACE_CREATED_CREDENTIAL_GENERATION","CONTINUE_STARTS"]
 
 
+@pytest.mark.parametrize("generation",["second","third"])
 @pytest.mark.parametrize("fault",[None,"stale-cid","bureau-exit"])
-def test_second_ob3_replacement_preimage_is_current_and_deferred(tmp_path,monkeypatch,fault):
+def test_ob3_acknowledged_replacement_preimage_is_current_and_deferred(tmp_path,monkeypatch,fault,generation):
     import scoped_d12_native_effect_host as host
     from scoped_native_runtime import ref
     def save_file(name,value):
         p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
     state={"phase":"EFFECT_ACKNOWLEDGED","acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION",
            "ob3StopOutcomes":{"passport-beta-bureau":{"observedExitCode":1}}}
-    prior=save_file("prior.json",{"operation":"REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"})
+    prior=save_file("prior.json",{"operation":("REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if generation=="third" else
+                                               "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME")})
     state["replacementAuthority"]=prior
     if fault=="bureau-exit":state["ob3StopOutcomes"]["passport-beta-bureau"]["observedExitCode"]=0
     state_ref=save_file("ack.json",state)
@@ -105,7 +111,8 @@ def test_second_ob3_replacement_preimage_is_current_and_deferred(tmp_path,monkey
            for role,row in rows.items()}
     if fault=="stale-cid":saved["auth"]["Id"]="f"*64
     recovery={"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1",
-              "operation":"REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+              "operation":("REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if generation=="third" else
+                           "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
               "replaceCredentialGeneration":True,"dispatchAuthorized":True,"draftOnly":False,
               "originalOperationState":state_ref,"previousRecoveryAuthority":prior,
               "selected22":save_file("current22.json",saved)}

@@ -1034,19 +1034,25 @@ function createdComposeLabels(input,role,labels){
 
 }
 function createdTargetOb3Authority(input,ack,load=boundJson){
- const authority=load(input.ob3Authority),second=authority.schema==='marty.d12-ob3-acknowledged-replacement-recovery/v1';
- const legacy=second?load(authority.previousRecoveryAuthority):authority;
+ const authority=load(input.ob3Authority),acknowledged=authority.schema==='marty.d12-ob3-acknowledged-replacement-recovery/v1';
+ const third=acknowledged&&authority.operation==='REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME';
+ const second=third?load(authority.previousRecoveryAuthority):authority;
+ const legacy=acknowledged?load(second.previousRecoveryAuthority):authority;
  assert.equal(legacy.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(legacy.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
  assert.equal(legacy.dispatchAuthorized,true);assert.equal(legacy.draftOnly,false);assert.equal(legacy.replaceCredentialGeneration,true);
  assert.equal(legacy.runId,input.runId);assert.deepEqual(legacy.deferredRoles,['passport-beta-bureau']);
  assert.deepEqual(ack.replacementAuthority,input.ob3Authority);assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
- if(second){
-  assert.equal(authority.operation,'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME');
-  assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);
-  assert.equal(authority.runId,input.runId);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);
+ if(acknowledged){
+  assert.equal(second.operation,'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME');
+  assert.equal(second.dispatchAuthorized,true);assert.equal(second.draftOnly,false);assert.equal(second.replaceCredentialGeneration,true);
+  assert.equal(second.runId,input.runId);assert.deepEqual(second.deferredRoles,['passport-beta-bureau']);
+  if(third){
+   assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);
+   assert.equal(authority.runId,input.runId);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);
+  }
   assert.deepEqual(authority.selected22,ack.priorCreatedSnapshot);
  }
- return {legacy,current:authority,second};
+ return {legacy,current:authority,second:acknowledged,third};
 }
 function verifyCreatedTargetModel(input,{readDocker}={}){
  assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState','composeArguments',...(Object.hasOwn(input,'ob3Authority')?['ob3Authority']:[])].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');

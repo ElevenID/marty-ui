@@ -83,10 +83,13 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
         "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
     ob3_second_ack_resume = (ob3_acknowledged and recovery.get("operation") ==
         "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+    ob3_third_replacement = (ob3_acknowledged and recovery.get("operation") ==
+        "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
     require((ob3_acknowledged and recovery.get("operation") in (
                 "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
                 "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
-                "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+                "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
             or recovery.get("schema") == "marty.d12-created-recovery/v1"
             and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
                 "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"))
@@ -95,30 +98,31 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
     resuming_replacement=recovery["operation"] in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME", "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
         "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
-        "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+        "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+        "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
     original, original_state = load(recovery["originalInputs"]), load(recovery["originalOperationState"])
     previous = load(recovery["previousRecoveryAuthority"])
     if resuming_replacement:
         if ob3_acknowledged:
-            require(previous.get("schema")==('marty.d12-ob3-acknowledged-replacement-recovery/v1' if ob3_second_ack_resume
+            require(previous.get("schema")==('marty.d12-ob3-acknowledged-replacement-recovery/v1' if ob3_second_ack_resume or ob3_third_replacement
                     else 'marty.d12-ob3-quiescent-recovery/v1')
                     and previous.get("operation")==('REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME'
-                    if ob3_second_ack_resume else 'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME')
+                    if ob3_second_ack_resume or ob3_third_replacement else 'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME')
                     and recovery.get("scope")==previous.get("scope")=="OB3_FUNCTIONAL_ONLY"
                     and recovery.get("deferredRoles")==previous.get("deferredRoles")==[OB3_DEFERRED_ROLE]
                     and recovery.get("allowedScenarios")==previous.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
                     and recovery.get("startupPrerequisites",{}).get("sha256")==previous.get("startupPrerequisites",{}).get("sha256")
                     and recovery.get("startupPrerequisites",{}).get("bytes")==previous.get("startupPrerequisites",{}).get("bytes")
-                    and recovery.get("replaceCredentialGeneration") is ob3_second_replacement,
+                    and recovery.get("replaceCredentialGeneration") is (ob3_second_replacement or ob3_third_replacement),
                     "D12_OB3_ACKNOWLEDGED_PRIOR_AUTHORITY_REQUIRED")
             ob3_startup_prerequisites(recovery["startupPrerequisites"],
                 historical_execution_source=inputs["executionSource"] if historical_source else None)
             ob3_startup_prerequisites(previous["startupPrerequisites"],
                 historical_execution_source=original["executionSource"])
             _ob3_acknowledged_failed_job_lineage(inputs,state,recovery,load,
-                expected_mode=('REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME' if ob3_second_ack_resume
+                expected_mode=('REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME' if ob3_second_ack_resume or ob3_third_replacement
                     else 'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME'))
-            if ob3_second_ack_resume:
+            if ob3_second_ack_resume or ob3_third_replacement:
                 database_original, _, _=created_recovery_checkpoint(original,
                     load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend,
                     historical_source=True)
@@ -184,7 +188,8 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
     old_lease,new_lease=load(original["runScopedTrustLeaseProof"]),load(inputs["runScopedTrustLeaseProof"])
     replacing=recovery["operation"] in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
-        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
+        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+        "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
     require(recovery.get("replaceCredentialGeneration",False) is replacing,
             "D12_CREATED_REPLACEMENT_AUTHORITY_REQUIRED")
     require((old_lease["generationDirectory"]!=new_lease["generationDirectory"]) if replacing
@@ -828,16 +833,22 @@ class D12CurrentExecution:
         return self._resume_created(recovery_ref,replace_credentials=False,resume_replacement=True,ob3=True,
             second_ack_resume=True)
 
+    def replace_ob3_second_acknowledged_credential_replacement_and_resume(self,recovery_ref):
+        return self._resume_created(recovery_ref,replace_credentials=True,resume_replacement=True,ob3=True,
+            third_ack_replace=True)
+
     def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False,ob3=False,
-                        second_ack_resume=False):
+                        second_ack_resume=False,third_ack_replace=False):
         require(type(replace_credentials) is bool and type(resume_replacement) is bool and type(ob3) is bool
-                and type(second_ack_resume) is bool
+                and type(second_ack_resume) is bool and type(third_ack_replace) is bool
                 and (not second_ack_resume or (ob3 and resume_replacement and not replace_credentials))
+                and (not third_ack_replace or (ob3 and resume_replacement and replace_credentials))
                 and (not ob3 or replace_credentials or resume_replacement),"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
         require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
         require(self.profile=="d05-membership-current-functional","D12_CREATED_RECOVERY_CURRENT10_ONLY")
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
-        require(recovery.get("operation")==("RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if second_ack_resume
+        require(recovery.get("operation")==("REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if third_ack_replace
+                else "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if second_ack_resume
                 else "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if ob3 and resume_replacement and replace_credentials
                 else "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if ob3 and resume_replacement
                 else "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME" if ob3 else "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials

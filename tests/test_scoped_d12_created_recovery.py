@@ -100,15 +100,15 @@ def acknowledged_replacement_fixture(tmp_path,quiescence=None):
 
 
 @pytest.mark.parametrize("fault", [None, "wrong-prior", "new-generation", "changed-model", "changed-ack", "old-schema", "job-request", "current-cid"])
-@pytest.mark.parametrize("mode", ["resume", "replace"])
+@pytest.mark.parametrize("mode", ["resume", "replace", "third"])
 def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_lineage(tmp_path,monkeypatch,fault,mode):
     inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path)
     original=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
     original["roleBinaries"]={"auth":"marty-auth"};inputs["roleBinaries"]=original["roleBinaries"]
     recovery["originalInputs"]=saved("ob3-executed-inputs.json",original)
     previous=json.loads(Path(recovery["previousRecoveryAuthority"]["path"]).read_bytes())
-    previous.update(schema="marty.d12-ob3-quiescent-recovery/v1",
-                    operation="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME",
+    previous.update(schema=("marty.d12-ob3-acknowledged-replacement-recovery/v1" if mode=="third" else "marty.d12-ob3-quiescent-recovery/v1"),
+                    operation=("REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if mode=="third" else "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
                     scope="OB3_FUNCTIONAL_ONLY",deferredRoles=["passport-beta-bureau"],
                     allowedScenarios=list(execution.OB3_ALLOWED_SCENARIOS),
                     startupPrerequisites=saved("ob3-startup.json",{"schema":"marty.ob3-startup-prerequisites/v1"}))
@@ -120,13 +120,14 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
         **journal_readback(Path(state_ref["path"]).read_bytes())}
     recovery.update(schema="marty.d12-ob3-acknowledged-replacement-recovery/v1",
                     operation=("RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if mode=="resume" else
+                        "REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if mode=="third" else
                         "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
                     scope="OB3_FUNCTIONAL_ONLY",deferredRoles=["passport-beta-bureau"],
                     allowedScenarios=list(execution.OB3_ALLOWED_SCENARIOS),
-                    startupPrerequisites=previous["startupPrerequisites"],replaceCredentialGeneration=mode=="replace",
+                    startupPrerequisites=previous["startupPrerequisites"],replaceCredentialGeneration=mode!="resume",
                     previousRecoveryAuthority=previous_ref,originalOperationState=state_ref,
                     journalRead=saved("ob3-replacement-journal.json",observed))
-    if mode=="replace":
+    if mode!="resume":
         next_generation=tmp_path/"next-ob3-generation"
         model=json.loads(Path(original["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
         for secret,name in (("trust_profile_workload_server_cert","trust_profile_workload_server_cert"),
@@ -142,7 +143,7 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
         p=failed/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(value));return ref(p)
     actor=failed_ref("actor.py",{"synthetic":"actor"});python=failed_ref("python.exe",{"synthetic":"python"})
     invocation=failed_ref("invocation.armed.json",{"schema":"marty.current10-effect-invocation/v1",
-        "executionMode":"REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME","executeAuthorized":True,
+        "executionMode":("REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME" if mode=="third" else "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),"executeAuthorized":True,
         "effectInputs":recovery["originalInputs"],"recoveryAuthority":previous_ref,
         "actor":actor,"executables":{"python":python},"outputRoot":str(outputs)})
     recovery["failedCutoverInvocation"]=invocation
@@ -165,7 +166,8 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
         assert historical_source is True
         assert authority==previous and actual_intent==intent
         return json.loads(Path(previous["originalInputs"]["path"]).read_bytes()),{},{}
-    monkeypatch.setattr(execution,"ob3_quiescent_checkpoint",prior_checkpoint)
+    original_checkpoint=execution.created_recovery_checkpoint
+    monkeypatch.setattr(execution,"created_recovery_checkpoint" if mode=="third" else "ob3_quiescent_checkpoint",prior_checkpoint)
     def startup(ref,*,historical_execution_source=None):
         called.append(ref)
         return {"same":True}
@@ -188,9 +190,9 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
     if fault=="current-cid":recovery["selected22"]=saved("foreign-current-cid.json",{"auth":{"Id":"b"*64}})
     backend=json.loads((tmp_path/"created-backend.json").read_bytes())
     if fault:
-        with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+        with pytest.raises(ValueError):original_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
     else:
-        result=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+        result=original_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
         assert result[0]["runId"]==inputs["runId"] and len(called)==3
 
 
@@ -548,6 +550,18 @@ def test_second_ob3_acknowledgement_dispatches_resume_without_replacement(monkey
     assert owner.resume_ob3_second_acknowledged_credential_replacement(reference)=="DISPATCH_ONLY"
     assert captured==[(reference,{"replace_credentials":False,"resume_replacement":True,
                                   "ob3":True,"second_ack_resume":True})]
+
+
+def test_third_ob3_generation_dispatches_replacement_mode(monkeypatch):
+    captured=[]
+    def resume(self, reference, **options):
+        captured.append((reference,options));return "DISPATCH_ONLY"
+    monkeypatch.setattr(execution.D12CurrentExecution,"_resume_created",resume)
+    owner=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
+    reference={"sha256":"third-generation"}
+    assert owner.replace_ob3_second_acknowledged_credential_replacement_and_resume(reference)=="DISPATCH_ONLY"
+    assert captured==[(reference,{"replace_credentials":True,"resume_replacement":True,
+                                  "ob3":True,"third_ack_replace":True})]
 
 
 @pytest.mark.parametrize("checkpoint",["create","replacement"])
