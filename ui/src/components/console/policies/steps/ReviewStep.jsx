@@ -19,23 +19,28 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import TimerIcon from '@mui/icons-material/Timer';
-import VerifiedIcon from '@mui/icons-material/Verified';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewActivationCard, ReviewField } from '../../../common';
+import { isValidPolicyCredentialAge } from '../policyFreshnessValidation';
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
-  const { t } = useTranslation('console');
+  const { t, i18n } = useTranslation('console');
   const { policyConfig, selectedTrustProfile: trustProfile, selectedTemplate, activateImmediately } = data;
 
-  // Helper to format seconds to human-readable
+  // Keep every second visible, including sub-day values and zero.
   const formatDuration = (seconds) => {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-
-    if (days > 0) return `${days} day${days > 1 ? 's' : ''}`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''}`;
-    return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+    if (!isValidPolicyCredentialAge(seconds)) return t('wizards.presentationPolicy.reviewStep.values.notSet');
+    const locale = i18n.resolvedLanguage || i18n.language;
+    let remaining = Number(seconds);
+    const parts = [];
+    for (const [unit, divisor] of [['day', 86400], ['hour', 3600], ['minute', 60], ['second', 1]]) {
+      const count = Math.floor(remaining / divisor);
+      remaining %= divisor;
+      if (count > 0 || (unit === 'second' && parts.length === 0)) {
+        parts.push(new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'long' }).format(count));
+      }
+    }
+    return new Intl.ListFormat(locale, { style: 'long', type: 'unit' }).format(parts);
   };
 
   const holderBindingLabels = {
@@ -221,9 +226,6 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             {policyConfig.prefer_predicates && (
               <Chip label={t('wizards.presentationPolicy.reviewStep.values.preferPredicates')} size="small" color="info" variant="outlined" />
             )}
-            {policyConfig.single_presentation && (
-              <Chip label={t('wizards.presentationPolicy.reviewStep.values.singlePresentation')} size="small" variant="outlined" />
-            )}
           </Box>
       </ReviewSectionCard>
 
@@ -262,30 +264,8 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
                 value={formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
               />
             </Grid>
-
-            <Grid size={{ xs: 12, sm: 6 }}>
-              <ReviewField
-                label={t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
-                value={formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}
-              />
-            </Grid>
           </Grid>
       </ReviewSectionCard>
-
-      {/* Standard Reference */}
-      {policyConfig.metadata?.standard_reference && (
-        <ReviewSectionCard
-          sx={{ mb: 2 }}
-          title={t('wizards.presentationPolicy.reviewStep.sections.complianceStandard')}
-          icon={<VerifiedIcon color="primary" />}
-          onEdit={() => onEdit(3)}
-          editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
-        >
-            <Typography variant="body1">
-              {policyConfig.metadata.standard_reference}
-            </Typography>
-        </ReviewSectionCard>
-      )}
 
       {/* Activation Toggle */}
       <ReviewActivationCard

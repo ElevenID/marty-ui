@@ -80,5 +80,32 @@
       "revoked": "Esta credencial ha sido revocada. Contacta con el emisor para obtener ayuda.",
       "additionalInformation": "El emisor necesita más información. Contacta con él para saber cómo proporcionarla."
     }
+  },
+  "devices": {
+    "loading": "Cargando dispositivos",
+    "searchLabel": "Buscar dispositivos",
+    "noMatches": "Ningún dispositivo coincide con tu búsqueda.",
+    "clearSearch": "Borrar búsqueda",
+    "tableLabel": "Dispositivos registrados",
+    "notReported": "No informado",
+    "signInRequired": "Inicia sesión para ver tus dispositivos registrados.",
+    "tableHeaders": {
+      "status": "Registro"
+    },
+    "status": {
+      "inactive": "Inactivo"
+    },
+    "actions": {
+      "unregisterNamed": "Dar de baja el dispositivo {{deviceId}}"
+    },
+    "errorUnregisteringFallback": "No se pudo dar de baja el dispositivo. Inténtalo de nuevo.",
+    "info": "Consulta tus dispositivos registrados y da de baja los que ya no uses. Un registro activo no indica si un dispositivo está conectado.",
+    "empty": {
+      "description": "Los dispositivos aparecen aquí después de registrarlos en tu cuenta."
+    },
+    "unregisterDialog": {
+      "message": "¿Dar de baja este dispositivo? Su registro quedará inactivo. Para volver a usarlo, registra el dispositivo de nuevo."
+    },
+    "description": "Gestiona los registros de tus dispositivos."
   }
 }

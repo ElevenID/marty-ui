@@ -648,6 +648,7 @@ function ApplicationFormSession({ previewContext }) {
   // ===========================================================================
   const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
   const canAutoApply = isOneClickCredential && canAutoApplyApplicationTemplate({ applicationTemplate, user });
+  const isOneClickApplication = canAutoApply && !isCanvasLtiApplication;
   const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || t('applicationForm.title.default');
   const applicationDescription = isCanvasLtiApplication
     ? 'Review the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.'
@@ -1134,18 +1135,24 @@ function ApplicationFormSession({ previewContext }) {
           <>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3, textAlign: 'left' }}>
               <Typography variant="body2" component="p" sx={{ marginBottom: '16px' }}>
-                <strong>{t('applicationForm.success.previewMode')}:</strong> {t('applicationForm.success.previewMessage')}
+                <strong>{t('applicationForm.success.previewMode')}:</strong> {t(isOneClickApplication
+                  ? 'applicationForm.oneClick.previewMessage'
+                  : 'applicationForm.success.previewMessage')}
               </Typography>
               <Typography variant="body2">
                 {t('applicationForm.success.previewNote')}
               </Typography>
             </Alert>
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-              {t('applicationForm.success.dataCollected')}
-            </Typography>
-            <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
-              {JSON.stringify(formData, null, 2)}
-            </Box>
+            {!isOneClickApplication && (
+              <>
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                  {t('applicationForm.success.dataCollected')}
+                </Typography>
+                <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
+                  {JSON.stringify(formData, null, 2)}
+                </Box>
+              </>
+            )}
           </>
         ) : (
           <>
@@ -1285,7 +1292,7 @@ function ApplicationFormSession({ previewContext }) {
   // ===========================================================================
   // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
-  if (canAutoApply && !isCanvasLtiApplication) {
+  if (isOneClickApplication) {
     const isMdocCredential = isMdlCredential || isMdocMemberCredential;
     const HeroIcon = isMdlCredential ? DirectionsCarIcon : (isOpenBadgeCredential ? BadgeIcon : LoginIcon);
     const fallbackTitle = isMdocCredential
@@ -1293,7 +1300,9 @@ function ApplicationFormSession({ previewContext }) {
       : (isOpenBadgeCredential ? 'Verified Member Badge' : 'Login Credential');
     const heroTitle = credentialConfig?.display_name || credentialConfig?.name || fallbackTitle;
     const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
-    const ctaLabel = isMdocCredential ? 'Get Membership ID' : 'Add to Wallet';
+    const ctaLabel = isPreview
+      ? t('applicationForm.oneClick.previewAction')
+      : (isMdocCredential ? 'Get Membership ID' : 'Add to Wallet');
     const ctaSubtext = [credentialConfig?.format, credentialConfig?.issuanceProtocol]
       .filter(Boolean)
       .join(' - ');
@@ -1386,7 +1395,7 @@ function ApplicationFormSession({ previewContext }) {
 
             {/* Helper text */}
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-              You'll be prompted to open your wallet to receive this credential.
+              {t(isPreview ? 'applicationForm.oneClick.previewHelper' : 'applicationForm.oneClick.walletHelper')}
             </Typography>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>

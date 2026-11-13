@@ -1,210 +1,141 @@
-/**
- * Device Management Page
- * 
- * Allows users to view and manage their registered devices
- */
+/** View the authenticated user's registrations and deactivate an owned device. */
 
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  Box,
-  Typography,
-  Paper,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  IconButton,
-  Chip,
-  Alert,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogContentText,
-  DialogActions,
-  CircularProgress,
-  Tooltip,
+  Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogContentText,
+  DialogTitle, IconButton, LinearProgress, Paper, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Tooltip, Typography,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
-import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import PhoneIphoneIcon from '@mui/icons-material/PhoneIphone';
-import LaptopIcon from '@mui/icons-material/Laptop';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import SecurityIcon from '@mui/icons-material/Security';
 import { useTranslation } from 'react-i18next';
-import { useDialog } from '../../../hooks/useDialog';
+import { useAuth } from '../../../hooks/useAuth';
 import { listDevices, unregisterDevice } from '../../../services/devicesApi';
 
-const DeviceManagementPage = () => {
+function DeviceManagementContent({ principalId }) {
   const { t } = useTranslation('applicant');
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const deleteDialog = useDialog();
+  const [selectedDevice, setSelectedDevice] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+  const active = useRef(false);
+  const request = useRef(0);
+  const pendingDelete = useRef(false);
 
-  useEffect(() => {
-    loadDevices();
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; request.current += 1; };
   }, []);
 
-  const loadDevices = async () => {
+  const loadDevices = useCallback(async () => {
+    const generation = ++request.current;
+    const isCurrent = () => active.current && request.current === generation;
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
-      const data = await listDevices();
-      setDevices(data.devices || []);
+      const data = await listDevices(null, { userId: principalId, isCurrent });
+      if (isCurrent()) setDevices(data);
     } catch (err) {
-      setError(err.message);
+      if (isCurrent()) setError(err);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
+  }, [principalId]);
+
+  useEffect(() => { loadDevices(); }, [loadDevices]);
+
+  const closeDialog = () => {
+    if (pendingDelete.current) return;
+    setSelectedDevice(null);
+    setDeleteError(null);
   };
 
   const handleDeleteConfirm = async () => {
+    if (!active.current || pendingDelete.current || !selectedDevice) return;
+    const device = devices.find(item => item.id === selectedDevice.id && item.is_active);
+    if (!device) return;
+    pendingDelete.current = true;
+    setDeleting(true);
+    setDeleteError(null);
+    // A pending refresh must not restore the former active state after deactivation.
+    request.current += 1;
+    setLoading(false);
     try {
-      setDeleting(true);
-      await unregisterDevice(deleteDialog.data.device_id);
-      setDevices(devices.filter((d) => d.device_id !== deleteDialog.data.device_id));
-      deleteDialog.close();
+      await unregisterDevice(device.id);
+      if (!active.current) return;
+      setDevices(current => current.map(item => item.id === device.id ? { ...item, is_active: false } : item));
+      setSelectedDevice(null);
     } catch (err) {
-      setError(t('devices.errorUnregistering', { message: err.message }));
+      if (active.current) setDeleteError(err);
     } finally {
-      setDeleting(false);
+      if (active.current) {
+        pendingDelete.current = false;
+        setDeleting(false);
+      }
     }
   };
 
-  const getPlatformIcon = (platform) => {
-    switch (platform?.toLowerCase()) {
-      case 'ios':
-        return <PhoneIphoneIcon />;
-      case 'android':
-        return <PhoneAndroidIcon />;
-      case 'web':
-        return <LaptopIcon />;
-      default:
-        return <PhoneAndroidIcon />;
-    }
+  const formatDate = (value) => {
+    const parsed = value ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime()) ? parsed.toLocaleString() : t('devices.notReported');
   };
-
-  const formatDate = (dateString) => {
-    if (!dateString) return t('devices.formatDate.never');
-    try {
-      return new Date(dateString).toLocaleString();
-    } catch {
-      return dateString;
-    }
-  };
-
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
 
   return (
-    <Box>
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Typography variant="h4" component="h1">
-          {t('devices.title')}
-        </Typography>
-        <Button
-          startIcon={<RefreshIcon />}
-          onClick={loadDevices}
-          disabled={loading}
-        >
+    <Box sx={{ minWidth: 0, maxWidth: '100%' }}>
+      <Box sx={{ mb: 3, display: 'flex', flexWrap: 'wrap', gap: 2, justifyContent: 'space-between', alignItems: 'center' }}>
+        <Typography variant="h4" component="h1">{t('devices.title')}</Typography>
+        <Button startIcon={<RefreshIcon />} onClick={loadDevices} disabled={loading || deleting}>
           {t('devices.refresh')}
         </Button>
       </Box>
-
-      {error && (
-        <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 3 }}>
-          {error}
+      <Alert severity="info" sx={{ mb: 3 }}>{t('devices.info')}</Alert>
+      {loading ? <LinearProgress aria-label={t('devices.loading')} /> : error ? (
+        <Alert severity="error" action={<Button color="inherit" onClick={loadDevices}>{t('actions.retry', { ns: 'common' })}</Button>}>
+          {error?.message?.trim() || t('devices.errorLoading')}
         </Alert>
-      )}
-
-      <Alert severity="info" sx={{ mb: 3 }}>
-        {t('devices.info')}
-      </Alert>
-
-      {devices.length === 0 ? (
+      ) : devices.length === 0 ? (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
-          <SecurityIcon sx={{ fontSize: 80, color: 'text.secondary', mb: 2 }} />
-          <Typography variant="h6" gutterBottom>
-            {t('devices.empty.title')}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t('devices.empty.description')}
-          </Typography>
+          <Typography variant="h6" gutterBottom>{t('devices.empty.title')}</Typography>
+          <Typography variant="body2" color="text.secondary">{t('devices.empty.description')}</Typography>
         </Paper>
       ) : (
-        <TableContainer component={Paper}>
-          <Table>
+        <TableContainer component={Paper} role="region" aria-label={t('devices.tableLabel')} tabIndex={0} sx={{ maxWidth: '100%' }}>
+          <Table sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
-                <TableCell>{t('devices.tableHeaders.device')}</TableCell>
-                <TableCell>{t('devices.tableHeaders.platform')}</TableCell>
-                <TableCell>{t('devices.tableHeaders.appVersion')}</TableCell>
-                <TableCell>{t('devices.tableHeaders.registered')}</TableCell>
-                <TableCell>{t('devices.tableHeaders.lastSeen')}</TableCell>
-                <TableCell>{t('devices.tableHeaders.security')}</TableCell>
+                {['device', 'platform', 'appVersion', 'registered', 'lastSeen', 'status'].map(field => (
+                  <TableCell key={field}>{t(`devices.tableHeaders.${field}`)}</TableCell>
+                ))}
                 <TableCell align="right">{t('devices.tableHeaders.actions')}</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {devices.map((device) => (
-                <TableRow key={device.device_id}>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      {getPlatformIcon(device.platform)}
-                      <Box>
-                        <Typography variant="body2" fontWeight="medium">
-                          {device.device_id}
-                        </Typography>
-                        {device.is_active && (
-                          <Chip label={t('devices.status.active')} size="small" color="success" sx={{ mt: 0.5 }} />
-                        )}
-                      </Box>
-                    </Box>
+              {devices.map(device => (
+                <TableRow key={device.id}>
+                  <TableCell sx={{ overflowWrap: 'anywhere', maxWidth: 280 }}>
+                    {device.device_model && <Typography variant="body2" sx={{ fontWeight: 500 }}>{device.device_model}</Typography>}
+                    <Typography variant="body2">{device.device_id}</Typography>
                   </TableCell>
-                  <TableCell>
-                    <Chip
-                      label={device.platform?.toUpperCase() || 'Unknown'}
-                      size="small"
-                      variant="outlined"
-                    />
-                  </TableCell>
-                  <TableCell>{device.app_version || 'N/A'}</TableCell>
+                  <TableCell>{device.platform.toUpperCase()}</TableCell>
+                  <TableCell>{device.app_version || t('devices.notReported')}</TableCell>
                   <TableCell>{formatDate(device.created_at)}</TableCell>
                   <TableCell>{formatDate(device.last_seen_at)}</TableCell>
-                  <TableCell>
-                    {device.has_public_key ? (
-                      <Tooltip title={t('devices.security.hasPublicKey')}>
-                        <Chip
-                          icon={<SecurityIcon />}
-                          label={t('devices.status.secured')}
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                        />
-                      </Tooltip>
-                    ) : (
-                      <Chip label={t('devices.status.basic')} size="small" variant="outlined" />
-                    )}
-                  </TableCell>
+                  <TableCell><Chip label={t(device.is_active ? 'devices.status.active' : 'devices.status.inactive')} size="small" /></TableCell>
                   <TableCell align="right">
-                    <Tooltip title={t('devices.actions.unregister')}>
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => deleteDialog.open(device)}
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                    </Tooltip>
+                    {device.is_active && (
+                      <Tooltip title={t('devices.actions.unregister')}>
+                        <IconButton
+                          aria-label={t('devices.actions.unregisterNamed', { deviceId: device.device_id })}
+                          size="small"
+                          color="error"
+                          onClick={() => { setSelectedDevice(device); setDeleteError(null); }}
+                        >
+                          <DeleteIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -212,36 +143,36 @@ const DeviceManagementPage = () => {
           </Table>
         </TableContainer>
       )}
-
-      {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.isOpen} onClose={deleteDialog.close}>
-        <DialogTitle>{t('devices.unregisterDialog.title')}</DialogTitle>
+      <Dialog open={Boolean(selectedDevice)} onClose={closeDialog} aria-labelledby="unregister-device-title" aria-describedby="unregister-device-description">
+        <DialogTitle id="unregister-device-title">{t('devices.unregisterDialog.title')}</DialogTitle>
         <DialogContent>
-          <DialogContentText>
-            {t('devices.unregisterDialog.message')}
-            {deleteDialog.data && (
-              <Box sx={{ mt: 2, p: 2, bgcolor: 'grey.100', borderRadius: 1 }}>
-                <Typography variant="body2" fontWeight="medium">
-                  {t('devices.unregisterDialog.deviceId', { deviceId: deleteDialog.data.device_id })}
-                </Typography>
-                <Typography variant="body2" color="text.secondary">
-                  {t('devices.unregisterDialog.platform', { platform: deleteDialog.data.platform?.toUpperCase() })}
-                </Typography>
-              </Box>
-            )}
-          </DialogContentText>
+          <DialogContentText id="unregister-device-description">{t('devices.unregisterDialog.message')}</DialogContentText>
+          {selectedDevice && (
+            <Box sx={{ mt: 2, p: 2, bgcolor: 'action.hover', borderRadius: 1, overflowWrap: 'anywhere' }}>
+              <Typography variant="body2" sx={{ fontWeight: 500 }}>{t('devices.unregisterDialog.deviceId', { deviceId: selectedDevice.device_id })}</Typography>
+              <Typography variant="body2" color="text.secondary">{t('devices.unregisterDialog.platform', { platform: selectedDevice.platform.toUpperCase() })}</Typography>
+            </Box>
+          )}
+          {deleteError && <Alert severity="error" sx={{ mt: 2 }}>{deleteError?.message?.trim() || t('devices.errorUnregisteringFallback')}</Alert>}
         </DialogContent>
         <DialogActions>
-          <Button onClick={deleteDialog.close} disabled={deleting}>
-            {t('actions.cancel', { ns: 'common' })}
-          </Button>
+          <Button onClick={closeDialog} disabled={deleting}>{t('actions.cancel', { ns: 'common' })}</Button>
           <Button onClick={handleDeleteConfirm} color="error" disabled={deleting}>
-            {deleting ? t('devices.unregisterDialog.unregistering') : t('devices.unregisterDialog.confirm')}
+            {deleting ? t('devices.unregisterDialog.unregistering') : deleteError ? t('actions.retry', { ns: 'common' }) : t('devices.unregisterDialog.confirm')}
           </Button>
         </DialogActions>
       </Dialog>
     </Box>
   );
-};
+}
+
+function DeviceManagementPage() {
+  const { t } = useTranslation('applicant');
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const principalId = user?.user_id || user?.sub || user?.id || null;
+  if (isLoading) return <LinearProgress aria-label={t('devices.loading')} />;
+  if (!isAuthenticated || !principalId) return <Alert severity="info">{t('devices.signInRequired')}</Alert>;
+  return <DeviceManagementContent key={principalId} principalId={principalId} />;
+}
 
 export default DeviceManagementPage;

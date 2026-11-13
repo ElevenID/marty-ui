@@ -589,6 +589,112 @@ async fn actual_remote_diagnostic_failure_releases_the_claim_and_preserves_http_
     }
 }
 
+#[tokio::test]
+async fn missing_open_badge_criteria_returns_a_caller_error_without_signing_or_issuing() {
+    use marty_issuance_service::credential_builder::HttpCredentialBuilder;
+    use std::{
+        sync::atomic::{AtomicUsize, Ordering},
+        time::Duration,
+    };
+    struct Server(tokio::task::JoinHandle<()>);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-credential-signing.json"
+    ))
+    .unwrap();
+    let mut case = contract["formats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "jwt_vc_json")
+        .unwrap()
+        .clone();
+    case["credential_type"] = json!("OpenBadgeCredential");
+    case["credential_configuration_id"] = json!("OpenBadgeCredential");
+    let count = Arc::new(AtomicUsize::new(0));
+    let observed = count.clone();
+    let server_app = axum::Router::new().route(
+        "/internal/issuer-dids/sign",
+        axum::routing::post(move || {
+            let observed = observed.clone();
+            async move {
+                observed.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let mut server = Server(tokio::spawn(async move {
+        axum::serve(listener, server_app).await.unwrap();
+    }));
+    let builder = HttpCredentialBuilder::new_with_grant(
+        format!("http://{address}/internal").parse().unwrap(),
+        Some("synthetic-key"),
+        Duration::from_secs(2),
+        contract_grant::ContractGrantMinter(marty_signing_grant::SigningOrigin::IssuanceCredential),
+    )
+    .unwrap();
+    let harness = SigningHarness::new(&case, &contract);
+    {
+        let mut state = harness.state.lock().unwrap();
+        state.transaction.claims.clear();
+        state.transaction.claims.insert(
+            "_vct".to_owned(),
+            json!("https://issuer.example/achievements/course"),
+        );
+        // A canonical, otherwise complete subject with only criteria omitted.
+        state.transaction.claims.insert(
+            "_credential_subject".to_owned(),
+            json!({
+                "id":contract["inputs"]["holder_did"], "type":["AchievementSubject"],
+                "achievement": {
+                    "id":"https://issuer.example/achievements/course", "type":["Achievement"],
+                    "name":"Completed course", "description":"Completed the required assessment"
+                }
+            }),
+        );
+    }
+    let response = app_with_builder(harness.clone(), &contract, Arc::new(builder))
+        .oneshot(request(&case, &contract))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body(response).await,
+        json!({
+            "error":"invalid_credential_request",
+            "error_description":"Open Badges achievement criteria is required and must be an object"
+        })
+    );
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    {
+        let state = harness.state.lock().unwrap();
+        assert_eq!(
+            state.transaction.status,
+            CredentialTransactionStatus::Failed
+        );
+        assert_eq!(
+            state.repository_failure_reason.as_deref(),
+            Some("invalid credential request: Open Badges achievement criteria is required and must be an object")
+        );
+        assert!(state.transaction.reserved_credential_id.is_some());
+        assert!(state.existing.is_none());
+        assert!(!state.events.iter().any(|event| {
+            event == "finalize_credential_issuance" || event == "post_issuance_side_effects"
+        }));
+    }
+    server.0.abort();
+    assert!((&mut server.0)
+        .await
+        .as_ref()
+        .is_err_and(|error| error.is_cancelled()));
+}
+
 fn encode(value: Value) -> String {
     URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).unwrap())
 }

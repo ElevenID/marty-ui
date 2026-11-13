@@ -1,11 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, renderWithRouter, screen, waitFor } from '@test/utils';
 import { Link, Route, Routes } from 'react-router';
 import PreviewFlowPage from './PreviewFlowPage';
 
-const { getFlow, getTemplate, getCredential, readApplicant, write, auth } = vi.hoisted(() => ({
+const { getFlow, getTemplate, getCredential, readApplicant, write, startFlow, auth } = vi.hoisted(() => ({
   getFlow: vi.fn(), getTemplate: vi.fn(), getCredential: vi.fn(),
-  readApplicant: vi.fn(), write: vi.fn(),
+  readApplicant: vi.fn(), write: vi.fn(), startFlow: vi.fn(),
   auth: { user: { user_id: 'operator-1', email: 'operator@example.com' }, organizationId: 'org-1' },
 }));
 vi.mock('../../application/vendor', () => ({ fetchPreviewFlow: getFlow }));
@@ -14,6 +14,7 @@ vi.mock('../../services/applicationTemplatesApi', () => ({
   listApplicationTemplates: vi.fn(() => { throw new Error('Preview must use its exact linked template'); }),
 }));
 vi.mock('../../services/api', () => ({ get: getCredential, post: write }));
+vi.mock('../../services/flowsApi', () => ({ startFlowExecution: startFlow, default: { startFlowExecution: startFlow } }));
 vi.mock('../../hooks/useAuth', () => ({ useAuth: () => auth }));
 vi.mock('../../hooks/useWalletPreferences', () => ({ default: () => ({ walletIds: [] }) }));
 vi.mock('../../services/applicantApi', () => ({
@@ -25,9 +26,36 @@ vi.mock('../../services/credentialsApi', () => ({ generateIssuanceOffer: write }
 vi.mock('../console/applicant/ClaimCredentialDialog', () => ({ default: () => null }));
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 
-const flow = { id: 'flow-1', organization_id: 'org-1', name: 'Flow one', status: 'ACTIVE', credential_template_id: 'credential-1' };
+const flow = { id: 'flow-1', organization_id: 'org-1', name: 'Flow one', status: 'ACTIVE', flow_type: 'oid4vci_pre_authorized', flow_category: 'ISSUANCE', credential_template_id: 'credential-1' };
 const credential = { id: 'credential-1', organization_id: 'org-1', name: 'Credential one', credential_type: 'ExampleCredential', claims: [] };
 const template = { id: 'application-1', organization_id: 'org-1', credential_template_id: 'credential-1', name: 'Linked application', form_fields: [{ field_id: 'email', label: 'Contact email', field_type: 'EMAIL', required: true }] };
+// The built-in login definition retains a credential reference, but its custom
+// extension verifies an existing credential rather than issuing one.
+const verificationFlow = {
+  ...flow,
+  name: 'Marty Open Badge Login Flow',
+  flow_type: 'custom',
+  flow_category: 'VERIFICATION',
+  application_template_id: null,
+  presentation_policy_id: 'policy-login',
+  approval_strategy: 'AUTO',
+  resolved_steps: ['step_1', 'step_2', 'step_3'],
+  extension: {
+    extension_uri: 'urn:elevenid:flow-extension:legacy-orchestration:v1',
+    extension_version: '1.0.0',
+    extends_flow_type: 'oid4vp_presentation',
+    entry_step_id: 'step_1',
+    steps: [
+      { step_id: 'step_1', action: 'start_login_verification' },
+      { step_id: 'step_2', action: 'verify_open_badge_membership_credential' },
+      { step_id: 'step_3', action: 'login_complete' },
+    ],
+    transitions: [
+      { from_step_id: 'step_1', to_step_id: 'step_2', outcome: 'SUCCESS' },
+      { from_step_id: 'step_2', to_step_id: 'step_3', outcome: 'SUCCESS' },
+    ],
+  },
+};
 
 function routes() {
   return <><Link to="/applicant/preview/flows/flow-2?organization_id=org-1">Next flow</Link>
@@ -57,8 +85,13 @@ describe('Flow preview uses the routed native definition', () => {
     auth.organizationId = 'org-1'; auth.user = { user_id: 'operator-1', email: 'operator@example.com' };
     getFlow.mockResolvedValue(flow); getTemplate.mockResolvedValue(template); getCredential.mockResolvedValue(credential);
   });
+  afterEach(() => { vi.restoreAllMocks(); });
 
-  it('renders and simulates a fresh real route without an applicant or live writes', async () => {
+  it.each([
+    { flow_type: 'oid4vci_pre_authorized' },
+    { flow_type: 'custom', extension: { extends_flow_type: 'oid4vci_pre_authorized' } },
+  ])('renders and simulates an issuance route ($flow_type) without an applicant or live writes', async (definition) => {
+    getFlow.mockResolvedValue({ ...flow, ...definition });
     renderPreview();
     expect(await screen.findByRole('heading', { name: credential.name })).toBeInTheDocument();
     expect(getFlow).toHaveBeenCalledWith({ flowId: 'flow-1' });
@@ -68,6 +101,48 @@ describe('Flow preview uses the routed native definition', () => {
     expect(await screen.findByText('applicationForm.success.previewTitle')).toBeInTheDocument();
     expect(readApplicant).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it('explains the built-in custom login flow without loading an application or starting verification', async () => {
+    getFlow.mockResolvedValue(verificationFlow);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Preview must not start a protocol request'));
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderPreview();
+    expect(await screen.findByRole('heading', { name: 'Credential verification preview' })).toBeInTheDocument();
+    expect(screen.getByText(`Flow: ${verificationFlow.name}`)).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('This flow requests presentation of existing credentials. Interactive verification preview is unavailable here. No verification has been started.');
+    expect(screen.getAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'previewMode.exitPreview' })).toBeEnabled();
+    expect(screen.queryByTestId('credential-application-form')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('submit-application-btn')).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(getFlow).toHaveBeenCalledExactlyOnceWith({ flowId: 'flow-1' });
+    expect(getTemplate).not.toHaveBeenCalled(); expect(getCredential).not.toHaveBeenCalled();
+    expect(readApplicant).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled();
+    expect(startFlow).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { flow_category: 'VERIFICATION', extension: undefined },
+    { flow_category: undefined },
+    { flow_category: undefined, flow_type: 'oid4vp_presentation', extension: undefined },
+    { flow_category: undefined, flow_type: 'mdl_presentation', extension: undefined },
+    { flow_category: undefined, flow_type: 'siopv2', extension: undefined },
+  ])('uses the native verification category or effective protocol before linked reads: %j', async (definition) => {
+    getFlow.mockResolvedValue({ ...verificationFlow, ...definition });
+    renderPreview();
+    expect(await screen.findByRole('heading', { name: 'Credential verification preview' })).toBeInTheDocument();
+    expect(getTemplate).not.toHaveBeenCalled(); expect(getCredential).not.toHaveBeenCalled();
+    expect(readApplicant).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled(); expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it('checks verification-flow ownership before showing the unavailable preview', async () => {
+    getFlow.mockResolvedValue({ ...verificationFlow, organization_id: 'org-2' });
+    renderPreview();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/selected organization/i);
+    expect(screen.queryByRole('heading', { name: 'Credential verification preview' })).not.toBeInTheDocument();
+    expect(screen.queryByText(`Flow: ${verificationFlow.name}`)).not.toBeInTheDocument();
+    expect(getTemplate).not.toHaveBeenCalled(); expect(getCredential).not.toHaveBeenCalled(); expect(startFlow).not.toHaveBeenCalled();
   });
 
   it('loads an application-template flow and renders its actual fields', async () => {
@@ -126,6 +201,10 @@ describe('Flow preview uses the routed native definition', () => {
     renderPreview();
     expect(await screen.findByRole('heading', { name: credential.name })).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent(new RegExp(status, 'i'));
+    expect(screen.getByRole('alert')).toHaveTextContent(status === 'DRAFT'
+      ? 'Activate this flow before it can start new instances.'
+      : 'This flow cannot start new instances. You can still preview its linked application form.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/publish|not accepting new applications/i);
     expect(screen.getByTestId('submit-application-btn')).toHaveTextContent('applicationForm.navigation.previewSubmit');
   });
 
@@ -149,15 +228,16 @@ describe('Flow preview uses the routed native definition', () => {
     expect(getCredential).not.toHaveBeenCalled();
   });
 
-  it('does not follow an obsolete flow response after navigating to another flow', async () => {
+  it.each([flow, verificationFlow])('does not follow an obsolete $flow_category flow response after navigating to another flow', async (definition) => {
     const old = deferred<typeof flow>(); getFlow.mockReturnValueOnce(old.promise);
     renderPreview();
     await waitFor(() => expect(getFlow).toHaveBeenCalledTimes(1));
     nextFlow();
     expect(await screen.findByRole('heading', { name: 'Credential two' })).toBeInTheDocument();
-    await act(async () => { old.resolve(flow); });
+    await act(async () => { old.resolve(definition); });
     expect(getCredential).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole('heading', { name: credential.name })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Credential verification preview' })).not.toBeInTheDocument();
   });
 
   it('does not read a credential from an obsolete application-template response', async () => {

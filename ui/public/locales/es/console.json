@@ -175,22 +175,27 @@
 			"noCriticalEvents": "No se han notificado eventos críticos en las últimas 24 horas."
 		},
 		"runtimeReadiness": {
+			"title": "Configuración de operaciones de credenciales",
+			"description": "Este resumen muestra los recursos configurados. Consulte el estado del sistema para conocer la salud de los servicios y la preparación de la configuración para ver los requisitos pendientes.",
+			"ready": "Configurado",
+			"degraded": "Requiere revisión",
+			"notReady": "No configurado",
 			"issuance": {
 				"noDeployments": "No hay despliegues activos",
 				"deploymentsReason": "Se requiere un perfil de despliegue activo para emitir credenciales.",
 				"configureDeployment": "Configurar despliegue",
-				"notReady": "La emisión de credenciales no está lista",
+				"notReady": "La configuración de emisión de credenciales está incompleta",
 				"readinessReason": "Revise el flujo de emisión y sus recursos necesarios antes de emitir credenciales.",
 				"reviewFlows": "Revisar flujos de emisión",
-				"operational": "La emisión de credenciales está lista",
+				"operational": "Hay recursos activos configurados para emitir credenciales.",
 				"issuerConfigurationRequired": "La configuración del emisor necesita revisión",
 				"issuerConfigurationReason": "Revise la identidad del emisor y el DID del emisor al que hace referencia la plantilla de credencial activa antes de emitir credenciales."
 			},
 			"verification": {
-				"notReady": "La verificación de credenciales no está lista",
+				"notReady": "La configuración de verificación de credenciales está incompleta",
 				"readinessReason": "Revise la configuración de verificación antes de iniciar una sesión.",
 				"reviewSetup": "Revisar configuración de verificación",
-				"operational": "La verificación de credenciales está lista",
+				"operational": "Hay recursos activos de políticas y despliegue configurados para la verificación.",
 				"policyUnreachable": "No hay políticas de presentación activas",
 				"policyReason": "Se requiere al menos una política de presentación activa para verificar credenciales."
 			},
@@ -280,7 +285,7 @@
 		"deploymentProfilesDescription": "Configura perfiles de despliegue para APIs, quioscos y dispositivos en entornos en línea y fuera de línea.",
 		"apiKeys": "Claves API",
 		"apiKeysDescription": "Genera y gestiona claves API para acceso programático.",
-		"lanesDevices": "Carriles y dispositivos",
+		"lanesDevices": "Dispositivos",
 		"webhooks": "Webhooks",
 		"apiKeysPage": {
 			"generateKey": "Generar clave API",
@@ -349,8 +354,14 @@
 			"deploy": "Despliegue",
 			"deploymentProfiles": "Perfiles de despliegue",
 			"apiKeys": "Claves API",
-			"lanesDevices": "Carriles y dispositivos",
+			"lanesDevices": "Dispositivos",
 			"signingKeys": "Claves de firma"
+		},
+		"lanesDevicesPage": {
+			"title": "Tus dispositivos registrados",
+			"description": "Consulta los dispositivos que has registrado en la organización seleccionada.",
+			"noDevices": "No tienes dispositivos registrados en esta organización.",
+			"selectOrganization": "Selecciona una organización para ver tus dispositivos registrados."
 		}
 	},
 	"audit": {
@@ -493,6 +504,18 @@
 			"optional": "Opcional"
 		},
 		"presentationPolicy": {
+			"freshnessBindingStep": {
+				"helpers": {
+					"freshness": "Controla la antigüedad máxima de las credenciales.",
+					"maxCredentialAge": "Tiempo máximo desde la emisión, en segundos (1 día = 86.400 segundos)."
+				},
+				"units": {
+					"seconds": "segundos"
+				},
+				"validation": {
+					"maxCredentialAge": "Introduce un número entero válido de segundos, igual o mayor que 0."
+				}
+			},
 			"claimsConfigurationStep": {
 				"validation": {
 					"claimName": "Introduce un nombre de atributo.",
@@ -593,6 +616,15 @@
 	"applicationTemplatesPage": {
 		"validation": {
 			"validityDays": "Introduce un número entero de días entre 1 y 3650."
+		},
+		"errors": {
+			"loadFailed": "No se pudieron cargar las plantillas de solicitud.",
+			"invalidInventory": "No se pudieron cargar las plantillas de solicitud de la organización seleccionada.",
+			"selectOrganization": "Selecciona una organización antes de cargar las plantillas de solicitud.",
+			"credentialDetailsUnavailable": "No se pudieron cargar los detalles de las plantillas de credenciales. Es posible que los nombres y los recuentos de campos derivados no estén disponibles."
+		},
+		"actions": {
+			"retryCredentialDetails": "Reintentar detalles de credenciales"
 		}
 	}
 }

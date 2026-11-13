@@ -362,21 +362,8 @@ const ClaimsConfigurationStep = ({ policyConfig, onConfigChange, validationError
             }
             label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.preferPredicateProofs')}
           />
-          <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4, mb: 2 }}>
-            {t('wizards.presentationPolicy.claimsConfigurationStep.captions.preferPredicates')}
-          </Typography>
-
-          <FormControlLabel
-            control={
-              <Switch
-                checked={policyConfig.single_presentation}
-                onChange={(e) => handleFieldChange('single_presentation', e.target.checked)}
-              />
-            }
-            label={t('wizards.presentationPolicy.claimsConfigurationStep.labels.singlePresentation')}
-          />
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
-            {t('wizards.presentationPolicy.claimsConfigurationStep.captions.singlePresentation')}
+            {t('wizards.presentationPolicy.claimsConfigurationStep.captions.preferPredicates')}
           </Typography>
         </CardContent>
       </Card>
