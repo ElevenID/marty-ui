@@ -36,13 +36,15 @@ test('postCREATE closed10 rebinds source-owned created generations and retains o
 function actualPreimageFixture(t){
  const f=fixture(t),actual=structuredClone(f.before),newTime='2026-01-02T00:00:00Z';
  const retained=actual.roles.find(row=>row.role==='retained-0');retained.startedAt=newTime;f.saved['retained-0'].State.StartedAt=newTime;
+ for(const [i,role] of selectedRoles.entries())actual.roles.find(row=>row.role===role).containerId=(i+301).toString(16).padStart(64,'0');
  f.post.selected22=f.file('selected-after-restart.json',f.saved);
  const current=Object.values(f.saved).map(row=>({Id:row.Id,Image:row.Image,StartedAt:row.State.StartedAt,Labels:row.Labels,
   HostConfig:structuredClone(row.HostConfig),Mounts:structuredClone(row.Mounts)}));
  for(let i=0;i<6;i++)current.push({Id:(i+201).toString(16).padStart(64,'0'),Image:f.before.roles[0].imageId,StartedAt:newTime,Labels:{},HostConfig:structuredClone(f.resourceBefore[0].HostConfig),Mounts:[]});
  f.post.actualRuntimeBefore=f.file('actual-before.json',actual);
  f.post.actualResourceBefore=f.file('actual-resource28.json',current);
- f.post.acknowledgedState=f.file('acknowledged.json',{phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore});
+ const prior=Object.fromEntries(actual.roles.map(row=>[row.role,{Id:row.containerId,Image:row.imageId,State:{StartedAt:row.startedAt},HostConfig:structuredClone(f.resourceBefore.find(item=>item.Id===f.before.roles.find(old=>old.role===row.role).containerId).HostConfig)}]));
+ f.post.acknowledgedState=f.file('acknowledged.json',{phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore,priorCreatedSnapshot:f.file('prior-created.json',prior)});
  return {...f,actual,current,newTime,invoke:()=>maintenanceCreatedContext(f.restart,f.before,f.resourceBefore,f.post,argv=>{assert.deepEqual(argv,['image','inspect',f.before.roles[0].imageId]);return JSON.stringify([{Id:argv[2],Config:f.imageConfig}]);})};
 }
 test('postCREATE actual acknowledged preimage rebinds retained process time',t=>{

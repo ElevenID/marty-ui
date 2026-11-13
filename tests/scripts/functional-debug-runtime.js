@@ -942,16 +942,24 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
  assert.deepEqual(Object.keys(selected.binaries).sort(),[...MAINTENANCE_CREATED_ROLES],'MAINTENANCE_CREATED_CLOSED10');
  assert.deepEqual(Object.keys(saved).sort(),before.roles.map(row=>row.role).sort(),'MAINTENANCE_CREATED_SAVED22');
  const actual=actualMode?boundJson(post.actualRuntimeBefore):null,actualBaseline=actualMode?boundJson(post.actualResourceBefore):null;
+ let previousCreated=null;
  if(actualMode){
   const ack=boundJson(post.acknowledgedState);
   assert.equal(ack.phase,'EFFECT_ACKNOWLEDGED');assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
   assert.deepEqual(ack.replacementPreimage,post.actualRuntimeBefore,'MAINTENANCE_CREATED_ACTUAL_PREIMAGE_ACK_CHANGED');
+  previousCreated=boundJson(ack.priorCreatedSnapshot);
+  assert.deepEqual(Object.keys(previousCreated).sort(),before.roles.map(row=>row.role).sort(),'MAINTENANCE_CREATED_PRIOR_SNAPSHOT_ROLES');
   assert.equal(actual.roles.length,22);assert.deepEqual(actual.roles.map(row=>row.role).sort(),before.roles.map(row=>row.role).sort());
-  for(const row of actual.roles){const historical=before.roles.find(old=>old.role===row.role);assert.equal(row.containerId,historical.containerId,'MAINTENANCE_CREATED_PREIMAGE_CID_CHANGED:'+row.role);assert.equal(row.imageId,historical.imageId,'MAINTENANCE_CREATED_PREIMAGE_IMAGE_CHANGED:'+row.role);}
+  for(const row of actual.roles){const historical=before.roles.find(old=>old.role===row.role),prior=previousCreated[row.role];
+   assert.equal(row.containerId,prior.Id,'MAINTENANCE_CREATED_PREIMAGE_CID_CHANGED:'+row.role);
+   if(!MAINTENANCE_CREATED_ROLES.includes(row.role))assert.equal(row.containerId,historical.containerId,'MAINTENANCE_CREATED_RETAINED_HISTORICAL_CID_CHANGED:'+row.role);
+   assert.equal(row.imageId,historical.imageId,'MAINTENANCE_CREATED_PREIMAGE_IMAGE_CHANGED:'+row.role);
+   assert.equal(row.startedAt,prior.State.StartedAt,'MAINTENANCE_CREATED_PREIMAGE_STARTED_AT_CHANGED:'+row.role);
+  }
   assert(Array.isArray(actualBaseline)&&actualBaseline.length===28&&new Set(actualBaseline.map(row=>row.Id)).size===28,'MAINTENANCE_CREATED_ACTUAL_RESOURCE28_REQUIRED');
  }
  const a=structuredClone(restart.a),generations=new Map([...restart.generations].map(([role,value])=>[role,structuredClone(value)])),next=structuredClone(actual||before),baseline=structuredClone(actualBaseline||resourceBefore),created=new Set(MAINTENANCE_CREATED_ROLES);
- const owner=require('./beta-resource-runtime'),oldIds=new Set(before.roles.map(row=>row.containerId)),newIds=new Set();
+ const owner=require('./beta-resource-runtime'),oldIds=new Set([...before.roles.map(row=>row.containerId),...(previousCreated?Object.values(previousCreated).map(row=>row.Id):[])]),newIds=new Set();
  for(const frozen of next.roles){
   const role=frozen.role,snap=saved[role];assert(snap&&snap.Id&&snap.Image===frozen.imageId,'MAINTENANCE_CREATED_IMAGE:'+role);
    if(!created.has(role)){
@@ -982,8 +990,10 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
    const expectedResource={Id:snap.Id,Image:snap.Image,StartedAt:snap.State.StartedAt,Labels:snap.Labels,HostConfig:Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>[key,snap.HostConfig[key]])),Mounts:snap.Mounts};
    if(actualMode){const current=baseline.find(row=>row.Id===snap.Id);assert(current,'MAINTENANCE_CREATED_ACTUAL_BASELINE_ID:'+role);assert.equal(current.Image,expectedResource.Image);assert.equal(current.StartedAt,expectedResource.StartedAt);assert.deepEqual(current.Labels,expectedResource.Labels);assert.deepEqual(current.HostConfig,expectedResource.HostConfig);assert.deepEqual(maintenanceFullMounts(current.Mounts),maintenanceFullMounts(expectedResource.Mounts));}
    else baseline[index]=expectedResource;
-   const priorCaps=resourceBefore.find(row=>row.Id===oldId).HostConfig;assert.deepEqual(expectedResource.HostConfig,priorCaps,'MAINTENANCE_CREATED_BASELINE_CAPS_CHANGED:'+role);
-  const config=a.configs.rows.find(row=>row.cid===oldId);assert(config);config.cid=snap.Id;config.envSha256=digest(JSON.stringify(Object.entries(env).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)));config.mountsSha256=owner.mountDigest(snap);config.modelPath=snap.Labels['com.docker.compose.project.config_files']||null;
+   const priorCaps=actualMode?previousCreated[role].HostConfig:resourceBefore.find(row=>row.Id===oldId).HostConfig;
+   assert.deepEqual(expectedResource.HostConfig,Object.fromEntries(MAINTENANCE_CAP_FIELDS.map(key=>[key,priorCaps[key]])),'MAINTENANCE_CREATED_BASELINE_CAPS_CHANGED:'+role);
+   const historicalId=before.roles.find(row=>row.role===role).containerId;
+   const config=a.configs.rows.find(row=>row.cid===historicalId);assert(config);config.cid=snap.Id;config.envSha256=digest(JSON.stringify(Object.entries(env).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0)));config.mountsSha256=owner.mountDigest(snap);config.modelPath=snap.Labels['com.docker.compose.project.config_files']||null;
   a.cap.allRunningRoles[role].id=snap.Id;generations.set(role,{...generations.get(role),cid:snap.Id,startedAt:snap.State.StartedAt,pid:0});
   frozen.containerId=snap.Id;frozen.startedAt=snap.State.StartedAt;
   const mount=frozen.binaryMounts.find(mount=>mount.destination===target);if(mount)mount.source=binary.path;else frozen.binaryMounts.push({type:'bind',source:binary.path,destination:target,writable:false});
