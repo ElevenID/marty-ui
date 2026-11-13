@@ -335,6 +335,8 @@ fn transaction(id: &str) -> CredentialTransaction {
         selective_disclosure_claims: vec![],
         zk_predicate_claims: vec![],
         credential_payload_format: FORMAT.into(),
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
         wallet_configs: vec![
             json!({"wallet_id":"didcomm","format_variant":"didcomm_v2","display_name":"Synthetic Wallet"}),
         ],

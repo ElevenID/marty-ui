@@ -1,14 +1,24 @@
 import properties from '../../../../contracts/credential-template-readback-properties.json';
+import schemas from '../../../../contracts/credential-template-write-schemas.json';
 import { describe, expect, it } from 'vitest';
 import Ajv from 'ajv';
 import { normalizeCredentialTemplate } from '../presentationPolicyApi';
 
-const validate = new Ajv({ strict: false }).compile({ type: 'object', properties, required: Object.keys(properties), additionalProperties: false });
+const required = Object.keys(properties).filter((field) => field !== 'jwt_vc_profile');
+const validate = new Ajv({ strict: false }).compile({
+  type: 'object', properties, required, additionalProperties: false,
+  components: { schemas },
+});
 const stored = {
   validity_rules: { default_validity_days: 2, max_validity_days: 365, renewable: true, renewal_window_days: 0, not_before_offset_seconds: 900, require_revalidation: true, revalidation_interval_days: 7, ttl_seconds: 172800 },
   supported_formats: ['SD_JWT_VC'], selective_disclosure_fields: ['name'], zk_predicate_claims: ['age_over_21'],
   derived_attributes: [{ id: 'age', name: 'Age', description: null, source_claim: 'birth_date', derivation_type: 'age_over', parameters: { threshold: 21 } }],
   display_style: { background_color: '#123456', text_color: '#ffffff', logo_url: null, background_image_url: null, icon: null },
+};
+const directProfile = {
+  contract: 'marty.jwt-vc-template-profile/v1',
+  securing_profile: 'w3c_vc2_jose_2026_v1',
+  signature_lifetime_seconds: 600,
 };
 describe('public template configuration schema', () => {
   it('accepts persisted non-default configuration and preserves it during UI normalization', () => {
@@ -27,5 +37,31 @@ describe('public template configuration schema', () => {
     const validity_rules = { default_validity_days: 0, max_validity_days: -1, renewable: false, renewal_window_days: 0, not_before_offset_seconds: 0, require_revalidation: false, revalidation_interval_days: null, ttl_seconds: 0 };
     expect(validate({ ...stored, validity_rules }), JSON.stringify(validate.errors)).toBe(true);
     expect(normalizeCredentialTemplate({ ...stored, validity_rules }).validity_rules).toMatchObject(validity_rules);
+  });
+  it('keeps every legacy readback field required while the profile remains optional', () => {
+    for (const field of required) {
+      const incomplete = Object.fromEntries(Object.entries(stored).filter(([name]) => name !== field));
+      expect(validate(incomplete), field).toBe(false);
+    }
+  });
+  it('accepts and preserves the explicit direct profile during UI normalization', () => {
+    const direct = { ...stored, supported_formats: ['VC_JWT_DIRECT_V1'], jwt_vc_profile: directProfile };
+    expect(validate(direct), JSON.stringify(validate.errors)).toBe(true);
+    const normalized = normalizeCredentialTemplate({ id: 'direct-template', ...direct });
+    expect(normalized.jwt_vc_profile).toEqual(directProfile);
+    expect(normalized.supported_formats).toEqual(['VC_JWT_DIRECT_V1']);
+  });
+  it.each([
+    ['null', null],
+    ['unknown contract', { ...directProfile, contract: 'unknown' }],
+    ['unknown profile', { ...directProfile, securing_profile: 'unknown' }],
+    ['missing lifetime', { contract: directProfile.contract, securing_profile: directProfile.securing_profile }],
+    ['zero lifetime', { ...directProfile, signature_lifetime_seconds: 0 }],
+    ['excessive lifetime', { ...directProfile, signature_lifetime_seconds: 31622401 }],
+    ['fractional lifetime', { ...directProfile, signature_lifetime_seconds: 1.5 }],
+    ['string lifetime', { ...directProfile, signature_lifetime_seconds: '600' }],
+    ['extra property', { ...directProfile, issuer_profile_id: 'unexpected' }],
+  ])('rejects an invalid explicit profile: %s', (_name, jwt_vc_profile) => {
+    expect(validate({ ...stored, jwt_vc_profile })).toBe(false);
   });
 });
