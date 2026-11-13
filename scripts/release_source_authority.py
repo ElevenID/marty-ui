@@ -30,6 +30,7 @@ POLICY = {"schema": "marty.immutable-source-authority/v1",
 # Include transitive local Python imports, workflow/action/verifier pins and all
 # policy definitions. The candidate's own stack lock remains independently bound
 # by the original claim, CI, signed transaction and publication checkpoint.
+# Its non-version authority fields are compared separately at every commit.
 PATHS = (".github", "scripts", "release", ".gitattributes",
          "requirements-proto.txt", "requirements-services.txt",
          ".cargo", "rust/.cargo", "rust-toolchain", "rust-toolchain.toml",
@@ -74,6 +75,16 @@ class History:
         require(result.returncode == 0 and len(result.stdout) <= MAX_BYTES,
                 "source history is unavailable or exceeds its bound")
         return result.stdout
+
+    def pristine(self) -> None:
+        require(self.git("rev-parse", "--is-shallow-repository").strip() == b"false",
+                "source history must be complete")
+        require(not self.git("for-each-ref", "--format=%(refname)", "refs/replace").strip(),
+                "source history cannot contain replace refs")
+        grafts = Path(os.fsdecode(self.git("rev-parse", "--git-path", "info/grafts").strip()))
+        if not grafts.is_absolute():
+            grafts = self.root / grafts
+        require(not grafts.exists() and not grafts.is_symlink(), "source history cannot contain grafts")
 
     def inventory(self, source: str) -> dict[str, tuple[str, str, int]]:
         raw = self.git("ls-tree", "-r", "-l", "-z", "--full-tree", source, "--", *PATHS)
@@ -178,14 +189,7 @@ def require_compatible_source(source: str, executable: str, protected_main: str,
     require(all(type(value) is str and SHA.fullmatch(value)
                 for value in (source, executable, protected_main)), "source identity is malformed")
     history = History(repository, timeout_seconds)
-    require(history.git("rev-parse", "--is-shallow-repository").strip() == b"false",
-            "source history must be complete")
-    require(not history.git("for-each-ref", "--format=%(refname)", "refs/replace").strip(),
-            "source history cannot contain replace refs")
-    grafts = Path(os.fsdecode(history.git("rev-parse", "--git-path", "info/grafts").strip()))
-    if not grafts.is_absolute():
-        grafts = repository / grafts
-    require(not grafts.exists(), "source history cannot contain grafts")
+    history.pristine()
     for commit in {source, executable, protected_main}:
         require(history.git("cat-file", "-t", commit).strip() == b"commit", "source must be a commit")
     for ancestor in {source, executable}:
@@ -211,6 +215,7 @@ def authenticated_current(github, source: str, executable: str, *, repository: P
     This does not validate workflow identity or a clean executable checkout.
     Callers retain those checks, successful original-run qualification and all
     write admission. The cache cannot replace the fresh protected-branch read.
+    An earlier cached M cannot authorize a rewind of observed protected main.
     """
     if __package__:
         from . import release_tag_handoff as h
@@ -233,8 +238,13 @@ def authenticated_current(github, source: str, executable: str, *, repository: P
               repository=repository, deadline=deadline)
         require_compatible_source(source, executable, main, repository=repository,
                                   timeout_seconds=h.remaining(deadline, 30))
-        if verified is not None:
-            verified.add(key)
+    if verified is not None:
+        history = History(repository, h.remaining(deadline, 30))
+        history.pristine()
+        for previous in {entry[2] for entry in verified}:
+            if previous != main:
+                history.git("merge-base", "--is-ancestor", previous, main)
+        verified.add(key)
     return main
 
 

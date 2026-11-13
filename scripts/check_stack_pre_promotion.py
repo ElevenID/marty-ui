@@ -142,18 +142,28 @@ def check(
         )
     except (ValueError, KeyError, TypeError):
         raise PrePromotionError("Official gate differs from the qualified transaction") from None
-    expected_main = main_lookup(repository)
-    git_command("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
-    main_sha = git_command("rev-parse", "refs/remotes/origin/main^{commit}")
-    if main_sha != expected_main:
-        raise PrePromotionError("Fetched main differs from the authenticated protected-main observation")
-    try:
-        history_check(
-            source_sha, main_sha, run_id, authority["origin_attempt"],
-            authority["review_required"], record_sha256=authority["record_sha256"],
-        )
-    except (ValueError, OSError, subprocess.SubprocessError):
-        raise PrePromotionError("Protected main is not the exact permitted review history") from None
+    observed_main: str | None = None
+
+    def verify_main() -> None:
+        nonlocal observed_main
+        current = main_lookup(repository)
+        if not isinstance(current, str) or re.fullmatch(r"[0-9a-f]{40}", current) is None:
+            raise PrePromotionError("Protected main observation is malformed")
+        # Fetch the authenticated immutable object, never a moving main ref.
+        git_command("fetch", "--no-tags", "origin", current)
+        try:
+            history_check(
+                source_sha, current, run_id, authority["origin_attempt"],
+                authority["review_required"], record_sha256=authority["record_sha256"],
+            )
+            if observed_main is not None and current != observed_main:
+                if git_command("merge-base", observed_main, current) != observed_main:
+                    raise ValueError("protected main observation rewound")
+        except (ValueError, OSError, subprocess.SubprocessError):
+            raise PrePromotionError("Protected main is not the exact permitted review history") from None
+        observed_main = current
+
+    verify_main()
 
     if state != "promoted":
         if git_command("ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"):
@@ -176,10 +186,9 @@ def check(
                 existing[role] = True
             else:
                 existing[role] = False
-    # Coordinate reads can take time. A later authorization commit is not an
-    # invitation to refresh an already-qualified candidate's accepted main.
-    if main_lookup(repository) != expected_main:
-        raise PrePromotionError("Protected main changed during the pre-publication check")
+    # Refresh policy authority after potentially slow coordinate reads without
+    # changing the original source, qualification, claim or image digests.
+    verify_main()
     return existing
 
 

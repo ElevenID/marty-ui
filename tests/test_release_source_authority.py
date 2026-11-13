@@ -193,10 +193,36 @@ def test_immutable_cache_never_replaces_a_fresh_protected_main_read(repository, 
     current[0] = commit(root, "Unrelated protected-main advance")
     assert MODULE.authenticated_current(github, source, source, repository=root, verified=verified) == current[0]
     assert len(reads) == 3 and len(fetches) == 2
+    current[0] = source
+    with pytest.raises(MODULE.SourceAuthorityError):
+        MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
+    assert len(fetches) == 2  # A cached old M cannot hide a rewind.
     protected[0] = False
     with pytest.raises(h.HandoffError, match="authenticated protected main"):
         MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
     assert len(fetches) == 2
+
+
+@pytest.mark.parametrize("fault", ["graft", "shallow", "replace"])
+def test_cached_proof_still_rejects_a_changed_local_git_view(repository, monkeypatch, fault) -> None:
+    root, source = repository
+    h = import_module("scripts.release_tag_handoff")
+    monkeypatch.setitem(sys.modules, "release_tag_handoff", h)
+    github = h.GitHub()
+    monkeypatch.setattr(github, "json", lambda _: {"name": "main", "protected": True, "commit": {"sha": source}})
+    monkeypatch.setattr(h, "git", lambda *args, **kwargs: None)
+    verified = set()
+    MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
+    if fault == "graft":
+        write(root, ".git/info/grafts", source.encode() + b"\n")
+    elif fault == "shallow":
+        write(root, ".git/shallow", source.encode() + b"\n")
+    else:
+        write(root, "ui/next.ts", b"next\n")
+        later = commit(root, "Next local object")
+        git(root, "replace", source, later)
+    with pytest.raises(MODULE.SourceAuthorityError, match="complete|grafts|replace"):
+        MODULE.authenticated_current(github, source, source, repository=root, verified=verified)
 
 
 def test_current_main_policy_change_is_not_covered_by_cached_old_main(repository, monkeypatch) -> None:

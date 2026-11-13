@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind an automatically qualified release candidate to unchanged protected main.
+"""Bind automatically qualified releases to admitted protected-main history.
 
 The shared Rust gate owns official protocol and browser outcome requirements.
 Production consumers accept only its automated v2 receipt. Historical review
@@ -186,7 +186,7 @@ def require_review_only_history(
     repository: Path = ROOT, record_sha256: str | None = None,
     timeout_seconds: float | None = None,
 ) -> None:
-    """Permit only the exact original-run disposition on top of candidate S.
+    """Permit the original disposition or the future immutable-source policy.
 
     A pending review may observe S itself while the record is still absent.
     Once a record digest is supplied, S itself cannot be an accepted review.
