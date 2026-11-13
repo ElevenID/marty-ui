@@ -162,6 +162,8 @@ message PolicyResponse {
   PolicyRevision policy_revision = 13;
   string prerequisite_evidence_profile = 14;
   string credential_authority_snapshot_json = 15;
+  // Saved credential-holder policy, independent of holder-only proof obligations.
+  bool holder_binding_required = 16;
 }
 
 // Server-computed identity of the exact saved policy snapshot. A revision is

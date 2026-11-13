@@ -115,6 +115,10 @@ pub async fn prepare_verification_request(
         return Err(FlowVerificationRequestError::WalletNonceRequired);
     }
     let is_siop = context.get("flow_type").and_then(Value::as_str) == Some("siop_v2");
+    if is_siop && context.contains_key(crate::presentation_request::FROZEN_PRESENTATION_REQUEST_KEY)
+    {
+        return Err(FlowVerificationRequestError::InvalidContext);
+    }
     let artifacts = if is_siop {
         None
     } else {

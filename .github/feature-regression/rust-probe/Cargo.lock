@@ -3861,6 +3861,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "marty-canonical-digest",
+ "marty-oid4vci",
  "p256",
  "percent-encoding",
  "serde",

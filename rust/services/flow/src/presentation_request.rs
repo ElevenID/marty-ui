@@ -2,6 +2,9 @@ use marty_oid4vci::presentation_request::{
     build_presentation_request, MdocClaimInput, PresentationRequestArtifacts,
     PresentationRequestBuildInput, PresentationRequirementInput, RequestedClaimInput,
 };
+use marty_oid4vp_contract::jwt_vc_profile::{
+    policy_credential_format, profiled_jwt_vc_query, JwtVcProfileBinding, JwtVcSecuringProfile,
+};
 use marty_oid4vp_contract::{digest_query_document, FrozenPolicyIdentity};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -70,7 +73,8 @@ impl FrozenFlowPresentationRequest {
         match kind {
             marty_oid4vp_contract::QueryKind::Dcql => query == &self.dcql_query,
             marty_oid4vp_contract::QueryKind::PresentationExchange => {
-                query == &self.presentation_definition
+                matches!(profiled_jwt_vc_query(&self.dcql_query), Ok(None))
+                    && query == &self.presentation_definition
             }
         }
     }
@@ -125,6 +129,16 @@ fn validate_frozen_request(
     snapshot: &FrozenFlowPresentationRequest,
     instance: &FlowInstanceRecord,
 ) -> Result<(), FlowPresentationRequestError> {
+    let profiled = profiled_jwt_vc_query(&snapshot.dcql_query)
+        .map_err(|_| FlowPresentationRequestError::InvalidFrozenRequest)?;
+    if profiled.is_some()
+        && (snapshot.presentation_definition != serde_json::json!({})
+            || snapshot.credential_authority.is_some()
+            || instance.context["flow_type"].as_str() == Some("siop_v2")
+            || instance.context["oid4vp_profile"].as_str() == Some("haip"))
+    {
+        return Err(FlowPresentationRequestError::InvalidFrozenRequest);
+    }
     if snapshot.policy_revision.validate().is_err()
         || snapshot
             .credential_authority
@@ -259,6 +273,13 @@ pub(crate) async fn build_resolved_flow_presentation_request(
     providers: &FlowProviderRegistry,
     resolved: &ResolvedPresentationPolicy,
 ) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    if resolved.requirements.iter().any(|(requirement, template)| {
+        requirement.get("expected_securing_profile").is_some()
+            || template.jwt_vc_profile.is_some()
+            || template.credential_format == "vc_jwt_direct_v1"
+    }) {
+        return build_profiled_request(resolved);
+    }
     let template_provider =
         providers
             .credential_template
@@ -307,6 +328,87 @@ pub(crate) async fn build_resolved_flow_presentation_request(
         wallet_formats,
     })
     .map_err(|error| FlowPresentationRequestError::Native(error.to_string()))
+}
+
+fn build_profiled_request(
+    resolved: &ResolvedPresentationPolicy,
+) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    let invalid = || {
+        FlowPresentationRequestError::InvalidPolicy(
+            "explicit JWT-VC requires one type-only holder-bound DCQL requirement".into(),
+        )
+    };
+    if resolved.requirements.len() != 1
+        || !resolved.policy.holder_binding_required
+        || resolved.policy.prerequisite_evidence_profile.is_some()
+        || resolved.policy.credential_authority.is_some()
+    {
+        return Err(invalid());
+    }
+    let (requirement, template) = &resolved.requirements[0];
+    let profile: JwtVcSecuringProfile = serde_json::from_value(
+        requirement
+            .get("expected_securing_profile")
+            .cloned()
+            .ok_or_else(invalid)?,
+    )
+    .map_err(|_| invalid())?;
+    if requirement.get("required") != Some(&Value::Bool(true))
+        || requirement
+            .get("requested_claims")
+            .is_none_or(|claims| claims.as_array().is_none_or(|claims| !claims.is_empty()))
+        || requirement
+            .get("credential_payload_format")
+            .and_then(Value::as_str)
+            != Some(policy_credential_format(profile))
+    {
+        return Err(invalid());
+    }
+    let supported = match profile {
+        JwtVcSecuringProfile::W3cVc2Jose2026V1 => {
+            template.jwt_vc_profile.is_some()
+                && template.credential_format == "vc_jwt_direct_v1"
+                && template.supported_formats == ["VC_JWT_DIRECT_V1"]
+        }
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1 => {
+            template.jwt_vc_profile.is_none()
+                && template.credential_format == "jwt_vc"
+                && template
+                    .supported_formats
+                    .iter()
+                    .any(|format| format == "VC_JWT")
+        }
+    };
+    if !supported {
+        return Err(invalid());
+    }
+    let credential_type = match template
+        .credential_type
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "open_badge" | "open_badge_v3" | "openbadgecredential" => "OpenBadgeCredential",
+        _ => template.credential_type.as_str(),
+    };
+    let query = marty_oid4vci::presentation_request::build_profiled_jwt_vc_query(
+        requirement
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?,
+        JwtVcProfileBinding::new(profile),
+        vec![vec!["VerifiableCredential".into(), credential_type.into()]],
+        true,
+    )
+    .map_err(|_| invalid())?;
+    let dcql_query = serde_json::json!({"credentials": [query]});
+    profiled_jwt_vc_query(&dcql_query)
+        .map_err(|_| invalid())?
+        .ok_or_else(invalid)?;
+    Ok(PresentationRequestArtifacts {
+        presentation_definition: serde_json::json!({}),
+        dcql_query,
+    })
 }
 
 fn validate_template(

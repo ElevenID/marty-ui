@@ -171,6 +171,7 @@ async fn data_integrity_credential_fields_cannot_bypass_registry_controls() {
         "public_jwk": registry_response(&key)["did_document"]["verificationMethod"][0]["publicKeyJwk"]
     });
     let context = CredentialVerificationContext {
+        profiled_jwt_vc: None,
         resolved_issuer_key: None,
         format: DetectedCredentialFormat::W3cVcdmDi,
         token: signed,
@@ -297,6 +298,7 @@ async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCred
         let kernel =
             ResolvingCredentialKernel::new(Arc::new(NoPublic)).with_registry(Arc::new(registry));
         let context = CredentialVerificationContext {
+            profiled_jwt_vc: None,
             resolved_issuer_key: None,
             format,
             token: signed.clone(),
@@ -459,6 +461,7 @@ async fn ob3_wrappers_apply_registry_controls_to_the_credential_the_native_verif
                 relationship["public_jwk"] = unrelated.clone();
             }
             let context = CredentialVerificationContext {
+                profiled_jwt_vc: None,
                 resolved_issuer_key: None,
                 format: DetectedCredentialFormat::OpenbadgeV3,
                 token: token.clone(),
@@ -546,6 +549,7 @@ async fn retired_assertion_wrapper_is_rejected_before_scoped_registry_lookup() {
     let issuer = fixture["credential"]["issuer"]["id"].as_str().unwrap();
     let method = fixture["governed_method"]["id"].as_str().unwrap();
     let mut context = CredentialVerificationContext {
+        profiled_jwt_vc: None,
         resolved_issuer_key: None,
         format: DetectedCredentialFormat::OpenbadgeV3,
         token: fixture["credential"].clone(),

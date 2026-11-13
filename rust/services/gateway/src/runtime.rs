@@ -5104,6 +5104,12 @@ mod tests {
                     "credential_payload_format":"MDOC"
                 }))
                 .expect("authoritative template"),
+                "/v1/credential-templates/template%2Dprofiled%2Ddirect" => serde_json::to_vec(&json!({
+                    "id":"template-profiled-direct","organization_id":"org-1","credential_payload_format":"VC_JWT_DIRECT_V1"
+                })).expect("explicit direct template"),
+                "/v1/credential-templates/template%2Dprofiled%2Dhistorical" => serde_json::to_vec(&json!({
+                    "id":"template-profiled-historical","organization_id":"org-1","credential_payload_format":"VC_JWT"
+                })).expect("explicit historical template"),
                 "/v1/credential-templates" if request.method == HttpMethod::Post => {
                     let body: Value = serde_json::from_slice(
                         request.body.as_deref().expect("template create body"),
@@ -5441,10 +5447,17 @@ mod tests {
                     )
                     .expect("presentation policy JSON");
                     assert_eq!(body["organization_id"], "org-1");
-                    assert_eq!(
-                        body["credential_requirements"][0]["credential_payload_format"],
-                        "MDOC"
-                    );
+                    let expected_format=match body["credential_requirements"][0]["expected_securing_profile"].as_str() {
+                        Some("w3c_vc2_jose_2026_v1")=>"VC_JWT_DIRECT_V1",
+                        Some("marty_nested_vc2_jwt_v1")=>"VC_JWT",
+                        _=>"MDOC",
+                    };
+                    assert_eq!(body["credential_requirements"][0]["credential_payload_format"],expected_format);
+                    let holder=if expected_format=="MDOC" {json!({"required":false})} else {
+                        assert_eq!(body["credential_requirements"][0]["requested_claims"],json!([]));
+                        assert_eq!(body["holder_binding"]["required"],true);
+                        body["holder_binding"].clone()
+                    };
                     serde_json::to_vec(&json!({
                         "id":"policy-1", "organization_id":"org-1", "name":"Verify DTC",
                         "status":"draft", "description":null, "purpose":null,
@@ -5452,7 +5465,7 @@ mod tests {
                         "trust_profile_id":null, "display_metadata":null,
                         "credential_requirements":body["credential_requirements"],
                         "alternative_requirements":[], "compliance_profile_id":null,
-                        "holder_binding":{"required":false}, "issuer_constraints":null,
+                        "holder_binding":holder, "issuer_constraints":null,
                         "freshness":null, "prefer_predicates":false, "fallback_policy":null,
                         "supported_circuits":[], "credential_ranking_strategy":"FRESHEST_FIRST",
                         "credential_ranking_weights":null, "version":1,
@@ -10154,6 +10167,72 @@ mod tests {
         assert_eq!(body["holder_binding"], json!({"required": false}));
         assert!(body.get("issuer_profile_id").is_none());
         assert!(body.get("description").is_none());
+    }
+
+    #[tokio::test]
+    async fn explicit_jwt_vc_policy_crosses_the_public_gateway_write_and_readback_contract() {
+        for (profile, format, template) in [
+            (
+                "w3c_vc2_jose_2026_v1",
+                "VC_JWT_DIRECT_V1",
+                "template-profiled-direct",
+            ),
+            (
+                "marty_nested_vc2_jwt_v1",
+                "VC_JWT",
+                "template-profiled-historical",
+            ),
+        ] {
+            let input = json!({"organization_id":"org-1","name":"Whole credential","holder_binding":{"required":true,"binding_methods":["DEVICE_KEY"],"proof_profiles":["OID4VP_VERIFIABLE_PRESENTATION"],"proof_freshness":{"challenge_required":true,"audience_binding_required":true,"replay_detection_required":true}},"credential_requirements":[{"credential_template_id":template,"credential_payload_format":format,"expected_securing_profile":profile,"requested_claims":[]}]});
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/presentation-policies")
+                        .header("cookie", "sessionId=valid")
+                        .header("content-type", "application/json")
+                        .body(Body::from(input.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .unwrap();
+            assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                body["credential_requirements"][0]["expected_securing_profile"],
+                profile
+            );
+            assert_eq!(
+                body["credential_requirements"][0]["credential_payload_format"],
+                format
+            );
+            assert_eq!(
+                body["credential_requirements"][0]["requested_claims"],
+                json!([])
+            );
+            assert_eq!(body["holder_binding"]["required"], true);
+            for marker in [json!(null), json!("unknown_profile")] {
+                let mut invalid = input.clone();
+                invalid["credential_requirements"][0]["expected_securing_profile"] = marker;
+                let response = runtime_router()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri("/v1/presentation-policies")
+                            .header("cookie", "sessionId=valid")
+                            .header("content-type", "application/json")
+                            .body(Body::from(invalid.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            }
+        }
     }
 
     #[tokio::test]

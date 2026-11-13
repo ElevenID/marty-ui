@@ -85,6 +85,7 @@ impl CredentialTemplateProvider for Templates {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
         Ok(CredentialTemplateReference {
+            jwt_vc_profile: None,
             id: template_id.into(),
             organization_id: self.organization_id.into(),
             status: "ACTIVE".into(),

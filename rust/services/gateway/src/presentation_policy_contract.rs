@@ -317,6 +317,7 @@ fn canonical_requirement(
         "description",
         "required",
         "credential_payload_format",
+        "expected_securing_profile",
         "requested_claims",
         "trust_profile_id",
         "max_age_seconds",
@@ -347,10 +348,37 @@ fn canonical_requirement(
             return Err(PresentationPolicyContractError);
         }
     }
+    let profile = value
+        .get("expected_securing_profile")
+        .map(|value| {
+            serde_json::from_value::<marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile>(
+                value.clone(),
+            )
+            .map_err(|_| PresentationPolicyContractError)
+        })
+        .transpose()?;
+    if let Some(profile) = profile {
+        if value
+            .get("credential_payload_format")
+            .and_then(Value::as_str)
+            != Some(marty_oid4vp_contract::jwt_vc_profile::policy_credential_format(profile))
+            || value
+                .get("required")
+                .is_some_and(|required| required != &Value::Bool(true))
+        {
+            return Err(PresentationPolicyContractError);
+        }
+    }
     let claims = value
         .get_mut("requested_claims")
         .and_then(Value::as_array_mut)
-        .filter(|claims| !claims.is_empty())
+        .filter(|claims| {
+            if profile.is_some() {
+                claims.is_empty()
+            } else {
+                !claims.is_empty()
+            }
+        })
         .ok_or(PresentationPolicyContractError)?;
     for claim in claims {
         *claim = canonical_requested_claim(claim.take(), response)?;
@@ -1046,6 +1074,56 @@ mod tests {
         invalid_requests: Vec<Value>,
         internal_response: Value,
         expected_public_response: Value,
+    }
+
+    #[test]
+    fn explicit_jwt_vc_requirements_preserve_profile_and_reject_null_before_projection() {
+        use serde_json::json;
+        for (profile, format) in [
+            ("marty_nested_vc2_jwt_v1", "VC_JWT"),
+            ("w3c_vc2_jose_2026_v1", "VC_JWT_DIRECT_V1"),
+        ] {
+            let input = json!({"organization_id":"org-1","name":"Whole credential","holder_binding":{"required":true,"binding_methods":["DEVICE_KEY"],"proof_profiles":["OID4VP_VERIFIABLE_PRESENTATION"],"proof_freshness":{"challenge_required":true,"audience_binding_required":true,"replay_detection_required":true}},"credential_requirements":[{"credential_template_id":"template-1","credential_payload_format":format,"expected_securing_profile":profile,"requested_claims":[]}]});
+            for update in [false, true] {
+                let canonical =
+                    canonicalize_request(&serde_json::to_vec(&input).unwrap(), update, true)
+                        .unwrap();
+                assert_eq!(
+                    canonical["credential_requirements"][0]["expected_securing_profile"],
+                    profile
+                );
+                for (field, value) in [
+                    ("expected_securing_profile", json!(null)),
+                    ("expected_securing_profile", json!("unknown")),
+                    ("credential_payload_format", json!("SD_JWT_VC")),
+                    ("requested_claims", json!([{"claim_name":"email"}])),
+                    ("required", json!(false)),
+                ] {
+                    let mut invalid = input.clone();
+                    invalid["credential_requirements"][0][field] = value;
+                    assert!(
+                        canonicalize_request(&serde_json::to_vec(&invalid).unwrap(), update, true)
+                            .is_err(),
+                        "{field}"
+                    );
+                }
+            }
+            let fixture: Contract = serde_json::from_str(include_str!(
+                "../../../../contracts/gateway-presentation-policy-behavior.json"
+            ))
+            .unwrap();
+            let mut response = fixture.internal_response;
+            let canonical =
+                canonicalize_request(&serde_json::to_vec(&input).unwrap(), false, true).unwrap();
+            response["credential_requirements"] = canonical["credential_requirements"].clone();
+            let projected = project_response(response.clone()).unwrap();
+            assert_eq!(
+                projected["credential_requirements"][0]["expected_securing_profile"],
+                profile
+            );
+            response["credential_requirements"][0]["expected_securing_profile"] = json!(null);
+            assert!(project_response(response).is_err());
+        }
     }
 
     #[test]

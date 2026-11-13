@@ -19,6 +19,28 @@ pub(crate) fn matches_query(
     format: DetectedCredentialFormat,
     evidence: &CredentialVerificationEvidence,
 ) -> bool {
+    let profiled = match marty_oid4vp_contract::jwt_vc_profile::profiled_jwt_vc_query(
+        &transport.query_document,
+    ) {
+        Ok(query) => query,
+        Err(_) => return false,
+    };
+    if let Some(query) = profiled {
+        return transport.query_kind == QueryKind::Dcql
+            && selected.query == transport.query_document["credentials"][0]
+            && selected.format == query.binding.credential_format()
+            && evidence.verified
+            && evidence.presentation_verified
+            && evidence.holder_binding_verified
+            && evidence
+                .authenticated_profiled_jwt_vc
+                .as_ref()
+                .is_some_and(|proof| proof.binding() == query.binding)
+            && query.matches_types(&evidence.credential_types);
+    }
+    if evidence.authenticated_profiled_jwt_vc.is_some() {
+        return false;
+    }
     if !evidence.verified || !matches_format(&selected.format, format) {
         return false;
     }

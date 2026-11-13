@@ -32,6 +32,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            holder_binding_required: false,
             prerequisite_evidence_profile: None,
             credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),

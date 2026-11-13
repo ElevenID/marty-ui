@@ -13,6 +13,9 @@ mod policy_contract;
 pub mod policy_revision;
 pub mod postgres;
 mod prerequisite_authority;
+mod profiled_jwt_vc;
+#[cfg(test)]
+mod profiled_jwt_vc_tests;
 mod response_association;
 pub mod runtime;
 mod sd_jwt_query;
@@ -49,6 +52,7 @@ pub use postgres::{
     PostgresPolicyStoreError,
 };
 pub use prerequisite_authority::VerifiedManagedCredentialAuthority;
+pub use profiled_jwt_vc::{AuthenticatedProfiledJwtVcEvidence, ProfiledJwtVcRequest};
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
 pub use sd_jwt_query::{AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest};
 pub use verification::{

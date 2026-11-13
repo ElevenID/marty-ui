@@ -14,6 +14,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 mmf-runtime.workspace = true

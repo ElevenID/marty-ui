@@ -44,6 +44,126 @@ fn golden() -> (
 }
 
 #[test]
+fn explicit_jwt_vc_frozen_contract_keeps_the_exact_profile_and_closed_raw_query() {
+    use marty_oid4vp_contract::jwt_vc_profile::{
+        profiled_jwt_vc_query, JwtVcProfileBinding, JwtVcSecuringProfile,
+    };
+    for profile in [
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1,
+        JwtVcSecuringProfile::W3cVc2Jose2026V1,
+    ] {
+        let (now, mut request, _, _) = golden();
+        request.query.kind = QueryKind::Dcql;
+        request.query.requirements.truncate(1);
+        let requirement = &mut request.query.requirements[0];
+        requirement.expected_securing_profile = Some(profile);
+        requirement.accepted_formats = vec![profile.credential_format().into()];
+        requirement.accepted_algorithms =
+            [(profile.credential_format().into(), vec!["EdDSA".into()])].into();
+        requirement.format_options.clear();
+        requirement.accepted_type_sets = vec![vec!["MemberCredential".into()]];
+        requirement.required_claims.clear();
+        requirement.allowed_claims.clear();
+        requirement.retained_claims.clear();
+        requirement.dcql_claim_paths.clear();
+        requirement.required = true;
+        requirement.min_credentials = 1;
+        requirement.max_credentials = 1;
+        let entry = marty_oid4vci::presentation_request::build_profiled_jwt_vc_query(
+            &requirement.id,
+            JwtVcProfileBinding::new(profile),
+            vec![vec![
+                "VerifiableCredential".into(),
+                "MemberCredential".into(),
+            ]],
+            true,
+        )
+        .unwrap();
+        request.query.document = json!({"credentials":[entry]});
+        request.query.document_digest = digest_query_document(&request.query.document).unwrap();
+        request.policy.alternative_requirement_groups.clear();
+        request.validate_at(now).unwrap();
+        assert_eq!(
+            profiled_jwt_vc_query(&request.query.document)
+                .unwrap()
+                .unwrap()
+                .binding
+                .securing_profile(),
+            profile
+        );
+        for (path, value) in [
+            ("/credential_sets", json!([])),
+            ("/credentials/0/claim_sets", json!([])),
+            ("/credentials/0/multiple", json!(true)),
+            ("/credentials/0/trusted_authorities", json!([])),
+            (
+                "/credentials/0/require_cryptographic_holder_binding",
+                json!(false),
+            ),
+            (
+                "/credentials/0/require_cryptographic_holder_binding",
+                json!(null),
+            ),
+            ("/credentials/0/claims", json!([{"path":["email"]}])),
+            ("/credentials/0/meta/marty_securing_profile", json!(null)),
+            (
+                "/credentials/0/meta/marty_securing_profile",
+                json!("unknown"),
+            ),
+            ("/credentials/0/meta/extra", json!(true)),
+            (
+                "/credentials/0/format",
+                json!(if profile == JwtVcSecuringProfile::MartyNestedVc2JwtV1 {
+                    "application/vc+jwt"
+                } else {
+                    "jwt_vc_json"
+                }),
+            ),
+        ] {
+            let mut changed = request.clone();
+            let (parent, key) = path.rsplit_once('/').unwrap();
+            changed
+                .query
+                .document
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), value);
+            changed.query.document_digest = digest_query_document(&changed.query.document).unwrap();
+            assert!(changed.validate_at(now).is_err(), "{path}");
+            assert!(
+                profiled_jwt_vc_query(&changed.query.document).is_err(),
+                "{path}"
+            );
+        }
+        let mut mixed = request.clone();
+        mixed.query.document["credentials"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"other","format":"jwt_vc_json","meta":{"type_values":[["Other"]]}}));
+        mixed.query.document_digest = digest_query_document(&mixed.query.document).unwrap();
+        assert!(mixed.validate_at(now).is_err());
+        let mut downgraded = request.clone();
+        downgraded.query.requirements[0].expected_securing_profile = None;
+        assert!(downgraded.validate_at(now).is_err());
+        let mut pe = request.clone();
+        pe.query.kind = QueryKind::PresentationExchange;
+        assert!(pe.validate_at(now).is_err());
+        let mut null = serde_json::to_value(&request).unwrap();
+        null["query"]["requirements"][0]["expected_securing_profile"] = Value::Null;
+        assert!(serde_json::from_value::<FrozenOid4vpRequestV1>(null).is_err());
+    }
+    let (_, legacy, _, _) = golden();
+    assert!(
+        !serde_json::to_value(&legacy).unwrap()["query"]["requirements"][0]
+            .as_object()
+            .unwrap()
+            .contains_key("expected_securing_profile")
+    );
+}
+
+#[test]
 fn language_neutral_contract_freezes_boundaries_limits_and_domains() {
     let fixture = fixture();
     assert_eq!(fixture["schema_version"], 1);

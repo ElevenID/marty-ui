@@ -200,6 +200,7 @@ fn requirement(
     claim: RequestedClaim,
 ) -> CredentialRequirement {
     CredentialRequirement {
+        expected_securing_profile: None,
         id: stable_id(seed, "requirement"),
         credential_template_id: template_id.into(),
         display_name: display_name.into(),

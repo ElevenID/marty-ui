@@ -68,6 +68,12 @@ pub struct CredentialTemplateReference {
     pub claims: Vec<CredentialClaimReference>,
     pub issuer_did: String,
     pub credential_format: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "marty_jwt_vc_issuance::optional_policy"
+    )]
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     #[serde(default)]
     pub issuance_protocol: String,
     #[serde(default)]
@@ -112,6 +118,8 @@ pub struct PresentationPolicyReference {
     pub organization_id: String,
     pub status: String,
     pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holder_binding_required: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prerequisite_evidence_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

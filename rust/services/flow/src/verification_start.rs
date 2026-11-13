@@ -147,6 +147,13 @@ pub async fn prepare_profiled_verification_start(
         return Err(FlowVerificationStartError::PrincipalRequired);
     }
     request.validate_for_environment(allow_http_loopback)?;
+    // A SIOP-only start has no presentation-policy evaluation. Reject a
+    // supplied policy instead of silently discarding its credential profile.
+    if request.response_type == VerificationResponseType::IdToken
+        && request.presentation_policy_id.is_some()
+    {
+        return Err(FlowVerificationStartError::InvalidPolicyReference);
+    }
     if request.oid4vp_profile == Oid4vpProfile::Haip && !options.haip_enabled {
         return Err(FlowVerificationStartError::HaipDisabled);
     }
@@ -316,6 +323,11 @@ pub async fn prepare_profiled_verification_start(
         updated_at: now,
     };
     if let Some((policy_revision, authority, artifacts)) = presentation.as_ref() {
+        crate::request_object::validate_profiled_query_transport(
+            &instance,
+            artifacts,
+            &options.request_object,
+        )?;
         freeze_flow_presentation_request(
             &mut instance,
             policy_revision.clone(),

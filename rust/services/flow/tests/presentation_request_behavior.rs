@@ -1,5 +1,7 @@
 #[path = "support/presentation_snapshot.rs"]
 mod presentation_snapshot;
+#[path = "support/profiled_jwt_vc.rs"]
+mod profiled_jwt_vc;
 
 use std::sync::Arc;
 
@@ -40,6 +42,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            holder_binding_required: false,
             prerequisite_evidence_profile: None,
             credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),
@@ -68,6 +71,7 @@ impl CredentialTemplateProvider for Templates {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
         Ok(CredentialTemplateReference {
+            jwt_vc_profile: None,
             id: template_id.into(),
             organization_id: "org-1".into(),
             status: "ACTIVE".into(),
@@ -108,6 +112,110 @@ fn providers(organization_id: &'static str, requirements: Vec<Value>) -> FlowPro
         })),
         credential_template: Some(Arc::new(Templates)),
         ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn explicit_jwt_vc_builder_requires_owner_profile_holder_and_exact_template_capability() {
+    use marty_oid4vp_contract::jwt_vc_profile::{profiled_jwt_vc_query, JwtVcSecuringProfile};
+    for profile in [
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1,
+        JwtVcSecuringProfile::W3cVc2Jose2026V1,
+    ] {
+        for (credential_type, expected_type) in [
+            ("MemberCredential", "MemberCredential"),
+            ("open_badge_v3", "OpenBadgeCredential"),
+            ("OPENBADGECREDENTIAL", "OpenBadgeCredential"),
+        ] {
+            let artifacts = build_flow_presentation_request(
+                &profiled_jwt_vc::providers(profile, credential_type),
+                "policy-1",
+                "org-1",
+            )
+            .await
+            .unwrap();
+            assert_eq!(artifacts.presentation_definition, json!({}));
+            let query = profiled_jwt_vc_query(&artifacts.dcql_query)
+                .unwrap()
+                .unwrap();
+            assert_eq!(query.binding.securing_profile(), profile);
+            assert_eq!(query.id, profiled_jwt_vc::REQUIREMENT_ID);
+            assert_eq!(query.type_sets, vec![vec![expected_type.to_owned()]]);
+            assert_eq!(
+                artifacts.dcql_query["credentials"][0]["require_cryptographic_holder_binding"],
+                true
+            );
+        }
+        for mutation in [
+            "old_owner",
+            "null_profile",
+            "unknown_profile",
+            "unmarked",
+            "crossed_format",
+            "optional",
+            "claims",
+            "second_requirement",
+            "wrong_template_format",
+            "wrong_template_capability",
+            "direct_template_policy",
+        ] {
+            let mut policy = profiled_jwt_vc::policy(profile);
+            let mut template = profiled_jwt_vc::template(profile, "MemberCredential");
+            match mutation {
+                "old_owner" => policy.holder_binding_required = false,
+                "null_profile" => {
+                    policy.credential_requirements[0]["expected_securing_profile"] = json!(null)
+                }
+                "unknown_profile" => {
+                    policy.credential_requirements[0]["expected_securing_profile"] =
+                        json!("unknown")
+                }
+                "unmarked" => {
+                    policy.credential_requirements[0]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("expected_securing_profile");
+                    if profile == JwtVcSecuringProfile::MartyNestedVc2JwtV1 {
+                        continue;
+                    }
+                }
+                "crossed_format" => {
+                    policy.credential_requirements[0]["credential_payload_format"] =
+                        json!("SD_JWT_VC")
+                }
+                "optional" => policy.credential_requirements[0]["required"] = json!(false),
+                "claims" => {
+                    policy.credential_requirements[0]["requested_claims"] =
+                        json!([{"claim_name":"email"}])
+                }
+                "second_requirement" => policy
+                    .credential_requirements
+                    .push(policy.credential_requirements[0].clone()),
+                "wrong_template_format" => template.credential_format = "sd_jwt_vc".into(),
+                "wrong_template_capability" => {
+                    template.supported_formats = vec!["SD_JWT_VC".into()]
+                }
+                "direct_template_policy" => {
+                    template.jwt_vc_profile = if profile == JwtVcSecuringProfile::W3cVc2Jose2026V1 {
+                        None
+                    } else {
+                        Some(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap())
+                    }
+                }
+                _ => unreachable!(),
+            }
+            let ports = FlowProviderRegistry {
+                presentation_policy: Some(Arc::new(profiled_jwt_vc::Policies(policy))),
+                credential_template: Some(Arc::new(profiled_jwt_vc::Templates(template))),
+                ..Default::default()
+            };
+            assert!(
+                build_flow_presentation_request(&ports, "policy-1", "org-1")
+                    .await
+                    .is_err(),
+                "{profile:?}: {mutation}"
+            );
+        }
     }
 }
 
