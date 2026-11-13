@@ -558,6 +558,118 @@ pub(crate) fn observe_user_systemd_prerequisites(parent: &Path) -> UserSystemdPr
     )
 }
 
+/// A successful, bounded query is required even for a genuinely absent unit.
+/// Failure to reach the user manager never establishes absence or inactivity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct OperatorPredecessorUnit {
+    load_state: String,
+    unit_file_state: String,
+    active_state: String,
+    sub_state: String,
+    fragment_path: String,
+}
+impl OperatorPredecessorUnit {
+    fn parse(output: &str) -> Result<Self> {
+        let mut values = std::collections::BTreeMap::new();
+        for line in output.lines() {
+            let (key, value) = line
+                .split_once('=')
+                .ok_or("invalid predecessor unit observation")?;
+            if ![
+                "LoadState",
+                "UnitFileState",
+                "ActiveState",
+                "SubState",
+                "FragmentPath",
+            ]
+            .contains(&key)
+                || values.insert(key, value).is_some()
+            {
+                return Err("ambiguous predecessor unit observation".into());
+            }
+        }
+        if values.len() != 5 {
+            return Err("incomplete predecessor unit observation".into());
+        }
+        Ok(Self {
+            load_state: values["LoadState"].into(),
+            unit_file_state: values["UnitFileState"].into(),
+            active_state: values["ActiveState"].into(),
+            sub_state: values["SubState"].into(),
+            fragment_path: values["FragmentPath"].into(),
+        })
+    }
+
+    pub(crate) fn quiescent(&self) -> bool {
+        (self.load_state == "not-found"
+            && self.unit_file_state.is_empty()
+            && self.fragment_path.is_empty()
+            && self.active_state == "inactive"
+            && self.sub_state == "dead")
+            || (self.load_state == "masked"
+                && self.unit_file_state == "masked"
+                && self.fragment_path == "/dev/null"
+                && matches!(self.active_state.as_str(), "inactive" | "failed")
+                && matches!(self.sub_state.as_str(), "dead" | "failed"))
+    }
+}
+
+pub(crate) fn observe_operator_predecessor_units(
+    parent: &Path,
+    names: &std::collections::BTreeSet<String>,
+) -> Result<std::collections::BTreeMap<String, OperatorPredecessorUnit>> {
+    observe_operator_predecessor_units_at(parent, names, Path::new("/usr/bin/systemctl"), unsafe {
+        libc::geteuid()
+    })
+}
+
+fn observe_operator_predecessor_units_at(
+    parent: &Path,
+    names: &std::collections::BTreeSet<String>,
+    systemctl: &Path,
+    uid: u32,
+) -> Result<std::collections::BTreeMap<String, OperatorPredecessorUnit>> {
+    if uid == 0 || names.is_empty() || names.len() > 165 {
+        return Err("predecessor user units require an ordinary owner session".into());
+    }
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
+    let mut result = std::collections::BTreeMap::new();
+    for name in names {
+        if !name.starts_with("lifecycle-marty-")
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b".-".contains(&b))
+            || !(name.ends_with(".service") || name.ends_with(".timer"))
+        {
+            return Err("invalid predecessor unit name".into());
+        }
+        let mut runner = BoundedRunner::new(systemctl, "unix:///var/run/docker.sock", parent)?;
+        runner.docker_host = None;
+        runner.user_session_uid = Some(uid);
+        let budget = deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or("predecessor user unit inspection deadline exceeded")?;
+        let output = runner.run(
+            &[
+                "--user",
+                "show",
+                name,
+                "--property=LoadState",
+                "--property=UnitFileState",
+                "--property=ActiveState",
+                "--property=SubState",
+                "--property=FragmentPath",
+            ],
+            budget.min(Duration::from_secs(10)),
+            4096,
+        )?;
+        result.insert(name.clone(), OperatorPredecessorUnit::parse(&output)?);
+    }
+    Ok(result)
+}
+
 /// Invoke an already hash-pinned installer verifier with bounded execution and
 /// no inherited credentials/configuration. Only reviewed internal callers may
 /// construct arguments; caller authenticates binary and private input bytes.
@@ -1135,6 +1247,60 @@ mod tests {
             observe_user_systemd_at(0, &login, &system, d.path()).linger_enabled,
             None
         );
+    }
+
+    #[test]
+    fn predecessor_unit_admission_requires_exact_quiescent_observations() {
+        let absent = "LoadState=not-found\nUnitFileState=\nActiveState=inactive\nSubState=dead\nFragmentPath=\n";
+        let masked = "LoadState=masked\nUnitFileState=masked\nActiveState=inactive\nSubState=dead\nFragmentPath=/dev/null\n";
+        assert!(OperatorPredecessorUnit::parse(absent).unwrap().quiescent());
+        assert!(OperatorPredecessorUnit::parse(masked).unwrap().quiescent());
+        for invalid in [
+            absent.replace("inactive", "active"),
+            absent.replace("dead", "running"),
+            absent.replace("UnitFileState=\n", "UnitFileState=enabled\n"),
+            absent.replace("FragmentPath=\n", "FragmentPath=/private/old.service\n"),
+            masked.replace("UnitFileState=masked", "UnitFileState=masked-runtime"),
+            masked.replace("LoadState=masked", "LoadState=loaded"),
+            masked.replace("inactive", "activating"),
+            masked.replace("/dev/null", "/private/old.service"),
+        ] {
+            assert!(!OperatorPredecessorUnit::parse(&invalid)
+                .unwrap()
+                .quiescent());
+        }
+        for invalid in [
+            absent.replace("SubState=dead\n", ""),
+            format!("{absent}LoadState=not-found\n"),
+            format!("{absent}UnknownProperty=false\n"),
+            "unavailable".into(),
+        ] {
+            assert!(OperatorPredecessorUnit::parse(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn predecessor_unit_not_found_requires_successful_read_only_user_query() {
+        let d = private_temp();
+        let name = "lifecycle-marty-00000000-0000-0000-0000-000000000001.service";
+        let names = std::collections::BTreeSet::from([name.to_owned()]);
+        let output = "printf 'LoadState=not-found\\nUnitFileState=\\nActiveState=inactive\\nSubState=dead\\nFragmentPath=\\n'";
+        let system = script(d.path(), &format!(
+            "[ \"$*\" = '--user show {name} --property=LoadState --property=UnitFileState --property=ActiveState --property=SubState --property=FragmentPath' ] || exit 9\n\
+             [ \"$XDG_RUNTIME_DIR\" = /run/user/1000 ] || exit 9\n\
+             [ \"$DBUS_SESSION_BUS_ADDRESS\" = unix:path=/run/user/1000/bus ] || exit 9\n\
+             [ -z \"$DOCKER_HOST$GH_HOST\" ] || exit 9\n{output}"
+        ));
+        let observed =
+            observe_operator_predecessor_units_at(d.path(), &names, &system, 1000).unwrap();
+        assert!(observed[name].quiescent());
+        // A missing bus or denied query may print plausible output. Exit
+        // status, timeout and transport failure still cannot prove absence.
+        fs::write(&system, format!("#!/bin/sh\n{output}\nexit 1\n")).unwrap();
+        assert!(observe_operator_predecessor_units_at(d.path(), &names, &system, 1000).is_err());
+        fs::remove_file(&system).unwrap();
+        assert!(observe_operator_predecessor_units_at(d.path(), &names, &system, 1000).is_err());
+        assert!(observe_operator_predecessor_units_at(d.path(), &names, &system, 0).is_err());
     }
     #[test]
     fn openbao_control_operations_have_fixed_argv_and_no_generic_exec_or_kill() {
