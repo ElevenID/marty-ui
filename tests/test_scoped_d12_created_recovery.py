@@ -51,7 +51,7 @@ def created_fixture(tmp_path,quiescence=None):
     return inputs,state,intent,recovery,saved,observed
 
 
-def replacement_checkpoint_fixture(tmp_path,quiescence=None):
+def replacement_checkpoint_fixture(tmp_path,quiescence=None,expired_prior=False):
     inputs,old_state,intent,prior,saved,_=created_fixture(tmp_path,quiescence)
     prior.update(operation="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
     generation=tmp_path/"executed-replacement-generation"
@@ -60,7 +60,8 @@ def replacement_checkpoint_fixture(tmp_path,quiescence=None):
                         ("trust_profile_tls_kms_token","trust_profile_workload_server_kms_token")):
         model["secrets"][secret]["file"]=str(generation/name)
     inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("executed-replacement-model.json",model)}
-    inputs["runScopedTrustLeaseProof"]=saved("executed-replacement-lease.json",{"generationDirectory":str(generation)})
+    inputs["runScopedTrustLeaseProof"]=saved("executed-replacement-lease.json",{"generationDirectory":str(generation),
+        "actualNativeGrantExpiryUnixSeconds":1 if expired_prior else 4000000000})
     for key in ("plannedModels","runScopedTrustLeaseProof"):prior["trustDataMap"][key]["recovery"]=inputs[key]
     prior_ref=saved("executed-replacement-authority.json",prior)
     original=deepcopy(inputs)
@@ -80,6 +81,42 @@ def replacement_checkpoint_fixture(tmp_path,quiescence=None):
         **journal_readback(Path(state_ref["path"]).read_bytes())}
     recovery["journalRead"]=saved("replacement-journal.json",observed)
     return inputs,state,intent,recovery,saved,observed
+
+
+def acknowledged_replacement_fixture(tmp_path,quiescence=None):
+    inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path,quiescence,expired_prior=True)
+    installed=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
+    assert json.loads(Path(installed["runScopedTrustLeaseProof"]["path"]).read_bytes())["actualNativeGrantExpiryUnixSeconds"]==1
+    generation=tmp_path/"fresh-next-credential-generation"
+    model=json.loads(Path(installed["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+    for secret,name in (("trust_profile_workload_server_cert","trust_profile_workload_server_cert"),
+                        ("trust_profile_tls_kms_token","trust_profile_workload_server_kms_token")):
+        model["secrets"][secret]["file"]=str(generation/name)
+    inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("fresh-next-model.json",model)}
+    inputs["runScopedTrustLeaseProof"]=saved("fresh-next-lease.json",{"generationDirectory":str(generation),"actualNativeGrantExpiryUnixSeconds":4000000000})
+    for key in ("plannedModels","runScopedTrustLeaseProof"):recovery["trustDataMap"][key]["recovery"]=inputs[key]
+    recovery.update(operation="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
+    return inputs,state,intent,recovery,saved,observed
+
+
+@pytest.mark.parametrize("change",[None,"missing-flag","same-generation","other-model-field"])
+def test_acknowledged_replacement_accepts_only_explicit_new_generation(tmp_path,change):
+    inputs,state,intent,recovery,saved,_=acknowledged_replacement_fixture(tmp_path)
+    if change=="missing-flag":recovery["replaceCredentialGeneration"]=False
+    elif change=="same-generation":
+        original=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
+        for key in ("plannedModels","runScopedTrustLeaseProof"):
+            inputs[key]=original[key];recovery["trustDataMap"][key]["recovery"]=inputs[key]
+    elif change=="other-model-field":
+        model=json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes());model["name"]="foreign-project"
+        inputs["plannedModels"]={**inputs["plannedModels"],"elevenid-beta":saved("wrong-fresh-model.json",model)}
+        recovery["trustDataMap"]["plannedModels"]["recovery"]=inputs["plannedModels"]
+    backend=json.loads((tmp_path/"created-backend.json").read_bytes())
+    if change:
+        with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+    else:
+        deepest,proof,_=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+        assert deepest["executorSource"]==json.loads(Path(proof["operationState"]["path"]).read_bytes())["executorSource"]
 
 
 @pytest.mark.parametrize("change",[None,"pending","wrong-ack","lease","authority","target","consumed"])
@@ -129,14 +166,15 @@ def test_created_checkpoint_refuses_drift_before_any_effect(tmp_path,change):
     with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=json.loads((tmp_path/"created-backend.json").read_bytes()))
 
 
-@pytest.mark.parametrize("mode",["create","replace","replacement-ack"])
+@pytest.mark.parametrize("mode",["create","replace","replacement-ack","replacement-ack-replace"])
 def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recreate(tmp_path,mode):
-    replace=mode=="replace"
+    replace=mode in ("replace","replacement-ack-replace")
     import hashlib
     from scoped_native_profiles import current_rollout_build
     from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES
-    inputs,state,intent,recovery,saved,_observed=(replacement_checkpoint_fixture(tmp_path) if mode=="replacement-ack" else created_fixture(tmp_path))
-    if replace:
+    inputs,state,intent,recovery,saved,_observed=(acknowledged_replacement_fixture(tmp_path) if mode=="replacement-ack-replace"
+        else replacement_checkpoint_fixture(tmp_path) if mode=="replacement-ack" else created_fixture(tmp_path))
+    if mode=="replace":
         recovery.update(operation="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",replaceCredentialGeneration=True)
         generation=tmp_path/"new-synthetic-generation"
         model=json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
@@ -160,8 +198,9 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
     stopped=deepcopy(before)
     for row in stopped["roles"]:row.update(state="exited",running=False,hostPid=0)
     q=saved("actual-test-quiescence.json",stopped)
-    if mode=="replacement-ack":
-        inputs,state,intent,recovery,saved,_observed=replacement_checkpoint_fixture(tmp_path,quiescence=q)
+    if mode in ("replacement-ack","replacement-ack-replace"):
+        inputs,state,intent,recovery,saved,_observed=(acknowledged_replacement_fixture(tmp_path,quiescence=q) if mode=="replacement-ack-replace"
+            else replacement_checkpoint_fixture(tmp_path,quiescence=q))
         proof=json.loads(Path(recovery["databaseProof"]["path"]).read_bytes())
         verified=json.loads(Path(recovery["verifiedDatabase"]["path"]).read_bytes())
     else:
@@ -207,18 +246,24 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
         value.recovery_preflight=lambda ref:(db,before,{"restoreOrder":sorted(D12_CURRENT_RUNTIME_ROLES)},{"path":"synthetic-overlay"})
         from unittest.mock import patch
         with patch.object(execution.overlay,"compose_recreate_arguments",return_value=["docker","compose","up","--no-start"]):
-            with pytest.raises(ReachedFirstStart):value.replace_created_credentials_and_resume(saved("recovery.json",recovery))
+            with pytest.raises(ReachedFirstStart):
+                (value.replace_acknowledged_created_credentials_and_resume if mode=="replacement-ack-replace"
+                    else value.replace_created_credentials_and_resume)(saved("recovery.json",recovery))
         assert calls[:3]==["VERIFY_COMPLETED_DB","PREPARE_REPLACEMENT","REPLACE_CREATED_CREDENTIAL_GENERATION"] and len(calls)==4
     else:
         with pytest.raises(ReachedFirstStart):
             (value.resume_after_created_credential_replacement if mode=="replacement-ack" else value.resume_after_create_selected)(saved("recovery.json",recovery))
         assert calls[0]=="VERIFY_COMPLETED_DB" and len(calls)==2
     assert value.state["phase"]=="SELECTED_CREATED"
+    if mode=="replacement-ack-replace":
+        installed=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
+        assert value.state["priorCredentialGeneration"]==installed["runScopedTrustLeaseProof"]
+        assert value.state["nextCredentialGeneration"]==inputs["runScopedTrustLeaseProof"]
     with pytest.raises(ValueError,match="D12_ONLY_ACKNOWLEDGED_CREATE_RECOVERABLE"):
         execution.created_recovery_checkpoint(inputs,value.state,intent,recovery,operation_backend=value.store.specification)
 
 
-@pytest.mark.parametrize("reconciled",[False,True])
+@pytest.mark.parametrize("reconciled",[False,"resume","replace-ack"])
 @pytest.mark.parametrize("change",[None,"reused-current-cid","missing-prepare"])
 def test_replacement_observer_requires_new_cids_against_current_created_preimage(tmp_path,change,reconciled):
     from scoped_d12_native_effect_host import D12CurrentEffectObserver
@@ -269,7 +314,8 @@ def test_replacement_observer_requires_new_cids_against_current_created_preimage
             "selected22":saved("reconciled-prior22.json",{role:{"Id":first.get(role,old[role])} for role in old})})
         state["replacementAuthority"]=prior
         resume=saved("reconciled-resume-authority.json",{"schema":"marty.d12-created-recovery/v1",
-            "operation":"RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT","dispatchAuthorized":True,
+            "operation":"REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if reconciled=="replace-ack"
+                else "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT","dispatchAuthorized":True,
             "draftOnly":change=="missing-prepare","previousRecoveryAuthority":prior,
             "originalOperationState":saved("reconciled-state.json",state),
             "selected22":saved("reconciled-selected22.json",{role:{"Id":second.get(role,old[role])} for role in old})})
@@ -366,3 +412,49 @@ def test_created_host_gates_pass_actual_separate_backend(tmp_path,gate,foreign_r
         with pytest.raises(ValueError,match="D12_CREATED_JOURNAL_ROOT_CHANGED"):check()
     else:
         with pytest.raises(ReachedObserverAfterRealCheckpoint):check()
+
+
+@pytest.mark.parametrize("phase",["before-replacement","after-replacement","wrong-operation"])
+def test_acknowledged_replacement_target_request_uses_exact_phase_model(tmp_path,monkeypatch,phase):
+    import scoped_d12_native_effect_host as host_module
+    owner=host_module.D12CurrentHostBindings.__new__(host_module.D12CurrentHostBindings)
+    owner.profile="d05-membership-current-functional";owner.root=tmp_path
+    def saved(name,value):
+        file=tmp_path/name;file.write_text(json.dumps(value));return ref(file)
+    selection=saved("target-selection.json",{"fixture":"same-selected-build"})
+    old_model=saved("installed-SDK4-model.json",{"fixture":"installed-SDK4-generation"})
+    new_model=saved("target-SDK5-model.json",{"fixture":"fresh-SDK5-generation"})
+    old_args=["docker","compose","--env-file",str(tmp_path/"installed-SDK4.env")]
+    new_args=["docker","compose","--env-file",str(tmp_path/"target-SDK5.env")]
+    owner.inputs={"runId":"SYNTHETIC","selection":selection,"plannedModels":{"elevenid-beta":new_model},
+        "composeArguments":new_args,"runtimeBefore":{"sha256":"historical-running-preimage"},"functionalRuntimeModule":{"path":"reviewed-current-module","sha256":"source"}}
+    installed={**owner.inputs,"plannedModels":{"elevenid-beta":old_model},"composeArguments":old_args}
+    state={"runId":"SYNTHETIC","phase":"EFFECT_ACKNOWLEDGED","acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION"}
+    recovery=saved("phase-authority.json",{"operation":"RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if phase=="wrong-operation"
+        else "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME","dispatchAuthorized":True,"draftOnly":False,
+        "originalInputs":saved("installed-inputs.json",installed),"originalOperationState":saved("prior-ack.json",state),
+        "maintenanceResourceRecovery":saved("target-resource.json",{"resourceBefore":{"sha256":"actual-bound-baseline"}})})
+    owner.store=SimpleNamespace(read=lambda name:state);owner.assert_inputs=lambda:None
+    owner.host=SimpleNamespace(engine_id="SYNTHETIC_ENGINE");owner.node="node";owner.docker="docker";owner.environment={}
+    owner.save=saved
+    def save_bytes(name,raw):
+        file=tmp_path/name;file.write_bytes(raw);return ref(file)
+    owner.save_bytes=save_bytes
+    calls=[]
+    def run(argv,**kwargs):
+        request=json.loads(Path(argv[-3]).read_bytes());calls.append(request)
+        expected=installed if phase=="before-replacement" else owner.inputs
+        assert request["plannedModels"]==expected["plannedModels"]
+        assert request["composeArguments"]==expected["composeArguments"]
+        assert request["selection"]==selection and request["runtimeBefore"]==owner.inputs["runtimeBefore"]
+        return SimpleNamespace(returncode=0,stdout=json.dumps({"state":"ACTUAL_CREATED_TARGET_MODEL_BOUND_BY_CURRENT_OWNER",
+            "runId":"SYNTHETIC","acknowledgedStep":state["acknowledgedStep"],"currentJobNormalClosureNotYetQualified":True}).encode(),
+            stderr=b"",observation={"timedOut":False,"failures":[]})
+    monkeypatch.setattr(host_module,"bounded_run",run)
+    def check():return owner._verify_created_target(state["acknowledgedStep"],state,{"sha256":"exact-current-cids"},
+        recovery_ref=recovery,prefix="phase-control",use_installed_model=phase!="after-replacement")
+    if phase=="wrong-operation":
+        with pytest.raises(ValueError,match="D12_CREATED_INSTALLED_MODEL_AUTHORITY_REQUIRED"):check()
+        assert calls==[]
+    else:
+        check();assert len(calls)==1

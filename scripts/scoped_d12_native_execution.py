@@ -80,15 +80,17 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                 "D12_CREATED_RECOVERY_NORMAL_JOB_REQUIRED")
     require(recovery.get("schema") == "marty.d12-created-recovery/v1"
             and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
-                "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
+                "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
             and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
             and recovery.get("runId") == inputs["runId"], "D12_CREATED_RECOVERY_AUTHORITY_REQUIRED")
-    resuming_replacement=recovery["operation"]=="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
+    resuming_replacement=recovery["operation"] in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
     original, original_state = load(recovery["originalInputs"]), load(recovery["originalOperationState"])
     previous = load(recovery["previousRecoveryAuthority"])
     if resuming_replacement:
         require(previous.get("schema")=="marty.d12-created-recovery/v1"
-                and previous.get("operation")=="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"
+                and previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
                 and previous.get("dispatchAuthorized") is True and previous.get("draftOnly") is False,
                 "D12_CREATED_REPLACEMENT_PRIOR_AUTHORITY_REQUIRED")
         database_original, _, _=created_recovery_checkpoint(original,
@@ -122,7 +124,8 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                 and isinstance(state.get("replacementPreimage"),dict),
                 "D12_CREATED_REPLACEMENT_LINEAGE_CHANGED")
         read_ref(state["replacementPreimage"])
-        require(all(inputs.get(key)==original.get(key) for key in RECOVERY_TRUST_FIELDS
+        require(recovery["operation"]!="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
+                or all(inputs.get(key)==original.get(key) for key in RECOVERY_TRUST_FIELDS
                     - {"composeEffectReadOnlyProof","composeEffectReadOnlyJob"}),
                 "D12_CREATED_RESUME_TARGET_CHANGED")
     require(intent.get("runId") == inputs["runId"] and intent.get("selectionSha256") == inputs["selection"]["sha256"]
@@ -138,7 +141,8 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
             "D12_CREATED_RECOVERY_INPUT_DRIFT")
     _recovery_trust_models(original, inputs)
     old_lease,new_lease=load(original["runScopedTrustLeaseProof"]),load(inputs["runScopedTrustLeaseProof"])
-    replacing=recovery["operation"]=="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"
+    replacing=recovery["operation"] in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
     require(recovery.get("replaceCredentialGeneration",False) is replacing,
             "D12_CREATED_REPLACEMENT_AUTHORITY_REQUIRED")
     require((old_lease["generationDirectory"]!=new_lease["generationDirectory"]) if replacing
@@ -382,13 +386,16 @@ class D12CurrentExecution:
     def resume_after_created_credential_replacement(self, recovery_ref):
         return self._resume_created(recovery_ref, replace_credentials=False, resume_replacement=True)
 
+    def replace_acknowledged_created_credentials_and_resume(self, recovery_ref):
+        return self._resume_created(recovery_ref, replace_credentials=True, resume_replacement=True)
+
     def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False):
-        require(type(replace_credentials) is bool and type(resume_replacement) is bool
-                and not (replace_credentials and resume_replacement),"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
+        require(type(replace_credentials) is bool and type(resume_replacement) is bool,"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
         require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
         require(self.profile=="d05-membership-current-functional","D12_CREATED_RECOVERY_CURRENT10_ONLY")
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
-        require(recovery.get("operation")==("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if resume_replacement
+        require(recovery.get("operation")==("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials
+                else "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if resume_replacement
                 else "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME" if replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),"D12_CREATED_RECOVERY_OPERATION_CHANGED")
         original, proof, verified=created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
@@ -422,7 +429,7 @@ class D12CurrentExecution:
             # A new authorized effect, with its own durable pending/ack state;
             # neither the original SQL nor the original create is replayed.
             self.record("CREATED_CREDENTIAL_REPLACEMENT_AUTHORIZED",replacementAuthority=recovery_ref,
-                priorCreatedSnapshot=recovery["selected22"],replacementPreimage=replacement_preimage,priorCredentialGeneration=original["runScopedTrustLeaseProof"],
+                priorCreatedSnapshot=recovery["selected22"],replacementPreimage=replacement_preimage,priorCredentialGeneration=json.loads(read_ref(recovery["originalInputs"]).read_bytes())["runScopedTrustLeaseProof"],
                 nextCredentialGeneration=self.i["runScopedTrustLeaseProof"])
             arguments=overlay.compose_recreate_arguments(self.i["composeArguments"],overlay_ref["path"],
                 self.profile,list(self.roles),no_start=True)

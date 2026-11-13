@@ -226,7 +226,8 @@ class D12CurrentEffectObserver:
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
         state=self.store.read("build-state.json")
         require(self.profile=="d05-membership-current-functional" and self.created_ref is not None and recovery.get("schema")=="marty.d12-created-recovery/v1"
-                and recovery.get("operation")=="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"
+                and recovery.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
                 and recovery.get("replaceCredentialGeneration") is True
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
@@ -251,7 +252,8 @@ class D12CurrentEffectObserver:
         if resuming:
             recovery=json.loads(read_ref(reconciled_replacement).read_bytes())
             require(replacing and recovery.get("schema")=="marty.d12-created-recovery/v1"
-                    and recovery.get("operation")=="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
+                    and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
                     and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"],
@@ -276,7 +278,8 @@ class D12CurrentEffectObserver:
         old_ids = {row["containerId"] for row in (self.current if replacing else self.original).values()}
         if resuming:
             previous=json.loads(read_ref(recovery["previousRecoveryAuthority"]).read_bytes())
-            require(previous.get("operation")=="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+            require(previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
                     "D12_RECONCILED_REPLACEMENT_AUTHORITY_REQUIRED")
             prior=json.loads(read_ref(previous["selected22"]).read_bytes())
             require(isinstance(prior,dict) and set(prior)==set(self.original)
@@ -523,7 +526,8 @@ class D12CurrentHostBindings:
                 and (recovery.get("schema"), recovery.get("operation")) in (("marty.d12-fence-install-recovery/v1", "RESUME_AFTER_TERMINAL_FENCE_INSTALL"),
                     ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),
                     ("marty.d12-created-recovery/v1", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"),
-                    ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"))
+                    ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
+                    ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"))
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and recovery.get("runId") == self.inputs["runId"],
                 "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
@@ -568,11 +572,13 @@ class D12CurrentHostBindings:
                     self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
                 if self.observer.created_ref is None:
                     state=self.store.read("build-state.json")
-                    if recovery.get("operation")=="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT":
+                    if recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"):
                         created=self.observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,
                             reconciled_replacement=recovery_ref)
                         self._verify_created_target("REPLACE_CREATED_CREDENTIAL_GENERATION",state,created,
-                            recovery_ref=recovery_ref,prefix=observation_prefix+"d12-reconciled-replacement-target")
+                            recovery_ref=recovery_ref,prefix=observation_prefix+"d12-reconciled-replacement-target",
+                            use_installed_model=recovery.get("operation")=="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
                     else:
                         self.observer.bind_created_after_ack("CREATE_SELECTED",state)
             frozen_ref = recovery["quiescence"]
@@ -704,7 +710,7 @@ class D12CurrentHostBindings:
         created=self.observer.bind_created_after_ack(step,state)
         return self._verify_created_target(step,state,created)
 
-    def _verify_created_target(self,step,state,created,*,recovery_ref=None,prefix=None):
+    def _verify_created_target(self,step,state,created,*,recovery_ref=None,prefix=None,use_installed_model=False):
         if created is None or self.profile!="d05-membership-current-functional":
             return created
         # The current owned Job has not closed yet: this binds the actual
@@ -717,12 +723,22 @@ class D12CurrentHostBindings:
         if recovery_ref is None:
             return created  # Existing non-recovery entry retains its behavior.
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        require(type(use_installed_model) is bool,"D12_CREATED_TARGET_MODEL_MODE_REQUIRED")
+        target_inputs=self.inputs
+        if use_installed_model:
+            require(recovery.get("operation")=="REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"
+                    and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
+                    and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
+                    "D12_CREATED_INSTALLED_MODEL_AUTHORITY_REQUIRED")
+            target_inputs=json.loads(read_ref(recovery["originalInputs"]).read_bytes())
+            require(target_inputs["runId"]==self.inputs["runId"] and target_inputs["selection"]==self.inputs["selection"],
+                    "D12_CREATED_INSTALLED_MODEL_BINDING_CHANGED")
         resource=json.loads(read_ref(recovery["maintenanceResourceRecovery"]).read_bytes())
         prefix=prefix or ("d12-created-replacement-target" if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else "d12-created-target")
         acknowledgement=self.save(prefix+"-ack.private.json",durable)
         request=self.save(prefix+"-request.private.json",{"runId":self.inputs["runId"],"engineId":self.host.engine_id,
-            "selection":self.inputs["selection"],"plannedModels":self.inputs["plannedModels"],
-            "composeArguments":self.inputs["composeArguments"],
+            "selection":self.inputs["selection"],"plannedModels":target_inputs["plannedModels"],
+            "composeArguments":target_inputs["composeArguments"],
             "runtimeBefore":self.inputs["runtimeBefore"],"resourceBefore":resource["resourceBefore"],
             "createdCids":created,"acknowledgedState":acknowledgement})
         source=self.inputs["functionalRuntimeModule"]
