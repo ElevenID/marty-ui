@@ -538,6 +538,18 @@ def test_created_target_ob3_authority_uses_durable_ack_for_t5_and_second_replace
         created_target_ob3_authority(resume,next_recovery,{"replacementAuthority":t5})
 
 
+def test_second_ob3_acknowledgement_dispatches_resume_without_replacement(monkeypatch):
+    captured=[]
+    def resume(self, reference, **options):
+        captured.append((reference,options));return "DISPATCH_ONLY"
+    monkeypatch.setattr(execution.D12CurrentExecution,"_resume_created",resume)
+    owner=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
+    reference={"sha256":"current-ack"}
+    assert owner.resume_ob3_second_acknowledged_credential_replacement(reference)=="DISPATCH_ONLY"
+    assert captured==[(reference,{"replace_credentials":False,"resume_replacement":True,
+                                  "ob3":True,"second_ack_resume":True})]
+
+
 @pytest.mark.parametrize("checkpoint",["create","replacement"])
 @pytest.mark.parametrize("gate",["authorization","quiescence"])
 @pytest.mark.parametrize("foreign_root",[False,True])

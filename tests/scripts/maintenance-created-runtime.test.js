@@ -69,12 +69,21 @@ function deferredBureauFixture(t){
  const prior=JSON.parse(fs.readFileSync(JSON.parse(fs.readFileSync(f.post.acknowledgedState.path)).priorCreatedSnapshot.path));
  prior[role]=prior[old];delete prior[old];prior[role].State={StartedAt:f.newTime,Status:'exited',ExitCode:1};
  const failure=f.file('bureau-deferred-failure.json',{containerId:prior[role].Id,sqlstate42501Observed:true,permissionDeniedForSchemaObserved:true});
- f.post.ob3Authority=f.file('bureau-authority.json',{schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',deferredRoles:[role],deferredFailure:failure});
- f.post.acknowledgedState=f.file('bureau-ack.json',{phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore,priorCreatedSnapshot:f.file('bureau-prior.json',prior),replacementAuthority:f.post.ob3Authority});
+ f.post.ob3Authority=f.file('bureau-authority.json',{schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',runId:'SYNTHETIC_RUN',dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,deferredRoles:[role],deferredFailure:failure});
+ f.post.acknowledgedState=f.file('bureau-ack.json',{runId:'SYNTHETIC_RUN',phase:'EFFECT_ACKNOWLEDGED',acknowledgedStep:'REPLACE_CREATED_CREDENTIAL_GENERATION',replacementPreimage:f.post.actualRuntimeBefore,priorCreatedSnapshot:f.file('bureau-prior.json',prior),replacementAuthority:f.post.ob3Authority});
  return f;
 }
 test('postCREATE OB3 retains the specifically acknowledged deferred bureau failure',t=>{
  const f=deferredBureauFixture(t),out=f.invoke();assert.equal(out.deferredExitCodes.get('passport-beta-bureau'),1);
+});
+test('postCREATE OB3 retains deferred bureau failure after a second acknowledged replacement',t=>{
+ const f=deferredBureauFixture(t),old=f.post.ob3Authority,ack=JSON.parse(fs.readFileSync(f.post.acknowledgedState.path));
+ const second=f.file('second-ob3-authority.json',{schema:'marty.d12-ob3-acknowledged-replacement-recovery/v1',
+  operation:'REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME',
+  previousRecoveryAuthority:old,selected22:ack.priorCreatedSnapshot,runId:'SYNTHETIC_RUN',
+  dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,deferredRoles:['passport-beta-bureau']});
+ f.post.ob3Authority=second;f.post.acknowledgedState=f.file('second-ob3-ack.json',{...ack,replacementAuthority:second});
+ const out=f.invoke();assert.equal(out.deferredExitCodes.get('passport-beta-bureau'),1);
 });
 test('postCREATE OB3 refuses a foreign deferred bureau failure',t=>{
  const f=deferredBureauFixture(t),authority=JSON.parse(fs.readFileSync(f.post.ob3Authority.path));

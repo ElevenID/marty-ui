@@ -958,10 +958,8 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
    assert.equal(row.startedAt,prior.State.StartedAt,'MAINTENANCE_CREATED_PREIMAGE_STARTED_AT_CHANGED:'+row.role);
   }
   if(Object.hasOwn(post,'ob3Authority')){
-   const authority=boundJson(post.ob3Authority),bureau=previousCreated['passport-beta-bureau'];
-   assert.equal(authority.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(authority.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');
-   assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);assert.deepEqual(ack.replacementAuthority,post.ob3Authority);
-   const failure=boundJson(authority.deferredFailure);
+   const {legacy}=createdTargetOb3Authority({ob3Authority:post.ob3Authority,runId:ack.runId},ack),bureau=previousCreated['passport-beta-bureau'];
+   const failure=boundJson(legacy.deferredFailure);
    assert.equal(failure.containerId,bureau?.Id);assert.equal(failure.sqlstate42501Observed,true);assert.equal(failure.permissionDeniedForSchemaObserved,true);
    assert.equal(bureau.State.Status,'exited');assert.equal(bureau.State.ExitCode,1);
    deferredExitCodes=new Map([['passport-beta-bureau',1]]);

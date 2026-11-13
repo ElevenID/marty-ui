@@ -358,7 +358,8 @@ class D12CurrentEffectObserver:
                     and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
                         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
                         "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+                        "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
                     and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"],
@@ -681,7 +682,8 @@ class D12CurrentHostBindings:
         recovery=json.loads(read_ref(recovery_ref).read_bytes());source=recovery["startupPrerequisites"]
         require(recovery.get("operation") in ("QUIESCE_OB3_PARTIAL_STARTS","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME",
                     "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-                    "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
+                    "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+                    "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False,"D12_OB3_STARTUP_AUTHORITY_REQUIRED")
         registered=self.host._source_files.get("scripts/ob3-startup-prerequisites.json")
         require(isinstance(registered,dict) and read_ref(source).resolve()==self.host._root/"scripts/ob3-startup-prerequisites.json"
@@ -751,7 +753,8 @@ class D12CurrentHostBindings:
                     ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
                     ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
                     ("marty.d12-ob3-acknowledged-replacement-recovery/v1","RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
-                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"))
+                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"),
+                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"))
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and recovery.get("runId") == self.inputs["runId"],
                 "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
@@ -807,13 +810,15 @@ class D12CurrentHostBindings:
                     if recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
                         "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
                         "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"):
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+                        "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"):
                         created=self.observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,
                             reconciled_replacement=recovery_ref)
                         self._verify_created_target("REPLACE_CREATED_CREDENTIAL_GENERATION",state,created,
                             recovery_ref=recovery_ref,prefix=observation_prefix+"d12-reconciled-replacement-target",
                             use_installed_model=recovery.get("operation") in ("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
-                                "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"))
+                                "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+                                "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"))
                     else:
                         self.observer.bind_created_after_ack("CREATE_SELECTED",state)
             frozen_ref = recovery["quiescence"]
@@ -1008,7 +1013,8 @@ class D12CurrentHostBindings:
         target_inputs=self.inputs
         if use_installed_model:
             require(recovery.get("operation") in ("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
-                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME")
+                        "REPLACE_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME",
+                        "RESUME_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
                     "D12_CREATED_INSTALLED_MODEL_AUTHORITY_REQUIRED")
