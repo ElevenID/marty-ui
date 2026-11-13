@@ -106,6 +106,20 @@ function credentialReplacementFixture(t){
 test('replacement allows only the two source-model-verified credential mount sources to change',t=>{
  const f=credentialReplacementFixture(t),before=fs.readFileSync(f.ack.priorCreatedSnapshot.path);assert.equal(f.invoke().roles.length,22);assert(fs.readFileSync(f.ack.priorCreatedSnapshot.path).equals(before));
 });
+test('replacement accepts Docker normalization of unset OOM kill disable to false',t=>{
+ const f=credentialReplacementFixture(t),previous=JSON.parse(fs.readFileSync(f.ack.priorCreatedSnapshot.path));
+ previous['compliance-profile'].HostConfig.OomKillDisable=null;
+ const ids=JSON.parse(fs.readFileSync(f.input.createdCids.path)).selectedContainerIds;
+ f.live[ids['compliance-profile']].HostConfig.OomKillDisable=false;
+ f.ack.priorCreatedSnapshot=f.file('nullable-oom-prior.json',previous);
+ f.input.acknowledgedState=f.file('nullable-oom-ack.json',f.ack);
+ assert.equal(f.invoke().state,'ACTUAL_CREATED_TARGET_MODEL_BOUND_BY_CURRENT_OWNER');
+});
+test('replacement refuses enabling OOM kill disable',t=>{
+ const f=credentialReplacementFixture(t),ids=JSON.parse(fs.readFileSync(f.input.createdCids.path)).selectedContainerIds;
+ f.live[ids['compliance-profile']].HostConfig.OomKillDisable=true;
+ assert.throws(f.invoke,/MAINTENANCE_CREATED_UNRELATED_CAP_CHANGED:compliance-profile/);
+});
 for(const field of ['Propagation','UnexpectedField'])test('replacement refuses credential mount '+field+' drift',t=>{
  const f=credentialReplacementFixture(t);f.credentialMount[field]='changed';assert.throws(f.invoke,/MAINTENANCE_CREATED_FULL_MOUNTS_CHANGED:trust-profile/);
 });

@@ -14,6 +14,9 @@ const ISSUANCE_SOURCE='85a6e31265f465a6a46c0cd97ecc6be4770fe7b4',ISSUANCE_CORE='
 const ISSUANCE_ROLES=Object.freeze(['issuance','issuance-native']);
 const RETAINED_ROLES=Object.freeze({flow:'marty-flow','signing-keys':'marty-signing-keys'});
 const digest=value=>crypto.createHash('sha256').update(value).digest('hex');
+function normalizeHostOomKillDisable(left,right){
+ if([null,false].includes(left.OomKillDisable)&&[null,false].includes(right.OomKillDisable))left.OomKillDisable=right.OomKillDisable=false;
+}
 function boundBytes(ref){
  assert(ref&&path.isAbsolute(ref.path)&&HASH.test(ref.sha256),'Explicit hash-bound receipt required');
  assert(fs.lstatSync(ref.path).isFile()&&!fs.lstatSync(ref.path).isSymbolicLink(),'Receipt must be regular');
@@ -635,7 +638,7 @@ function validateMdocConfigContainer(before,created,role,authority,provenance){
  // Compose5.4.0. Both complete representations were independently closed above.
  const hA=structuredClone(before.HostConfig),hB=structuredClone(created.HostConfig);for(const key of ['Binds','Mounts']){delete hA[key];delete hB[key];}
  for(const name of ['Dns','DnsSearch','DnsOptions'])if((hA[name]===null||Array.isArray(hA[name])&&!hA[name].length)&&(hB[name]===null||Array.isArray(hB[name])&&!hB[name].length))hA[name]=hB[name]=[];
- if([null,false].includes(hA.OomKillDisable)&&[null,false].includes(hB.OomKillDisable))hA.OomKillDisable=hB.OomKillDisable=false;
+ normalizeHostOomKillDisable(hA,hB);
  privateEqual(hA,hB,'MDOC_OTHER_HOST_CONFIG_CHANGED');
  mdocNetworks(before,created,created.State.Status!=='created');
 }
@@ -1010,7 +1013,7 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
    assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.Paused,false);assert.equal(row.State?.OOMKilled,false);assert.equal(row.State?.ExitCode,ob3&&role==='passport-beta-bureau'?ob3.current[role].State.ExitCode:0);assert.equal(row.State?.Status,context.created.has(role)?'created':'exited');
    if(previousCreated){
     const prior=previousCreated[role];assert(prior&&prior.Image===row.Image);
-    const oldCaps=structuredClone(prior.HostConfig),newCaps=structuredClone(row.HostConfig);for(const key of ['Binds','Mounts']){delete oldCaps[key];delete newCaps[key];}assert.deepEqual(newCaps,oldCaps,'MAINTENANCE_CREATED_UNRELATED_CAP_CHANGED:'+role);
+    const oldCaps=structuredClone(prior.HostConfig),newCaps=structuredClone(row.HostConfig);for(const key of ['Binds','Mounts']){delete oldCaps[key];delete newCaps[key];}normalizeHostOomKillDisable(oldCaps,newCaps);assert.deepEqual(newCaps,oldCaps,'MAINTENANCE_CREATED_UNRELATED_CAP_CHANGED:'+role);
     const oldLabels=structuredClone(prior.Labels||{}),newLabels=structuredClone(row.Config?.Labels||{});
     if(context.created.has(role)){
      createdComposeLabels(input,role,newLabels);
