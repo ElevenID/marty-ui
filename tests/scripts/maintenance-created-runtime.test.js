@@ -4,7 +4,7 @@ const {maintenanceCreatedContext,verifyCreatedTargetModel}=require('./functional
 const selectedRoles=['auth','compliance-profile','credential-template','flow','gateway','issuance-native','organization','presentation-policy','signing-keys','trust-profile'];
 const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
 function fixture(t){
- const root=fs.mkdtempSync(path.join(os.tmpdir(),'created-source-control-'));t.after(()=>fs.rmSync(root,{recursive:true}));
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'created-source-control-'));t.after(()=>{const target=path.resolve(root),temporary=path.resolve(os.tmpdir());assert.equal(path.dirname(target),temporary);assert(path.basename(target).startsWith('created-source-control-'));assert(!fs.lstatSync(target).isSymbolicLink());assert.equal(fs.realpathSync(target),target);fs.rmSync(target,{recursive:true});});
  const file=(name,value,raw=false)=>{const target=path.join(root,name),bytes=raw?Buffer.from(value):Buffer.from(JSON.stringify(value));fs.writeFileSync(target,bytes);return {path:target,bytes:bytes.length,sha256:hash(bytes)};};
  const caps={Memory:268435456,MemorySwap:536870912,NanoCpus:1000000000,PidsLimit:128,RestartPolicy:{Name:'no',MaximumRetryCount:0}};
  const before={roles:[]},resourceBefore=[],saved={},selection={binaries:{}},model={services:{},secrets:{},volumes:{}},configs=[],all={},generations=new Map();
@@ -74,9 +74,9 @@ function acknowledgedFixture(t,replacement=false){
   if(JSON.stringify(argv)===JSON.stringify(['info','--format','{{json .}}']))return JSON.stringify({ID:engineId});
   if(argv[0]==='image'){assert.deepEqual(argv,['image','inspect','sha256:'+'b'.repeat(64)]);return JSON.stringify([{Id:argv[2],Config:f.imageConfig}]);}
   assert.equal(argv.length,2);assert.equal(argv[0],'inspect');assert(live[argv[1]]);inspected++;
-  const row=structuredClone(live[argv[1]]);if(f.drift&&inspected>22)row.HostConfig.UnrecordedDefault='changed';return JSON.stringify([row]);
+  const row=structuredClone(live[argv[1]]);if(f.drift&&inspected>22)row.HostConfig.UnrecordedDefault='changed';if(f.mountChange&&inspected>22)f.mountChange(row.Mounts);return JSON.stringify([row]);
  };
- return {...f,live,input,ack,invoke:()=>verifyCreatedTargetModel(input,{readDocker:read}),drift:()=>{f.drift=true;}};
+ return {...f,live,input,ack,invoke:()=>verifyCreatedTargetModel(input,{readDocker:read}),drift:()=>{f.drift=true;},changeMounts:change=>{f.mountChange=change;}};
 }
 for(const replacement of [false,true])test('current owner verifies '+(replacement?'replacement':'create')+' target before start without claiming closed Job',t=>{
  const f=acknowledgedFixture(t,replacement),result=f.invoke();assert.equal(result.roles.length,22);assert.equal(result.currentJobNormalClosureNotYetQualified,true);assert.equal(result.functionalQualification,false);assert.equal(result.runningProcessQualification,false);assert.equal(result.environmentValuesReported,false);
@@ -128,4 +128,15 @@ for(const [field,value]of [
 test('retained service labels cannot change even to approved generated values',t=>{
  const f=acknowledgedFixture(t,true),retained=Object.entries(f.live).find(([,v])=>v.State.Status==='exited')[1];
  retained.Config.Labels['com.docker.compose.project.environment_file']='C:/reviewed/current10.env';assert.throws(f.invoke,/MAINTENANCE_CREATED_UNRELATED_LABEL_CHANGED/);
+});
+
+
+test('created target mount digest accepts only destination reordering',t=>{
+ const f=credentialReplacementFixture(t);f.changeMounts(mounts=>mounts.reverse());
+ const result=f.invoke();assert.equal(result.state,'ACTUAL_CREATED_TARGET_MODEL_BOUND_BY_CURRENT_OWNER');
+ assert.equal(result.functionalQualification,false);assert.equal(result.currentJobNormalClosureNotYetQualified,true);
+});
+test('created target mount digest retains every field and refuses propagation drift',t=>{
+ const f=credentialReplacementFixture(t);f.changeMounts(mounts=>{if(mounts.length>1)mounts[0].Propagation='changed-propagation';});
+ assert.throws(f.invoke,/MAINTENANCE_CREATED_FULL_MOUNTS_CHANGED|MAINTENANCE_CREATED_TARGET_CHANGED_DURING_READ/);
 });

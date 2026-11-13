@@ -1028,7 +1028,7 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
     assert.equal(digest(JSON.stringify(Object.entries(env).sort((a,b)=>a[0]<b[0]?-1:a[0]>b[0]?1:0))),expected.envSha256,'MAINTENANCE_CREATED_TARGET_ENV_CHANGED:'+role);
    }
   }
-  return raw.map(([role,row])=>({role,containerId:row.Id,configSha256:digest(JSON.stringify(row.Config)),hostConfigSha256:digest(JSON.stringify(row.HostConfig)),mountsSha256:digest(JSON.stringify(row.Mounts)),stateSha256:digest(JSON.stringify(row.State))}));
+  return raw.map(([role,row])=>({role,containerId:row.Id,configSha256:digest(JSON.stringify(row.Config)),hostConfigSha256:digest(JSON.stringify(row.HostConfig)),mountsSha256:digest(JSON.stringify(maintenanceFullMounts(row.Mounts))),stateSha256:digest(JSON.stringify(row.State))}));
  };
  const first=derive(read()),second=derive(read());assert.deepEqual(second,first,'MAINTENANCE_CREATED_TARGET_CHANGED_DURING_READ');
  boundJson(input.createdCids);boundJson(input.acknowledgedState);boundJson(input.selection);for(const ref of Object.values(input.plannedModels))boundJson(ref);
