@@ -225,8 +225,8 @@ class D12CurrentEffectObserver:
     def prepare_credential_replacement(self,recovery_ref):
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
         state=self.store.read("build-state.json")
-        require(self.profile=="d05-membership-current-functional" and self.created_ref is not None and recovery.get("schema")=="marty.d12-created-recovery/v1"
-                and recovery.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+        require(self.profile=="d05-membership-current-functional" and self.created_ref is not None and recovery.get("schema") in ("marty.d12-created-recovery/v1","marty.d12-ob3-quiescent-recovery/v1")
+                and recovery.get("operation") in ("REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME","REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
                     "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
                 and recovery.get("replaceCredentialGeneration") is True
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
@@ -234,11 +234,19 @@ class D12CurrentEffectObserver:
                 "D12_CREATED_REPLACEMENT_AUTHORITY_REQUIRED")
         snapshot=self.inspect_all22();rows=exact_roles(snapshot,self.profile)
         selected=dict(self.build_profile.roles)
-        require(all(row.get("state")==("created" if role in selected else "exited")
-                and row.get("running") is False and row.get("hostPid")==0
-                and row.get("paused") is False and row.get("oomKilled") is False
-                and row.get("containerExitCode")==0 for role,row in rows.items()),
-                "D12_CREATED_REPLACEMENT_PREIMAGE_REQUIRED")
+        ob3=recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+        if ob3:
+            require(state.get("phase")=="OB3_PARTIAL_QUIESCENT","D12_OB3_REPLACEMENT_QUIESCENCE_REQUIRED")
+            saved=json.loads(read_ref(recovery["selected22"]).read_bytes())
+            require(set(saved)==set(rows) and all(row["containerId"]==saved[role]["Id"] and row["state"]==saved[role]["State"]["Status"]
+                    and row.get("running") is False and row.get("hostPid")==0 and row.get("paused") is False and row.get("oomKilled") is False
+                    and row.get("containerExitCode")==saved[role]["State"]["ExitCode"] for role,row in rows.items()),"D12_OB3_REPLACEMENT_PREIMAGE_REQUIRED")
+        else:
+            require(all(row.get("state")==("created" if role in selected else "exited")
+                    and row.get("running") is False and row.get("hostPid")==0
+                    and row.get("paused") is False and row.get("oomKilled") is False
+                    and row.get("containerExitCode")==0 for role,row in rows.items()),
+                    "D12_CREATED_REPLACEMENT_PREIMAGE_REQUIRED")
         self._replacement_ready_authority=recovery_ref
         self._replacement_preimage_ids={row["containerId"] for row in rows.values()}
         return self.save("d12-created-credential-replacement-preimage.private.json",snapshot)
@@ -270,7 +278,7 @@ class D12CurrentEffectObserver:
     def bind_ob3_partial_created(self,recovery_ref):
         recovery=json.loads(read_ref(recovery_ref).read_bytes());state=self.store.read("build-state.json")
         require(state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
-                and state.get("phase")=="START_INSPECTION_PENDING","D12_OB3_PARTIAL_OBSERVER_STATE_CHANGED")
+                and state.get("phase") in ("START_INSPECTION_PENDING","OB3_PARTIAL_QUIESCENT"),"D12_OB3_PARTIAL_OBSERVER_STATE_CHANGED")
         created=json.loads(read_ref(state["created"]).read_bytes());rows=exact_roles(created,self.profile)
         selection=json.loads(read_ref(self.selection_ref).read_bytes());roles=dict(self.build_profile.roles)
         require(set(selection["binaries"])==set(roles) and selection["sourceRevision"]==self.build_profile.ui_revision
@@ -536,6 +544,12 @@ class D12CurrentHostBindings:
         observed = exact_roles(result, CURRENT_PROFILE)
         for role, old in expected.items():
             row = observed[role]
+            if result.get("ob3QuiescentCheckpoint") is True:
+                require(result.get("readinessScope")=="OB3_FUNCTIONAL_ONLY" and result.get("fullStackQualified") is False
+                        and result.get("deferredRoles")==["passport-beta-bureau"] and all(row.get(key)==old.get(key) for key in
+                        ("containerId","imageId","startedAt","hostPid")) and row.get("status")==old.get("state")
+                        and row.get("containerExitCode")==old.get("containerExitCode"),"D12_OB3_RESOURCE28_AND_NATIVE22_DIVERGED:"+role)
+                continue
             require(all(row.get(key) == old.get(key) for key in
                         ("containerId", "imageId", "project", "startedAt", "hostPid"))
                     and row.get("health") == old.get("health"),
@@ -608,6 +622,23 @@ class D12CurrentHostBindings:
         self._ob3_containment_before=self._ob3_containment_read(recovery_ref,"PARTIAL",{})
         return True
 
+    def ob3_startup_plan(self,recovery_ref):
+        from scoped_d12_native_execution import ob3_startup_prerequisites
+        from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
+        recovery=json.loads(read_ref(recovery_ref).read_bytes());source=recovery["startupPrerequisites"]
+        require(recovery.get("operation") in ("QUIESCE_OB3_PARTIAL_STARTS","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME")
+                and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False,"D12_OB3_STARTUP_AUTHORITY_REQUIRED")
+        registered=self.host._source_files.get("scripts/ob3-startup-prerequisites.json")
+        require(isinstance(registered,dict) and read_ref(source).resolve()==self.host._root/"scripts/ob3-startup-prerequisites.json"
+                and source.get("sha256")==registered["sha256"] and source.get("bytes")==registered["bytes"]
+                and isinstance(registered.get("gitBlob"),str) and re.fullmatch(r"[a-f0-9]{40}",registered["gitBlob"]),"D12_OB3_REGISTERED_STARTUP_SOURCE_REQUIRED")
+        proof=ob3_startup_prerequisites(source)
+        plan=json.loads(read_ref(self.inputs["maintenancePlan"]).read_bytes());before=json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes())
+        models={project:json.loads(read_ref(reference).read_bytes()) for project,reference in plan["composeModels"].items()}
+        rows=exact_roles(before,self.profile);cohort=set(rows);edges=_reviewed_cross_edges(plan,cohort)
+        edges|={(row["dependentRole"],row["prerequisiteRole"]) for row in proof["requirements"]}
+        return {"order":_restore_order(models,rows,edges,cohort),"requirements":proof["requirements"],"source":source,"installedModelChanged":False}
+
     def ob3_quiesce_steps(self,recovery_ref):
         from scoped_passport_maintenance import _stop_contract
         require(getattr(self,"_ob3_quiesce_approval",None)==recovery_ref,"D12_OB3_CONTAINMENT_NOT_AUTHORIZED")
@@ -615,10 +646,7 @@ class D12CurrentHostBindings:
         require(state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),"D12_OB3_STOP_PREIMAGE_CHANGED")
         roles=set(state["startAcks"])|{"passport-beta-bureau"};require(set(recovery["stopContracts"])==set(state["startAcks"]),
             "D12_OB3_EXACT_SOURCE_STOP_CONTRACT_SET_REQUIRED")
-        plan=json.loads(read_ref(self.inputs["maintenancePlan"]).read_bytes())
-        before=json.loads(read_ref(self.inputs["runtimeBefore"]).read_bytes());models={k:json.loads(read_ref(v).read_bytes()) for k,v in plan["composeModels"].items()}
-        from scoped_passport_maintenance import preview
-        order=[step["role"] for step in preview(plan,before,models)["stopSteps"] if step["role"] in roles]
+        order=[role for role in reversed(self.ob3_startup_plan(recovery_ref)["order"]) if role in roles]
         result=[]
         for role in order:
             row=self.observer.inspect_role(role)
@@ -665,7 +693,8 @@ class D12CurrentHostBindings:
                     ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),
                     ("marty.d12-created-recovery/v1", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"),
                     ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
-                    ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"))
+                    ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
+                    ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"))
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and recovery.get("runId") == self.inputs["runId"],
                 "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
@@ -700,10 +729,17 @@ class D12CurrentHostBindings:
         require(read_ref(authority_ref, 65536).is_file(), "D12_EXACT_REVIEWED_AUTHORITY_REQUIRED")
         resource_recovery_ref = None
         created_recovery = False
+        ob3_recovery = False
         frozen_ref = self.inputs["runtimeBefore"]
         if recovery_ref is not None:
             recovery = json.loads(read_ref(recovery_ref).read_bytes())
             created_recovery = recovery.get("schema")=="marty.d12-created-recovery/v1"
+            ob3_recovery=recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+            if ob3_recovery:
+                from scoped_d12_native_execution import ob3_quiescent_checkpoint
+                ob3_quiescent_checkpoint(self.inputs,self.store.read("build-state.json"),self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
+                if self.observer.created_ref is None:self.observer.bind_ob3_partial_created(recovery_ref)
+
             if created_recovery:
                 from scoped_d12_native_execution import created_recovery_checkpoint
                 created_recovery_checkpoint(self.inputs,self.store.read("build-state.json"),
@@ -722,13 +758,18 @@ class D12CurrentHostBindings:
             frozen_ref = recovery["quiescence"]
             resource_recovery_ref = recovery["maintenanceResourceRecovery"]
             read_ref(resource_recovery_ref, 2 * 1024 * 1024)
-        frozen = self.observer.inspect_all22() if created_recovery else json.loads(read_ref(frozen_ref).read_bytes())
+        frozen = self.observer.inspect_all22() if created_recovery or ob3_recovery else json.loads(read_ref(frozen_ref).read_bytes())
         if created_recovery:
             resource_recovery=json.loads(read_ref(resource_recovery_ref).read_bytes())
             require(resource_recovery.get("postCreate")=={
                 "selection":self.inputs["selection"],"selected22":recovery["selected22"],
                 "selected22Job":recovery["selected22Job"],"plannedModels":json.loads(read_ref(recovery["originalInputs"]).read_bytes())["plannedModels"]},
                 "D12_CREATED_RESOURCE_BINDING_CHANGED")
+        if ob3_recovery:
+            resource_recovery=json.loads(read_ref(resource_recovery_ref).read_bytes());state=self.store.read("build-state.json")
+            require(resource_recovery.get("ob3Quiescent")=={"authority":recovery["previousRecoveryAuthority"],"quiescence":state["ob3Quiescence"],
+                "quiescenceJob":recovery["quiescenceJob"],"current22":recovery["selected22"],"current22Job":recovery["selected22Job"]}
+                and "postCreate" not in resource_recovery,"D12_OB3_RESOURCE_BINDING_CHANGED")
         self.save(observation_prefix + "d12-resource28-request.private.json", {"runId": self.inputs["runId"],
             "source": source_ref, "resourceProfile": profile_ref,
             "runtimeBefore": self.inputs["runtimeBefore"],
@@ -795,6 +836,14 @@ class D12CurrentHostBindings:
     def verify_recovery_quiescent(self, recovery_ref):
         self.assert_inputs()
         recovery = json.loads(read_ref(recovery_ref).read_bytes())
+        if recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1":
+            from scoped_d12_native_execution import ob3_quiescent_checkpoint
+            state=self.store.read("build-state.json")
+            ob3_quiescent_checkpoint(self.inputs,state,self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
+            require(self.observer.created_ref is not None,"D12_OB3_QUIESCENT_OBSERVER_NOT_BOUND")
+            fresh=self._ob3_containment_read(recovery["previousRecoveryAuthority"],"QUIESCENT",state["ob3StopOutcomes"])
+            require(fresh==json.loads(read_ref(state["ob3Quiescence"]).read_bytes()),"D12_OB3_FRESH_QUIESCENCE_CHANGED")
+            return True
         if recovery.get("schema")=="marty.d12-created-recovery/v1":
             from scoped_d12_native_execution import created_recovery_checkpoint
             created_recovery_checkpoint(self.inputs,self.store.read("build-state.json"),
@@ -827,17 +876,48 @@ class D12CurrentHostBindings:
         return True
 
     def wait_all22_healthy(self, seconds):
+        return self._wait_required_healthy(seconds)
+
+    def wait_ob3_prerequisite_ready(self,seconds,recovery_ref,role,dependent,observed):
+        require(type(seconds) is int and 0<seconds<=120,"D12_OB3_PREREQUISITE_DEADLINE_REQUIRED")
+        plan=self.ob3_startup_plan(recovery_ref)
+        require({"dependentRole":dependent,"prerequisiteRole":role,"readiness":"DOCKER_HEALTHY"} in plan["requirements"],"D12_SOURCE_DEFINED_OB3_PREREQUISITE_REQUIRED")
+        deadline=time.monotonic()+seconds
+        while True:
+            self.assert_inputs();require(self.lock is not None and self.lock.held(),"D12_OB3_STARTUP_LOCK_REQUIRED")
+            row=self.observer.inspect_role(role)
+            require(all(row.get(key)==observed[key] for key in ("containerId","imageId","startedAt","hostPid"))
+                    and row.get("running") is True and row.get("state")=="running" and row.get("paused") is False
+                    and row.get("oomKilled") is False,"D12_OB3_STARTED_GENERATION_CHANGED:"+role)
+            if row.get("health")=="healthy":
+                return self.save("ob3-ready-"+role+"-for-"+dependent+".json",{"role":role,"dependentRole":dependent,"readiness":"DOCKER_HEALTHY","health":"healthy",**observed,
+                    "startupPrerequisites":plan["source"],"observedUnixSeconds":int(time.time()),"currentJobNormalClosureNotYetQualified":True,"functionalRuntimeQualified":False})
+            require(time.monotonic()<deadline,"D12_OB3_PREREQUISITE_READINESS_DEADLINE:"+role)
+            time.sleep(min(1.0,max(0.0,deadline-time.monotonic())))
+
+    def wait_ob3_required_healthy(self,seconds,recovery_ref):
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        require(recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1" and recovery.get("operation")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+                and recovery.get("deferredRoles")==["passport-beta-bureau"],"D12_CLOSED_OB3_HEALTH_AUTHORITY_REQUIRED")
+        return self._wait_required_healthy(seconds,recovery)
+
+    def _wait_required_healthy(self,seconds,ob3=None):
         require(type(seconds) is int and 0 < seconds <= 120, "D12_HEALTH_DEADLINE_REQUIRED")
         self.assert_inputs()
         expected = self.host.before
         deadline = time.monotonic() + seconds
         while True:
             rows = exact_roles(self.observer.inspect_all22(), self.profile)
+            if ob3 is not None:
+                saved=json.loads(read_ref(ob3["selected22"]).read_bytes())["passport-beta-bureau"];deferred=rows["passport-beta-bureau"]
+                require(deferred["containerId"]==saved["Id"] and deferred.get("state")=="exited" and deferred.get("hostPid")==0
+                        and deferred.get("running") is False and deferred.get("paused") is False and deferred.get("oomKilled") is False
+                        and deferred.get("containerExitCode")==saved["State"]["ExitCode"] and deferred.get("health")!="healthy","D12_OB3_DEFERRED_ROLE_CHANGED")
             if all(row.get("running") is True and row.get("paused") is False
                    and row.get("oomKilled") is False and type(row.get("hostPid")) is int
                    and row["hostPid"] > 0 and row.get("state") == "running"
                    and row.get("health") == expected[role].get("health")
-                   for role, row in rows.items()):
+                   for role, row in rows.items() if ob3 is None or role!="passport-beta-bureau"):
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -878,7 +958,7 @@ class D12CurrentHostBindings:
             "selection":self.inputs["selection"],"plannedModels":target_inputs["plannedModels"],
             "composeArguments":target_inputs["composeArguments"],
             "runtimeBefore":self.inputs["runtimeBefore"],"resourceBefore":resource["resourceBefore"],
-            "createdCids":created,"acknowledgedState":acknowledgement})
+            "createdCids":created,"acknowledgedState":acknowledgement,**({"ob3Authority":recovery_ref} if recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1" else {})})
         source=self.inputs["functionalRuntimeModule"]
         result=bounded_run([str(self.node),"-e",CREATED_TARGET_VERIFY_JS,source["path"],source["sha256"],
             request["path"],request["sha256"],str(self.docker)],env=self.environment,
@@ -914,6 +994,9 @@ class D12CurrentHostBindings:
                 "verify_recovery_quiescent": self.verify_recovery_quiescent,
                 "recovery_authorization_verified": self.recovery_authorization_verified,
                 "wait_all22_healthy": self.wait_all22_healthy,
+                "wait_ob3_required_healthy":self.wait_ob3_required_healthy,
+                "wait_ob3_prerequisite_ready":self.wait_ob3_prerequisite_ready,
+                "ob3_startup_plan":self.ob3_startup_plan,
                 "ob3_quiesce_authorization_verified": self.ob3_quiesce_authorization_verified,
                 "ob3_quiesce_steps": self.ob3_quiesce_steps,
                 "ob3_stop_owned_role": self.ob3_stop_owned_role,

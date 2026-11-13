@@ -176,6 +176,9 @@ services:
       - openbao_tls_ca_cert
 
   compliance-profile:
+    depends_on:
+      organization:
+        condition: service_healthy
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
@@ -223,6 +226,9 @@ services:
       - workload_identity_ca_cert
 
   deployment-profile:
+    depends_on:
+      organization:
+        condition: service_healthy
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
@@ -311,6 +317,9 @@ services:
       - rp_tls_kms_token
 
   device-registration:
+    depends_on:
+      organization:
+        condition: service_healthy
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
@@ -389,6 +398,9 @@ services:
       - issuance_tls_kms_token
 
   canvas-sync-worker:
+    depends_on:
+      signing-keys:
+        condition: service_healthy
     environment:
       <<: *beta-grpc-service-auth
 

@@ -154,6 +154,8 @@ def test_host_quiesce_steps_use_real_source_contracts_exact_cids(tmp_path,monkey
  r['stopContracts']=contracts;rr=save('source-approved.json',r)
  owner=host_module.D12CurrentHostBindings.__new__(host_module.D12CurrentHostBindings);owner.inputs=i;owner.profile=i['rolloutProfile'];owner._ob3_quiesce_approval=rr;owner.store=SimpleNamespace(read=lambda name:s)
  owner.observer=SimpleNamespace(current=current,inspect_role=lambda role:current[role])
+ # This control isolates stop contracts; the source-owned DAG is tested separately.
+ owner.ob3_startup_plan=lambda _: {'order':[*prefix,'passport-beta-bureau',*[role for role in sorted(rows) if role not in prefix and role!='passport-beta-bureau']]}
  if wrong_cid:
   with pytest.raises(ValueError,match='EXACT_STOP_CONTRACT_REQUIRED'):owner.ob3_quiesce_steps(rr)
  else:

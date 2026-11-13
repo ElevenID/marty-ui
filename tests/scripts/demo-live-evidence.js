@@ -39,7 +39,8 @@ function functionalBinding(client, environment) {
   const {loadFunctionalRuntimeObservation} = require(regularSource(path.join(directory, 'canvasNativeRuntime.js')));
   const acknowledged = validateFunctionalRuntimeContext(binding);
   const runtime = loadFunctionalRuntimeObservation(receipt,
-    environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true});
+    environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true,
+      ...(acknowledged.ob3Configuration?{ob3Configuration:acknowledged.ob3Configuration}:{})});
   assert.deepEqual(acknowledged, functionalRuntimeContext(runtime), 'Functional runtime acknowledgement differs from mounted receipt');
   return acknowledged;
 }
@@ -101,7 +102,8 @@ function applyLocalNativeReadiness(report, client, {ready, cleanupComplete}, env
     report.releaseReady = false;
     report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
     report.localFunctionalRuntime = {profileSha256:functional.profileSha256, receiptSha256:functional.receiptSha256,
-      scope:functional.scope, releaseQualified:false, recordingQualified:false};
+      scope:functional.scope, releaseQualified:false, recordingQualified:false,
+      ...(functional.ob3Readiness?{ob3Readiness:functional.ob3Readiness,ob3Configuration:functional.ob3Configuration}:{})};
     if(wallet)report.localFunctionalWallet={...wallet};
     report.signedManifestVerified = false;
     report.demo_qualified = false;

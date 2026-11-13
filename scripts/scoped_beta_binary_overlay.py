@@ -6,7 +6,7 @@ not a migration receipt or a functional-runtime/v2 qualification.
 """
 from __future__ import annotations
 from copy import deepcopy
-import re
+import re,json
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
     MARTY_CLIENTS, MIGRATIONS, daemon_source, read_ref, require, runtime_roles, selected_sources, started_later)
 
@@ -200,7 +200,7 @@ def validate_fenced_observation(observed, expected):
     require(set(observed.get("flowIntentUpdateColumns", [])) == FLOW_MUTABLE_COLUMNS, "FLOW_IMMUTABLE_FIELDS_NOT_PROTECTED")
     require(observed.get("appSchemaCreateDenied") is True and observed.get("cancellationHistoryMutationsDenied") is True, "REQUIRED_ACL_DENIALS_UNPROVEN")
 
-def validate_runtime_after(before, after, binaries, maintenance_restart_roles, profile=None, *, native_preimage=None):
+def validate_runtime_after(before, after, binaries, maintenance_restart_roles, profile=None, *, native_preimage=None,ob3_authority=None):
     require(profile in (None, "d12-passport-current-functional", "d05-membership-current-functional"), "UNREVIEWED_D12_RUNTIME_PROFILE")
     if profile is None:
         source, core, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
@@ -215,9 +215,30 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
     require(len(before["roles"]) == len(after["roles"]) == len(old) == len(new) == 22 and set(old) == set(new) == cohort, "EXACT_22_ROLE_SET_REQUIRED")
     require(len({row["containerId"] for row in new.values()}) == 22 and all(re.fullmatch(r"[a-f0-9]{64}", row["containerId"]) for row in new.values()), "UNIQUE_CONTAINER_IDENTITIES_REQUIRED")
     require(set(maintenance_restart_roles).issubset(cohort - set(roles if profile == "d05-membership-current-functional" else ROLE_BINARIES)), "UNREVIEWED_RESTART_ROLE")
+    deferred=None
+    if ob3_authority is not None:
+        authority=json.loads(read_ref(ob3_authority).read_bytes())
+        require(profile=="d05-membership-current-functional" and authority.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+                and authority.get("operation")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+                and authority.get("dispatchAuthorized") is True and authority.get("draftOnly") is False
+                and authority.get("deferredRoles")==["passport-beta-bureau"] and after.get("readinessScope")=="OB3_FUNCTIONAL_ONLY"
+                and after.get("fullStackQualified") is False and after.get("nativeRuntimeReady") is False and after.get("ob3RuntimeReady") is True,
+                "D12_CLOSED_OB3_RUNTIME_AUTHORITY_REQUIRED")
+        deferred=json.loads(read_ref(authority["selected22"]).read_bytes())["passport-beta-bureau"]
     changes = []
     for role, prior in old.items():
         actual = new[role]
+        if deferred is not None and role=="passport-beta-bureau":
+            require(actual["containerId"]==prior["containerId"]==deferred["Id"] and actual["imageId"]==prior["imageId"]==deferred["Image"]
+                    and actual.get("running") is False and actual.get("hostPid")==0 and actual.get("status")=="exited"
+                    and actual.get("containerExitCode")==deferred["State"]["ExitCode"] and actual.get("health")!="healthy"
+                    and actual.get("source")==prior.get("source") and actual.get("sha256")==prior.get("sha256")
+                    and actual.get("binaryMounts")==prior.get("binaryMounts") and actual.get("configuredRuntimeUid")==prior.get("configuredRuntimeUid")
+                    and actual.get("sourceEffectiveUid")==prior.get("effectiveUid") and actual.get("sourceFactsInherited") is True
+                    and actual.get("deferred") is True and actual.get("runningProcessQualified") is False
+                    and actual.get("binaryObserved") is False and actual.get("processObserved") is False
+                    and actual.get("processExecutableSha256") is None and actual.get("executablePath") is None,"D12_DEFERRED_BUREAU_FACTS_CHANGED")
+            continue
         require(actual["imageId"] == prior["imageId"] and actual["effectiveUid"] == prior["effectiveUid"] and actual["configuredRuntimeUid"] == prior["configuredRuntimeUid"], "IMAGE_OR_UID_CHANGED")
         if role not in roles:
             expected = deepcopy(prior)
@@ -261,7 +282,7 @@ def validate_runtime_after(before, after, binaries, maintenance_restart_roles, p
     return {"schema": "marty.passport-scoped-native-runtime/v1", "uiRevision": source, "coreRevision": core,
         "roleBinaries": roles, "maintenanceRestartRoles": changes, "roles": list(new.values()),
         "scope": "FUNCTIONAL_ONLY", "releaseQualified": False, "recordingQualified": False,
-        "acceptedByExistingFunctionalRuntimeV2": False}
+        "acceptedByExistingFunctionalRuntimeV2": False,**({key:after[key] for key in ("readinessScope","fullStackQualified","ob3RuntimeReady","nativeRuntimeReady","deferredRoles","deferredFailure","allowedScenarios","inputs")} if deferred is not None else {})}
 
 def compose_recreate_arguments(frozen_arguments, overlay_path, profile=None, selected_roles=None, *, no_start=False):
     # Existing operator invokes this only AFTER reviewed maintenance/SQL/backup

@@ -985,11 +985,17 @@ function createdComposeLabels(input,role,labels){
 
 }
 function verifyCreatedTargetModel(input,{readDocker}={}){
- assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState','composeArguments'].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');
+ assert.equal(typeof readDocker,'function');assert.deepEqual(Object.keys(input).sort(),['runId','engineId','selection','plannedModels','runtimeBefore','resourceBefore','createdCids','acknowledgedState','composeArguments',...(Object.hasOwn(input,'ob3Authority')?['ob3Authority']:[])].sort(),'MAINTENANCE_CREATED_TARGET_SCHEMA');
  const proof=boundJson(input.createdCids),ack=boundJson(input.acknowledgedState),before=boundJson(input.runtimeBefore),baseline=boundJson(input.resourceBefore);
  assert.equal(proof.schema,'marty.d12-owned-created-cids/v1');assert.equal(proof.runId,input.runId);assert.equal(ack.runId,input.runId);assert.deepEqual(proof.selection,input.selection);assert.deepEqual(proof.durableCreateAck,{phase:ack.phase,acknowledgedStep:ack.acknowledgedStep});
  assert.deepEqual(Object.keys(proof.selectedContainerIds).sort(),[...MAINTENANCE_CREATED_ROLES]);
  const previousCreated=ack.acknowledgedStep==='REPLACE_CREATED_CREDENTIAL_GENERATION'?boundJson(ack.priorCreatedSnapshot):null;
+ let ob3=null;
+ if(Object.hasOwn(input,'ob3Authority')){
+  const authority=boundJson(input.ob3Authority);assert.equal(authority.schema,'marty.d12-ob3-quiescent-recovery/v1');assert.equal(authority.operation,'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME');assert.equal(authority.dispatchAuthorized,true);assert.equal(authority.draftOnly,false);assert.equal(authority.replaceCredentialGeneration,true);assert.equal(authority.runId,input.runId);assert.deepEqual(authority.deferredRoles,['passport-beta-bureau']);assert.deepEqual(ack.replacementAuthority,input.ob3Authority);assert.equal(ack.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');
+  ob3=maintenanceOb3QuiescentContext(boundJson(authority.maintenanceResourceRecovery),boundJson(authority.originalOperationState));assert.deepEqual(authority.selected22,ob3.post.current22);assert.deepEqual(input.plannedModels,authority.trustDataMap.plannedModels.recovery);assert.deepEqual(input.composeArguments,authority.trustDataMap.composeArguments.recovery);
+ }
+
  const ids=new Map(before.roles.map(row=>[row.role,proof.selectedContainerIds[row.role]||row.containerId]));assert.equal(ids.size,22);assert.equal(new Set(ids.values()).size,22);
  if(ack.acknowledgedStep==='REPLACE_CREATED_CREDENTIAL_GENERATION'){
   const previous=boundJson(ack.priorCreatedSnapshot),oldIds=new Set(Object.values(previous).map(row=>row.Id));
@@ -1001,7 +1007,7 @@ function verifyCreatedTargetModel(input,{readDocker}={}){
   const a={configs:{rows:before.roles.map(row=>({cid:row.containerId}))},cap:{allRunningRoles:Object.fromEntries(before.roles.map(row=>[row.role,{id:row.containerId}]))}},generations=new Map(before.roles.map(row=>[row.role,{cid:row.containerId,startedAt:row.startedAt,pid:row.hostPid}]));
   const context=maintenanceCreatedContext({a,generations},before,baseline,{selection:input.selection,selected22:null,selected22Job:null,plannedModels:input.plannedModels},readDocker,{ack,rows});
   for(const [role,row]of raw){
-   assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.Paused,false);assert.equal(row.State?.OOMKilled,false);assert.equal(row.State?.ExitCode,0);assert.equal(row.State?.Status,context.created.has(role)?'created':'exited');
+   assert.equal(row.State?.Running,false);assert.equal(row.State?.Pid,0);assert.equal(row.State?.Paused,false);assert.equal(row.State?.OOMKilled,false);assert.equal(row.State?.ExitCode,ob3&&role==='passport-beta-bureau'?ob3.current[role].State.ExitCode:0);assert.equal(row.State?.Status,context.created.has(role)?'created':'exited');
    if(previousCreated){
     const prior=previousCreated[role];assert(prior&&prior.Image===row.Image);
     const oldCaps=structuredClone(prior.HostConfig),newCaps=structuredClone(row.HostConfig);for(const key of ['Binds','Mounts']){delete oldCaps[key];delete newCaps[key];}assert.deepEqual(newCaps,oldCaps,'MAINTENANCE_CREATED_UNRELATED_CAP_CHANGED:'+role);
@@ -1120,6 +1126,38 @@ function verifyOb3ContainmentRuntime(profile,{readDocker,recoveryRef,phase='PART
  const owned=new Map(created.roles.map(row=>[row.role,row])),target=new Map(modelProof.roles.map(row=>[row.role,row]));
  assert.equal(owned.size,22);assert.equal(target.size,22);
  assert.equal(modelProof.acknowledgedStep,'REPLACE_CREATED_CREDENTIAL_GENERATION');assert.deepEqual(Object.fromEntries([...target].map(([role,row])=>[role,row.containerId])),Object.fromEntries([...owned].map(([role,row])=>[role,row.containerId])),'OB3_TARGET_CURRENT22_CHANGED');assert.deepEqual(cidProof.selectedContainerIds,Object.fromEntries(Object.keys(input.roleBinaries).map(role=>{assert(owned.has(role));return [role,owned.get(role).containerId];})),'OB3_TARGET_SELECTED10_CHANGED');
+ const processPrefix={...prefix},reviewedRestarts=new Set();
+ if(authority.currentProcessBaseline){
+  const baseline=boundJson(authority.currentProcessBaseline);
+  assert.deepEqual(Object.keys(baseline).sort(),['schema','originalOperationState','journalRead','job','rootReview','owned22','ancillary6','restartedRoles'].sort(),'OB3_CURRENT_PROCESS_BASELINE_SCHEMA');
+  assert.equal(baseline.schema,'marty.d12-ob3-current-process-baseline/v1');assert.deepEqual(baseline.originalOperationState,authority.originalOperationState);
+  assert.deepEqual(baseline.restartedRoles,['canvas-sync-worker','compliance-profile','deployment-profile','device-registration'],'OB3_EXACT_RESTARTED_ROLES_REQUIRED');
+  const current=boundJson(baseline.owned22),currentAncillary=boundJson(baseline.ancillary6),job=boundJson(baseline.job),review=boundJson(baseline.rootReview),read=boundJson(baseline.journalRead);
+  for(const ref of [baseline.ancillary6,baseline.journalRead])assert.equal(path.dirname(ref.path),path.dirname(baseline.owned22.path),'OB3_CURRENT_PROCESS_CAPTURE_NAMESPACE_CHANGED');
+  assert.equal(job.schema,'marty.windows-job-result/v1');assert.equal(job.state,'COMPLETE');assert.equal(job.exitCode,0);assert.equal(job.jobClosed,true);assert.equal(job.terminalActiveProcesses,0);
+  for(const key of ['timedOut','forcedTermination','cancelled','hostMarginBreached'])assert.equal(job[key],false);
+  assert.equal(review.state,'ROOT_QUIESCENCE_FAILURE_RECONCILED_READONLY');assert.equal(review.journalStateSha256,authority.originalOperationState.sha256);assert.equal(review.journalUnchanged,true);assert.equal(review.created22CidsUnchanged,true);
+  assert.equal(review.closedJobSha256,baseline.job.sha256);assert.equal(review.workerResultSha256,baseline.journalRead.sha256);assert.equal(review.quiescenceQualified,false);assert.equal(review.fullStackQualified,false);
+  assert(Array.isArray(read)&&read.length===1);assert.equal(read[0].state,'EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE');assert.equal(read[0].mountReadOnly,true);
+  const originalRead=boundJson(authority.journalRead);assert(Array.isArray(originalRead)&&originalRead.length===1);
+  for(const key of ['device','inode','uid','gid','mode']){assert(Object.hasOwn(originalRead[0].root,key),'OB3_ORIGINAL_JOURNAL_ROOT_REQUIRED:'+key);assert.equal(read[0].root?.[key],originalRead[0].root[key],'OB3_CURRENT_PROCESS_JOURNAL_ROOT_CHANGED:'+key);}
+  for(const [name,ref]of [['build-state.json',authority.originalOperationState],['build-apply-intent.json',authority.originalApplyIntent]]){
+   const record=read[0].files[name],raw=Buffer.from(record.storedBytesBase64,'base64');assert.equal(record.present,true);assert.equal(raw.toString('base64'),record.storedBytesBase64);assert.equal(raw.length,ref.bytes);assert.equal(raw.length,record.bytes);assert.equal(digest(raw),ref.sha256);assert.equal(digest(raw),record.sha256);assert.deepEqual(JSON.parse(raw.toString('utf8')),record.document);assert.deepEqual(record.document,boundJson(ref));
+  }
+  for(const name of ['build-receipt.json','configuration-receipt.json'])assert.equal(read[0].files[name].present,false);
+  assert.deepEqual(Object.keys(current).sort(),Object.keys(saved).sort());assert.deepEqual(currentAncillary,ancillary,'OB3_ANCILLARY_GENERATION_CHANGED');
+  assert.deepEqual(review.restartDrift.map(item=>item.role),baseline.restartedRoles);
+  for(const [role,row]of Object.entries(current)){
+   const before=saved[role],strip=value=>Object.fromEntries(Object.entries(value).filter(([key])=>!['State','RestartCount'].includes(key)));
+   assert.deepEqual(strip(row),strip(before),'OB3_CURRENT_PROCESS_IDENTITY_CHANGED:'+role);assert.equal(row.Id,owned.get(role).containerId);assert.equal(row.Image,owned.get(role).imageId);
+   if(baseline.restartedRoles.includes(role)){
+    const ack=prefix[role],item=review.restartDrift.find(item=>item.role===role);assert(ack);assert.equal(row.State.Status,'running');assert.equal(row.State.Running,true);assert(Number.isSafeInteger(row.State.Pid)&&row.State.Pid>0);assert.equal(row.State.Paused,false);assert.equal(row.State.OOMKilled,false);assert.notEqual(row.State.StartedAt,ack.startedAt);assert.notEqual(row.State.Pid,ack.hostPid);
+    assert.deepEqual(item,{role,ackStartedAt:ack.startedAt,ackHostPid:ack.hostPid,observedStartedAt:row.State.StartedAt,observedHostPid:row.State.Pid,restartCount:row.RestartCount,status:'running'},'OB3_REVIEWED_PROCESS_GENERATION_CHANGED:'+role);
+    reviewedRestarts.add(role);processPrefix[role]={...ack,startedAt:row.State.StartedAt,hostPid:row.State.Pid,restartCount:row.RestartCount};
+   }else if(prefix[role]){assert.equal(row.State.StartedAt,prefix[role].startedAt,'OB3_UNREVIEWED_PROCESS_GENERATION_CHANGED:'+role);assert.equal(row.State.Pid,prefix[role].hostPid);assert.equal(row.State.Status,'running');assert.equal(row.State.Running,true);}
+   else if(role!=='passport-beta-bureau'){assert.deepEqual(row.State,before.State);assert.equal(row.RestartCount,before.RestartCount);}
+  }
+ }
  const all={...saved,...ancillary},ids=Object.values(all).map(row=>row.Id);assert.equal(new Set(ids).size,28);
  for(const [role,row]of Object.entries(saved)){assert.equal(row.Id,owned.get(role).containerId);assert.equal(row.Image,owned.get(role).imageId);}
  const expectedConfig=new Map(modelProof.roles.map(row=>[row.containerId,row.configSha256]));
@@ -1140,7 +1178,7 @@ function verifyOb3ContainmentRuntime(profile,{readDocker,recoveryRef,phase='PART
     if(phase==='QUIESCENT'){assert.equal(row.State.Status,'exited');assert.equal(row.State.Running,false);assert.equal(row.State.Pid,0);assert(outcomes[role]);assert.equal(row.State.ExitCode,outcomes[role].observedExitCode);assert([0,1,143].includes(row.State.ExitCode));}
     else {assert(['running','restarting','exited'].includes(row.State.Status));assert.notEqual(row.State.Health?.Status,'healthy');}
    }else if(prefix[role]){
-    const ack=prefix[role];assert.equal(row.Id,ack.containerId);assert.equal(row.Image,ack.imageId);assert.equal(row.State.StartedAt,ack.startedAt);
+    const ack=processPrefix[role];assert.equal(row.Id,ack.containerId);assert.equal(row.Image,ack.imageId);assert.equal(row.State.StartedAt,ack.startedAt);if(reviewedRestarts.has(role))assert.equal(row.RestartCount,ack.restartCount,'OB3_NEWER_PROCESS_RESTART_REFUSED:'+role);
     if(phase==='PARTIAL'){assert.equal(row.State.Status,'running');assert.equal(row.State.Running,true);assert.equal(row.State.Pid,ack.hostPid);}
     else {assert.equal(row.State.Status,'exited');assert.equal(row.State.Running,false);assert.equal(row.State.Pid,0);assert.equal(row.State.ExitCode,0);assert.equal(outcomes[role]?.observedExitCode,0);}
    }else{
@@ -1157,7 +1195,7 @@ function verifyOb3ContainmentRuntime(profile,{readDocker,recoveryRef,phase='PART
  if(phase==='PARTIAL')for(const role of Object.keys(prefix)){
   const prior=original.roles.find(row=>row.role===role),base={...prior,containerId:saved[role].Id};
   if(selected.binaries[role]){base.sha256=selected.binaries[role].sha256;base.source=selected.sourceRevision;}
-  const actual=observeDocker(base,readDocker);assert.equal(actual.containerId,prefix[role].containerId);assert.equal(actual.startedAt,prefix[role].startedAt);assert.equal(actual.hostPid,prefix[role].hostPid);
+  const actual=observeDocker(base,readDocker);assert.equal(actual.containerId,prefix[role].containerId);assert.equal(actual.startedAt,processPrefix[role].startedAt);assert.equal(actual.hostPid,processPrefix[role].hostPid);
   assert.equal(actual.imageId,base.imageId);assert.equal(actual.effectiveUid,base.effectiveUid);assert.equal(actual.configuredRuntimeUid,base.configuredRuntimeUid);
   if(base.binary){assert.equal(actual.binarySha256,base.sha256);assert.equal(actual.processExecutableSha256,base.sha256);}
  }

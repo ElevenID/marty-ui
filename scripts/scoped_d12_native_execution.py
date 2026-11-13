@@ -6,7 +6,7 @@ An uncertain command leaves a durable pending state for explicit reconciliation.
 """
 from __future__ import annotations
 
-import json
+import json,time
 from pathlib import Path
 
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES, daemon_source, durable_barrier, read_ref, require, selected_sources, sha, started_later
@@ -286,6 +286,176 @@ def partial_start_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backen
             and all(failure.get(k) is True for k in
             ("sqlstate42501Observed","permissionDeniedForSchemaObserved","issuanceServiceSchemaObserved")),
             "D12_OB3_EXACT_DEFERRED_FAILURE_REQUIRED")
+    baseline_ref=recovery.get("currentProcessBaseline")
+    if baseline_ref is not None:
+        baseline=load(baseline_ref)
+        require(set(baseline)=={"schema","originalOperationState","journalRead","job","rootReview","owned22","ancillary6","restartedRoles"}
+                and baseline.get("schema")=="marty.d12-ob3-current-process-baseline/v1"
+                and baseline["originalOperationState"]==recovery["originalOperationState"]
+                and baseline["restartedRoles"]==["canvas-sync-worker","compliance-profile","deployment-profile","device-registration"],
+                "D12_OB3_CURRENT_PROCESS_BASELINE_REQUIRED")
+        current=load(baseline["owned22"]);ancillary=load(baseline["ancillary6"]);old=load(recovery["currentOwned22"]);old_ancillary=load(recovery["currentAncillary6"])
+        require(set(current)==set(old)==set(rows) and set(ancillary)==set(old_ancillary)
+                and read_ref(baseline["owned22"]).parent==read_ref(baseline["ancillary6"]).parent==read_ref(baseline["journalRead"]).parent,
+                "D12_OB3_CURRENT_PROCESS_CAPTURE_CHANGED")
+        job=load(baseline["job"]);require(job.get("schema")=="marty.windows-job-result/v1" and job.get("state")=="COMPLETE"
+                and type(job.get("exitCode")) is int and job["exitCode"]==0 and job.get("jobClosed") is True and job.get("terminalActiveProcesses")==0
+                and all(job.get(k) is False for k in ("timedOut","forcedTermination","cancelled","hostMarginBreached")),"D12_OB3_CURRENT_PROCESS_JOB_REQUIRED")
+        review=load(baseline["rootReview"])
+        require(review.get("state")=="ROOT_QUIESCENCE_FAILURE_RECONCILED_READONLY" and review.get("journalStateSha256")==recovery["originalOperationState"]["sha256"]
+                and review.get("journalUnchanged") is True and review.get("created22CidsUnchanged") is True
+                and review.get("closedJobSha256")==baseline["job"]["sha256"] and review.get("workerResultSha256")==baseline["journalRead"]["sha256"]
+                and review.get("quiescenceQualified") is False and review.get("fullStackQualified") is False,"D12_OB3_CURRENT_PROCESS_ROOT_REVIEW_REQUIRED")
+        fresh_read=load(baseline["journalRead"]);require(isinstance(fresh_read,list) and len(fresh_read)==1
+                and fresh_read[0].get("state")=="EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE" and fresh_read[0].get("mountReadOnly") is True
+                and all(fresh_read[0]["root"][k]==operation_backend["rootProof"][k] for k in ("device","inode","uid","mode")),"D12_OB3_CURRENT_PROCESS_JOURNAL_REQUIRED")
+        for name,reference,value in (("build-state.json",recovery["originalOperationState"],state),("build-apply-intent.json",recovery["originalApplyIntent"],intent)):
+            file=fresh_read[0]["files"][name]
+            exact=validate_journal_readback({"storedBytesBase64":file.get("storedBytesBase64"),"sha256":file.get("sha256"),"value":file.get("document")})
+            require(file.get("present") is True and exact==read_ref(reference).read_bytes() and file.get("bytes")==reference["bytes"] and file.get("document")==value,
+                    "D12_OB3_CURRENT_PROCESS_JOURNAL_CHANGED")
+        require(all(fresh_read[0]["files"][name].get("present") is False for name in ("build-receipt.json","configuration-receipt.json")),"D12_OB3_CURRENT_PROCESS_RECEIPTS_CHANGED")
+        reviewed=review.get("restartDrift",[]);require([item.get("role") for item in reviewed]==baseline["restartedRoles"],"D12_OB3_EXACT_RESTARTED_ROLES_REQUIRED")
+        by_role={item["role"]:item for item in reviewed}
+        for role,now in current.items():
+            prior=old[role]
+            require({k:v for k,v in now.items() if k not in ("State","RestartCount")}=={k:v for k,v in prior.items() if k not in ("State","RestartCount")}
+                    and now["Id"]==rows[role]["containerId"] and now["Image"]==rows[role]["imageId"],"D12_OB3_CURRENT_PROCESS_IDENTITY_CHANGED:"+role)
+            if role in by_role:
+                item=by_role[role];ack=state["startAcks"][role]
+                require(now["State"]["Status"]=="running" and now["State"]["Running"] is True and type(now["State"]["Pid"]) is int and now["State"]["Pid"]>0
+                        and now["State"]["Paused"] is False and now["State"]["OOMKilled"] is False
+                        and now["State"]["StartedAt"]!=ack["startedAt"] and now["State"]["Pid"]!=ack["hostPid"]
+                        and item=={"role":role,"ackStartedAt":ack["startedAt"],"ackHostPid":ack["hostPid"],"observedStartedAt":now["State"]["StartedAt"],"observedHostPid":now["State"]["Pid"],"restartCount":now["RestartCount"],"status":"running"},
+                        "D12_OB3_REVIEWED_PROCESS_GENERATION_CHANGED:"+role)
+            elif role in state["startAcks"]:
+                ack=state["startAcks"][role];require(now["State"]["StartedAt"]==ack["startedAt"] and now["State"]["Pid"]==ack["hostPid"]
+                    and now["State"]["Status"]=="running" and now["State"]["Running"] is True,"D12_OB3_UNREVIEWED_PROCESS_GENERATION_CHANGED:"+role)
+            elif role!="passport-beta-bureau":
+                require(now["State"]==prior["State"] and now["RestartCount"]==prior["RestartCount"],"D12_OB3_UNSTARTED_PROCESS_CHANGED:"+role)
+        require(ancillary==old_ancillary,"D12_OB3_ANCILLARY_GENERATION_CHANGED")
+    return deepest,proof,verified
+
+
+def ob3_startup_prerequisites(reference):
+    """One source-owned datafile; an operational graph, never an installed-model claim."""
+    source=Path(__file__).resolve().with_name("ob3-startup-prerequisites.json")
+    require(read_ref(reference,65536).resolve()==source,"D12_OB3_STARTUP_SOURCE_PATH_REQUIRED")
+    proof=json.loads(source.read_bytes())
+    require(proof.get("schema")=="marty.ob3-startup-prerequisites/v1" and proof.get("composeSourcePath")=="docker-compose.beta.yml"
+            and isinstance(proof.get("composeSha256"),str) and len(proof["composeSha256"])==64
+            and all(c in "0123456789abcdef" for c in proof["composeSha256"]) and proof.get("installedModelChanged") is False,
+            "D12_OB3_STARTUP_SOURCE_PROOF_REQUIRED")
+    requirements=proof.get("requirements")
+    require(isinstance(requirements,list) and len(requirements)==4 and all(set(row)=={"dependentRole","prerequisiteRole","readiness"}
+            and row["readiness"]=="DOCKER_HEALTHY" and row["prerequisiteRole"] in {"organization","signing-keys"} for row in requirements)
+            and {row["dependentRole"] for row in requirements}=={"compliance-profile","deployment-profile","device-registration","canvas-sync-worker"},
+            "D12_OB3_CLOSED_STARTUP_REQUIREMENTS_REQUIRED")
+    return proof
+
+
+def ob3_quiescent_checkpoint(inputs,state,intent,recovery,*,operation_backend):
+    """Validate an actual OB3 quiescence; authorize only a new credential generation."""
+    from scoped_native_database import RECOVERY_SOURCE_FIELDS,RECOVERY_TRUST_FIELDS,_recovery_trust_models
+    from scoped_native_runtime import validate_journal_readback
+    def load(reference):return json.loads(read_ref(reference).read_bytes())
+    require(recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+            and recovery.get("operation")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+            and recovery.get("replaceCredentialGeneration") is True
+            and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
+            and recovery.get("runId")==inputs["runId"] and recovery.get("scope")=="OB3_FUNCTIONAL_ONLY"
+            and recovery.get("deferredRoles")==[OB3_DEFERRED_ROLE]
+            and recovery.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS),"D12_CLOSED_OB3_QUIESCENT_AUTHORITY_REQUIRED")
+    ob3_startup_prerequisites(recovery["startupPrerequisites"])
+    original=load(recovery["originalInputs"]);previous=load(recovery["previousRecoveryAuthority"])
+    require(previous.get("operation")=="QUIESCE_OB3_PARTIAL_STARTS","D12_OB3_QUIESCENCE_PRIOR_AUTHORITY_REQUIRED")
+    partial=load(previous["originalOperationState"])
+    deepest,proof,verified=partial_start_ob3_checkpoint(original,partial,intent,previous,operation_backend=operation_backend)
+    require(state==load(recovery["originalOperationState"]) and state.get("phase")=="OB3_PARTIAL_QUIESCENT"
+            and state.get("schema")=="marty.d12-current-native-operation/v1" and state.get("runId")==inputs["runId"]
+            and state.get("pendingStep") is None and state.get("pendingArgv") is None and state.get("pendingContainerId") is None
+            and state.get("pendingRequest") is None and state.get("readinessScope")=="OB3_FUNCTIONAL_ONLY"
+            and state.get("fullStackQualified") is False and state.get("scope")=="FUNCTIONAL_ONLY" and state.get("releaseQualified") is False and state.get("recordingQualified") is False
+            and state.get("sourceRevision")==inputs["uiRevision"] and state.get("coreRevision")==inputs["coreRevision"] and state.get("deferredRoles")==[OB3_DEFERRED_ROLE]
+            and state.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
+            and state.get("recoveryAuthority")==recovery["previousRecoveryAuthority"]
+            and state.get("priorPartialStartState")==previous["originalOperationState"]
+            and state.get("originalOperationState")==previous["originalOperationState"]
+            and state.get("priorStartAcks")==partial["startAcks"] and state.get("startAcks")=={},
+            "D12_OB3_ACTUAL_QUIESCENT_CHECKPOINT_REQUIRED")
+    require(all(state.get(key)==partial.get(key) for key in
+            ("created","databaseProof","verifiedDatabase","tenantPreflight","sourceRevision","coreRevision"))
+            and recovery["databaseProof"]==state["databaseProof"] and recovery["verifiedDatabase"]==state["verifiedDatabase"]
+            and recovery["deferredFailure"]==state["deferredFailure"]==previous["deferredFailure"],
+            "D12_OB3_PRESERVED_DATABASE_AND_FAILURE_REQUIRED")
+    observation=load(state["ob3Quiescence"])
+    require(observation.get("schema")=="marty.ob3-containment-observation/v1"
+            and observation.get("phase")=="OB3_PARTIAL_QUIESCENT" and observation.get("runId")==inputs["runId"]
+            and observation.get("fullStackQualified") is False and observation.get("functionalRuntimeQualified") is False
+            and observation.get("runningProcessQualified") is False and observation.get("currentJobNormalClosureNotYetQualified") is True
+            and observation.get("readinessScope")=="OB3_FUNCTIONAL_ONLY" and len(observation.get("roles",[]))==22
+            and len(observation.get("resources",[]))==28 and observation.get("deferredFailure")==state["deferredFailure"],
+            "D12_OB3_ACTUAL_QUIESCENCE_OBSERVATION_REQUIRED")
+    rows={row["role"]:row for row in observation["roles"]};current=load(recovery["selected22"])
+    resources={row["role"]:row for row in observation["resources"]};ancillary=load(previous["currentAncillary6"])
+    require(set(ancillary)=={"docs","nginx-proxy","openbao","postgres","redis","keycloak"}
+            and set(resources)==set(rows)|set(ancillary) and len({row["containerId"] for row in resources.values()})==28
+            and all(resources[role]["containerId"]==row["containerId"] for role,row in rows.items())
+            and all(resources[role]["containerId"]==row["Id"] for role,row in ancillary.items()),"D12_OB3_EXACT_CURRENT28_REQUIRED")
+    original_created={row["role"]:row for row in load(partial["created"])["roles"]}
+    require(set(rows)==D12_CURRENT_RUNTIME_ROLES and set(current)==set(rows)
+            and len({row["containerId"] for row in rows.values()})==22,"D12_OB3_QUIESCENT22_REQUIRED")
+    outcomes=state["ob3StopOutcomes"];contract=load(previous["deferredStopContract"])
+    require(set(outcomes)==set(partial["startAcks"])|{OB3_DEFERRED_ROLE}
+            and contract.get("role")==OB3_DEFERRED_ROLE and contract.get("containerId")==partial["pendingContainerId"]
+            and contract.get("schema")=="marty.reviewed-deferred-startup-stop/v1" and contract.get("signal")=="SIGTERM"
+            and contract.get("gracefulShutdownVerified") is False and contract.get("allowedExitCodes")==[0,1,143] and contract.get("noAutomaticSigkill") is True
+            and all(value.get("deferred") is (role==OB3_DEFERRED_ROLE) and value.get("observedExitCode")==0 for role,value in outcomes.items() if role!=OB3_DEFERRED_ROLE)
+            and outcomes[OB3_DEFERRED_ROLE].get("deferred") is True,
+            "D12_OB3_REVIEWED_STOP_OUTCOMES_REQUIRED")
+    for role,row in rows.items():
+        expected_exit=outcomes[role]["observedExitCode"] if role==OB3_DEFERRED_ROLE else 0
+        snap=current[role]
+        require(row.get("status")==("exited" if role in partial["startAcks"] or role==OB3_DEFERRED_ROLE else original_created[role]["state"]) and row.get("running") is False and row.get("hostPid")==0
+                and row.get("containerExitCode")==expected_exit
+                and (expected_exit in contract["allowedExitCodes"] if role==OB3_DEFERRED_ROLE else True)
+                and snap.get("Id")==row["containerId"] and snap.get("Image")==row["imageId"]
+                and snap["State"]["Status"]==row["status"] and snap["State"]["StartedAt"]==row["startedAt"]
+                and snap["State"]["Running"] is False and snap["State"]["Pid"]==0
+                and snap["State"]["OOMKilled"] is False and snap["State"]["Paused"] is False
+                and snap["State"]["ExitCode"]==expected_exit,"D12_OB3_CURRENT_QUIESCENT_ROLE_CHANGED:"+role)
+    require(recovery.get("sourceMap")=={key:{"original":original[key],"recovery":inputs[key]} for key in RECOVERY_SOURCE_FIELDS}
+            and recovery.get("trustDataMap")=={key:{"original":original.get(key),"recovery":inputs.get(key)} for key in RECOVERY_TRUST_FIELDS},
+            "D12_OB3_EXACT_SOURCE_AND_TRUST_MAP_REQUIRED")
+    ignored=RECOVERY_SOURCE_FIELDS|RECOVERY_TRUST_FIELDS|{"d12Authority","quiescence"}
+    require({key:value for key,value in original.items() if key not in ignored}=={key:value for key,value in inputs.items() if key not in ignored},
+            "D12_OB3_RECOVERY_INPUT_DRIFT")
+    _recovery_trust_models(original,inputs)
+    require(load(original["runScopedTrustLeaseProof"])["generationDirectory"]!=load(inputs["runScopedTrustLeaseProof"])["generationDirectory"],
+            "D12_OB3_FRESH_CREDENTIAL_GENERATION_REQUIRED")
+    require(load(proof["operationState"])["quiescenceSha256"]==recovery["quiescence"]["sha256"] and read_ref(recovery["quiescence"]).is_file() and recovery["originalApplyIntent"]==previous["originalApplyIntent"]
+            and load(recovery["originalApplyIntent"])==intent,"D12_OB3_ORIGINAL_DATABASE_LINEAGE_REQUIRED")
+    for key in ("quiescenceJob","reconciliationJob","selected22Job"):
+        job=load(recovery[key]);require(job.get("state")=="COMPLETE" and type(job.get("exitCode")) is int and job["exitCode"]==0
+            and job.get("jobClosed") is True and job.get("terminalActiveProcesses")==0
+            and all(job.get(name) is False for name in ("forcedTermination","timedOut","cancelled","hostMarginBreached")),
+            "D12_OB3_NORMAL_CLOSED_QUIESCENCE_JOB_REQUIRED")
+    read=load(recovery["journalRead"]);require(isinstance(read,list) and len(read)==1
+            and read[0].get("state")=="EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE" and read[0].get("mountReadOnly") is True,
+            "D12_OB3_AUTHORITATIVE_QUIESCENT_JOURNAL_REQUIRED")
+    require(all(read[0]["root"][key]==operation_backend["rootProof"][key] for key in ("device","inode","uid","mode")),
+            "D12_OB3_JOURNAL_ROOT_CHANGED")
+    for name,reference,value in (("build-state.json",recovery["originalOperationState"],state),("build-apply-intent.json",recovery["originalApplyIntent"],intent)):
+        record=read[0]["files"][name]
+        raw=validate_journal_readback({"storedBytesBase64":record.get("storedBytesBase64"),"sha256":record.get("sha256"),"value":record.get("document")})
+        require(record.get("present") is True and raw==read_ref(reference).read_bytes() and record.get("sha256")==reference["sha256"]
+                and record.get("bytes")==reference["bytes"] and record.get("document")==value,"D12_OB3_RAW_QUIESCENT_JOURNAL_CHANGED")
+    require(all(read[0]["files"][name].get("present") is False for name in ("build-receipt.json","configuration-receipt.json")),
+            "D12_OB3_QUIESCENCE_ALREADY_CONSUMED")
+    resource=load(recovery["maintenanceResourceRecovery"])
+    require(resource.get("ob3Quiescent")=={"authority":recovery["previousRecoveryAuthority"],"quiescence":state["ob3Quiescence"],
+            "quiescenceJob":recovery["quiescenceJob"],"current22":recovery["selected22"],"current22Job":recovery["selected22Job"]}
+            and "postCreate" not in resource,"D12_OB3_EXACT_QUIESCENT_RESOURCE_DTO_REQUIRED")
     return deepest,proof,verified
 
 
@@ -548,20 +718,25 @@ class D12CurrentExecution:
     def replace_acknowledged_created_credentials_and_resume(self, recovery_ref):
         return self._resume_created(recovery_ref, replace_credentials=True, resume_replacement=True)
 
-    def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False):
-        require(type(replace_credentials) is bool and type(resume_replacement) is bool,"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
+    def replace_ob3_quiescent_credentials_and_resume(self,recovery_ref):
+        return self._resume_created(recovery_ref,replace_credentials=True,ob3=True)
+
+    def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False,ob3=False):
+        require(type(replace_credentials) is bool and type(resume_replacement) is bool and type(ob3) is bool and (not ob3 or replace_credentials and not resume_replacement),"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
         require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
         require(self.profile=="d05-membership-current-functional","D12_CREATED_RECOVERY_CURRENT10_ONLY")
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
-        require(recovery.get("operation")==("REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials
+        require(recovery.get("operation")==("REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME" if ob3 else "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if resume_replacement
                 else "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME" if replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),"D12_CREATED_RECOVERY_OPERATION_CHANGED")
-        original, proof, verified=created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
+        checkpoint=ob3_quiescent_checkpoint if ob3 else created_recovery_checkpoint
+        original, proof, verified=checkpoint(self.i, self.store.read("build-state.json"),
             self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database, before, preview, overlay_ref = self.recovery_preflight(recovery_ref)
+        if ob3:preview={**preview,"restoreOrder":self.g["ob3_startup_plan"](recovery_ref)["order"]}
         # Recheck after all fresh reads and before the first new durable write.
-        created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
+        checkpoint(self.i, self.store.read("build-state.json"),
             self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database.i={**self.i,"quiescence":recovery["quiescence"]}
         dbstate=json.loads(read_ref(proof["operationState"]).read_bytes())
@@ -583,7 +758,7 @@ class D12CurrentExecution:
             if replace_credentials else None)
         self.state=json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
         self.record("POST_CREATE_RECOVERY_VERIFIED",recoveryAuthority=recovery_ref,
-                    originalOperationState=recovery["originalOperationState"])
+                    originalOperationState=recovery["originalOperationState"],**({"steps":[],"startAcks":{}} if ob3 else {}))
         if replace_credentials:
             # A new authorized effect, with its own durable pending/ack state;
             # neither the original SQL nor the original create is replayed.
@@ -593,7 +768,7 @@ class D12CurrentExecution:
             arguments=overlay.compose_recreate_arguments(self.i["composeArguments"],overlay_ref["path"],
                 self.profile,list(self.roles),no_start=True)
             self.command(database,"REPLACE_CREATED_CREDENTIAL_GENERATION",arguments)
-        return self._finish_after_create(database,before,preview,proof)
+        return self._finish_after_create(database,before,preview,proof,ob3_recovery=recovery_ref if ob3 else None)
 
     def _finish_after_database(self, database, before, preview, overlay_ref, database_proof):
         i, g = self.i, self.g
@@ -619,9 +794,9 @@ class D12CurrentExecution:
         self.command(database, "CREATE_SELECTED", recreate)
         return self._finish_after_create(database, before, preview, database_proof)
 
-    def _finish_after_create(self, database, before, preview, database_proof):
+    def _finish_after_create(self, database, before, preview, database_proof,*,ob3_recovery=None):
         i, g = self.i, self.g
-        stopped_rows = maintenance.exact_roles(json.loads(read_ref(database.i["quiescence"]).read_bytes()), self.profile)
+        stopped_rows = maintenance.exact_roles(json.loads(read_ref(self.state["replacementPreimage"] if ob3_recovery is not None else database.i["quiescence"]).read_bytes()), self.profile)
         self.record("CREATE_INSPECTION_PENDING", pendingStep="INSPECT_CREATED")
         created = self.inspect_all22()
         old_rows = maintenance.exact_roles(before, self.profile)
@@ -651,7 +826,25 @@ class D12CurrentExecution:
         created_ref = g["save"]("d12-created.private.json", {"runId": i["runId"], "roles": created["roles"]})
         self.record("SELECTED_CREATED", pendingStep=None, created=created_ref)
         start_acks = {}
+        remaining_wait_budget=120.0 if ob3_recovery is not None else None
+        requirements=(g["ob3_startup_plan"](ob3_recovery)["requirements"] if ob3_recovery is not None else [])
         for role in preview["restoreOrder"]:
+            if ob3_recovery is not None and role==OB3_DEFERRED_ROLE:continue
+            for requirement in requirements:
+                if requirement["dependentRole"]!=role:continue
+                prerequisite=requirement["prerequisiteRole"]
+                require(prerequisite in start_acks,"D12_OB3_PREREQUISITE_NOT_STARTED:"+prerequisite)
+                remaining=int(remaining_wait_budget);require(remaining>0,"D12_OB3_START_READINESS_DEADLINE")
+                self.record("OB3_START_PREREQUISITE_PENDING",pendingStep="WAIT_READY_"+prerequisite,pendingContainerId=start_acks[prerequisite]["containerId"],startupDependentRole=role)
+                wait_started=time.monotonic()
+                readiness=g["wait_ob3_prerequisite_ready"](remaining,ob3_recovery,prerequisite,role,start_acks[prerequisite])
+                remaining_wait_budget-=time.monotonic()-wait_started
+                require(remaining_wait_budget>=0,"D12_OB3_START_READINESS_DEADLINE")
+                actual=json.loads(read_ref(readiness).read_bytes())
+                require(actual.get("readiness")=="DOCKER_HEALTHY" and actual.get("health")=="healthy" and actual.get("role")==prerequisite
+                        and actual.get("dependentRole")==role and all(actual.get(key)==start_acks[prerequisite][key] for key in ("containerId","imageId","startedAt","hostPid")),
+                        "D12_OB3_PREREQUISITE_NOT_READY:"+prerequisite)
+                self.record("OB3_START_PREREQUISITE_OBSERVED",pendingStep=None,pendingContainerId=None,startupReadiness=readiness)
             cid = new_rows[role]["containerId"]
             self.command(database, "START_" + role, ["docker", "start", cid])
             self.record("START_INSPECTION_PENDING", pendingStep="INSPECT_START_" + role,
@@ -672,16 +865,25 @@ class D12CurrentExecution:
             self.state["steps"].append("START_" + role)
             self.record("START_OBSERVED", pendingStep=None, pendingContainerId=None,
                         startAcks=dict(start_acks))
-        require(set(start_acks) == D12_CURRENT_RUNTIME_ROLES, "D12_ALL22_START_ACKS_REQUIRED")
+        require(set(start_acks) == (D12_CURRENT_RUNTIME_ROLES-{OB3_DEFERRED_ROLE} if ob3_recovery is not None else D12_CURRENT_RUNTIME_ROLES), "D12_EXACT_START_ACKS_REQUIRED" if ob3_recovery is not None else "D12_ALL22_START_ACKS_REQUIRED")
         acks_ref = g["save"]("d12-start-acks.private.json", {"runId": i["runId"], "acks": start_acks})
-        self.record("ALL22_STARTS_OBSERVED", startAcksRef=acks_ref)
-        require(g["wait_all22_healthy"](120) is True, "D12_ALL22_HEALTH_DEADLINE_REQUIRED")
+        self.record("OB3_21_STARTS_OBSERVED" if ob3_recovery is not None else "ALL22_STARTS_OBSERVED", startAcksRef=acks_ref)
+        if ob3_recovery is not None:
+            remaining=int(remaining_wait_budget)
+            require(remaining>0,"D12_OB3_START_READINESS_DEADLINE")
+            wait_started=time.monotonic()
+            healthy=g["wait_ob3_required_healthy"](remaining,ob3_recovery)
+            remaining_wait_budget-=time.monotonic()-wait_started
+            require(remaining_wait_budget>=0,"D12_OB3_START_READINESS_DEADLINE")
+            require(healthy is True,"D12_OB3_21_HEALTH_DEADLINE_REQUIRED")
+        else:
+            require(g["wait_all22_healthy"](120) is True,"D12_ALL22_HEALTH_DEADLINE_REQUIRED")
         after = database.node("runtime", module=i["d12RuntimeModule"],
             inputs={"before": i["runtimeBefore"], "selection": i["selection"],
                     "created": created_ref, "startAcks": acks_ref,
-                    "runId": i["runId"], "engineId": database.engine_id})
+                    "runId": i["runId"], "engineId": database.engine_id,**({"ob3Authority":ob3_recovery} if ob3_recovery is not None else {})})
         proof = overlay.validate_runtime_after(before, after, database.selection["binaries"],
-                   D12_CURRENT_RUNTIME_ROLES - set(self.roles), self.profile,native_preimage=self.native_preimage)
+                   D12_CURRENT_RUNTIME_ROLES - set(self.roles)-({OB3_DEFERRED_ROLE} if ob3_recovery is not None else set()), self.profile,native_preimage=self.native_preimage,ob3_authority=ob3_recovery)
         require(g["database_snapshot"]()["databaseIdentity"] == database.identity,
                 "D12_DATABASE_POSTFLIGHT_REQUIRED")
         startup_schema = None
@@ -704,11 +906,13 @@ class D12CurrentExecution:
                   "coreRevision": self.build_profile.core_revision,
                   "selection": i["selection"], "database": database_proof,
                   "runtime": runtime_ref if runtime_ref is not None else g["save"]("d12-runtime-after.private.json", proof),
-                  "nativeRuntimeReady": True, "functionalReady": False,
+                  "nativeRuntimeReady": ob3_recovery is None, "functionalReady": False,
                   "passportScenarioVerified": False, "physicalBookletVerified": False,
                   "releaseQualified": False, "recordingQualified": False}
         if startup_schema is not None:
             result["startupSchema"] = startup_schema
             result["tenantId"] = database.tenant_id
-        self.record("FUNCTIONAL_NATIVE_TERMINAL", result=g["save"]("d12-native-result.private.json", result))
+        if ob3_recovery is not None:
+            for key in ("readinessScope","fullStackQualified","ob3RuntimeReady","nativeRuntimeReady","deferredRoles","deferredFailure","allowedScenarios"):result[key]=after[key]
+        self.record("OB3_NATIVE_TERMINAL" if ob3_recovery is not None else "FUNCTIONAL_NATIVE_TERMINAL", result=g["save"]("d12-native-result.private.json", result))
         return result

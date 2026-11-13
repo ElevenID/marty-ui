@@ -83,3 +83,54 @@ for(const fault of ['selection-ref','created-ref','model-arguments','target-term
  if(fault==='ancillary-baseline')authority.ancillaryResourceBinding=f.file('foreign-resource.json',{});
  let reads=0;assert.throws(()=>verifyOb3ContainmentRuntime({}, {recoveryRef:f.file('changed-authority.json',authority),phase:'QUIESCENT',outcomes:f.outcomes,readDocker:()=>{reads++;throw Error('NO_DOCKER_ALLOWED');}}));assert.equal(reads,0);
 });
+
+function observerFixture(t){
+ const f=fixture(t),observer=require('./d12-current-native-runtime'),read=reference=>JSON.parse(fs.readFileSync(reference.path));
+ const before=read(f.recovery.runtimeBefore),oldCreated=read(f.state.created),names=before.roles.map(row=>row.role),native=observer.CURRENT10.roles;
+ const binaries={};for(const [role,binary]of Object.entries(native))binaries[role]=f.file(binary,'SYNTHETIC_ELF_SOURCE_BYTES');
+ const selection={profile:observer.CURRENT10.profile,state:'SELECTED_NOT_DEPLOYED',sourceRevision:observer.CURRENT10.source,coreRevision:observer.CURRENT10.core,roleBinaries:native,binaries,scope:'FUNCTIONAL_ONLY',releaseQualified:false,recordingQualified:false},selectionRef=f.file('observer-selection.json',selection);
+ for(const [i,row]of before.roles.entries()){
+  const role=row.role,binary=native[role]||'marty-'+role,source=Object.hasOwn(native,role)?'e'.repeat(40):'f'.repeat(40),hash=Object.hasOwn(native,role)?binaries[role].sha256:'d'.repeat(64);
+  Object.assign(row,{project:'elevenid-beta',binary,source,kind:'RETAINED_SOURCE_BOUND_BINARY',sha256:hash,processExecutableSha256:hash,executablePath:'/usr/local/bin/'+binary,effectiveUid:10001,configuredRuntimeUid:10001,effectiveGid:10001,configuredRuntimeGid:10001,running:true,paused:false,oomKilled:false,state:'running',health:'healthy',hostPid:1,startedAt:'2026-01-01T00:00:00Z',binaryMounts:[{type:'bind',source:require('node:path').join(require('node:path').dirname(binaries.auth.path),'original-'+binary),destination:'/usr/local/bin/'+binary,writable:false}]});
+  if(Object.hasOwn(native,role))row.containerId=(i+5001).toString(16).padStart(64,'0');
+ }
+ before.roles.find(row=>row.role==='passport-beta-bureau').binaryMounts=[];
+ const beforeRef=f.file('observer-before.json',before),partial=read(f.authority.originalOperationState);partial.sourceRevision=observer.CURRENT10.source;partial.coreRevision=observer.CURRENT10.core;
+ const authority={...f.authority,runtimeBefore:beforeRef,selection:selectionRef,originalOperationState:f.file('observer-partial.json',partial)},original={...f.original,runtimeBefore:beforeRef,selection:selectionRef};authority.originalInputs=f.file('observer-original.json',original);
+ const bureauBefore=before.roles.find(row=>row.role==='passport-beta-bureau'),bureauLive=f.live[f.owned['passport-beta-bureau'].Id];bureauLive.Config.User='10001:10001';const bureauHash=sha(JSON.stringify(bureauLive.Config));
+ const quiescence=structuredClone(f.quiescence);quiescence.roles.find(row=>row.role==='passport-beta-bureau').configSha256=bureauHash;quiescence.resources.find(row=>row.role==='passport-beta-bureau').configSha256=bureauHash;
+ const post={...f.post,authority:f.file('observer-quiesce-authority.json',authority),quiescence:f.file('observer-quiescence.json',quiescence)};
+ const state={...f.state,sourceRevision:partial.sourceRevision,coreRevision:partial.coreRevision,recoveryAuthority:post.authority,ob3Quiescence:post.quiescence,priorPartialStartState:authority.originalOperationState,originalOperationState:authority.originalOperationState};
+ const recovery={...f.recovery,runtimeBefore:beforeRef,ob3Quiescent:post};
+ const nextAuthority={schema:'marty.d12-ob3-quiescent-recovery/v1',operation:'REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME',dispatchAuthorized:true,draftOnly:false,replaceCredentialGeneration:true,scope:'OB3_FUNCTIONAL_ONLY',runId:state.runId,engineId:authority.engineId,allowedScenarios:scenarios,deferredRoles:['passport-beta-bureau'],deferredFailure:authority.deferredFailure,originalInputs:authority.originalInputs,originalOperationState:f.file('observer-quiescent-state.json',state),previousRecoveryAuthority:post.authority,selected22:post.current22,selected22Job:post.current22Job,quiescenceJob:post.quiescenceJob,maintenanceResourceRecovery:f.file('observer-maintenance.json',recovery)};
+ const created={runId:state.runId,roles:[]},acks={runId:state.runId,acks:{}},live={},hashById={};
+ for(const [i,prior]of before.roles.entries()){
+  const chosen=Object.hasOwn(native,prior.role),cid=chosen?(i+1001).toString(16).padStart(64,'0'):prior.containerId;
+  const row={...prior,containerId:cid,state:chosen?'created':'exited',hostPid:0,running:false,containerExitCode:prior.role==='passport-beta-bureau'?1:0};created.roles.push(row);
+  if(prior.role==='passport-beta-bureau'){live[cid]=structuredClone(bureauLive);continue;}
+  const mounts=chosen?[{type:'bind',source:binaries[prior.role].path,destination:'/usr/local/bin/'+prior.binary,writable:false}]:prior.binaryMounts;
+  live[cid]={Id:cid,Image:prior.imageId,Config:{User:'10001:10001',Labels:{'com.docker.compose.project':prior.project,'com.docker.compose.service':prior.role}},Mounts:mounts.map(m=>({Type:m.type,Source:m.source,Destination:m.destination,RW:m.writable})),State:{Status:'running',Running:true,Pid:i+100,Paused:false,OOMKilled:false,StartedAt:'2026-02-01T00:00:00Z',Health:{Status:'healthy'}}};
+  hashById[cid]=chosen?binaries[prior.role].sha256:prior.sha256;acks.acks[prior.role]={containerId:cid,imageId:prior.imageId,hostPid:i+100,startedAt:live[cid].State.StartedAt};
+ }
+ const inputs={before:beforeRef,selection:selectionRef,created:f.file('observer-created.json',created),startAcks:f.file('observer-start-acks.json',acks),runId:state.runId,engineId:authority.engineId,ob3Authority:f.file('next-root-authority.json',nextAuthority)};
+ let execs=0;const transport=argv=>{
+  if(JSON.stringify(argv)===JSON.stringify(['info','--format','{{json .}}']))return JSON.stringify({ID:inputs.engineId});
+  if(argv[0]==='ps'){const role=argv.at(-1).split('=').at(-1);const row=Object.values(live).find(row=>row.Config.Labels['com.docker.compose.service']===role&&row.State.Running);return row?.Id||'';}
+  if(argv[0]==='inspect'){assert(live[argv[1]]);return JSON.stringify([live[argv[1]]]);}
+  assert.equal(argv[0],'exec');assert.notEqual(argv[1],bureauBefore.containerId,'DEFERRED_ROLE_MUST_NOT_EXEC');execs++;
+  if(argv[2]==='readlink')return '/usr/local/bin/'+before.roles.find(row=>row.role===live[argv[1]].Config.Labels['com.docker.compose.service']).binary;
+  if(argv[2]==='sha256sum')return hashById[argv[1]]+'  '+argv[3];
+  assert.deepEqual(argv.slice(2),['cat','/proc/1/status']);return 'Uid:\t10001\t10001\t10001\t10001\nGid:\t10001\t10001\t10001\t10001\n';
+ };
+ return {observer,inputs,transport,live,execs:()=>execs,invoke:()=>observer.observeOb3(inputs,{readDocker:transport})};
+}
+test('controlled OB3 transport requests process facts for21 roles and validates both cached shapes',t=>{
+ const f=observerFixture(t),out=f.invoke();assert.equal(out.roles.length,22);assert(f.execs()>0);assert.equal(out.fullStackQualified,false);assert.equal(out.nativeRuntimeReady,false);assert.equal(out.ob3RuntimeReady,true);
+ const bureau=out.roles.find(row=>row.role==='passport-beta-bureau');assert.equal(bureau.hostPid,0);assert.equal(bureau.sourceFactsInherited,true);assert.equal(bureau.processExecutableSha256,null);
+ f.observer.validateOb3Observation(out);f.observer.validateOb3Observation({...out,schema:'marty.functional-mixed-runtime-binding/v2',mixedSourceStack:true,receiptDigests:{syntheticOnly:true}});
+ assert.deepEqual(f.observer.observe(f.inputs,{readDocker:f.transport}),out);
+});
+for(const fault of ['missing-role','foreign-image','wrong-native-source','uid','elf','healthy-bureau','bureau-pid','fake-bureau-elf','unknown-schema','fullstack','retained-kind','gid'])test('cached OB3 facts refuse '+fault,t=>{
+ const f=observerFixture(t),out=f.invoke(),first=out.roles.find(row=>row.role==='auth'),bureau=out.roles.find(row=>row.role==='passport-beta-bureau');
+ if(fault==='retained-kind')out.roles.find(row=>row.role==='retained-0').kind='FOREIGN_KIND';if(fault==='gid')first.effectiveGid=0;if(fault==='missing-role')out.roles.pop();if(fault==='foreign-image')first.imageId='sha256:'+'f'.repeat(64);if(fault==='wrong-native-source')first.source='f'.repeat(40);if(fault==='uid')first.effectiveUid=0;if(fault==='elf')first.processExecutableSha256='f'.repeat(64);if(fault==='healthy-bureau')bureau.health='healthy';if(fault==='bureau-pid')bureau.hostPid=123;if(fault==='fake-bureau-elf')bureau.processExecutableSha256=bureau.sha256;if(fault==='unknown-schema')out.schema='marty.other/v1';if(fault==='fullstack')out.fullStackQualified=true;assert.throws(()=>f.observer.validateOb3Observation(out));
+});

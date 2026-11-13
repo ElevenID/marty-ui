@@ -18,8 +18,9 @@ const {
 } = require('./beta-demo-resource-helpers');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin, presentWalletRequest } = require('./demo-wallet-session');
 const { VIDEO_SIZE, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
+const { applyLocalNativeReadiness } = require('./demo-live-evidence');
 const {
-  GRANT, assertions, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
+  GRANT, assertions, validateFunctionalSupportReport, awaitNaturalExpiry, credentialContract, expiryWindow, hash,
   loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture, validateIssuerSetup, validateLoginSetup,
 } = require('./beta-membership-support-contract');
 const {isCredentialLoginDestinationUrl, requireCompletedLoginNonce} = require('./beta-credential-contract');
@@ -68,6 +69,7 @@ async function prepareFixture(artifactDir, env, lane, evidence) {
   const stat = fs.statSync(filename);
   assert.ok(stat.isFile() && stat.size > 0 && stat.size <= 64 * 1024, 'A bounded regular fixture JSON file is required');
   const bytes = fs.readFileSync(filename);
+  if(env.DEMO_D05_FIXTURE_SHA256!==undefined)assert.equal(sha256(bytes),env.DEMO_D05_FIXTURE_SHA256,'Owned supporting fixture changed');
   // Validate before copying; private/provider credentials are not fixture data.
   const proposed = validateFixture(JSON.parse(bytes.toString('utf8')), lane);
   assert.equal(proposed.applicant.email, env.TEST_APPLICANT_EMAIL, 'Fixture must name the existing synthetic applicant account');
@@ -424,6 +426,19 @@ async function present({ authPage, walletPage, authContext, operator, fixture, o
     walletHttpStatus: response.status(), authFailureVisible: failureVisible, authenticated: false, finalizeSetCookie: false };
 }
 
+function finalizeSupportReport(report,evidence,{record,cleanupComplete},environment=process.env){
+  report.behaviorAssertions=assertions(report.lane,report.checks);
+  const ready=!report.failure&&!report.error&&report.finalizationFailures.length===0&&cleanupComplete===true&&Object.values(report.behaviorAssertions).every(Boolean);
+  report.releaseReady=record===true&&ready;report.functionalReady=false;report.operations_verified=false;
+  if(record===false){
+    assert(evidence?.functionalRuntimeBinding&&evidence.ownedWalletBinding,'Functional supporting lane requires owned runtime and wallet evidence');
+    applyLocalNativeReadiness(report,evidence,{ready,cleanupComplete},environment);
+    if(report.functionalReady)validateFunctionalSupportReport(report,report.lane,{wallet:evidence.ownedWalletBinding,fixtureSha256:report.fixtureSha256,entrypointSha256:report.source.sha256});
+    report.releaseReady=false;
+  }
+  report.status=report.releaseReady||report.functionalReady?'PASS':'BLOCKED';return report.releaseReady||report.functionalReady;
+}
+
 async function main(lane = process.argv[2], env = process.env) {
   const dir = createArtifactDir(ROOT, `d05-${lane || 'blocked'}-${Date.now()}`, env);
   assert.ok(!fs.existsSync(path.join(dir, 'report.json')), 'Refuse to overwrite an existing attempt');
@@ -432,7 +447,7 @@ async function main(lane = process.argv[2], env = process.env) {
     releaseReady: false, status: 'BLOCKED', runId: env.DEMO_EXECUTION_EVIDENCE_RUN_ID || null,
     source: { entrypoint: 'tests/scripts/audit-beta-membership-support.js', sha256: sha256(fs.readFileSync(__filename)) },
     observed: {}, cleanup: { ok: false }, finalizationFailures: [], recording: env.RECORD_VIDEO === '1' };
-  let browser, evidence, controller, walletSession, walletContext, authContext;
+  let browser, evidence, controller, walletSession, walletContext, authContext,adminContext,applicantContext,sessionRetirement,closeOwnedWallet;
   let walletVideo, authVideo, fixture, settings;
   let walletAcquisitionAttempted = false;
   const contexts = [];
@@ -442,19 +457,23 @@ async function main(lane = process.argv[2], env = process.env) {
     assert.equal(sha256(fs.readFileSync(env.DEMO_EXECUTION_EVIDENCE_HELPER)), env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256,
       'Recorder evidence helper digest mismatch');
     evidence = await require(env.DEMO_EXECUTION_EVIDENCE_HELPER).createLiveEvidenceClient();
+    if(!settings.record)assert(evidence.functionalRuntimeBinding&&evidence.ownedWalletBinding,'Functional support requires owned runtime/wallet');
+    const ownedSessions=require('./verify-beta-credential-login');sessionRetirement=ownedSessions.membershipSessionRetirement(report.runId);closeOwnedWallet=ownedSessions.closeControlSession;
     report.stage = 'fixture_schema';
     const input = await prepareFixture(dir, env, lane, evidence);
     fixture = input.fixture; report.fixtureSha256 = input.sha256;
     const { chromium } = require('@playwright/test');
     const { login, waitFor } = require('./audit-beta-credential-lifecycle');
     browser = await chromium.launch({ headless: env.HEADED !== '1' });
-    const adminContext = await browser.newContext(); contexts.push(adminContext);
-    const applicantContext = await browser.newContext(); contexts.push(applicantContext);
+    adminContext = await browser.newContext(); contexts.push(adminContext);
+    applicantContext = await browser.newContext(); contexts.push(applicantContext);
     const operator = await adminContext.newPage(); evidence.bindPage(operator);
     const applicantPage = await applicantContext.newPage(); evidence.bindPage(applicantPage);
     report.stage = 'browser_authentication';
     await login(operator, env.TEST_ADMIN_EMAIL, env.TEST_ADMIN_PASSWORD);
+    await sessionRetirement.capture('operator',adminContext);
     await login(applicantPage, env.TEST_APPLICANT_EMAIL, env.TEST_APPLICANT_PASSWORD);
+    await sessionRetirement.capture('applicant',applicantContext);
     controller = createSupportController({ operator, applicantPage, fixture, lane, origin: settings.origin,
       runId: report.runId, waitFor, onOwned: (owned) => { report.ownedApplications = JSON.parse(JSON.stringify(owned)); } });
     report.stage = 'fixture_bindings';
@@ -479,7 +498,7 @@ async function main(lane = process.argv[2], env = process.env) {
     const walletPage = await walletContext.newPage(); evidence.bindPage(walletPage); walletVideo = walletPage.video();
     const authPage = await authContext.newPage(); evidence.bindPage(authPage); authVideo = authPage.video();
     const step = (page, title, detail) => showStep(page, title, detail, { enabled: settings.record,
-      eyebrow: 'D05 supporting evidence · First-party Rust test wallet' });
+      eyebrow: 'D05 supporting evidence - First-party Rust test wallet' });
     const inventory = () => walletInventory(walletContext, walletSession);
     assert.equal((await inventory()).length, 0);
     assert.equal((await authMe(authContext, settings.origin)).authenticated, false);
@@ -567,6 +586,7 @@ async function main(lane = process.argv[2], env = process.env) {
     report.stage = 'trusted_login_recovery';
     report.observed.recovery = await present({ authPage, walletPage, authContext, operator, fixture, ...settings,
       waitFor, issuerDid: fixture.trusted.issuerDid, allowed: true, step });
+    await sessionRetirement.capture('credential-login',authContext);
     report.checks.trusted_login_recovery = report.observed.recovery.authenticated === true;
     await step(authPage, '5. Trusted sign-in opens the portal',
       'The real credential login completed with the trusted issuer and the existing synthetic account.');
@@ -584,6 +604,12 @@ async function main(lane = process.argv[2], env = process.env) {
         report.checks.configuration_unchanged = report.observed.configurationReadback.ok;
       } catch (error) { report.finalizationFailures.push({ operation: 'configuration_readback', type: error.name }); }
     }
+    if(sessionRetirement){
+      try{for(const [index,context]of [adminContext,applicantContext,authContext].entries())if(context&&(await context.cookies(settings.origin)).some(cookie=>cookie.name==='sessionId'))await sessionRetirement.capture('support-'+index,context);
+        report.originalSessionRetirement=await sessionRetirement.retire();report.authoringSessionsRetired=report.originalSessionRetirement.complete===true;
+        if(!report.authoringSessionsRetired)report.finalizationFailures.push({operation:'original_beta_sessions',type:'Unconfirmed'});
+      }catch(error){report.finalizationFailures.push({operation:'original_beta_sessions',type:error.name});}
+    }
     let authClosed = !authContext;
     if (authContext) {
       try {
@@ -596,7 +622,7 @@ async function main(lane = process.argv[2], env = process.env) {
     }
     let walletClosed = !walletAcquisitionAttempted;
     if (walletSession) {
-      try { await walletSession.close(); walletClosed = walletSession.evidence.closed === true; }
+      try { report.closedWalletSession=await closeOwnedWallet(walletSession,walletContext);walletClosed=walletSession.evidence.closed===true; }
       catch (error) { report.finalizationFailures.push({ operation: 'wallet_session_close', type: error.name }); }
     } else if (walletAcquisitionAttempted) report.finalizationFailures.push({ operation: 'wallet_session_acquisition', outcome: 'UNCONFIRMED' });
     report.checks.fixture_cleanup = report.cleanup.ok === true && authClosed && walletClosed;
@@ -617,10 +643,9 @@ async function main(lane = process.argv[2], env = process.env) {
       try { await browser.close(); }
       catch (error) { report.finalizationFailures.push({ operation: 'browser_close', type: error.name }); }
     }
-    report.behaviorAssertions = assertions(lane, report.checks);
-    report.releaseReady = !report.failure && report.finalizationFailures.length === 0
-      && Object.values(report.behaviorAssertions).every(Boolean);
-    report.status = report.releaseReady ? 'PASS' : 'BLOCKED';
+    report.cleanup.complete=report.cleanup.ok===true&&authClosed&&walletClosed&&report.authoringSessionsRetired===true&&report.finalizationFailures.length===0;
+    try{finalizeSupportReport(report,evidence,{record:settings?.record,cleanupComplete:report.cleanup.complete},env);}
+    catch(error){report.releaseReady=false;report.functionalReady=false;report.operations_verified=false;report.status='BLOCKED';report.finalizationFailures.push({operation:'functional_report',type:error.name});}
     report.finishedAt = new Date().toISOString();
     const save = () => {
       fs.writeFileSync(path.join(dir, EVIDENCE_FILE), `${JSON.stringify({ schemaVersion: 1, kind: 'd05-support-evidence',
@@ -632,15 +657,15 @@ async function main(lane = process.argv[2], env = process.env) {
     };
     try {
       save();
-      if (report.releaseReady) await evidence.complete();
+      if (report.releaseReady||report.functionalReady) await evidence.complete();
     } catch (error) {
-      report.releaseReady = false; report.status = 'BLOCKED';
+      report.releaseReady = false;report.functionalReady=false;report.operations_verified=false; report.status = 'BLOCKED';
       report.finalizationFailures.push({ operation: 'evidence_finalization', type: error.name });
       save();
     } finally { evidence?.close(); }
     console.log(JSON.stringify({ lane, status: report.status, releaseReady: report.releaseReady,
       stage: report.stage, failure: report.failure || null, behaviorAssertions: report.behaviorAssertions }));
-    if (!report.releaseReady) process.exitCode = 1;
+    if (!report.releaseReady&&!report.functionalReady) process.exitCode = 1;
   }
   return report;
 }
@@ -648,5 +673,5 @@ async function main(lane = process.argv[2], env = process.env) {
 if (require.main === module) main().catch((error) => {
   console.error(JSON.stringify({ failed: true, type: error.name })); process.exitCode = 1;
 });
-module.exports = { EVIDENCE_FILE, FIXTURE_FILE, createSupportController, guards, main,
+module.exports = { finalizeSupportReport, EVIDENCE_FILE, FIXTURE_FILE, createSupportController, guards, main,
   prepareFixture, present, receive, stableConfiguration, walletInventory,authMe,startLogin,rebindLoginInstance };
