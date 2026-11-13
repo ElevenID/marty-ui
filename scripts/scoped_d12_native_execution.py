@@ -65,6 +65,90 @@ def exact_exported_sql(prepared, inputs, profile=CURRENT_PROFILE):
                 "D12_EXACT_GIT_EXPORTED_MIGRATION_REQUIRED")
 
 
+def created_recovery_checkpoint(inputs, state, intent, recovery):
+    """Bind a Root-reconciled acknowledged create, never repeat its commands."""
+    from scoped_native_database import RECOVERY_SOURCE_FIELDS, RECOVERY_TRUST_FIELDS, _recovery_trust_models
+    from scoped_native_runtime import validate_journal_readback
+    def load(ref):
+        return json.loads(read_ref(ref).read_bytes())
+    def closed_job(ref, expected):
+        job = load(ref)
+        require(job.get("state") == expected and type(job.get("exitCode")) is int
+                and job["exitCode"] == (0 if expected == "COMPLETE" else 1)
+                and job.get("jobClosed") is True and job.get("terminalActiveProcesses") == 0
+                and all(job.get(k) is False for k in ("forcedTermination", "timedOut", "cancelled", "hostMarginBreached")),
+                "D12_CREATED_RECOVERY_NORMAL_JOB_REQUIRED")
+    require(recovery.get("schema") == "marty.d12-created-recovery/v1"
+            and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME")
+            and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
+            and recovery.get("runId") == inputs["runId"], "D12_CREATED_RECOVERY_AUTHORITY_REQUIRED")
+    original, original_state = load(recovery["originalInputs"]), load(recovery["originalOperationState"])
+    previous = load(recovery["previousRecoveryAuthority"])
+    require(previous.get("schema") == "marty.d12-fence-install-recovery/v1"
+            and previous.get("dispatchAuthorized") is True and previous.get("draftOnly") is False
+            and previous.get("runId") == inputs["runId"]
+            and previous["originalApplyIntent"] == recovery["originalApplyIntent"]
+            and load(recovery["originalApplyIntent"]) == intent,
+            "D12_CREATED_RECOVERY_PRIOR_AUTHORITY_CHANGED")
+    require(state == original_state and state.get("schema") == "marty.d12-current-native-operation/v1"
+            and state.get("phase") == "EFFECT_ACKNOWLEDGED" and state.get("acknowledgedStep") == "CREATE_SELECTED"
+            and state.get("pendingStep") is None and state.get("pendingArgv") is None and state.get("pendingRequest") is None
+            and state.get("runId") == inputs["runId"] and state.get("sourceRevision") == inputs["uiRevision"]
+            and state.get("coreRevision") == inputs["coreRevision"] and state.get("scope") == "FUNCTIONAL_ONLY"
+            and state.get("releaseQualified") is False and state.get("recordingQualified") is False
+            and state.get("recoveryAuthority") == recovery["previousRecoveryAuthority"]
+            and state.get("databaseProof") == recovery["databaseProof"]
+            and state.get("verifiedDatabase") == recovery["verifiedDatabase"]
+            and state.get("steps") == [], "D12_ONLY_ACKNOWLEDGED_CREATE_RECOVERABLE")
+    require(intent.get("runId") == inputs["runId"] and intent.get("selectionSha256") == inputs["selection"]["sha256"]
+            and intent.get("runtimeBefore") == inputs["runtimeBefore"]
+            and intent.get("databaseBefore") == inputs["databaseBefore"], "D12_CREATED_RECOVERY_INTENT_CHANGED")
+    require(recovery.get("sourceMap") == {key:{"original":original[key],"recovery":inputs[key]} for key in RECOVERY_SOURCE_FIELDS}
+            and all(previous["sourceMap"][key]["recovery"] == original[key] for key in RECOVERY_SOURCE_FIELDS),
+            "D12_CREATED_RECOVERY_SOURCE_MAP_CHANGED")
+    require(recovery.get("trustDataMap") == {key:{"original":original.get(key),"recovery":inputs.get(key)} for key in RECOVERY_TRUST_FIELDS},
+            "D12_CREATED_RECOVERY_TRUST_MAP_CHANGED")
+    ignored = RECOVERY_SOURCE_FIELDS | RECOVERY_TRUST_FIELDS | {"d12Authority", "quiescence"}
+    require({k:v for k,v in original.items() if k not in ignored} == {k:v for k,v in inputs.items() if k not in ignored},
+            "D12_CREATED_RECOVERY_INPUT_DRIFT")
+    _recovery_trust_models(original, inputs)
+    old_lease,new_lease=load(original["runScopedTrustLeaseProof"]),load(inputs["runScopedTrustLeaseProof"])
+    replacing=recovery["operation"]=="REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"
+    require(recovery.get("replaceCredentialGeneration",False) is replacing,
+            "D12_CREATED_REPLACEMENT_AUTHORITY_REQUIRED")
+    require((old_lease["generationDirectory"]!=new_lease["generationDirectory"]) if replacing
+            else (old_lease["generationDirectory"]==new_lease["generationDirectory"]),
+            "D12_CREATED_CREDENTIAL_GENERATION_CHANGED")
+    closed_job(recovery["reconciliationJob"], "COMPLETE")
+    closed_job(recovery["selected22Job"], "COMPLETE")
+    closed_job(recovery["failedCutoverJob"], "FAILED")
+    observed = load(recovery["journalRead"])
+    require(isinstance(observed,list) and len(observed)==1 and observed[0].get("state")=="EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE"
+            and observed[0].get("mountReadOnly") is True, "D12_CREATED_AUTHORITATIVE_JOURNAL_REQUIRED")
+    files=observed[0]["files"]
+    for name,ref,value in (("build-state.json",recovery["originalOperationState"],state),
+                           ("build-apply-intent.json",recovery["originalApplyIntent"],intent)):
+        exact=validate_journal_readback({"storedBytesBase64":files[name].get("storedBytesBase64"),
+            "sha256":files[name].get("sha256"),"value":files[name].get("document")})
+        require(exact==read_ref(ref).read_bytes(),"D12_CREATED_CHECKPOINT_STORED_BYTES_CHANGED")
+        require(files[name].get("present") is True and files[name].get("document")==value
+                and files[name].get("sha256")==ref["sha256"] and files[name].get("bytes")==ref["bytes"],
+                "D12_CREATED_CHECKPOINT_READ_CHANGED")
+    require(all(files[name].get("present") is False for name in ("build-receipt.json","configuration-receipt.json")),
+            "D12_CREATED_CHECKPOINT_ALREADY_CONSUMED")
+    backend=load(inputs["operationJournal"])
+    require(all(observed[0]["root"][key]==backend["rootProof"][key] for key in ("device","inode","uid","mode")),
+            "D12_CREATED_JOURNAL_ROOT_CHANGED")
+    proof, verified = load(recovery["databaseProof"]), load(recovery["verifiedDatabase"])
+    dbstate=load(proof["operationState"])
+    require(dbstate.get("phase")=="DATABASE_MAINTENANCE_COMPLETED" and dbstate.get("runId")==inputs["runId"]
+            and dbstate.get("executorSource")==original["executorSource"]
+            and verified.get("operationState")==dbstate and verified.get("databaseIdentity")==dbstate["databaseIdentity"]
+            and dbstate.get("quiescenceSha256")==recovery["quiescence"]["sha256"]
+            and previous["quiescence"]==recovery["quiescence"], "D12_COMPLETED_DATABASE_CHECKPOINT_CHANGED")
+    return original, proof, verified
+
+
 class D12CurrentExecution:
     def __init__(self, context, inputs, journal, *, read_only_preflight=False):
         self.g, self.i, self.store = context, inputs, journal
@@ -262,10 +346,61 @@ class D12CurrentExecution:
         self.state["recoveryAuthority"] = recovery_ref
         return self._finish_after_database(database, before, preview, overlay_ref, database_proof)
 
+    def resume_after_create_selected(self, recovery_ref):
+        return self._resume_created(recovery_ref, replace_credentials=False)
+
+    def replace_created_credentials_and_resume(self, recovery_ref):
+        return self._resume_created(recovery_ref, replace_credentials=True)
+
+    def _resume_created(self, recovery_ref, *, replace_credentials):
+        require(type(replace_credentials) is bool,"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
+        require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
+        require(self.profile=="d05-membership-current-functional","D12_CREATED_RECOVERY_CURRENT10_ONLY")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        require(recovery.get("operation")==("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME" if replace_credentials
+                else "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),"D12_CREATED_RECOVERY_OPERATION_CHANGED")
+        original, proof, verified=created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
+            self.store.read("build-apply-intent.json"), recovery)
+        database, before, preview, overlay_ref = self.recovery_preflight(recovery_ref)
+        # Recheck after all fresh reads and before the first new durable write.
+        created_recovery_checkpoint(self.i, self.store.read("build-state.json"),
+            self.store.read("build-apply-intent.json"), recovery)
+        database.i={**self.i,"quiescence":recovery["quiescence"]}
+        dbstate=json.loads(read_ref(proof["operationState"]).read_bytes())
+        from scoped_native_database import schema_steps
+        command_steps={step for command in ("migrate","verify-owned-schema")
+            for step,_role in schema_steps(self.profile=="d05-membership-current-functional",command)}
+        database.commands=[json.loads(read_ref(op["receipt"]).read_bytes()) for op in dbstate["operations"]
+            if op["stepId"] in command_steps]
+        require({op["stepId"] for op in dbstate["operations"] if op["stepId"] in command_steps}==command_steps,
+                "D12_COMPLETED_SCHEMA_COMMAND_SET_CHANGED")
+        checked=database.node("verify",proof=proof,commands=database.commands,context={
+            "runId":self.i["runId"],"selectionSha256":self.i["selection"]["sha256"],
+            "executorSource":original["executorSource"],"rolloutProfile":self.profile,
+            "sourceRevision":self.build_profile.ui_revision,"coreRevision":self.build_profile.core_revision,
+            "baseline":database.baseline_refs,"approvedDatabaseBeforeSha256":self.i["databaseBefore"]["sha256"],
+            "approvedEngineId":database.engine_id,"tenantId":database.tenant_id})
+        require(checked==verified,"D12_COMPLETED_DATABASE_PROOF_REVERIFY_CHANGED")
+        replacement_preimage=(self.g["prepare_created_credential_replacement"](recovery_ref)
+            if replace_credentials else None)
+        self.state=json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
+        self.record("POST_CREATE_RECOVERY_VERIFIED",recoveryAuthority=recovery_ref,
+                    originalOperationState=recovery["originalOperationState"])
+        if replace_credentials:
+            # A new authorized effect, with its own durable pending/ack state;
+            # neither the original SQL nor the original create is replayed.
+            self.record("CREATED_CREDENTIAL_REPLACEMENT_AUTHORIZED",replacementAuthority=recovery_ref,
+                priorCreatedSnapshot=recovery["selected22"],replacementPreimage=replacement_preimage,priorCredentialGeneration=original["runScopedTrustLeaseProof"],
+                nextCredentialGeneration=self.i["runScopedTrustLeaseProof"])
+            arguments=overlay.compose_recreate_arguments(self.i["composeArguments"],overlay_ref["path"],
+                self.profile,list(self.roles),no_start=True)
+            self.command(database,"REPLACE_CREATED_CREDENTIAL_GENERATION",arguments)
+        return self._finish_after_create(database,before,preview,proof)
+
     def _finish_after_database(self, database, before, preview, overlay_ref, database_proof):
         i, g = self.i, self.g
-        stopped = json.loads(read_ref(database.i["quiescence"]).read_bytes())
-        stopped_rows = maintenance.exact_roles(stopped, self.profile)
+        # Preserve the original pre-create integrity check across the split.
+        read_ref(database.i["quiescence"])
         verified_database = database.node("verify", proof=database_proof,
             commands=database.commands, context={"runId": i["runId"],
                 "selectionSha256": i["selection"]["sha256"],
@@ -284,6 +419,11 @@ class D12CurrentExecution:
         recreate = overlay.compose_recreate_arguments(i["composeArguments"], overlay_ref["path"],
                     self.profile, list(self.roles), no_start=True)
         self.command(database, "CREATE_SELECTED", recreate)
+        return self._finish_after_create(database, before, preview, database_proof)
+
+    def _finish_after_create(self, database, before, preview, database_proof):
+        i, g = self.i, self.g
+        stopped_rows = maintenance.exact_roles(json.loads(read_ref(database.i["quiescence"]).read_bytes()), self.profile)
         self.record("CREATE_INSPECTION_PENDING", pendingStep="INSPECT_CREATED")
         created = self.inspect_all22()
         old_rows = maintenance.exact_roles(before, self.profile)
