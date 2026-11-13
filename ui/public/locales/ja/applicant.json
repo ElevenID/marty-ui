@@ -80,5 +80,32 @@
       "revoked": "この資格情報は失効しています。発行者にお問い合わせください。",
       "additionalInformation": "発行者が追加情報を求めています。情報の提供方法については発行者にお問い合わせください。"
     }
+  },
+  "devices": {
+    "loading": "デバイスを読み込み中",
+    "searchLabel": "デバイスを検索",
+    "noMatches": "検索に一致するデバイスはありません。",
+    "clearSearch": "検索をクリア",
+    "tableLabel": "登録済みデバイス",
+    "notReported": "報告なし",
+    "signInRequired": "登録済みデバイスを表示するにはサインインしてください。",
+    "tableHeaders": {
+      "status": "登録状態"
+    },
+    "status": {
+      "inactive": "無効"
+    },
+    "actions": {
+      "unregisterNamed": "デバイス {{deviceId}} の登録を解除"
+    },
+    "errorUnregisteringFallback": "デバイスの登録を解除できませんでした。もう一度お試しください。",
+    "info": "登録済みデバイスを確認し、使用しなくなったデバイスの登録を解除できます。登録が有効であっても、デバイスがオンラインであるとは限りません。",
+    "empty": {
+      "description": "アカウントに登録したデバイスがここに表示されます。"
+    },
+    "unregisterDialog": {
+      "message": "このデバイスの登録を解除しますか？登録は無効になります。再度使用するには、デバイスを登録し直してください。"
+    },
+    "description": "デバイスの登録を管理します。"
   }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { act, fireEvent, render, renderWithRouter, screen, waitFor } from '@test/utils';
 import { Link, Route, Routes } from 'react-router';
 
@@ -215,6 +215,10 @@ function deferred<T>() {
 }
 
 describe('ApplicationForm', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockPreview.isPreview = false;
@@ -270,30 +274,48 @@ describe('ApplicationForm', () => {
     mockAuthState.organizationId = 'org-1';
   });
 
-  it.each([false, true])('simulates preview submission without applicant, credential or evidence writes (one click=%s)', async (oneClick) => {
+  it.each(['EmployeeCredential', 'MemberCredential', 'open_badge'])('simulates %s preview without network, writes or wallet launch', async (credentialType) => {
+    const oneClick = credentialType !== 'EmployeeCredential';
+    const networkRequest = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected preview network request'));
+    const openWindow = vi.spyOn(window, 'open').mockImplementation(() => null);
     mockPreview.isPreview = true;
     mockLocationState.location.search = '?canvas_lti_state=stale-launch&application_template_id=stale-template';
     const { user } = render(<ApplicationForm previewContext={{
-      credential: { id: 'preview-credential', credential_type: oneClick ? 'MemberCredential' : 'EmployeeCredential',
+      credential: { id: 'preview-credential', credential_type: credentialType,
         required_fields: [], optional_fields: [], custom_fields: [], field_validation_rules: {} },
       applicationTemplate: { id: 'preview-template', name: 'Actual preview template', credential_template_id: 'preview-credential',
         status: 'DRAFT', form_fields: oneClick ? [{ field_id: 'email', field_type: 'EMAIL', required: true }] : [], evidence_requirements: [] },
     }} />);
-    expect(screen.getByText('Actual preview template')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Actual preview template' })).toBeInTheDocument();
     expect(screen.queryByText('ElevenID Login Credential')).not.toBeInTheDocument();
     expect(mockGet).not.toHaveBeenCalled();
     if (oneClick) {
       expect(screen.queryByText(/^Instant/)).not.toBeInTheDocument();
-      await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+      expect(screen.getByText('applicationForm.oneClick.previewHelper')).toBeInTheDocument();
+      expect(screen.queryByText('applicationForm.oneClick.walletHelper')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Add to Wallet' })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'applicationForm.oneClick.previewAction' }));
     } else {
       if (screen.queryByTestId('next-step-btn')) await user.click(screen.getByTestId('next-step-btn'));
       await user.click(screen.getByTestId('accept-terms-checkbox'));
       await user.click(screen.getByTestId('submit-application-btn'));
     }
     expect(await screen.findByTestId('application-submitted')).toHaveTextContent('applicationForm.success.previewTitle');
-    for (const mutation of [mockCreateApplicant, mockCreateApplication, mockSubmitApplication,
-      mockSubmitApplicationEvidence, mockUpdateApplicantProfile, mockEnrollBiometric, mockGenerateIssuanceOffer, mockPost]) {
-      expect(mutation).not.toHaveBeenCalled();
+    expect(screen.getByText('applicationForm.success.previewNote')).toBeInTheDocument();
+    if (oneClick) {
+      expect(screen.getByText('applicationForm.oneClick.previewMessage', { exact: false })).toBeInTheDocument();
+      expect(screen.queryByText('applicationForm.success.previewMessage', { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByText('applicationForm.success.dataCollected')).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByText('applicationForm.success.previewMessage', { exact: false })).toBeInTheDocument();
+      expect(screen.getByText('applicationForm.success.dataCollected')).toBeInTheDocument();
+    }
+    expect(screen.queryByTestId('claim-credential-dialog')).not.toBeInTheDocument();
+    for (const effect of [mockGet, mockGetApplicant, mockListApplications, mockCreateApplicant,
+      mockCreateApplication, mockSubmitApplication, mockSubmitApplicationEvidence, mockUpdateApplicantProfile,
+      mockEnrollBiometric, mockGenerateIssuanceOffer, mockSupersedeApplication, mockPost,
+      networkRequest, openWindow, mockNavigate]) {
+      expect(effect).not.toHaveBeenCalled();
     }
   });
 

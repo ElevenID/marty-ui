@@ -91,9 +91,9 @@
   },
   "devices": {
     "title": "Device Management",
-    "description": "Manage your registered devices for secure credential access.",
+    "description": "Manage your device registrations.",
     "refresh": "Refresh",
-    "info": "Registered devices can receive push notifications and securely sign verification challenges. Remove devices you no longer use to maintain security.",
+    "info": "View your device registrations and unregister devices you no longer use. An active registration does not indicate whether a device is online.",
     "errorLoading": "Failed to load devices",
     "errorUnregistering": "Failed to unregister device: {{message}}",
     "tableHeaders": {
@@ -103,26 +103,29 @@
       "registered": "Registered",
       "lastSeen": "Last Seen",
       "security": "Security",
-      "actions": "Actions"
+      "actions": "Actions",
+      "status": "Registration"
     },
     "status": {
       "active": "Active",
       "secured": "Secured",
-      "basic": "Basic"
+      "basic": "Basic",
+      "inactive": "Inactive"
     },
     "security": {
       "hasPublicKey": "Device has registered a public key for challenge signing"
     },
     "empty": {
       "title": "No Devices Registered",
-      "description": "Register your mobile wallet app to receive push notifications and use secure verification features."
+      "description": "Devices appear here after they are registered with your account."
     },
     "actions": {
-      "unregister": "Unregister device"
+      "unregister": "Unregister device",
+      "unregisterNamed": "Unregister device {{deviceId}}"
     },
     "unregisterDialog": {
       "title": "Unregister Device?",
-      "message": "Are you sure you want to unregister this device? This will prevent it from receiving push notifications and using secure verification features.",
+      "message": "Unregister this device? Its registration will become inactive. To use it again, register the device again.",
       "deviceId": "Device ID: {{deviceId}}",
       "platform": "Platform: {{platform}}",
       "confirm": "Unregister",
@@ -130,7 +133,15 @@
     },
     "formatDate": {
       "never": "Never"
-    }
+    },
+    "loading": "Loading devices",
+    "searchLabel": "Search devices",
+    "noMatches": "No devices match your search.",
+    "clearSearch": "Clear search",
+    "tableLabel": "Registered devices",
+    "notReported": "Not reported",
+    "signInRequired": "Sign in to view your registered devices.",
+    "errorUnregisteringFallback": "Failed to unregister the device. Try again."
   },
   "settings": {
     "title": "Settings",
@@ -243,17 +254,23 @@
       "uploaded": "Uploaded",
       "terms": "I certify that all information provided is accurate and complete. I understand that providing false information may result in denial of my application."
     },
+    "oneClick": {
+      "previewAction": "Preview credential request",
+      "previewHelper": "Simulate the request without submitting an application or opening a wallet.",
+      "previewMessage": "In the live experience, the applicant would be prompted to receive the credential in a wallet when it is ready.",
+      "walletHelper": "You'll be prompted to open your wallet to receive this credential."
+    },
     "success": {
       "title": "Application Submitted!",
-      "previewTitle": "Preview: Application Would Be Submitted",
+      "previewTitle": "Preview complete",
       "message": "Your application has been submitted successfully.",
       "applicationId": "Application ID: {{id}}",
       "nextSteps": "You will receive updates on your application status via email. Redirecting to your applications page...",
       "viewApplications": "View My Applications",
       "dataCollected": "Application data collected:",
       "previewMode": "Preview Mode",
-      "previewMessage": "In production, this application would be submitted for review.",
-      "previewNote": "The applicant would receive confirmation and be able to track the application status."
+      "previewMessage": "In the live experience, this application would be submitted using the template's approval settings.",
+      "previewNote": "This was a simulation. No application was submitted, no credential was issued, and no wallet was opened."
     },
     "errors": {
       "noCredential": "Please select a credential from the catalog before starting an application."

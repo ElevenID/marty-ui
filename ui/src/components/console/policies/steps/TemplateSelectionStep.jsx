@@ -82,11 +82,9 @@ const policyOptionForCredentialTemplate = (template) => {
       holder_binding: 'device_key',
       freshness_requirements: {
         max_credential_age_seconds: 31536000,
-        max_proof_age_seconds: 300,
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
       metadata: {
         credential_template_id: template.id,
         credential_template_vct: template.vct || null,

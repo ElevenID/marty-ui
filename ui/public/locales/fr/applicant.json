@@ -80,5 +80,32 @@
       "revoked": "Ce justificatif a été révoqué. Contactez l’émetteur pour obtenir de l’aide.",
       "additionalInformation": "L’émetteur a besoin d’informations supplémentaires. Contactez-le pour savoir comment les fournir."
     }
+  },
+  "devices": {
+    "loading": "Chargement des appareils",
+    "searchLabel": "Rechercher des appareils",
+    "noMatches": "Aucun appareil ne correspond à votre recherche.",
+    "clearSearch": "Effacer la recherche",
+    "tableLabel": "Appareils enregistrés",
+    "notReported": "Non renseigné",
+    "signInRequired": "Connectez-vous pour consulter vos appareils enregistrés.",
+    "tableHeaders": {
+      "status": "Enregistrement"
+    },
+    "status": {
+      "inactive": "Inactif"
+    },
+    "actions": {
+      "unregisterNamed": "Désenregistrer l’appareil {{deviceId}}"
+    },
+    "errorUnregisteringFallback": "Impossible de désenregistrer l’appareil. Réessayez.",
+    "info": "Consultez vos appareils enregistrés et désenregistrez ceux que vous n’utilisez plus. Un enregistrement actif n’indique pas si un appareil est en ligne.",
+    "empty": {
+      "description": "Les appareils apparaissent ici une fois enregistrés auprès de votre compte."
+    },
+    "unregisterDialog": {
+      "message": "Désenregistrer cet appareil ? Son enregistrement deviendra inactif. Pour l’utiliser à nouveau, enregistrez-le à nouveau."
+    },
+    "description": "Gérez les enregistrements de vos appareils."
   }
 }

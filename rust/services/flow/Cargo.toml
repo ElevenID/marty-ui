@@ -58,6 +58,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 http.workspace = true
 tower.workspace = true
 

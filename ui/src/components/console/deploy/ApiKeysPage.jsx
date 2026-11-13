@@ -1,3 +1,4 @@
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
 /**
  * API Keys Page
  *
@@ -6,7 +7,7 @@
  * asynchronous completions and notifications.
  */
 
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -252,11 +253,7 @@ function ApiKeysContent({ organizationId, browserEntry }) {
   const dialogGeneration = useRef(0);
   const createPending = useRef(false);
   const startAction = useAsyncActionScope();
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    typeof window !== 'undefined' && window.location.href === browserEntry.href
-      && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.routeKey
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
@@ -959,26 +956,7 @@ export default function ApiKeysPage() {
   const { activeOrgId } = useConsole();
   const { user, isAuthenticated } = useAuth();
   const location = useLocation();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  // Organization/session replacements retain the committed browser entry even
-  // while a suspended destination has already changed the address bar.
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    routeKey: location.key,
-    generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const entry = { href: window.location.href, key: window.history.state?.key };
-    const handlePopState = () => {
-      if (window.location.href === entry.href && window.history.state?.key === entry.key) {
-        setReturnedEntry((value) => value + 1);
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location.key, location.pathname, location.search, location.hash]);
+  const browserEntry = useBrowserEntry(location);
   const principalId = isAuthenticated ? user?.user_id || user?.sub || user?.id || 'unknown-user' : 'signed-out';
   return <ApiKeysContent key={JSON.stringify([activeOrgId, principalId, location.key,
     location.pathname, location.search, location.hash, browserEntry.generation])}

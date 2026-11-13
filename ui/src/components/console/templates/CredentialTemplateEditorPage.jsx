@@ -1,3 +1,4 @@
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
@@ -40,10 +41,7 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
   const versionOperation = useMemo(() => createTemplateVersionOperation(organizationId, principalId, templateId), [organizationId, principalId, templateId]);
   const [versionRecord, setVersionRecord] = useState(null);
   const [journalError, setJournalError] = useState('');
-  const isCurrentBrowserEntry = useCallback(() => browserEntry.href === null || (
-    window.location.href === browserEntry.href && window.history.state?.key === browserEntry.key
-      && (browserEntry.key || 'default') === browserEntry.routeKey
-  ), [browserEntry]);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
 
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -200,21 +198,7 @@ export default function CredentialTemplateEditorPage() {
   const { templateId } = useParams();
   const location = useLocation();
   const { can, isLoading } = usePermissions();
-  const [returnedEntry, setReturnedEntry] = useState(0);
-  const browserEntry = useMemo(() => ({
-    href: typeof window === 'undefined' ? null : window.location.href,
-    key: typeof window === 'undefined' ? undefined : window.history.state?.key,
-    routeKey: location.key, generation: returnedEntry,
-  }), [location, returnedEntry]);
-  useLayoutEffect(() => {
-    if (typeof window === 'undefined') return undefined;
-    const entry = { href: window.location.href, key: window.history.state?.key };
-    const handlePopState = () => {
-      if (window.location.href === entry.href && window.history.state?.key === entry.key) setReturnedEntry((value) => value + 1);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [location.key, location.pathname, location.search, location.hash]);
+  const browserEntry = useBrowserEntry(location);
   if (!activeOrgId) return <Alert severity="error">Select an organization before editing credential templates.</Alert>;
   if (typeof templateId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(templateId)) return <Alert severity="error">Select a valid credential template.</Alert>;
   if (isLoading) return <LinearProgress />;
@@ -224,7 +208,7 @@ export default function CredentialTemplateEditorPage() {
   const principalId = user?.user_id || user?.sub || user?.id || null;
   return <CredentialTemplateEditor
     key={JSON.stringify([activeOrgId, templateId, principalId, isAuthenticated, canEdit, canVersion,
-      location.key, location.pathname, location.search, location.hash, returnedEntry])}
+      location.key, location.pathname, location.search, location.hash, browserEntry.generation])}
     organizationId={activeOrgId} principalId={principalId} templateId={templateId}
     canEdit={canEdit} canVersion={canVersion} browserEntry={browserEntry}
   />;

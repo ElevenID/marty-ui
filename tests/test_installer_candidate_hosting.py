@@ -11,8 +11,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_candidate_hosting as hosting
 import installer_release as release
 import installer_candidate_public_bootstrap as bootstrap
+import generate_bootstrap_hosting as generator
 
 FIXTURES = Path(__file__).resolve().parents[1] / "rust/crates/deployment-catalog/tests/fixtures"
+
+
+def test_standalone_parser_matches_canonical_generation():
+    source = Path(hosting.__file__).read_text(encoding="utf-8")
+    standalone = Path(bootstrap.__file__).read_text(encoding="utf-8")
+    assert generator.generated_bootstrap(source, standalone) == standalone
+
+
+@pytest.mark.parametrize("origin", [
+    "https://example.com", "https://xn--bcher-kva.example",
+    "https://xn--caf-dma.example:8443",
+])
+def test_valid_hostname_parity_including_internationalized_labels(origin):
+    value = configuration()
+    value["public_origin"] = origin
+    raw = encoded(value)
+    assert hosting.from_bytes(raw)["public_origin"] == origin
+    assert bootstrap._hosting_from_bytes(raw) == hosting.from_bytes(raw)
+
+
+@pytest.mark.parametrize("origin", [
+    "https://xn--a.example", "https://xn--.example", "https://EXAMPLE.com",
+    "https://example.com:443", "https://example.com@other.example",
+])
+def test_invalid_hostname_parity(origin):
+    for validate in (hosting.origin, bootstrap._hosting_origin):
+        with pytest.raises(ValueError):
+            validate(origin, address=False)
 
 
 def configuration(source="managed-ca", environment="production"):

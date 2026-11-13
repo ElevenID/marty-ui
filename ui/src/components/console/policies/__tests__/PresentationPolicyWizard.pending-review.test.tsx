@@ -167,7 +167,7 @@ describe('presentation policy pending review intent', () => {
     const toggle = screen.getByRole('switch', { name: /Activate immediately/i });
     expect(toggle).toBeDisabled(); expect(toggle).toBeChecked();
     const edits = screen.getAllByRole('button', { name: 'Edit' });
-    expect(edits).toHaveLength(6);
+    expect(edits).toHaveLength(5);
     for (const edit of edits) { expect(edit).toBeDisabled(); fireEvent.click(edit); }
     expect(screen.getByTestId('wizard.policy.back')).toBeDisabled();
     expect(screen.getByTestId('wizard.policy.submit')).toBeDisabled();

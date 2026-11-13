@@ -56,8 +56,8 @@ describe('Flow Management — vendor console interaction', () => {
     // ── Step 2: Check flow status presentation ─────────────
     const statusInfo = getFlowStatusPresentation(flows[0].status);
     expect(statusInfo.isDraft).toBe(true);
-    expect(statusInfo.isPublished).toBe(false);
-    expect(statusInfo.hasApplicantEntry).toBe(false);
+    expect(statusInfo.isActive).toBe(false);
+    expect(statusInfo).not.toHaveProperty('hasApplicantEntry');
 
     const approvalInfo = getApprovalStrategyPresentation(flows[0].approval_strategy);
     expect(approvalInfo).toBeDefined();
@@ -79,10 +79,10 @@ describe('Flow Management — vendor console interaction', () => {
     expect(publishedState.error).toBeNull();
     expect(publishedState.publicUrl).toBe('https://marty.dev/apply/flow-1');
 
-    // ── Step 4: Published flow status ───────────────────────
-    const publishedStatusInfo = getFlowStatusPresentation('PUBLISHED');
-    expect(publishedStatusInfo.isPublished).toBe(true);
-    expect(publishedStatusInfo.hasApplicantEntry).toBe(true);
+    // Activation alone does not prove a public applicant entry exists.
+    const activeStatusInfo = getFlowStatusPresentation('ACTIVE');
+    expect(activeStatusInfo.isActive).toBe(true);
+    expect(activeStatusInfo).not.toHaveProperty('hasApplicantEntry');
   });
 
   it('surfaces backend failures without returning mock flows', async () => {

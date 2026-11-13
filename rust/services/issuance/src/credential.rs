@@ -1470,6 +1470,8 @@ pub enum CredentialIssuanceError {
     InvalidNonce,
     #[error("invalid proof: {0}")]
     InvalidProof(String),
+    #[error("invalid credential request: {0}")]
+    InvalidCredentialRequest(String),
     #[error("proof nonce repository is unavailable")]
     NonceRepositoryUnavailable,
     #[error("mso_mdoc requires a verified holder public JWK")]

@@ -34,12 +34,12 @@ use futures_core::Stream;
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+#[cfg(test)]
+use marty_signing_grant::SigningOrigin;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     minter::{GrantMinter, GrantMinting},
 };
-#[cfg(test)]
-use marty_signing_grant::{GrantBinding, GrantError, SigningOrigin};
 #[path = "runtime_organization_defaults.rs"]
 mod organization_defaults;
 #[path = "runtime_signing_ceremony.rs"]
@@ -4269,7 +4269,6 @@ mod tests {
     include!("../tests/support/template_issuer_options_behavior.rs");
     include!("../tests/support/organization_defaults_behavior.rs");
     include!("../tests/support/ob3_client_contract_behavior.rs");
-    use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
         sync::atomic::{AtomicBool, Ordering},
@@ -4315,36 +4314,7 @@ mod tests {
 
     // Exercise Gateway's authorization and forwarding contract without a
     // plaintext KMS endpoint. Transit mint/verify has connected OpenBao tests.
-    struct ContractGrantMinter(SigningOrigin);
-
-    #[async_trait]
-    impl GrantMinting for ContractGrantMinter {
-        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
-            if binding.origin != self.0 {
-                return Err(GrantError::BindingMismatch);
-            }
-            let now = Utc::now().timestamp();
-            Ok(GrantEnvelope {
-                claims: GrantClaims {
-                    version: 1,
-                    origin: binding.origin,
-                    operation_id: binding.operation_id.to_owned(),
-                    organization_id: binding.organization_id.to_owned(),
-                    route: binding.route.to_owned(),
-                    service_id: binding.service_id.map(str::to_owned),
-                    issuer_did: binding.issuer_did.map(str::to_owned),
-                    key_reference: binding.key_reference.map(str::to_owned),
-                    key_purpose: binding.key_purpose.to_owned(),
-                    algorithm: binding.algorithm.to_owned(),
-                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
-                    issued_at: now,
-                    expires_at: now + 30,
-                    nonce: "contract-only-nonce".into(),
-                },
-                hmac: "not-a-production-hmac".into(),
-            })
-        }
-    }
+    use marty_signing_grant_test_support::ContractGrantMinter;
 
     #[test]
     fn gateway_originated_management_uses_the_selected_native_owner() {

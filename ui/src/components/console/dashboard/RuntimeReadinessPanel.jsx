@@ -1,14 +1,16 @@
 /**
  * Runtime Readiness Panel
  * 
- * Shows credential operation readiness reported by the gateway:
+ * Shows credential operation configuration reported by the gateway:
  * - Can issue credentials? (issuer configuration, deployment, issuance flow)
  * - Can verify credentials? (presentation policy, deployment)
  * - Is an issuer DID referenced by an active credential template?
  * - Last successful issuance timestamp
  * - Last successful verification timestamp
  * 
- * These readiness flags do not establish live signing-key validity.
+ * These resource flags do not establish live service health, complete setup,
+ * or signing-key validity. System Status and Setup Readiness report those
+ * separate observations and prerequisites.
  */
 
 import {
