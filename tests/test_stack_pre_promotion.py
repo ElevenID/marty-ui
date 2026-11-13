@@ -82,6 +82,8 @@ def run_check(
     review_main: str | None = None, gate_override: bytes | None = None,
     current_attempt: int = 1, history_invalid: bool = False,
     main_after_coordinates: str | None = None,
+    compatible_main: bool = False,
+    main_is_descendant: bool = True, history_invalid_after: bool = False,
 ) -> tuple[dict[str, bool], list[tuple[str, ...]]]:
     calls: list[tuple[str, ...]] = []
 
@@ -91,8 +93,8 @@ def run_check(
             return SOURCE
         if arguments == ("rev-parse", "refs/remotes/origin/main^{commit}"):
             return main
-        if arguments == ("merge-base", SOURCE, main):
-            return SOURCE if source_is_ancestor else "c" * 40
+        if arguments[0] == "merge-base":
+            return arguments[1] if main_is_descendant else SOURCE
         if arguments[0] == "ls-remote":
             return "existing" if tag_exists else ""
         return ""
@@ -120,8 +122,10 @@ def run_check(
 
     def fake_history(source, target, run_id, origin, reviewed, **kwargs) -> None:
         calls.append(("history", source, target, str(run_id), str(origin), str(reviewed)))
-        if not source_is_ancestor or history_invalid:
+        if not source_is_ancestor or history_invalid or target != source and not compatible_main:
             raise ValueError("unrelated or incomplete history")
+        if history_invalid_after and sum(call == ("main",) for call in calls) > 1:
+            raise ValueError("changed policy after coordinate reads")
 
     result = check(
         value, source_sha=SOURCE, claim_run_id="123", tag="v1.1.218",
@@ -139,8 +143,7 @@ def run_check(
 def test_fresh_claim_rechecks_main_tag_release_and_all_images() -> None:
     existing, calls = run_check(transaction())
     assert existing == {role: False for role in REQUIRED_IMAGE_ROLES}
-    assert ("git", "fetch", "--no-tags", "origin",
-            "+refs/heads/main:refs/remotes/origin/main") in calls
+    assert ("git", "fetch", "--no-tags", "origin", SOURCE) in calls
     assert ("git", "ls-remote", "--tags", "origin", "refs/tags/v1.1.218",
             "refs/tags/v1.1.218^{}") in calls
     assert ("release",) in calls
@@ -148,11 +151,39 @@ def test_fresh_claim_rechecks_main_tag_release_and_all_images() -> None:
 
 
 def test_automatic_qualification_cannot_advance_main_even_with_a_legacy_review() -> None:
-    with pytest.raises(PrePromotionError, match="changed after official qualification"):
+    with pytest.raises(PrePromotionError, match="permitted review history"):
         run_check(transaction(), main="b" * 40)
     reviewed = "b" * 40
     with pytest.raises(PrePromotionError, match="Official gate differs"):
         run_check(transaction(review_main=reviewed), main=reviewed, review_main=reviewed)
+
+
+def test_future_compatible_main_uses_original_candidate_without_changing_qualification() -> None:
+    current = "b" * 40
+    existing, calls = run_check(transaction(), main=current, compatible_main=True)
+    assert existing == {role: False for role in REQUIRED_IMAGE_ROLES}
+    assert ("history", SOURCE, current, str(RUN_ID), "1", "False") in calls
+
+
+def test_compatible_main_can_advance_during_coordinate_reads_without_requalifying_source() -> None:
+    current = "b" * 40
+    existing, calls = run_check(transaction(), main_after_coordinates=current, compatible_main=True)
+    assert existing == {role: False for role in REQUIRED_IMAGE_ROLES}
+    assert ("history", SOURCE, current, str(RUN_ID), "1", "False") in calls
+    assert ("git", "fetch", "--no-tags", "origin", current) in calls
+    assert ("git", "merge-base", SOURCE, current) in calls
+
+
+def test_policy_change_after_coordinate_reads_stops_admission() -> None:
+    with pytest.raises(PrePromotionError, match="permitted review history"):
+        run_check(transaction(), main_after_coordinates="b" * 40,
+                  compatible_main=True, history_invalid_after=True)
+
+
+def test_observed_main_cannot_rewind_to_an_earlier_compatible_commit() -> None:
+    with pytest.raises(PrePromotionError, match="permitted review history"):
+        run_check(transaction(), main="b" * 40, main_after_coordinates=SOURCE,
+                  compatible_main=True, main_is_descendant=False)
 
 
 @pytest.mark.parametrize("change,match", [
@@ -181,7 +212,7 @@ def test_fresh_claim_refuses_drift_or_owned_coordinate(condition: dict, match: s
 def test_partial_resume_checks_recorded_and_unused_image_coordinates() -> None:
     existing, calls = run_check(transaction(promoted=["ui"]))
     assert existing == {role: role == "ui" for role in REQUIRED_IMAGE_ROLES}
-    assert ("git", "rev-parse", "refs/remotes/origin/main^{commit}") in calls
+    assert ("git", "fetch", "--no-tags", "origin", SOURCE) in calls
     assert ("digest", IMAGES[0]) in calls
     assert [(call[1]) for call in calls if call[0] == "registry"] == list(IMAGES[1:])
     assert ("release",) in calls
@@ -239,7 +270,7 @@ def test_unrelated_or_reverted_main_history_cannot_promote() -> None:
 
 
 def test_authorization_is_rechecked_after_coordinate_reads() -> None:
-    with pytest.raises(PrePromotionError, match="changed during"):
+    with pytest.raises(PrePromotionError, match="permitted review history"):
         run_check(transaction(), main_after_coordinates="b" * 40)
 
 

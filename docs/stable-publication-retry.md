@@ -11,8 +11,9 @@ publication.
 
 The tag handoff uses `marty.create-only-annotated-tag/v1`. Its v2 checkpoint,
 operator result and typed admission bind a create-only annotated-tag reservation
-and before/after main observations. Publication policy v3 explicitly binds that
-contract; the selected publication pipeline and candidate remain v2. Older atomic
+and before/after main observations. Publication policy v4 binds that contract
+and the complete release program and policy digest; the pipeline and candidate
+remain v2. Older atomic
 handoff records cannot be silently reinterpreted under the new policy. A reserved
 tag alone is not an admitted candidate or permission to retry a failed original
 CD. See the [reservation contract](release-tag-reservation-contract.md) for the
@@ -24,6 +25,41 @@ artifact through GitHub, and verifies the original signatures, provenance,
 qualification, tag admission, lock, and promoted digests again. It never rebuilds
 the candidate or executes code from the candidate archive.
 
+## Immutable candidate and advancing main
+
+For `release-pipeline.yml` with `channel=stable`, the initial stage admits the
+original CI, claim and CD runs at the same exact protected-main source before
+waiting. The claim waits for that original successful CI and binds its definite
+run ID; CD waits for that original successful claim before downloading inputs or
+building. A missing acknowledgement, failed dependency or rerun never selects a
+replacement. Other channels retain their existing conservative admission order.
+
+The candidate source S stays fixed. The later operator source O and publisher
+source P are authenticated as their actual first-attempt workflow sources; their
+OIDC certificates are never presented as if they came from S. Fresh protected
+main M must contain S and each executor, and each executor must descend from S.
+Every intervening commit must
+preserve the release program and policy: local scripts, workflows/action and
+verifier pins, release policy, the native evidence validator and its local build
+inputs. Changes and subsequent reversions still refuse admission. The complete
+history is bounded to 128 commits and rejects shallow, replaced or grafted views.
+
+The version lock is read from the original Git object at S and checked against
+the original signed claim. An executor's newer version lock cannot replace it.
+Unrelated application changes and subsequent version preparation can advance
+main. Only the version field is excluded from the lock's policy projection;
+eligibility, component pins and all other lock fields must remain unchanged.
+Changes within the release-policy scope require a fresh candidate.
+
+This policy requires the exact future source-authority marker at S and binds
+the clean program's paths, modes and bytes in the publication policy digest.
+Historical candidates cannot gain this authority. Original successful CI/CD,
+seven-lane qualification, signatures, provenance, immutable coordinates,
+approval requirements and bounded authorization remain mandatory. Operator
+receipts retain the original admitted source and separately record actual
+executor and before/after protected-main observations; the observations must
+form an unchanged-policy descendant chain.
+
 ## Retry a publication failure
 
 1. Open the failed `Publish stable candidate` run and its
@@ -31,7 +67,7 @@ the candidate or executes code from the candidate archive.
    and mutation observations. Identify the original successful `Stack release`
    run, not the failed publisher run.
 2. If the candidate is still within its fixed 24-hour lifetime, protected main
-   and the policy remain unchanged, and the release has no conflicting state,
+   preserves its admitted release program and policy, and the release has no conflicting state,
    start a **new manual dispatch** of `Publish stable candidate` on `main` with
    `candidate_run_id` set to the original successful CD run ID.
 3. The new dispatch reauthenticates the candidate and creates a fresh in-memory

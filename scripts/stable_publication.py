@@ -23,6 +23,7 @@ import stable_publication_candidate as c
 import stable_publication_checkpoint as cp
 import push_promoted_release_tag as operator
 import verify_installer_provenance as provenance
+import release_source_authority as source_authority
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_TYPE = "https://elevenidllc.com/attestations/stable-publication-owner/v2"
@@ -73,14 +74,14 @@ class Proof:
     def __init__(self, gh: Path, cosign: Path, root: Path = ROOT):
         self.gh, self.cosign, self.root = gh, cosign, root
 
-    def source(self, request: dict, deadline: datetime) -> None:
-        main = request["protected_main_commit"]
-        h.require(h.git("rev-parse", "HEAD^{commit}", repository=self.root, deadline=deadline) == main,
-                  "publisher checkout is not the admitted protected main")
+    def source(self, request: dict, deadline: datetime, executable: str) -> None:
+        h.require(execution_source(self.root) == executable,
+                  "publisher checkout differs from its actual workflow source")
         h.git("diff", "--exit-code", "HEAD", "--", repository=self.root, deadline=deadline)
-        h.git("fetch", "--no-tags", "origin", main, repository=self.root, deadline=deadline)
+        h.git("fetch", "--no-tags", "origin", request["source_sha"], executable,
+              repository=self.root, deadline=deadline)
         authority = request["authority"]
-        review.require_review_only_history(request["source_sha"], main, request["run_id"], 1,
+        review.require_review_only_history(request["source_sha"], executable, request["run_id"], 1,
             authority["review_required"], record_sha256=authority["record_sha256"],
             repository=self.root, timeout_seconds=h.remaining(deadline, 30))
 
@@ -88,6 +89,19 @@ class Proof:
         operator.verify_crypto(directory / "checkpoint/assets", request, self.gh, self.cosign, deadline, observations)
         claim = h.decode(h.bounded_file(directory / "checkpoint/assets/release-transaction.json", 65536))
         operator.promoted_digests(claim, deadline)
+
+    def stack_lock(self, request: dict, deadline: datetime) -> bytes:
+        return source_authority.stack_lock_bytes(request["source_sha"], repository=self.root,
+            timeout_seconds=h.remaining(deadline, 30))
+
+
+def execution_source(root: Path) -> str:
+    return source_authority.History(root, 30).git("rev-parse", "HEAD^{commit}").decode("ascii").strip()
+
+
+def source_main(github: h.GitHub, request: dict, executable: str, root: Path) -> str:
+    return source_authority.authenticated_current(github, request["source_sha"], executable,
+        repository=root, deadline=github.deadline, verified=getattr(github, "verified_sources", None))
 
 
 def authorize(github: h.GitHub, directory: Path, artifact: dict, *, proof: Proof,
@@ -99,17 +113,16 @@ def authorize(github: h.GitHub, directory: Path, artifact: dict, *, proof: Proof
     github.deadline = deadline
     context = os.environ if environment is None else environment
     run_id, source = publisher_context(context)
-    h.require(source == request["protected_main_commit"], "publisher source differs from original qualification authority")
-    h.require(github.main()["commit"]["sha"] == source, "protected main has changed")
+    source_main(github, request, source, proof.root)
     live = publisher_run(github, run_id, source, current=True)
     h.require(live["event"] == context["GITHUB_EVENT_NAME"], "publisher event differs")
     original_success(github, candidate)
     _, actual_artifact = c.find_artifact(github, candidate["run_id"])
     h.require(actual_artifact == artifact, "candidate artifact changed before authorization")
     h.require(c.policy_digest(proof.root) == candidate["policy_sha256"], "publication policy changed")
-    proof.source(request, deadline)
+    proof.source(request, deadline, source)
     claim = h.decode(h.bounded_file(directory / "checkpoint/assets/release-transaction.json", 65536))
-    lock_bytes = h.bounded_file(proof.root / "release/stack-lock.json")
+    lock_bytes = proof.stack_lock(request, deadline)
     lock = h.decode(lock_bytes)
     h.require(h.sha256(lock_bytes) == claim["stack_lock_sha256"] and lock.get("release_state") == "eligible"
               and lock.get("release") == "marty-ui@" + candidate["tag"][1:], "candidate source lock is no longer eligible")
@@ -132,8 +145,8 @@ def authorize(github: h.GitHub, directory: Path, artifact: dict, *, proof: Proof
     proof.assets(directory, request, deadline, github.crypto)
     # Re-read candidate custody after all original signature/attestation checks.
     h.require(c.load_candidate(directory, now=now) == (candidate, request, admission), "candidate changed during authorization")
-    h.require(github.main()["commit"]["sha"] == source and c.utc(now) < deadline,
-              "protected main or publication deadline changed during authorization")
+    source_main(github, request, source, proof.root)
+    h.require(c.utc(now) < deadline, "publication deadline changed during authorization")
     original_success(github, candidate)
     return {"schema": "elevenid.stable-publication-authorization/v2", "candidate_id": candidate["candidate_id"],
             "policy_sha256": candidate["policy_sha256"], "publisher_run_id": run_id,
@@ -204,8 +217,9 @@ class Ownership:
     def __init__(self, gh: Path, cosign: Path, github: GitHub):
         self.gh, self.cosign, self.github = gh, cosign, github
 
-    def verify(self, receipt: dict, bundle: dict) -> None:
+    def verify(self, receipt: dict, bundle: dict, source_sha: str) -> None:
         publisher_run(self.github, receipt["publisher_run_id"], receipt["publisher_source_sha"])
+        h.candidate_main(self.github, source_sha, receipt["publisher_source_sha"])
         with tempfile.TemporaryDirectory(prefix="marty-publication-owner-") as temporary:
             root = Path(temporary)
             subject, proof = root / "owner.json", root / "owner.sigstore.json"
@@ -219,7 +233,7 @@ class Ownership:
             provenance.verified_certificate(raw.decode(), workflow=c.PUBLISHER_WORKFLOW,
                 source_sha=receipt["publisher_source_sha"], run_id=receipt["publisher_run_id"], run_attempt=1)
 
-    def sign(self, receipt: dict) -> dict:
+    def sign(self, receipt: dict, source_sha: str) -> dict:
         with tempfile.TemporaryDirectory(prefix="marty-publication-owner-") as temporary:
             root = Path(temporary); subject, proof = root / "owner.json", root / "owner.sigstore.json"
             subject.write_bytes(h.encoded(receipt))
@@ -227,7 +241,7 @@ class Ownership:
                 "--type", OWNER_TYPE, "--bundle", str(proof), str(subject)], timeout=h.remaining(self.github.deadline))
             h.require(code == 0, "draft ownership signing failed; unowned draft needs incident reconciliation")
             bundle = h.decode(h.bounded_file(proof, 49152))
-            self.verify(receipt, bundle)
+            self.verify(receipt, bundle, source_sha)
             return bundle
 
 
@@ -251,24 +265,27 @@ def read_owner(body: str, candidate: dict, request: dict, release_id: int, verif
               and type(receipt.get("original_run_id")) is int and receipt["original_run_id"] == candidate["run_id"]
               and h.positive(receipt.get("publisher_run_id")) and type(receipt.get("publisher_run_attempt")) is int
               and receipt["publisher_run_attempt"] == 1
-              and receipt.get("publisher_source_sha") == request["protected_main_commit"],
+              and isinstance(receipt.get("publisher_source_sha"), str)
+              and h.SHA.fullmatch(receipt["publisher_source_sha"]) is not None,
               "release ownership is foreign to this candidate and coordinate")
     h.require(type(value["bundle"]) is dict and body == ownership_body(receipt, value["bundle"]),
               "ownership envelope is noncanonical")
-    verifier.verify(receipt, value["bundle"])
+    verifier.verify(receipt, value["bundle"], candidate["source_sha"])
 
 
 class Publisher:
     def __init__(self, github: GitHub, directory: Path, authorization: dict, ownership: Ownership,
-                 *, root: Path = ROOT, clock=lambda: datetime.now(timezone.utc)):
+                 *, root: Path = ROOT, clock=lambda: datetime.now(timezone.utc), environment: dict | None = None):
         self.github, self.directory, self.authorization, self.ownership = github, directory, authorization, ownership
         self.root, self.clock = root, clock
+        self.environment = os.environ if environment is None else environment
         self.candidate, self.request, self.admission = c.load_candidate(directory, now=clock())
         self.deadline = h.timestamp(authorization["not_after"])
         self.github.deadline = self.deadline
         h.require(authorization["candidate_id"] == self.candidate["candidate_id"]
                   and authorization["policy_sha256"] == self.candidate["policy_sha256"]
-                  and authorization["publisher_source_sha"] == self.request["protected_main_commit"]
+                  and isinstance(authorization["publisher_source_sha"], str)
+                  and h.SHA.fullmatch(authorization["publisher_source_sha"]) is not None
                   and h.timestamp(authorization["created_at"]) < self.deadline
                   <= min(h.timestamp(authorization["created_at"]) + timedelta(seconds=900),
                          h.timestamp(self.candidate["not_after"])), "publication authorization differs")
@@ -277,9 +294,14 @@ class Publisher:
 
     def guard(self) -> None:
         h.require(c.utc(self.clock()) < self.deadline, "publication authorization expired")
+        h.require(publisher_context(self.environment) == (
+            self.authorization["publisher_run_id"], self.authorization["publisher_source_sha"]),
+            "publication authorization belongs to a different actual workflow invocation")
         c.validate_manifest(self.candidate, now=self.clock())
         h.require(c.policy_digest(self.root) == self.candidate["policy_sha256"], "publication policy changed")
-        h.require(self.github.main()["commit"]["sha"] == self.request["protected_main_commit"], "protected main changed")
+        h.require(execution_source(self.root) == self.authorization["publisher_source_sha"],
+                  "publisher checkout differs from its actual workflow source")
+        source_main(self.github, self.request, self.authorization["publisher_source_sha"], self.root)
         original_success(self.github, self.candidate)
         publisher_run(self.github, self.authorization["publisher_run_id"],
                       self.authorization["publisher_source_sha"], current=True)
@@ -338,7 +360,7 @@ class Publisher:
             h.require(current["draft"] is True and current.get("body") in {None, ""}
                       and current.get("assets") == [], "new draft is no longer unclaimed")
             receipt = owner_receipt(self.candidate, self.authorization, self.release_id)
-            bundle = self.ownership.sign(receipt)
+            bundle = self.ownership.sign(receipt, self.candidate["source_sha"])
             body = ownership_body(receipt, bundle)
             current = self.release(fresh=True, owned=False)
             h.require(current["draft"] is True and current.get("body") in {None, ""}
