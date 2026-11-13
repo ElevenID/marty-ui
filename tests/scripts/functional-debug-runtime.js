@@ -1459,7 +1459,7 @@ function verifyOb3FlowQuiescentMaintenance(profile,recovery,recoveryRef,state,re
   assert.deepEqual(actual.NetworkSettings?.Networks||{},row.Networks||{},'MAINTENANCE_FLOW_NETWORKS_CHANGED:'+role);
   for(const [key,value] of [['Cmd',actual.Config?.Cmd],['Entrypoint',actual.Config?.Entrypoint],
                             ['User',actual.Config?.User||''],['WorkingDir',actual.Config?.WorkingDir||''],
-                            ['StopSignal',actual.Config?.StopSignal]])
+                            ['StopSignal',actual.Config?.StopSignal??null]])
    if(Object.hasOwn(row,key))assert.deepEqual(value,row[key],'MAINTENANCE_FLOW_CONFIG_CHANGED:'+role+':'+key);
   return [role,actual];
  }));
