@@ -33,6 +33,14 @@ def sha(value):
     return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
 
 
+def application_schema_parts(value, side):
+    names = {'schema', 'rows', 'membership', 'startup', 'ledger', 'catalog', 'mutable_rows'}
+    require(side in {'before', 'after'} and type(value) is dict and set(value) == {'schema', 'side', 'parts'}
+            and value['schema'] == 'marty.windows-application-schema-evidence/v1' and value['side'] == side
+            and type(value['parts']) is dict and set(value['parts']) == names)
+    return value['parts']
+
+
 def validate_application_schema_evidence(before, after):
     """Join mandatory application migration proofs, never release admission.
 
@@ -48,12 +56,7 @@ def validate_application_schema_evidence(before, after):
     import selfhost_windows_product_startup as startup
     import selfhost_windows_product_ledger as ledger
     import selfhost_windows_product_catalog as catalog
-    names = {'schema', 'rows', 'membership', 'startup', 'ledger', 'catalog', 'mutable_rows'}
-    for value, side in ((before, 'before'), (after, 'after')):
-        require(type(value) is dict and set(value) == {'schema', 'side', 'parts'}
-                and value['schema'] == 'marty.windows-application-schema-evidence/v1' and value['side'] == side
-                and type(value['parts']) is dict and set(value['parts']) == names)
-    old, new = before['parts'], after['parts']
+    old, new = application_schema_parts(before, 'before'), application_schema_parts(after, 'after')
     membership.validate_delta(old['membership'], new['membership'])
     startup.validate_delta(old['startup'], new['startup'])
     ledger.validate_profile_delta(old['schema'], new['schema'], old['ledger'], new['ledger'])

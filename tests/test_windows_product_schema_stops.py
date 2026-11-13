@@ -140,3 +140,23 @@ def test_stop_producer_order_and_no_replay_or_restart(tmp_path, monkeypatch, fau
     before = deepcopy(events)
     with pytest.raises(ValueError):deploy._stop_schema_writers(context, CYCLE, write=write)
     assert events == before
+
+
+def test_stopped_observation_copies_only_owned_private_rows(tmp_path):
+    context, docker = context_fixture(tmp_path)
+    roles = context.prepare_schema_stops(CYCLE)
+    for role, cid in roles.items():
+        context.begin_schema_stop(role)
+        stopped(next(row for row in docker.items if row['Id'] == cid))
+        context.acknowledge_schema_stop(role, cid)
+    foreign = deepcopy(docker.items[0])
+    foreign['Id'] = 'f'*64
+    foreign['Config']['Labels']['com.docker.compose.project'] = 'other-owner'
+    docker.items.append(foreign)
+    witness, owned = context.schema_stopped_observation()
+    assert all(product.renewal._project(row) == PROJECT for row in owned)
+    assert not any(row['Id'] == foreign['Id'] for row in owned)
+    retained = deepcopy(docker.items)
+    owned[0]['Config']['Env'] = ['PRIVATE_TEST_SENTINEL=changed-copy']
+    assert docker.items == retained
+    assert context.schema_stopped_witness() == witness

@@ -305,15 +305,21 @@ class ProductContext(renewal.ForeignContext):
                 'terminal': deepcopy(plan['roles'][role]['terminal'])}
 
     def schema_stopped_witness(self):
+        witness, _observations = self.schema_stopped_observation()
+        return witness
+
+    def schema_stopped_observation(self):
+        """Same-proof private inspect rows; never print resolved environments."""
         plan = self._schema_stops
         require(plan is not None and all(value['stage'] == 'stopped' for value in plan['roles'].values()))
         rows = self.check()
         by_id = {row['Id']: row for row in rows}
-        return {'schema': 'marty.windows-schema-stopped-writers/v1', 'project': self.project,
+        witness = {'schema': 'marty.windows-schema-stopped-writers/v1', 'project': self.project,
                 'cycle': plan['cycle'], 'writers': {role: {'id': value['id'],
                     'terminal': deepcopy(value['terminal']), 'observation_sha256': digest(by_id[value['id']])}
                     for role, value in plan['roles'].items()},
                 'product_transition_admission': False, 'native_admission': False}
+        return witness, deepcopy([row for row in rows if renewal._project(row) == self.project])
 
     def _schema_stop_rows(self, items, before_intent):
         plan = self._schema_stops

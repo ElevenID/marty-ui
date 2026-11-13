@@ -137,6 +137,60 @@ def _stop_schema_writers(context, cycle, *, write):
     return witness
 
 
+def _capture_application_schema_evidence(context, organization_id, issuer_did, *, write,
+                                         before=None, profile=probe.LedgerProfile()):
+    """Coherent read-only collection under the future full schema owner.
+
+    Caller holds its guarded intent/inputs and private durable phase writer.
+    No active migration helper is permitted. This collector never stops, starts
+    or migrates a workload and has no production call site yet.
+    """
+    import selfhost_windows_product_schema as membership
+    import selfhost_windows_product_startup as startup
+    import selfhost_windows_product_ledger as ledger
+    import selfhost_windows_product_catalog as catalog
+    require(type(profile) is probe.LedgerProfile)
+    require(context._issuance_helper is None or context._issuance_helper['stage'] == 'absent')
+    prior = None if before is None else journal.application_schema_parts(before, 'before')
+    if prior is not None:
+        require(prior['schema']['database_roles'] == {'application': profile.application,
+            'keycloak': profile.keycloak, 'applicants': profile.applicants})
+    side = 'before' if prior is None else 'after'
+    deadline = time.monotonic()+900
+    def fresh(call, *args, **kwargs):
+        renewal.require(time.monotonic() < deadline, 'Schema evidence budget expired')
+        result = call(*args, **kwargs)
+        renewal.require(time.monotonic() < deadline, 'Schema evidence budget expired')
+        return result
+    stopped, owned = fresh(context.schema_stopped_observation)
+    base = {'schema': 'marty.windows-application-schema-collection/v1', 'project': context.project,
+            'side': side, 'stopped_sha256': selection.digest(selection.packed(stopped))}
+    fresh(write, 'schema-evidence.'+side+'.started.json', selection.packed(base))
+    fresh(write, 'schema-evidence.'+side+'.runtime.json', selection.packed(owned))
+    args = (context.docker, owned, context.project)
+    quiet_open = fresh(probe.quiescence_snapshot, *args, profile=profile)
+    parts = {'schema': fresh(probe.detailed_schema_snapshot, *args, profile=profile),
+             'rows': fresh(probe.retained_rows_snapshot, *args, profile=profile)}
+    for name, module in (('membership', membership), ('startup', startup), ('ledger', ledger), ('catalog', catalog)):
+        kwargs = {'profile': profile, 'before': None if prior is None else prior[name]}
+        if name == 'startup':kwargs.update(organization_id=organization_id, issuer_did=issuer_did)
+        parts[name] = fresh(module.capture, *args, **kwargs)
+    parts['mutable_rows'] = fresh(probe.retained_mutable_rows_snapshot, *args,
+        (parts if prior is None else prior)['membership'], (parts if prior is None else prior)['startup'], profile=profile)
+    require(parts['schema'] == fresh(probe.detailed_schema_snapshot, *args, profile=profile)
+            and parts['rows'] == fresh(probe.retained_rows_snapshot, *args, profile=profile))
+    quiet_close = fresh(probe.quiescence_snapshot, *args, profile=profile)
+    require(stopped == fresh(context.schema_stopped_witness))
+    result = {'schema': 'marty.windows-application-schema-evidence/v1', 'side': side, 'parts': parts}
+    if before is not None:fresh(journal.validate_application_schema_evidence, before, result)
+    body = selection.packed(result)
+    fresh(write, 'schema-evidence.'+side+'.json', body)
+    fresh(write, 'schema-evidence.'+side+'.completed.json', selection.packed(dict(base,
+        evidence_sha256=selection.digest(body), runtime_sha256=selection.digest(selection.packed(owned)),
+        quiet_open=quiet_open, quiet_close=quiet_close)))
+    return result
+
+
 def qualified_images(docker, before, after, owned):
     """Require already cached exact amd64 subjects and existing volume targets."""
     by_role = {renewal._service(item): item for item in owned}
