@@ -907,3 +907,78 @@ def test_completion_does_not_seal_changed_prior_or_completion_bytes(reload_flow,
         run(item)
     assert changed == [record]
     assert len(item.reload_patches) == len(item.execs) == 16
+
+
+def test_adoption_readback_reuses_owned_profiles_and_never_restarts_workloads(reload_flow, monkeypatch):
+    import adopt_kubernetes_renewal as coordinator
+    import kubernetes_renewal_adoption_state as adoption
+    item = reload_flow
+    # Readback does not mutate the completed reload. Keep its real private files
+    # and inodes, and reset only the doubled cluster/clock state between cases.
+    run(item)
+    original_patches = list(item.reload_patches)
+    pristine = {name: deepcopy(getattr(item, name)) for name in (
+        "secrets", "deployments", "replica_sets", "pods", "clock", "reload_patches",
+        "execs", "io", "guard_calls", "reload_failure", "reload_failure_index",
+        "preflight_tamper", "pod_tamper")}
+
+    def evidence_identity():
+        paths = [item.request.output, *item.request.output.rglob("*")]
+        return {str(path.relative_to(item.request.output)): reload.file_identity(path.lstat()) for path in paths}
+
+    original_evidence = evidence_identity()
+    cases = [("valid-before", None), ("foreign-owner", "foreign-owner"), ("namespace", "namespace"),
+             ("secret", "secret"), ("projection", "projection"), ("expired", "expired"), ("valid-after", None)]
+    checked_cases = []
+    for label, fault in cases:
+        try:
+            with monkeypatch.context() as case:
+                for name, value in pristine.items():
+                    case.setattr(item, name, deepcopy(value))
+                case.setattr(coordinator, "time", SimpleNamespace(time=lambda: item.clock.wall,
+                    monotonic=lambda: item.clock.monotonic))
+                _, after, changed = reload.admitted_inputs(item.request)
+                verification = item.request.output.parent / ("adoption-verification-" + label)
+                verification.mkdir(mode=0o700)
+                now = int(item.clock.wall)
+                bootstrap.write_new(verification / "verified.json", bootstrap.encoded({"verification": {
+                    "validBeforeUnixSeconds": now - 1 if fault == "expired" else now + 900}}))
+                intent = {"binding": item.binding, "adoptionId": "a" * 32,
+                          "candidateInputs": recovery.input_bindings(item.candidate)}
+                legacy = {"after": after, "changed": changed, "bound": item.bound, "plan": item.plan_bytes}
+                if fault == "foreign-owner":
+                    def tamper(pod):
+                        pod["metadata"]["ownerReferences"][0]["uid"] = str(uuid.UUID(int=987654))
+                    item.pod_tamper = tamper
+                elif fault == "namespace":
+                    previous = item.transport.kubectl
+                    def wrong_namespace(operation, *command, **kwargs):
+                        if command[:2] == ("get", "namespace"):
+                            return bootstrap.encoded({"metadata": {"name": item.binding["namespace"], "uid": str(uuid.UUID(int=987654))}})
+                        return previous(operation, *command, **kwargs)
+                    case.setattr(item.transport, "kubectl", wrong_namespace)
+                elif fault == "secret":
+                    secret = next(iter(item.secrets.values()))
+                    secret["data"][next(iter(secret["data"]))] = base64.b64encode(b"different-generation").decode()
+                elif fault == "projection":
+                    item.reload_failure = "file-hash"
+                if fault is not None:
+                    with pytest.raises(bootstrap.BootstrapError):
+                        coordinator.delivery(verification, intent, item.request.original, legacy, item.transport, lambda: None)
+                    assert not (verification / "delivery.json").exists()
+                else:
+                    coordinator.delivery(verification, intent, item.request.original, legacy, item.transport, lambda: None)
+                    receipt = json.loads((verification / "delivery.json").read_bytes())
+                    assert receipt["schema"] == adoption.DELIVERY_SCHEMA
+                    assert receipt["secretCount"] == 34 and receipt["workloadCount"] == 16
+                    assert receipt["credentialDeliveryVerified"] is True and receipt["credentialConsumptionVerified"] is False
+                    assert set(receipt["workloads"]) == set(reload.WORKLOADS)
+                    assert len(receipt["observationHashes"]) > 100
+                assert item.reload_patches == original_patches
+                assert evidence_identity() == original_evidence
+            assert all(getattr(item, name) == value for name, value in pristine.items())
+            checked_cases.append(label)
+        except BaseException as error:
+            error.add_note("adoption readback case: " + label)
+            raise
+    assert checked_cases == ["valid-before", "foreign-owner", "namespace", "secret", "projection", "expired", "valid-after"]

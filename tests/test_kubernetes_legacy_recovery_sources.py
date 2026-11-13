@@ -124,7 +124,10 @@ def test_source_custody_rejects_aliases_and_shared_writers(source_case, change):
 
 def imported_local_modules(root: Path) -> set[str]:
     scripts = root / "scripts"
-    pending = ["inspect_kubernetes_legacy_credentials", "recover_kubernetes_legacy_credentials", "reload_kubernetes_legacy_workloads"]
+    pending = ["inspect_kubernetes_legacy_credentials", "recover_kubernetes_legacy_credentials",
+               "reload_kubernetes_legacy_workloads", "adopt_kubernetes_renewal",
+               "stage_kubernetes_application_credentials", "stage_kubernetes_renewal_credentials",
+               "activate_kubernetes_application_credentials", "activate_kubernetes_renewal_credentials"]
     seen = set()
     while pending:
         name = pending.pop()

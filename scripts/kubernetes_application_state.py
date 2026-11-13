@@ -261,7 +261,8 @@ class LockedState:
         """Use the retained admitted publication contract, not another inventory."""
         complete = self.read("bootstrap-complete.json")
         require(complete is not None)
-        publication = complete.value.get("credentialPublication")
+        import kubernetes_renewal_adoption_state as adoption
+        publication = adoption.contract(self.path, complete.value, "publication")
         require(isinstance(publication, dict) and set(publication) == {"schema", "catalog"}
                 and publication["schema"] == bootstrap.PUBLICATION_SCHEMA)
         catalog = publication["catalog"]
@@ -388,6 +389,12 @@ class LockedState:
     def selection(self, binding: dict, record: Record | None, *, complete: bool,
                   _seen: frozenset[Path] = frozenset()) -> Selection:
         if record is None:
+            import kubernetes_renewal_adoption_state as adoption
+            adopted = adoption.selected(self.path)
+            if adopted is not None:
+                require(adopted["binding"] == binding)
+                path = path_value(adopted["candidateDirectory"])
+                return Selection(path, None, None, None, owned_directory(path), None, adopted["adoptionId"])
             path = self.path / "credentials"
             return Selection(path, None, None, None, owned_directory(path))
         value = record.value
@@ -548,7 +555,8 @@ class LockedState:
                 and not operation.is_relative_to(self.path / "application-identity")
                 and not operation.is_relative_to(self.path / "renewal-identity"))
         self.no_foreign_receipts(operation, domain)
-        modern = domain == "renewal" or expected.renewal_activation_id is not None
+        modern = (domain == "renewal" or expected.renewal_activation_id is not None
+                  or (expected.selector is None and expected.generation_activation_id is not None))
         value = {
             "schema": PENDING_SCHEMA, "binding": binding, "activationId": activation_id,
             "operationDirectory": str(operation), "candidateDirectory": str(candidate),

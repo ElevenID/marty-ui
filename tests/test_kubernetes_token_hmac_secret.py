@@ -1231,3 +1231,60 @@ def test_real_kubectl_applies_synthetic_secret_schema_against_owned_api(harness,
     keycloak = next(item for item in received if item["metadata"]["name"] == "keycloak-kms")
     assert keycloak["stringData"]["master-cookie.token"] == "synthetic-required-value-at-least-thirty-two-bytes"
     assert TOKEN not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name != "posix", reason="native adoption requires Linux private custody")
+@pytest.mark.parametrize("fault", ["cluster", "namespace", "operator", "owner", "partial-identity"])
+def test_native_adoption_refuses_mismatched_pair_before_mutating_authority(native_tools, tmp_path, fault):
+    from tests.native_operator_https import https_json_server
+    binary = native_tools[0]
+    identity = subprocess.run([str(binary), "--build-identity"], check=True, capture_output=True).stdout.decode().strip()
+    private_root = tmp_path / "private-adoption"
+    private_root.mkdir(mode=0o700)
+    current, application, renewal, output = [private_root / name for name in ("current", "application", "renewal", "proof")]
+    for directory in (current, application, renewal, output):
+        directory.mkdir(mode=0o700)
+    binding = {"namespace": "marty-test", "namespaceUid": "11111111-2222-3333-4444-555555555555",
+        "openbaoClusterId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        "workloadProject": "marty-selfhost-disposable-k8s-012345abcdef"}
+    def private_file(path, value):
+        path.write_bytes(value if isinstance(value, bytes) else json.dumps(value).encode())
+        path.chmod(0o600)
+    specs = json.loads((ROOT / "deploy-config/catalog/kubernetes-application-tokens.json").read_bytes())["tokens"]
+    for spec in specs:
+        private_file(current / spec["file"], ("synthetic-retained-" + spec["file"]).encode())
+    for name in ("application-role-id", "application-secret-id"):
+        private_file(application / name, ("synthetic-existing-" + name).encode())
+    private_file(application / "application-binding.json", binding)
+    for name in ("renewal-role-id", "renewal-secret-id"):
+        private_file(renewal / name, ("synthetic-existing-" + name).encode())
+    private_file(renewal / "renewal-leaf-policies.json", [f"synthetic-scoped-{index:02}" for index in range(21)])
+    bound = private_root / "binding.json"
+    private_file(bound, {"schema": "marty.kubernetes-renewal-binding/v1", "binding": binding,
+                         "producerNonce": "012345abcdef"})
+    context = {"binding": dict(binding), "bootstrap_id": "22222222-3333-4444-5555-666666666666",
+        "adoption_id": "a" * 32, "operator_identity": identity, "candidate": str(current),
+        "application_identity": str(application), "renewal_identity": str(renewal), "renewal_binding": str(bound)}
+    if fault == "namespace":
+        context["binding"]["namespace"] = "foreign-namespace"
+    elif fault == "operator":
+        context["operator_identity"] = "foreign-source:foreign-release"
+    elif fault == "owner":
+        current.chmod(0o755)
+    elif fault == "partial-identity":
+        (application / "application-secret-id").unlink()
+    calls, errors = [], []
+    def dispatch(method, path, body, token):
+        calls.append((method, path))
+        assert (method, path, body, token) == ("GET", "sys/health", None, None)
+        return 200, {"initialized": True, "sealed": False, "standby": False,
+                     "cluster_id": "00000000-1111-2222-3333-444444444444"}
+    with https_json_server(tmp_path, dispatch, errors) as server:
+        server.ca.chmod(0o600)
+        private_file(current / "openbao_tls_ca_cert", server.ca.read_bytes())
+        result = subprocess.run([str(binary), "operator", "kubernetes-renewal-adoption-verify", server.endpoint,
+            str(server.ca), str(output)], input=json.dumps(context).encode(), capture_output=True, timeout=30)
+    assert result.returncode != 0 and result.stdout == b""
+    assert not (output / "verified.json").exists()
+    assert calls == ([("GET", "sys/health")] if fault == "cluster" else [])
+    assert all(method == "GET" for method, _ in calls)

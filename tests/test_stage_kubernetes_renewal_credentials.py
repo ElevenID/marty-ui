@@ -689,3 +689,21 @@ def test_custody_drift_during_evidence_retention_withholds_completion(flow, targ
     assert flow.stage_calls == flow.cleanup_calls == 1
     assert (flow.args.operation_dir / "native-operation-evidence.tar").exists()
     assert not (flow.args.operation_dir / staging.COMPLETE).exists()
+
+
+def test_adopted_first_tls_stage_uses_live_generation_and_preserves_application(flow, monkeypatch):
+    from tests.kubernetes_renewal_adoption_fixture import staging_flow
+    fixture, selected_operator = staging_flow(flow, monkeypatch)
+    historical = staging.application.current_snapshot(flow.args.state_dir / "credentials")
+    bootstrap_bytes = (flow.args.state_dir / "bootstrap-complete.json").read_bytes()
+    staging.stage(flow.args)
+    candidate = staging.application.current_snapshot(flow.args.operation_dir / "candidate")
+    assert candidate == flow.candidate
+    assert staging.application.current_snapshot(flow.args.state_dir / "credentials") == historical
+    assert (flow.args.state_dir / "bootstrap-complete.json").read_bytes() == bootstrap_bytes
+    assert unpack((flow.args.operation_dir / "current-snapshot.tar").read_bytes()) == flow.snapshot
+    assert any(context.get("current") == str(fixture.candidate) for _, context in flow.generation_calls)
+    assert flow.creates[0]["spec"]["containers"][0]["image"] == selected_operator["images"]["services"]
+    for entry in bootstrap.APPLICATION_TOKEN_SPEC["tokens"]:
+        assert candidate[entry["file"]] == flow.snapshot[entry["file"]]
+    assert staging.application.record(flow.args.operation_dir / staging.REQUEST)["runtime"] == flow.values["release"]

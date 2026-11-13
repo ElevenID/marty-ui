@@ -6,8 +6,13 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
-const RECOVERY_ASSETS: [&str; 11] = [
+const RECOVERY_ASSETS: [&str; 16] = [
     "scripts/bootstrap_kubernetes_openbao.py",
+    "scripts/adopt_kubernetes_renewal.py",
+    "scripts/kubernetes_renewal_adoption_state.py",
+    "scripts/stage_kubernetes_renewal_credentials.py",
+    "scripts/activate_kubernetes_application_credentials.py",
+    "scripts/activate_kubernetes_renewal_credentials.py",
     "scripts/stage_kubernetes_application_credentials.py",
     "scripts/kubernetes_application_state.py",
     "scripts/prepare_kubernetes_helm_values.py",

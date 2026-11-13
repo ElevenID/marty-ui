@@ -424,15 +424,49 @@ binding, existing policies and 11 live ordinary runtime token inputs before it
 creates its separate scoped application AppRole and leaf roles. Neither guard
 needs to accept expired credentials or fabricated enrollment receipts.
 
-There is still a Kubernetes adoption boundary. The routine application staging
-adapter requires the original bootstrap's `applicationAuthority` record, its
-retained identity directory and authenticated original operator bytes. The
-supported legacy bootstrap has no such record. The fresh-bootstrap helper is
-currently the owner that creates it; successfully invoking native enrollment
-later does not authorize rewriting historical `bootstrap-complete.json` or
-pretending it was present originally. A separately reviewed retained-Kubernetes
-enrollment/adoption owner must bind real new enrollment evidence before that
-routine adapter can be used for this installation.
+After completed Secret recovery and verified workload delivery,
+`adopt_kubernetes_renewal.py` explicitly enrolls the retained Kubernetes
+installation for routine renewal. Its `--help` lists the required original and
+selected signed artifact identities. Supply the retained `--state-dir`, the
+completed `--recovery-dir`, a new separate private `--operation-dir`, and the
+same independently authenticated original and selected operator artifact
+closures used for recovery. The selected operator must contain the adoption
+command and these adapters; it must preserve the original initializer bytes.
+
+The adoption operation retains its own copy of the recovered generation and
+records intent before each native enrollment. The existing native owners
+create the 11-role application authority and 21-scope TLS/Keycloak authority.
+A separate native verification logs in through both retained identities,
+checks their exact policies and bindings, proves current token and certificate
+lifetimes, and revokes its transient sessions. The verification includes the
+compiled operator identity and exact private input hashes. Its 15-minute window
+reserves a full one-hour remaining credential floor through final publication.
+The adapter then checks all 34 existing Secrets and the original ownership,
+images, readiness and projected credential bytes of all 16 workloads. This
+readback does not restart workloads or update their images.
+
+Only the complete pair and fresh live delivery proof publish the separate
+`renewal-adoption.json` selector. Historical `bootstrap-complete.json`, original
+image receipts and historical credentials remain intact. Routine application
+and TLS staging and activation resolve the adopted generation through the same
+state lock and preserve the other renewal domain's inputs.
+
+An interrupted adoption leaves `renewal-adoption-pending.json`, which blocks
+routine renewal. Reopen the same operation with the same arguments and explicit
+`--reconcile`. A domain with durable enrollment intent is never enrolled again
+automatically: reconciliation requires complete retained identity evidence,
+rejects a still-running or foreign producer, and verifies both live authorities
+again. Missing or conflicting evidence remains a stopped private attempt. A
+domain never attempted may be enrolled once. Even an interrupted final selector
+publication needs fresh verification and live delivery before the pending
+record is cleared. Keep the operation directory and its private evidence.
+
+For routine operations after adoption, retain the ordinary original-runtime
+arguments and additionally provide all five selected-operator arguments:
+`--operator-assets`, `--operator-source-sha`, `--operator-release-tag`,
+`--operator-build-run-id` and `--operator-build-run-attempt`. They must match the
+adopted signed operator lineage. Temporary producers use that authenticated
+operator image; installed workloads retain their original image identity.
 
 A migration grant is separate again. The routine application authority contains
 only 11 runtime replacement roles. It excludes the initial migration credential
