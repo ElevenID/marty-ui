@@ -90,6 +90,13 @@ pub struct CredentialRequirement {
     pub description: Option<String>,
     pub required: bool,
     pub credential_payload_format: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "marty_oid4vp_contract::jwt_vc_profile::deserialize_optional_profile"
+    )]
+    pub expected_securing_profile:
+        Option<marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile>,
     pub requested_claims: Vec<RequestedClaim>,
     pub trust_profile_id: Option<Uuid>,
     pub max_age_seconds: Option<u64>,
@@ -236,6 +243,8 @@ pub enum PolicyDomainError {
     MissingRankingWeights,
     #[error("PRESENTATION_POLICY.INVALID: managed SD-JWT prerequisites require one holder-bound SD-JWT requirement, one explicit trust profile and required status")]
     UnsupportedPrerequisiteProfile,
+    #[error("PRESENTATION_POLICY.INVALID: explicit JWT-VC requires one required type-only credential, an exact profile/format, and cryptographic holder binding with challenge, audience and replay checks")]
+    UnsupportedJwtVcProfile,
     #[error("PRESENTATION_POLICY.INVALID_TRANSITION: {from:?} cannot transition to {to:?}")]
     InvalidTransition {
         from: PolicyStatus,
@@ -247,6 +256,32 @@ pub enum PolicyDomainError {
 
 impl PresentationPolicy {
     pub fn validate(&self) -> Result<(), PolicyDomainError> {
+        let profiled = self
+            .credential_requirements
+            .iter()
+            .chain(
+                self.alternative_requirements
+                    .iter()
+                    .flat_map(|alternative| &alternative.credential_requirements),
+            )
+            .any(|requirement| requirement.expected_securing_profile.is_some());
+        if profiled
+            && (self.credential_requirements.len() != 1
+                || !self.alternative_requirements.is_empty()
+                || !self.required_claims.is_empty()
+                || !self.accepted_credential_types.is_empty()
+                || self.prerequisite_evidence_profile.is_some()
+                || !self.holder_binding.required
+                || [
+                    "challenge_required",
+                    "audience_binding_required",
+                    "replay_detection_required",
+                ]
+                .iter()
+                .any(|name| self.holder_binding.proof_freshness.get(*name) != Some(&true)))
+        {
+            return Err(PolicyDomainError::UnsupportedJwtVcProfile);
+        }
         if self.prerequisite_evidence_profile.is_some()
             && (self.credential_requirements.len() != 1
                 || !self.alternative_requirements.is_empty()
@@ -289,7 +324,17 @@ impl PresentationPolicy {
                 .iter()
                 .flat_map(|alternative| alternative.credential_requirements.iter()),
         ) {
-            if requirement.requested_claims.is_empty() {
+            if let Some(profile) = requirement.expected_securing_profile {
+                if !requirement.required
+                    || !requirement.requested_claims.is_empty()
+                    || requirement.credential_payload_format
+                        != marty_oid4vp_contract::jwt_vc_profile::policy_credential_format(profile)
+                {
+                    return Err(PolicyDomainError::UnsupportedJwtVcProfile);
+                }
+            } else if requirement.credential_payload_format == "VC_JWT_DIRECT_V1" {
+                return Err(PolicyDomainError::UnsupportedJwtVcProfile);
+            } else if requirement.requested_claims.is_empty() {
                 return Err(PolicyDomainError::EmptyRequestedClaims { id: requirement.id });
             }
         }

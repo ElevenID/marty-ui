@@ -152,6 +152,7 @@ fn policy() -> PresentationPolicy {
         required_claims: Vec::new(),
         accepted_credential_types: Vec::new(),
         credential_requirements: vec![CredentialRequirement {
+            expected_securing_profile: None,
             id: Uuid::from_u128(5),
             credential_template_id: "template-email".into(),
             display_name: "Email".into(),
@@ -981,6 +982,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         let kernel =
             crate::ResolvingCredentialKernel::new(Arc::new(ForeignPublicKeyResolver { keys }));
         let context = CredentialVerificationContext {
+            profiled_jwt_vc: None,
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: Some(crate::ResolvedIssuerKey {
@@ -1019,6 +1021,7 @@ async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
         },
     );
     let context = CredentialVerificationContext {
+        profiled_jwt_vc: None,
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
@@ -1053,6 +1056,7 @@ async fn existing_governed_key_remains_authoritative_without_resolution() {
     ))
     .unwrap();
     let context = CredentialVerificationContext {
+        profiled_jwt_vc: None,
         presentation_only: false,
         sd_jwt_dcql: None,
         resolved_issuer_key: None,
@@ -1095,6 +1099,7 @@ async fn explicit_profile_key_authority_cannot_downgrade_to_public_discovery() {
         json!({"status":"ACTIVE", "issuer_relationships":[relationship.clone(), relationship]}),
     ] {
         let context = CredentialVerificationContext {
+            profiled_jwt_vc: None,
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: None,

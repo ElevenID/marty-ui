@@ -183,6 +183,47 @@ fn create_request(organization_id: Uuid) -> CreatePolicyRequest {
 }
 
 #[tokio::test]
+async fn explicit_jwt_vc_policy_grpc_preserves_profile_and_owner_holder_requirement() {
+    for (profile, format) in [
+        ("marty_nested_vc2_jwt_v1", "VC_JWT"),
+        ("w3c_vc2_jose_2026_v1", "VC_JWT_DIRECT_V1"),
+    ] {
+        let organization_id = Uuid::new_v4();
+        let service = service(organization_id);
+        let mut request = create_request(organization_id);
+        request.credential_requirements_json=json!([{"credential_template_id":"member","credential_payload_format":format,"expected_securing_profile":profile,"requested_claims":[]}]).to_string();
+        request.holder_binding_json = json!({"required":true}).to_string();
+        let created = service
+            .create_policy(authenticated(request))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(created.holder_binding_required);
+        let saved = service
+            .get_policy(service_authenticated(GetPolicyRequest {
+                policy_id: created.id.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(saved.holder_binding_required);
+        let requirements: Value =
+            serde_json::from_str(&saved.credential_requirements_json).unwrap();
+        assert_eq!(requirements[0]["expected_securing_profile"], profile);
+        assert_eq!(requirements[0]["credential_payload_format"], format);
+        assert_eq!(requirements[0]["requested_claims"], json!([]));
+        let legacy = service
+            .create_policy(authenticated(create_request(organization_id)))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!legacy.holder_binding_required);
+        let legacy: Value = serde_json::from_str(&legacy.credential_requirements_json).unwrap();
+        assert!(legacy[0].get("expected_securing_profile").is_none());
+    }
+}
+
+#[tokio::test]
 async fn managed_profile_can_be_authored_and_cleared_but_lookup_requires_owner_snapshot() {
     let organization_id = Uuid::new_v4();
     let service = service(organization_id);

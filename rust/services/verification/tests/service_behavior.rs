@@ -106,6 +106,7 @@ impl PresentationPolicyProvider for Policies {
         Ok(PresentationPolicyReference {
             prerequisite_evidence_profile: None,
             credential_authority: None,
+            holder_binding_required: false,
             id: policy_id.into(),
             policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
                 id: policy_id.into(),
@@ -160,6 +161,7 @@ impl CredentialTemplateProvider for Templates {
             issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),
+            jwt_vc_profile: None,
         })
     }
 

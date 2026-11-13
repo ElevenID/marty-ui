@@ -14,6 +14,8 @@ use marty_flow::{
 };
 #[path = "support/haip_remote_fixture.rs"]
 mod haip_remote_fixture;
+#[path = "support/profiled_jwt_vc.rs"]
+mod profiled_jwt_vc;
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
 use serde::Deserialize;
@@ -245,6 +247,67 @@ fn instance(flow_type: &str) -> FlowInstanceRecord {
 fn payload(compact: &str) -> Value {
     let encoded = compact.split('.').nth(1).unwrap();
     serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn explicit_jwt_vc_signed_and_unsigned_builders_refuse_every_unsupported_selection() {
+    use marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile;
+    let profile = JwtVcSecuringProfile::W3cVc2Jose2026V1;
+    let artifacts = marty_flow::build_flow_presentation_request(
+        &profiled_jwt_vc::providers(profile, "MemberCredential"),
+        "policy-1",
+        "org-1",
+    )
+    .await
+    .unwrap();
+    let signing = Signing::default();
+    let ports = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(signing.clone())),
+        ..Default::default()
+    };
+    for mutation in ["lissi", "dc_api", "haip", "siop", "pe", "unknown_meta"] {
+        let mut flow = instance("verification");
+        let mut artifacts = artifacts.clone();
+        let mut options = RequestObjectOptions::default();
+        match mutation {
+            "lissi" => options.compatibility = RequestObjectCompatibility::Lissi,
+            "dc_api" => options.transport = RequestObjectTransport::DigitalCredentialsApi,
+            "haip" => flow.context["oid4vp_profile"] = json!("haip"),
+            "siop" => flow.context["flow_type"] = json!("siop_v2"),
+            "pe" => artifacts.presentation_definition = json!({"id":"legacy-definition"}),
+            "unknown_meta" => {
+                artifacts.dcql_query["credentials"][0]["meta"]["unsupported"] = json!(true)
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            build_profiled_request_object(
+                &ports,
+                flow.clone(),
+                Some(&artifacts),
+                "https://verifier.example",
+                &options,
+                now()
+            )
+            .await
+            .is_err(),
+            "signed {mutation}"
+        );
+        flow.context["request_transport"] = json!("url_query");
+        assert!(
+            build_unsigned_url_query(
+                flow,
+                &artifacts,
+                "https://verifier.example",
+                &options,
+                8192,
+                now()
+            )
+            .is_err(),
+            "unsigned {mutation}"
+        );
+        assert!(signing.requests.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]

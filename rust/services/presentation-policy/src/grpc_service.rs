@@ -429,6 +429,7 @@ fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status>
             .map(|profile| profile.as_str().to_owned())
             .unwrap_or_default(),
         credential_authority_snapshot_json: String::new(),
+        holder_binding_required: policy.holder_binding.required,
         id: policy.id.to_string(),
         organization_id: policy.organization_id.to_string(),
         name: policy.name.clone(),

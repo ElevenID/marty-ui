@@ -1195,6 +1195,26 @@ fn validate_profile(profile: &crate::EvidenceProfileReference) -> Result<(), Oid
 fn validate_requirement(
     requirement: &FrozenCredentialRequirement,
 ) -> Result<(), Oid4vpContractError> {
+    if let Some(profile) = requirement.expected_securing_profile {
+        if requirement.accepted_formats != [profile.credential_format()]
+            || !requirement.required
+            || requirement.min_credentials != 1
+            || requirement.max_credentials != 1
+            || !requirement.required_claims.is_empty()
+            || !requirement.allowed_claims.is_empty()
+            || !requirement.retained_claims.is_empty()
+            || !requirement.dcql_claim_paths.is_empty()
+            || !requirement.format_options.is_empty()
+        {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+    } else if requirement
+        .accepted_formats
+        .iter()
+        .any(|format| format == "application/vc+jwt")
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
     require_identifier(&requirement.id, "query.requirements.id")?;
     validate_string_list(
         &requirement.accepted_formats,
@@ -1308,6 +1328,23 @@ fn validate_dcql_document(
     document: &Value,
     requirements: &[FrozenCredentialRequirement],
 ) -> Result<BTreeSet<String>, Oid4vpContractError> {
+    if let Some(query) = crate::jwt_vc_profile::profiled_jwt_vc_query(document)? {
+        let requirement = requirement_by_id(requirements, &query.id)?;
+        if requirements.len() != 1
+            || requirement.expected_securing_profile != Some(query.binding.securing_profile())
+            || requirement.accepted_formats != [query.binding.credential_format()]
+            || requirement.accepted_type_sets != query.type_sets
+        {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+        return Ok(BTreeSet::from([query.id]));
+    }
+    if requirements
+        .iter()
+        .any(|requirement| requirement.expected_securing_profile.is_some())
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
     let object = exact_object(document, &["credentials"], &[])?;
     let entries = object["credentials"]
         .as_array()
@@ -1359,10 +1396,9 @@ fn validate_pe_document(
     document: &Value,
     requirements: &[FrozenCredentialRequirement],
 ) -> Result<BTreeSet<String>, Oid4vpContractError> {
-    if requirements
-        .iter()
-        .any(|requirement| !requirement.dcql_claim_paths.is_empty())
-    {
+    if requirements.iter().any(|requirement| {
+        !requirement.dcql_claim_paths.is_empty() || requirement.expected_securing_profile.is_some()
+    }) {
         return Err(Oid4vpContractError::InvalidQueryDocument);
     }
     let object = exact_object(document, &["format", "id", "input_descriptors"], &[])?;

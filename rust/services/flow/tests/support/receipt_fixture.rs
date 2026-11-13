@@ -30,6 +30,7 @@ impl PresentationPolicyProvider for ReceiptPolicies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            holder_binding_required: false,
             id: policy_id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),

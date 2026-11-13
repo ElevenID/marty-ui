@@ -150,8 +150,10 @@ impl AuthenticatedIssuerEvidence {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CredentialVerificationContext {
+    /// Saved/frozen profile plus the orchestrator clock; never caller JSON.
+    pub profiled_jwt_vc: Option<crate::ProfiledJwtVcRequest>,
     /// Prepared by the workload transport adapter; caller JSON cannot supply it.
     pub sd_jwt_dcql: Option<crate::SdJwtDcqlRequest>,
     /// Derived from the saved policy, never from caller-supplied context.
@@ -169,9 +171,11 @@ pub struct CredentialVerificationContext {
 
 /// Authenticated material returned by one Rust credential-format kernel.
 /// Unverified input is represented explicitly and never supplies claims.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialVerificationEvidence {
+    #[serde(skip)]
+    pub authenticated_profiled_jwt_vc: Option<crate::AuthenticatedProfiledJwtVcEvidence>,
     /// Native query/subject/key evidence has no JSON promotion path.
     #[serde(skip)]
     pub authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
@@ -208,6 +212,24 @@ pub struct CredentialVerificationEvidence {
     pub replay_check_verified: bool,
     pub proof_epoch_seconds: Option<u64>,
     pub status: CredentialStatusEvidence,
+}
+
+impl std::fmt::Debug for CredentialVerificationContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialVerificationContext")
+            .field("contents", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CredentialVerificationEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CredentialVerificationEvidence")
+            .field("contents", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -437,7 +459,13 @@ impl VerifiedFactsOrchestrator {
         templates: &mut BTreeMap<String, ResolvedCredentialTemplate>,
     ) -> Result<VerifiedPolicyMaterial, PresentationVerificationError> {
         let token = canonical_token(&request.vp_token)?;
-        let format = credential_format_for_token(&token);
+        let profiled_jwt_vc =
+            crate::ProfiledJwtVcRequest::prepare(policy, request, || (self.clock)())?;
+        let format = if profiled_jwt_vc.is_some() {
+            DetectedCredentialFormat::W3cVc
+        } else {
+            credential_format_for_token(&token)
+        };
         if format == DetectedCredentialFormat::Unknown {
             let reason = if is_retired_ob2(&request.vp_token)
                 || request.vp_token.get("assertion").is_some()
@@ -499,6 +527,7 @@ impl VerifiedFactsOrchestrator {
 
         let transport = request.oid4vp_transport.as_ref();
         let context = CredentialVerificationContext {
+            profiled_jwt_vc: profiled_jwt_vc.clone(),
             sd_jwt_dcql: sd_jwt_dcql.clone(),
             presentation_only,
             resolved_issuer_key: None,
@@ -526,6 +555,18 @@ impl VerifiedFactsOrchestrator {
             trust_profile: trust_profile.clone(),
         };
         let mut evidence = self.kernel.verify(&context).await?;
+        let profile_matches = match (&profiled_jwt_vc, &evidence.authenticated_profiled_jwt_vc) {
+            (Some(request), Some(authenticated)) => context
+                .token
+                .as_str()
+                .is_some_and(|raw| authenticated.matches(request, raw, &evidence)),
+            (Some(_), None) => !evidence.verified,
+            (None, None) => true,
+            (None, Some(_)) => false,
+        };
+        if !profile_matches {
+            return Err(failed("Authenticated JWT-VC profile evidence mismatch"));
+        }
         let query_evidence_matches = match (&sd_jwt_dcql, &evidence.authenticated_sd_jwt_query) {
             (Some(prepared), Some(authenticated)) => {
                 prepared.matches_evidence(authenticated)
@@ -590,6 +631,7 @@ impl VerifiedFactsOrchestrator {
             evidence.issuer_id = None;
             evidence.authenticated_issuer = None;
             evidence.authenticated_sd_jwt_query = None;
+            evidence.authenticated_profiled_jwt_vc = None;
         }
 
         let mut authenticated_sd_jwt_query = evidence.authenticated_sd_jwt_query.clone();
@@ -714,6 +756,9 @@ impl VerifiedFactsOrchestrator {
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
             query.revalidate_at(evaluation_time)?;
         }
+        if let Some(profile) = evidence.authenticated_profiled_jwt_vc.as_ref() {
+            profile.revalidate_at(evaluation_time)?;
+        }
         let managed_credential_authority =
             match (authenticated_sd_jwt_query.as_ref(), owner_observations) {
                 (Some(query), Some((trust, status))) => Some(
@@ -730,6 +775,15 @@ impl VerifiedFactsOrchestrator {
             } else {
                 None
             };
+        let policy_format = evidence
+            .authenticated_profiled_jwt_vc
+            .as_ref()
+            .map(|proof| {
+                marty_oid4vp_contract::jwt_vc_profile::policy_credential_format(
+                    proof.binding().securing_profile(),
+                )
+            })
+            .unwrap_or(format.as_str());
         let mut warnings = evidence.warnings;
         warnings.extend(evidence.status.warnings.clone());
         if !evidence.verified {
@@ -762,7 +816,7 @@ impl VerifiedFactsOrchestrator {
                 "credential_id": credential_id,
                 "credential_template_ids": matched_templates,
                 "credential_types": evidence.credential_types,
-                "credential_format": format.as_str(),
+                "credential_format": policy_format,
                 "claims": claims,
                 "issuer_id": issuer_id,
                 "signature_verified": evidence.verified,
@@ -846,6 +900,15 @@ impl VerifiedFactsOrchestrator {
                     .as_deref()
                     .unwrap_or(&template.credential_type),
                 _ => template.credential_type.as_str(),
+            };
+            let expected = if requirement.expected_securing_profile.is_some()
+                && matches!(
+                    expected.trim().to_ascii_lowercase().as_str(),
+                    "open_badge" | "open_badge_v3" | "openbadgecredential"
+                ) {
+                "OpenBadgeCredential"
+            } else {
+                expected
             };
             if !expected.is_empty() && credential_types.iter().any(|actual| actual == expected) {
                 matching.insert(id.clone());
@@ -970,7 +1033,16 @@ fn credential_external_authorization(
         .unwrap_or("UNSPECIFIED");
     let facts = CredentialVerificationAuthorizationFacts {
         organization_id: policy.organization_id.to_string(),
-        credential_format: cedar_credential_format(format).into(),
+        credential_format: evidence
+            .authenticated_profiled_jwt_vc
+            .as_ref()
+            .map(|proof| {
+                marty_oid4vp_contract::jwt_vc_profile::policy_credential_format(
+                    proof.binding().securing_profile(),
+                )
+            })
+            .unwrap_or_else(|| cedar_credential_format(format))
+            .into(),
         compliance_code: compliance_code.into(),
         issuer_id: issuer_id.into(),
         issuer_trust_level: trust.trust_level.unwrap_or_default(),

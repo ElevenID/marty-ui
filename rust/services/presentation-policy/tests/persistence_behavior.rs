@@ -48,6 +48,80 @@ fn native_policy_document_round_trips_every_intended_field() {
 }
 
 #[test]
+fn explicit_jwt_vc_profiles_round_trip_both_storage_paths_and_old_readers_fail_closed() {
+    use marty_oid4vp_contract::jwt_vc_profile::{policy_credential_format, JwtVcSecuringProfile};
+    // The pre-profile requirement schema was already deny_unknown_fields.
+    // This snapshot exercises its actual JSON boundary, including omission.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PreProfileRequirement {
+        id: Uuid,
+        credential_template_id: String,
+        display_name: String,
+        description: Option<String>,
+        required: bool,
+        credential_payload_format: String,
+        requested_claims: Vec<marty_presentation_policy::RequestedClaim>,
+        trust_profile_id: Option<Uuid>,
+        max_age_seconds: Option<u64>,
+        require_fresh_issuance: bool,
+    }
+    let legacy = PolicyRecord::from_policy(&policy()).unwrap();
+    assert!(legacy.credential_requirements[0]
+        .get("expected_securing_profile")
+        .is_none());
+    serde_json::from_value::<PreProfileRequirement>(legacy.credential_requirements[0].clone())
+        .unwrap();
+    for profile in [
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1,
+        JwtVcSecuringProfile::W3cVc2Jose2026V1,
+    ] {
+        let mut policy = policy();
+        policy.accepted_credential_types.clear();
+        policy.compliance_profile_id = None;
+        policy.fallback_policy = None;
+        policy.supported_circuits.clear();
+        policy.prefer_predicates = false;
+        policy.holder_binding = marty_presentation_policy::HolderBinding {
+            required: true,
+            ..Default::default()
+        }
+        .normalize();
+        let requirement = &mut policy.credential_requirements[0];
+        requirement.expected_securing_profile = Some(profile);
+        requirement.credential_payload_format = policy_credential_format(profile).into();
+        requirement.requested_claims.clear();
+        policy.validate().unwrap();
+        let stored = PolicyRecord::from_policy(&policy).unwrap();
+        for document_path in [true, false] {
+            let mut row = stored.clone();
+            let requirement = if document_path {
+                &row.policy_document["credential_requirements"][0]
+            } else {
+                &row.credential_requirements[0]
+            };
+            assert!(serde_json::from_value::<PreProfileRequirement>(requirement.clone()).is_err());
+            if !document_path {
+                row.policy_document = json!({});
+            }
+            assert_eq!(row.into_policy().unwrap(), policy);
+            for marker in [json!(null), json!("unknown_profile")] {
+                let mut poisoned = stored.clone();
+                if document_path {
+                    poisoned.policy_document["credential_requirements"][0]
+                        ["expected_securing_profile"] = marker;
+                } else {
+                    poisoned.policy_document = json!({});
+                    poisoned.credential_requirements[0]["expected_securing_profile"] = marker;
+                }
+                assert!(poisoned.into_policy().is_err());
+            }
+        }
+    }
+}
+
+#[test]
 fn policy_storage_rejects_private_material_in_current_and_legacy_json() {
     let mut candidate = policy();
     candidate.description = Some(r#"{"kty":"EC","d":"secret"}"#.into());

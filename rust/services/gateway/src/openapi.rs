@@ -13,6 +13,24 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 
 pub fn schemas() -> Value {
     let mut schemas = BUNDLE["schemas"].clone();
+    // Create/update already reference this exact response requirement shape.
+    // Keep the pinned bundle intact and extend only the explicit type-only path.
+    let requirement = &mut schemas["schemas__presentation_policy"]["properties"]
+        ["credential_requirements"]["items"];
+    requirement["properties"]["expected_securing_profile"] = json!({
+        "type":"string", "enum":["marty_nested_vc2_jwt_v1", "w3c_vc2_jose_2026_v1"],
+        "description":"Explicit securing profile for one required whole credential with cryptographic holder binding. Omit for existing claim-based policies."
+    });
+    requirement["properties"]["requested_claims"]["minItems"] = json!(0);
+    requirement["allOf"] = json!([
+        {"if":{"required":["expected_securing_profile"]},
+         "then":{"required":["credential_payload_format"],"properties":{"required":{"const":true},"requested_claims":{"maxItems":0}}},
+         "else":{"properties":{"requested_claims":{"minItems":1}}}},
+        {"if":{"required":["expected_securing_profile"],"properties":{"expected_securing_profile":{"const":"w3c_vc2_jose_2026_v1"}}},
+         "then":{"properties":{"credential_payload_format":{"const":"VC_JWT_DIRECT_V1"}}}},
+        {"if":{"required":["expected_securing_profile"],"properties":{"expected_securing_profile":{"const":"marty_nested_vc2_jwt_v1"}}},
+         "then":{"properties":{"credential_payload_format":{"const":"VC_JWT"}}}}
+    ]);
     // The native owner and gateway omit absent optional membership fields.
     // Keep the protocol pin intact while reconciling this public readback.
     let membership = &mut schemas["schemas__organization"]["properties"]["membership"]["oneOf"][0];
@@ -950,6 +968,60 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_jwt_vc_policy_schema_covers_write_and_readback_without_defaulting_legacy() {
+        use serde_json::json;
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        let schemas = &document["components"]["schemas"];
+        let requirement = &schemas["schemas__presentation_policy"]["properties"]
+            ["credential_requirements"]["items"];
+        assert_eq!(
+            requirement["properties"]["expected_securing_profile"]["type"],
+            "string"
+        );
+        assert_eq!(
+            requirement["properties"]["expected_securing_profile"]["enum"],
+            json!(["marty_nested_vc2_jwt_v1", "w3c_vc2_jose_2026_v1"])
+        );
+        assert!(requirement["properties"]["expected_securing_profile"]
+            .get("default")
+            .is_none());
+        assert!(!requirement["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "expected_securing_profile"));
+        assert_eq!(
+            requirement["allOf"][0]["then"]["properties"]["requested_claims"]["maxItems"],
+            0
+        );
+        assert_eq!(
+            requirement["allOf"][0]["else"]["properties"]["requested_claims"]["minItems"],
+            1
+        );
+        assert_eq!(
+            requirement["allOf"][1]["then"]["properties"]["credential_payload_format"]["const"],
+            "VC_JWT_DIRECT_V1"
+        );
+        assert_eq!(
+            requirement["allOf"][2]["then"]["properties"]["credential_payload_format"]["const"],
+            "VC_JWT"
+        );
+        let shared="#/components/schemas/schemas__presentation_policy/properties/credential_requirements/items";
+        assert_eq!(
+            schemas["schemas__presentation_policy_create_request"]["properties"]
+                ["credential_requirements"]["items"]["$ref"],
+            shared
+        );
+        assert_eq!(
+            schemas["schemas__presentation_policy_update_request"]["properties"]
+                ["credential_requirements"]["oneOf"][0]["items"]["$ref"],
+            shared
+        );
+    }
+
     #[test]
     fn api_key_operations_document_scoped_management_and_one_time_secret() {
         let document = crate::contract::GatewayContract::load()

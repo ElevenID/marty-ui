@@ -229,6 +229,11 @@ struct CredentialRequirementRequest {
     required: bool,
     #[serde(default = "default_credential_format")]
     credential_payload_format: String,
+    #[serde(
+        default,
+        deserialize_with = "marty_oid4vp_contract::jwt_vc_profile::deserialize_optional_profile"
+    )]
+    expected_securing_profile: Option<marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile>,
     requested_claims: Vec<RequestedClaimRequest>,
     trust_profile_id: Option<String>,
     max_age_seconds: Option<u64>,
@@ -891,7 +896,7 @@ fn convert_requirements(
 fn convert_requirement(
     value: CredentialRequirementRequest,
 ) -> Result<CredentialRequirement, PresentationPolicyHttpError> {
-    if value.requested_claims.is_empty() {
+    if value.expected_securing_profile.is_none() && value.requested_claims.is_empty() {
         return Err(unprocessable("requested_claims must not be empty"));
     }
     Ok(CredentialRequirement {
@@ -901,6 +906,7 @@ fn convert_requirement(
         description: value.description,
         required: value.required,
         credential_payload_format: value.credential_payload_format,
+        expected_securing_profile: value.expected_securing_profile,
         requested_claims: value
             .requested_claims
             .into_iter()
@@ -997,6 +1003,7 @@ fn synthetic_requirement(
     claims: &[RequestedClaim],
 ) -> Result<CredentialRequirement, PresentationPolicyHttpError> {
     Ok(CredentialRequirement {
+        expected_securing_profile: None,
         id: Uuid::new_v4(),
         credential_template_id: "protocol-inline".into(),
         display_name: name.to_owned(),
@@ -1059,7 +1066,7 @@ fn protocol_claim_response(claim: &RequestedClaim) -> Value {
 }
 
 fn requirement_response(requirement: &CredentialRequirement) -> Value {
-    json!({
+    let mut response = json!({
         "credential_template_id": requirement.credential_template_id,
         "display_name": requirement.display_name,
         "description": requirement.description,
@@ -1069,7 +1076,11 @@ fn requirement_response(requirement: &CredentialRequirement) -> Value {
         "trust_profile_id": requirement.trust_profile_id,
         "max_age_seconds": requirement.max_age_seconds,
         "require_fresh_issuance": requirement.require_fresh_issuance
-    })
+    });
+    if let Some(profile) = requirement.expected_securing_profile {
+        response["expected_securing_profile"] = json!(profile);
+    }
+    response
 }
 
 fn requested_claim_response(claim: &RequestedClaim) -> Value {

@@ -293,7 +293,17 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
             if let Some(outer_token) = context.token.as_str() {
                 // Only a bounded untrusted selection hint. The complete VP is
                 // authenticated later; its holder key is never an issuer key.
-                let inner_token = if context.format != DetectedCredentialFormat::SdJwt {
+                let inner_token = if let Some(profile) = context.profiled_jwt_vc.as_ref() {
+                    match marty_oid4vci::presented_jwt_vc_with_profile(
+                        outer_token,
+                        profile.query().binding.securing_profile(),
+                    ) {
+                        Ok(token) => Some(token),
+                        Err(_) => {
+                            return Ok(rejected("Explicit JWT-VC presentation profile is invalid"))
+                        }
+                    }
+                } else if context.format != DetectedCredentialFormat::SdJwt {
                     marty_oid4vci::presented_jwt_vc(outer_token).ok()
                 } else {
                     None
@@ -328,7 +338,11 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
                         let Some(algorithm) = algorithm else {
                             return Ok(rejected("Issuer algorithm is required"));
                         };
-                        let format = if context.format == DetectedCredentialFormat::SdJwt {
+                        let format = if let Some(profile) = context.profiled_jwt_vc.as_ref() {
+                            marty_oid4vp_contract::jwt_vc_profile::policy_credential_format(
+                                profile.query().binding.securing_profile(),
+                            )
+                        } else if context.format == DetectedCredentialFormat::SdJwt {
                             "SD_JWT_VC"
                         } else {
                             "VC_JWT"
@@ -395,6 +409,9 @@ impl CredentialVerificationKernel for RustCredentialKernel {
         &self,
         context: &CredentialVerificationContext,
     ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+        if context.profiled_jwt_vc.is_some() {
+            return verify_profiled_vc_jwt(context);
+        }
         if is_retired_ob2(&context.token)
             || (matches!(
                 context.format,
@@ -875,6 +892,117 @@ async fn verify_vc_jwt(
         evidence.challenge_verified = true;
         evidence.audience_verified = true;
     }
+    Ok(evidence)
+}
+
+fn verify_profiled_vc_jwt(
+    context: &CredentialVerificationContext,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+    let request = context
+        .profiled_jwt_vc
+        .as_ref()
+        .ok_or_else(|| invalid_native("Explicit JWT-VC request is absent"))?;
+    let outer = token_string(&context.token)?;
+    let profile = request.query().binding.securing_profile();
+    if context.nonce.as_deref() != Some(request.nonce())
+        || context.audience.as_deref() != Some(request.audience())
+    {
+        return Ok(rejected("Explicit JWT-VC verifier transaction changed"));
+    }
+    let Ok(inner) = marty_oid4vci::presented_jwt_vc_with_profile(outer, profile) else {
+        return Ok(rejected("Explicit JWT-VC presentation profile is invalid"));
+    };
+    let Some(key) = context
+        .resolved_issuer_key
+        .clone()
+        .or_else(|| governed_issuer_key(context, &inner))
+    else {
+        return Ok(rejected(
+            "Explicit JWT-VC requires governed issuer verification material",
+        ));
+    };
+    let Some((issuer, kid)) = jwt_selector(&inner) else {
+        return Ok(rejected("Explicit JWT-VC issuer selection is invalid"));
+    };
+    if issuer != key.issuer_id {
+        return Ok(rejected("Explicit JWT-VC issuer authority does not match"));
+    }
+    let algorithm = match jwt_algorithm(&inner).as_deref() {
+        Some("ES256") => marty_oid4vci::types::SigningAlgorithm::ES256,
+        Some("ES384") => marty_oid4vci::types::SigningAlgorithm::ES384,
+        Some("EdDSA") => marty_oid4vci::types::SigningAlgorithm::EdDSA,
+        Some("RS256") => marty_oid4vci::types::SigningAlgorithm::RS256,
+        _ => return Ok(rejected("Explicit JWT-VC issuer algorithm is unsupported")),
+    };
+    let keys = match crate::profiled_jwt_vc::pinned_keys(&key, kid, algorithm) {
+        Ok(keys) => keys,
+        Err(_) => {
+            return Ok(rejected(
+                "Explicit JWT-VC issuer verification binding is invalid",
+            ))
+        }
+    };
+    let Ok(proof) = marty_oid4vci::verify_jwt_vc_presentation_with_profile(
+        outer,
+        &keys,
+        request.nonce(),
+        request.audience(),
+        request.evaluated_at(),
+        profile,
+    ) else {
+        return Ok(rejected(
+            "Explicit JWT-VC presentation authentication failed",
+        ));
+    };
+    let credential = proof.credential();
+    let document = credential
+        .credential()
+        .as_object()
+        .ok_or_else(|| invalid_native("Authenticated JWT-VC credential is not an object"))?;
+    let types = authenticated_credential_types(document);
+    if types.iter().any(|kind| kind == "OpenBadgeCredential")
+        && marty_oid4vci::formats::jwt_vc::validate_open_badge_v3_profile(credential.credential())
+            .is_err()
+    {
+        return Ok(rejected("Authenticated Open Badge profile is invalid"));
+    }
+    let Some(issuer_evidence) = authenticated_issuer(
+        context,
+        &key,
+        Some(credential.issuer()),
+        Some(credential.algorithm().into()),
+    ) else {
+        return Ok(rejected(
+            "Verified issuer authority or provenance is invalid",
+        ));
+    };
+    let mut evidence = credential_evidence(document, Some(credential.issuer()), true, 1);
+    evidence.authenticated_issuer = Some(issuer_evidence);
+    evidence.credential_id = Some(credential.credential_id().into());
+    if let Some(claims) = credential.claims().as_object() {
+        bind_authenticated_jwt_credential_id(&mut evidence, claims);
+    }
+    evidence.authenticated_document = Some(credential.credential().clone());
+    evidence.issued_at_epoch_seconds = u64::try_from(credential.signature_issued_at()).ok();
+    evidence.algorithm = Some(credential.algorithm().into());
+    evidence.holder_algorithm = jwt_algorithm(outer);
+    evidence.validity_checked = true;
+    evidence.is_expired = Some(false);
+    evidence.proof_epoch_seconds = u64::try_from(proof.proof_issued_at()).ok();
+    evidence.holder_binding_verified = true;
+    evidence.holder_binding_method = Some("DEVICE_KEY".into());
+    evidence.proof_profile = Some("OID4VP_VERIFIABLE_PRESENTATION".into());
+    evidence.challenge_verified = true;
+    evidence.audience_verified = true;
+    evidence.authenticated_profiled_jwt_vc = Some(
+        crate::AuthenticatedProfiledJwtVcEvidence::from_authenticated(
+            request.clone(),
+            outer,
+            key,
+            &proof,
+            &evidence,
+        )?,
+    );
     Ok(evidence)
 }
 
@@ -2103,6 +2231,7 @@ mod tests {
 
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
+            profiled_jwt_vc: None,
             presentation_only: false,
             sd_jwt_dcql: None,
             resolved_issuer_key: None,

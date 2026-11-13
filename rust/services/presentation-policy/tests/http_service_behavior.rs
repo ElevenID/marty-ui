@@ -301,6 +301,133 @@ fn create_body(organization_id: Uuid) -> Value {
 }
 
 #[tokio::test]
+async fn explicit_jwt_vc_policy_is_usable_through_http_and_round_trips_without_null_defaults() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    for (profile, format) in [
+        ("marty_nested_vc2_jwt_v1", "VC_JWT"),
+        ("w3c_vc2_jose_2026_v1", "VC_JWT_DIRECT_V1"),
+    ] {
+        let mut input = create_body(org);
+        input["accepted_credential_types"] = json!([]);
+        input["holder_binding"] = json!({"required":true});
+        input["credential_requirements"][0]["requested_claims"] = json!([]);
+        input["credential_requirements"][0]["credential_payload_format"] = json!(format);
+        input["credential_requirements"][0]["expected_securing_profile"] = json!(profile);
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/v1/presentation-policies",
+                input.clone(),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(
+            body["credential_requirements"][0]["expected_securing_profile"],
+            profile
+        );
+        assert_eq!(body["holder_binding"]["required"], true);
+        let uri = format!("/v1/presentation-policies/{}", body["id"].as_str().unwrap());
+        let response = app
+            .clone()
+            .oneshot(request("GET", &uri, json!(null), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let read: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(
+            read["credential_requirements"],
+            body["credential_requirements"]
+        );
+        let response = app
+            .clone()
+            .oneshot(request(
+                "PATCH",
+                &uri,
+                json!({"name":"Profile retained"}),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+        assert_eq!(
+            updated["credential_requirements"],
+            body["credential_requirements"]
+        );
+        for (path, value) in [
+            (
+                "/credential_requirements/0/expected_securing_profile",
+                json!(null),
+            ),
+            (
+                "/credential_requirements/0/expected_securing_profile",
+                json!("unknown"),
+            ),
+            (
+                "/credential_requirements/0/credential_payload_format",
+                json!("SD_JWT_VC"),
+            ),
+            ("/credential_requirements/0/required", json!(false)),
+            (
+                "/credential_requirements/0/requested_claims",
+                json!([{"claim_name":"email"}]),
+            ),
+            ("/holder_binding", json!({"required":false})),
+            (
+                "/holder_binding",
+                json!({"required":true,"proof_freshness":{"challenge_required":false,"audience_binding_required":true,"replay_detection_required":true}}),
+            ),
+        ] {
+            let mut changed = input.clone();
+            // The established JSON extractor classifies null enum input as a
+            // bad request; unknown enum values and policy validation use 422.
+            let expected_status = if path.ends_with("expected_securing_profile") && value.is_null()
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::UNPROCESSABLE_ENTITY
+            };
+            let (parent, key) = path.rsplit_once('/').unwrap();
+            changed
+                .pointer_mut(parent)
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(key.into(), value);
+            let response = app
+                .clone()
+                .oneshot(request("POST", "/v1/presentation-policies", changed, true))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected_status, "{path}");
+        }
+    }
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/v1/presentation-policies",
+            create_body(org),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let legacy: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+    assert!(legacy["credential_requirements"][0]
+        .get("expected_securing_profile")
+        .is_none());
+}
+
+#[tokio::test]
 async fn creation_rejects_unresolved_compliance_and_unsupported_predicate_capabilities() {
     let org = Uuid::new_v4();
     let app = router(org, Arc::new(VerifiedFacts));

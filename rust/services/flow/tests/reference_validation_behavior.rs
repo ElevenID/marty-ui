@@ -62,6 +62,7 @@ impl CredentialTemplateProvider for Templates {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let policy_template = template_id == "policy-template";
         Ok(CredentialTemplateReference {
+            jwt_vc_profile: None,
             id: template_id.into(),
             organization_id: "org-1".into(),
             status: self.status.into(),
@@ -107,6 +108,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            holder_binding_required: false,
             prerequisite_evidence_profile: None,
             credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),

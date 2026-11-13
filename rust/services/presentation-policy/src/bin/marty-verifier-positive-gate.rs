@@ -211,6 +211,7 @@ fn gate_policy(organization_id: Uuid, trust_profile_id: Uuid) -> PresentationPol
         required_claims: Vec::new(),
         accepted_credential_types: Vec::new(),
         credential_requirements: vec![CredentialRequirement {
+            expected_securing_profile: None,
             id: Uuid::from_u128(4),
             credential_template_id: "runtime-gate-template".into(),
             display_name: "Runtime gate credential".into(),

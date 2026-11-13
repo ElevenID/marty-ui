@@ -196,6 +196,8 @@ name ends in `_test`. A run without that variable does not execute those control
 and must not be reported as database validation. Existing template migration
 tests retain historical JSON-column coverage.
 
-UI frozen-verifier adoption and independently implemented wallet/verifier
-qualification remain subsequent batches. Issuer support alone does not establish
-full end-to-end policy acceptance or close Core issue 421.
+The bounded frozen-verifier path is documented in
+[Explicit JWT-VC verification](explicit-jwt-vc-verification.md).
+Independently implemented wallet/verifier qualification remains separate work.
+Issuer support alone does not establish full end-to-end policy acceptance or
+close Core issue 421.

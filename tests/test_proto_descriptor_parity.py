@@ -55,6 +55,12 @@ def test_public_field_numbers_remain_wire_compatible():
         == 13
     )
     assert (
+        fields("presentation_policy_service.proto", "PolicyResponse")[
+            "holder_binding_required"
+        ]
+        == 16
+    )
+    assert (
         fields("presentation_policy_service.proto", "PolicyEvaluationResponse")[
             "policy_revision"
         ]

@@ -22,6 +22,7 @@ marty-crypto.workspace = true
 marty-didcomm.workspace = true
 marty-iso18013 = { workspace = true, features = ["verifier"] }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
 marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "sd_jwt"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-passport-auth = { path = "../../crates/passport-auth" }

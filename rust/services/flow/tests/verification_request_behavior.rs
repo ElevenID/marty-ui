@@ -52,6 +52,7 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            holder_binding_required: false,
             prerequisite_evidence_profile: None,
             credential_authority: None,
             policy_revision: presentation_snapshot::revision(policy_id),
@@ -79,6 +80,7 @@ impl CredentialTemplateProvider for Templates {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError> {
         Ok(CredentialTemplateReference {
+            jwt_vc_profile: None,
             id: template_id.into(),
             organization_id: "org-1".into(),
             status: "active".into(),

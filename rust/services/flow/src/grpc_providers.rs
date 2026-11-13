@@ -32,6 +32,114 @@ use crate::{
     PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
 };
 
+fn decode_template_reference(
+    template_id: &str,
+    response: crate::credential_template_proto::TemplateResponse,
+) -> Result<CredentialTemplateReference, FlowProviderError> {
+    if response.id != template_id || response.organization_id.trim().is_empty() {
+        return Err(invalid_response(
+            "credential_template",
+            "template identity mismatch",
+        ));
+    }
+    Ok(CredentialTemplateReference {
+        id: response.id,
+        organization_id: response.organization_id,
+        status: response.status,
+        credential_type: response.credential_type,
+        vct: response.vct,
+        doctype: response.doctype,
+        supported_formats: response.supported_formats,
+        claims: response
+            .claims
+            .into_iter()
+            .map(|claim| CredentialClaimReference {
+                name: claim.name,
+                display_name: claim.display_name,
+                description: claim.description,
+                required: claim.required,
+                mdoc_namespace: claim.mdoc_namespace,
+                mdoc_element_identifier: claim.mdoc_element_identifier,
+            })
+            .collect(),
+        issuer_did: response.issuer_did,
+        credential_format: response.credential_payload_format,
+        jwt_vc_profile: marty_jwt_vc_issuance::parse_optional_policy_json(
+            &response.jwt_vc_profile_json,
+        )
+        .map_err(|_| invalid_response("credential_template", "invalid explicit JWT-VC policy"))?,
+        issuance_protocol: response.issuance_protocol,
+        wallet_configurations: bounded_json(&response.wallet_configs_json, "credential_template")?,
+        issuer_algorithm: nonempty(response.issuer_algorithm),
+    })
+}
+
+fn decode_policy_reference(
+    policy_id: &str,
+    response: crate::presentation_policy_proto::PolicyResponse,
+) -> Result<PresentationPolicyReference, FlowProviderError> {
+    if response.id != policy_id || response.organization_id.trim().is_empty() {
+        return Err(invalid_response(
+            "presentation_policy",
+            "policy identity mismatch",
+        ));
+    }
+    let policy_revision = decode_policy_revision(
+        response.policy_revision.as_ref(),
+        &response.organization_id,
+        policy_id,
+    )?;
+    if u32::try_from(response.version).ok() != Some(policy_revision.version) {
+        return Err(invalid_response(
+            "presentation_policy",
+            "policy version mismatch",
+        ));
+    }
+    let prerequisite_evidence_profile = match response.prerequisite_evidence_profile.as_str() {
+        "" => None,
+        "managed_sd_jwt_dcql_v1" => Some(response.prerequisite_evidence_profile.clone()),
+        _ => {
+            return Err(invalid_response(
+                "presentation_policy",
+                "unknown prerequisite evidence profile",
+            ))
+        }
+    };
+    let credential_authority: Option<
+        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+    > = if response.credential_authority_snapshot_json.is_empty() {
+        None
+    } else {
+        Some(bounded_json(
+            &response.credential_authority_snapshot_json,
+            "presentation_policy",
+        )?)
+    };
+    if prerequisite_evidence_profile.is_some() != credential_authority.is_some()
+        || credential_authority.as_ref().is_some_and(|authority| {
+            authority.validate().is_err() || authority.organization_id != response.organization_id
+        })
+    {
+        return Err(invalid_response(
+            "presentation_policy",
+            "credential authority snapshot mismatch",
+        ));
+    }
+    Ok(PresentationPolicyReference {
+        id: response.id,
+        organization_id: response.organization_id,
+        status: response.status,
+        policy_revision,
+        holder_binding_required: response.holder_binding_required,
+        prerequisite_evidence_profile,
+        credential_authority,
+        credential_requirements: bounded_json(
+            &response.credential_requirements_json,
+            "presentation_policy",
+        )?,
+    })
+}
+
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const USER_ID_HEADER: &str = "x-user-id";
@@ -403,41 +511,7 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             .await
             .map_err(|status| provider_status("credential_template", template_id, status))?
             .into_inner();
-        if response.id != template_id || response.organization_id.trim().is_empty() {
-            return Err(invalid_response(
-                "credential_template",
-                "template identity mismatch",
-            ));
-        }
-        Ok(CredentialTemplateReference {
-            id: response.id,
-            organization_id: response.organization_id,
-            status: response.status,
-            credential_type: response.credential_type,
-            vct: response.vct,
-            doctype: response.doctype,
-            supported_formats: response.supported_formats,
-            claims: response
-                .claims
-                .into_iter()
-                .map(|claim| CredentialClaimReference {
-                    name: claim.name,
-                    display_name: claim.display_name,
-                    description: claim.description,
-                    required: claim.required,
-                    mdoc_namespace: claim.mdoc_namespace,
-                    mdoc_element_identifier: claim.mdoc_element_identifier,
-                })
-                .collect(),
-            issuer_did: response.issuer_did,
-            credential_format: response.credential_payload_format,
-            issuance_protocol: response.issuance_protocol,
-            wallet_configurations: bounded_json(
-                &response.wallet_configs_json,
-                "credential_template",
-            )?,
-            issuer_algorithm: nonempty(response.issuer_algorithm),
-        })
+        decode_template_reference(template_id, response)
     }
 
     async fn wallet_formats(
@@ -514,66 +588,7 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
             .await
             .map_err(|status| provider_status("presentation_policy", policy_id, status))?
             .into_inner();
-        if response.id != policy_id || response.organization_id.trim().is_empty() {
-            return Err(invalid_response(
-                "presentation_policy",
-                "policy identity mismatch",
-            ));
-        }
-        let policy_revision = decode_policy_revision(
-            response.policy_revision.as_ref(),
-            &response.organization_id,
-            policy_id,
-        )?;
-        if u32::try_from(response.version).ok() != Some(policy_revision.version) {
-            return Err(invalid_response(
-                "presentation_policy",
-                "policy version mismatch",
-            ));
-        }
-        let prerequisite_evidence_profile = match response.prerequisite_evidence_profile.as_str() {
-            "" => None,
-            "managed_sd_jwt_dcql_v1" => Some(response.prerequisite_evidence_profile.clone()),
-            _ => {
-                return Err(invalid_response(
-                    "presentation_policy",
-                    "unknown prerequisite evidence profile",
-                ))
-            }
-        };
-        let credential_authority: Option<
-            marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
-        > = if response.credential_authority_snapshot_json.is_empty() {
-            None
-        } else {
-            Some(bounded_json(
-                &response.credential_authority_snapshot_json,
-                "presentation_policy",
-            )?)
-        };
-        if prerequisite_evidence_profile.is_some() != credential_authority.is_some()
-            || credential_authority.as_ref().is_some_and(|authority| {
-                authority.validate().is_err()
-                    || authority.organization_id != response.organization_id
-            })
-        {
-            return Err(invalid_response(
-                "presentation_policy",
-                "credential authority snapshot mismatch",
-            ));
-        }
-        Ok(PresentationPolicyReference {
-            id: response.id,
-            organization_id: response.organization_id,
-            status: response.status,
-            policy_revision,
-            prerequisite_evidence_profile,
-            credential_authority,
-            credential_requirements: bounded_json(
-                &response.credential_requirements_json,
-                "presentation_policy",
-            )?,
-        })
+        decode_policy_reference(policy_id, response)
     }
 
     async fn evaluate(
@@ -917,6 +932,90 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_jwt_vc_owner_responses_survive_protobuf_without_legacy_capability_widening() {
+        use prost::Message;
+        use serde_json::json;
+        let revision = marty_oid4vp_contract::FrozenPolicyIdentity {
+            id: "policy-1".into(),
+            version: 1,
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+        };
+        let mut response=crate::presentation_policy_proto::PolicyResponse {
+            id:"policy-1".into(),organization_id:"org-1".into(),status:"active".into(),version:1,
+            policy_revision:Some(encode_policy_revision(&revision,"org-1","policy-1").unwrap()),
+            credential_requirements_json:json!([{"id":"member","credential_template_id":"template-1","required":true,"expected_securing_profile":"w3c_vc2_jose_2026_v1","credential_payload_format":"VC_JWT_DIRECT_V1","requested_claims":[]}]).to_string(),
+            holder_binding_required:true,..Default::default()
+        };
+        let decoded = crate::presentation_policy_proto::PolicyResponse::decode(
+            response.encode_to_vec().as_slice(),
+        )
+        .unwrap();
+        let selected = decode_policy_reference("policy-1", decoded).unwrap();
+        assert!(selected.holder_binding_required);
+        assert_eq!(
+            selected.credential_requirements[0]["expected_securing_profile"],
+            "w3c_vc2_jose_2026_v1"
+        );
+        response.holder_binding_required = false; // Older responses omit the new proto3 field.
+        let old = decode_policy_reference(
+            "policy-1",
+            crate::presentation_policy_proto::PolicyResponse::decode(
+                response.encode_to_vec().as_slice(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!old.holder_binding_required);
+        assert!(serde_json::to_value(&old)
+            .unwrap()
+            .get("holder_binding_required")
+            .is_none());
+
+        let mut template = crate::credential_template_proto::TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            status: "active".into(),
+            credential_type: "MemberCredential".into(),
+            credential_payload_format: "vc_jwt_direct_v1".into(),
+            supported_formats: vec!["VC_JWT_DIRECT_V1".into()],
+            jwt_vc_profile_json: serde_json::to_string(
+                &marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap(),
+            )
+            .unwrap(),
+            wallet_configs_json: "[]".into(),
+            ..Default::default()
+        };
+        let direct = decode_template_reference(
+            "template-1",
+            crate::credential_template_proto::TemplateResponse::decode(
+                template.encode_to_vec().as_slice(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(direct.credential_format, "vc_jwt_direct_v1");
+        assert_eq!(direct.supported_formats, ["VC_JWT_DIRECT_V1"]);
+        assert!(direct.jwt_vc_profile.is_some());
+        for malformed in [
+            "null",
+            "{}",
+            r#"{"contract":"marty.jwt-vc-template-profile/v1","securing_profile":"unknown","signature_lifetime_seconds":300}"#,
+        ] {
+            template.jwt_vc_profile_json = malformed.into();
+            assert!(decode_template_reference("template-1", template.clone()).is_err());
+        }
+        template.jwt_vc_profile_json.clear();
+        template.credential_payload_format = "jwt_vc".into();
+        template.supported_formats = vec!["VC_JWT".into()];
+        let legacy = decode_template_reference("template-1", template).unwrap();
+        assert!(legacy.jwt_vc_profile.is_none());
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("jwt_vc_profile")
+            .is_none());
+    }
 
     fn flow_issuance_fixture(name: &str) -> String {
         std::env::var(format!("MARTY_TEST_FLOW_ISSUANCE_{name}"))

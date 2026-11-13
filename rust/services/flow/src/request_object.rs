@@ -119,6 +119,7 @@ pub fn build_unsigned_url_query(
     maximum_length: usize,
     now: DateTime<Utc>,
 ) -> Result<UnsignedAuthorizationRequest, FlowRequestObjectError> {
+    let profiled = validate_profiled_query_transport(&instance, artifacts, options)?;
     if maximum_length < 1_024 {
         return Err(FlowRequestObjectError::InvalidInstance(
             "URL-query maximum must be at least 1024 bytes",
@@ -147,7 +148,7 @@ pub fn build_unsigned_url_query(
     let base = public_base_url.trim_end_matches('/');
     let response_uri = format!("{base}/v1/flows/instances/{}/submit", instance.id);
     let client_id = format!("redirect_uri:{response_uri}");
-    let metadata = client_metadata(base, options);
+    let metadata = selected_client_metadata(base, options, profiled);
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for (name, value) in [
         ("response_type", "vp_token".to_owned()),
@@ -240,6 +241,10 @@ pub async fn build_profiled_request_object(
     options: &RequestObjectOptions,
     now: DateTime<Utc>,
 ) -> Result<SignedRequestObject, FlowRequestObjectError> {
+    let profiled = artifacts
+        .map(|artifacts| validate_profiled_query_transport(&instance, artifacts, options))
+        .transpose()?
+        .flatten();
     let context = instance
         .context
         .as_object()
@@ -375,7 +380,7 @@ pub async fn build_profiled_request_object(
         });
         match options.compatibility {
             RequestObjectCompatibility::Standard => {
-                payload["client_metadata"] = client_metadata(base, options);
+                payload["client_metadata"] = selected_client_metadata(base, options, profiled);
                 payload["dcql_query"] = artifacts.dcql_query.clone();
             }
             RequestObjectCompatibility::Lissi => {
@@ -732,6 +737,55 @@ async fn sign_payload(
     let result = provider.sign(&request).await?;
     result.validate_binding(&request)?;
     Ok(format!("{signing_input}.{}", result.signature_raw_b64url))
+}
+
+pub(crate) fn validate_profiled_query_transport(
+    instance: &FlowInstanceRecord,
+    artifacts: &PresentationRequestArtifacts,
+    options: &RequestObjectOptions,
+) -> Result<
+    Option<marty_oid4vp_contract::jwt_vc_profile::JwtVcProfileBinding>,
+    FlowRequestObjectError,
+> {
+    let query = marty_oid4vp_contract::jwt_vc_profile::profiled_jwt_vc_query(&artifacts.dcql_query)
+        .map_err(|_| FlowRequestObjectError::UnsupportedProfile("invalid explicit JWT-VC query"))?;
+    if let Some(query) = query {
+        if artifacts.presentation_definition != json!({})
+            || options.compatibility != RequestObjectCompatibility::Standard
+            || options.transport != RequestObjectTransport::RequestUri
+            || instance.context["oid4vp_profile"].as_str() == Some("haip")
+            || instance.context["flow_type"].as_str() == Some("siop_v2")
+        {
+            return Err(FlowRequestObjectError::UnsupportedProfile(
+                "explicit JWT-VC requires standard OID4VP DCQL",
+            ));
+        }
+        return Ok(Some(query.binding));
+    }
+    Ok(None)
+}
+
+fn selected_client_metadata(
+    base_url: &str,
+    options: &RequestObjectOptions,
+    profiled: Option<marty_oid4vp_contract::jwt_vc_profile::JwtVcProfileBinding>,
+) -> Value {
+    let mut metadata = client_metadata(base_url, options);
+    if let Some(binding) = profiled {
+        let presentation_format = match binding.securing_profile() {
+            marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile::MartyNestedVc2JwtV1 => {
+                "jwt_vp"
+            }
+            marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile::W3cVc2Jose2026V1 => {
+                "application/vp+jwt"
+            }
+        };
+        metadata["vp_formats_supported"] = json!({
+            (binding.credential_format()): {"alg_values_supported": ["ES256", "ES384", "EdDSA", "RS256"]},
+            (presentation_format): {"alg_values_supported": ["ES256", "ES384", "EdDSA", "RS256"]}
+        });
+    }
+    metadata
 }
 
 fn client_metadata(base_url: &str, options: &RequestObjectOptions) -> Value {
