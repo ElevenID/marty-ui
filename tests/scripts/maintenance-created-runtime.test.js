@@ -38,9 +38,9 @@ function actualPreimageFixture(t){
  const retained=actual.roles.find(row=>row.role==='retained-0');retained.startedAt=newTime;f.saved['retained-0'].State.StartedAt=newTime;
  for(const [i,role] of selectedRoles.entries())actual.roles.find(row=>row.role===role).containerId=(i+301).toString(16).padStart(64,'0');
  f.post.selected22=f.file('selected-after-restart.json',f.saved);
- const current=Object.values(f.saved).map(row=>({Id:row.Id,Image:row.Image,StartedAt:row.State.StartedAt,Labels:row.Labels,
+ const current=Object.values(f.saved).map(row=>({Id:row.Id,Image:row.Image,Pid:row.State.Pid,StartedAt:row.State.StartedAt,Labels:row.Labels,
   HostConfig:structuredClone(row.HostConfig),Mounts:structuredClone(row.Mounts)}));
- for(let i=0;i<6;i++)current.push({Id:(i+201).toString(16).padStart(64,'0'),Image:f.before.roles[0].imageId,StartedAt:newTime,Labels:{},HostConfig:structuredClone(f.resourceBefore[0].HostConfig),Mounts:[]});
+ for(let i=0;i<6;i++)current.push({Id:(i+201).toString(16).padStart(64,'0'),Image:f.before.roles[0].imageId,Pid:100+i,StartedAt:newTime,Labels:{},HostConfig:structuredClone(f.resourceBefore[0].HostConfig),Mounts:[]});
  f.post.actualRuntimeBefore=f.file('actual-before.json',actual);
  f.post.actualResourceBefore=f.file('actual-resource28.json',current);
  const prior=Object.fromEntries(actual.roles.map(row=>[row.role,{Id:row.containerId,Image:row.imageId,State:{StartedAt:row.startedAt},HostConfig:structuredClone(f.resourceBefore.find(item=>item.Id===f.before.roles.find(old=>old.role===row.role).containerId).HostConfig)}]));
@@ -49,6 +49,7 @@ function actualPreimageFixture(t){
 }
 test('postCREATE actual acknowledged preimage rebinds retained process time',t=>{
  const f=actualPreimageFixture(t),out=f.invoke();assert.equal(out.generations.get('retained-0').startedAt,f.newTime);
+ assert.equal(out.generations.get('retained-0').pid,0);
  assert.equal(out.resourceBefore.length,28);assert.equal(out.before.roles.find(row=>row.role==='retained-0').startedAt,f.newTime);
 });
 test('postCREATE actual preimage refuses an unacknowledged ref',t=>{

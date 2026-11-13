@@ -1014,6 +1014,8 @@ function maintenanceCreatedContext(restart,before,resourceBefore,post,readDocker
     const recorded=baseline.find(row=>row.Id===generation.cid);assert(recorded,'MAINTENANCE_CREATED_ACTUAL_RETAINED_RESOURCE:'+role);
     if(saved[role])assert.equal(recorded.StartedAt,saved[role].State.StartedAt,'MAINTENANCE_CREATED_ACTUAL_RETAINED_STARTED_AT:'+role);
     generation.startedAt=recorded.StartedAt;
+    assert(Number.isSafeInteger(recorded.Pid)&&recorded.Pid>=0,'MAINTENANCE_CREATED_ACTUAL_PROCESS_PID:'+role);
+    generation.pid=recorded.Pid;
    }
   }
   return {a,generations,before:next,resourceBefore:baseline,created,saved,deferredExitCodes};
