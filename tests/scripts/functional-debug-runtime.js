@@ -1272,17 +1272,19 @@ function verifyOb3QuiescentMaintenance(profile,recovery,recoveryRef,state,readDo
  assert.deepEqual(stable(fresh),stable(context.quiescence),'MAINTENANCE_OB3_QUIESCENCE_CHANGED');
  const ancillary=boundJson(context.authority.currentAncillary6),managed=new Map(fresh.roles.map(row=>[row.role,{...row,state:row.status}]));
  const read=id=>{const rows=JSON.parse(readDocker(['inspect',id]));assert.equal(rows.length,1);assert.equal(rows[0].Id,id);return rows[0];};
+ const dependency=recovery.proxyDependencyHealth?maintenanceProxyEvidence(recovery.proxyDependencyHealth):null;
  const health=()=>{const observations=[],classifications=new Map();
   for(const [role,saved]of Object.entries(ancillary)){
    const row=read(saved.Id);assert.equal(row.Image,saved.Image);assert.equal(row.State.Status,'running');assert.equal(row.State.Running,true);assert.equal(row.State.Pid,saved.State.Pid);assert.equal(row.State.StartedAt,saved.State.StartedAt);
-   if(role==='nginx-proxy'&&row.State.Health?.Status==='unhealthy'&&recovery.proxyDependencyHealth){
-    const checked=maintenanceProxyHealth(recovery.proxyDependencyHealth,row,read(managed.get('gateway').containerId),managed,{states:new Map(fresh.roles.map(row=>[row.role,row.status]))});
+   if(role==='nginx-proxy'&&row.State.Health?.Status==='unhealthy'&&dependency){
+    const checked=maintenanceProxyHealth(dependency,row,read(managed.get('gateway').containerId),managed,{states:new Map(fresh.roles.map(row=>[row.role,row.status]))});
     observations.push(checked.observation);classifications.set(role,checked.classification);
    }else assert.equal(row.State.Health?.Status||null,restart.a.cap.allRunningRoles[role].health,'MAINTENANCE_ANCILLARY_HEALTH_CHANGED:'+role);
   }
   return {observations,classifications};
  };
  const first=health(),second=health();assert.deepEqual(first.observations.map(({lastHealthEnd,...row})=>row),second.observations.map(({lastHealthEnd,...row})=>row),'MAINTENANCE_OB3_DEPENDENCY_CHANGED');
+ if(dependency)maintenanceProxyEvidence(recovery.proxyDependencyHealth);
  maintenanceOb3QuiescentContext(recovery,state);boundJson(recoveryRef);owner.restartAuthority(profile,{boundJson,expectedRuntime,receiptDigests});
  return {schema:'marty.maintenance-resource-binding/v1',scope:'MAINTENANCE_RECOVERY_ONLY',releaseQualified:false,recordingQualified:false,functionalRuntimeQualified:false,runningProcessQualification:false,sourceFactsBoundToPriorReceiptNotNewElfProbe:true,historicalFullHostConfigKnown:false,historicalHostConfigProjectionFields:[...MAINTENANCE_CAP_FIELDS],currentFullHostConfigStableDuringRead:true,
   ob3QuiescentCheckpoint:true,readinessScope:'OB3_FUNCTIONAL_ONLY',fullStackQualified:false,deferredRoles:['passport-beta-bureau'],runId:recovery.runId,roles:fresh.roles,resources:fresh.resources.map(row=>({...row,...(second.classifications.has(row.role)?{maintenanceHealthClassification:second.classifications.get(row.role)}:{})})),dependencyHealthObservations:second.observations,recoverySha256:recoveryRef.sha256,receiptDigests:receiptDigests(profile)};

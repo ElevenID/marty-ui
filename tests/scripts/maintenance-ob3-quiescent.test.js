@@ -4,12 +4,15 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {maintenanceOb3QuiescentContext,verifyOb3ContainmentRuntime}=require('./functional-debug-runtime');
 const sha=value=>crypto.createHash('sha256').update(value).digest('hex');
 const scenarios=['D01_ORGANIZATION_OB3','D05_MEMBERSHIP_OB3','D05_MEMBERSHIP_EXPIRED_NEGATIVE','D05_MEMBERSHIP_UNTRUSTED_NEGATIVE','D07_CANVAS_OB3'];
-function fixture(t){
+function fixture(t,{proxyEvidence=false}={}){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'ob3-quiescent-control-'));t.after(()=>{assert.equal(path.dirname(root),fs.realpathSync(os.tmpdir()));assert(path.basename(root).startsWith('ob3-quiescent-control-'));assert.equal(fs.realpathSync(root),root);assert(!fs.lstatSync(root).isSymbolicLink());fs.rmSync(root,{recursive:true});});
  const file=(name,value)=>{const p=path.join(root,name),raw=Buffer.from(JSON.stringify(value));fs.writeFileSync(p,raw);return {path:p,bytes:raw.length,sha256:sha(raw)};};
  const runId='8b5f5d22-eb3a-4a7f-b9e7-2cdcb651c8e0',imageId='sha256:'+'b'.repeat(64),time='2026-01-01T00:00:00Z';
  const names=['gateway','organization','auth','issuance-native','flow','credential-template','signing-keys','trust-profile','presentation-policy','compliance-profile','passport-beta-bureau',...Array.from({length:11},(_,i)=>'retained-'+i)];
  const owned={},ancillary={},live={},created={roles:[]},prefix={},outcomes={},resources=[],roles=[],modelRoles=[];
+ const publicFile=(name,text)=>{const p=path.join(root,name);fs.writeFileSync(p,text);return {path:p,bytes:Buffer.byteLength(text),sha256:sha(text)};};
+ const route=proxyEvidence?publicFile('route.template','location = /ready { set $backend_api ${GATEWAY_UPSTREAM}; proxy_pass http://$backend_api/ready; }'):null;
+ const entry=proxyEvidence?publicFile('entry.sh',"GATEWAY_UPSTREAM=${GATEWAY_UPSTREAM:-gateway:8000}\nenvsubst '${PUBLIC_DOMAIN} ${UI_DEV_PORT} ${DOCS_DOMAIN} ${GATEWAY_UPSTREAM}' < /etc/nginx/conf.d/default.conf.template"):null;
  for(const [i,role]of names.entries()){
   const cid=(i+1).toString(16).padStart(64,'0'),status=i>=4&&i<10?'created':'exited',exit=role==='passport-beta-bureau'?1:0;
   const config={Env:['SYNTHETIC=1'],Labels:{'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role}},host={Memory:67108864};
@@ -22,8 +25,11 @@ function fixture(t){
  outcomes['passport-beta-bureau']={observedExitCode:1,deferred:true};
  for(const [i,role]of ['docs','keycloak','nginx-proxy','openbao','postgres','redis'].entries()){
   const cid=(i+100).toString(16).padStart(64,'0'),config={Env:['SYNTHETIC=1'],Labels:{'com.docker.compose.project':'elevenid-beta','com.docker.compose.service':role}},host={Memory:67108864};
-  ancillary[role]={Id:cid,Image:imageId,State:{Status:'running',Running:true,Pid:i+100,StartedAt:time},HostConfig:host,Mounts:[],Labels:config.Labels};live[cid]={...structuredClone(ancillary[role]),Config:config,State:{...ancillary[role].State,Paused:false,OOMKilled:false,ExitCode:0}};
-  resources.push({role,containerId:cid,imageId,status:'running',running:true,hostPid:i+100,startedAt:time,containerExitCode:0,configSha256:sha(JSON.stringify(config)),hostConfigSha256:sha(JSON.stringify(host)),mountsSha256:sha('[]')});
+  const mounts=proxyEvidence&&role==='nginx-proxy'?[{Destination:'/etc/nginx/conf.d/default.conf.template',Type:'bind',RW:false,Source:route.path},{Destination:'/docker-entrypoint.d/40-substitute-env.sh',Type:'bind',RW:false,Source:entry.path}]:[];
+  if(proxyEvidence&&role==='nginx-proxy'){config.Env=['GATEWAY_UPSTREAM=gateway:8000'];config.Healthcheck={Test:['CMD-SHELL','wget --quiet --tries=1 --spider http://127.0.0.1/ready || exit 1']};}
+  ancillary[role]={Id:cid,Image:imageId,State:{Status:'running',Running:true,Pid:i+100,StartedAt:time},HostConfig:host,Mounts:mounts,Labels:config.Labels};live[cid]={...structuredClone(ancillary[role]),Config:config,State:{...ancillary[role].State,Paused:false,OOMKilled:false,ExitCode:0}};
+  if(proxyEvidence&&role==='nginx-proxy')live[cid].State.Health={Status:'unhealthy',Log:Array.from({length:5},()=>({ExitCode:1,Output:'wget: server returned error: HTTP/1.1 502 Bad Gateway',End:new Date().toISOString()}))};
+  resources.push({role,containerId:cid,imageId,status:'running',running:true,hostPid:i+100,startedAt:time,containerExitCode:0,configSha256:sha(JSON.stringify(config)),hostConfigSha256:sha(JSON.stringify(host)),mountsSha256:sha(JSON.stringify([...mounts].sort((a,b)=>a.Destination.localeCompare(b.Destination))))});
  }
  const job={schema:'marty.windows-job-result/v1',state:'COMPLETE',exitCode:0,jobClosed:true,terminalActiveProcesses:0,forcedTermination:false,timedOut:false,cancelled:false,hostMarginBreached:false};
  const runtimeBefore=file('runtime-before.json',{roles:created.roles}),failure=file('failure.json',{code:'SYNTHETIC_REVIEWED_DEFERRED_FAILURE'});
@@ -40,6 +46,7 @@ function fixture(t){
  const post={authority:file('authority.json',authority),quiescence:file('quiescence.json',quiescence),quiescenceJob:file('quiescence-job.json',job),current22:file('current22.json',owned),current22Job:file('current22-job.json',job)};
  const state={...partial,phase:'OB3_PARTIAL_QUIESCENT',pendingStep:null,pendingArgv:null,pendingContainerId:null,pendingRequest:null,readinessScope:'OB3_FUNCTIONAL_ONLY',fullStackQualified:false,allowedScenarios:scenarios,deferredRoles:['passport-beta-bureau'],recoveryAuthority:post.authority,ob3Quiescence:post.quiescence,priorPartialStartState:authority.originalOperationState,originalOperationState:authority.originalOperationState,priorStartAcks:prefix,startAcks:{},ob3StopOutcomes:outcomes,deferredFailure:failure};
  const recovery={runId,runtimeBefore,ob3Quiescent:post};
+ if(proxyEvidence){const proxy=Object.values(live).find(row=>row.Config.Labels['com.docker.compose.service']==='nginx-proxy');recovery.proxyDependencyHealth=file('proxy-evidence.json',{schema:'marty.maintenance-proxy-dependency/v1',proxyObservation:file('proxy-observation.json',{Id:proxy.Id,Image:proxy.Image,Health:proxy.State.Health,Healthcheck:proxy.Config.Healthcheck}),selectedUpstream:file('selected-upstream.json',{containerId:proxy.Id,selectedVariable:'GATEWAY_UPSTREAM',present:true,otherEnvironmentValuesReported:false,value:'gateway:8000'}),routeTemplate:route,entrypoint:entry});}
  const read=argv=>{if(JSON.stringify(argv)===JSON.stringify(['info','--format','{{json .}}']))return JSON.stringify({ID:authority.engineId});assert.equal(argv.length,2);assert.equal(argv[0],'inspect');assert(live[argv[1]],'SYNTHETIC_SCOPE_ONLY');return JSON.stringify([live[argv[1]]]);};
  return {file,job,post,state,recovery,quiescence,owned,live,outcomes,authority,original,invoke:()=>maintenanceOb3QuiescentContext(recovery,state),read};
 }
@@ -162,4 +169,22 @@ for(const drift of ['none','host-value','host-extra','mount-value','mount-extra'
   assert.deepEqual(fresh,f.quiescence,'Original raw-order Q2 receipt still matches the live producer');
  }
  else assert.throws(f.invoke);
+});
+
+for(const fault of ['none','wrong-upstream','wrong-health-cause'])test('controlled OB3 maintenance branch resolves bound proxy evidence: '+fault,t=>{
+ const f=fixture(t,{proxyEvidence:true}),Module=require('node:module'),filename=require.resolve('./functional-debug-runtime');
+ // Expose this private branch only in the isolated test module; execute its
+ // unchanged body and real containment/proxy owners, with profile authority stubbed.
+ const isolated=new Module(filename,module);isolated.filename=filename;isolated.paths=module.paths;
+ isolated._compile(fs.readFileSync(filename,'utf8')+'\nmodule.exports.controlledOb3Branch=verifyOb3QuiescentMaintenance;\n',filename);
+ const owner=require('./beta-resource-runtime');t.mock.method(owner,'restartAuthority',()=>({a:{cap:{allRunningRoles:Object.fromEntries(['docs','keycloak','nginx-proxy','openbao','postgres','redis'].map(role=>[role,{health:null}]))}}}));
+ const proxy=Object.values(f.live).find(row=>row.Config.Labels['com.docker.compose.service']==='nginx-proxy');
+ if(fault==='wrong-upstream')proxy.Config.Env=['GATEWAY_UPSTREAM=foreign:8000'];
+ if(fault==='wrong-health-cause')for(const log of proxy.State.Health.Log)log.Output='different failure';
+ const fakeRef={sha256:'a'.repeat(64)},profile={baselineDeployment:fakeRef,baselineBuild:fakeRef,debugDeployment:fakeRef,debugBuild:fakeRef,retainedBuilds:{}};
+ const invoke=()=>isolated.exports.controlledOb3Branch(profile,f.recovery,f.file('bound-recovery.json',f.recovery),f.state,f.read);
+ if(fault!=='none'){assert.throws(invoke);return;}
+ const result=invoke();assert.equal(result.ob3QuiescentCheckpoint,true);assert.equal(result.fullStackQualified,false);assert.equal(result.functionalRuntimeQualified,false);
+ assert.equal(result.dependencyHealthObservations.length,1);const classification=result.resources.find(row=>row.role==='nginx-proxy').maintenanceHealthClassification;
+ assert.equal(classification.state,'EXPECTED_MAINTENANCE_UPSTREAM_STOPPED');assert.equal(classification.functionalReadiness,false);assert.equal(classification.evidenceSha256,f.recovery.proxyDependencyHealth.sha256);
 });
