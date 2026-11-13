@@ -135,7 +135,9 @@ def test_quiescence_compares_full_state_across_order(tmp_path):
     path=tmp_path/'quiescent.json';path.write_text(json.dumps(retained));bound=ref(path)
     bindings=D12CurrentHostBindings.__new__(D12CurrentHostBindings)
     bindings.profile=CURRENT;bindings.assert_inputs=lambda: None
-    bindings.store=SimpleNamespace(read=lambda _: {"phase":"ALL22_QUIESCENT","quiescenceSha256":bound['sha256']})
+    bindings.inputs={"runId":"00000000-0000-4000-8000-000000000001"}
+    bindings.store=SimpleNamespace(read=lambda _: {"phase":"ALL22_QUIESCENT",
+        "runId":bindings.inputs["runId"],"quiescenceSha256":bound['sha256']})
     bindings.observer=SimpleNamespace(inspect_all22=lambda: observed)
     assert bindings.verify_all22_quiescent(bound) is True
     observed['roles'][0]['oomKilled']=True

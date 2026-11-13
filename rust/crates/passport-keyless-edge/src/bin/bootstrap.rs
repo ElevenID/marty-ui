@@ -346,10 +346,10 @@ async fn verify_managed_identity(
     key: &str,
 ) -> Result<(), Box<dyn Error>> {
     OpenBaoTlsIdentityFiles {
-        certificate_chain_file: output.join(&cert_file),
+        certificate_chain_file: output.join(cert_file),
         kms_ca_cert_file: ca_file.to_owned(),
         kms_endpoint: endpoint.to_owned(),
-        kms_token_file: output.join(&token_file),
+        kms_token_file: output.join(token_file),
         kms_key_name: key.to_owned(),
         kms_key_version: 1,
         request_timeout: Duration::from_secs(5),
