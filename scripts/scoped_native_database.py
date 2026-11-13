@@ -63,7 +63,7 @@ RECOVERY_TRUST_FIELDS = frozenset(("composeArguments", "composeSources", "planne
 
 
 
-def _recovery_trust_models(original, inputs):
+def _recovery_trust_models(original, inputs, *, allow_ob3_flow_validate=False):
     # Only the two new credential paths may differ; the retained signer address,
     # key and version and every other model field remain unchanged.
     old_refs, new_refs = original["plannedModels"], inputs["plannedModels"]
@@ -81,6 +81,17 @@ def _recovery_trust_models(original, inputs):
                 require(after["secrets"][secret]["file"] == str(generation / name),
                         "D12_RECOVERY_TRUST_GENERATION_REQUIRED")
                 after["secrets"][secret]["file"] = before["secrets"][secret]["file"]
+            if allow_ob3_flow_validate:
+                old_flow=before["services"]["flow"]
+                new_flow=after["services"]["flow"]
+                require(old_flow.get("environment",{}).get("MARTY_SCHEMA_STARTUP_MODE") is None
+                        and new_flow.get("environment",{}).get("MARTY_SCHEMA_STARTUP_MODE")=="validate",
+                        "D12_OB3_FLOW_PREMIGRATED_MODE_REQUIRED")
+                new_flow["environment"]=dict(new_flow["environment"])
+                del new_flow["environment"]["MARTY_SCHEMA_STARTUP_MODE"]
+                if "environment" not in old_flow:
+                    require(new_flow["environment"]=={},"D12_OB3_FLOW_ENVIRONMENT_DRIFT")
+                    del new_flow["environment"]
         require(before == after, "D12_RECOVERY_TARGET_MODEL_DRIFT")
 
 def fence_install_recovery_checkpoint(inputs, state, intent, recovery):
