@@ -679,6 +679,150 @@ class D12CurrentHostBindings:
         self._ob3_containment_before=self._ob3_containment_read(recovery_ref,"PARTIAL",{})
         return True
 
+    def ob3_flow_quiesce_authorization_verified(self,authority_ref,recovery_ref):
+        """Bind only the acknowledged Flow failure; this grants no KMS or DB effect."""
+        from scoped_d12_native_execution import flow_pending_ob3_checkpoint,OB3_ALLOWED_SCENARIOS,D12CurrentExecution
+        self.assert_inputs();selected_sources(self.inputs,self.profile)
+        source=Path(D12CurrentExecution.__init__.__code__.co_filename).resolve()
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        authority=json.loads(read_ref(authority_ref).read_bytes())
+        require(self.profile=="d05-membership-current-functional"
+                and self.lock is not None and self.lock.held()
+                and self.dispatch_permit is not None
+                and self.dispatch_permit["scope"]=="OB3_FUNCTIONAL_ONLY"
+                and self.dispatch_permit["authority"]==authority_ref==self.inputs["d12Authority"]
+                and read_ref(self.inputs["executionSource"]).resolve()==source
+                and source==self.host._root/"scripts/scoped_d12_native_execution.py"
+                and self.inputs["executionSource"]["sha256"]==self.host._source_files["scripts/scoped_d12_native_execution.py"]["sha256"]
+                and authority.get("approvedRecoveryAuthoritySha256")==recovery_ref["sha256"]
+                and authority.get("approvedExecutionSourceSha256")==self.inputs["executionSource"]["sha256"]
+                and authority.get("approvedFunctionalRuntimeSha256")==self.inputs["functionalRuntimeModule"]["sha256"]
+                and authority.get("approvedSelectionSha256")==self.inputs["selection"]["sha256"]
+                and authority.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
+                and recovery.get("schema")=="marty.d12-ob3-flow-pending-recovery/v1"
+                and recovery.get("operation")=="QUIESCE_OB3_FLOW_PENDING_STARTS"
+                and recovery.get("dispatchAuthorized") is True
+                and recovery.get("draftOnly") is False,
+                "D12_EXACT_FLOW_QUIESCE_AUTHORITY_REQUIRED")
+        flow_pending_ob3_checkpoint(self.inputs,self.store.read("build-state.json"),
+            self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
+        self.observer.bind_ob3_partial_created(recovery_ref)
+        saved=json.loads(read_ref(recovery["currentOwned22"]).read_bytes())
+        actual=exact_roles(self.observer.inspect_all22(),self.profile)
+        require(set(saved)==set(actual) and all(saved[role]["Id"]==row["containerId"]
+                and saved[role]["Image"]==row["imageId"] for role,row in actual.items()),
+                "D12_FLOW_CURRENT22_IDENTITY_CHANGED")
+        self._ob3_flow_approval=recovery_ref
+        return True
+
+    def ob3_flow_quiesce_steps(self,recovery_ref):
+        from scoped_passport_maintenance import _stop_contract
+        require(getattr(self,"_ob3_flow_approval",None)==recovery_ref
+                and self.lock is not None and self.lock.held(),"D12_FLOW_QUIESCE_NOT_AUTHORIZED")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        state=self.store.read("build-state.json")
+        require(state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes()),
+                "D12_FLOW_STOP_PREIMAGE_CHANGED")
+        prefix=[step.removeprefix("START_") for step in state["steps"]]
+        require(len(prefix)==17 and set(state["startAcks"])==set(prefix)
+                and set(recovery["stopContracts"])==set(prefix)|{"flow"},
+                "D12_FLOW_EXACT_STOP_SET_REQUIRED")
+        saved=json.loads(read_ref(recovery["currentOwned22"]).read_bytes())
+        steps=[]
+        for role in reversed([*prefix,"flow"]):
+            row=self.observer.inspect_role(role)
+            require(row["containerId"]==saved[role]["Id"] and row["imageId"]==saved[role]["Image"],
+                    "D12_FLOW_STOP_CID_CHANGED:"+role)
+            if role=="flow":
+                policy=json.loads(read_ref(recovery["stopContracts"][role]).read_bytes())
+                proof=json.loads(read_ref(policy["sourceProof"]).read_bytes())
+                require(policy.get("schema")=="marty.reviewed-flow-crash-stop/v1"
+                        and policy.get("role")=="flow"
+                        and policy.get("containerId")==row["containerId"]
+                        and policy.get("imageId")==row["imageId"]
+                        and policy.get("sourceRevision")==self.observer.current[role]["source"]
+                        and policy.get("elfSha256")==self.observer.current[role]["sha256"]
+                        and policy.get("signal")=="SIGTERM"
+                        and policy.get("allowedExitCodes")==[0,1,143]
+                        and policy.get("noAutomaticSigkill") is True
+                        and policy.get("gracefulShutdownVerified") is False
+                        and policy.get("failedStart")==recovery["originalOperationState"]
+                        and policy.get("observedExitCode")==1
+                        and proof.get("schema")=="marty.graceful-shutdown-source-proof/v1"
+                        and proof.get("role")=="flow"
+                        and proof.get("sourceRevision")==policy["sourceRevision"]
+                        and proof.get("elfSha256")==policy["elfSha256"]
+                        and "SIGTERM" in proof.get("supportedSignals",[])
+                        and row.get("state") in ("restarting","exited")
+                        and row.get("hostPid")==0 and row.get("paused") is False
+                        and row.get("oomKilled") is False
+                        and row.get("containerExitCode")==1,
+                        "D12_FLOW_EXACT_CRASH_STOP_REQUIRED")
+            else:
+                require(row.get("state")=="running" and row.get("running") is True
+                        and type(row.get("hostPid")) is int and row["hostPid"]>0
+                        and row.get("paused") is False and row.get("oomKilled") is False,
+                        "D12_FLOW_PREFIX_ROLE_NOT_RUNNING:"+role)
+                policy=_stop_contract(role,self.observer.current[role],recovery["stopContracts"][role])
+            steps.append({"role":role,"containerId":row["containerId"],"imageId":row["imageId"],
+                "argv":["docker","stop","--signal",policy["signal"],"--time","-1",row["containerId"]]})
+        self._ob3_flow_stop_steps={step["role"]:step for step in steps}
+        return steps
+
+    def ob3_flow_stop_owned_role(self,recovery_ref,step):
+        self.assert_inputs()
+        require(self.lock is not None and self.lock.held()
+                and getattr(self,"_ob3_flow_approval",None)==recovery_ref
+                and getattr(self,"_ob3_flow_stop_steps",{}).get(step["role"])==step,
+                "D12_FLOW_EXACT_STOP_STEP_REQUIRED")
+        state=self.store.read("build-state.json")
+        require(state.get("phase")=="OB3_FLOW_STOP_PENDING"
+                and state.get("pendingStep")=="OB3_FLOW_STOP_"+step["role"]
+                and state.get("pendingArgv")==step["argv"]
+                and state.get("pendingContainerId")==step["containerId"]
+                and state.get("recoveryAuthority")==recovery_ref,
+                "D12_FLOW_DURABLE_STOP_INTENT_REQUIRED")
+        row=self.observer.inspect_role(step["role"])
+        require(row["containerId"]==step["containerId"] and row["imageId"]==step["imageId"],
+                "D12_FLOW_STOP_CID_CHANGED")
+        if step["role"]=="flow":
+            require(row.get("state") in ("restarting","exited")
+                    and row.get("hostPid")==0 and row.get("containerExitCode")==1,
+                    "D12_FLOW_CRASH_STATE_CHANGED")
+        else:
+            require(row.get("state")=="running" and row.get("running") is True
+                    and type(row.get("hostPid")) is int and row["hostPid"]>0
+                    and row.get("paused") is False and row.get("oomKilled") is False,
+                    "D12_FLOW_PREFIX_ROLE_NOT_RUNNING:"+step["role"])
+        result=bounded_run([str(self.docker),"--context","desktop-linux",*step["argv"][1:]],
+            env=self.environment,timeout=180,stdout_limit=65536,stderr_limit=65536)
+        name="ob3-flow-stop-"+step["role"]
+        self.save_bytes(name+".stdout",result.stdout);self.save_bytes(name+".stderr",result.stderr)
+        self.save(name+".terminal.json",{"exitCode":result.returncode,"observation":result.observation})
+        require(result.returncode==0 and result.observation["timedOut"] is False
+                and not result.observation["failures"],"D12_FLOW_STOP_UNKNOWN_NO_RETRY")
+        return self.observer.inspect_role(step["role"])
+
+    def ob3_flow_observe_quiescence(self,recovery_ref,outcomes):
+        require(getattr(self,"_ob3_flow_approval",None)==recovery_ref
+                and self.lock is not None and self.lock.held(),"D12_FLOW_QUIESCE_NOT_AUTHORIZED")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        saved=json.loads(read_ref(recovery["currentOwned22"]).read_bytes())
+        rows=exact_roles(self.observer.inspect_all22(),self.profile)
+        require(set(rows)==set(saved)
+                and all(row["containerId"]==saved[role]["Id"]
+                    and row["imageId"]==saved[role]["Image"]
+                    and row.get("running") is False and row.get("hostPid")==0
+                    and row.get("paused") is False and row.get("oomKilled") is False
+                    for role,row in rows.items())
+                and set(outcomes)==set(self._ob3_flow_stop_steps)
+                and all(outcomes[role]["observedExitCode"]==rows[role]["containerExitCode"]
+                    for role in outcomes),"D12_FLOW_ALL22_QUIESCENCE_CHANGED")
+        return self.save("ob3-flow-owned22-quiescence.private.json",{
+            "schema":"marty.ob3-flow-quiescence/v1","runId":self.inputs["runId"],
+            "authority":recovery_ref,"roles":list(rows.values()),"stopOutcomes":outcomes,
+            "fullStackQualified":False,"releaseQualified":False,"recordingQualified":False})
+
     def ob3_startup_plan(self,recovery_ref):
         from scoped_d12_native_execution import ob3_startup_prerequisites
         from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
@@ -1080,6 +1224,10 @@ class D12CurrentHostBindings:
                 "ob3_quiesce_steps": self.ob3_quiesce_steps,
                 "ob3_stop_owned_role": self.ob3_stop_owned_role,
                 "observe_ob3_quiescence": self.observe_ob3_quiescence,
+                "ob3_flow_quiesce_authorization_verified": self.ob3_flow_quiesce_authorization_verified,
+                "ob3_flow_quiesce_steps": self.ob3_flow_quiesce_steps,
+                "ob3_flow_stop_owned_role": self.ob3_flow_stop_owned_role,
+                "ob3_flow_observe_quiescence": self.ob3_flow_observe_quiescence,
                 "save": self.save, "save_bytes": self.save_bytes, "ref": ref,
                 "assert_inputs": self.assert_inputs, "root": self.root,
                 "env": self.environment, "nodeExecutable": str(self.node),

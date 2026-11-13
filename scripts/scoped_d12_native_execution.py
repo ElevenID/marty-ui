@@ -302,6 +302,180 @@ def _closed_ob3_scope(recovery,inputs,operations):
             and recovery.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS),"D12_CLOSED_OB3_AUTHORITY_REQUIRED")
 
 
+def flow_pending_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend):
+    """Admit only the third-replacement Flow pending inspection for quiescence."""
+    from scoped_native_database import RECOVERY_SOURCE_FIELDS
+    from scoped_native_runtime import validate_journal_readback
+    def load(reference):return json.loads(read_ref(reference).read_bytes())
+    require(recovery.get("schema")=="marty.d12-ob3-flow-pending-recovery/v1"
+            and recovery.get("operation")=="QUIESCE_OB3_FLOW_PENDING_STARTS"
+            and recovery.get("scope")=="OB3_FUNCTIONAL_ONLY"
+            and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
+            and recovery.get("runId")==inputs["runId"]
+            and recovery.get("deferredRoles")==[OB3_DEFERRED_ROLE]
+            and recovery.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS),
+            "D12_OB3_FLOW_RECOVERY_AUTHORITY_REQUIRED")
+    original=load(recovery["originalInputs"]);previous=load(recovery["previousRecoveryAuthority"])
+    require(previous.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1"
+            and previous.get("operation")=="REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"
+            and state.get("recoveryAuthority")==recovery["previousRecoveryAuthority"]
+            and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"]
+            and recovery.get("quiescence")==previous["quiescence"],
+            "D12_OB3_FLOW_PRIOR_AUTHORITY_CHANGED")
+    deepest,proof,verified=created_recovery_checkpoint(original,
+        load(previous["originalOperationState"]),intent,previous,
+        operation_backend=operation_backend,historical_source=True)
+    require(recovery.get("sourceMap")=={key:{"original":original[key],"recovery":inputs[key]}
+                for key in RECOVERY_SOURCE_FIELDS}
+            and {key:value for key,value in original.items()
+                if key not in RECOVERY_SOURCE_FIELDS|{"d12Authority"}}
+                =={key:value for key,value in inputs.items()
+                if key not in RECOVERY_SOURCE_FIELDS|{"d12Authority"}},
+            "D12_OB3_FLOW_INPUT_GRAPH_CHANGED")
+    require(state==load(recovery["originalOperationState"])
+            and state.get("schema")=="marty.d12-current-native-operation/v1"
+            and state.get("phase")=="START_INSPECTION_PENDING"
+            and state.get("scope")=="FUNCTIONAL_ONLY"
+            and state.get("pendingStep")=="INSPECT_START_flow"
+            and state.get("acknowledgedStep")=="START_flow"
+            and state.get("pendingArgv") is None and state.get("pendingRequest") is None
+            and state.get("runId")==inputs["runId"]
+            and state.get("sourceRevision")==original["uiRevision"]
+            and state.get("coreRevision")==original["coreRevision"]
+            and state.get("databaseProof")==previous["databaseProof"]
+            and state.get("verifiedDatabase")==previous["verifiedDatabase"]
+            and recovery.get("originalApplyIntent")==previous["originalApplyIntent"],
+            "D12_OB3_FLOW_PENDING_STATE_CHANGED")
+    rows=maintenance.exact_roles(load(state["created"]),inputs["rolloutProfile"])
+    plan=load(original["maintenancePlan"]);before=load(original["runtimeBefore"])
+    models={name:load(reference) for name,reference in plan["composeModels"].items()}
+    order=maintenance.preview(plan,before,models)["restoreOrder"]
+    prefix=order[:order.index("flow")]
+    require(len(prefix)==17 and state.get("steps")==["START_"+role for role in prefix]
+            and set(state.get("startAcks",{}))==set(prefix)
+            and state.get("pendingContainerId")==rows["flow"]["containerId"]
+            and recovery.get("created")==state["created"]
+            and recovery.get("selection")==inputs["selection"],
+            "D12_OB3_FLOW_START_PREFIX_CHANGED")
+    current=load(recovery["currentOwned22"]);ancillary=load(recovery["currentAncillary6"])
+    require(set(current)==set(rows) and len(current)==22 and len(ancillary)==6,
+            "D12_OB3_FLOW_CURRENT28_REQUIRED")
+    for role,row in rows.items():
+        require(current[role].get("Id")==row["containerId"]
+                and current[role].get("Image")==row["imageId"],
+                "D12_OB3_FLOW_CURRENT_CID_CHANGED:"+role)
+    flow=current["flow"]["State"]
+    require(flow.get("Status") in ("exited","restarting") and flow.get("Pid")==0
+            and flow.get("ExitCode")==1,"D12_OB3_FLOW_FAILURE_NOT_OBSERVED")
+    for role in prefix:
+        ack=state["startAcks"][role]
+        require(set(ack)=={"containerId","startedAt","hostPid","imageId"}
+                and ack["containerId"]==rows[role]["containerId"]
+                and ack["imageId"]==rows[role]["imageId"]
+                and type(ack["hostPid"]) is int and ack["hostPid"]>0
+                and current[role]["State"].get("Status")=="running"
+                and current[role]["State"].get("Running") is True
+                and type(current[role]["State"].get("Pid")) is int
+                and current[role]["State"]["Pid"]>0,
+                "D12_OB3_FLOW_START_ACK_CHANGED:"+role)
+    require(set(recovery.get("stopContracts",{}))==set(prefix)|{"flow"},
+            "D12_OB3_FLOW_STOP_SET_CHANGED")
+    for role,reference in recovery["stopContracts"].items():
+        contract=load(reference)
+        require(contract.get("role")==role and contract.get("containerId")==rows[role]["containerId"]
+                and contract.get("noAutomaticSigkill") is True
+                and isinstance(contract.get("sourceProof"),dict),
+                "D12_OB3_FLOW_STOP_CONTRACT_CHANGED:"+role)
+        proof_source=load(contract["sourceProof"])
+        if role=="flow":
+            require(contract.get("schema")=="marty.reviewed-flow-crash-stop/v1"
+                    and contract.get("imageId")==rows[role]["imageId"]
+                    and contract.get("sourceRevision")==rows[role]["source"]
+                    and contract.get("elfSha256")==rows[role]["sha256"]
+                    and contract.get("signal")=="SIGTERM"
+                    and contract.get("allowedExitCodes")==[0,1,143]
+                    and contract.get("gracefulShutdownVerified") is False
+                    and contract.get("observedExitCode")==1
+                    and contract.get("failedStart")==recovery["originalOperationState"]
+                    and proof_source.get("schema")=="marty.graceful-shutdown-source-proof/v1"
+                    and proof_source.get("role")=="flow"
+                    and proof_source.get("sourceRevision")==rows[role]["source"]
+                    and proof_source.get("elfSha256")==rows[role]["sha256"]
+                    and "SIGTERM" in proof_source.get("supportedSignals",[]),
+                    "D12_OB3_FLOW_CRASH_STOP_PROOF_REQUIRED")
+    journal=load(recovery["journalRead"])
+    require(isinstance(journal,list) and len(journal)==1
+            and journal[0].get("state")=="EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE"
+            and journal[0].get("mountReadOnly") is True,
+            "D12_OB3_FLOW_AUTHORITATIVE_JOURNAL_REQUIRED")
+    for name,reference,value in (("build-state.json",recovery["originalOperationState"],state),
+                                 ("build-apply-intent.json",recovery["originalApplyIntent"],intent)):
+        item=journal[0]["files"][name]
+        exact=validate_journal_readback({"storedBytesBase64":item.get("storedBytesBase64"),
+            "sha256":item.get("sha256"),"value":item.get("document")})
+        require(item.get("present") is True and exact==read_ref(reference).read_bytes()
+                and item.get("document")==value and item.get("sha256")==reference["sha256"]
+                and item.get("bytes")==reference["bytes"],"D12_OB3_FLOW_JOURNAL_CHANGED")
+    require(all(journal[0]["files"][name].get("present") is False
+                for name in ("build-receipt.json","configuration-receipt.json"))
+            and all(journal[0]["root"][key]==operation_backend["rootProof"][key]
+                for key in ("device","inode","uid","mode")),
+            "D12_OB3_FLOW_ROOT_OR_RECEIPT_CHANGED")
+    invocation_ref=recovery["failedCutoverInvocation"]
+    invocation_path=read_ref(invocation_ref)
+    invocation=load(invocation_ref);failed_root=invocation_path.parent
+    require(invocation_path.name=="invocation.armed.json"
+            and invocation.get("schema")=="marty.current10-effect-invocation/v1"
+            and invocation.get("executionMode")=="REPLACE_OB3_AFTER_SECOND_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT_AND_RESUME"
+            and invocation.get("executeAuthorized") is True
+            and invocation.get("effectInputs")==recovery["originalInputs"]
+            and invocation.get("recoveryAuthority")==recovery["previousRecoveryAuthority"]
+            and Path(invocation.get("outputRoot",""))==failed_root/"outputs"
+            and all(Path(recovery[key]["path"])==failed_root/name for key,name in (
+                ("failedCutoverRequest","current10-effect-request.private.json"),
+                ("failedCutoverController","current10-effect-controller.safe.json"),
+                ("failedCutoverJob","current10-effect-job.json"))),
+            "D12_OB3_FLOW_FAILED_INVOCATION_CHANGED")
+    read_ref(invocation["actor"]);read_ref(invocation["executables"]["python"])
+    request=load(recovery["failedCutoverRequest"])
+    require(request.get("schema")=="marty.windows-job-request/v1"
+            and request.get("command")==[invocation["executables"]["python"]["path"],"-B",
+                invocation["actor"]["path"],"--run",str(invocation_path),invocation_ref["sha256"]]
+            and Path(request.get("cwd",""))==failed_root
+            and Path(request.get("receiptFile",""))==Path(recovery["failedCutoverJob"]["path"])
+            and request.get("executableSha256")==invocation["executables"]["python"]["sha256"],
+            "D12_OB3_FLOW_FAILED_REQUEST_CHANGED")
+    controller=load(recovery["failedCutoverController"])
+    require(controller.get("state")=="CURRENT10_EFFECT_FAILED_OR_UNKNOWN_NO_RETRY"
+            and controller.get("jobState")=="FAILED"
+            and controller.get("jobClosed") is True
+            and controller.get("terminalActiveProcesses")==0
+            and controller.get("resultPresent") is False
+            and controller.get("failurePresent") is True
+            and controller.get("automaticCleanupOrRetry") is False,
+            "D12_OB3_FLOW_FAILED_CONTROLLER_CHANGED")
+    for key,expected in (("failedCutoverJob","FAILED"),("reconciliationJob","COMPLETE")):
+        job=load(recovery[key])
+        require(job.get("state")==expected and type(job.get("exitCode")) is int
+                and job["exitCode"]==(1 if expected=="FAILED" else 0)
+                and job.get("jobClosed") is True and job.get("terminalActiveProcesses")==0
+                and all(job.get(field) is False for field in
+                    ("timedOut","forcedTermination","cancelled","hostMarginBreached")),
+                "D12_OB3_FLOW_CLOSED_JOB_REQUIRED:"+key)
+    capture=load(recovery["reconciliationResult"])
+    require(capture.get("state")=="OB3_THIRD_FLOW_PENDING_JOURNAL_AND_CURRENT28_CAPTURE_COMPLETE"
+            and capture.get("failedCutoverJob")==recovery["failedCutoverJob"]
+            and capture.get("serviceWrites") is False and capture.get("sqlWrites") is False
+            and capture.get("journalContentRead") is True
+            and capture.get("identity28StableDuringRead") is True
+            and capture.get("selectedGenerationsBound")==10
+            and capture.get("retainedOriginalGenerations")==12
+            and read_ref(recovery["journalRead"]).parent==read_ref(recovery["currentOwned22"]).parent
+            ==read_ref(recovery["currentAncillary6"]).parent==read_ref(recovery["reconciliationResult"]).parent,
+            "D12_OB3_FLOW_CAPTURE_CHANGED")
+    return deepest,proof,verified,prefix
+
+
 def partial_start_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backend):
     """Bind only the known Bureau failed-start checkpoint, not a successful start."""
     from scoped_native_database import RECOVERY_SOURCE_FIELDS,RECOVERY_TRUST_FIELDS
@@ -850,6 +1024,72 @@ class D12CurrentExecution:
         return self._resume_created(recovery_ref,replace_credentials=True,resume_replacement=True,ob3=True,
             third_ack_replace=True)
 
+    def quiesce_ob3_flow_pending_starts(self,recovery_ref):
+        """Durably stop only the failed Flow and 17 acknowledged predecessors."""
+        require(not self.read_only_preflight and self.profile=="d05-membership-current-functional",
+                "D12_OB3_FLOW_CURRENT10_ONLY")
+        recovery=json.loads(read_ref(recovery_ref).read_bytes())
+        original_state=self.store.read("build-state.json")
+        original,proof,verified,prefix=flow_pending_ob3_checkpoint(self.i,original_state,
+            self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
+        g=self.g
+        require(g["operation_lock_held"]() is True and g["recording_lock_held"]() is True
+                and g["ob3_flow_quiesce_authorization_verified"](self.i["d12Authority"],recovery_ref) is True,
+                "D12_OB3_FLOW_EXCLUSIVE_AUTHORITY_REQUIRED")
+        steps=g["ob3_flow_quiesce_steps"](recovery_ref)
+        bound22=json.loads(read_ref(recovery["currentOwned22"]).read_bytes())
+        require([step["role"] for step in steps]==list(reversed([*prefix,"flow"]))
+                and all(step["containerId"]==bound22[step["role"]]["Id"] for step in steps),
+                "D12_OB3_FLOW_EXACT_STOP_ORDER_REQUIRED")
+        self.state=dict(original_state)
+        self.record("OB3_FLOW_RECOVERY_AUTHORIZED",recoveryAuthority=recovery_ref,
+                    originalOperationState=recovery["originalOperationState"],fullStackQualified=False)
+        outcomes={}
+        for step in steps:
+            role=step["role"]
+            self.record("OB3_FLOW_STOP_PENDING",pendingStep="OB3_FLOW_STOP_"+role,
+                        pendingArgv=step["argv"],pendingContainerId=step["containerId"])
+            observed=g["ob3_flow_stop_owned_role"](recovery_ref,step)
+            contract=json.loads(read_ref(recovery["stopContracts"][role]).read_bytes())
+            require(observed.get("containerId")==step["containerId"]
+                    and observed.get("state")=="exited" and observed.get("running") is False
+                    and observed.get("hostPid")==0 and observed.get("oomKilled") is False
+                    and observed.get("containerExitCode") in contract["allowedExitCodes"],
+                    "D12_OB3_FLOW_STOP_NOT_RECONCILED:"+role)
+            outcomes[role]={"observedExitCode":observed["containerExitCode"]}
+            self.record("OB3_FLOW_STOP_TERMINAL",pendingStep=None,pendingArgv=None,
+                        pendingContainerId=None,ob3StopOutcomes=dict(outcomes))
+        quiescence=g["ob3_flow_observe_quiescence"](recovery_ref,outcomes)
+        require(read_ref(quiescence).is_file(),"D12_OB3_FLOW_ACTUAL_QUIESCENCE_REQUIRED")
+        self.record("OB3_FLOW_PARTIAL_QUIESCENT",pendingStep=None,pendingArgv=None,
+                    pendingContainerId=None,ob3Quiescence=quiescence,
+                    priorStartAcks=original_state["startAcks"],startAcks={},steps=[],
+                    fullStackQualified=False)
+        return {"schema":"marty.d12-ob3-flow-quiescence/v1","runId":self.i["runId"],
+            "quiescence":quiescence,"readinessScope":"OB3_FUNCTIONAL_ONLY",
+            "fullStackQualified":False,"runningProcessQualified":False,
+            "priorStartAcksAreHistorical":True,"databaseProof":proof,"verifiedDatabase":verified}
+
+    def _verify_completed_recovery_database(self, database, original, proof, verified, *, historical_revision=False):
+        """Recheck the completed database receipt without replaying SQL."""
+        dbstate=json.loads(read_ref(proof["operationState"]).read_bytes())
+        from scoped_native_database import schema_steps
+        command_steps={step for command in ("migrate","verify-owned-schema")
+            for step,_role in schema_steps(self.profile=="d05-membership-current-functional",command)}
+        database.commands=[json.loads(read_ref(op["receipt"]).read_bytes()) for op in dbstate["operations"]
+            if op["stepId"] in command_steps]
+        require({op["stepId"] for op in dbstate["operations"] if op["stepId"] in command_steps}==command_steps,
+                "D12_COMPLETED_SCHEMA_COMMAND_SET_CHANGED")
+        source_revision=(original["uiRevision"] if historical_revision else self.build_profile.ui_revision)
+        core_revision=(original["coreRevision"] if historical_revision else self.build_profile.core_revision)
+        checked=database.node("verify",proof=proof,commands=database.commands,context={
+            "runId":self.i["runId"],"selectionSha256":self.i["selection"]["sha256"],
+            "executorSource":original["executorSource"],"rolloutProfile":self.profile,
+            "sourceRevision":source_revision,"coreRevision":core_revision,
+            "baseline":database.baseline_refs,"approvedDatabaseBeforeSha256":self.i["databaseBefore"]["sha256"],
+            "approvedEngineId":database.engine_id,"tenantId":database.tenant_id})
+        require(checked==verified,"D12_COMPLETED_DATABASE_PROOF_REVERIFY_CHANGED")
+
     def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False,ob3=False,
                         second_ack_resume=False,third_ack_replace=False):
         require(type(replace_credentials) is bool and type(resume_replacement) is bool and type(ob3) is bool
@@ -877,21 +1117,7 @@ class D12CurrentExecution:
         checkpoint(self.i, self.store.read("build-state.json"),
             self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database.i={**self.i,"quiescence":recovery["quiescence"]}
-        dbstate=json.loads(read_ref(proof["operationState"]).read_bytes())
-        from scoped_native_database import schema_steps
-        command_steps={step for command in ("migrate","verify-owned-schema")
-            for step,_role in schema_steps(self.profile=="d05-membership-current-functional",command)}
-        database.commands=[json.loads(read_ref(op["receipt"]).read_bytes()) for op in dbstate["operations"]
-            if op["stepId"] in command_steps]
-        require({op["stepId"] for op in dbstate["operations"] if op["stepId"] in command_steps}==command_steps,
-                "D12_COMPLETED_SCHEMA_COMMAND_SET_CHANGED")
-        checked=database.node("verify",proof=proof,commands=database.commands,context={
-            "runId":self.i["runId"],"selectionSha256":self.i["selection"]["sha256"],
-            "executorSource":original["executorSource"],"rolloutProfile":self.profile,
-            "sourceRevision":self.build_profile.ui_revision,"coreRevision":self.build_profile.core_revision,
-            "baseline":database.baseline_refs,"approvedDatabaseBeforeSha256":self.i["databaseBefore"]["sha256"],
-            "approvedEngineId":database.engine_id,"tenantId":database.tenant_id})
-        require(checked==verified,"D12_COMPLETED_DATABASE_PROOF_REVERIFY_CHANGED")
+        self._verify_completed_recovery_database(database,original,proof,verified)
         replacement_preimage=(self.g["prepare_created_credential_replacement"](recovery_ref)
             if replace_credentials else None)
         self.state=json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
