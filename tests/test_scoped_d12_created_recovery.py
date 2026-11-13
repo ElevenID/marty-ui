@@ -99,6 +99,79 @@ def acknowledged_replacement_fixture(tmp_path,quiescence=None):
     return inputs,state,intent,recovery,saved,observed
 
 
+@pytest.mark.parametrize("fault", [None, "wrong-prior", "new-generation", "changed-ack", "old-schema", "job-request", "current-cid"])
+def test_ob3_acknowledged_replacement_reuses_created_checkpoint_without_recreating(tmp_path,monkeypatch,fault):
+    inputs,state,intent,recovery,saved,observed=replacement_checkpoint_fixture(tmp_path)
+    original=json.loads(Path(recovery["originalInputs"]["path"]).read_bytes())
+    original["roleBinaries"]={"auth":"marty-auth"};inputs["roleBinaries"]=original["roleBinaries"]
+    recovery["originalInputs"]=saved("ob3-executed-inputs.json",original)
+    previous=json.loads(Path(recovery["previousRecoveryAuthority"]["path"]).read_bytes())
+    previous.update(schema="marty.d12-ob3-quiescent-recovery/v1",
+                    operation="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME",
+                    scope="OB3_FUNCTIONAL_ONLY",deferredRoles=["passport-beta-bureau"],
+                    allowedScenarios=list(execution.OB3_ALLOWED_SCENARIOS),
+                    startupPrerequisites=saved("ob3-startup.json",{"schema":"marty.ob3-startup-prerequisites/v1"}))
+    previous_ref=saved("ob3-prior-authority.json",previous)
+    state.update(recoveryAuthority=previous_ref,replacementAuthority=previous_ref,
+                 priorCreatedSnapshot=previous["selected22"])
+    state_ref=saved("ob3-replacement-ack.json",state)
+    observed[0]["files"]["build-state.json"]={"present":True,"document":state,"bytes":state_ref["bytes"],
+        **journal_readback(Path(state_ref["path"]).read_bytes())}
+    recovery.update(schema="marty.d12-ob3-acknowledged-replacement-recovery/v1",
+                    operation="RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                    scope="OB3_FUNCTIONAL_ONLY",deferredRoles=["passport-beta-bureau"],
+                    allowedScenarios=list(execution.OB3_ALLOWED_SCENARIOS),
+                    startupPrerequisites=previous["startupPrerequisites"],replaceCredentialGeneration=False,
+                    previousRecoveryAuthority=previous_ref,originalOperationState=state_ref,
+                    journalRead=saved("ob3-replacement-journal.json",observed))
+    recovery["selected22"]=saved("ob3-current-selected22.json",{"auth":{"Id":"a"*64}})
+    failed=tmp_path/"failed"/"cutover";outputs=failed/"outputs";outputs.mkdir(parents=True)
+    def failed_ref(name,value):
+        p=failed/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(value));return ref(p)
+    actor=failed_ref("actor.py",{"synthetic":"actor"});python=failed_ref("python.exe",{"synthetic":"python"})
+    invocation=failed_ref("invocation.armed.json",{"schema":"marty.current10-effect-invocation/v1",
+        "executionMode":"REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME","executeAuthorized":True,
+        "effectInputs":recovery["originalInputs"],"recoveryAuthority":previous_ref,
+        "actor":actor,"executables":{"python":python},"outputRoot":str(outputs)})
+    recovery["failedCutoverInvocation"]=invocation
+    recovery["failedCutoverJob"]=failed_ref("current10-effect-job.json",{"state":"FAILED","exitCode":1,
+        "jobClosed":True,"terminalActiveProcesses":0,**{k:False for k in ("forcedTermination","timedOut","cancelled","hostMarginBreached")}})
+    recovery["failedCutoverController"]=failed_ref("current10-effect-controller.safe.json",{
+        "state":"CURRENT10_EFFECT_FAILED_OR_UNKNOWN_NO_RETRY","jobState":"FAILED","jobClosed":True,
+        "terminalActiveProcesses":0,"resultPresent":False,"failurePresent":True,"automaticCleanupOrRetry":False})
+    recovery["failedCutoverRequest"]=failed_ref("current10-effect-request.private.json",{
+        "schema":"marty.windows-job-request/v1","command":[python["path"],"-B",actor["path"],"--run",invocation["path"],invocation["sha256"]],
+        "cwd":str(failed),"receiptFile":recovery["failedCutoverJob"]["path"],"executableSha256":python["sha256"]})
+    recovery["acknowledgedReplacement"]=failed_ref("outputs/d12-created-replacement-target-ack.private.json",state)
+    recovery["ownedCreatedCids"]=failed_ref("outputs/d12-credential-replacement-cids-after-ack.private.json",{
+        "schema":"marty.d12-owned-created-cids/v1","runId":inputs["runId"],"runtimeWrites":True,
+        "durableCreateAck":{"phase":"EFFECT_ACKNOWLEDGED","acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION"},
+        "selection":inputs["selection"],"selectedContainerIds":{"auth":"a"*64}})
+    called=[]
+    def prior_checkpoint(original,prior_state,actual_intent,authority,*,operation_backend):
+        called.append((original,prior_state,actual_intent,authority))
+        assert authority==previous and actual_intent==intent
+        return json.loads(Path(previous["originalInputs"]["path"]).read_bytes()),{},{}
+    monkeypatch.setattr(execution,"ob3_quiescent_checkpoint",prior_checkpoint)
+    monkeypatch.setattr(execution,"ob3_startup_prerequisites",lambda ref:called.append(ref))
+    if fault=="wrong-prior":recovery["previousRecoveryAuthority"]=saved("foreign-ob3-authority.json",{**previous,"operation":"UNREVIEWED"})
+    if fault=="new-generation":
+        inputs["runScopedTrustLeaseProof"]=saved("unapproved-new-lease.json",{"generationDirectory":"C:/different"})
+        recovery["trustDataMap"]["runScopedTrustLeaseProof"]["recovery"]=inputs["runScopedTrustLeaseProof"]
+    if fault=="changed-ack":state["replacementAuthority"]={"sha256":"foreign"}
+    if fault=="old-schema":recovery["schema"]="marty.d12-created-recovery/v1"
+    if fault=="job-request":
+        request=json.loads(Path(recovery["failedCutoverRequest"]["path"]).read_bytes());request["command"][-1]="f"*64
+        recovery["failedCutoverRequest"]=saved("foreign-job-request.json",request)
+    if fault=="current-cid":recovery["selected22"]=saved("foreign-current-cid.json",{"auth":{"Id":"b"*64}})
+    backend=json.loads((tmp_path/"created-backend.json").read_bytes())
+    if fault:
+        with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+    else:
+        result=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+        assert result[0]["runId"]==inputs["runId"] and len(called)==2
+
+
 @pytest.mark.parametrize("change",[None,"missing-flag","same-generation","other-model-field"])
 def test_acknowledged_replacement_accepts_only_explicit_new_generation(tmp_path,change):
     inputs,state,intent,recovery,saved,_=acknowledged_replacement_fixture(tmp_path)
@@ -263,7 +336,7 @@ def test_created_resume_enters_shared_finish_then_start_without_sql_stop_or_recr
         execution.created_recovery_checkpoint(inputs,value.state,intent,recovery,operation_backend=value.store.specification)
 
 
-@pytest.mark.parametrize("reconciled",[False,"resume","replace-ack"])
+@pytest.mark.parametrize("reconciled",[False,"resume","replace-ack","ob3-resume"])
 @pytest.mark.parametrize("change",[None,"reused-current-cid","missing-prepare"])
 def test_replacement_observer_requires_new_cids_against_current_created_preimage(tmp_path,change,reconciled):
     from scoped_d12_native_effect_host import D12CurrentEffectObserver
@@ -310,11 +383,14 @@ def test_replacement_observer_requires_new_cids_against_current_created_preimage
     state.update(acknowledgedStep="REPLACE_CREATED_CREDENTIAL_GENERATION",replacementAuthority=recovery)
     options={}
     if reconciled:
-        prior=saved("reconciled-prior-authority.json",{"operation":"REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+        prior=saved("reconciled-prior-authority.json",{"operation":"REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME" if reconciled=="ob3-resume"
+            else "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
             "selected22":saved("reconciled-prior22.json",{role:{"Id":first.get(role,old[role])} for role in old})})
         state["replacementAuthority"]=prior
-        resume=saved("reconciled-resume-authority.json",{"schema":"marty.d12-created-recovery/v1",
+        resume=saved("reconciled-resume-authority.json",{"schema":"marty.d12-ob3-acknowledged-replacement-recovery/v1" if reconciled=="ob3-resume"
+            else "marty.d12-created-recovery/v1",
             "operation":"REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if reconciled=="replace-ack"
+                else "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if reconciled=="ob3-resume"
                 else "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT","dispatchAuthorized":True,
             "draftOnly":change=="missing-prepare","previousRecoveryAuthority":prior,
             "originalOperationState":saved("reconciled-state.json",state),

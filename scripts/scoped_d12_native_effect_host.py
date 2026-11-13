@@ -304,9 +304,11 @@ class D12CurrentEffectObserver:
         recovery=None
         if resuming:
             recovery=json.loads(read_ref(reconciled_replacement).read_bytes())
-            require(replacing and recovery.get("schema")=="marty.d12-created-recovery/v1"
+            require(replacing and recovery.get("schema") in ("marty.d12-created-recovery/v1",
+                        "marty.d12-ob3-acknowledged-replacement-recovery/v1")
                     and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                     and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                     and state==json.loads(read_ref(recovery["originalOperationState"]).read_bytes())
                     and state.get("replacementAuthority")==recovery["previousRecoveryAuthority"],
@@ -332,7 +334,8 @@ class D12CurrentEffectObserver:
         if resuming:
             previous=json.loads(read_ref(recovery["previousRecoveryAuthority"]).read_bytes())
             require(previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
-                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
+                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                    "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
                     "D12_RECONCILED_REPLACEMENT_AUTHORITY_REQUIRED")
             prior=json.loads(read_ref(previous["selected22"]).read_bytes())
             require(isinstance(prior,dict) and set(prior)==set(self.original)
@@ -626,7 +629,8 @@ class D12CurrentHostBindings:
         from scoped_d12_native_execution import ob3_startup_prerequisites
         from scoped_passport_maintenance import _restore_order,_reviewed_cross_edges
         recovery=json.loads(read_ref(recovery_ref).read_bytes());source=recovery["startupPrerequisites"]
-        require(recovery.get("operation") in ("QUIESCE_OB3_PARTIAL_STARTS","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME")
+        require(recovery.get("operation") in ("QUIESCE_OB3_PARTIAL_STARTS","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME",
+                    "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False,"D12_OB3_STARTUP_AUTHORITY_REQUIRED")
         registered=self.host._source_files.get("scripts/ob3-startup-prerequisites.json")
         require(isinstance(registered,dict) and read_ref(source).resolve()==self.host._root/"scripts/ob3-startup-prerequisites.json"
@@ -694,7 +698,8 @@ class D12CurrentHostBindings:
                     ("marty.d12-created-recovery/v1", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME"),
                     ("marty.d12-created-recovery/v1", "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"),
                     ("marty.d12-created-recovery/v1", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"),
-                    ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"))
+                    ("marty.d12-ob3-quiescent-recovery/v1","REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"),
+                    ("marty.d12-ob3-acknowledged-replacement-recovery/v1","RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"))
                 and recovery.get("dispatchAuthorized") is True and recovery.get("draftOnly") is False
                 and recovery.get("runId") == self.inputs["runId"],
                 "D12_EXPLICIT_RECOVERY_AUTHORITY_REQUIRED")
@@ -733,7 +738,8 @@ class D12CurrentHostBindings:
         frozen_ref = self.inputs["runtimeBefore"]
         if recovery_ref is not None:
             recovery = json.loads(read_ref(recovery_ref).read_bytes())
-            created_recovery = recovery.get("schema")=="marty.d12-created-recovery/v1"
+            created_recovery = recovery.get("schema") in ("marty.d12-created-recovery/v1",
+                "marty.d12-ob3-acknowledged-replacement-recovery/v1")
             ob3_recovery=recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
             if ob3_recovery:
                 from scoped_d12_native_execution import ob3_quiescent_checkpoint
@@ -747,7 +753,8 @@ class D12CurrentHostBindings:
                 if self.observer.created_ref is None:
                     state=self.store.read("build-state.json")
                     if recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"):
+                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME",
+                        "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"):
                         created=self.observer.bind_created_after_ack("REPLACE_CREATED_CREDENTIAL_GENERATION",state,
                             reconciled_replacement=recovery_ref)
                         self._verify_created_target("REPLACE_CREATED_CREDENTIAL_GENERATION",state,created,
@@ -844,17 +851,22 @@ class D12CurrentHostBindings:
             fresh=self._ob3_containment_read(recovery["previousRecoveryAuthority"],"QUIESCENT",state["ob3StopOutcomes"])
             require(fresh==json.loads(read_ref(state["ob3Quiescence"]).read_bytes()),"D12_OB3_FRESH_QUIESCENCE_CHANGED")
             return True
-        if recovery.get("schema")=="marty.d12-created-recovery/v1":
+        if recovery.get("schema") in ("marty.d12-created-recovery/v1",
+                "marty.d12-ob3-acknowledged-replacement-recovery/v1"):
             from scoped_d12_native_execution import created_recovery_checkpoint
-            created_recovery_checkpoint(self.inputs,self.store.read("build-state.json"),
+            state=self.store.read("build-state.json")
+            created_recovery_checkpoint(self.inputs,state,
                 self.store.read("build-apply-intent.json"),recovery,operation_backend=self.store.specification)
             require(self.observer.created_ref is not None,"D12_CREATED_OBSERVER_NOT_BOUND")
             fresh=exact_roles(self.observer.inspect_all22(),self.profile)
             selected=dict(self.observer.build_profile.roles)
+            deferred_exit=(state["ob3StopOutcomes"]["passport-beta-bureau"]["observedExitCode"]
+                if recovery.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1" else 0)
             require(all(row.get("state")==("created" if role in selected else "exited")
                     and row.get("running") is False and row.get("hostPid")==0
                     and row.get("paused") is False and row.get("oomKilled") is False
-                    and row.get("containerExitCode")==0 for role,row in fresh.items()),
+                    and row.get("containerExitCode")== (deferred_exit if role=="passport-beta-bureau" else 0)
+                    for role,row in fresh.items()),
                     "D12_CREATED_RECOVERY_STATE_CHANGED")
             return True
         bound = recovery["quiescence"]
@@ -954,11 +966,13 @@ class D12CurrentHostBindings:
         resource=json.loads(read_ref(recovery["maintenanceResourceRecovery"]).read_bytes())
         prefix=prefix or ("d12-created-replacement-target" if step=="REPLACE_CREATED_CREDENTIAL_GENERATION" else "d12-created-target")
         acknowledgement=self.save(prefix+"-ack.private.json",durable)
+        ob3_authority=(recovery_ref if recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+            else recovery["previousRecoveryAuthority"] if recovery.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1" else None)
         request=self.save(prefix+"-request.private.json",{"runId":self.inputs["runId"],"engineId":self.host.engine_id,
             "selection":self.inputs["selection"],"plannedModels":target_inputs["plannedModels"],
             "composeArguments":target_inputs["composeArguments"],
             "runtimeBefore":self.inputs["runtimeBefore"],"resourceBefore":resource["resourceBefore"],
-            "createdCids":created,"acknowledgedState":acknowledgement,**({"ob3Authority":recovery_ref} if recovery.get("schema")=="marty.d12-ob3-quiescent-recovery/v1" else {})})
+            "createdCids":created,"acknowledgedState":acknowledgement,**({"ob3Authority":ob3_authority} if ob3_authority is not None else {})})
         source=self.inputs["functionalRuntimeModule"]
         result=bounded_run([str(self.node),"-e",CREATED_TARGET_VERIFY_JS,source["path"],source["sha256"],
             request["path"],request["sha256"],str(self.docker)],env=self.environment,

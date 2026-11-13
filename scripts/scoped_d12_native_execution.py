@@ -78,23 +78,39 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                 and job.get("jobClosed") is True and job.get("terminalActiveProcesses") == 0
                 and all(job.get(k) is False for k in ("forcedTermination", "timedOut", "cancelled", "hostMarginBreached")),
                 "D12_CREATED_RECOVERY_NORMAL_JOB_REQUIRED")
-    require(recovery.get("schema") == "marty.d12-created-recovery/v1"
+    ob3_acknowledged = recovery.get("schema") == "marty.d12-ob3-acknowledged-replacement-recovery/v1"
+    require((ob3_acknowledged and recovery.get("operation") == "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
+            or recovery.get("schema") == "marty.d12-created-recovery/v1"
             and recovery.get("operation") in ("RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED", "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
-                "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+                "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT", "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME"))
             and recovery.get("draftOnly") is False and recovery.get("dispatchAuthorized") is True
             and recovery.get("runId") == inputs["runId"], "D12_CREATED_RECOVERY_AUTHORITY_REQUIRED")
     resuming_replacement=recovery["operation"] in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
-        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME", "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
     original, original_state = load(recovery["originalInputs"]), load(recovery["originalOperationState"])
     previous = load(recovery["previousRecoveryAuthority"])
     if resuming_replacement:
-        require(previous.get("schema")=="marty.d12-created-recovery/v1"
-                and previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
-                    "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
-                and previous.get("dispatchAuthorized") is True and previous.get("draftOnly") is False,
-                "D12_CREATED_REPLACEMENT_PRIOR_AUTHORITY_REQUIRED")
-        database_original, _, _=created_recovery_checkpoint(original,
-            load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend)
+        if ob3_acknowledged:
+            require(previous.get("schema")=="marty.d12-ob3-quiescent-recovery/v1"
+                    and previous.get("operation")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+                    and recovery.get("scope")==previous.get("scope")=="OB3_FUNCTIONAL_ONLY"
+                    and recovery.get("deferredRoles")==previous.get("deferredRoles")==[OB3_DEFERRED_ROLE]
+                    and recovery.get("allowedScenarios")==previous.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
+                    and recovery.get("startupPrerequisites")==previous.get("startupPrerequisites")
+                    and recovery.get("replaceCredentialGeneration") is False,
+                    "D12_OB3_ACKNOWLEDGED_PRIOR_AUTHORITY_REQUIRED")
+            ob3_startup_prerequisites(recovery["startupPrerequisites"])
+            _ob3_acknowledged_failed_job_lineage(inputs,state,recovery,load)
+            database_original, _, _=ob3_quiescent_checkpoint(original,
+                load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend)
+        else:
+            require(previous.get("schema")=="marty.d12-created-recovery/v1"
+                    and previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
+                        "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME")
+                    and previous.get("dispatchAuthorized") is True and previous.get("draftOnly") is False,
+                    "D12_CREATED_REPLACEMENT_PRIOR_AUTHORITY_REQUIRED")
+            database_original, _, _=created_recovery_checkpoint(original,
+                load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend)
     else:
         require(previous.get("schema") == "marty.d12-fence-install-recovery/v1"
                 and previous.get("dispatchAuthorized") is True and previous.get("draftOnly") is False,
@@ -124,7 +140,8 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                 and isinstance(state.get("replacementPreimage"),dict),
                 "D12_CREATED_REPLACEMENT_LINEAGE_CHANGED")
         read_ref(state["replacementPreimage"])
-        require(recovery["operation"]!="RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT"
+        require(recovery["operation"] not in ("RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+                    "RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT")
                 or all(inputs.get(key)==original.get(key) for key in RECOVERY_TRUST_FIELDS
                     - {"composeEffectReadOnlyProof","composeEffectReadOnlyJob"}),
                 "D12_CREATED_RESUME_TARGET_CHANGED")
@@ -178,6 +195,55 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
             and dbstate.get("quiescenceSha256")==recovery["quiescence"]["sha256"]
             and previous["quiescence"]==recovery["quiescence"], "D12_COMPLETED_DATABASE_CHECKPOINT_CHANGED")
     return database_original, proof, verified
+
+
+def _ob3_acknowledged_failed_job_lineage(inputs,state,recovery,load):
+    """Join the failed owned Job and its create acknowledgement to one invocation."""
+    invocation_ref=recovery["failedCutoverInvocation"]
+    invocation_path=Path(invocation_ref["path"])
+    require(invocation_path.name=="invocation.armed.json", "D12_OB3_FAILED_INVOCATION_REQUIRED")
+    invocation=load(invocation_ref);root=invocation_path.parent
+    read_ref(invocation["actor"]);read_ref(invocation["executables"]["python"])
+    require(invocation.get("schema")=="marty.current10-effect-invocation/v1"
+            and invocation.get("executionMode")=="REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME"
+            and invocation.get("executeAuthorized") is True
+            and invocation.get("effectInputs")==recovery["originalInputs"]
+            and invocation.get("recoveryAuthority")==recovery["previousRecoveryAuthority"]
+            and Path(invocation.get("outputRoot",""))==root/"outputs"
+            and all(Path(recovery[key]["path"])==root/name for key,name in (
+                ("failedCutoverRequest","current10-effect-request.private.json"),
+                ("failedCutoverJob","current10-effect-job.json"),
+                ("failedCutoverController","current10-effect-controller.safe.json"),
+                ("acknowledgedReplacement","outputs/d12-created-replacement-target-ack.private.json"),
+                ("ownedCreatedCids","outputs/d12-credential-replacement-cids-after-ack.private.json"))),
+            "D12_OB3_FAILED_INVOCATION_LINEAGE_CHANGED")
+    request=load(recovery["failedCutoverRequest"])
+    require(request.get("schema")=="marty.windows-job-request/v1"
+            and request.get("command")==[invocation["executables"]["python"]["path"],"-B",
+                invocation["actor"]["path"],"--run",str(invocation_path),invocation_ref["sha256"]]
+            and Path(request.get("cwd",""))==root
+            and Path(request.get("receiptFile",""))==Path(recovery["failedCutoverJob"]["path"])
+            and request.get("executableSha256")==invocation["executables"]["python"]["sha256"],
+            "D12_OB3_FAILED_JOB_REQUEST_CHANGED")
+    controller=load(recovery["failedCutoverController"])
+    require(controller.get("state")=="CURRENT10_EFFECT_FAILED_OR_UNKNOWN_NO_RETRY"
+            and controller.get("jobState")=="FAILED" and controller.get("jobClosed") is True
+            and controller.get("terminalActiveProcesses")==0 and controller.get("resultPresent") is False
+            and controller.get("failurePresent") is True and controller.get("automaticCleanupOrRetry") is False,
+            "D12_OB3_FAILED_JOB_CONTROLLER_CHANGED")
+    require(load(recovery["acknowledgedReplacement"])==state,
+            "D12_OB3_FAILED_ACKNOWLEDGEMENT_CHANGED")
+    cids=load(recovery["ownedCreatedCids"])
+    selected=load(recovery["selected22"])
+    require(cids.get("schema")=="marty.d12-owned-created-cids/v1"
+            and cids.get("runId")==inputs["runId"] and cids.get("runtimeWrites") is True
+            and cids.get("durableCreateAck")=={"phase":"EFFECT_ACKNOWLEDGED",
+                "acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION"}
+            and cids.get("selection")==inputs["selection"]
+            and isinstance(cids.get("selectedContainerIds"),dict)
+            and set(cids["selectedContainerIds"])==set(inputs["roleBinaries"])
+            and all(selected[role]["Id"]==cid for role,cid in cids["selectedContainerIds"].items()),
+            "D12_OB3_CREATED_CIDS_LINEAGE_CHANGED")
 
 
 OB3_DEFERRED_ROLE="passport-beta-bureau"
@@ -721,16 +787,21 @@ class D12CurrentExecution:
     def replace_ob3_quiescent_credentials_and_resume(self,recovery_ref):
         return self._resume_created(recovery_ref,replace_credentials=True,ob3=True)
 
+    def resume_ob3_acknowledged_credential_replacement(self,recovery_ref):
+        return self._resume_created(recovery_ref,replace_credentials=False,resume_replacement=True,ob3=True)
+
     def _resume_created(self, recovery_ref, *, replace_credentials, resume_replacement=False,ob3=False):
-        require(type(replace_credentials) is bool and type(resume_replacement) is bool and type(ob3) is bool and (not ob3 or replace_credentials and not resume_replacement),"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
+        require(type(replace_credentials) is bool and type(resume_replacement) is bool and type(ob3) is bool
+                and (not ob3 or replace_credentials != resume_replacement),"D12_CREATED_REPLACEMENT_MODE_REQUIRED")
         require(not self.read_only_preflight, "D12_READ_ONLY_PREFLIGHT_NO_APPLY")
         require(self.profile=="d05-membership-current-functional","D12_CREATED_RECOVERY_CURRENT10_ONLY")
         recovery=json.loads(read_ref(recovery_ref).read_bytes())
-        require(recovery.get("operation")==("REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME" if ob3 else "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials
+        require(recovery.get("operation")==("RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if ob3 and resume_replacement
+                else "REPLACE_OB3_QUIESCENT_CREDENTIALS_AND_RESUME" if ob3 else "REPLACE_ACKNOWLEDGED_CREDENTIAL_GENERATION_AND_RESUME" if resume_replacement and replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT" if resume_replacement
                 else "REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME" if replace_credentials
                 else "RESUME_AFTER_ACKNOWLEDGED_CREATE_SELECTED"),"D12_CREATED_RECOVERY_OPERATION_CHANGED")
-        checkpoint=ob3_quiescent_checkpoint if ob3 else created_recovery_checkpoint
+        checkpoint=ob3_quiescent_checkpoint if ob3 and not resume_replacement else created_recovery_checkpoint
         original, proof, verified=checkpoint(self.i, self.store.read("build-state.json"),
             self.store.read("build-apply-intent.json"), recovery, operation_backend=self.store.specification)
         database, before, preview, overlay_ref = self.recovery_preflight(recovery_ref)
@@ -796,6 +867,11 @@ class D12CurrentExecution:
 
     def _finish_after_create(self, database, before, preview, database_proof,*,ob3_recovery=None):
         i, g = self.i, self.g
+        ob3_runtime_authority=ob3_recovery
+        if ob3_recovery is not None:
+            recovery=json.loads(read_ref(ob3_recovery).read_bytes())
+            if recovery.get("schema")=="marty.d12-ob3-acknowledged-replacement-recovery/v1":
+                ob3_runtime_authority=recovery["previousRecoveryAuthority"]
         stopped_rows = maintenance.exact_roles(json.loads(read_ref(self.state["replacementPreimage"] if ob3_recovery is not None else database.i["quiescence"]).read_bytes()), self.profile)
         self.record("CREATE_INSPECTION_PENDING", pendingStep="INSPECT_CREATED")
         created = self.inspect_all22()
@@ -872,7 +948,7 @@ class D12CurrentExecution:
             remaining=int(remaining_wait_budget)
             require(remaining>0,"D12_OB3_START_READINESS_DEADLINE")
             wait_started=time.monotonic()
-            healthy=g["wait_ob3_required_healthy"](remaining,ob3_recovery)
+            healthy=g["wait_ob3_required_healthy"](remaining,ob3_runtime_authority)
             remaining_wait_budget-=time.monotonic()-wait_started
             require(remaining_wait_budget>=0,"D12_OB3_START_READINESS_DEADLINE")
             require(healthy is True,"D12_OB3_21_HEALTH_DEADLINE_REQUIRED")
@@ -881,9 +957,9 @@ class D12CurrentExecution:
         after = database.node("runtime", module=i["d12RuntimeModule"],
             inputs={"before": i["runtimeBefore"], "selection": i["selection"],
                     "created": created_ref, "startAcks": acks_ref,
-                    "runId": i["runId"], "engineId": database.engine_id,**({"ob3Authority":ob3_recovery} if ob3_recovery is not None else {})})
+                    "runId": i["runId"], "engineId": database.engine_id,**({"ob3Authority":ob3_runtime_authority} if ob3_runtime_authority is not None else {})})
         proof = overlay.validate_runtime_after(before, after, database.selection["binaries"],
-                   D12_CURRENT_RUNTIME_ROLES - set(self.roles)-({OB3_DEFERRED_ROLE} if ob3_recovery is not None else set()), self.profile,native_preimage=self.native_preimage,ob3_authority=ob3_recovery)
+                   D12_CURRENT_RUNTIME_ROLES - set(self.roles)-({OB3_DEFERRED_ROLE} if ob3_recovery is not None else set()), self.profile,native_preimage=self.native_preimage,ob3_authority=ob3_runtime_authority)
         require(g["database_snapshot"]()["databaseIdentity"] == database.identity,
                 "D12_DATABASE_POSTFLIGHT_REQUIRED")
         startup_schema = None

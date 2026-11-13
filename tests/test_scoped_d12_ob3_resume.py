@@ -10,6 +10,38 @@ import scoped_native_database as database
 from scoped_native_runtime import D12_CURRENT_RUNTIME_ROLES,journal_readback
 from test_scoped_d12_ob3_quiesce import fixture as partial_fixture
 
+def test_acknowledged_ob3_replacement_continues_without_recreate_or_sql(tmp_path,monkeypatch):
+    from scoped_native_runtime import ref
+    def save(name,value):
+        p=tmp_path/name;p.write_text(json.dumps(value));return ref(p)
+    inputs={"runId":"SYNTHETIC","rolloutProfile":"d05-membership-current-functional",
+            "runScopedTrustLeaseProof":{"sha256":"same-generation"},"selection":{"sha256":"selected"},
+            "databaseBefore":{"sha256":"database-before"},"executorSource":{"sha256":"reviewed-executor"}}
+    original=deepcopy(inputs)
+    commands=[{"stepId":step,"receipt":save("sql-"+step+".json",{"stepId":step})}
+              for command in ("migrate","verify-owned-schema") for step,_role in database.schema_steps(True,command)]
+    proof={"operationState":save("database-state.json",{"operations":commands})}
+    verified={"state":"SYNTHETIC_VERIFIED_DATABASE"}
+    recovery={"operation":"RESUME_OB3_AFTER_ACKNOWLEDGED_CREDENTIAL_REPLACEMENT",
+              "quiescence":{"sha256":"quiescent"},"originalOperationState":save("ack.json",{"phase":"EFFECT_ACKNOWLEDGED"})}
+    recovery_ref=save("recovery.json",recovery)
+    value=execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
+    value.i=inputs;value.profile="d05-membership-current-functional";value.read_only_preflight=False
+    value.store=SimpleNamespace(specification={},read=lambda name:{"phase":"EFFECT_ACKNOWLEDGED"})
+    value.build_profile=SimpleNamespace(ui_revision="source",core_revision="core")
+    calls=[]
+    def checkpoint(*args,**kwargs):calls.append("CHECKPOINT");return original,proof,verified
+    monkeypatch.setattr(execution,"created_recovery_checkpoint",checkpoint)
+    db=SimpleNamespace(i={},commands=[],baseline_refs={},engine_id="SYNTHETIC",tenant_id="SYNTHETIC",
+                       node=lambda mode,**kwargs:verified)
+    value.recovery_preflight=lambda ref:(db,{}, {"restoreOrder":[]},None)
+    value.g={"ob3_startup_plan":lambda ref:{"order":[]}}
+    value.record=lambda phase,**kwargs:calls.append(phase)
+    value.command=lambda *args,**kwargs:pytest.fail("acknowledged recovery replayed a create or SQL command")
+    value._finish_after_create=lambda *args,**kwargs:calls.append("CONTINUE_STARTS") or kwargs["ob3_recovery"]
+    assert value.resume_ob3_acknowledged_credential_replacement(recovery_ref)==recovery_ref
+    assert calls==["CHECKPOINT","CHECKPOINT","POST_CREATE_RECOVERY_VERIFIED","CONTINUE_STARTS"]
+
 def startup_fixture(tmp_path,monkeypatch):
     """Controlled source namespace; Git verification belongs to Host construction."""
     import scoped_d12_native_effect_host as host
@@ -153,21 +185,22 @@ def test_shared_start_loop_starts_exact21_and_never_the_deferred_role(tmp_path,m
         return original_record(*args,**kwargs)
     value.record=record
     class ReachedObserver(Exception):pass
-    def node(mode,**kwargs):assert mode=='runtime' and kwargs['inputs']['ob3Authority']=={'sha256':'REVIEWED'};raise ReachedObserver
+    reviewed=save('reviewed-ob3-authority.json',{'schema':'marty.d12-ob3-quiescent-recovery/v1'})
+    def node(mode,**kwargs):assert mode=='runtime' and kwargs['inputs']['ob3Authority']==reviewed;raise ReachedObserver
     def inspect(args):
         role=next(row['role'] for row in created['roles'] if row['containerId']==args[-1]);row=next(row for row in created['roles'] if row['role']==role)
         return json.dumps([{'Id':row['containerId'],'Image':row['imageId'],'Config':{'Labels':{'com.docker.compose.project':row['project'],'com.docker.compose.service':role}},'State':{'Status':'running','Running':True,'OOMKilled':False,'Pid':100,'StartedAt':'2026-01-02T00:00:00Z'}}]).encode()
     db=SimpleNamespace(i={},selection={'binaries':binaries},engine_id='SYNTHETIC',node=node,command=inspect)
     if readiness_failure:
-        with pytest.raises(ValueError,match='D12_OB3_PREREQUISITE_READINESS_DEADLINE'):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery={'sha256':'REVIEWED'})
+        with pytest.raises(ValueError,match='D12_OB3_PREREQUISITE_READINESS_DEADLINE'):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery=reviewed)
         assert 0<len(calls)<21 and value.state['phase']=='OB3_START_PREREQUISITE_PENDING'
         assert 'START_'+value.state['startupDependentRole'] not in calls and len(readiness_calls)==1
         return
     if timing in ('cumulative-exhaustion','final-exhaustion'):
-        with pytest.raises(ValueError,match='D12_OB3_START_READINESS_DEADLINE'):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery={'sha256':'REVIEWED'})
+        with pytest.raises(ValueError,match='D12_OB3_START_READINESS_DEADLINE'):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery=reviewed)
         assert wait_budgets==([120,80,40] if timing=='cumulative-exhaustion' else [120,115,110,105,100])
         return
-    with pytest.raises(ReachedObserver):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery={'sha256':'REVIEWED'})
+    with pytest.raises(ReachedObserver):value._finish_after_create(db,before,{'restoreOrder':startup_plan['order']},{},ob3_recovery=reviewed)
     assert len(calls)==21 and set(calls)=={'START_'+role for role in D12_CURRENT_RUNTIME_ROLES-{'passport-beta-bureau'}}
     assert value.state['phase']=='OB3_21_STARTS_OBSERVED' and len(readiness_calls)==4
     assert wait_budgets==[120,115,110,105,100]
