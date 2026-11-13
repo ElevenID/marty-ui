@@ -160,12 +160,16 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
         "durableCreateAck":{"phase":"EFFECT_ACKNOWLEDGED","acknowledgedStep":"REPLACE_CREATED_CREDENTIAL_GENERATION"},
         "selection":inputs["selection"],"selectedContainerIds":{"auth":"a"*64}})
     called=[]
-    def prior_checkpoint(original,prior_state,actual_intent,authority,*,operation_backend):
+    def prior_checkpoint(original,prior_state,actual_intent,authority,*,operation_backend,historical_source=False):
         called.append((original,prior_state,actual_intent,authority))
+        assert historical_source is True
         assert authority==previous and actual_intent==intent
         return json.loads(Path(previous["originalInputs"]["path"]).read_bytes()),{},{}
     monkeypatch.setattr(execution,"ob3_quiescent_checkpoint",prior_checkpoint)
-    monkeypatch.setattr(execution,"ob3_startup_prerequisites",lambda ref:called.append(ref))
+    def startup(ref,*,historical_execution_source=None):
+        called.append(ref)
+        return {"same":True}
+    monkeypatch.setattr(execution,"ob3_startup_prerequisites",startup)
     if fault=="wrong-prior":recovery["previousRecoveryAuthority"]=saved("foreign-ob3-authority.json",{**previous,"operation":"UNREVIEWED"})
     if fault=="new-generation":
         generation="C:/different" if mode=="resume" else json.loads(Path(original["runScopedTrustLeaseProof"]["path"]).read_bytes())["generationDirectory"]
@@ -187,7 +191,7 @@ def test_ob3_acknowledged_recovery_requires_explicit_generation_and_current_line
         with pytest.raises(ValueError):execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
     else:
         result=execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
-        assert result[0]["runId"]==inputs["runId"] and len(called)==2
+        assert result[0]["runId"]==inputs["runId"] and len(called)==3
 
 
 @pytest.mark.parametrize("change",[None,"missing-flag","same-generation","other-model-field"])
@@ -466,6 +470,27 @@ def test_created_checkpoint_requires_separately_bound_backend_root(tmp_path,back
     assert inputs["operationJournal"] is None
     with pytest.raises(ValueError,match="D12_CREATED_JOURNAL_(BACKEND_REQUIRED|ROOT_CHANGED)"):
         execution.created_recovery_checkpoint(inputs,state,intent,recovery,operation_backend=backend)
+
+
+def test_ob3_historical_startup_source_requires_exact_sibling_and_current_bytes(tmp_path):
+    current=Path(execution.__file__).with_name("ob3-startup-prerequisites.json")
+    historical=tmp_path/"historical";historical.mkdir()
+    prior_execution=historical/"scoped_d12_native_execution.py"
+    prior_execution.write_bytes(b"historical execution source")
+    prior_startup=historical/current.name
+    prior_startup.write_bytes(current.read_bytes().replace(b"\r\n",b"\n").replace(b"\n",b"\r\n"))
+    assert execution.ob3_startup_prerequisites(ref(prior_startup),historical_execution_source=ref(prior_execution))
+    foreign=tmp_path/current.name;foreign.write_bytes(current.read_bytes())
+    with pytest.raises(ValueError,match="D12_OB3_STARTUP_SOURCE_PATH_REQUIRED"):
+        execution.ob3_startup_prerequisites(ref(foreign),historical_execution_source=ref(prior_execution))
+    foreign_execution=tmp_path/"foreign_execution.py";foreign_execution.write_bytes(prior_execution.read_bytes())
+    with pytest.raises(ValueError,match="D12_OB3_STARTUP_SOURCE_PATH_REQUIRED"):
+        execution.ob3_startup_prerequisites(ref(prior_startup),historical_execution_source=ref(foreign_execution))
+    changed=prior_startup.read_bytes().replace(b"signing-keys",b"signing-kays")
+    assert len(changed)==prior_startup.stat().st_size
+    prior_startup.write_bytes(changed)
+    with pytest.raises(ValueError,match="D12_OB3_HISTORICAL_STARTUP_CONTENT_CHANGED"):
+        execution.ob3_startup_prerequisites(ref(prior_startup),historical_execution_source=ref(prior_execution))
 
 
 @pytest.mark.parametrize("checkpoint",["create","replacement"])

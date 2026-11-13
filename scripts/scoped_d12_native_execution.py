@@ -101,13 +101,16 @@ def created_recovery_checkpoint(inputs, state, intent, recovery, *, operation_ba
                     and recovery.get("scope")==previous.get("scope")=="OB3_FUNCTIONAL_ONLY"
                     and recovery.get("deferredRoles")==previous.get("deferredRoles")==[OB3_DEFERRED_ROLE]
                     and recovery.get("allowedScenarios")==previous.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS)
-                    and recovery.get("startupPrerequisites")==previous.get("startupPrerequisites")
                     and recovery.get("replaceCredentialGeneration") is ob3_second_replacement,
                     "D12_OB3_ACKNOWLEDGED_PRIOR_AUTHORITY_REQUIRED")
-            ob3_startup_prerequisites(recovery["startupPrerequisites"])
+            current_startup=ob3_startup_prerequisites(recovery["startupPrerequisites"])
+            historical_startup=ob3_startup_prerequisites(previous["startupPrerequisites"],
+                historical_execution_source=original["executionSource"])
+            require(current_startup==historical_startup,"D12_OB3_STARTUP_SEMANTICS_CHANGED")
             _ob3_acknowledged_failed_job_lineage(inputs,state,recovery,load)
             database_original, _, _=ob3_quiescent_checkpoint(original,
-                load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend)
+                load(previous["originalOperationState"]),intent,previous,operation_backend=operation_backend,
+                historical_source=True)
         else:
             require(previous.get("schema")=="marty.d12-created-recovery/v1"
                     and previous.get("operation") in ("REPLACE_CREATED_CREDENTIAL_GENERATION_AND_RESUME",
@@ -409,10 +412,15 @@ def partial_start_ob3_checkpoint(inputs,state,intent,recovery,*,operation_backen
     return deepest,proof,verified
 
 
-def ob3_startup_prerequisites(reference):
+def ob3_startup_prerequisites(reference, *, historical_execution_source=None):
     """One source-owned datafile; an operational graph, never an installed-model claim."""
-    source=Path(__file__).resolve().with_name("ob3-startup-prerequisites.json")
+    source=(Path(__file__).resolve() if historical_execution_source is None
+            else read_ref(historical_execution_source).resolve()).with_name("ob3-startup-prerequisites.json")
     require(read_ref(reference,65536).resolve()==source,"D12_OB3_STARTUP_SOURCE_PATH_REQUIRED")
+    if historical_execution_source is not None:
+        current=Path(__file__).resolve().with_name("ob3-startup-prerequisites.json")
+        require(source.read_bytes().replace(b"\r\n",b"\n")==current.read_bytes().replace(b"\r\n",b"\n"),
+                "D12_OB3_HISTORICAL_STARTUP_CONTENT_CHANGED")
     proof=json.loads(source.read_bytes())
     require(proof.get("schema")=="marty.ob3-startup-prerequisites/v1" and proof.get("composeSourcePath")=="docker-compose.beta.yml"
             and isinstance(proof.get("composeSha256"),str) and len(proof["composeSha256"])==64
@@ -426,7 +434,7 @@ def ob3_startup_prerequisites(reference):
     return proof
 
 
-def ob3_quiescent_checkpoint(inputs,state,intent,recovery,*,operation_backend):
+def ob3_quiescent_checkpoint(inputs,state,intent,recovery,*,operation_backend,historical_source=False):
     """Validate an actual OB3 quiescence; authorize only a new credential generation."""
     from scoped_native_database import RECOVERY_SOURCE_FIELDS,RECOVERY_TRUST_FIELDS,_recovery_trust_models
     from scoped_native_runtime import validate_journal_readback
@@ -438,7 +446,8 @@ def ob3_quiescent_checkpoint(inputs,state,intent,recovery,*,operation_backend):
             and recovery.get("runId")==inputs["runId"] and recovery.get("scope")=="OB3_FUNCTIONAL_ONLY"
             and recovery.get("deferredRoles")==[OB3_DEFERRED_ROLE]
             and recovery.get("allowedScenarios")==list(OB3_ALLOWED_SCENARIOS),"D12_CLOSED_OB3_QUIESCENT_AUTHORITY_REQUIRED")
-    ob3_startup_prerequisites(recovery["startupPrerequisites"])
+    ob3_startup_prerequisites(recovery["startupPrerequisites"],
+        historical_execution_source=inputs["executionSource"] if historical_source else None)
     original=load(recovery["originalInputs"]);previous=load(recovery["previousRecoveryAuthority"])
     require(previous.get("operation")=="QUIESCE_OB3_PARTIAL_STARTS","D12_OB3_QUIESCENCE_PRIOR_AUTHORITY_REQUIRED")
     partial=load(previous["originalOperationState"])
