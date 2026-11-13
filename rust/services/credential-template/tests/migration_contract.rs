@@ -92,9 +92,22 @@ async fn live_postgres_migration_supports_historical_json_columns_when_configure
         .connect(&database_url)
         .await
         .expect("credential-template PostgreSQL contract database must connect");
-    migrate_credential_template_schema(&pool)
-        .await
-        .expect("first Credential Template migration must pass");
+    // Establish the historical column before installing the profile CHECK.
+    // Other contract executables may have used this same disposable database;
+    // remove only that newer CHECK while preparing the pre-profile fixture.
+    sqlx::raw_sql(include_str!(
+        "../migrations/0001_credential_template_schema.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("pre-profile Credential Template schema must be reproducible");
+    sqlx::query(
+        "ALTER TABLE credential_template_service.credential_templates
+         DROP CONSTRAINT IF EXISTS ck_template_explicit_jwt_vc_profile",
+    )
+    .execute(&pool)
+    .await
+    .expect("historical fixture must precede the profile CHECK");
     sqlx::query(
         "ALTER TABLE credential_template_service.credential_templates
          ALTER COLUMN wallet_configs TYPE json USING wallet_configs::json",
@@ -102,9 +115,16 @@ async fn live_postgres_migration_supports_historical_json_columns_when_configure
     .execute(&pool)
     .await
     .expect("historical JSON wallet configuration schema must be reproducible");
+    assert!(validate_credential_template_schema(&pool).await.is_err());
     migrate_credential_template_schema(&pool)
         .await
         .expect("migration must accept historical JSON wallet configuration columns");
+    validate_credential_template_schema(&pool)
+        .await
+        .expect("read-only validation must accept historical JSON columns");
+    migrate_credential_template_schema(&pool)
+        .await
+        .expect("migration must remain idempotent with historical JSON columns");
     let wallet_configs_type: String = sqlx::query_scalar(
         "SELECT data_type FROM information_schema.columns
          WHERE table_schema='credential_template_service'

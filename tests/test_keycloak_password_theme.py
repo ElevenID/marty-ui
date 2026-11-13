@@ -6,28 +6,20 @@ This verifies password-manager DOM/event compatibility, not a live Bitwarden vau
 from __future__ import annotations
 
 from functools import lru_cache
-import hashlib
 import os
 from pathlib import Path
 import shutil
 import subprocess
-import urllib.request
 
 import pytest
 from playwright.sync_api import sync_playwright
+
+from tests.keycloak_freemarker import load_freemarker_jar
 
 ROOT = Path(__file__).resolve().parents[1]
 THEME = ROOT / "config/keycloak/themes/11id/login"
 USERNAME = 'fixture"<user>&@example.invalid'
 PASSWORD = "Fixture!Password42"
-JAR_URL = "https://repo.maven.apache.org/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
-JAR_SHA256 = "0fac87dddd78f1223139e8ef88e819c7f483c0a3835cdf5982ad5e4576d1d896"
-MAX_JAR_BYTES = 4 * 1024 * 1024
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise ValueError("FreeMarker test dependency must not redirect")
 
 
 @pytest.fixture(scope="module")
@@ -35,15 +27,7 @@ def render(tmp_path_factory):
     java, javac = shutil.which("java"), shutil.which("javac")
     assert java and javac, "A JDK is required for the Keycloak login rendering contract"
     working = tmp_path_factory.mktemp("keycloak-password-theme")
-    supplied = os.environ.get("KEYCLOAK_LOGIN_FREEMARKER_JAR") or os.environ.get("KEYCLOAK_EMAIL_FREEMARKER_JAR")
-    if supplied:
-        with Path(supplied).open("rb") as source:
-            data = source.read(MAX_JAR_BYTES + 1)
-    else:
-        with urllib.request.build_opener(NoRedirect()).open(JAR_URL, timeout=30) as response:
-            assert response.status == 200 and response.url == JAR_URL
-            data = response.read(MAX_JAR_BYTES + 1)
-    assert len(data) <= MAX_JAR_BYTES and hashlib.sha256(data).hexdigest() == JAR_SHA256
+    data = load_freemarker_jar("KEYCLOAK_LOGIN_FREEMARKER_JAR", "KEYCLOAK_EMAIL_FREEMARKER_JAR")
     jar = working / "freemarker.jar"
     jar.write_bytes(data)
     subprocess.run([javac, "-J-Xmx128m", "-cp", str(jar), "-d", str(working),

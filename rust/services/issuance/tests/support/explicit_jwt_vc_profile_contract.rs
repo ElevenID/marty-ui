@@ -375,8 +375,6 @@ async fn assert_json_overload_is_not_the_owned_predicate(pool: &sqlx::PgPool, fu
     // identical after harmless JSONB casts are removed. The owned original
     // function remains present and byte-correct; the constraint's dependency
     // must still point to that exact signature.
-    sqlx::query("ALTER TABLE credential_template_service.credential_templates ALTER COLUMN wallet_configs TYPE json USING wallet_configs::json")
-        .execute(pool).await.unwrap();
     let definition: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='credential_template_service.credential_templates'::regclass AND conname='ck_template_explicit_jwt_vc_profile'")
         .fetch_one(pool).await.unwrap();
     let marker = function.find("AS $function$").unwrap();
@@ -387,6 +385,11 @@ async fn assert_json_overload_is_not_the_owned_predicate(pool: &sqlx::PgPool, fu
         .execute(pool)
         .await
         .unwrap();
+    validate_credential_template_schema(pool).await.unwrap();
+    // ALTER TYPE reparses the existing CHECK. Its redundant JSONB cast was
+    // omitted by PostgreSQL, so the JSON overload must already be available.
+    sqlx::query("ALTER TABLE credential_template_service.credential_templates ALTER COLUMN wallet_configs TYPE json USING wallet_configs::json")
+        .execute(pool).await.unwrap();
     sqlx::query("ALTER TABLE credential_template_service.credential_templates DROP CONSTRAINT ck_template_explicit_jwt_vc_profile")
         .execute(pool).await.unwrap();
     sqlx::query("ALTER TABLE credential_template_service.credential_templates ADD CONSTRAINT ck_template_explicit_jwt_vc_profile CHECK (credential_template_service.template_explicit_jwt_vc_profile_valid(jwt_vc_profile::jsonb, credential_payload_format::text, status::text, issuance_protocol::text, supported_formats::jsonb, wallet_configs, validity_rules::jsonb) IS TRUE)")
@@ -408,11 +411,13 @@ async fn assert_json_overload_is_not_the_owned_predicate(pool: &sqlx::PgPool, fu
     assert!(validate_credential_template_schema(pool).await.is_err());
     sqlx::query("ALTER TABLE credential_template_service.credential_templates DROP CONSTRAINT ck_template_explicit_jwt_vc_profile")
         .execute(pool).await.unwrap();
+    // Restore the original column type before reparsing its canonical CHECK;
+    // otherwise the unchanged text can bind to the malicious JSON overload.
+    sqlx::query("ALTER TABLE credential_template_service.credential_templates ALTER COLUMN wallet_configs TYPE jsonb USING wallet_configs::jsonb")
+        .execute(pool).await.unwrap();
     sqlx::query(sqlx::AssertSqlSafe(format!("ALTER TABLE credential_template_service.credential_templates ADD CONSTRAINT ck_template_explicit_jwt_vc_profile {definition}")))
         .execute(pool).await.unwrap();
     sqlx::query("DROP FUNCTION credential_template_service.template_explicit_jwt_vc_profile_valid(jsonb,text,text,text,jsonb,json,jsonb)")
-        .execute(pool).await.unwrap();
-    sqlx::query("ALTER TABLE credential_template_service.credential_templates ALTER COLUMN wallet_configs TYPE jsonb USING wallet_configs::jsonb")
         .execute(pool).await.unwrap();
     validate_credential_template_schema(pool).await.unwrap();
 }
