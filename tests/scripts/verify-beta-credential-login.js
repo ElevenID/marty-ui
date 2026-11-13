@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('node:assert/strict');
 const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness, privateReviewCaptureContext } = require('./demo-live-evidence');
+const { createPrivateReviewRealPagePreflight } = require('./demo-private-review-preflight');
 const { createOwnedMembership } = require('./demo-owned-membership');
 const { requireJson } = require('./beta-demo-resource-helpers');
 const { directPostRequestReference, directPostLoginBinding, loginInstanceOwnership, holderDeclineEvidence, freshDirectPostLogin } = require('./beta-membership-support-contract');
@@ -55,6 +56,15 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const CONTROL_IMPLEMENTATION = 'marty-core/marty-test-wallet';
+
+function selectRealPagePreflight({mode,retainedMembership,evidence,privateReview,recordVideo,walletOrigin,loginOrigin}) {
+  assert([undefined,'0','1'].includes(mode),'Choose an explicit D05 real-page preflight mode');
+  if(mode!=='1')return null;
+  if(!retainedMembership||privateReview||recordVideo||typeof evidence?.privateReviewPagePreflightSource!=='function')
+    throw Error('D05 real-page preflight requires the owned no-video functional driver');
+  return createPrivateReviewRealPagePreflight({...evidence.privateReviewPagePreflightSource(),
+    expectedOrigins:{wallet:walletOrigin,login:loginOrigin}});
+}
 const WALLET_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function controlCredentialReceived(badge) {
@@ -260,6 +270,9 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
   const uiCandidate = resolveUiCandidateDist(ROOT);
   assert(!evidence?.privateReviewCaptureBinding||retainedMembership,'Private review is scoped to the retained membership scenario');
   const privateReview=evidence?.privateReviewCaptureBinding?createPrivateReviewRecording(privateReviewCaptureContext(evidence,{scenario:'membership-badge-login',supportingLane:null}),{artifactDir}):null;
+  const realPagePreflight=selectRealPagePreflight({mode:process.env.D05_REAL_PAGE_PREFLIGHT,
+    retainedMembership,evidence,privateReview,recordVideo:RECORD_VIDEO,
+    walletOrigin:TEST_WALLET_ORIGIN,loginOrigin:BETA_ORIGIN});
   const privateRedactions={sensitiveTexts:[process.env.TEST_ADMIN_EMAIL,process.env.TEST_APPLICANT_EMAIL]};
   if (ownedMembership && (!['0', '1'].includes(process.env.RECORD_VIDEO) || LOCAL_BETA_PROXY || uiCandidate
     || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || new URL(BETA_ORIGIN).protocol !== 'https:')) {
@@ -348,9 +361,10 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     walletContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
-      ...(privateReview?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
+      ...(privateReview?.contextOptions||realPagePreflight?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
     });
     if(privateReview)await privateReview.prepareContext(walletContext,'wallet',privateRedactions);
+    if(realPagePreflight)await realPagePreflight.prepareContext(walletContext,'wallet');
     walletSession = await acquireWalletSession(walletContext, { origin: TEST_WALLET_ORIGIN });
     report.walletSession = walletSession.evidence;
 
@@ -363,10 +377,11 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
         return control.prepare(page);
       } : null,
       onPage: evidence ? (page) => {evidence.bindPage(page);if(privateReview)privateReview.trackPage('login',page);} : null,
-      contextOptions: privateReview?.contextOptions||(RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+      contextOptions: privateReview?.contextOptions||realPagePreflight?.contextOptions||(RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
       onStep: explain,
       setupContext: async (context) => {
         if(privateReview)await privateReview.prepareContext(context,'login',privateRedactions);
+        if(realPagePreflight)await realPagePreflight.prepareContext(context,'login');
         if (ownedMembership) holderContext = context;
         await installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN);
       },
@@ -410,9 +425,10 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
     loginContext = holderContext || await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
-      ...(privateReview?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
+      ...(privateReview?.contextOptions||realPagePreflight?.contextOptions||(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {})),
     });
     if(privateReview&&!holderContext)await privateReview.prepareContext(loginContext,'login',privateRedactions);
+    if(realPagePreflight&&!holderContext)await realPagePreflight.prepareContext(loginContext,'login');
     if (!holderContext) await installUiCandidateRoute(loginContext, uiCandidate, BETA_ORIGIN);
     // This lane drives presentation through the deterministic local wallet.
     // Keep Chromium's platform-wallet prefetch from racing the same request URI.
@@ -584,6 +600,11 @@ async function runCredentialLogin({ retainedFirstParty = false, retainedMembersh
       && report.badResponses.length === 0
       && report.consoleErrors.length === 0
     );
+    if(realPagePreflight){
+      await realPagePreflight.probePage('wallet',walletPage);
+      await realPagePreflight.probePage('login',loginPage);
+      report.realPagePrivacyPreflight=realPagePreflight.finish();
+    }
     report.releaseReady = report.engineeringReady && !uiCandidate;
     report.finishedAt = new Date().toISOString();
     if (ownedMembership) {
@@ -703,4 +724,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { presentBadge, bindMembershipLogin, observeDeclinedLogin, membershipSessionRetirement, closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };
+module.exports = { presentBadge, bindMembershipLogin, observeDeclinedLogin, membershipSessionRetirement, closeControlSession, controlCredentialReceived, firstPartyControlAssertions, selectRealPagePreflight, main };
