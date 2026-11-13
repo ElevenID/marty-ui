@@ -55,6 +55,12 @@ def test_public_field_numbers_remain_wire_compatible():
         == 13
     )
     assert (
+        fields("presentation_policy_service.proto", "PolicyResponse")[
+            "holder_binding_required"
+        ]
+        == 16
+    )
+    assert (
         fields("presentation_policy_service.proto", "PolicyEvaluationResponse")[
             "policy_revision"
         ]
@@ -87,6 +93,19 @@ def test_public_field_numbers_remain_wire_compatible():
     credential = fields("credential_template_service.proto", "CreateTemplateRequest")
     assert credential["compliance_profile_id"] == 22
     assert credential["derived_attributes"] == 26
+    assert credential["jwt_vc_profile_json"] == 28
+    assert (
+        fields("credential_template_service.proto", "UpdateTemplateRequest")[
+            "jwt_vc_profile_json"
+        ]
+        == 24
+    )
+    assert (
+        fields("credential_template_service.proto", "TemplateResponse")[
+            "jwt_vc_profile_json"
+        ]
+        == 34
+    )
     initiation = fields("issuance_service.proto", "InitiateIssuanceRequest")
     assert {
         name: initiation[name]

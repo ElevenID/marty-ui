@@ -416,7 +416,7 @@ def assert_renewal_registration(script, source, name, owner):
     assert function is not None
     body = re.sub(r"(?m)^ *//[^\n]*\n", "", function.group(1))
     assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
-    start = """let owned = canvas_published_database::PublishedDatabase::start()
+    start = """let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();"""
     call = f"{owner}(&owned.url).await;"
