@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, io::Read, path::Path};
 
-const RECOVERY_ASSETS: [&str; 16] = [
+const RECOVERY_ASSETS: [&str; 17] = [
     "scripts/bootstrap_kubernetes_openbao.py",
     "scripts/adopt_kubernetes_renewal.py",
     "scripts/kubernetes_renewal_adoption_state.py",
@@ -20,6 +20,7 @@ const RECOVERY_ASSETS: [&str; 16] = [
     "scripts/recover_kubernetes_legacy_credentials.py",
     "scripts/reload_kubernetes_legacy_workloads.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
+    "scripts/kubernetes_legacy_recovery_lineage.py",
     "deploy-config/catalog/kubernetes-application-tokens.json",
     "deploy-config/catalog/kubernetes-secrets.json",
     "docs/kubernetes-legacy-credential-recovery.md",

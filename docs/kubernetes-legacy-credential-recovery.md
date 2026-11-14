@@ -340,6 +340,87 @@ and preserves its candidate; it does not update Kubernetes Secrets. Both modes
 require the same original and selected signed artifact closures and exact source
 and run identities shown by `--help`. There is no resume, replay or rollback flag.
 
+### A later generation after completed Secret activation
+
+A legacy installation can outlive the eight-hour credentials from its first
+successful recovery before routine renewal has been enrolled. Select that
+completed recovery explicitly when creating a **new** operation. Do not copy its
+candidate over `state/credentials`, change `bootstrap-complete.json`, edit old
+receipts, or rerun the old operation directory. Those actions erase the
+original-to-current evidence and are not a supported continuation.
+
+The repeat-recovery owner accepts ordered pairs of `--previous-recovery-dir`
+and `--previous-recovery-assets`, starting with the first completed activation
+after bootstrap and ending with the generation currently published to Secrets.
+The first prior directory can come from the earlier signed b7 recovery operator;
+it does not need to contain the newer lineage helper. Each assets directory must
+contain that predecessor's independently authenticated signed release closure.
+The new recovery operator and its Python helpers must themselves come from a
+signed release containing this owner. A source checkout or locally compiled
+binary does not satisfy release admission.
+
+Add these arguments to the normal recovery command's original/new release,
+source, run, chart, tool and state arguments:
+
+```sh
+python scripts/recover_kubernetes_legacy_credentials.py \
+  --state-dir "$ORIGINAL_STATE" --operation-dir "$NEW_PRIVATE_OPERATION" \
+  --original-assets "$ORIGINAL_ASSETS" \
+  --original-release-tag "$ORIGINAL_TAG" \
+  --original-build-run-id "$ORIGINAL_RUN" --original-build-run-attempt "$ORIGINAL_ATTEMPT" \
+  --recovery-assets "$NEW_OPERATOR_ASSETS" \
+  --recovery-source-sha "$NEW_OPERATOR_SOURCE" --recovery-release-tag "$NEW_OPERATOR_TAG" \
+  --recovery-build-run-id "$NEW_OPERATOR_RUN" --recovery-build-run-attempt "$NEW_OPERATOR_ATTEMPT" \
+  --chart-source-sha "$RETAINED_CHART_SOURCE" --gh "$GH_BIN" --cosign "$COSIGN_BIN" \
+  --previous-recovery-dir "$FIRST_COMPLETED_ACTIVATION" \
+  --previous-recovery-assets "$FIRST_OPERATOR_ASSETS" \
+  --activate-existing-secrets --reload-owned-workloads
+```
+
+For another successor, retain that first pair and append a pair for the later
+completed activation. At most eight predecessors and 64 MiB of admitted private
+evidence are accepted. The normal path after a successful recovery is prompt
+renewal adoption, not an indefinitely growing privileged recovery chain.
+
+Before creating the producer, the adapter authenticates every prior operator
+closure and compares its recorded source hashes with that release's signed
+bundle. It parses the historical source-file declaration as data without
+executing old helpers. The native owner independently reconstructs every
+original-to-successor plan from its actual credential inputs and Secret
+preimages. It requires complete staging and qualification journals, the exact
+51 replacements in 34 existing Secrets, all 34 successful patch responses and
+their verified hashes, and a completed Secret activation receipt. Preserved
+files, key and CA references, original runtime images, policies and static seal
+material keep their existing owners.
+
+The current Secret UID and complete data must match the final predecessor's
+verified postimages. A differing credential, an unexplained foreign field,
+missing response, partial activation, uncertain result or reordered/omitted
+predecessor stops before new issuance. The adapter observes the publication
+again immediately before staging. Resource-version changes alone do not invent
+a different credential generation; fresh activation still tests the newly
+observed resource version and entire data for every object. A failed workload
+reload after completed Secret activation is allowed as historical input;
+incomplete Secret activation is not. No recovery receipt is synthesized from a
+matching live snapshot.
+
+The chain is retained in the new operation and bound into its inspection,
+request and completion. Historical qualification deadlines are checked for
+internal consistency only: they are provenance, never a fresh TTL assertion.
+The existing live OpenBao target, root-custody, issuer, nonexportable key,
+same-scope policy, certificate and replacement-token checks still run for the
+new generation. Secret patch guards and workload reload qualification are
+unchanged.
+
+After successful fresh activation and delivery, run the existing explicit
+`adopt_kubernetes_renewal.py` owner while its required credential lifetime remains.
+It consumes the new completed recovery directory, preserves historical state,
+and enrolls the existing ordinary application/TLS renewal authorities. A retained
+`renewal-adoption.json` or `renewal-adoption-pending.json` selects that ordinary
+renewal/reconciliation owner and refuses privileged legacy recovery. This command
+does not install a scheduler, renew public cert-manager certificates or qualify
+an OB3 browser journey.
+
 `--reload-owned-workloads` is accepted only with explicit Secret activation.
 The caller first verifies all 34 Secret update responses, exports the complete
 native evidence, removes the bounded producer and writes the credential
