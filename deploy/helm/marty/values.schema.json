@@ -491,6 +491,15 @@
         },
         "tlsSecretName": {
           "type": "string"
+        },
+        "useDefaultCertificate": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "allOf": [
@@ -503,9 +512,31 @@
             }
           },
           "then": {
-            "properties": {
-              "tlsSecretName": {
-                "minLength": 1
+            "if": {
+              "required": [
+                "useDefaultCertificate"
+              ],
+              "properties": {
+                "useDefaultCertificate": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "className": {
+                  "const": "traefik"
+                },
+                "tlsSecretName": {
+                  "maxLength": 0
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "tlsSecretName": {
+                  "minLength": 1
+                }
               }
             }
           }

@@ -100,7 +100,10 @@ spec:
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /health/ready
+              # Development keeps the UI available to explain backend outages.
+              # The ui-dev container separately verifies Vite; API readiness is
+              # a strict gate in check_kubernetes_dev_resume.py before demo use.
+              path: {{ ternary "/edge-healthz" "/health/ready" $development.enabled }}
               port: http
             periodSeconds: 10
             timeoutSeconds: 5

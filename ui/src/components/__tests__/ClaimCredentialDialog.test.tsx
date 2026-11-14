@@ -136,7 +136,7 @@ describe('ClaimCredentialDialog', () => {
     expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
     expect(mockListWallets).toHaveBeenCalledWith(true, 'org-1');
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
-    expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i })).toBeChecked();
     expect(screen.getByTestId('claim-invite-allowed-wallets')).toHaveTextContent('all');
     expect(screen.getByTestId('claim-invite-default-tab')).toHaveTextContent('true');
   });
@@ -169,6 +169,22 @@ describe('ClaimCredentialDialog', () => {
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
   });
 
+  it('provides one named native radio per wallet and supports keyboard selection without another offer', async () => {
+    const { user } = render(<ClaimCredentialDialog {...props} />);
+    await screen.findByTestId('claim-invite-display');
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(wallets.length);
+    for (const radio of radios) expect(radio).toHaveAccessibleName();
+    const selected = screen.getByRole('radio', { name: /Any OID4VCI Wallet/i });
+    selected.focus();
+    await user.keyboard('{ArrowDown}');
+    expect(selected).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: /walt.id Wallet/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /walt.id Wallet/i })).toHaveFocus();
+    expect(mockSetWalletIds).toHaveBeenCalledExactlyOnceWith(['wr-waltid-001']);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
+  });
+
   it('waits for a delayed wallet catalogue and applies the preference without duplicate claims', async () => {
     const catalogue = deferred<unknown[]>();
     mockListWallets.mockReturnValue(catalogue.promise);
@@ -179,6 +195,57 @@ describe('ClaimCredentialDialog', () => {
     await act(async () => catalogue.resolve(wallets));
     expect(await screen.findByTestId('claim-invite-allowed-wallets')).toHaveTextContent('wr-spruce-001');
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+  });
+
+  it('explains a failed wallet catalogue and retries without replacing the active invite', async () => {
+    const retry = deferred<unknown[]>();
+    mockListWallets.mockRejectedValueOnce(new Error('Catalogue unavailable')).mockReturnValueOnce(retry.promise);
+    const { user } = render(<ClaimCredentialDialog {...props} />);
+    const invite = await screen.findByTestId('claim-invite-display');
+    expect(screen.getByRole('alert')).toHaveTextContent('Wallet options could not be loaded');
+    expect(screen.getByRole('radio', { name: /Any OID4VCI Wallet/i })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Retry wallet list' }));
+    expect(await screen.findByRole('button', { name: 'Retrying wallet list…' })).toBeDisabled();
+    expect(screen.getByTestId('claim-invite-display')).toBe(invite);
+    expect(screen.getByTestId('claim-invite-url')).toHaveTextContent(offer.offer_url);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
+
+    await act(async () => retry.resolve(wallets));
+    expect(await screen.findByTestId('wallet-option-wr-spruce-001')).toBeInTheDocument();
+    expect(screen.queryByText(/Wallet options could not be loaded/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('claim-invite-display')).toBe(invite);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
+    expect(mockListWallets).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes a successful empty catalogue from a malformed response', async () => {
+    mockListWallets.mockResolvedValueOnce([]);
+    const view = render(<ClaimCredentialDialog {...props} />);
+    await screen.findByTestId('claim-invite-display');
+    expect(screen.queryByText(/Wallet options could not be loaded/)).not.toBeInTheDocument();
+    view.unmount();
+
+    mockListWallets.mockResolvedValueOnce({ error: 'Unexpected response' });
+    render(<ClaimCredentialDialog {...props} />);
+    expect(await screen.findByText(/Wallet options could not be loaded/)).toBeInTheDocument();
+  });
+
+  it('does not apply a catalogue retry response after the organization changes', async () => {
+    const previousRetry = deferred<unknown[]>();
+    mockListWallets.mockRejectedValueOnce(new Error('Catalogue unavailable'))
+      .mockReturnValueOnce(previousRetry.promise)
+      .mockResolvedValueOnce([{ id: 'wr-org-2', name: 'Current wallet', specifications: ['OID4VCI'] }]);
+    const view = render(<ClaimCredentialDialog {...props} />);
+    await screen.findByTestId('claim-invite-display');
+    await view.user.click(screen.getByRole('button', { name: 'Retry wallet list' }));
+    await waitFor(() => expect(mockListWallets).toHaveBeenCalledTimes(2));
+    view.rerender(<ClaimCredentialDialog {...props} applicationId="app-2" organizationId="org-2" />);
+    await screen.findByTestId('wallet-option-wr-org-2');
+    await act(async () => previousRetry.resolve(wallets));
+    expect(screen.getByTestId('wallet-option-wr-org-2')).toBeInTheDocument();
+    expect(screen.queryByTestId('wallet-option-wr-spruce-001')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Wallet options could not be loaded/)).not.toBeInTheDocument();
+    expect(mockGenerateIssuanceOffer.mock.calls).toEqual([['app-1'], ['app-2']]);
   });
 
   it('ignores the previous application response after switching applications', async () => {

@@ -10,7 +10,8 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAuth } from '../../../hooks/useAuth';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
-import { getCredentialTemplate, updateCredentialTemplate } from '../../../services/presentationPolicyApi';
+import { activateCredentialTemplate, getCredentialTemplate, updateCredentialTemplate } from '../../../services/presentationPolicyApi';
+import { getErrorMessage } from '../../../services/api';
 import { createTemplateVersionOperation } from '../../../services/credentialTemplateVersionOperation';
 import { MAX_VALIDITY_DAYS, MIN_VALIDITY_OFFSET, MAX_VALIDITY_OFFSET } from './credentialTemplateValidity';
 
@@ -25,7 +26,7 @@ const settingsFor = (template) => ({
   ...Object.fromEntries(validityFields.map(([key]) => [key, String(template.validity_rules?.[key] ?? '')])),
 });
 
-function CredentialTemplateEditor({ organizationId, principalId, templateId, canEdit, canVersion, browserEntry }) {
+function CredentialTemplateEditor({ organizationId, principalId, templateId, canEdit, canVersion, canActivate, browserEntry }) {
   const navigate = useNavigate();
   const beginAction = useAsyncActionScope();
   const busyRef = useRef(false);
@@ -37,6 +38,8 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [activating, setActivating] = useState(false);
+  const [activated, setActivated] = useState(false);
   const [separateOpen, setSeparateOpen] = useState(false);
   const versionOperation = useMemo(() => createTemplateVersionOperation(organizationId, principalId, templateId), [organizationId, principalId, templateId]);
   const [versionRecord, setVersionRecord] = useState(null);
@@ -68,7 +71,7 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
       }
       setTemplate(result);
       setSettings(settingsFor(result));
-    }).catch((cause) => { if (active) setLoadError(cause.message || String(cause)); })
+    }).catch((cause) => { if (active) setLoadError(getErrorMessage(cause)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [templateId, organizationId, loadGeneration]);
@@ -116,7 +119,7 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
       }
       setTemplate(result); setSettings(settingsFor(result)); setSaved(true);
     } catch (cause) {
-      if (isCurrent()) setError(cause.message || String(cause));
+      if (isCurrent()) setError(getErrorMessage(cause));
     } finally {
       if (isCurrent()) { busyRef.current = false; setBusy(false); }
     }
@@ -132,14 +135,50 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
       if (!isCurrent()) return;
       navigate(`/console/org/templates/credentials/${encodeURIComponent(result.id)}${canEdit ? '/edit' : ''}`);
     } catch (cause) {
-      if (isCurrent()) setError(cause.message || String(cause));
+      if (isCurrent()) setError(getErrorMessage(cause));
     } finally {
       if (isCurrent()) { busyRef.current = false; setBusy(false); refreshVersionRecord(); }
     }
   };
 
+  const activateDraft = async () => {
+    if (busyRef.current || !canActivate || !isDraft || dirty || !isCurrentBrowserEntry()) return;
+    const isCurrent = currentAction();
+    busyRef.current = true;
+    setBusy(true); setActivating(true); setError(''); setSaved(false); setActivated(false);
+    try {
+      // Reconcile a lost response before another activation request. Never create
+      // a replacement template to recover an acknowledged draft.
+      const current = await getCredentialTemplate(templateId);
+      if (!isCurrent()) return;
+      if (current?.id !== templateId || current.organization_id !== organizationId
+        || !['draft', 'active'].includes(String(current.status).toLowerCase())) {
+        throw new Error('This template is no longer available for activation. Reload it to inspect its current state.');
+      }
+      if (String(current.status).toLowerCase() === 'active') {
+        setTemplate(current); setSettings(settingsFor(current)); setActivated(true);
+        return;
+      }
+      if (JSON.stringify(current) !== JSON.stringify(template)) {
+        setTemplate(current); setSettings(settingsFor(current));
+        throw new Error('This draft changed since you opened it. Review its current settings before activating it.');
+      }
+      const result = await activateCredentialTemplate(templateId);
+      if (!isCurrent()) return;
+      if (result?.id !== templateId || result.organization_id !== organizationId
+        || String(result.status).toLowerCase() !== 'active') {
+        throw new Error('Activation could not be confirmed. Retry activation to check this same template before sending another request.');
+      }
+      setTemplate(result); setSettings(settingsFor(result)); setActivated(true);
+    } catch (cause) {
+      if (isCurrent()) setError(getErrorMessage(cause));
+    } finally {
+      if (isCurrent()) { busyRef.current = false; setBusy(false); setActivating(false); }
+    }
+  };
+
   return (
-    <ResourcePage title="Edit credential template" description="Update the name, description, and validity settings of a draft."
+    <ResourcePage title="Edit credential template" description="Review draft settings, save changes, and activate the template when it is ready."
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Credential Templates', path: '/console/org/templates/credentials' },
@@ -159,6 +198,7 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
           </Paper>
           {error && <Alert severity="error">{error}</Alert>}
           {saved && <Alert severity="success">Draft settings saved.</Alert>}
+          {activated && <Alert severity="success">This credential template is active.</Alert>}
           {isDraft ? <>
             {!canEdit && <Alert severity="info">You do not have permission to edit this draft.</Alert>}
             <Stack component="fieldset" disabled={busy || !canEdit} spacing={3} sx={{ border: 0, p: 0, m: 0, minWidth: 0 }} aria-label="Draft settings">
@@ -166,7 +206,11 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
               <TextField label="Description" multiline minRows={3} value={settings.description} onChange={(event) => update('description', event.target.value)} fullWidth />
               {validityFields.map(([key, label]) => <TextField key={key} label={label} type="number" value={settings[key]} onChange={(event) => update(key, event.target.value)} fullWidth />)}
             </Stack>
-            <Box><Button variant="contained" disabled={busy || !canEdit || !dirty} onClick={save}>{busy ? 'Saving…' : 'Save draft'}</Button></Box>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <Button variant="contained" disabled={busy || !canEdit || !dirty} onClick={save}>{busy && !activating ? 'Saving…' : 'Save draft'}</Button>
+              {canActivate && <Button variant="outlined" disabled={busy || Boolean(dirty)} onClick={activateDraft}>{activating ? 'Activating…' : 'Activate draft'}</Button>}
+            </Stack>
+            {canActivate && dirty && <Typography variant="body2" color="text.secondary">Save your changes before activation.</Typography>}
           </> : <>
             <Alert severity="info">This template is {template.status}. Create a new draft version to change its settings.</Alert>
             {journalError && <Alert severity="error">{journalError}</Alert>}
@@ -205,11 +249,12 @@ export default function CredentialTemplateEditorPage() {
   if (!isAuthenticated || !can('credential-template', 'view')) return <Alert severity="error">You do not have permission to view credential templates.</Alert>;
   const canEdit = can('credential-template', 'edit');
   const canVersion = can('credential-template', 'version');
+  const canActivate = can('credential-template', 'activate');
   const principalId = user?.user_id || user?.sub || user?.id || null;
   return <CredentialTemplateEditor
-    key={JSON.stringify([activeOrgId, templateId, principalId, isAuthenticated, canEdit, canVersion,
+    key={JSON.stringify([activeOrgId, templateId, principalId, isAuthenticated, canEdit, canVersion, canActivate,
       location.key, location.pathname, location.search, location.hash, browserEntry.generation])}
     organizationId={activeOrgId} principalId={principalId} templateId={templateId}
-    canEdit={canEdit} canVersion={canVersion} browserEntry={browserEntry}
+    canEdit={canEdit} canVersion={canVersion} canActivate={canActivate} browserEntry={browserEntry}
   />;
 }

@@ -1605,18 +1605,32 @@
         "info": "Claims are the individual pieces of information in the credential (e.g., \"family_name\", \"birth_date\", \"license_number\").",
         "quickStart": {
           "title": "Quick Start Templates",
-          "description": "Choose a preset to auto-populate common claim structures",
+          "description": "Choose a preset to replace the current claims with a common structure.",
           "identity": "Identity Profile",
           "age": "Age Verification",
-          "employee": "Employee Badge"
+          "employee": "Employee Badge",
+          "openBadge": "Open Badges achievement"
         },
+        "openBadge": {
+          "missingCriteria": "Add achievement_criteria as an Object claim, or use an achievement Object containing criteria.",
+          "criteriaObject": "Open Badges criteria must come from an Object claim, not text or a list.",
+          "guidance": "These fields define the badge structure. In the application template, map achievement details and criteria from issuer configuration or verified evidence. For example, criteria can contain a narrative describing the required assessment. The issuer validates those values before issuance."
+        },
+        "actions": {
+          "remove": "Remove {{name}}",
+          "moveUp": "Move {{name}} up",
+          "moveDown": "Move {{name}} down",
+          "required": "Require {{name}}"
+        },
+        "reviewClaims": "Return to Claims and review the credential structure before creating the template.",
         "addClaim": {
           "title": "Add Claim",
           "nameLabel": "Claim Name",
           "namePlaceholder": "given_name",
           "typeLabel": "Type",
           "requiredLabel": "Required",
-          "addButton": "Add"
+          "addButton": "Add",
+          "duplicate": "A claim with this name already exists."
         },
         "claimTypeLabels": {
           "string": "Text (string)",
