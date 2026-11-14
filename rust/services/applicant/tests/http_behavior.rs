@@ -13,6 +13,7 @@ use marty_applicant::{
     store::StoreDocument,
     Applicant, Application, LifecycleStatus,
 };
+use marty_service_contracts::application_approval::NO_MATCHING_FLOW;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::sync::{
@@ -1233,11 +1234,13 @@ fn prepared_flow_offer() -> Value {
 
 #[tokio::test]
 async fn flow_offer_failures_are_not_reported_as_missing_flows() {
-    let no_match = "No active custom OID4VCI extension handling APPLICATION_APPROVED matched org issuer-org and credential template credential-template-1";
+    let legacy_reason = "No active custom OID4VCI extension handling APPLICATION_APPROVED matched org issuer-org and credential template credential-template-1";
     let mut partial_failure = prepared_flow_offer();
     partial_failure["failed_flow_ids"] = json!(["flow-1"]);
+    partial_failure["reason_code"] = json!(NO_MATCHING_FLOW);
     let mut failed_with_offer = prepared_flow_offer();
     failed_with_offer["success"] = json!(false);
+    failed_with_offer["reason_code"] = json!(NO_MATCHING_FLOW);
     let mut empty_offer = prepared_flow_offer();
     empty_offer["offers"][0]["credential_offer_uri"] = Value::Null;
     empty_offer["offers"][0]["credential_offer_uris"] = json!({});
@@ -1247,20 +1250,65 @@ async fn flow_offer_failures_are_not_reported_as_missing_flows() {
         json!({"web-wallet":"openid-credential-offer://synthetic-wallet-offer"});
     for (body, expected) in [
         (
-            json!({"success":false, "flows_triggered":0, "reason":no_match}),
+            json!({"success":false, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW,
+            "reason":"No issuance flow was selected"}),
             StatusCode::CONFLICT,
         ),
         (
-            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            json!({"success":false, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW,
+            "reason":"該当する発行フローがありません",
             "offers":[], "instance_ids":[], "failed_flow_ids":[]}),
             StatusCode::CONFLICT,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW}),
+            StatusCode::CONFLICT,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":null}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":"FLOW.FUTURE_REASON"}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":""}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":17}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":true}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":{"code":NO_MATCHING_FLOW}}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":legacy_reason,
+            "reason_code":[NO_MATCHING_FLOW]}),
+            StatusCode::SERVICE_UNAVAILABLE,
         ),
         (
             json!({"success":false, "flows_triggered":0, "failed_flow_ids":["flow-1"]}),
             StatusCode::SERVICE_UNAVAILABLE,
         ),
         (
-            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            json!({"success":false, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW,
             "failed_flow_ids":["flow-1"]}),
             StatusCode::SERVICE_UNAVAILABLE,
         ),
@@ -1276,12 +1324,20 @@ async fn flow_offer_failures_are_not_reported_as_missing_flows() {
         ),
         (
             json!({"success":false, "flows_triggered":0,
-            "reason":no_match.replace("issuer-org", "another-org")}),
+            "reason":legacy_reason.replace("issuer-org", "another-org")}),
             StatusCode::SERVICE_UNAVAILABLE,
         ),
         (
-            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            json!({"success":false, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW,
             "instance_ids":["reserved-instance"]}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":1, "reason_code":NO_MATCHING_FLOW}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":true, "flows_triggered":0, "reason_code":NO_MATCHING_FLOW}),
             StatusCode::SERVICE_UNAVAILABLE,
         ),
         (

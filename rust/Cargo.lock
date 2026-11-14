@@ -3919,6 +3919,7 @@ dependencies = [
  "chrono",
  "marty-claim-collection",
  "marty-event-stream",
+ "marty-service-contracts",
  "marty-service-runtime",
  "mmf-platform",
  "mmf-security",
