@@ -19,6 +19,11 @@ provenance, authenticate the exact same-run artifact transport, and bind the
 original attempt and protected release source before treating the receipt as a
 release gate. This CLI validates the evidence contents, not those authorities.
 
+The public-dependency Cargo package at `tools/official-suite-validator` builds
+these same canonical policy modules for the integration release workflow, which
+does not have the product workspace's private dependency credentials. It uses
+its own committed lockfile and exposes only the two released-stack modes.
+
 ## Lossless beta deployment transport
 
 `beta-evidence-bundle` transports these three original deployment-runner files,
