@@ -38,6 +38,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 tower.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
 
 [lints.rust]
 unsafe_code = "forbid"
