@@ -256,16 +256,16 @@ impl FlowGrpcChannelFactories {
             self.presentation_policy.connect(),
             self.issuance.connect(),
         )?;
-        Ok(FlowGrpcClients::new(
+        let mut clients = FlowGrpcClients::new(
             organization,
             credential_template,
             presentation_policy,
             issuance,
-        ))
-    }
-
-    pub(crate) fn presentation_policy_workload_transport(&self) -> bool {
-        self.presentation_policy.is_keyless()
+        );
+        // Keep the inspected capability with the exact client constructed from
+        // this connected channel. A raw or replaceable client cannot inherit it.
+        clients.presentation_policy_mtls = self.presentation_policy.is_keyless();
+        Ok(clients)
     }
 }
 
@@ -322,7 +322,8 @@ fn workload_factory(
 pub struct FlowGrpcClients {
     pub organization: OrganizationServiceClient<Channel>,
     pub credential_template: CredentialTemplateServiceClient<Channel>,
-    pub presentation_policy: PresentationPolicyServiceClient<Channel>,
+    presentation_policy: PresentationPolicyServiceClient<Channel>,
+    presentation_policy_mtls: bool,
     pub issuance: IssuanceServiceClient<Channel>,
 }
 
@@ -338,6 +339,7 @@ impl FlowGrpcClients {
             organization: OrganizationServiceClient::new(organization),
             credential_template: CredentialTemplateServiceClient::new(credential_template),
             presentation_policy: PresentationPolicyServiceClient::new(presentation_policy),
+            presentation_policy_mtls: false,
             issuance: IssuanceServiceClient::new(issuance),
         }
     }
@@ -346,18 +348,9 @@ impl FlowGrpcClients {
         self,
         service_token: Option<&str>,
     ) -> Result<FlowGrpcProviders, FlowProviderError> {
-        // Preserve the public direct-client API's previous forwarding behavior.
-        self.providers_with_channel_security(service_token, true)
-    }
-
-    pub(crate) fn providers_with_channel_security(
-        self,
-        service_token: Option<&str>,
-        presentation_policy_mtls: bool,
-    ) -> Result<FlowGrpcProviders, FlowProviderError> {
         let mut presentation_policy =
             GrpcPresentationPolicyProvider::new(self.presentation_policy, service_token)?;
-        presentation_policy.workload_mtls = presentation_policy_mtls;
+        presentation_policy.workload_mtls = self.presentation_policy_mtls;
         Ok(FlowGrpcProviders {
             tenant_membership: GrpcTenantMembershipProvider::new(self.organization, service_token)?,
             credential_template: GrpcCredentialTemplateProvider::new(
@@ -567,9 +560,8 @@ impl GrpcPresentationPolicyProvider {
         Ok(Self {
             client,
             auth: GrpcAuthentication::new(token)?,
-            // Preserve direct-constructor behavior; configured Flow providers
-            // receive the inspected channel capability from their factory.
-            workload_mtls: true,
+            // Raw clients carry no inspected workload-identity provenance.
+            workload_mtls: false,
         })
     }
 }
@@ -646,7 +638,26 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 "evaluation identity mismatch",
             ));
         }
-        Ok(PresentationEvaluationResult {
+        let evaluation_validity = if response.evaluation_validity_json.is_empty() {
+            None
+        } else {
+            if !self.workload_mtls {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "uninspected validity channel",
+                ));
+            }
+            Some(
+                marty_oid4vp_contract::PolicyEvaluationValidityV1::from_json(
+                    &response.evaluation_validity_json,
+                )
+                .map_err(|_| {
+                    invalid_response("presentation_policy", "invalid evaluation validity")
+                })?,
+            )
+        };
+        let evaluation = PresentationEvaluationResult {
+            evaluation_validity,
             evaluation_timestamp: nonempty(response.evaluation_timestamp),
             policy_revision: decode_policy_revision(
                 response.policy_revision.as_ref(),
@@ -676,7 +687,9 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 })?,
             error_codes: Vec::new(),
             warnings: Vec::new(),
-        })
+        };
+        evaluation.validate_validity_for(request)?;
+        Ok(evaluation)
     }
 }
 
@@ -1244,15 +1257,33 @@ mod tests {
             presentation_policy: factory().into(),
             issuance: factory().into(),
         };
-        assert!(!factories.presentation_policy_workload_transport());
         let clients = factories.connect_lazy().unwrap();
-        let providers = clients
-            .providers_with_channel_security(
+        let providers = clients.providers(None).unwrap();
+        assert!(!providers.presentation_policy.workload_mtls);
+    }
+
+    #[tokio::test]
+    async fn raw_clients_never_claim_inspected_workload_identity() {
+        for target in ["http://127.0.0.1:9009", "https://policy.example:9009"] {
+            let channel = tonic::transport::Endpoint::from_shared(target.to_owned())
+                .unwrap()
+                .connect_lazy();
+            let direct = GrpcPresentationPolicyProvider::new(
+                PresentationPolicyServiceClient::new(channel.clone()),
                 None,
-                factories.presentation_policy_workload_transport(),
             )
             .unwrap();
-        assert!(!providers.presentation_policy.workload_mtls);
+            assert!(!direct.workload_mtls);
+            let clients =
+                FlowGrpcClients::new(channel.clone(), channel.clone(), channel.clone(), channel);
+            assert!(
+                !clients
+                    .providers(None)
+                    .unwrap()
+                    .presentation_policy
+                    .workload_mtls
+            );
+        }
     }
 
     #[test]

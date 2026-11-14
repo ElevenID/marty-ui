@@ -2297,6 +2297,8 @@ mod bounded_sd_jwt_query_evidence {
             Changed,
             WrongTemplate,
             StaleAfterTemplate,
+            ShortTrustDeadline,
+            ShortStatusDeadline,
         }
 
         struct Owners {
@@ -2403,7 +2405,12 @@ mod bounded_sd_jwt_query_evidence {
                     },
                     accreditations: vec![],
                     checked_at_epoch_seconds: self.now,
-                    valid_until_epoch_seconds: self.now + 60,
+                    valid_until_epoch_seconds: self.now
+                        + if matches!(self.mode, Mode::ShortTrustDeadline) {
+                            5
+                        } else {
+                            60
+                        },
                     evidence_digest: String::new(),
                 };
                 if matches!(self.mode, Mode::WrongTrustScope) {
@@ -2459,7 +2466,12 @@ mod bounded_sd_jwt_query_evidence {
                     },
                     status_updated_at_epoch_seconds: self.now - 1,
                     checked_at_epoch_seconds: self.now,
-                    valid_until_epoch_seconds: self.now + 60,
+                    valid_until_epoch_seconds: self.now
+                        + if matches!(self.mode, Mode::ShortStatusDeadline) {
+                            6
+                        } else {
+                            60
+                        },
                     credential_expires_at_epoch_seconds: self.now + 600,
                     evidence_digest: String::new(),
                 };
@@ -2627,6 +2639,18 @@ mod bounded_sd_jwt_query_evidence {
             );
             assert!(output.get("authenticated_oid4vp_evidence").is_none());
             assert!(output.get("issuance_continuation").is_none());
+            let validity = marty_oid4vp_contract::PolicyEvaluationValidityV1::from_json(
+                &output[marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY].to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                validity.evaluated_at_epoch_micros,
+                fixture.now as i64 * 1_000_000
+            );
+            assert_eq!(
+                validity.valid_until_epoch_micros,
+                (fixture.now as i64 + 60) * 1_000_000
+            );
             let trust = owners.trust_calls.lock().unwrap();
             let status = owners.status_calls.lock().unwrap();
             assert_eq!(trust.len(), 1);
@@ -2647,6 +2671,116 @@ mod bounded_sd_jwt_query_evidence {
         }
 
         #[tokio::test]
+        async fn managed_finalization_validity_uses_every_earliest_authenticated_bound() {
+            use marty_oid4vp_contract::{
+                PolicyEvaluationValidityRequest, PolicyEvaluationValidityV1,
+                POLICY_EVALUATION_VALIDITY,
+            };
+
+            for case in [
+                "trust",
+                "status",
+                "credential",
+                "holder_expiry",
+                "holder_age",
+                "requirement_age",
+                "policy_age",
+                "status_grace",
+            ] {
+                let mode = match case {
+                    "trust" => Mode::ShortTrustDeadline,
+                    "status" => Mode::ShortStatusDeadline,
+                    _ => Mode::Valid,
+                };
+                let (mut fixture, _) = fixture(mode, 0);
+                let mut holder = json!({
+                    "aud": AUDIENCE, "nonce": fixture.nonce, "iat": fixture.now,
+                });
+                let expected_delta = match case {
+                    "trust" => 5_000_000,
+                    "status" => 6_000_000,
+                    "credential" => {
+                        fixture.claims["exp"] = json!(fixture.now + 7);
+                        7_000_000
+                    }
+                    "holder_expiry" => {
+                        holder["exp"] = json!(fixture.now as f64 + 3.25);
+                        3_250_000
+                    }
+                    "holder_age" => {
+                        holder["iat"] = json!(fixture.now as f64 - 296.5);
+                        3_500_000
+                    }
+                    "requirement_age" => {
+                        fixture.policy.credential_requirements[0].max_age_seconds = Some(62);
+                        // nbf is later than iat; it must not extend credential age.
+                        fixture.claims["nbf"] = json!(fixture.now - 1);
+                        2_000_000
+                    }
+                    "policy_age" => {
+                        fixture.policy.freshness.as_mut().unwrap().max_age_seconds = Some(63);
+                        3_000_000
+                    }
+                    "status_grace" => {
+                        fixture
+                            .policy
+                            .freshness
+                            .as_mut()
+                            .unwrap()
+                            .revocation_grace_seconds = Some(4);
+                        4_000_000
+                    }
+                    _ => unreachable!(),
+                };
+                fixture.request = fixture.request_for_token(bind_disclosed_sd_jwt_with_claims(
+                    &disclosed_sd_jwt(&fixture.claims, &["email"]),
+                    holder,
+                ));
+                let material = fixture.verify(&fixture.request).await;
+                let output = evaluate_verified_material_for_policy(
+                    material,
+                    &fixture.policy,
+                    &fixture.request,
+                )
+                .unwrap();
+                assert_eq!(output["decision"], "allow", "{case}: {output}");
+                let validity = PolicyEvaluationValidityV1::from_json(
+                    &output[POLICY_EVALUATION_VALIDITY].to_string(),
+                )
+                .unwrap();
+                assert_eq!(
+                    validity.valid_until_epoch_micros,
+                    fixture.now as i64 * 1_000_000 + expected_delta,
+                    "{case}"
+                );
+                let context = Value::Object(fixture.request.context.clone());
+                let organization_id = fixture.policy.organization_id.to_string();
+                let revision = policy_revision(&fixture.policy).unwrap();
+                let binding = PolicyEvaluationValidityRequest {
+                    organization_id: &organization_id,
+                    policy: &revision,
+                    nonce: fixture.request.nonce.as_deref().unwrap(),
+                    audience: fixture.request.audience.as_deref().unwrap(),
+                    vp_token: fixture.request.vp_token.as_str().unwrap(),
+                    trust_profile_id: fixture.request.trust_profile_id.as_deref(),
+                    context: &context,
+                    oid4vp_transport: fixture.request.oid4vp_transport.as_ref().unwrap(),
+                };
+                validity.validate_for_request(&binding, &output).unwrap();
+                validity
+                    .validate_at(validity.valid_until_epoch_micros - 1)
+                    .unwrap();
+                assert!(validity
+                    .validate_at(validity.valid_until_epoch_micros)
+                    .is_err());
+                let mut replaced = output.clone();
+                replaced["credential_results"][0]["managed_sd_jwt_authority"]["status"]["state"] =
+                    json!("revoked");
+                assert!(validity.validate_for_request(&binding, &replaced).is_err());
+            }
+        }
+
+        #[tokio::test]
         async fn managed_authority_does_not_confer_catalog_template_membership() {
             let (fixture, owners) = fixture(Mode::WrongTemplate, 0);
             let material = fixture.verify(&fixture.request).await;
@@ -2659,6 +2793,9 @@ mod bounded_sd_jwt_query_evidence {
                 evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
                     .unwrap();
             assert_eq!(output["decision"], "deny", "{output}");
+            assert!(output
+                .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+                .is_none());
             assert!(output["credential_results"][0]
                 .get("managed_sd_jwt_authority")
                 .is_none());
@@ -2707,6 +2844,9 @@ mod bounded_sd_jwt_query_evidence {
                 )
                 .unwrap();
                 assert_eq!(output["decision"], "deny", "{output}");
+                assert!(output
+                    .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+                    .is_none());
             }
         }
 

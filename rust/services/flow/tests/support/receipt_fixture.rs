@@ -21,6 +21,7 @@ use super::presentation_snapshot;
 
 struct ReceiptPolicies {
     evaluated_at: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
 }
 
 #[async_trait]
@@ -50,7 +51,8 @@ impl PresentationPolicyProvider for ReceiptPolicies {
         assert_eq!(request.principal_id, "receipt-principal-1");
         assert_eq!(request.audience, "did:web:receipt-verifier.example");
         assert!(request.oid4vp_transport.is_some());
-        Ok(PresentationEvaluationResult {
+        let mut result = PresentationEvaluationResult {
+            evaluation_validity: None,
             evaluation_timestamp: self.evaluated_at.map(|value| value.to_rfc3339()),
             policy_revision: request.expected_policy_revision.clone(),
             result: "passed".into(),
@@ -68,7 +70,32 @@ impl PresentationPolicyProvider for ReceiptPolicies {
             authentication_diagnostic: None,
             error_codes: Vec::new(),
             warnings: Vec::new(),
-        })
+        };
+        if let Some(valid_until) = self.valid_until {
+            let context = serde_json::to_value(&request.context).unwrap();
+            result.evaluation_validity = Some(
+                marty_oid4vp_contract::PolicyEvaluationValidityV1::bind(
+                    &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                        organization_id: &request.organization_id,
+                        policy: &request.expected_policy_revision,
+                        nonce: &request.nonce,
+                        audience: &request.audience,
+                        vp_token: &request.presentation,
+                        trust_profile_id: request
+                            .context
+                            .get("trust_profile_id")
+                            .and_then(serde_json::Value::as_str),
+                        context: &context,
+                        oid4vp_transport: request.oid4vp_transport.as_ref().unwrap(),
+                    },
+                    &serde_json::to_value(&result).unwrap(),
+                    self.evaluated_at.unwrap().timestamp_micros(),
+                    valid_until.timestamp_micros(),
+                )
+                .unwrap(),
+            );
+        }
+        Ok(result)
     }
 }
 
@@ -136,9 +163,22 @@ pub async fn prepare(
     token: &str,
     now: DateTime<Utc>,
 ) -> Result<PreparedVerificationSubmission, FlowVerificationSubmissionError> {
+    prepare_with_validity(instance, evaluated_at, None, token, now).await
+}
+
+async fn prepare_with_validity(
+    instance: FlowInstanceRecord,
+    evaluated_at: Option<DateTime<Utc>>,
+    valid_until: Option<DateTime<Utc>>,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<PreparedVerificationSubmission, FlowVerificationSubmissionError> {
     prepare_verification_submission(
         &FlowProviderRegistry {
-            presentation_policy: Some(Arc::new(ReceiptPolicies { evaluated_at })),
+            presentation_policy: Some(Arc::new(ReceiptPolicies {
+                evaluated_at,
+                valid_until,
+            })),
             ..Default::default()
         },
         instance,
@@ -157,6 +197,20 @@ pub async fn prepare(
         now,
     )
     .await
+}
+
+pub async fn finalization_with_validity(
+    instance: FlowInstanceRecord,
+    evaluated_at: DateTime<Utc>,
+    valid_until: DateTime<Utc>,
+    token: &str,
+    now: DateTime<Utc>,
+) -> Result<PreparedVerificationFinalization, FlowVerificationSubmissionError> {
+    match prepare_with_validity(instance, Some(evaluated_at), Some(valid_until), token, now).await?
+    {
+        PreparedVerificationSubmission::Final(prepared) => Ok(*prepared),
+        other => panic!("receipt fixture must prepare a terminal result: {other:?}"),
+    }
 }
 
 pub async fn finalization(

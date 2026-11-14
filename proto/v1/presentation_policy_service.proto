@@ -217,6 +217,9 @@ message PolicyEvaluationResponse {
   string nonce = 13;
   string authentication_diagnostic_json = 14; // Optional server-owned request-bound diagnostic; never credential authority
   PolicyRevision policy_revision = 15;
+  // Optional request/result-bound finalization deadline from native managed evidence.
+  // Correspondence only; consumers must authenticate the Policy channel.
+  string evaluation_validity_json = 16;
 }
 
 message HealthCheckRequest {}

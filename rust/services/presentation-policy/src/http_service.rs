@@ -682,7 +682,7 @@ pub fn evaluate_verified_material_for_policy(
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_POLICY_REVISION"))?;
     // Carry only native-constructed query evidence on its unique credential
     // result. Generic policy facts and caller JSON cannot create this field.
-    if let Some(query) = authenticated_sd_jwt_query {
+    if let Some(query) = authenticated_sd_jwt_query.as_ref() {
         if let Some(results) = result
             .get_mut("credential_results")
             .and_then(Value::as_array_mut)
@@ -698,7 +698,7 @@ pub fn evaluate_verified_material_for_policy(
                         .map_err(|_| {
                             service_unavailable("PRESENTATION_POLICY.INVALID_QUERY_EVIDENCE")
                         })?;
-                    if let Some(authority) = managed_credential_authority {
+                    if let Some(authority) = managed_credential_authority.as_ref() {
                         credential["managed_sd_jwt_authority"] = serde_json::to_value(authority)
                             .map_err(|_| {
                                 service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_AUTHORITY")
@@ -707,6 +707,22 @@ pub fn evaluate_verified_material_for_policy(
                 }
             }
         }
+    }
+    if policy.prerequisite_evidence_profile.is_some() && result["decision"] == "allow" {
+        let query = authenticated_sd_jwt_query
+            .as_ref()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let authority = managed_credential_authority
+            .as_ref()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let validity = crate::evaluation_validity::managed_validity(
+            policy, request, query, authority, &result,
+        )
+        .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        result[marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
+            .map_err(|_| {
+                service_unavailable("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY")
+            })?;
     }
     Ok(result)
 }

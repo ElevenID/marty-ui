@@ -150,6 +150,7 @@ impl PresentationPolicyProvider for Policies {
             revision.version += 1;
         }
         Ok(PresentationEvaluationResult {
+            evaluation_validity: None,
             evaluation_timestamp: self.evaluation_timestamp.lock().unwrap().clone(),
             policy_revision: revision,
             result: if accepted { "passed" } else { "failed" }.into(),

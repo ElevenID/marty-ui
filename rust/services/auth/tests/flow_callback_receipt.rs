@@ -68,6 +68,7 @@ fn produced_callback() -> Value {
         nonce_digest: "c".repeat(64),
         result_digest: flow_result_digest(&result).unwrap(),
         callback_payload_digest: flow_callback_payload_digest(&basis).unwrap(),
+        policy_valid_until_epoch_micros: None,
         policy_evaluated_at_epoch_micros: (now() - Duration::seconds(10)).timestamp_micros(),
         nonce_consumed_at_epoch_micros: (now() - Duration::seconds(7)).timestamp_micros() + 123,
         nonce_retention_expires_at_epoch_micros: (now() + Duration::minutes(15)).timestamp_micros(),
