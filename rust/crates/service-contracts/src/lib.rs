@@ -1,6 +1,7 @@
 //! Shared transport policy metadata and wire-contract primitives.
 //! Authorization, public errors and operations stay at service adapters.
 
+pub mod application_approval;
 pub mod flow_context;
 pub mod integration_secret;
 pub mod organization_defaults;

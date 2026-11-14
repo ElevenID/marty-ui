@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use marty_event_stream::proto::{
     event_stream_service_client::EventStreamServiceClient, DomainEvent, PublishEventRequest,
 };
+use marty_service_contracts::application_approval::NO_MATCHING_FLOW;
 use mmf_security::ApplicationEventAuthenticator;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Map, Value};
@@ -160,11 +161,12 @@ struct ApplicationApprovalResponse {
     offers: Vec<Value>,
     #[serde(default)]
     failed_flow_ids: Vec<String>,
-    reason: Option<String>,
+    #[serde(default)]
+    reason_code: Option<String>,
 }
 
 impl ApplicationApprovalResponse {
-    fn offer(&self, application: &Application) -> Result<&Value, ProviderError> {
+    fn offer(&self) -> Result<&Value, ProviderError> {
         if !self.failed_flow_ids.is_empty() {
             // Flow has already reserved the matching instance. Keep the current
             // issuance attempt so a later retry uses that same durable plan.
@@ -173,16 +175,12 @@ impl ApplicationApprovalResponse {
             ));
         }
         if self.offers.is_empty() {
-            // The released Flow owner emits this reason only for an empty
-            // matching plan. An absent offer alone does not prove flow absence.
-            let no_match = format!(
-                "No active custom OID4VCI extension handling APPLICATION_APPROVED matched org {} and credential template {}",
-                application.organization_id, application.credential_template_id
-            );
+            // Flow emits this code only for an empty durable plan. Missing or
+            // unknown codes cannot turn a retryable failure into a claim blocker.
             if !self.success
                 && self.flows_triggered == 0
                 && self.instance_ids.is_empty()
-                && self.reason.as_deref() == Some(no_match.as_str())
+                && self.reason_code.as_deref() == Some(NO_MATCHING_FLOW)
             {
                 return Err(ProviderError::NoActiveFlow);
             }
@@ -294,7 +292,7 @@ impl FlowProvider for HttpFlowProvider {
             .json::<ApplicationApprovalResponse>()
             .await
             .map_err(|_| ProviderError::Unavailable("flow issuance response is invalid".into()))?;
-        let offer = body.offer(application)?;
+        let offer = body.offer()?;
         let transaction_id = offer
             .get("credential_offer_transaction_id")
             .or_else(|| offer.get("flow_instance_id"))
