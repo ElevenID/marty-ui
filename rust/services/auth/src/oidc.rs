@@ -474,6 +474,28 @@ impl KeycloakOidcProvider {
                 "OIDC discovery does not support the configured public or client_secret_post client",
             ));
         }
+        // Preserve existing compatibility when the metadata is absent. A
+        // present list must overlap the operator's policy; discovery never
+        // adds an algorithm to the token validator's configured allowlist.
+        if let Some(algorithms) =
+            metadata_values(discovery, "id_token_signing_alg_values_supported")?
+        {
+            if !algorithms.iter().any(|&algorithm| {
+                algorithm != "none"
+                    && self
+                        .config
+                        .allowed_algorithms
+                        .iter()
+                        .any(|allowed| allowed == algorithm)
+            }) {
+                return Err(PortError::new(
+                    "unsupported_oidc_signing_algorithm",
+                    "OIDC discovery does not support a configured ID-token signing algorithm",
+                ));
+            }
+        }
+        // Discovery section 3 permits supported scopes to be unadvertised;
+        // scopes_supported is not a complete scope allowlist for the client.
         if !metadata_values(discovery, "response_types_supported")?
             .is_some_and(|types| types.contains(&"code"))
             || metadata_values(discovery, "code_challenge_methods_supported")?
