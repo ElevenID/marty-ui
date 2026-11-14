@@ -30,6 +30,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import DragHandleIcon from '@mui/icons-material/DragHandle';
 import InfoIcon from '@mui/icons-material/Info';
 import { useTranslation } from 'react-i18next';
+import { OPEN_BADGE_CLAIM_PRESET, isOpenBadgeTemplate, openBadgeClaimSchemaIssue } from '../credentialTemplateClaims';
 
 const getClaimTypes = (t) => [
   { value: 'string', label: t('wizards.credentialTemplate.claimsStep.claimTypeLabels.string') },
@@ -63,6 +64,7 @@ const CLAIM_PRESETS = {
     { name: 'position', type: 'string', required: true },
     { name: 'start_date', type: 'date', required: true },
   ],
+  openBadge: OPEN_BADGE_CLAIM_PRESET,
 };
 
 const ClaimsStep = ({ data, onChange }) => {
@@ -70,6 +72,18 @@ const ClaimsStep = ({ data, onChange }) => {
   const [newClaimName, setNewClaimName] = useState('');
   const [newClaimType, setNewClaimType] = useState('string');
   const [newClaimRequired, setNewClaimRequired] = useState(true);
+  const openBadge = isOpenBadgeTemplate(data);
+  const badgeSchemaIssue = openBadgeClaimSchemaIssue(data);
+  const duplicateClaimName = Boolean(newClaimName.trim()
+    && (data.claims || []).some((claim) => claim.name === newClaimName.trim()));
+  const badgeSchemaMessages = {
+    missingCriteria: t('wizards.credentialTemplate.claimsStep.openBadge.missingCriteria', {
+      defaultValue: 'Add achievement_criteria as an Object claim, or use an achievement Object containing criteria.',
+    }),
+    criteriaObject: t('wizards.credentialTemplate.claimsStep.openBadge.criteriaObject', {
+      defaultValue: 'Open Badges criteria must come from an Object claim, not text or a list.',
+    }),
+  };
 
   const handleApplyPreset = (presetKey) => {
     const preset = CLAIM_PRESETS[presetKey];
@@ -142,6 +156,15 @@ const ClaimsStep = ({ data, onChange }) => {
         {t('wizards.credentialTemplate.claimsStep.info')}
       </Alert>
 
+      {openBadge && (
+        <Alert severity={badgeSchemaIssue ? 'warning' : 'info'} sx={{ mb: 3 }}>
+          {badgeSchemaIssue && <Typography variant="body2" sx={{ mb: 1 }}>{badgeSchemaMessages[badgeSchemaIssue]}</Typography>}
+          {t('wizards.credentialTemplate.claimsStep.openBadge.guidance', {
+            defaultValue: 'These fields define the badge structure. In the application template, map achievement details and criteria from issuer configuration or verified evidence. For example, criteria can contain a narrative describing the required assessment. The issuer validates those values before issuance.',
+          })}
+        </Alert>
+      )}
+
       {/* Claim Presets */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" gutterBottom>
@@ -151,6 +174,15 @@ const ClaimsStep = ({ data, onChange }) => {
           {t('wizards.credentialTemplate.claimsStep.quickStart.description')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {openBadge && (
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() => handleApplyPreset('openBadge')}
+            >
+              {t('wizards.credentialTemplate.claimsStep.quickStart.openBadge', { defaultValue: 'Open Badges achievement' })}
+            </Button>
+          )}
           <Button
             variant="outlined"
             size="small"
@@ -180,19 +212,24 @@ const ClaimsStep = ({ data, onChange }) => {
         <Typography variant="subtitle2" gutterBottom>
           {t('wizards.credentialTemplate.claimsStep.addClaim.title')}
         </Typography>
-        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start' }}>
+        <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <TextField
             label={t('wizards.credentialTemplate.claimsStep.addClaim.nameLabel')}
             placeholder={t('wizards.credentialTemplate.claimsStep.addClaim.namePlaceholder')}
             value={newClaimName}
             onChange={(e) => setNewClaimName(e.target.value)}
-            onKeyPress={handleKeyPress}
-            sx={{ flex: 2 }}
+            onKeyDown={handleKeyPress}
+            error={duplicateClaimName}
+            helperText={duplicateClaimName ? t('wizards.credentialTemplate.claimsStep.addClaim.duplicate', {
+              defaultValue: 'A claim with this name already exists.',
+            }) : undefined}
+            sx={{ flex: '2 1 180px' }}
             size="small"
           />
-          <FormControl sx={{ flex: 1 }} size="small">
-            <InputLabel>{t('wizards.credentialTemplate.claimsStep.addClaim.typeLabel')}</InputLabel>
+          <FormControl sx={{ flex: '1 1 140px' }} size="small">
+            <InputLabel id="credential-claim-type-label">{t('wizards.credentialTemplate.claimsStep.addClaim.typeLabel')}</InputLabel>
             <Select
+              labelId="credential-claim-type-label"
               value={newClaimType}
               onChange={(e) => setNewClaimType(e.target.value)}
               label={t('wizards.credentialTemplate.claimsStep.addClaim.typeLabel')}
@@ -218,7 +255,7 @@ const ClaimsStep = ({ data, onChange }) => {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={handleAddClaim}
-            disabled={!newClaimName.trim()}
+            disabled={!newClaimName.trim() || duplicateClaimName}
           >
             {t('wizards.credentialTemplate.claimsStep.addClaim.addButton')}
           </Button>
@@ -247,6 +284,9 @@ const ClaimsStep = ({ data, onChange }) => {
                     edge="end"
                     onClick={() => handleRemoveClaim(index)}
                     color="error"
+                    aria-label={t('wizards.credentialTemplate.claimsStep.actions.remove', {
+                      name: claim.name, defaultValue: 'Remove {{name}}',
+                    })}
                   >
                     <DeleteIcon />
                   </IconButton>
@@ -257,6 +297,9 @@ const ClaimsStep = ({ data, onChange }) => {
                     size="small"
                     onClick={() => handleMoveClaim(index, 'up')}
                     disabled={index === 0}
+                    aria-label={t('wizards.credentialTemplate.claimsStep.actions.moveUp', {
+                      name: claim.name, defaultValue: 'Move {{name}} up',
+                    })}
                   >
                     ▲
                   </IconButton>
@@ -265,6 +308,9 @@ const ClaimsStep = ({ data, onChange }) => {
                     size="small"
                     onClick={() => handleMoveClaim(index, 'down')}
                     disabled={index === data.claims.length - 1}
+                    aria-label={t('wizards.credentialTemplate.claimsStep.actions.moveDown', {
+                      name: claim.name, defaultValue: 'Move {{name}} down',
+                    })}
                   >
                     ▼
                   </IconButton>
@@ -293,6 +339,9 @@ const ClaimsStep = ({ data, onChange }) => {
                   checked={claim.required}
                   onChange={() => handleToggleRequired(index)}
                   edge="end"
+                  slotProps={{ input: { 'aria-label': t('wizards.credentialTemplate.claimsStep.actions.required', {
+                    name: claim.name, defaultValue: 'Require {{name}}',
+                  }) } }}
                 />
               </ListItem>
             ))}

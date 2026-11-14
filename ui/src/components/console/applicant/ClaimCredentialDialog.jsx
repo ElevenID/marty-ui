@@ -30,11 +30,12 @@ import {
   Stack,
   Alert,
   Card,
-  CardContent,
   Collapse,
   Chip,
   CircularProgress,
   Radio,
+  RadioGroup,
+  FormControlLabel,
   Typography,
   useMediaQuery,
   useTheme,
@@ -79,7 +80,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const resolvedOrganizationId = organizationId || offerData?.organization_id || null;
   const scopeKey = JSON.stringify([applicationId || null, resolvedOrganizationId, user?.user_id || null]);
   const [registry, setRegistry] = useState(null);
-  const registryWallets = registry?.scopeKey === scopeKey ? registry.items : EMPTY_ITEMS;
+  const [registryAttempt, setRegistryAttempt] = useState(0);
+  const currentRegistry = registry?.scopeKey === scopeKey ? registry : null;
+  const registryWallets = currentRegistry?.items || EMPTY_ITEMS;
+  const registryLoading = currentRegistry?.status === 'loading';
+  const registryFailed = currentRegistry?.failed === true;
   const [walletSelection, setWalletSelection] = useState(null);
 
   const [preloadedOffer, setPreloadedOffer] = useState(offerData);
@@ -125,17 +130,33 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       return;
     }
     let active = true;
+    // Retrying the catalogue must not reset a prepared offer or restart its
+    // status observer. Keep the completed first load and current scoped items.
+    setRegistry((current) => ({
+      scopeKey,
+      items: current?.scopeKey === scopeKey ? current.items : EMPTY_ITEMS,
+      settled: current?.scopeKey === scopeKey && current.settled,
+      failed: current?.scopeKey === scopeKey && current.failed,
+      status: 'loading',
+    }));
     listWallets(true, resolvedOrganizationId)
       .then((items) => {
-        if (active) setRegistry({ scopeKey, items: Array.isArray(items) ? items : [] });
+        if (!Array.isArray(items)) throw new Error('Invalid wallet catalogue response');
+        if (active) setRegistry({ scopeKey, items, settled: true, failed: false, status: 'ready' });
       })
       .catch(() => {
-        if (active) setRegistry({ scopeKey, items: [] });
+        if (active) setRegistry((current) => ({
+          scopeKey,
+          items: current?.scopeKey === scopeKey ? current.items : EMPTY_ITEMS,
+          settled: true,
+          failed: true,
+          status: 'error',
+        }));
       });
     return () => { active = false; };
-  }, [open, resolvedOrganizationId, scopeKey]);
+  }, [open, resolvedOrganizationId, scopeKey, registryAttempt]);
 
-  const canGenerateWalletOffer = registry?.scopeKey === scopeKey;
+  const canGenerateWalletOffer = currentRegistry?.settled === true;
   const offerKey = JSON.stringify([scopeKey, offerAttempt]);
   const currentOffer = offerRequest?.key === offerKey ? offerRequest : null;
   const liveOffer = applicationId ? (canGenerateWalletOffer ? currentOffer?.data || null : null) : preloadedOffer;
@@ -334,7 +355,31 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       </DialogTitle>
 
       <DialogContent dividers>
-        <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="wallet-selector" role="radiogroup" aria-label="Choose wallet">
+        {registryFailed && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 2 }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => setRegistryAttempt((attempt) => attempt + 1)}
+                disabled={registryLoading}
+              >
+                {registryLoading ? 'Retrying wallet list…' : 'Retry wallet list'}
+              </Button>
+            }
+          >
+            Wallet options could not be loaded. You can still use Any OID4VCI Wallet or retry the list.
+          </Alert>
+        )}
+        <RadioGroup
+          value={selectedWalletId}
+          onChange={(_event, walletId) => handleSelectWallet(walletId)}
+          sx={{ gap: 1.25, mb: 2 }}
+          data-testid="wallet-selector"
+          aria-label="Choose wallet"
+        >
           {walletOptions.map((option) => {
             const selected = option.id === selectedWalletId;
             const isCompatibleWallet = option.id === ANY_OID4VCI_WALLET_ID;
@@ -346,26 +391,19 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               <Card
                 key={option.id}
                 variant="outlined"
-                role="radio"
-                tabIndex={0}
-                aria-checked={selected}
-                data-testid={`wallet-option-${option.id}`}
-                onClick={() => handleSelectWallet(option.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    handleSelectWallet(option.id);
-                  }
-                }}
                 sx={{
                   cursor: 'pointer',
                   borderColor: selected ? 'primary.main' : 'divider',
                   bgcolor: selected ? 'action.selected' : 'background.paper',
                 }}
               >
-                <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
-                  <Stack direction="row" spacing={1.25} sx={{ alignItems: 'flex-start' }}>
-                    <Radio checked={selected} size="small" sx={{ p: 0.25, mt: 0.1 }} />
+                <FormControlLabel
+                  value={option.id}
+                  data-testid={`wallet-option-${option.id}`}
+                  control={<Radio size="small" sx={{ p: 0.25, mt: 0.1, mr: 1.25 }} />}
+                  disableTypography
+                  sx={{ m: 0, px: 2, py: 1.25, width: '100%', boxSizing: 'border-box', alignItems: 'flex-start' }}
+                  label={<Stack direction="row" spacing={1.25} sx={{ minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
                     <Box sx={{ minWidth: 0, flex: 1 }}>
                       <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
                         <Typography variant="body2" sx={{ fontWeight: 700 }}>{option.name}</Typography>
@@ -386,18 +424,18 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                       </Typography>
                     </Box>
                     {selected && <CheckCircleIcon color="primary" fontSize="small" />}
-                  </Stack>
-                </CardContent>
+                  </Stack>}
+                />
               </Card>
             );
           })}
-        </Stack>
+        </RadioGroup>
 
         {loadingInitialOffer && (
           <Stack spacing={2} sx={{ alignItems: 'center', py: 4 }}>
             <CircularProgress />
             <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
-              Preparing your wallet invite...
+              {canGenerateWalletOffer ? 'Preparing your wallet invite...' : 'Loading wallet options...'}
             </Typography>
           </Stack>
         )}
