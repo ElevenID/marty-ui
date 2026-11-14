@@ -11,8 +11,8 @@ use crate::{
     reject_private_custody_metadata, require_issuer_status_transition, CascadeRevocationPolicy,
     ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus, IssuerEntityType,
     IssuerKeyResolutionError, IssuerKeyResolver, OrganizationTrustProfile, RegistryImportSource,
-    RegistryImportedIssuer, RegistryStatus, TimePolicy, TrustAnchorType, TrustDomainError,
-    TrustFramework, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
+    RegistryImportedIssuer, RegistryStatus, ScopedIssuerKeyResolver, TimePolicy, TrustAnchorType,
+    TrustDomainError, TrustFramework, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
     TrustProfileRepositoryError, TrustPurpose, TrustRegistryEntry, TrustRelationshipStatus,
     TrustSource, ValidationRules,
 };
@@ -160,6 +160,7 @@ pub struct TrustProfileApplication {
     repository: Arc<dyn TrustProfileRepository>,
     control_plane: Arc<dyn TrustProfileControlPlane>,
     issuer_key_resolver: Option<Arc<dyn IssuerKeyResolver>>,
+    scoped_issuer_key_resolver: Option<Arc<dyn ScopedIssuerKeyResolver>>,
 }
 
 impl TrustProfileApplication {
@@ -172,12 +173,22 @@ impl TrustProfileApplication {
             repository,
             control_plane,
             issuer_key_resolver: None,
+            scoped_issuer_key_resolver: None,
         }
     }
 
     #[must_use]
     pub fn with_issuer_key_resolver(mut self, resolver: Arc<dyn IssuerKeyResolver>) -> Self {
         self.issuer_key_resolver = Some(resolver);
+        self
+    }
+
+    #[must_use]
+    pub fn with_scoped_issuer_key_resolver(
+        mut self,
+        resolver: Arc<dyn ScopedIssuerKeyResolver>,
+    ) -> Self {
+        self.scoped_issuer_key_resolver = Some(resolver);
         self
     }
 
@@ -682,10 +693,27 @@ impl TrustProfileApplication {
         if !issuer.issuer_id.starts_with("did:") || has_verification_keys(&issuer.metadata) {
             return Ok(false);
         }
-        let Some(resolver) = &self.issuer_key_resolver else {
-            return Ok(false);
+        // The entity's stored organization and DID are the authority context.
+        // A registered document must keep that exact identity even when the
+        // deployment's public transport address has changed.
+        let scoped = match (
+            &self.scoped_issuer_key_resolver,
+            issuer.organization_id.as_deref(),
+        ) {
+            (Some(resolver), Some(organization_id)) => {
+                resolver.resolve(organization_id, &issuer.issuer_id).await?
+            }
+            _ => None,
         };
-        let resolution = resolver.resolve(&issuer.issuer_id).await?;
+        let resolution = match scoped {
+            Some(resolution) => resolution,
+            None => {
+                let Some(resolver) = &self.issuer_key_resolver else {
+                    return Ok(false);
+                };
+                resolver.resolve(&issuer.issuer_id).await?
+            }
+        };
         crate::issuer_keys::pin_resolution(&mut issuer.metadata, resolution)?;
         Ok(true)
     }

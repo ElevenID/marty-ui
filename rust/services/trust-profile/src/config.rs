@@ -34,6 +34,7 @@ pub struct TrustProfileServiceConfig {
     pub organization_grpc_ca_cert: Option<PathBuf>,
     pub service_token: Option<String>,
     pub internal_api_key: Option<String>,
+    pub signing_keys_service_url: String,
     pub dependency_timeout: Duration,
     pub registry_sync_poll_interval: Duration,
     pub registry_private_hosts: Vec<String>,
@@ -102,6 +103,21 @@ impl TrustProfileServiceConfig {
             MINIMUM_INTERNAL_API_KEY_BYTES,
             environment,
         )?;
+        let signing_keys_service_url = value(&values, "SIGNING_KEYS_SERVICE_URL")
+            .unwrap_or("http://signing-keys:8017")
+            .to_owned();
+        let signing_url = Url::parse(&signing_keys_service_url)
+            .map_err(|_| invalid("SIGNING_KEYS_SERVICE_URL"))?;
+        if !matches!(signing_url.scheme(), "http" | "https")
+            || signing_url.host_str().is_none()
+            || !signing_url.username().is_empty()
+            || signing_url.password().is_some()
+            || signing_url.path() != "/"
+            || signing_url.query().is_some()
+            || signing_url.fragment().is_some()
+        {
+            return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
+        }
         let marty_organization_id = value(&values, "MARTY_ORG_ID")
             .unwrap_or("00000000-0000-0000-0000-000000000001")
             .parse()
@@ -216,6 +232,7 @@ impl TrustProfileServiceConfig {
             organization_grpc_ca_cert,
             service_token,
             internal_api_key,
+            signing_keys_service_url,
             dependency_timeout,
             registry_sync_poll_interval,
             registry_private_hosts,
@@ -420,6 +437,7 @@ mod tests {
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert_eq!(config.http_addr.port(), 8004);
         assert_eq!(config.marty_issuer_url, "https://issuer.example");
+        assert_eq!(config.signing_keys_service_url, "http://signing-keys:8017");
         assert_eq!(config.did_resolution_base_urls, ["http://gateway:8000"]);
         assert!(config.did_web_allowed_hosts.is_empty());
     }
@@ -541,5 +559,36 @@ mod tests {
                 name: "DID_RESOLUTION_BASE_URL"
             })
         );
+    }
+
+    #[test]
+    fn scoped_document_owner_uses_only_a_configured_credential_free_origin() {
+        let mut input = values("development");
+        input.insert(
+            "SIGNING_KEYS_SERVICE_URL".into(),
+            "https://signing.internal:8017".into(),
+        );
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input)
+                .unwrap()
+                .signing_keys_service_url,
+            "https://signing.internal:8017"
+        );
+        for origin in [
+            "file:///tmp/did",
+            "http://user:secret@signing.internal",
+            "http://signing.internal/path",
+            "http://signing.internal?query",
+            "http://signing.internal#fragment",
+        ] {
+            let mut input = values("development");
+            input.insert("SIGNING_KEYS_SERVICE_URL".into(), origin.into());
+            assert_eq!(
+                TrustProfileServiceConfig::from_values(input),
+                Err(TrustProfileConfigError::Invalid {
+                    name: "SIGNING_KEYS_SERVICE_URL"
+                })
+            );
+        }
     }
 }

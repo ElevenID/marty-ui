@@ -2,11 +2,11 @@ use marty_service_runtime::shutdown_signal_best_effort as shutdown_signal;
 use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_trust_profile::{
-    bootstrap_system_catalog, run_migrations, trust_profile_router, MartyBootstrapConfig,
-    NativeIssuerKeyResolver, NativeTrustProfileControlPlane, NativeTrustRegistrySynchronizer,
-    PostgresTrustProfileRepository, TrustProfileApplication, TrustProfileDependency,
-    TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime, TrustProfileServiceConfig,
-    TrustRegistryScheduler,
+    bootstrap_system_catalog, run_migrations, trust_profile_router, HttpScopedIssuerKeyResolver,
+    MartyBootstrapConfig, NativeIssuerKeyResolver, NativeTrustProfileControlPlane,
+    NativeTrustRegistrySynchronizer, PostgresTrustProfileRepository, TrustProfileApplication,
+    TrustProfileDependency, TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime,
+    TrustProfileServiceConfig, TrustRegistryScheduler,
 };
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
@@ -89,10 +89,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.did_web_allowed_hosts.clone(),
     ));
     runtime.mark_healthy(TrustProfileDependency::NativeDidResolver)?;
-    let application = Arc::new(
-        TrustProfileApplication::new(Arc::clone(&repository), control)
-            .with_issuer_key_resolver(issuer_key_resolver),
-    );
+    let mut application = TrustProfileApplication::new(Arc::clone(&repository), control)
+        .with_issuer_key_resolver(issuer_key_resolver);
+    if let Some(api_key) = config.internal_api_key.as_deref() {
+        application = application.with_scoped_issuer_key_resolver(Arc::new(
+            HttpScopedIssuerKeyResolver::new(
+                &config.signing_keys_service_url,
+                api_key,
+                config.dependency_timeout,
+            )?,
+        ));
+    }
+    let application = Arc::new(application);
     let registry_synchronizer = Arc::new(NativeTrustRegistrySynchronizer::new(
         Arc::clone(&repository),
         config.dependency_timeout,
