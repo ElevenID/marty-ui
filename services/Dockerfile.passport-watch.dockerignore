@@ -1,0 +1,9 @@
+# --prepare creates this context privately; the checkout is never sent to build.
+**
+!cargo/
+!cargo/registry/
+!cargo/registry/**
+!cargo/git/
+!cargo/git/**
+!Dockerfile
+!Dockerfile.dockerignore

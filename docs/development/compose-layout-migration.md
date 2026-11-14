@@ -11,8 +11,8 @@ root overlays into `deploy/compose/development/` without changing their YAML:
 | `docker-compose.passport-supported-disposable-watch.yml` | `scripts/passport_local_watch.py` |
 
 The [Compose index](../../deploy/compose/README.md) links to the canonical files.
-The helper interfaces, first/base Compose files, merge order, port values,
-project identity, environment handling, and teardown semantics are unchanged.
+The initial relocation kept the helper interfaces, first/base Compose files,
+merge order, port values, project identity, and teardown semantics unchanged.
 No compatibility copies or symlinks remain at the old paths. This deployment
 batch is independent of the earlier documentation-only organization PR.
 
@@ -42,8 +42,8 @@ Compose files. The new layout test additionally scans nested `.yml` and `.yaml`
 files under `deploy/compose/`, including mappings containing Compose tags.
 Root-only environment-discovery loops in `test_compose_memory_limits.py` and
 `test_beta_passport_selector.py` need review before their own rendered inputs
-move. The moved watcher has no interpolation variables; the worktree helper
-supplies its `WT_*` variables itself.
+move. The watcher preparation correction below adds three explicit image/seed
+inputs; the worktree helper supplies its `WT_*` variables itself.
 
 Indexed filename searches identified the two callers above. They are not a
 complete checkout-wide or cross-repository reachability proof. Subsequent batches
@@ -52,7 +52,9 @@ must repeat source and consumer searches against their exact current base.
 ## Validation scope
 
 The selected source blobs were verified against GitHub blob hashes before
-editing. Only the two caller path literals change; the overlay blobs are reused.
+editing. The initial move reused the overlay blobs and changed the two caller
+path literals. The later development prerequisites below are intentional
+behavior changes and require their own model-difference review.
 Existing worktree tests and the new layout tests are runnable with:
 
 ```sh
@@ -64,6 +66,28 @@ services at both the old and new locations. They perform no pulls, container
 starts, credentials provisioning, or production operations. A skipped Docker
 test is not a passing render comparison. Full source-stack rendering and a live
 disposable smoke test remain required before claiming deployment acceptance.
+
+## Development prerequisite corrections
+
+The full-source validation exposed prerequisites beyond the path relocation.
+The worktree helper supplies unusable application-only interpolation values for
+its PostgreSQL/Redis-only route, and both launchers preserve the verified local
+rootless Docker endpoint. Neither correction relaxes the application's required
+managed-key configuration.
+
+The passport watcher now has an explicit, plan-free `--prepare` phase for its
+local dependency image. Preparation reuses the canonical private-fork fetch
+helper in a bounded rootless container with a read-only reader mount, then proves
+offline dependency completeness in a separate container without that credential.
+Its local image recipe only copies the verified caches and contains no `RUN`
+instructions. Normal startup binds the prepared image and seed,
+uses `--no-build`, and rejects stale volumes before staging. Both native watcher
+services compile offline with one job, one CPU, 4 GiB RAM and no swap. These
+image, environment, command, resource, and volume-label changes must appear as
+explicit before/after model differences; they must not be normalized away as
+path relocation. The original base/surface order, private network, read-only
+source bind, plan/manifest/lease checks, managed signer, and teardown boundaries
+remain in force. See the [preparation procedure](../../deploy/compose/README.md#prepare-the-disposable-passport-watcher).
 
 ## Remaining deployment batches
 

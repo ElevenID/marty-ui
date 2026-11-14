@@ -134,6 +134,11 @@ def test_overlay_relocation_preserves_fixture_render(name, tmp_path):
     env_file = root / "empty.env"
     env_file.write_text("", encoding="utf-8")
     env = worktree_stack.environment(root, "marty-layout-test", 28000)
+    if not worktree:
+        # Controlled render inputs only; no prepared image or plan is asserted.
+        env.update(PASSPORT_WATCH_IMAGE="sha256:" + "0" * 64,
+                   PASSPORT_WATCH_SEED_ID="0" * 64,
+                   PASSPORT_WATCH_LOCK_SHA256="0" * 64)
     command = ["docker", "compose", "--project-name", "marty-layout-test"]
     if worktree:
         command.extend(["--project-directory", str(root)])
