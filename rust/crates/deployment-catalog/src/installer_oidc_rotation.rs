@@ -289,6 +289,12 @@ pub(crate) fn redaction_values(
 }
 
 #[cfg(test)]
+pub(crate) fn test_stage(installation: &Path, parent: &GenerationBinding, bytes: &[u8]) -> String {
+    let mut state = LockedMaintenance::open(installation).unwrap();
+    stage(installation, &mut state, parent, bytes).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::installer_generation_binding::{GenerationFile, GenerationSource};
@@ -470,10 +476,4 @@ mod tests {
             }
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn test_stage(installation: &Path, parent: &GenerationBinding, bytes: &[u8]) -> String {
-    let mut state = LockedMaintenance::open(installation).unwrap();
-    stage(installation, &mut state, parent, bytes).unwrap()
 }
