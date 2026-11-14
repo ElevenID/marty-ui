@@ -703,7 +703,11 @@
     },
     "usedByFlows": "{{count}} Flow",
     "usedByFlows_plural": "{{count}} Flows",
+    "usedByFlows_one": "{{count}} Flow",
+    "usedByFlows_other": "{{count}} Flows",
     "usedByFlowsTooltip": "Number of Issuance Flows using this template",
+    "notReported": "Not reported",
+    "flowUsageNotReported": "The service did not report how many flows use this template.",
     "breadcrumbs": {
       "console": "Console",
       "templates": "Templates",

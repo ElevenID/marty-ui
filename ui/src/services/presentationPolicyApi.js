@@ -422,6 +422,7 @@ export function normalizeCredentialTemplate(data = {}) {
     signing_key_reference: _signingKeyReference,
     ...contractData
   } = data;
+  const reportedFlowCount = data.usedByFlowsCount ?? data.used_by_flows_count;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => ({
         ...claim,
@@ -432,7 +433,7 @@ export function normalizeCredentialTemplate(data = {}) {
   return {
     ...contractData,
     status: data.status ? String(data.status).toLowerCase() : data.status,
-    usedByFlowsCount: data.usedByFlowsCount ?? data.used_by_flows_count ?? 0,
+    usedByFlowsCount: Number.isSafeInteger(reportedFlowCount) && reportedFlowCount >= 0 ? reportedFlowCount : null,
     claims,
     validity_rules: normalizeCredentialTemplateValidityRules(data.validity_rules || {}),
     createdAt: data.created_at || data.createdAt,
