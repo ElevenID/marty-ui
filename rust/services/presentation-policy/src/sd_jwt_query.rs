@@ -93,6 +93,8 @@ pub struct AuthenticatedSdJwtQueryEvidence {
     #[serde(skip)]
     policy_claims_digest: String,
     #[serde(skip)]
+    issued_at_epoch_seconds: u64,
+    #[serde(skip)]
     valid_from_epoch_seconds: u64,
     #[serde(skip)]
     expires_at_epoch_seconds: u64,
@@ -190,6 +192,41 @@ impl AuthenticatedSdJwtQueryEvidence {
 
     pub(crate) fn checked_at_epoch_seconds(&self) -> u64 {
         self.checked_at_epoch_seconds
+    }
+
+    pub(crate) fn finalization_deadline_micros(
+        &self,
+        policy: &PresentationPolicy,
+    ) -> Result<i64, PresentationVerificationError> {
+        use crate::evaluation_validity::{invalid, numeric_date_floor_micros, seconds_to_micros};
+
+        let mut deadline = seconds_to_micros(self.expires_at_epoch_seconds)?;
+        let holder_age_deadline = numeric_date_floor_micros(self.holder_proof_issued_at)?
+            .checked_add(300_000_000)
+            .ok_or_else(invalid)?;
+        deadline = deadline.min(holder_age_deadline);
+        if let Some(expires_at) = self.holder_proof_expires_at {
+            deadline = deadline.min(numeric_date_floor_micros(expires_at)?);
+        }
+        let [requirement] = policy.credential_requirements.as_slice() else {
+            return Err(invalid());
+        };
+        let policy_max_age = policy
+            .freshness
+            .as_ref()
+            .and_then(|freshness| freshness.max_age_seconds);
+        let maximum = match (requirement.max_age_seconds, policy_max_age) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
+        if let Some(maximum) = maximum {
+            let expires = self
+                .issued_at_epoch_seconds
+                .checked_add(maximum)
+                .ok_or_else(invalid)?;
+            deadline = deadline.min(seconds_to_micros(expires)?);
+        }
+        Ok(deadline)
     }
 
     pub(crate) fn credential_template_id(&self) -> &str {
@@ -690,6 +727,7 @@ impl SdJwtDcqlRequest {
                 &self.policy_claims(claims),
             )
             .map_err(|_| PROFILE_ERROR)?,
+            issued_at_epoch_seconds: issued_at,
             valid_from_epoch_seconds: issued_at.max(
                 claims
                     .get("nbf")

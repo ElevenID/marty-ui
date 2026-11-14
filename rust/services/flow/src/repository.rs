@@ -163,6 +163,9 @@ impl InMemoryFlowRepository {
             result
                 .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
                 .is_some()
+                || result
+                    .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+                    .is_some()
         }) || callback.as_ref().is_some_and(|message| {
             message
                 .payload
@@ -259,6 +262,9 @@ impl InMemoryFlowRepository {
             .ok()
             .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
             .ok_or(RepositoryError::InvalidVerificationReceipt)?;
+        if now_ms >= prepared.replay_expires_at_ms || !receipt_input.is_live_at(consumed_at) {
+            return Ok(None);
+        }
         let (instance, callback, receipt) = receipt_input.attach(prepared, consumed_at)?;
         let stored = instance.kernel()?;
         checked_public_record(&stored)?;

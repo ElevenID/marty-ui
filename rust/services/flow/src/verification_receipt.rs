@@ -33,6 +33,7 @@ pub(crate) struct PreparedVerificationReceipt {
     submission_digest: String,
     replay_expires_at_ms: u64,
     policy_evaluated_at_epoch_micros: i64,
+    policy_valid_until_epoch_micros: Option<i64>,
 }
 
 /// A terminal result returned only after repository finalization succeeds.
@@ -98,6 +99,28 @@ impl PreparedVerificationReceipt {
             .and_then(Value::as_str)
             .ok_or_else(invalid)?;
         let normalized = canonical_policy_timestamp(evaluated_at)?;
+        let policy_evaluated_at_epoch_micros = DateTime::parse_from_rfc3339(&normalized)
+            .map_err(|_| invalid())?
+            .timestamp_micros();
+        let validity: Option<marty_oid4vp_contract::PolicyEvaluationValidityV1> = result
+            .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+            .map(|value| serde_json::from_value(value.clone()).map_err(|_| invalid()))
+            .transpose()?;
+        if let Some(validity) = &validity {
+            validity.validate().map_err(|_| invalid())?;
+            if validity.organization_id != instance.organization_id
+                || validity.policy != policy
+                || validity.evaluated_at_epoch_micros != policy_evaluated_at_epoch_micros
+                || result.get("evaluation_result").and_then(Value::as_str) != Some("passed")
+                || result.get("decision").and_then(Value::as_str) != Some("allow")
+            {
+                return Err(invalid());
+            }
+        } else if frozen.credential_authority.is_some()
+            && instance.status == FlowInstanceStatus::Completed
+        {
+            return Err(invalid());
+        }
         if normalized != evaluated_at
             || !matches!(
                 instance.status,
@@ -139,9 +162,8 @@ impl PreparedVerificationReceipt {
             nonce_digest: finalization.nonce_digest.clone(),
             submission_digest: finalization.submission_digest.clone(),
             replay_expires_at_ms: finalization.replay_expires_at_ms,
-            policy_evaluated_at_epoch_micros: DateTime::parse_from_rfc3339(&normalized)
-                .map_err(|_| invalid())?
-                .timestamp_micros(),
+            policy_evaluated_at_epoch_micros,
+            policy_valid_until_epoch_micros: validity.map(|value| value.valid_until_epoch_micros),
         })
     }
 
@@ -157,10 +179,18 @@ impl PreparedVerificationReceipt {
             || self.submission_digest != observed.submission_digest
             || self.replay_expires_at_ms != observed.replay_expires_at_ms
             || self.policy_evaluated_at_epoch_micros != observed.policy_evaluated_at_epoch_micros
+            || self.policy_valid_until_epoch_micros != observed.policy_valid_until_epoch_micros
         {
             return Err(invalid());
         }
         Ok(())
+    }
+
+    /// A bounded policy observation remains usable only before its exclusive
+    /// deadline. The repository supplies a fresh clock after awaited writes.
+    pub(crate) fn is_live_at(&self, now: DateTime<Utc>) -> bool {
+        self.policy_valid_until_epoch_micros
+            .is_none_or(|deadline| now.timestamp_micros() < deadline)
     }
 
     /// The timestamp is the database nonce-consumption observation inside the
@@ -194,6 +224,7 @@ impl PreparedVerificationReceipt {
             callback_payload_digest: flow_callback_payload_digest(&callback_payload(&instance)?)
                 .map_err(|_| invalid())?,
             policy_evaluated_at_epoch_micros: self.policy_evaluated_at_epoch_micros,
+            policy_valid_until_epoch_micros: self.policy_valid_until_epoch_micros,
             nonce_consumed_at_epoch_micros: consumed_at.timestamp_micros(),
             nonce_retention_expires_at_epoch_micros: i64::try_from(self.replay_expires_at_ms)
                 .ok()

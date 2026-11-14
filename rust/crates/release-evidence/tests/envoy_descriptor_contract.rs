@@ -81,10 +81,11 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
     // additive saved-policy revision and managed prerequisite authority fields,
     // direct jwt_vc_profile_json template fields (create 28/update 24/response 34),
-    // and PolicyResponse holder_binding_required bool field 16.
+    // PolicyResponse holder_binding_required bool field 16, and
+    // PolicyEvaluationResponse evaluation_validity_json string field 16.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "7199f0e1da2c506cc0c22f951b6876314afec921b82b97275f34d7a61da2ecb3"
+        "86f0ce632815c5f54d578c5c66b941935ffc7a63448fd1ffab0649a97056b2b7"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -246,6 +247,12 @@ fn managed_prerequisite_fields_are_additive_and_keep_explicit_update_presence() 
             "PolicyResponse",
             "credential_authority_snapshot_json",
             15,
+            false,
+        ),
+        (
+            "PolicyEvaluationResponse",
+            "evaluation_validity_json",
+            16,
             false,
         ),
         (

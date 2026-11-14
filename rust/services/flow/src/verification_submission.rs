@@ -390,22 +390,19 @@ pub async fn prepare_verification_submission(
         .ok_or(FlowProviderError::Unavailable {
             provider: "presentation_policy",
         });
+    let evaluation_request = PresentationEvaluationRequest {
+        policy_id: policy_id.clone(),
+        organization_id: instance.organization_id.clone(),
+        expected_policy_revision: frozen.policy_revision.clone(),
+        principal_id,
+        presentation: vp_token.clone(),
+        nonce: nonce.clone(),
+        audience: audience.clone(),
+        oid4vp_transport: Some(oid4vp_transport),
+        context: evaluation_context,
+    };
     let evaluation = match policy {
-        Ok(provider) => {
-            provider
-                .evaluate(&PresentationEvaluationRequest {
-                    policy_id: policy_id.clone(),
-                    organization_id: instance.organization_id.clone(),
-                    expected_policy_revision: frozen.policy_revision.clone(),
-                    principal_id,
-                    presentation: vp_token.clone(),
-                    nonce: nonce.clone(),
-                    audience: audience.clone(),
-                    oid4vp_transport: Some(oid4vp_transport),
-                    context: evaluation_context,
-                })
-                .await
-        }
+        Ok(provider) => provider.evaluate(&evaluation_request).await,
         Err(error) => Err(error),
     };
     let evaluation = match evaluation {
@@ -452,6 +449,12 @@ pub async fn prepare_verification_submission(
     {
         return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
     }
+    if frozen.credential_authority.is_some() && evaluation.evaluation_timestamp.is_none() {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "policy_evaluation_timestamp",
+        ));
+    }
+    evaluation.validate_validity_for(&evaluation_request)?;
     let authenticated = !evaluation.credential_results.is_empty()
         && evaluation
             .credential_results
@@ -560,6 +563,11 @@ pub async fn prepare_verification_submission(
         return Err(FlowVerificationSubmissionError::InvalidContext(
             "policy_evaluation_timestamp",
         ));
+    }
+    if let Some(validity) = evaluation.evaluation_validity.as_ref() {
+        instance.result.as_mut().expect("result was assigned")
+            [marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
+            .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
     }
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
@@ -1123,6 +1131,7 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            evaluation_validity: None,
             evaluation_timestamp: None,
             policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
                 id: "policy-1".into(),

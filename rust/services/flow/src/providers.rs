@@ -151,6 +151,9 @@ pub struct PresentationEvaluationResult {
     /// Actual Policy-owned observation time, never a Flow completion clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_timestamp: Option<String>,
+    /// Policy's request-bound validity projection. This is not issuance authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_validity: Option<marty_oid4vp_contract::PolicyEvaluationValidityV1>,
     pub result: String,
     pub decision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,6 +168,60 @@ pub struct PresentationEvaluationResult {
     pub error_codes: Vec<String>,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+impl PresentationEvaluationResult {
+    pub(crate) fn validate_validity_for(
+        &self,
+        request: &PresentationEvaluationRequest,
+    ) -> Result<(), FlowProviderError> {
+        let invalid = || FlowProviderError::InvalidResponse {
+            provider: "presentation_policy",
+            message: "evaluation validity binding mismatch".into(),
+        };
+        let Some(validity) = &self.evaluation_validity else {
+            if self.result == "passed"
+                && self.decision == "allow"
+                && request
+                    .oid4vp_transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.credential_authority.is_some())
+            {
+                return Err(invalid());
+            }
+            return Ok(());
+        };
+        let transport = request.oid4vp_transport.as_ref().ok_or_else(invalid)?;
+        let result = serde_json::to_value(self).map_err(|_| invalid())?;
+        let context = serde_json::to_value(&request.context).map_err(|_| invalid())?;
+        validity
+            .validate_for_request(
+                &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                    organization_id: &request.organization_id,
+                    policy: &request.expected_policy_revision,
+                    nonce: &request.nonce,
+                    audience: &request.audience,
+                    vp_token: &request.presentation,
+                    oid4vp_transport: transport,
+                    trust_profile_id: request
+                        .context
+                        .get("trust_profile_id")
+                        .and_then(Value::as_str),
+                    context: &context,
+                },
+                &result,
+            )
+            .map_err(|_| invalid())?;
+        let evaluated_at = self
+            .evaluation_timestamp
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.timestamp_micros());
+        if evaluated_at != Some(validity.evaluated_at_epoch_micros) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

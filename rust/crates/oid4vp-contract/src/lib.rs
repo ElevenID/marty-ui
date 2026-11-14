@@ -17,12 +17,14 @@ mod response;
 pub mod trust_authority;
 mod types;
 mod validation;
+mod validity;
 
 pub use callback::build_verification_callback_payload;
 pub use digest::*;
 pub use flow_receipt::*;
 pub use types::*;
 pub use validation::Oid4vpContractError;
+pub use validity::*;
 
 pub use rejection::*;
 pub use response::*;

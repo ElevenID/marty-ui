@@ -66,6 +66,12 @@ def test_public_field_numbers_remain_wire_compatible():
         ]
         == 15
     )
+    assert (
+        fields("presentation_policy_service.proto", "PolicyEvaluationResponse")[
+            "evaluation_validity_json"
+        ]
+        == 16
+    )
     assert fields("presentation_policy_service.proto", "PolicyRevision") == {
         "organization_id": 1,
         "id": 2,

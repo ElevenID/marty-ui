@@ -44,6 +44,32 @@ struct ManagedStatusProjection {
 }
 
 impl VerifiedManagedCredentialAuthority {
+    pub(crate) fn finalization_deadline_micros(
+        &self,
+        policy: &crate::PresentationPolicy,
+    ) -> Result<i64, PresentationVerificationError> {
+        use crate::evaluation_validity::{invalid, signed_seconds_to_micros};
+
+        let mut deadline = self
+            .trust
+            .valid_until_epoch_seconds
+            .min(self.status.valid_until_epoch_seconds);
+        if let Some(grace) = policy
+            .freshness
+            .as_ref()
+            .and_then(|freshness| freshness.revocation_grace_seconds)
+        {
+            let grace = i64::try_from(grace).map_err(|_| invalid())?;
+            deadline = deadline.min(
+                self.status
+                    .checked_at_epoch_seconds
+                    .checked_add(grace)
+                    .ok_or_else(invalid)?,
+            );
+        }
+        signed_seconds_to_micros(deadline)
+    }
+
     pub(crate) fn from_owner_observations(
         query: &AuthenticatedSdJwtQueryEvidence,
         trust: AuthenticatedOwnerResponse<CredentialTrustEvaluationResponseV1>,
