@@ -179,7 +179,17 @@
     "forApplicants": "For <strong>Applicants</strong>: Submit applications and track your travel document status.",
     "signInWithSSO": "Sign in with SSO",
     "securedBy": "Secured by Keycloak OpenID Connect",
-    "checkingAuth": "Checking authentication..."
+    "checkingAuth": "Checking authentication...",
+    "unavailable": {
+      "title": "Sign-in is temporarily unavailable",
+      "network": "We could not reach the sign-in service. Check your connection and retry.",
+      "timeout": "The sign-in service took too long to respond. Retry in a moment.",
+      "configuration": "The sign-in service could not check your session. If retrying does not help, contact the operator of this environment.",
+      "service": "The sign-in service is temporarily unavailable. Retry in a moment.",
+      "intent": "We could not confirm your session. Your requested destination is kept while you retry.",
+      "retry": "Retry sign-in check",
+      "retrying": "Checking sign-in…"
+    }
   },
   "notifications": {
     "title": "Notifications",

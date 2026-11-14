@@ -51,7 +51,7 @@ export function useAuth() {
 export function useRequireAuth(redirectUri) {
   const auth = useAuth();
 
-  if (!auth.isLoading && !auth.isAuthenticated) {
+  if (!auth.isLoading && !auth.authError && !auth.isAuthenticated) {
     auth.login(redirectUri || window.location.pathname);
   }
 

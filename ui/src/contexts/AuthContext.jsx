@@ -40,6 +40,7 @@ import {
  * @property {User|null} user - Current authenticated user
  * @property {boolean} isAuthenticated - Whether user is authenticated
  * @property {boolean} isLoading - Whether auth state is loading
+ * @property {Error|null} authError - Session check failure; never an anonymous authentication decision
  * @property {boolean} isAdministrator - Whether user is a super-administrator
  * @property {boolean} isVendor - Whether user has organization console capabilities
  * @property {boolean} isApplicant - Always true for authenticated users
@@ -59,6 +60,7 @@ const defaultContextValue = {
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  authError: null,
   isAdministrator: false,
   isVendor: false,
   isApplicant: false,
@@ -120,6 +122,7 @@ function obsoleteAuthRequest() {
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [isLoading, setIsLoading] = useState(() => !getPublicEntryCanonicalOrigin());
+  const [authError, setAuthError] = useState(null);
   const authRequestGeneration = useRef(0);
   const callbackAttempt = useRef(null);
   const currentUser = useRef(null);
@@ -142,6 +145,7 @@ export function AuthProvider({ children }) {
     };
     if (getPublicEntryCanonicalOrigin()) {
       updateUser(null);
+      setAuthError(null);
       identityRefreshPending.current = false;
       setIsLoading(false);
       return null;
@@ -197,9 +201,11 @@ export function AuthProvider({ children }) {
 
         confirmedAuthority.current = nextAuthority;
         updateUser(enrichedUser);
+        setAuthError(null);
         return enrichedUser;
       } else {
         updateUser(null);
+        setAuthError(null);
         return null;
       }
     } catch (error) {
@@ -209,6 +215,7 @@ export function AuthProvider({ children }) {
       // same validated account. Never return it as fresh callback identity proof.
       if (canRetainUser) throw error;
       updateUser(null);
+      setAuthError(error);
       return null;
     } finally {
       if (applies()) {
@@ -304,6 +311,7 @@ export function AuthProvider({ children }) {
       user,
       isAuthenticated: !!user,
       isLoading,
+      authError,
       isAdministrator,
       isVendor,
       isApplicant,
@@ -322,7 +330,7 @@ export function AuthProvider({ children }) {
       refreshUser,
       completeLoginCallback,
     };
-  }, [user, isLoading, login, register, logout, refreshUser, completeLoginCallback]);
+  }, [user, isLoading, authError, login, register, logout, refreshUser, completeLoginCallback]);
 
   return (
     <AuthContext.Provider value={contextValue}>

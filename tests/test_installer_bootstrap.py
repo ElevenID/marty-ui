@@ -47,6 +47,7 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     assert result.returncode == 0
     assert "--channel nightly|stable" in result.stdout
     assert "--foundation-file PATH" in result.stdout
+    assert "--external-oidc-file PATH" in result.stdout
     assert "--hosting-file PATH" in result.stdout
     assert "--settings-file PATH" in result.stdout
     assert "--acme-staging-roots PATH" in result.stdout
@@ -67,6 +68,14 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--foundation-file"], "Missing value"),
     (["--foundation-file", "--yes"], "Missing value"),
     (["--foundation-file", "/one", "--foundation-file", "/two"], "Repeated foundation"),
+    (["--external-oidc-file"], "Missing value"),
+    (["--external-oidc-file", ""], "Missing value"),
+    (["--external-oidc-file", "--yes"], "Missing value"),
+    (["--external-oidc-file", "/one", "--external-oidc-file", "/two"], "Repeated external OIDC"),
+    (["--external-oidc-file", "relative.json"], "must be absolute"),
+    (["--external-oidc-file", "/private/oidc.json", "--foundation-file", "/private/aws.json"], "cannot be combined"),
+    (["--foundation-file", "/private/aws.json", "--external-oidc-file", "/private/oidc.json"], "cannot be combined"),
+    (["--check-host", "--external-oidc-file", "/private/oidc.json"], "cannot be combined"),
     (["--hosting-file"], "Missing value"),
     (["--hosting-file", "--yes"], "Missing value"),
     (["--hosting-file", "/one", "--hosting-file", "/two"], "Repeated hosting"),
@@ -82,7 +91,7 @@ def test_help_does_not_require_docker_or_downloads(monkeypatch):
     (["--check-compatibility", "--check-host"], "cannot be combined"),
     (["--check-compatibility", "--yes"], "cannot be combined"),
     *[(["--check-compatibility", option, "/private/input"], "cannot be combined")
-      for option in ("--install-dir", "--foundation-file", "--hosting-file",
+      for option in ("--install-dir", "--foundation-file", "--external-oidc-file", "--hosting-file",
                      "--settings-file", "--acme-staging-roots")],
 ])
 def test_invalid_arguments_refused_before_host_mutation(args, reason):
@@ -351,7 +360,7 @@ def test_native_handoff_preserves_hosting_path_as_one_opaque_argument(tmp_path, 
     hosting = "/private/hosting file $(literal).json"
     setup = dict(version="v1.2.3-nightly.20261027.42", stage=str(tmp_path), gh="/private/gh",
                  docker_endpoint="unix:///run/user/1000/docker.sock", docker_engine_id="engine-1234",
-                 docker_bin="/usr/bin/docker", destination="", foundation_file="", hosting_file=hosting, settings_file="",
+                 docker_bin="/usr/bin/docker", destination="", foundation_file="", external_oidc_file="", hosting_file=hosting, settings_file="",
                  acme_staging_roots="", yes="false", check_compatibility="false", channel="nightly")
     script = "\n".join(f"{key}={shlex.quote(value)}" for key, value in setup.items())
     result = run(source=script + "\n" + handoff + "\nprintf '%s\\0' \"$@\"\n")
@@ -392,8 +401,12 @@ def test_compatibility_check_handoff_preserves_explicit_mode(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("verb", ["install", "candidate-test"])
+@pytest.mark.parametrize("option,variable", [
+    ("--settings-file", "settings_file"),
+    ("--external-oidc-file", "external_oidc_file"),
+])
 @pytest.mark.parametrize("settings", [None, "/private/settings $(literal); &.json"])
-def test_settings_parse_and_handoff_is_one_explicit_argument(tmp_path, monkeypatch, verb, settings):
+def test_private_input_parse_and_handoff_is_one_explicit_argument(tmp_path, monkeypatch, verb, option, variable, settings):
     source = SCRIPT.read_text()
     parser_start = source.index("    channel=nightly\n")
     parser_end = source.index("    require_rootless_process\n", parser_start)
@@ -407,17 +420,17 @@ def test_settings_parse_and_handoff_is_one_explicit_argument(tmp_path, monkeypat
     script += "\nprintf '%s\\0' \"$@\"\n"
     args = ["--candidate-test" if verb == "candidate-test" else "--version", "v1.2.3-nightly.20261027.42"]
     if settings is not None:
-        args += ["--settings-file", settings]
-    monkeypatch.setenv("settings_file", "/untrusted/inherited-settings.json")
+        args += [option, settings]
+    monkeypatch.setenv(variable, "/untrusted/inherited-settings.json")
     result = run(args + ["--bootstrap-complete"], source=script)
     assert result.returncode == 0, result.stderr
     arguments = result.stdout.rstrip("\0").split("\0")
     assert "/untrusted/inherited-settings.json" not in arguments
     if settings is None:
-        assert "--settings-file" not in arguments
+        assert option not in arguments
     else:
-        assert arguments.count("--settings-file") == 1
-        assert arguments[arguments.index("--settings-file") + 1] == settings
+        assert arguments.count(option) == 1
+        assert arguments[arguments.index(option) + 1] == settings
 
 
 @pytest.mark.parametrize("verb", ["install", "candidate-test"])

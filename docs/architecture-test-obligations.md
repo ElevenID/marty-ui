@@ -592,3 +592,36 @@ ordinary cases and fixture-owned exclusions separately, retains the independent
 feature-observer check, and must qualify its own execution before changing selection.
 This ledger alone does not authorize a fixture-free claim for the whole crate
 or a narrower protected merge/release gate.
+
+
+### Managed Policy evidence through durable Flow finalization
+
+The additive managed V2 obligation is owned by the Policy library's private
+native fixture:
+`verification_tests::bounded_sd_jwt_query_evidence::managed_authority::live_keyless_managed_policy_evidence`.
+It requires `FLOW_POSTGRES_TEST_URL` for the existing isolated
+`marty_atomic_test` database and the ephemeral identities supplied by
+`with_disposable_policy_owner_kms.py`. Missing fixture inputs fail. Ordinary
+library execution leaves this case explicitly ignored.
+
+CI selects the exact recorded library executable in the contracts step
+`Exercise managed Policy evidence through Flow PostgreSQL commit`, serialized
+after the existing Flow database suite. It requires positive discovery and one
+successful executed test. The fixture extracts the existing reviewed OpenBao
+2.5.5 image binary; it does not change the shared daemon or deployment pins.
+
+This test owns actual native credential verification, authenticated owner
+acquisition, production Policy gRPC and Flow preparation, PostgreSQL callback
+rollback/retry, private evidence recovery, protected-state erasure rejection,
+transport failures, public digest/privacy, and historical expiry. Existing
+receipt concurrency and deadline-lock tests remain independently owned by Flow.
+
+A single registered Policy-to-Flow development dependency composes these
+owners. It adds Flow's test compilation to the Policy library target; no
+production/build edge or public authority factory is introduced. Moving this
+fixture to an acceptance package would currently duplicate private native
+setup or expose test-only authority-adjacent APIs. The general acceptance
+package preference remains; this exact composition edge is guarded separately
+from all normal/build and renamed or target-specific dependency declarations.
+See [the V2 contract boundary](managed-oid4vp-evidence-v2.md) for its limited
+historical meaning and the remaining Issuance continuation obligation.

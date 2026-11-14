@@ -7,11 +7,13 @@ not installable release artifacts; the release projection verifies provenance.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -106,6 +108,88 @@ def test_chart_lints_with_verified_image_shapes(tmp_path: Path) -> None:
     values_file.write_text(yaml.safe_dump(installation_values()), encoding="utf-8")
     result = subprocess.run(helm_command(values_file, "lint"), capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_default_tls_store_removes_namespace_copy_without_disabling_https(tmp_path: Path) -> None:
+    values = installation_values()
+    values["publicHost"] = "192.0.2.20"
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": ""}
+    docs = render(tmp_path, values)
+    ingress = resources(docs, "Ingress")["marty"]
+    assert ingress["spec"]["ingressClassName"] == "traefik"
+    assert ingress["metadata"]["annotations"]["traefik.ingress.kubernetes.io/router.tls"] == "true"
+    assert "tls" not in ingress["spec"]
+    assert "host" not in ingress["spec"]["rules"][0]
+    assert not resources(docs, "Secret")
+    assert not resources(docs, "Certificate")
+    assert not resources(docs, "TLSStore")
+
+
+def test_default_tls_store_adds_explicit_tls_annotation(tmp_path: Path) -> None:
+    values = installation_values()
+    values["ingress"] = {
+        "useDefaultCertificate": True, "tlsSecretName": "", "className": "traefik",
+        "annotations": {"example.test/operator-note": "shared public certificate owner"},
+    }
+    values_file = tmp_path / "no-tls-annotation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    # Do not load the K3s overlay, which already supplies router.tls=true.
+    result = subprocess.run([HELM, "template", "marty-test", str(CHART), "--namespace", "isolated-install",
+                             "-f", str(values_file)], capture_output=True, text=True, check=True)
+    docs = [doc for doc in yaml.load_all(result.stdout, Loader=UniqueLoader) if doc]
+    ingress = resources(docs, "Ingress")["marty"]
+    assert ingress["metadata"]["annotations"]["traefik.ingress.kubernetes.io/router.tls"] == "true"
+    assert ingress["metadata"]["annotations"]["example.test/operator-note"] == "shared public certificate owner"
+    assert ingress["spec"]["rules"][0]["host"] == "marty.example.test"
+
+
+def test_existing_secret_ingress_remains_the_default(rendered: list[dict]) -> None:
+    ingress = resources(rendered, "Ingress")["marty"]
+    assert ingress["spec"]["tls"] == [{"secretName": "customer-edge-tls", "hosts": ["marty.example.test"]}]
+
+
+def test_resume_preflight_discovers_real_chart_public_leaf_projections(rendered: list[dict]) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from check_kubernetes_dev_resume import public_cert_targets
+    workloads = [doc for doc in rendered if doc["kind"] in {"Deployment", "StatefulSet"}]
+    targets = public_cert_targets(workloads)
+    assert len(targets) == 19  # 16 workload leaves, two Keycloak signing leaves, Redis.
+    assert targets[("gateway-auth-tls", "tls.crt")] == ["gateway"]
+    assert targets[("keycloak-kms", "keycloak-11id-rs256.crt")] == ["keycloak"]
+    assert targets[("marty-redis-tls", "tls.crt")] == ["redis"]
+    assert not any("token" in field for _, field in targets)
+
+
+@pytest.mark.parametrize("override", [
+    {"tlsSecretName": "stale-copy"},
+    {"className": "nginx"},
+    {"annotations": {"kubernetes.io/ingress.class": "nginx"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls": "false"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls.certresolver": "other-owner"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls.domains.0.main": "example.test"}},
+    {"annotations": {"cert-manager.io/issuer": "other-owner"}},
+    {"annotations": {"acme.cert-manager.io/http01-edit-in-place": "true"}},
+    {"annotations": {"kubernetes.io/tls-acme": "true"}},
+])
+def test_default_tls_store_rejects_conflicting_ownership(tmp_path: Path, override: dict) -> None:
+    values = installation_values()
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": "", **override}
+    values_file = tmp_path / "conflict.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "ingress" in result.stderr
+
+
+def test_default_tls_store_rejects_plaintext_origin(tmp_path: Path) -> None:
+    values = installation_values()
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": ""}
+    values["publicOrigin"] = "http://marty.example.test"
+    values_file = tmp_path / "plaintext.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "publicOrigin" in result.stderr
 
 
 def test_portable_namespace_and_complete_config_references(rendered: list[dict]) -> None:
@@ -790,7 +874,15 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
 
     pod = resources(development, "Deployment")["ui"]["spec"]["template"]["spec"]
     ordinary_pod = resources(normal, "Deployment")["ui"]["spec"]["template"]["spec"]
-    assert ordinary_pod["containers"] == [pod["containers"][0]]
+    ordinary_ui = ordinary_pod["containers"][0]
+    development_ui = pod["containers"][0]
+    assert len(ordinary_pod["containers"]) == 1
+    assert ordinary_ui["readinessProbe"]["httpGet"]["path"] == "/health/ready"
+    assert development_ui["readinessProbe"]["httpGet"]["path"] == "/edge-healthz"
+    assert {key: value for key, value in ordinary_ui.items() if key != "readinessProbe"} == {
+        key: value for key, value in development_ui.items() if key != "readinessProbe"
+    }
+    assert {**development_ui["readinessProbe"], "httpGet": ordinary_ui["readinessProbe"]["httpGet"]} == ordinary_ui["readinessProbe"]
     assert "initContainers" not in ordinary_pod
     assert all("hostPath" not in volume for volume in ordinary_pod["volumes"])
     assert pod["automountServiceAccountToken"] is False
@@ -802,6 +894,7 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
     assert pod["initContainers"][0]["resources"]["limits"]["memory"] == "1536Mi"
     assert "ports" not in node
     assert node["readinessProbe"]["exec"]["command"][0] == "node"
+    assert "/@vite/client" in node["readinessProbe"]["exec"]["command"][-1]
     for container in (pod["initContainers"][0], node):
         assert "@sha256:" in container["image"]
         assert "envFrom" not in container
@@ -865,3 +958,189 @@ def test_development_ui_rejects_mutable_node_image(tmp_path: Path) -> None:
     result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
     assert result.returncode != 0
     assert "sha256" in result.stderr
+
+
+def external_installation_values(confidential: bool = False) -> dict:
+    values = installation_values()
+    values["auth"] = {"provider": "external", "external": {
+        "issuerUrl": "https://identity.example.test/oidc", "clientId": "marty-beta",
+        "allowedAlgorithms": ["RS256"],
+    }}
+    if confidential:
+        values["auth"]["external"]["clientSecret"] = {"name": "beta-oidc", "key": "client-secret"}
+    return values
+
+
+@pytest.mark.parametrize("confidential", [False, True])
+def test_external_oidc_omits_managed_login_and_preserves_workload_custody(
+    tmp_path: Path, rendered: list[dict], confidential: bool,
+) -> None:
+    values = external_installation_values(confidential)
+    documents = render(tmp_path, values)
+    deployments = resources(documents, "Deployment")
+    assert set(deployments) == set(resources(rendered, "Deployment")) - {"keycloak"}
+    assert "keycloak" not in resources(documents, "Service")
+    assert not any(name.startswith("marty-keycloak-") for name in resources(documents, "Job"))
+    maps = resources(documents, "ConfigMap")
+    assert not any(name.startswith("keycloak-") for name in maps)
+    assert not resources(documents, "Secret")
+    config = maps["marty-config"]["data"]
+    assert config["BAO_ADDR"] == "https://openbao:8200"
+    assert config["OIDC_PROVIDER_MODE"] == "external"
+    assert config["OIDC_SCOPES"] == "openid,profile,email"
+    assert config["OIDC_CLIENT_ID"] == "marty-beta"
+    assert config["OIDC_REDIRECT_URI"] == "https://marty.example.test/v1/auth/callback"
+    assert config["KEYCLOAK_ADMIN_URL"] == ""
+    for name in ("KEYCLOAK_TOKEN_EXCHANGE_ENABLED", "KEYCLOAK_PASSKEYS_ENABLED",
+                 "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "CREDENTIAL_LOGIN_CREATE_USERS"):
+        assert config[name] == "false"
+    assert "KEYCLOAK_REALM" not in config and "KC_HOSTNAME" not in config
+    selection = maps["marty-auth-selection"]
+    raw = selection["data"]["selection.json"]
+    assert selection["immutable"] is True
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    for name, deployment in deployments.items():
+        if name == "ui":
+            continue
+        template = deployment["spec"]["template"]
+        assert template["metadata"]["annotations"]["marty.elevenid.com/auth-selection-sha256"] == digest
+        actual = template["spec"]
+        original = resources(rendered, "Deployment")[name]["spec"]["template"]["spec"]
+        expected_volumes = original["volumes"]
+        assert [volume for volume in actual["volumes"] if volume["name"] != "external-oidc-client"] == expected_volumes
+        actual_env = {entry["name"]: entry for entry in actual["containers"][0]["env"]}
+        original_env = {entry["name"]: entry for entry in original["containers"][0]["env"]}
+        for key, entry in original_env.items():
+            if "KMS" in key or "TLS" in key or "SIGN_GRANT" in key:
+                assert actual_env[key] == entry
+        assert "keycloak-kms" not in json.dumps(actual)
+        if name == "auth":
+            assert "MARTY_API_CLIENT_ID" not in actual_env and "MARTY_API_CLIENT_SECRET" not in actual_env
+            assert ("OIDC_CLIENT_SECRET_FILE" in actual_env) == confidential
+        else:
+            assert "beta-oidc" not in json.dumps(actual)
+    postgres = resources(documents, "StatefulSet")["postgres"]["spec"]["template"]["spec"]["containers"][0]
+    env = {entry["name"]: entry for entry in postgres["env"]}
+    assert "KEYCLOAK_DB_PASSWORD" not in env
+    assert env["MARTY_INITIALIZE_KEYCLOAK_DATABASE"]["value"] == "false"
+    assert "keycloak" not in json.dumps(postgres["readinessProbe"])
+    assert "keycloak" not in json.dumps(postgres["startupProbe"])
+    assert "http://keycloak:8080" not in maps["nginx-prod-config"]["data"]["default.conf"]
+    assert "MARTY_ORG_ADMIN_PASSWORD" not in json.dumps(documents)
+    assert "marty-operator" not in json.dumps(documents)
+    if confidential:
+        pod = deployments["auth"]["spec"]["template"]["spec"]
+        volume = next(entry for entry in pod["volumes"] if entry["name"] == "external-oidc-client")
+        assert volume["secret"] == {"secretName": "beta-oidc", "defaultMode": 0o440,
+                                    "items": [{"key": "client-secret", "path": "client-secret"}]}
+    test_portable_namespace_and_complete_config_references(documents)
+
+
+def test_external_oidc_preserves_literal_provider_values_and_custom_scopes(tmp_path: Path) -> None:
+    values = external_installation_values()
+    values["auth"]["external"].update(clientId="client$(SERVICE_NAME)",
+        issuerUrl="https://identity.example.test/$(SERVICE_NAME)", scopes=["openid", "$(SERVICE_NAME)", "custom:account"])
+    documents = render(tmp_path, values)
+    config = resources(documents, "ConfigMap")["marty-config"]["data"]
+    auth = resources(documents, "Deployment")["auth"]["spec"]["template"]["spec"]["containers"][0]
+    env = {entry["name"]: entry.get("value") for entry in auth["env"]}
+    for name in ("OIDC_CLIENT_ID", "OIDC_ISSUER_URL", "OIDC_SCOPES"):
+        assert "$(SERVICE_NAME)" in config[name]
+        assert env[name] == config[name].replace("$", "$$")
+
+
+@pytest.mark.parametrize("field,value", [
+    ("issuerUrl", "http://identity.example.test"), ("issuerUrl", "https://*.example.test/oidc"),
+    ("issuerUrl", "https://%2A.example.test/oidc"), ("issuerUrl", "https://user@identity.example.test/oidc"),
+    ("issuerUrl", "https://identity.example.test:65536"), ("issuerUrl", "https://identity.example.test?tenant=1"),
+    ("issuerUrl", "https://identity.example.test/#fragment"), ("clientId", "client\nother"),
+    ("issuerUrl", "https://identity.example.test/" + "é" * 1020), ("clientId", "é" * 129),
+    ("allowedAlgorithms", []), ("allowedAlgorithms", ["ES512"]), ("allowedAlgorithms", ["RS256", "RS256"]),
+    ("trustedEndpointOrigins", ["https://*.example.test"]), ("trustedEndpointOrigins", ["https://keys.example.test/path"]),
+    ("trustedEndpointOrigins", ["https://keys.example.test", "https://keys.example.test/"]),
+    ("trustedEndpointOrigins", ["https://KEYS.example.test"]), ("trustedEndpointOrigins", ["https://keys.example.test:443"]),
+    ("trustedEndpointOrigins", ["https://keys.example.test:08443"]),
+    ("scopes", []), ("scopes", ["profile", "email"]), ("scopes", ["openid", "openid"]),
+    ("scopes", ["openid", "email profile"]), ("scopes", ["openid", "email,profile"]),
+    ("scopes", ["openid", "scope'bad"]), ("scopes", ["openid", 'scope"bad']),
+    ("scopes", ["openid", "scope\\bad"]), ("scopes", ["openid", "scopeé"]),
+    ("scopes", ["openid"] + [str(index).ljust(128, "a") for index in range(17)]),
+    ("clientSecret", {"name": "marty-secrets", "key": "password"}),
+    ("clientSecret", {"name": "keycloak-kms", "key": "token"}),
+    ("clientSecret", {"name": "beta-oidc"}),
+    ("clientSecret", {"name": "beta-oidc", "key": "../key"}),
+    ("clientSecret", {"name": "beta-oidc", "key": "client-secret", "value": "SYNTHETIC_PRIVATE_OIDC_CANARY"}),
+])
+def test_external_oidc_invalid_selection_fails_before_manifest_output(tmp_path: Path, field: str, value: object) -> None:
+    values = external_installation_values()
+    values["auth"]["external"][field] = value
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "kind:" not in result.stdout
+    assert "SYNTHETIC_PRIVATE_OIDC_CANARY" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("key", ["OIDC_PROVIDER_MODE", "OIDC_CLIENT_SECRET", "OIDC_CLIENT_SECRET_FILE", "OIDC_SCOPES",
+    "KEYCLOAK_ADMIN_URL", "MARTY_API_CLIENT_ID", "MARTY_API_CLIENT_SECRET_FILE", "KEYCLOAK_PASSKEYS_ENABLED",
+    "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ADMIN_PASSWORD_FILE", "CREDENTIAL_LOGIN_CREATE_USERS"])
+def test_external_oidc_refuses_conflicting_arbitrary_config(tmp_path: Path, key: str) -> None:
+    values = external_installation_values()
+    values["config"] = {key: "SYNTHETIC_CONFLICT_CANARY"}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and key in result.stderr
+    assert "SYNTHETIC_CONFLICT_CANARY" not in result.stdout + result.stderr
+
+
+def test_external_oidc_upgrade_without_retained_selection_is_refused(tmp_path: Path) -> None:
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(external_installation_values()))
+    result = subprocess.run(helm_command(values_file) + ["--is-upgrade"], capture_output=True, text=True)
+    assert result.returncode != 0 and "fresh installation" in result.stderr
+
+
+def test_external_oidc_selection_writer_respects_renewal_reader_bound(tmp_path: Path) -> None:
+    values = external_installation_values()
+    values["organization"]["adminEmail"] = "operator@" + "a" * 16384 + ".test"
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and "16384-byte" in result.stderr
+
+
+@pytest.mark.parametrize("provider", ["keycloak", "external"])
+@pytest.mark.parametrize("annotation", ["marty.elevenid.com/auth-provider", "marty.elevenid.com/auth-selection-sha256"])
+def test_authentication_selection_annotations_cannot_be_overridden(tmp_path: Path, provider: str, annotation: str) -> None:
+    values = installation_values() if provider == "keycloak" else external_installation_values()
+    values["podAnnotations"] = {annotation: "external"}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and annotation in result.stderr
+
+
+@pytest.mark.parametrize("email", ["ADMIN@example.com", "user@example.com", "example@example.com", "Change-me-operator@example.test"])
+def test_external_oidc_rejects_bootstrap_administrator_placeholders(tmp_path: Path, email: str) -> None:
+    values = external_installation_values()
+    values["organization"]["adminEmail"] = email
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and "organization.adminEmail" in result.stderr
+
+
+def test_external_oidc_requires_typed_selection_and_keeps_verified_unused_image_requirement(tmp_path: Path) -> None:
+    values = installation_values()
+    values["config"] = {"OIDC_PROVIDER_MODE": "external"}
+    values_file = tmp_path / "installation.yaml"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and "auth.provider" in result.stderr
+    values = external_installation_values()
+    values["images"]["keycloak"] = "keycloak:latest"
+    values_file.write_text(yaml.safe_dump(values))
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0 and "sha256" in result.stderr

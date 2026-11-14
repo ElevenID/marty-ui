@@ -147,6 +147,10 @@ pub struct PresentationEvaluationRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationEvaluationResult {
+    /// Opaque acquisition from the inspected Policy client. Wire JSON and
+    /// ordinary provider implementations cannot manufacture this capability.
+    #[serde(skip)]
+    pub managed_evidence: Option<crate::AcquiredManagedPolicyEvidence>,
     pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
     /// Actual Policy-owned observation time, never a Flow completion clock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
