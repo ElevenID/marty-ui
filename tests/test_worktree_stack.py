@@ -10,6 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
 from scripts.dev import worktree_stack
 
 
@@ -44,12 +47,49 @@ class WorktreeStackTests(unittest.TestCase):
                          str(Path("/tmp/worktree") / ".worktree-dev-infra-only"
                              / "signing_keys_tls_kms_token_file"))
 
-    def test_full_base_required_inputs_are_explicit_and_create_no_secrets(self):
+    def test_full_stack_required_inputs_are_explicit_and_create_no_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             env = worktree_stack.environment(root, "marty-wt-test", 28000)
-            source = (worktree_stack.ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
-            required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", source))
+            command = worktree_stack.compose_command(worktree_stack.ROOT, "marty-wt-test")
+            pending = [Path(command[index + 1])
+                       for index, value in enumerate(command) if value == "-f"]
+            visited = set()
+            required = set()
+            while pending:
+                source = pending.pop().resolve()
+                if source in visited:
+                    continue
+                self.assertTrue(source.is_relative_to(worktree_stack.ROOT.resolve()),
+                                f"Compose extends source escapes the checkout: {source}")
+                visited.add(source)
+                document = yaml.compose(source.read_text(encoding="utf-8"))
+                self.assertIsInstance(document, MappingNode)
+                nodes = [document]
+                seen_nodes = set()
+                while nodes:
+                    node = nodes.pop()
+                    if id(node) in seen_nodes:
+                        continue
+                    seen_nodes.add(id(node))
+                    if isinstance(node, MappingNode):
+                        for key, value in node.value:
+                            if key.value == "extends" and isinstance(value, MappingNode):
+                                for field, reference in value.value:
+                                    if field.value == "file":
+                                        self.assertIsInstance(reference, ScalarNode)
+                                        self.assertNotIn("$", reference.value,
+                                                         "Audit interpolated extends paths explicitly")
+                                        # This command explicitly uses the repository root as
+                                        # its project directory for Compose file references.
+                                        pending.append(worktree_stack.ROOT / reference.value)
+                            nodes.append(value)
+                    elif isinstance(node, SequenceNode):
+                        nodes.extend(node.value)
+                    elif isinstance(node, ScalarNode):
+                        required.update(re.findall(
+                            r"(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*):?\?", node.value,
+                        ))
             self.assertTrue(required)
             self.assertEqual(required - env.keys(), set())
             self.assertEqual(list(root.iterdir()), [])
