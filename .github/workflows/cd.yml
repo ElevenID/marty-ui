@@ -870,14 +870,14 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@134958a14e39a68d1acaf2d3a6c563ed4eee186e
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@b46fbd7bc79135e715efb1d5cfe271778d712313
     with:
       lane: all
       collect_only: true
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 134958a14e39a68d1acaf2d3a6c563ed4eee186e
+      harness_revision: b46fbd7bc79135e715efb1d5cfe271778d712313
 
   official-gate-evidence:
     timeout-minutes: 30
@@ -889,7 +889,7 @@ jobs:
     env:
       PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: 134958a14e39a68d1acaf2d3a6c563ed4eee186e
+      HARNESS_SHA: b46fbd7bc79135e715efb1d5cfe271778d712313
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
