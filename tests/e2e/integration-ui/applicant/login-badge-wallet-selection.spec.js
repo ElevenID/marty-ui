@@ -306,7 +306,8 @@ test('applicant selects a browser wallet during login badge claim flow', async (
   await page.goto(`/console/applicant/apply/${TEMPLATE_ID}`);
 
   await expect(page.getByRole('heading', { name: 'Marty Member Login Credential' })).toBeVisible();
-  await expect(page.getByText('Issuer', { exact: true })).toBeVisible();
+  // This direct-template fixture supplies no issuer metadata; the preview must not invent it.
+  await expect(page.getByText('Issuer', { exact: true })).not.toBeVisible();
   await expect(page.getByText('This is a preview of the credential you are requesting. Issuance has not been confirmed.')).toBeVisible();
   await expect(page.getByText('The issuer will sign the credential if issuance succeeds.')).toBeVisible();
   expect(createRequests).toEqual([]);
