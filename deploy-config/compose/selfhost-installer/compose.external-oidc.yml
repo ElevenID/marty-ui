@@ -1,0 +1,65 @@
+# External login provider with the existing managed OpenBao foundation.
+# Apply after the installer and, for ordinary startup, runtime layers: runtime
+# adds the managed Keycloak readiness dependency which this selection removes.
+# Workload TLS, application signing, and their setup/renewal owners stay managed.
+services:
+  postgres:
+    environment:
+      KEYCLOAK_DB_PASSWORD_FILE: !reset 'null'
+      MARTY_INITIALIZE_KEYCLOAK_DATABASE: 'false'
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres && pg_isready -U marty -d marty]
+    secrets: !override
+      - postgres_password
+      - marty_db_password
+  keycloak: !reset 'null'
+  keycloak-configurator: !reset 'null'
+  auth:
+    environment:
+      KEYCLOAK_REALM: !reset 'null'
+      KEYCLOAK_ADMIN_URL: !reset 'null'
+      MARTY_API_CLIENT_ID: !reset 'null'
+      MARTY_API_CLIENT_SECRET: !reset 'null'
+      MARTY_API_CLIENT_SECRET_FILE: !reset 'null'
+      KEYCLOAK_PASSKEYS_ENABLED: 'false'
+      OIDC_PROVIDER_MODE: external
+      OIDC_ISSUER_URL: ${MARTY_EXTERNAL_OIDC_ISSUER:?external OIDC selection required}
+      OIDC_EXTERNAL_ISSUER_URL: ${MARTY_EXTERNAL_OIDC_ISSUER:?external OIDC selection required}
+      OIDC_CLIENT_ID: ${MARTY_EXTERNAL_OIDC_CLIENT_ID:?external OIDC selection required}
+      OIDC_TRUSTED_ENDPOINT_ORIGINS: ${MARTY_EXTERNAL_OIDC_TRUSTED_ORIGINS:-}
+      OIDC_ALLOWED_ALGORITHMS: ${MARTY_EXTERNAL_OIDC_ALGORITHMS:?external OIDC selection required}
+      OIDC_CLIENT_SECRET_FILE: ${MARTY_EXTERNAL_OIDC_SECRET_FILE:-}
+      CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: 'false'
+      CREDENTIAL_LOGIN_CREATE_USERS: 'false'
+      KEYCLOAK_TOKEN_EXCHANGE_ENABLED: 'false'
+    depends_on:
+      keycloak-configurator: !reset 'null'
+      keycloak: !reset 'null'
+    secrets: !override
+      - marty_db_password
+      - grpc_service_token
+      - auth_workload_client_cert
+      - openbao_tls_ca_cert
+      - auth_tls_kms_token
+      - auth_workload_server_cert
+      - auth_server_tls_kms_token
+      - workload_identity_ca_cert
+      - flow_webhook_secret
+      - external_oidc_client_secret
+  edge:
+    environment:
+      KEYCLOAK_UPSTREAM: !reset 'null'
+secrets:
+  keycloak_db_password: !reset 'null'
+  keycloak_signing_kms_token: !reset 'null'
+  keycloak_master_rs256_cert: !reset 'null'
+  keycloak_11id_rs256_cert: !reset 'null'
+  keycloak_master_cookie_token: !reset 'null'
+  keycloak_master_ciba_token: !reset 'null'
+  keycloak_11id_cookie_token: !reset 'null'
+  keycloak_11id_ciba_token: !reset 'null'
+  keycloak_admin_password: !reset 'null'
+  marty_api_client_secret: !reset 'null'
+  operator_bootstrap_password: !reset 'null'
+  external_oidc_client_secret:
+    file: ${SELFHOST_SECRET_DIR:?verified generation required}/external_oidc_client_secret

@@ -498,6 +498,7 @@ fn packaged_source_installer_layers_keep_native_dependencies_and_exclude_setup_o
     private_write(&supplied_env, environment.as_bytes());
     // Use the packaged installer layers, including their real resource closure.
     assert_actual_installer_layers(&executable, &bundle, &bundle, &supplied_env);
+    assert_native_external_oidc_models(&executable, &bundle, &supplied_env);
     for (case_index, (case, public_origin, bind_address, public_entry)) in [
         ("direct-dns", "https://marty.example.com", "0.0.0.0", None),
         // Legacy Compose inputs remain readable; fresh hosting selection
@@ -1665,6 +1666,217 @@ fn assert_actual_installer_layers(
     #[cfg(feature = "installer-development")]
     if let Some((_, image)) = development {
         println!("\nUNSIGNED_SIGNING_IMAGE_PARSED={image}");
+    }
+}
+
+fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supplied_env: &Path) {
+    let temp = PrivateFixture::new();
+    let layers = bundle.join("deploy-config/compose/selfhost-installer");
+    let mut files = vec![
+        bundle.join("docker-compose.yml"),
+        bundle.join("docker-compose.selfhost.openbao.yml"),
+        layers.join("compose.bootstrap.yml"),
+        layers.join("compose.installer.yml"),
+    ];
+    let managed = config(
+        executable,
+        bundle,
+        &files,
+        supplied_env,
+        &["setup", "installer-init"],
+        &[],
+    );
+    let mut runtime_files = files.clone();
+    runtime_files.push(layers.join("compose.runtime.yml"));
+    let managed_runtime = config(executable, bundle, &runtime_files, supplied_env, &[], &[]);
+    files.push(layers.join("compose.external-oidc.yml"));
+    // The external layer must follow runtime's managed Keycloak dependency.
+    runtime_files.push(layers.join("compose.external-oidc.yml"));
+    let original_env = fs::read_to_string(supplied_env)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("KEYCLOAK_PASSKEYS_ENABLED="))
+        .map(|line| format!("{line}\n"))
+        .collect::<String>();
+    for (client, secret_file) in [
+        ("public", ""),
+        ("confidential", "/run/secrets/external_oidc_client_secret"),
+    ] {
+        let env = temp.path().join(format!("{client}.env"));
+        private_write(
+            &env,
+            format!(
+                "{original_env}MARTY_EXTERNAL_OIDC_ISSUER='https://identity.example.invalid/auth/v1'\n\
+                 MARTY_EXTERNAL_OIDC_CLIENT_ID='fixture-client'\n\
+                 MARTY_EXTERNAL_OIDC_ALGORITHMS='ES256'\n\
+                 MARTY_EXTERNAL_OIDC_TRUSTED_ORIGINS='https://login.example.invalid'\n\
+                 MARTY_EXTERNAL_OIDC_SECRET_FILE='{secret_file}'\n\
+                 KEYCLOAK_PASSKEYS_ENABLED='true'\n"
+            )
+            .as_bytes(),
+        );
+        let install = config(
+            executable,
+            bundle,
+            &files,
+            &env,
+            &["setup", "installer-init"],
+            &[],
+        );
+        let services = install["services"].as_object().unwrap();
+        for removed in ["keycloak", "keycloak-configurator"] {
+            assert!(!services.contains_key(removed));
+        }
+        assert_eq!(
+            services.len() + 2,
+            managed["services"].as_object().unwrap().len()
+        );
+        // The existing one-shot OpenBao custody helper and its truthful receipt
+        // remain part of managed generation/renewal; no Keycloak server runs.
+        for retained in [
+            "openbao",
+            "openbao-unseal",
+            "installer-keycloak",
+            "installer-generation",
+            "kms-initialize",
+        ] {
+            assert!(
+                services.contains_key(retained),
+                "lost managed owner {retained}"
+            );
+        }
+        for (name, service) in services {
+            if !["auth", "postgres", "edge"].contains(&name.as_str()) {
+                assert_eq!(
+                    service, &managed["services"][name],
+                    "changed managed service {name}"
+                );
+            }
+            for dependency in service["depends_on"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(name, _)| name)
+            {
+                assert!(
+                    services.contains_key(dependency),
+                    "{name} retains missing {dependency}"
+                );
+            }
+            assert!(service["environment"].get("AWS_ROLE_ARN").is_none());
+            for secret in service["secrets"].as_array().into_iter().flatten() {
+                let source = secret["source"].as_str().unwrap();
+                assert!(
+                    !source.starts_with("keycloak_")
+                        && source != "marty_api_client_secret"
+                        && source != "operator_bootstrap_password"
+                );
+            }
+        }
+        let auth = &services["auth"]["environment"];
+        for (name, value) in [
+            ("OIDC_PROVIDER_MODE", "external"),
+            (
+                "OIDC_ISSUER_URL",
+                "https://identity.example.invalid/auth/v1",
+            ),
+            (
+                "OIDC_EXTERNAL_ISSUER_URL",
+                "https://identity.example.invalid/auth/v1",
+            ),
+            ("OIDC_CLIENT_ID", "fixture-client"),
+            ("OIDC_ALLOWED_ALGORITHMS", "ES256"),
+            (
+                "OIDC_TRUSTED_ENDPOINT_ORIGINS",
+                "https://login.example.invalid",
+            ),
+            ("OIDC_CLIENT_SECRET_FILE", secret_file),
+            ("KEYCLOAK_PASSKEYS_ENABLED", "false"),
+            ("KEYCLOAK_TOKEN_EXCHANGE_ENABLED", "false"),
+            ("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "false"),
+            ("CREDENTIAL_LOGIN_CREATE_USERS", "false"),
+        ] {
+            assert_eq!(auth[name], value, "wrong external auth setting {name}");
+        }
+        for removed in [
+            "KEYCLOAK_REALM",
+            "KEYCLOAK_ADMIN_URL",
+            "MARTY_API_CLIENT_ID",
+            "MARTY_API_CLIENT_SECRET",
+            "MARTY_API_CLIENT_SECRET_FILE",
+        ] {
+            assert!(
+                auth.get(removed).is_none(),
+                "retained managed auth setting {removed}"
+            );
+        }
+        for (name, value) in managed["services"]["auth"]["environment"]
+            .as_object()
+            .unwrap()
+        {
+            if name.starts_with("GRPC_") {
+                assert_eq!(&auth[name], value, "changed Auth workload TLS {name}");
+            }
+        }
+        let auth_secrets = services["auth"]["secrets"].as_array().unwrap();
+        let managed_secrets = managed["services"]["auth"]["secrets"].as_array().unwrap();
+        assert_eq!(auth_secrets.len(), managed_secrets.len());
+        for secret in managed_secrets {
+            if secret["source"] != "marty_api_client_secret" {
+                assert!(
+                    auth_secrets.contains(secret),
+                    "lost Auth workload secret binding"
+                );
+            }
+        }
+        assert!(auth_secrets
+            .iter()
+            .any(|secret| secret["source"] == "external_oidc_client_secret"));
+        assert_eq!(
+            services["postgres"]["environment"]["MARTY_INITIALIZE_KEYCLOAK_DATABASE"],
+            "false"
+        );
+        assert!(services["postgres"]["environment"]
+            .get("KEYCLOAK_DB_PASSWORD_FILE")
+            .is_none());
+        assert_eq!(
+            services["postgres"]["healthcheck"]["test"],
+            serde_json::json!([
+                "CMD-SHELL",
+                "pg_isready -U postgres && pg_isready -U marty -d marty"
+            ])
+        );
+        assert!(services["edge"]["environment"]
+            .get("KEYCLOAK_UPSTREAM")
+            .is_none());
+        let restarted = config(executable, bundle, &runtime_files, &env, &[], &[]);
+        let runtime = restarted["services"].as_object().unwrap();
+        assert_eq!(
+            runtime.len() + 1,
+            managed_runtime["services"].as_object().unwrap().len()
+        );
+        assert!(!runtime.contains_key("keycloak"));
+        assert!(runtime.contains_key("openbao") && runtime.contains_key("openbao-unseal"));
+        assert_eq!(
+            runtime["auth"]["depends_on"]["openbao-unseal"]["condition"],
+            "service_healthy"
+        );
+        for (name, service) in runtime {
+            assert_ne!(service["labels"]["com.elevenid.installer.phase"], "setup");
+            for (dependency, rule) in service["depends_on"].as_object().into_iter().flatten() {
+                assert!(
+                    runtime.contains_key(dependency),
+                    "{name} retains setup or missing dependency {dependency}"
+                );
+                assert_ne!(rule["condition"], "service_completed_successfully");
+            }
+            if !["auth", "postgres", "edge"].contains(&name.as_str()) {
+                assert_eq!(
+                    service, &managed_runtime["services"][name],
+                    "changed restarted managed service {name}"
+                );
+            }
+        }
     }
 }
 

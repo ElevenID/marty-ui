@@ -8,6 +8,7 @@ use crate::{
     installer_compose::{config_path, ComposeInputs},
     installer_host_fs::{self as fs, CredentialProjection},
     installer_json,
+    installer_oidc::ExternalOidc,
     installer_state::{InstallerState, LockedInspection, Phase},
 };
 use marty_selfhost_identity::origin::PublicOrigin;
@@ -98,18 +99,6 @@ pub(crate) struct TlsInput {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ExternalOidc {
-    pub issuer_url: String,
-    pub client_id: String,
-    pub admin_email: String,
-    #[serde(default)]
-    pub client_secret_file: Option<PathBuf>,
-    #[serde(default)]
-    pub trusted_endpoint_origins: Vec<String>,
-    pub allowed_algorithms: Vec<String>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct IdentityInput {
     role_arn: String,
     directory: PathBuf,
@@ -160,56 +149,7 @@ impl Configuration {
     fn validate(&self) -> Result<()> {
         require(self.schema == "elevenid.installer-foundation/v1" && self.foundation == "aws-kms")?;
         PublicOrigin::parse(&self.public_origin)?;
-        for value in [
-            &self.external_oidc.issuer_url,
-            &self.external_oidc.client_id,
-            &self.external_oidc.admin_email,
-        ] {
-            scalar(value)?;
-        }
-        let issuer = url::Url::parse(&self.external_oidc.issuer_url).map_err(|_| REFUSED)?;
-        require(
-            issuer.scheme() == "https"
-                && issuer.host_str().is_some()
-                && issuer.username().is_empty()
-                && issuer.password().is_none()
-                && issuer.query().is_none()
-                && issuer.fragment().is_none()
-                && self.external_oidc.admin_email.contains('@')
-                && self.external_oidc.trusted_endpoint_origins.len() <= 8
-                && !self.external_oidc.allowed_algorithms.is_empty()
-                && self.external_oidc.allowed_algorithms.len() <= 16,
-        )?;
-        let mut origins = BTreeSet::new();
-        for value in &self.external_oidc.trusted_endpoint_origins {
-            scalar(value)?;
-            let parsed = url::Url::parse(value).map_err(|_| REFUSED)?;
-            require(
-                parsed.scheme() == "https"
-                    && parsed.host_str().is_some()
-                    && parsed.username().is_empty()
-                    && parsed.password().is_none()
-                    && parsed.query().is_none()
-                    && parsed.fragment().is_none()
-                    && parsed.path() == "/"
-                    && parsed.origin().ascii_serialization() == *value
-                    && origins.insert(value),
-            )?;
-        }
-        let mut algorithms = BTreeSet::new();
-        for value in &self.external_oidc.allowed_algorithms {
-            scalar(value)?;
-            // These are the asymmetric OIDC JOSE algorithms supported by the
-            // existing ID-token owner; actual issuer metadata/JWKS remain Auth's check.
-            require(
-                [
-                    "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384",
-                    "ES512", "EdDSA",
-                ]
-                .contains(&value.as_str())
-                    && algorithms.insert(value),
-            )?;
-        }
+        self.external_oidc.validate().map_err(|_| REFUSED)?;
         let roles: BTreeSet<_> = SELFHOST_ROLES
             .iter()
             .map(|v| v.name)
@@ -498,35 +438,8 @@ impl Selection {
                 || name.ends_with("_TLS_KMS_KEY_NAME")
                 || name.ends_with("_TLS_KMS_KEY_VERSION"))
         });
-        values.insert(
-            "MARTY_ORG_ADMIN_EMAIL".into(),
-            config.external_oidc.admin_email.clone(),
-        );
+        config.external_oidc.apply_environment(values)?;
         for (name, value) in [
-            (
-                "MARTY_EXTERNAL_OIDC_ISSUER",
-                config.external_oidc.issuer_url.clone(),
-            ),
-            (
-                "MARTY_EXTERNAL_OIDC_CLIENT_ID",
-                config.external_oidc.client_id.clone(),
-            ),
-            (
-                "MARTY_EXTERNAL_OIDC_TRUSTED_ORIGINS",
-                config.external_oidc.trusted_endpoint_origins.join(","),
-            ),
-            (
-                "MARTY_EXTERNAL_OIDC_ALGORITHMS",
-                config.external_oidc.allowed_algorithms.join(","),
-            ),
-            (
-                "MARTY_EXTERNAL_OIDC_SECRET_FILE",
-                if config.external_oidc.client_secret_file.is_some() {
-                    "/run/secrets/external_oidc_client_secret".into()
-                } else {
-                    String::new()
-                },
-            ),
             (
                 "MARTY_INTEGRATION_SECRET_AWS_REGION",
                 config.integration_secret.region.clone(),

@@ -1,0 +1,264 @@
+use super::*;
+use crate::installer_state::Identity;
+use serde_json::json;
+use std::os::unix::fs::{symlink, PermissionsExt};
+
+fn private_file(path: &Path, raw: &[u8]) {
+    std::fs::write(path, raw).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+fn configuration() -> Value {
+    json!({
+        "schema": SCHEMA,
+        "external_oidc": {
+            "issuer_url": "https://identity.example.test/tenant",
+            "client_id": "marty-beta",
+            "admin_email": "operator@example.test",
+            "allowed_algorithms": ["RS256"],
+            "trusted_endpoint_origins": ["https://login.example.test"]
+        }
+    })
+}
+fn installation() -> (tempfile::TempDir, PathBuf, InstallerState) {
+    let parent = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let path = parent.path().join("installation");
+    let mut state = InstallerState::create(
+        &path,
+        Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v1.2.3".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+    )
+    .unwrap();
+    state.create_private_directory("evidence").unwrap();
+    state.advance(Phase::Verified).unwrap();
+    (parent, path, state)
+}
+fn choose(parent: &Path, state: &mut InstallerState, config: &Value) -> Selection {
+    let input = parent.join("oidc.json");
+    private_file(&input, &serde_json::to_vec(config).unwrap());
+    select(prepare(Some(&input), false).unwrap(), state).unwrap();
+    state.with_inspection(load).unwrap().unwrap()
+}
+
+#[test]
+fn absence_preserves_managed_default_and_selection_is_fresh_only() {
+    let (parent, path, mut state) = installation();
+    select(prepare(None, false).unwrap(), &mut state).unwrap();
+    assert!(state.with_inspection(external).unwrap().is_none());
+    assert!(state.journal().external_oidc_selection_sha256().is_none());
+    assert!(!path.join("evidence").join(RECORD).exists());
+    choose(parent.path(), &mut state, &configuration());
+    let input = parent.path().join("oidc.json");
+    assert!(select(prepare(Some(&input), false).unwrap(), &mut state).is_err());
+    state.advance(Phase::Provisioning).unwrap();
+    assert!(select(prepare(Some(&input), false).unwrap(), &mut state).is_err());
+}
+
+#[test]
+fn invalid_provider_contracts_are_rejected_before_selection() {
+    let (parent, path, state) = installation();
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let input = parent.path().join("oidc.json");
+    for (field, invalid) in [
+        ("issuer_url", json!("http://identity.example.test")),
+        (
+            "issuer_url",
+            json!("https://user:password@identity.example.test"),
+        ),
+        ("issuer_url", json!("https://identity.example.test?query=1")),
+        (
+            "issuer_url",
+            json!("https://identity.example.test/#fragment"),
+        ),
+        ("client_id", json!("")),
+        ("client_id", json!("unsafe\nvalue")),
+        ("admin_email", json!("no-email")),
+        ("allowed_algorithms", json!([])),
+        ("allowed_algorithms", json!(["HS256"])),
+        ("allowed_algorithms", json!(["RS256", "RS256"])),
+        (
+            "trusted_endpoint_origins",
+            json!(["https://login.example.test/path"]),
+        ),
+        (
+            "trusted_endpoint_origins",
+            json!(["https://login.example.test/"]),
+        ),
+        (
+            "trusted_endpoint_origins",
+            json!(["http://login.example.test"]),
+        ),
+        (
+            "trusted_endpoint_origins",
+            json!(["https://login.example.test", "https://login.example.test"]),
+        ),
+        ("client_secret_file", json!("relative-secret")),
+        ("unrecognized", json!(true)),
+    ] {
+        let mut config = configuration();
+        config["external_oidc"][field] = invalid;
+        private_file(&input, &serde_json::to_vec(&config).unwrap());
+        assert!(prepare(Some(&input), false).is_err(), "accepted {field}");
+    }
+    private_file(&input, br#"{"schema":"elevenid.installer-external-oidc/v1","schema":"duplicate","external_oidc":{}}"#);
+    assert!(prepare(Some(&input), false).is_err());
+    private_file(&input, &serde_json::to_vec(&configuration()).unwrap());
+    assert!(prepare(Some(&input), true).is_err());
+    std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(prepare(Some(&input), false).is_err());
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        before
+    );
+    assert!(state.journal().external_oidc_selection_sha256().is_none());
+}
+
+#[test]
+fn public_client_has_no_local_password_and_imports_only_empty_placeholder() {
+    let (parent, path, mut state) = installation();
+    let selected = choose(parent.path(), &mut state, &configuration());
+    state.advance(Phase::Provisioning).unwrap();
+    state.generate_external_auth_credentials().unwrap();
+    selected.import_inputs(&mut state).unwrap();
+    assert!(!path.join("operator-password").exists());
+    for name in crate::installer_state::LOCAL_AUTH_SCALAR_SECRETS {
+        assert!(!path.join("secrets").join(name).exists());
+    }
+    assert_eq!(
+        std::fs::read(path.join("secrets").join(SECRET)).unwrap(),
+        b""
+    );
+    assert!(selected
+        .verify_imported(&BTreeMap::from([(SECRET.into(), Vec::new())]))
+        .is_ok());
+    assert!(selected.verify_imported(&BTreeMap::new()).is_err());
+    let mut values = BTreeMap::from([
+        ("KEYCLOAK_REALM".into(), "11id".into()),
+        ("MARTY_OPENBAO_DIDCOMM_IMAGE".into(), "managed-image".into()),
+        ("BAO_ADDR".into(), "https://openbao:8200".into()),
+        ("AUTH_TLS_KMS_ADDR".into(), "https://openbao:8200".into()),
+    ]);
+    selected
+        .configuration
+        .external_oidc
+        .apply_environment(&mut values)
+        .unwrap();
+    assert!(!values.contains_key("KEYCLOAK_REALM"));
+    assert_eq!(values["MARTY_EXTERNAL_OIDC_SECRET_FILE"], "");
+    assert_eq!(values["MARTY_ORG_ADMIN_EMAIL"], "operator@example.test");
+    assert_eq!(values["AUTH_TLS_KMS_ADDR"], "https://openbao:8200");
+    assert_eq!(values["BAO_ADDR"], "https://openbao:8200");
+    assert_eq!(values["MARTY_OPENBAO_DIDCOMM_IMAGE"], "managed-image");
+}
+
+#[test]
+fn confidential_secret_is_fingerprinted_and_changed_source_is_refused() {
+    for change in [false, true] {
+        let (parent, path, mut state) = installation();
+        let input = parent.path().join("client-secret");
+        let secret = b"synthetic-client-secret-for-test";
+        private_file(&input, secret);
+        let mut config = configuration();
+        config["external_oidc"]["client_secret_file"] = json!(input);
+        let selected = choose(parent.path(), &mut state, &config);
+        let record = std::fs::read_to_string(path.join("evidence").join(RECORD)).unwrap();
+        assert!(!record.contains(std::str::from_utf8(secret).unwrap()));
+        if change {
+            private_file(&input, b"changed-after-selection");
+        }
+        state.advance(Phase::Provisioning).unwrap();
+        state.generate_external_auth_credentials().unwrap();
+        assert_eq!(selected.import_inputs(&mut state).is_ok(), !change);
+        if !change {
+            assert_eq!(
+                std::fs::read(path.join("secrets").join(SECRET)).unwrap(),
+                secret
+            );
+            let mut values = BTreeMap::new();
+            selected
+                .configuration
+                .external_oidc
+                .apply_environment(&mut values)
+                .unwrap();
+            assert_eq!(
+                values["MARTY_EXTERNAL_OIDC_SECRET_FILE"],
+                "/run/secrets/external_oidc_client_secret"
+            );
+            assert!(!serde_json::to_string(&values)
+                .unwrap()
+                .contains(std::str::from_utf8(secret).unwrap()));
+        }
+    }
+}
+
+#[test]
+fn removed_replaced_or_conflicting_record_cannot_downgrade_to_keycloak() {
+    for action in ["remove", "replace", "foundation", "symlink"] {
+        let (parent, path, mut state) = installation();
+        choose(parent.path(), &mut state, &configuration());
+        let record_path = path.join("evidence").join(RECORD);
+        match action {
+            "remove" => std::fs::remove_file(&record_path).unwrap(),
+            "replace" => {
+                let mut record: Value =
+                    serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
+                record["configuration"]["external_oidc"]["client_id"] = json!("other-client");
+                private_file(&record_path, &serde_json::to_vec(&record).unwrap());
+            }
+            "foundation" => private_file(
+                &path
+                    .join("evidence")
+                    .join(crate::installer_foundation::RECORD),
+                b"{}",
+            ),
+            "symlink" => {
+                let target = parent.path().join("copied-record");
+                std::fs::rename(&record_path, &target).unwrap();
+                symlink(target, record_path).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            state.with_inspection(external).is_err(),
+            "accepted {action}"
+        );
+        assert!(
+            record(&path, state.journal().installation_id()).is_err(),
+            "accepted {action}"
+        );
+    }
+}
+
+#[test]
+fn compose_inputs_must_pin_the_selected_record() {
+    let (parent, path, mut state) = installation();
+    let selected = choose(parent.path(), &mut state, &configuration());
+    let mut inputs = ComposeInputs {
+        installation: path.clone(),
+        project: state.journal().compose_project(),
+        files: vec![],
+        bound_inputs: vec![],
+        environment: crate::installer_compose::BoundFile {
+            path: path.join("unused.env"),
+            sha256: "a".repeat(64),
+        },
+        profiles: vec![],
+        services: vec![],
+        approved_images: BTreeSet::new(),
+        #[cfg(feature = "installer-development")]
+        development_image: None,
+        writable_bind_roots: BTreeSet::new(),
+        readonly_bind_roots: BTreeSet::new(),
+        allowed_loopback_ports: BTreeSet::new(),
+        ingress_listener: None,
+        prior: None,
+    };
+    assert!(for_inputs(&inputs).is_err());
+    selected.bind_inputs(&mut inputs).unwrap();
+    assert!(for_inputs(&inputs).unwrap().is_some());
+    inputs.bound_inputs[0].sha256 = "c".repeat(64);
+    assert!(for_inputs(&inputs).is_err());
+}

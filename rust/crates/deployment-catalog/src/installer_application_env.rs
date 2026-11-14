@@ -117,7 +117,17 @@ pub fn render(
     p: &ApplicationParameters,
     images: &BTreeMap<String, String>,
 ) -> Result<ApplicationEnvironment> {
-    render_selected(example, compose, tls_fragment, p, images, None, None, None)
+    render_selected(
+        example,
+        compose,
+        tls_fragment,
+        p,
+        images,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 #[expect(
@@ -133,7 +143,9 @@ pub(crate) fn render_selected(
     foundation: Option<&crate::installer_foundation::Selection>,
     hosting: Option<&crate::installer_hosting::Selection>,
     settings: Option<&crate::installer_settings::Selection>,
+    external_oidc: Option<&crate::installer_oidc::ExternalOidc>,
 ) -> Result<ApplicationEnvironment> {
+    require(!(foundation.is_some() && external_oidc.is_some()))?;
     let baseline = parse(EXAMPLE)?;
     let mut values = parse(example)?;
     require(values == baseline)?;
@@ -175,13 +187,15 @@ pub(crate) fn render_selected(
     };
     let services = selected("gateway", "services")?;
     require(images.get("signing-keys") == Some(&services))?;
-    let managed_identity_images = if foundation.is_none() {
-        let keycloak = selected("keycloak", "keycloak")?;
-        require(images.get("keycloak-configurator") == Some(&keycloak))?;
-        Some((
-            keycloak,
-            selected("openbao_didcomm_image", "openbao-didcomm")?,
-        ))
+    let managed_openbao = if foundation.is_none() {
+        Some(selected("openbao_didcomm_image", "openbao-didcomm")?)
+    } else {
+        None
+    };
+    let managed_keycloak = if foundation.is_none() && external_oidc.is_none() {
+        let image = selected("keycloak", "keycloak")?;
+        require(images.get("keycloak-configurator") == Some(&image))?;
+        Some(image)
     } else {
         None
     };
@@ -237,8 +251,10 @@ pub(crate) fn render_selected(
     ] {
         values.insert(key.into(), value);
     }
-    if let Some((keycloak, openbao)) = managed_identity_images {
+    if let Some(keycloak) = managed_keycloak {
         values.insert("MARTY_KEYCLOAK_KMS_IMAGE".into(), keycloak);
+    }
+    if let Some(openbao) = managed_openbao {
         values.insert("MARTY_OPENBAO_DIDCOMM_IMAGE".into(), openbao);
     }
     for key in [
@@ -310,6 +326,9 @@ pub(crate) fn render_selected(
     }
     if let Some(foundation) = foundation {
         foundation.apply_environment(&mut values)?;
+    }
+    if let Some(oidc) = external_oidc {
+        oidc.apply_environment(&mut values)?;
     }
     required_variables(compose, &values)?;
     let mut env_bytes = Vec::new();
@@ -527,12 +546,49 @@ mod tests {
             None,
             Some(&selection),
             None,
+            None,
         )
         .unwrap();
         let text = String::from_utf8(result.env_bytes).unwrap();
         assert!(text.contains("UI_ENABLED_SECTIONS='console'\n"));
         assert!(text
             .contains("OIDC_POST_LOGOUT_REDIRECT_URI='https://localhost:18443/console/login'\n"));
+        assert!(text.contains("OIDC_REDIRECT_URI='https://localhost:18443/v1/auth/callback'\n"));
+    }
+    #[test]
+    fn external_login_keeps_openbao_and_needs_no_keycloak_image() {
+        let oidc: crate::installer_oidc::ExternalOidc = serde_json::from_value(serde_json::json!({
+            "issuer_url": "https://identity.example.test/tenant", "client_id": "beta-client",
+            "admin_email": "owner@example.test", "allowed_algorithms": ["ES256"]
+        }))
+        .unwrap();
+        let mut selected_images = images();
+        selected_images.remove("keycloak");
+        selected_images.remove("keycloak-configurator");
+        let rendered = render_selected(
+            EXAMPLE,
+            COMPOSE,
+            &tls(),
+            &parameters(),
+            &selected_images,
+            None,
+            None,
+            None,
+            Some(&oidc),
+        )
+        .unwrap();
+        let text = String::from_utf8(rendered.env_bytes).unwrap();
+        assert!(
+            text.contains("MARTY_EXTERNAL_OIDC_ISSUER='https://identity.example.test/tenant'\n")
+        );
+        assert!(text.contains("MARTY_ORG_ADMIN_EMAIL='owner@example.test'\n"));
+        assert!(text.contains("MARTY_OPENBAO_DIDCOMM_IMAGE="));
+        assert!(text.contains("BAO_ADDR='https://openbao:8200'\n"));
+        assert!(text.contains("AUTH_TLS_KMS_ADDR='https://openbao:8200'\n"));
+        assert!(!text
+            .lines()
+            .any(|line| line.starts_with("KEYCLOAK_")
+                || line.starts_with("MARTY_KEYCLOAK_KMS_IMAGE=")));
         assert!(text.contains("OIDC_REDIRECT_URI='https://localhost:18443/v1/auth/callback'\n"));
     }
     #[test]

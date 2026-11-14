@@ -278,12 +278,16 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
     let engine = &state.journal().runtime().ok_or(REFUSED)?.engine_id;
     let binding = generation::load_verified(path, &id, engine)?.ok_or(REFUSED)?;
     let imported = binding.imported_foundation();
+    let external_oidc = crate::installer_oidc::load(state)?;
     let public_metadata = binding.public_ingress_metadata(path)?;
     let public = public_metadata.is_some();
     let mut names = vec![
         installer_doctor::SESSION_RECORD,
         "application-generation-selection.json",
     ];
+    if external_oidc.is_some() {
+        names.push(crate::installer_oidc::RECORD);
+    }
     if imported {
         names.push(crate::installer_foundation::RECORD);
     } else if !public {
@@ -478,7 +482,11 @@ pub(crate) fn inspect_locked(path: &Path, state: &LockedInspection) -> Result<Tr
         ]
         } else {
             vec![
-                "Explicit browser CA trust and TLS login",
+                if external_oidc.is_some() {
+                    "Explicit browser CA trust and external OIDC login"
+                } else {
+                    "Explicit browser CA trust and TLS login"
+                },
                 "Installed issue/present/verify/revoke/deny journey",
                 "Live custody, renewal, root retirement and recovery qualification",
             ]
