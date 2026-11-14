@@ -12,7 +12,8 @@ use marty_auth::{
 use marty_oid4vp_contract::{
     build_verification_callback_payload, digest_domain_json, flow_callback_payload_digest,
     flow_result_digest, FlowVerificationReceiptContractVersion, FlowVerificationReceiptV1,
-    FrozenPolicyIdentity, FLOW_REQUEST_BINDING_DIGEST_DOMAIN, VERIFICATION_RECEIPT,
+    FrozenPolicyIdentity, PolicyEvaluationValidityContractVersion, PolicyEvaluationValidityV1,
+    FLOW_REQUEST_BINDING_DIGEST_DOMAIN, POLICY_EVALUATION_VALIDITY, VERIFICATION_RECEIPT,
 };
 use mmf_data::MemoryCache;
 use mmf_push::{payload_digest, sign_event};
@@ -33,6 +34,10 @@ fn policy_revision() -> FrozenPolicyIdentity {
 }
 
 fn produced_callback() -> Value {
+    produced_callback_with_deadline(None)
+}
+
+fn produced_callback_with_deadline(deadline: Option<chrono::DateTime<Utc>>) -> Value {
     let mut result = json!({
         "policy_revision": policy_revision(),
         "evaluation_result": "passed",
@@ -45,6 +50,21 @@ fn produced_callback() -> Value {
         "warnings": [],
         "error_codes": [],
     });
+    if let Some(deadline) = deadline {
+        // Synthetic correspondence digests qualify the callback boundary only;
+        // this fixture does not authenticate Policy or establish live authority.
+        let validity = PolicyEvaluationValidityV1 {
+            contract: PolicyEvaluationValidityContractVersion::V1,
+            organization_id: "org-1".into(),
+            policy: policy_revision(),
+            request_binding_digest: format!("sha256:{}", "d".repeat(64)),
+            result_binding_digest: format!("sha256:{}", "e".repeat(64)),
+            evaluated_at_epoch_micros: (now() - Duration::seconds(10)).timestamp_micros(),
+            valid_until_epoch_micros: deadline.timestamp_micros(),
+        };
+        validity.validate().unwrap();
+        result[POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity).unwrap();
+    }
     let completed_at = Some((now() - Duration::seconds(8)).to_rfc3339());
     let basis = build_verification_callback_payload(
         "flow-1",
@@ -68,13 +88,14 @@ fn produced_callback() -> Value {
         nonce_digest: "c".repeat(64),
         result_digest: flow_result_digest(&result).unwrap(),
         callback_payload_digest: flow_callback_payload_digest(&basis).unwrap(),
-        policy_valid_until_epoch_micros: None,
+        policy_valid_until_epoch_micros: deadline.map(|value| value.timestamp_micros()),
         policy_evaluated_at_epoch_micros: (now() - Duration::seconds(10)).timestamp_micros(),
         nonce_consumed_at_epoch_micros: (now() - Duration::seconds(7)).timestamp_micros() + 123,
         nonce_retention_expires_at_epoch_micros: (now() + Duration::minutes(15)).timestamp_micros(),
         receipt_digest: String::new(),
     };
     receipt.receipt_digest = receipt.recompute_digest().unwrap();
+    receipt.validate_result(&result).unwrap();
     result[VERIFICATION_RECEIPT] = serde_json::to_value(receipt).unwrap();
     build_verification_callback_payload(
         "flow-1",
@@ -129,6 +150,54 @@ fn receipt_bearing_flow_callback_roundtrips_through_independent_auth_dto() {
         receipt.nonce_consumed_at_epoch_micros,
     );
     verify_credential_callback(&payload, &headers(&wire), SECRET, now(), 300).unwrap();
+}
+
+#[test]
+fn bounded_receipt_callback_remains_valid_after_policy_deadline() {
+    let deadline = now() - Duration::seconds(6);
+    let wire = produced_callback_with_deadline(Some(deadline));
+    let payload: CredentialVerifiedPayload = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&payload).unwrap(), wire);
+    assert!(wire.get(POLICY_EVALUATION_VALIDITY).is_none());
+    let receipt = payload.verification_receipt.as_ref().unwrap();
+    assert!(receipt.policy_evaluated_at_epoch_micros < receipt.nonce_consumed_at_epoch_micros);
+    assert!(receipt.nonce_consumed_at_epoch_micros < deadline.timestamp_micros());
+    assert_eq!(
+        receipt.policy_valid_until_epoch_micros,
+        Some(deadline.timestamp_micros())
+    );
+    assert!(deadline < now());
+    // Delivery authenticates a historical finalization fact after its Policy
+    // observation expired; it does not reuse the deadline as a live grant.
+    verify_credential_callback(&payload, &headers(&wire), SECRET, now(), 300).unwrap();
+}
+
+#[test]
+fn policy_deadline_removal_or_extension_cannot_reuse_callback_hmac() {
+    let original = produced_callback_with_deadline(Some(now() - Duration::seconds(6)));
+    let signed = headers(&original);
+    for remove_deadline in [true, false] {
+        let mut changed = original.clone();
+        if remove_deadline {
+            changed[VERIFICATION_RECEIPT]
+                .as_object_mut()
+                .unwrap()
+                .remove("policy_valid_until_epoch_micros");
+        } else {
+            changed[VERIFICATION_RECEIPT]["policy_valid_until_epoch_micros"] =
+                json!((now() + Duration::seconds(30)).timestamp_micros());
+        }
+        refresh_receipt_digest(&mut changed);
+        refresh_decision_digest(&mut changed);
+        let payload: CredentialVerifiedPayload = serde_json::from_value(changed.clone()).unwrap();
+        // Re-signing with the fixture secret proves the public correspondence
+        // checks still pass; only the original authentication is unavailable.
+        verify_credential_callback(&payload, &headers(&changed), SECRET, now(), 300).unwrap();
+        assert!(
+            verify_credential_callback(&payload, &signed, SECRET, now(), 300).is_err(),
+            "remove_deadline={remove_deadline}"
+        );
+    }
 }
 
 #[test]
