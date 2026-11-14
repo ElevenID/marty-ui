@@ -2,6 +2,7 @@ pub mod custody;
 pub mod governed;
 pub mod policy;
 pub mod registry;
+pub mod scoped_document;
 
 use std::collections::BTreeSet;
 

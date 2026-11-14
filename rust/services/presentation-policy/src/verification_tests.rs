@@ -2111,6 +2111,19 @@ mod bounded_sd_jwt_query_evidence {
     #[tokio::test]
     async fn exact_query_and_selected_response_are_required_for_authenticated_evidence() {
         let fixture = Fixture::new();
+        let mut scalar_response = fixture.request.clone();
+        let scalar_token = scalar_response.vp_token.as_str().unwrap().to_owned();
+        scalar_response
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .vp_token_raw = scalar_token;
+        let scalar_material = fixture.verify(&scalar_response).await;
+        assert!(
+            scalar_material.authenticated_sd_jwt_query().is_some(),
+            "one-query scalar direct_post must retain authenticated evidence",
+        );
+
         let mut changed_vct = fixture.request.clone();
         changed_vct
             .oid4vp_transport

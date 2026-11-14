@@ -179,7 +179,7 @@ def flow(tmp_path, monkeypatch):
 
     class Transport:
         def __init__(self, operation, kubeconfig, namespace, kubectl):
-            assert item.auth_calls == 2
+            assert item.auth_calls == getattr(item, "expected_auth_calls", 2)
             assert kubeconfig == operation / "kubeconfig" and namespace == binding["namespace"]
             self.state, self.namespace = operation, namespace
 
@@ -259,7 +259,7 @@ def flow(tmp_path, monkeypatch):
                     "binding": {"bootstrapId": BOOTSTRAP_ID, **binding, "producerNonce": "012345abcdef",
                         "runtimeSourceSha": inspection.LEGACY_RUNTIME, "chartSourceSha": args.chart_source_sha},
                     "inputBindings": {name: {"sha256": hashlib.sha256(value).hexdigest(), "mode": mode}
-                                      for name, (value, mode) in snapshot.items()}, "observed": {}}
+                                      for name, (value, mode) in item.imports[inspection.REMOTE_CURRENT].items()}, "observed": {}}
                 if item.failure == "native":
                     raise bootstrap.BootstrapError("synthetic native outcome unavailable")
                 if item.drift == "retained-current":

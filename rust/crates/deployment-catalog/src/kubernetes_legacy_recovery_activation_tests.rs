@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "kubernetes_legacy_recovery_lineage_tests.rs"]
+mod lineage_tests;
+
 #[derive(Clone)]
 struct Fixture {
     current: Generation,

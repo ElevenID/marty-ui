@@ -126,6 +126,7 @@ fn production_private_commands_refuse_bad_or_oversized_context_without_echo_or_s
     ];
     for command in [
         "kubernetes-legacy-recovery-targets",
+        "kubernetes-legacy-recovery-predecessors",
         "kubernetes-legacy-recovery-stage",
         "kubernetes-legacy-recovery-qualify",
     ] {
@@ -148,6 +149,7 @@ fn production_recovery_commands_accept_no_extra_or_credential_arguments() {
     for command in [
         "kubernetes-legacy-recovery-stage-contract",
         "kubernetes-legacy-recovery-targets",
+        "kubernetes-legacy-recovery-predecessors",
         "kubernetes-legacy-recovery-stage",
         "kubernetes-legacy-recovery-qualify",
     ] {

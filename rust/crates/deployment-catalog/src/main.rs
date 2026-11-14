@@ -886,6 +886,7 @@ fn run() -> Result<(), String> {
             #[cfg(target_os = "linux")]
             Some(
                 command @ ("kubernetes-legacy-recovery-targets"
+                | "kubernetes-legacy-recovery-predecessors"
                 | "kubernetes-legacy-recovery-stage"
                 | "kubernetes-legacy-recovery-qualify"),
             ) if args.len() == 2 => {
@@ -900,6 +901,8 @@ fn run() -> Result<(), String> {
                 }
                 let summary = if command == "kubernetes-legacy-recovery-targets" {
                     recovery::secret_targets(&input)?
+                } else if command == "kubernetes-legacy-recovery-predecessors" {
+                    recovery::inspect_predecessors(&input)?
                 } else {
                     let runtime = tokio::runtime::Builder::new_current_thread()
                         .enable_all()

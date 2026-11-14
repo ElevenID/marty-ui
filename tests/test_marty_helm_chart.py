@@ -110,6 +110,27 @@ def test_chart_lints_with_verified_image_shapes(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_development_preflight_matches_rendered_native_readiness_services(rendered: list[dict]) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_kubernetes_dev_resume as preflight
+
+    configured = [doc["data"]["GATEWAY_REQUIRED_READY_SERVICES"]
+                  for doc in resources(rendered, "ConfigMap").values()
+                  if "GATEWAY_REQUIRED_READY_SERVICES" in doc.get("data", {})]
+    assert len(configured) == 1
+    names = configured[0].split(",")
+    assert len(names) == len(set(names)) == 9
+    assert set(names) == {"auth", "organizations", "credential-templates", "trust-profiles",
+                          "presentation-policies", "deployment-profiles", "signing-keys", "flows", "issuance-native"}
+    assert preflight.CORE_READY_SERVICES == set(names)
+    response = {"service": "api-gateway", "status": "ready", "services": {
+        name: {"status": "healthy"} for name in names}}
+    assert preflight.readiness_contract(200, "application/json", json.dumps(response).encode()) == {"healthyServices": 9}
+    response["services"]["issuance-native"]["status"] = "unhealthy"
+    with pytest.raises(preflight.CheckError, match="unhealthy"):
+        preflight.readiness_contract(200, "application/json", json.dumps(response).encode())
+
+
 def test_default_tls_store_removes_namespace_copy_without_disabling_https(tmp_path: Path) -> None:
     values = installation_values()
     values["publicHost"] = "192.0.2.20"
@@ -872,8 +893,13 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
         if identity not in {("Deployment", "ui"), ("ConfigMap", "nginx-prod-config")}:
             assert normal_by_id[identity] == dev_by_id[identity], identity
 
-    pod = resources(development, "Deployment")["ui"]["spec"]["template"]["spec"]
-    ordinary_pod = resources(normal, "Deployment")["ui"]["spec"]["template"]["spec"]
+    development_spec = resources(development, "Deployment")["ui"]["spec"]
+    ordinary_spec = resources(normal, "Deployment")["ui"]["spec"]
+    # The explicit null clears the API-default rollingUpdate field on upgrade.
+    assert development_spec["strategy"] == {"type": "Recreate", "rollingUpdate": None}
+    assert "strategy" not in ordinary_spec
+    pod = development_spec["template"]["spec"]
+    ordinary_pod = ordinary_spec["template"]["spec"]
     ordinary_ui = ordinary_pod["containers"][0]
     development_ui = pod["containers"][0]
     assert len(ordinary_pod["containers"]) == 1
