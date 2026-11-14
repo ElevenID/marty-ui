@@ -3,6 +3,22 @@
 `validate-stack-release-run` validates authenticated GitHub release-run lineage.
 It does not replace signed release-manifest and exact-source verification.
 
+## Released stack interoperability evidence
+
+`validate-official-suite --prepare-released` and `--automated-released` assess
+all seven unmodified official lane summaries against one released stack manifest.
+The released mode requires the manifest's product source and release identity to
+match every summary, retains upstream `REVIEW` results, and accepts only the
+already supported positive verifier obligations with matching automated API and
+real-browser evidence. Failed, skipped, foreign, incomplete, or later-attempt
+evidence fails. The receipt says `PUBLISHED_RELEASE`; it cannot be substituted
+for the prepublication product candidate gate.
+
+The caller must independently verify the manifest's release signature and
+provenance, authenticate the exact same-run artifact transport, and bind the
+original attempt and protected release source before treating the receipt as a
+release gate. This CLI validates the evidence contents, not those authorities.
+
 ## Lossless beta deployment transport
 
 `beta-evidence-bundle` transports these three original deployment-runner files,

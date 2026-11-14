@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::official::{
-    assess_official_suite, candidate_receipt, digest, LaneReceipt, OfficialReceipt,
+    assess_official_suite, candidate_receipt, digest, LaneReceipt, OfficialReceipt, StackContext,
 };
 use crate::official_automation::AutomatedAssessment;
 
@@ -138,12 +138,56 @@ pub fn prepare_official_review(
     run_id: u64,
     run_attempt: u64,
 ) -> Result<OfficialReviewPlan, &'static str> {
+    prepare_review_for_context(
+        manifest,
+        summaries,
+        source,
+        harness,
+        run_id,
+        run_attempt,
+        StackContext::Candidate,
+    )
+}
+
+pub fn prepare_released_official_review(
+    manifest: &[u8],
+    summaries: &[Vec<u8>],
+    source: &str,
+    harness: &str,
+    run_id: u64,
+    run_attempt: u64,
+) -> Result<OfficialReviewPlan, &'static str> {
+    prepare_review_for_context(
+        manifest,
+        summaries,
+        source,
+        harness,
+        run_id,
+        run_attempt,
+        StackContext::Released,
+    )
+}
+
+fn prepare_review_for_context(
+    manifest: &[u8],
+    summaries: &[Vec<u8>],
+    source: &str,
+    harness: &str,
+    run_id: u64,
+    run_attempt: u64,
+    context: StackContext,
+) -> Result<OfficialReviewPlan, &'static str> {
     if run_attempt == 0 {
         return Err("official evidence attempt is invalid");
     }
-    let assessed = assess_official_suite(manifest, summaries, source, harness, run_id, true)?;
+    let assessed =
+        assess_official_suite(manifest, summaries, source, harness, run_id, true, context)?;
     Ok(OfficialReviewPlan {
-        schema: "marty.official-review-plan/v1",
+        schema: if context == StackContext::Released {
+            "marty.official-released-review-plan/v1"
+        } else {
+            "marty.official-review-plan/v1"
+        },
         source_sha: source.into(),
         harness_sha: harness.into(),
         manifest_sha256: assessed.manifest_sha256,
