@@ -1,3 +1,4 @@
+{{- if eq (include "marty.authProvider" .) "keycloak" -}}
 {{- $config := include "marty.configData" . | fromYaml -}}
 {{- $smtpPasswordRequired := eq (include "marty.keycloakSmtpPasswordRequired" $config) "true" -}}
 {{- $smtpHost := coalesce (get $config "KEYCLOAK_SMTP_HOST") (get $config "SMTP_HOST") "" -}}
@@ -292,4 +293,5 @@ spec:
           configMap:
             name: keycloak-setup-scripts
             defaultMode: 0555
+{{- end }}
 {{- end }}

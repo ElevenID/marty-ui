@@ -63,7 +63,10 @@ def workloads():
 
 def readiness():
     return {"service": "api-gateway", "status": "ready", "services": {
-        name: {"status": "healthy"} for name in check.CORE_READY_SERVICES
+        name: {"status": "healthy"} for name in (
+            "auth", "organizations", "credential-templates", "trust-profiles", "presentation-policies",
+            "deployment-profiles", "signing-keys", "flows", "issuance-native",
+        )
     }}
 
 
@@ -152,6 +155,13 @@ def test_gateway_contract_requires_healthy_core_dependencies():
     assert check.readiness_contract(200, "application/json; charset=utf-8", json.dumps(body).encode())["healthyServices"] == 9
     body["services"]["auth"]["status"] = "unhealthy"
     with pytest.raises(check.CheckError, match="unhealthy"):
+        check.readiness_contract(200, "application/json", json.dumps(body).encode())
+
+
+def test_legacy_issuance_alias_cannot_replace_required_native_owner():
+    body = readiness()
+    body["services"]["issuance"] = body["services"].pop("issuance-native")
+    with pytest.raises(check.CheckError, match="omits core"):
         check.readiness_contract(200, "application/json", json.dumps(body).encode())
 
 

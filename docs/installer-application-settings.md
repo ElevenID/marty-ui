@@ -6,6 +6,12 @@ testing and admitted nightly/stable installation. Managed OpenBao remains the
 default foundation. The selected release's admission and qualification rules
 still apply; accepting a settings file does not grant production readiness.
 
+Login-provider selection is separate. For external OIDC with managed OpenBao,
+add `--external-oidc-file ABSOLUTE_PATH` alongside the existing hosting and
+settings inputs; see [external OIDC installation](installer-external-oidc.md).
+That file owns the issuer, client, initial administrator email and optional
+client-secret reference. These values are not application settings.
+
 The installer retains a closed, typed application policy before provisioning.
 It does not import an arbitrary environment file. The canonical origin, generated
 identities, runtime paths, image digests, private ports and key custody remain
@@ -226,10 +232,12 @@ key/certificate outputs.
 | Remote key custody | OpenBao/AWS key names and versions, TLS material, signing-grant authority, workload identities and private-key prohibitions. Existing foundation-file validation owns an external AWS foundation. |
 | Transport/security contract | `GRPC_INSECURE_ALLOWED=false`, `GATEWAY_OBSERVE_CLIENT_IP=false`, private DIDComm endpoints disabled, no production HTTP-localhost Canvas exception, no portable legacy-event-ingest exception. |
 
-An external OIDC foundation owns its own registration, email and social login.
+An external OIDC provider owns its own registration, email and social login.
 Managed `KEYCLOAK_*` settings, Google login credentials, SMTP credentials and
 the two Keycloak-admin-dependent credential-login choices are rejected for that
-foundation instead of being silently ignored. The existing AWS foundation has
+selection. This applies both to independent `--external-oidc-file` selection
+with managed OpenBao and to the existing external OIDC in an AWS foundation.
+The existing AWS foundation has
 explicit AWS signing-grant authority support, including Canvas and Passport;
 configuration support does not claim that provider's runtime qualification.
 

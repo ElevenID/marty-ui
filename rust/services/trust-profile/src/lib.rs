@@ -42,6 +42,7 @@ pub use http_service::{
     trust_credential_authority_router, trust_profile_router, TrustProfileHttpState,
     TrustRegistrySyncError, TrustRegistrySynchronizer,
 };
+pub use issuer_keys::scoped_document::{HttpScopedIssuerKeyResolver, ScopedIssuerKeyResolver};
 pub use issuer_keys::{
     IssuerKeyResolution, IssuerKeyResolutionError, IssuerKeyResolver, NativeIssuerKeyResolver,
 };

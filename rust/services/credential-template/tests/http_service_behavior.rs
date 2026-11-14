@@ -915,6 +915,50 @@ async fn public_validity_readback_retains_canonical_rules_and_legacy_seconds_ali
 }
 
 #[tokio::test]
+async fn rejected_trust_activation_keeps_the_original_saved_draft() {
+    let app = router();
+    let mut body = create_body();
+    body["trust_profile_id"] = json!("invalid-trust-profile");
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", body, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created = json_body(response).await;
+    let id = created["id"].as_str().unwrap();
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                &format!("/v1/credential-templates/{id}/activate"),
+                json!({}),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(json_body(response).await["detail"]
+            .as_str()
+            .unwrap()
+            .contains("CREDENTIAL_TEMPLATE.TRUST_PROFILE_REJECTED"));
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/v1/credential-templates/{id}"),
+                json!({}),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await, created);
+    }
+}
+
+#[tokio::test]
 async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let app = router();
     let response = app

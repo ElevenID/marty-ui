@@ -4,8 +4,9 @@
 The signed native owner inspects, stages same-scope credentials and freshly
 qualifies a closed existing-Secret plan. Private evidence is exported before
 optional activation. Choose --stage-only or --activate-existing-secrets; the
-latter can explicitly add --reload-owned-workloads. This command has no replay,
-resume, rollback or enrollment mode.
+latter can explicitly add --reload-owned-workloads. A new attempt can select an
+ordered authenticated chain of completed activations with --previous-recovery-dir
+and --previous-recovery-assets. This is not replay, resume, rollback or enrollment.
 The original retained state is read-only. Keep the private operation directory
 on encrypted operator storage; it contains credentials and opaque API evidence.
 """
@@ -27,6 +28,7 @@ import time
 
 import bootstrap_kubernetes_openbao as bootstrap
 import inspect_kubernetes_legacy_credentials as inspection
+import kubernetes_legacy_recovery_lineage as lineage
 import stage_kubernetes_application_credentials as private
 
 
@@ -137,13 +139,14 @@ def evidence_members(payload: bytes, snapshot: dict) -> dict:
     return members
 
 
-def validate_inspection(members: dict, snapshot: dict, binding: dict) -> bytes:
+def validate_inspection(members: dict, snapshot: dict, binding: dict, predecessor_chain: dict | None = None) -> bytes:
     raw = members["inspection.json"][0]
     report = inspection.decode(raw, REPORT_LIMIT + 1, "private native inspection")
     bootstrap.require(report.get("schema") == inspection.SCHEMA and report.get("status") == "inspected-not-staged"
                       and report.get("mutationAvailable") is False, "native inspection is incomplete")
     inspection.same(report.get("binding"), binding, "native inspection installation binding differs")
     inspection.same(report.get("inputBindings"), input_bindings(snapshot), "native inspection input bindings differ")
+    inspection.same(report.get("predecessorChain"), predecessor_chain, "native predecessor chain differs")
     return raw
 
 
@@ -322,6 +325,9 @@ def verify_patch_reply(raw: bytes, expected: dict, original: dict) -> dict:
 
 def recover_locked(args: argparse.Namespace) -> None:
     state, operation = args.state_dir, args.operation_dir
+    for marker in ("renewal-adoption.json", "renewal-adoption-pending.json"):
+        bootstrap.require(not (state / marker).exists() and not (state / marker).is_symlink(),
+                          "retained renewal adoption requires its ordinary renewal or reconciliation owner")
     reload_requested = getattr(args, "reload_owned_workloads", False)
     records = inspection.retained_records(state, args.chart_source_sha)
     complete, initialize, metadata, binding, pull_secrets = records
@@ -332,7 +338,9 @@ def recover_locked(args: argparse.Namespace) -> None:
         "recoveryRuntime": selected["release"], "files": source_binding})
     bootstrap.write_new(operation / "source-authenticated.json", source_record)
     stage_contract(operation / "marty-deploy")
-    snapshot = private.current_snapshot(state / "credentials")
+    original_snapshot = private.current_snapshot(state / "credentials")
+    predecessors = lineage.selected(args, original, original_snapshot, bound)
+    snapshot = predecessors.snapshot if predecessors is not None else original_snapshot
     bootstrap.require("openbao_tls_ca_cert" in snapshot, "retained OpenBao trust is unavailable")
     archive = private.archive_snapshot(snapshot)
     bootstrap.write_new(operation / "current-snapshot.tar", archive)
@@ -352,6 +360,19 @@ def recover_locked(args: argparse.Namespace) -> None:
     transport = bootstrap.Transport(operation, operation / "kubeconfig", binding["namespace"], kubectl)
     inspection.namespace_identity(transport, binding)
     openbao = inspection.openbao_identity(transport, original["images"]["openbao_didcomm"])
+    context = {"schema": inspection.SCHEMA, "bootstrap": complete, "initializeRequest": initialize,
+        "tlsKeyMetadata": metadata, "namespaceObservation": {"name": binding["namespace"], "uid": binding["namespaceUid"]},
+        "current": inspection.REMOTE_CURRENT, "rootTokenFile": inspection.REMOTE_ROOT,
+        "retainedRootSha256": sha256(root_bytes)}
+    predecessor_fields = {}
+    predecessor_archive = None
+    if predecessors is not None:
+        observed, raw = observe_secrets(transport, predecessors.names, operation / "predecessor-live-preimages")
+        predecessor_fields["predecessorChain"] = predecessors.admit(operation / "marty-deploy", context, observed, raw)
+        predecessor_archive = predecessors.archive()
+        bootstrap.write_new(operation / "predecessors.tar", predecessor_archive)
+        bootstrap.write_new(operation / "predecessors-admitted.json", bootstrap.encoded(predecessors.summary))
+        context["predecessors"] = lineage.REMOTE
     expected = inspection.producer_document(binding["namespace"], selected["images"]["services"],
                                            bootstrap.secrets.token_hex(6), pull_secrets)
     pod = expected["metadata"]["name"]
@@ -361,6 +382,7 @@ def recover_locked(args: argparse.Namespace) -> None:
         "reloadOwnedWorkloads": reload_requested,
         "originalRuntime": original["release"], "recoveryRuntime": selected["release"],
         "openbao": openbao, "pod": expected, "automaticReplay": False,
+        **predecessor_fields,
     }))
     uid = None
     remote_ready = root_uploaded = operator_uploaded = native_inflight = exported = False
@@ -371,6 +393,9 @@ def recover_locked(args: argparse.Namespace) -> None:
     retained_outputs = {operation / "kubeconfig": (config, 0o600), operation / "marty-deploy": (operator_bytes, 0o700),
                         operation / "current-snapshot.tar": (archive, 0o600),
                         operation / "source-authenticated.json": (source_record, 0o600)}
+    if predecessors is not None:
+        retained_outputs[operation / "predecessors.tar"] = (predecessor_archive, 0o600)
+        retained_outputs[operation / "predecessors-admitted.json"] = (bootstrap.encoded(predecessors.summary), 0o600)
     retained_candidate = None
     verified_postimages = {}
     try:
@@ -407,8 +432,10 @@ def recover_locked(args: argparse.Namespace) -> None:
 
         def retained_consistency() -> None:
             inspection.sources.recheck(source_binding)
-            bootstrap.require(private.current_snapshot(state / "credentials") == snapshot,
+            bootstrap.require(private.current_snapshot(state / "credentials") == original_snapshot,
                               "retained original credentials changed during recovery")
+            if predecessors is not None:
+                predecessors.check()
             bootstrap.require(private.private_bytes(state / "openbao-initialization.json", 65536, {0o400})[0] == initialization,
                               "retained initialization changed during recovery")
             bootstrap.require(inspection.kubeconfig_bytes(state) == config, "retained Kubernetes configuration changed")
@@ -469,7 +496,8 @@ def recover_locked(args: argparse.Namespace) -> None:
         transport.execute(pod, ["/bin/sh", "-ec",
             'umask 077; for path in "$@"; do mkdir "$path"; chmod u=rwx,go=,a-s,a-t "$path"; done', "--",
             inspection.REMOTE_PUBLIC, inspection.REMOTE_CURRENT, inspection.REMOTE_IDENTITY,
-            inspection.REMOTE_OPERATION, REMOTE_STAGE, REMOTE_QUALIFICATION])
+            inspection.REMOTE_OPERATION, REMOTE_STAGE, REMOTE_QUALIFICATION,
+            *([lineage.REMOTE] if predecessors is not None else [])])
         remote_ready = True
         phase()
         transport.upload(pod, inspection.REMOTE_OPERATOR, operator_bytes, executable=True)
@@ -485,24 +513,29 @@ def recover_locked(args: argparse.Namespace) -> None:
         phase()
         transport.execute(pod, ["tar", "-xpf", "-", "-C", inspection.REMOTE_CURRENT], data=archive)
         phase()
+        if predecessor_archive is not None:
+            transport.execute(pod, ["tar", "-xpf", "-", "-C", lineage.REMOTE], data=predecessor_archive)
+            phase()
         transport.upload(pod, inspection.REMOTE_ROOT, root_bytes)
         root_uploaded = True
         phase()
-        context = {"schema": inspection.SCHEMA, "bootstrap": complete, "initializeRequest": initialize,
-            "tlsKeyMetadata": metadata, "namespaceObservation": {"name": binding["namespace"], "uid": binding["namespaceUid"]},
-            "current": inspection.REMOTE_CURRENT, "rootTokenFile": inspection.REMOTE_ROOT,
-            "retainedRootSha256": sha256(root_bytes)}
         summary = native("inspection", "kubernetes-legacy-recovery-inspect", context, 600, inspection.REMOTE_REPORT)
         inspection.same(summary, {"schema": inspection.SCHEMA, "status": "inspected-not-staged", "mutationAvailable": False,
             "namespace": binding["namespace"], "workloadIdentities": 16, "keycloakSigningCertificates": 2,
             "keycloakTokens": 5, "ordinaryRuntimeTokens": 12, "privateReportWritten": True}, "native inspection result differs")
         inspected = export("native-inspection-evidence.tar")
         bootstrap.require(set(inspected) == {"inspection.json"}, "native inspection exported unexpected files")
-        report = validate_inspection(inspected, snapshot, bound)
+        report = validate_inspection(inspected, snapshot, bound, predecessor_fields.get("predecessorChain"))
         bootstrap.write_new(operation / "inspection.json", report)
         retained_outputs[operation / "inspection.json"] = (report, 0o600)
         targets = native("targets", "kubernetes-legacy-recovery-targets", context, 30, maximum=16384)
         names = target_names(bootstrap.encoded(targets), binding["namespace"])
+        if predecessors is not None:
+            phase_name = "predecessor-before-stage"
+            observed, raw = observe_secrets(transport, names, operation / "predecessor-before-stage")
+            predecessors.same_publication(observed)
+            retained_outputs[operation / "predecessor-before-stage/all-secrets.json"] = (raw, 0o600)
+            phase()
         progress["stageAttempted"] = True
         stage_summary = native("stage", "kubernetes-legacy-recovery-stage", {"schema": STAGE_SCHEMA,
             "context": context, "inspection": inspection.REMOTE_REPORT, "output": REMOTE_STAGE}, 600)
@@ -632,6 +665,7 @@ def recover_locked(args: argparse.Namespace) -> None:
         "credentialsIssued": True, "activation": bool(args.activate_existing_secrets),
         "verifiedSecretCount": len(progress["verifiedSecrets"]), "workloadsRestarted": False,
         "privatePlanSha256": sha256(plan_bytes), "podRemoved": True,
+        **predecessor_fields,
     })
     bootstrap.write_new(operation / "recovery-complete.json", credential_completion)
     retained_outputs[operation / "recovery-complete.json"] = (credential_completion, 0o600)
@@ -706,6 +740,10 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--activate-existing-secrets", action="store_true")
     parser.add_argument("--reload-owned-workloads", action="store_true",
                         help="after complete Secret activation, reload only the 16 original credential consumers")
+    parser.add_argument("--previous-recovery-dir", type=Path, action="append", default=[],
+                        help="completed prior activation directory, repeated in original-to-current order")
+    parser.add_argument("--previous-recovery-assets", type=Path, action="append", default=[],
+                        help="matching signed assets for each prior activation, in the same order")
     try:
         recover(parser.parse_args(argv))
     except (bootstrap.BootstrapError, ValueError, OSError, KeyError, TypeError,

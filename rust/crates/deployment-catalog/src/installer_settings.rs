@@ -758,7 +758,7 @@ pub(crate) fn select(prepared: Prepared, state: &mut InstallerState) -> Result<(
     require(
         prepared.managed_keycloak
             == state
-                .with_inspection(crate::installer_foundation::load)?
+                .with_inspection(crate::installer_oidc::external)?
                 .is_none(),
     )?;
     let selection = Selection {
@@ -825,7 +825,7 @@ pub(crate) fn load(view: &LockedInspection) -> Result<Option<Selection>> {
         &source.ok_or(REFUSED)?,
         view.journal(),
     )?;
-    require(selected.managed_keycloak == crate::installer_foundation::load(view)?.is_none())?;
+    require(selected.managed_keycloak == crate::installer_oidc::external(view)?.is_none())?;
     Ok(Some(selected))
 }
 
@@ -867,7 +867,7 @@ pub(crate) fn for_inputs(inputs: &ComposeInputs) -> Result<Option<Selection>> {
     if let Some(selection) = &selection {
         require(
             selection.managed_keycloak
-                == crate::installer_foundation::for_inputs(inputs)?.is_none(),
+                == crate::installer_oidc::external_for_inputs(inputs)?.is_none(),
         )?;
     }
     Ok(selection)

@@ -54,6 +54,7 @@ fn configuration(root: &Path) -> Configuration {
             client_secret_file: None,
             trusted_endpoint_origins: vec!["https://keys.example.invalid".into()],
             allowed_algorithms: vec!["RS256".into()],
+            scopes: None,
         },
         workload_ca_file: root.join("ca.pem"),
         ingress_ca_file: root.join("ca.pem"),
@@ -421,4 +422,45 @@ fn workload_projection_refuses_parent_child_and_foreign_credential_mounts() {
         .unwrap();
     foreign["services"]["ui"] = gateway;
     assert!(selected.validate_model(&foreign).is_err());
+}
+
+#[test]
+fn explicit_external_scopes_bind_aws_environment_and_auth_model() {
+    let temp = tempfile::tempdir().unwrap();
+    files::set_permissions(temp.path(), files::Permissions::from_mode(0o700)).unwrap();
+    let (input, mut config) = inputs(temp.path());
+    config.external_oidc.scopes = Some(vec![
+        "openid".into(),
+        "email".into(),
+        "urn:example:groups".into(),
+    ]);
+    write(&input, &serde_json::to_vec(&config).unwrap(), 0o600);
+    let (installation, mut state) = fresh(temp.path());
+    select(&input, &installation, &mut state).unwrap();
+    let selected = state.with_inspection(load).unwrap().unwrap();
+    let mut environment = BTreeMap::new();
+    selected.apply_environment(&mut environment).unwrap();
+    assert_eq!(
+        environment["MARTY_EXTERNAL_OIDC_SCOPES"],
+        "openid,email,urn:example:groups"
+    );
+    let auth = &config.workload_identities["auth"];
+    let mut model = json!({"services":{"auth":{
+        "environment":{
+            "AWS_EC2_METADATA_DISABLED":"true",
+            "AWS_ROLE_ARN":auth.role_arn,
+            "AWS_WEB_IDENTITY_TOKEN_FILE":"/run/aws-identity/token",
+            "OIDC_SCOPES":"openid,email,urn:example:groups"
+        },
+        "volumes":[{"type":"bind","source":auth.directory,
+            "target":"/run/aws-identity","read_only":true}]
+    }}});
+    selected.validate_model(&model).unwrap();
+    model["services"]["auth"]["environment"]["OIDC_SCOPES"] = json!("openid,profile,email");
+    assert!(selected.validate_model(&model).is_err());
+    model["services"]["auth"]["environment"]
+        .as_object_mut()
+        .unwrap()
+        .remove("OIDC_SCOPES");
+    assert!(selected.validate_model(&model).is_err());
 }

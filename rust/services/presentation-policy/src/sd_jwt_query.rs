@@ -17,7 +17,7 @@ use marty_oid4vp_contract::{
     MAX_TOKEN_BYTES, MIN_NONCE_BYTES,
 };
 use marty_verification::credential_format::DetectedCredentialFormat;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -430,37 +430,6 @@ struct DcqlClaim {
     path: Vec<String>,
 }
 
-/// Reject duplicate query keys as well as extra responses before selecting any
-/// token. A generic JSON object parser would silently replace duplicate keys.
-struct SingleResponse {
-    query_id: String,
-    tokens: Vec<String>,
-}
-
-impl<'de> Deserialize<'de> for SingleResponse {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Visitor;
-        impl<'de> de::Visitor<'de> for Visitor {
-            type Value = SingleResponse;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("one DCQL response key with one token")
-            }
-
-            fn visit_map<A: de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-                let (query_id, tokens) = map
-                    .next_entry::<String, Vec<String>>()?
-                    .ok_or_else(|| de::Error::custom("missing DCQL response"))?;
-                if tokens.len() != 1 || map.next_key::<de::IgnoredAny>()?.is_some() {
-                    return Err(de::Error::custom("ambiguous DCQL response"));
-                }
-                Ok(SingleResponse { query_id, tokens })
-            }
-        }
-        deserializer.deserialize_map(Visitor)
-    }
-}
-
 impl SdJwtDcqlRequest {
     pub(crate) fn prepare(
         policy: &PresentationPolicy,
@@ -607,9 +576,13 @@ impl SdJwtDcqlRequest {
         if names != expected || names.len() != credential.claims.len() {
             return Err(invalid());
         }
-        let response: SingleResponse =
-            serde_json::from_str(&transport.vp_token_raw).map_err(|_| invalid())?;
-        let token = &response.tokens[0];
+        // Use the same duplicate-aware DCQL association as Flow. A request with
+        // one query may carry either a scalar VP token or the query-keyed map.
+        let associated = transport.associate_response().map_err(|_| invalid())?;
+        let [response] = associated.tokens.as_slice() else {
+            return Err(invalid());
+        };
+        let token = &response.token;
         if response.query_id != credential.id
             || token.len() > MAX_TOKEN_BYTES
             || request.vp_token.as_str() != Some(token.as_str())
