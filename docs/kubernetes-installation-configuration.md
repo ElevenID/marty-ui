@@ -77,6 +77,13 @@ issuer DID can depend on those exact bytes.
 
 The certificate must cover the chosen name or IP. The IP path also requires the
 controller's default TLS certificate, as described in the milestone guide.
+For an existing Traefik default TLSStore, the explicit
+`ingress.useDefaultCertificate=true` option can remove the need for an
+application-namespace certificate copy. Leave `ingress.tlsSecretName` empty in
+that mode and retain the independently managed Certificate/TLSStore owner.
+The default mode still requires the named existing Secret. See the
+[single certificate owner procedure](kubernetes-ui-live-reload.md#use-one-public-certificate-owner)
+before adopting the option on an existing installation.
 Leave `ingress.host` unset for ordinary direct hosting. A separate DNS/wildcard
 Ingress override is available for an operator-managed reverse proxy; that proxy
 must route the canonical public origin correctly. This does not create another
@@ -212,6 +219,13 @@ HTTPS, login and acceptance.
 Keep the AWS Free plan/credit checks and absolute shutdown timer from the
 milestone guide. Reuse the retained node, namespace, OpenBao store and private
 bootstrap evidence. Check the current public IP and certificate before access.
+
+Run the bounded, read-only
+[development resume preflight](kubernetes-ui-live-reload.md#run-the-development-resume-preflight)
+with the explicit EC2 instance, context, application namespace and public
+certificate owner. It checks fresh IP/generation/served-TLS agreement, public
+leaf lifetimes, current workload readiness and the actual gateway readiness
+contract. It does not renew credentials or qualify an authenticated demo.
 
 Development workload credentials have an **eight-hour absolute lifetime** and
 the initial migration token a **two-hour lifetime**. Stopping the node does not

@@ -117,6 +117,80 @@ kubectl -n "$MARTY_DEV_NAMESPACE" rollout status deployment/ui --timeout=600s
 Keycloak themes and backend services retain their existing deployment
 lifecycle; this overlay watches the UI checkout only.
 
+In development mode, Nginx readiness checks `/edge-healthz` and the `ui-dev`
+container independently checks Vite's `/@vite/client`. This keeps the frontend
+available to explain an authentication/backend outage and offer a retry. It
+does **not** make a ready UI pod evidence that the API or an OB3 journey works.
+The static release UI retains its existing gateway-dependent `/health/ready`
+readiness probe. Use the strict backend preflight below in development mode.
+
+## Run the development resume preflight
+
+From an operator shell with Python 3.10+, OpenSSL, kubectl and AWS CLI, run the
+read-only checker against the existing installation. The shell must already
+have its intended AWS identity and Kubernetes access. Select the context and
+the actual certificate owner explicitly; the application and certificate
+namespaces can differ. For example, replace these synthetic identifiers with
+the retained installation's values:
+
+```sh
+python3 scripts/check_kubernetes_dev_resume.py \
+  --context retained-development-context \
+  --namespace marty-active-dev \
+  --release marty \
+  --instance-id i-0123456789abcdef0 \
+  --region us-east-2 \
+  --origin https://192.0.2.20 \
+  --certificate-namespace marty-certificate-owner \
+  --certificate marty-public \
+  --tls-store-namespace marty-certificate-owner
+```
+
+This command supports the existing Linux AWS/K3s IPv4 profile. It neither
+starts EC2 nor changes Kubernetes, Helm, cert-manager, OpenBao or retained
+bootstrap state. It requires `ec2:DescribeInstances` and read access to the
+selected release's Deployments/StatefulSets, `marty-config`, Ingress,
+Certificate, Issuer and TLSStore. Existing Secret `get` access is needed for
+public certificates: Kubernetes RBAC does not grant access to individual
+Secret fields, but the checker asks kubectl to emit only the selected public
+leaf field. It never captures a Secret manifest, token or private key and
+never prints subprocess stderr or HTTP bodies. Do not grant broader access
+solely to make this check pass; run it with the established operator access.
+
+The stages distinguish conditions that can otherwise look like a successful
+resume:
+
+| Stage | Required observation |
+| --- | --- |
+| Current address | A fresh EC2 read identifies the requested running instance and its IP matches the exact HTTPS origin. |
+| Public certificate owner | The existing Certificate requests that IP, `Ready=True` observes its current generation, its Issuer is Ready and the designated default TLSStore uses its Secret. |
+| Actual HTTPS | The remote peer passes normal chain, validity and IP SAN verification, and its leaf fingerprint matches that owner's public leaf. No TLS bypass or redirect is accepted. |
+| Application origin | `PUBLIC_API_URL` and `KC_HOSTNAME` match the exact public origin. Existing Keycloak client redirects still need their separate readback. |
+| Workloads | The selected release's required Deployments and postgres/redis StatefulSets exist, and every selected workload is fully ready at its current revision. |
+| Public workload leaves | The actual Secret mounts selected by workload TLS paths, Keycloak signing-certificate paths and Redis are present and have sufficient public certificate lifetime remaining. Private-key access and token validity are outside this stage. |
+| Backend readiness | `/health/ready` returns the gateway's JSON contract and healthy core dependencies. An HTML page, generic health response, redirect or missing dependency does not pass. |
+
+The default budget is 120 seconds overall, with each command or HTTPS request
+bounded to 10 seconds and response sizes capped. Use `--timeout-seconds` and
+`--request-timeout-seconds` for a slow but understood connection, up to a
+600-second total budget. A timeout is a failed observation, never a readiness
+result. `--minimum-validity-seconds` defaults to 3600; choose enough time for
+the planned manual test. `--format json` produces a sanitized structured report.
+
+Exit `1` means a blocking check failed and includes its next diagnostic action;
+exit `2` means invalid input. Exit `0` means **ready to attempt an authenticated
+check**, with any warnings still visible. The report always says
+`demoQualified: false`: it does not authenticate to OpenBao, prove a running
+process reloaded its credentials, verify Keycloak client redirects, resolve
+the preserved issuer DID, or issue/present an OB3 credential. A generic OpenBao
+metadata error is not proof of an expired token. Follow the applicable retained
+credential lifecycle and inspect current service evidence; do not fresh-bootstrap
+an existing installation in response to a failed preflight.
+
+Complete login, the intended OB3 issuance/presentation path and the visible HMR
+round trip separately after the blocking checks pass. Keep the agreed node stop
+deadline in force throughout the test.
+
 ## Resume an existing development installation
 
 Inspect current deployment readiness, pod state and relevant service logs first.
@@ -180,6 +254,57 @@ not send SNI, the ingress controller's default TLSStore must reference that
 same issued Secret. Reconcile the certificate owned by this installation;
 running a different retained single-installer installation does not update
 the K3s ingress certificate.
+
+### Use one public certificate owner
+
+Traefik uses its `default` TLSStore for a connection without SNI or without a
+matching certificate. That Secret must be in the TLSStore's own namespace;
+the application namespace does not need a copied Secret when the Ingress uses
+this default. Retain one discoverable default TLSStore and one cert-manager
+Certificate owner for that default leaf. See Traefik's
+[TLSStore reference](https://doc.traefik.io/traefik/reference/routing-configuration/kubernetes/crd/tls/tlsstore/)
+and [Ingress TLS configuration](https://doc.traefik.io/traefik/reference/routing-configuration/kubernetes/ingress/#tls).
+
+The default chart behavior continues to require `ingress.tlsSecretName` for
+controllers/installations that load a certificate from the application
+namespace. On this existing Traefik profile, a separate, reviewed chart update
+can explicitly select the default-store mode instead:
+
+```yaml
+ingress:
+  className: traefik
+  useDefaultCertificate: true
+  tlsSecretName: ''
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: 'true'
+```
+
+This option enables the TLS router explicitly and omits the per-ingress
+`spec.tls` Secret reference. It creates no Certificate, Issuer, TLSStore or
+Secret, and it does not copy certificate bytes or alter renewal policy. The
+chart refuses a simultaneous Secret name, another ingress class, TLS disabling,
+or cert-manager/ACME ownership annotations. Unrelated annotations are retained.
+The existing Traefik deployment must already discover the owner namespace.
+Validate actual served HTTPS before and after the change; chart rendering cannot
+establish the live default store's visibility or certificate trust.
+
+An old copied Secret can differ from the default leaf while a normally verified
+IP connection succeeds. The preflight reports that difference as a delivery
+warning, alongside the actual served-certificate result. Removing the Ingress
+reference prevents that obsolete copy from being loaded by this Ingress. Review
+other consumers before separately deleting any old Secret; this option does
+not delete it. Do not introduce a second issuance or copying controller.
+
+This new option requires a chart that contains it. Keep its adoption separate
+from the same-chart origin-only replay below: compare the exact installed and
+proposed manifests, preserve all unrelated settings/image pins and keep both
+setup Jobs disabled. Confirm the intended Ingress and any separately approved
+UI probe change are the only additional differences. Resume certificate renewal
+through the existing cert-manager owner, then rerun the preflight and browser
+journey.
+
+### Replay only the existing public origin
 
 For this same-chart origin-only update, reuse the installed values and apply
 only the reviewed origin overrides, including the two disabled Jobs:
