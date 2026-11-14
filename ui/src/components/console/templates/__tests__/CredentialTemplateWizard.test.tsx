@@ -289,11 +289,14 @@ describe('CredentialTemplateWizard', () => {
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
+      expect(screen.queryByTestId('wizard.template.skip')).not.toBeInTheDocument()
       if (physical) {
         expect(await screen.findByText(/does not use a digital Revocation Profile/)).toBeInTheDocument()
         expect(screen.queryByRole('combobox', { name: /revocation profile/i })).not.toBeInTheDocument()
       } else {
         const revocationSelect = await screen.findByLabelText(/revocation profile/i)
+        expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+        expect(revocationSelect).toHaveAccessibleDescription('Select an active Revocation Profile to continue.')
         await user.click(revocationSelect)
         await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
       }
@@ -303,7 +306,7 @@ describe('CredentialTemplateWizard', () => {
         await user.clear(validity)
         expect(validity).toHaveValue(null)
         expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
-        expect(screen.getByTestId('wizard.template.skip')).toBeDisabled()
+        expect(screen.queryByTestId('wizard.template.skip')).not.toBeInTheDocument()
         await user.type(validity, '0')
         expect(validity).toHaveValue(0)
         expect(validity).toHaveAttribute('aria-invalid', 'true')
@@ -317,6 +320,12 @@ describe('CredentialTemplateWizard', () => {
       }
       await user.click(screen.getByTestId('wizard.template.next'))
 
+      expect(await screen.findByText('Production Trust')).toBeInTheDocument()
+      expect(screen.getByText('OID4VC Core')).toBeInTheDocument()
+      if (!physical) expect(screen.getByText('Lifecycle Status')).toBeInTheDocument()
+      for (const section of ['Basic Information', 'Claims', 'Trust & Compliance', 'Cryptography & Validity']) {
+        expect(screen.getByRole('button', { name: `Edit ${section}` })).toBeInTheDocument()
+      }
       if (mode === 'digital') {
         expect(screen.getByText('31 days')).toBeInTheDocument()
         expect(screen.getByText('90 days')).toBeInTheDocument()
@@ -356,6 +365,10 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('_issuer_selection')
         expect(createdPayload).not.toHaveProperty('_organization_default_trust')
+        expect(createdPayload).not.toHaveProperty('profileDisplay')
+        expect(JSON.stringify(createdPayload)).not.toContain('Production Trust')
+        expect(JSON.stringify(createdPayload)).not.toContain('Lifecycle Status')
+        expect(JSON.stringify(createdPayload)).not.toContain('OID4VC Core')
         expect(createdPayload?.validity_rules).toEqual(mode === 'digital'
           ? { default_validity_days: 31, max_validity_days: 90, not_before_offset_seconds: -900 }
           : { default_validity_days: 365, max_validity_days: 730, not_before_offset_seconds: 0 })

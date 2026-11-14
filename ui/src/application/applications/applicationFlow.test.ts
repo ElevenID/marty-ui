@@ -57,10 +57,14 @@ describe('applicationFlow helpers', () => {
       application_template_id: 'app-template-1',
       credential_type: 'ExampleCredential',
       name: 'Example',
+      credential_payload_format: 'VC_JWT',
+      issuance_protocol: 'OID4VCI_PRE_AUTH',
       claims: [{ name: 'first_name', required: true }, { name: 'email', required: false }],
     })).toMatchObject({
       id: 'tpl-1',
       credential_type: 'ExampleCredential',
+      credential_payload_format: 'VC_JWT',
+      issuance_protocol: 'OID4VCI_PRE_AUTH',
       display_name: 'Example',
       required_fields: [expect.objectContaining({ name: 'first_name', required: true })],
       optional_fields: [expect.objectContaining({ name: 'email', required: false })],
@@ -228,14 +232,42 @@ describe('applicationFlow helpers', () => {
     ])
   })
 
-  it('validates review step terms acceptance', () => {
+  it('previews only the profile inputs actually selected by the application form', () => {
+    expect(getOneClickSummaryFields({
+      credentialConfig: { credential_type: 'access_badge', application_template: {
+        id: 'application-template', form_fields: [
+          { field_id: 'given_name', label: 'First name', required: true },
+          { field_id: 'email', label: 'Contact email', required: true },
+          { field_id: 'employee_id', label: 'Employee ID' },
+        ],
+      } },
+      user: { user_id: 'user-1', given_name: 'Jane', family_name: 'Doe', email: 'jane@example.com' },
+    })).toEqual([
+      { label: 'First name', value: 'Jane' },
+      { label: 'Contact email', value: 'jane@example.com' },
+    ])
+  })
+
+  it.each(['org.iso.18013.5.1.mDL', 'access_badge', 'com.elevenid.member_credential'])(
+    'does not invent claims or format in the %s preview', (credential_type) => {
+      expect(getOneClickSummaryFields({
+        credentialConfig: { credential_type },
+        user: { user_id: 'user-1', given_name: 'Jane', family_name: 'Doe', email: 'jane@example.com' },
+      })).toEqual([
+        { label: 'Name', value: 'Jane Doe' },
+        { label: 'Email', value: 'jane@example.com' },
+      ])
+    },
+  )
+
+  it('requires the accuracy confirmation shown on the review step', () => {
     expect(validateApplicationStep({
       stepIndex: 1,
       steps: [{ label: 'step', fields: [] }, { label: 'review', fields: [] }],
       formData: { acceptTerms: false },
     })).toEqual({
       valid: false,
-      errors: { acceptTerms: 'You must accept the terms' },
+      errors: { acceptTerms: 'Confirm that the information you provided is accurate and complete.' },
     })
   })
 

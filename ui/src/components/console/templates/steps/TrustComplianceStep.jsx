@@ -20,7 +20,7 @@ const profilesFrom = (response) => {
   return profiles;
 };
 
-const TrustComplianceStep = ({ data, onChange }) => {
+const TrustComplianceStep = ({ data, onChange, onProfilesResolved }) => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
   const { defaults, loading: defaultsLoading } = useOrganizationDefaults(activeOrgId);
@@ -59,6 +59,15 @@ const TrustComplianceStep = ({ data, onChange }) => {
   const catalogsReady = Boolean(activeOrgId && catalog?.organizationId === activeOrgId && !catalog.error);
   const selectedTrust = trustProfiles.find((profile) => profile.id === data.trust_profile_id);
   const selectedCompliance = complianceProfiles.find((profile) => profile.id === data.compliance_profile_id);
+  useEffect(() => {
+    // Display labels come from the same scoped catalogs used for selection and
+    // stay outside the submitted template data.
+    onProfilesResolved?.({
+      trust: selectedTrust ? { organizationId: activeOrgId, id: selectedTrust.id, name: selectedTrust.name } : null,
+      compliance: selectedCompliance ? { organizationId: activeOrgId, id: selectedCompliance.id,
+        name: selectedCompliance.name || selectedCompliance.compliance_code } : null,
+    });
+  }, [activeOrgId, selectedTrust, selectedCompliance, onProfilesResolved]);
   const automaticTrust = Boolean(data._organization_default_trust
     && data._organization_default_trust.organizationId === activeOrgId
     && data._organization_default_trust.id === data.trust_profile_id);
@@ -170,7 +179,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
             credential_payload_format: undefined, supported_formats: undefined, issuance_protocol: undefined, _issuer_selection: null })}>
           {complianceProfiles.map((profile) => <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.compliance_code || profile.id}</MenuItem>)}
         </Select>
-        <FormHelperText>{complianceProfiles.length} active compliance profiles available.</FormHelperText>
+        <FormHelperText>{t('wizards.credentialTemplate.trustComplianceStep.complianceOptions', { count: complianceProfiles.length })}</FormHelperText>
       </FormControl>
       {!complianceValid && <Alert severity="info">Select an active Compliance Profile to discover compatible issuer DIDs.</Alert>}
       {complianceValid && !options && <CircularProgress aria-label="Checking issuer compatibility" size={24} />}
@@ -185,7 +194,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
           SelectDisplayProps={{ 'data-testid': 'template-issuer-profile-select' }}>
           {identities.map((identity) => <MenuItem key={identity.issuer_did} value={identity.issuer_did}>{identity.issuer_did}</MenuItem>)}
         </Select>
-        <FormHelperText>{identities.length} compatible issuer DIDs available.</FormHelperText>
+        <FormHelperText>{t('wizards.credentialTemplate.trustComplianceStep.issuerOptions', { count: identities.length })}</FormHelperText>
       </FormControl>
       <Button disabled={!complianceValid} onClick={() => setRefreshOptions((value) => value + 1)}>Refresh issuer compatibility</Button>
       {currentOptions?.requirements?.vct && <TextField fullWidth required label="Credential type URI (VCT)" value={data.vct || ''}

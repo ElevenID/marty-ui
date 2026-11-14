@@ -9,6 +9,7 @@ const ReviewSectionCard = ({
   icon,
   onEdit,
   editLabel = 'Edit',
+  editAriaLabel,
   children,
   sx,
 }) => {
@@ -21,7 +22,7 @@ const ReviewSectionCard = ({
             {title}
           </Typography>
           {onEdit && (
-            <Button size="small" startIcon={<EditIcon />} onClick={onEdit}>
+            <Button size="small" startIcon={<EditIcon />} onClick={onEdit} aria-label={editAriaLabel}>
               {editLabel}
             </Button>
           )}

@@ -150,12 +150,31 @@ describe('ClaimCredentialDialog', () => {
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
   });
 
-  it('explains when the issuer has not activated an OID4VCI issuance flow', async () => {
-    mockGenerateIssuanceOffer.mockRejectedValue({
-      response: { error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.' },
-    });
-    render(<ClaimCredentialDialog {...props} />);
-    expect(await screen.findByText(/issuer needs to activate an OID4VCI issuance flow/i)).toBeInTheDocument();
+  it.each([
+    { detail: 'no active issuance flow' },
+    { detail: 'provider unavailable: flow offer preparation failed' },
+    { response: { error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.' } },
+  ])('preserves the application and directs issuer preparation failures to the issuer', async (error) => {
+    mockGenerateIssuanceOffer.mockRejectedValue(error);
+    const { user } = render(<ClaimCredentialDialog {...props} />);
+    expect(await screen.findByText(/Your application is saved, but the issuer could not prepare a wallet invitation/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('claim-invite-display')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready', { exact: true })).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('wallet-option-wr-waltid-001'));
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
+    expect(mockBuildWalletOpenLink).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(props.onClose).toHaveBeenCalledOnce();
+  });
+
+  it('still lets the applicant explicitly retry a transport failure for the same application', async () => {
+    mockGenerateIssuanceOffer.mockRejectedValueOnce(new Error('Network connection interrupted')).mockResolvedValueOnce(offer);
+    const { user } = render(<ClaimCredentialDialog {...props} />);
+    expect(await screen.findByText('Network connection interrupted')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByTestId('claim-invite-display')).toBeInTheDocument();
+    expect(mockGenerateIssuanceOffer.mock.calls).toEqual([['app-1'], ['app-1']]);
   });
 
   it('changes browser wallet transport without starting another issuance', async () => {
@@ -287,6 +306,23 @@ describe('ClaimCredentialDialog', () => {
     await act(async () => pending.resolve(offer));
     expect(await screen.findByTestId('claim-invite-url')).toHaveTextContent(offer.offer_url);
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a pending claim result that arrives before reopened wallet discovery completes', async () => {
+    const pending = deferred<typeof offer>();
+    const walletReload = deferred<typeof wallets>();
+    mockGenerateIssuanceOffer.mockReturnValue(pending.promise);
+    mockListWallets.mockResolvedValueOnce(wallets).mockReturnValueOnce(walletReload.promise);
+    const view = render(<ClaimCredentialDialog {...props} />);
+    await waitFor(() => expect(mockGenerateIssuanceOffer).toHaveBeenCalledOnce());
+    view.rerender(<ClaimCredentialDialog {...props} open={false} />);
+    view.rerender(<ClaimCredentialDialog {...props} />);
+    await waitFor(() => expect(mockListWallets).toHaveBeenCalledTimes(2));
+    await act(async () => pending.resolve(offer));
+    expect(screen.queryByTestId('claim-invite-display')).not.toBeInTheDocument();
+    await act(async () => walletReload.resolve(wallets));
+    expect(await screen.findByTestId('claim-invite-url')).toHaveTextContent(offer.offer_url);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1');
   });
 
   it('hides the previous invite while a refresh is pending and never restores it after failure', async () => {

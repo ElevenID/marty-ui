@@ -29,6 +29,7 @@ import {
 import ApplicationEvidenceEditor from './ApplicationEvidenceEditor';
 import DraftListField from './DraftListField';
 import { formatFieldOptions, parseFieldOptions } from './applicationFieldOptions';
+import { claimConstantDraft, isConstantClaimRule, resolveConstantClaimRule, structuredClaimType } from './applicationClaimConstants';
 import { CHECK_TYPE_LABELS } from '../../../config/checkConstants';
 
 const EMPTY = {
@@ -53,6 +54,9 @@ function normalizeFieldType(value) {
 }
 
 function claimField(claim) {
+  // Application forms have no object/array input type. Their values must come
+  // from an explicitly configured claim source rather than a text conversion.
+  if (structuredClaimType(claim)) return null;
   const fieldId = claim.field_id || claim.name;
   return {
     field_id: fieldId,
@@ -103,7 +107,6 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   const [newCheckType, setNewCheckType] = useState('');
   const nextRowId = useRef(0);
   const formFields = fieldRows.map(({ field }) => field);
-  const claimRules = claimRows.map(({ rule }) => rule);
   const requiredChecks = checkDraft.edited
     ? checkRows.map(({ check }, index) => ({ ...check, order: index + 1 }))
     : data.required_checks;
@@ -183,6 +186,12 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
     () => credentialTemplates.find((item) => item.id === data.credential_template_id),
     [credentialTemplates, data.credential_template_id],
   );
+  const credentialClaims = Array.isArray(selectedCredential?.claims) ? selectedCredential.claims : [];
+  const claimDefinition = (name) => credentialClaims.find((claim) => (claim.name || claim.field_id) === name);
+  const structuredClaims = credentialClaims.filter(structuredClaimType);
+  const resolvedClaimRows = claimRows.map((row) => resolveConstantClaimRule(row, claimDefinition(row.rule.claim_name)));
+  const claimRules = resolvedClaimRows.map(({ rule }) => rule);
+  const constantError = resolvedClaimRows.find(({ error: issue }) => issue)?.error || '';
   // Keep the editable draft unchanged; only save a validated native integer.
   const validityDays = ['string', 'number'].includes(typeof data.application_validity_days)
     ? Number(data.application_validity_days) : NaN;
@@ -193,7 +202,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
 
   const selectCredential = (credentialTemplateId) => {
     const selected = credentialTemplates.find((item) => item.id === credentialTemplateId);
-    const derivedFields = Array.isArray(selected?.claims) ? selected.claims.map(claimField).filter((field) => field.field_id) : [];
+    const derivedFields = Array.isArray(selected?.claims) ? selected.claims.map(claimField).filter((field) => field?.field_id) : [];
     setData((current) => ({
       ...current,
       credential_template_id: credentialTemplateId,
@@ -208,7 +217,24 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
   )));
 
   const updateClaimRule = (index, changes) => setClaimRows((current) => current.map((row, ruleIndex) => (
-    ruleIndex === index ? { ...row, rule: { ...row.rule, ...changes } } : row
+    ruleIndex === index ? {
+      ...row,
+      rule: { ...row.rule, ...changes },
+      ...(changes.source !== undefined || (changes.source_config
+        && changes.source_config.system_field !== row.rule.source_config?.system_field)
+        ? { constantDraft: undefined } : {}),
+    } : row
+  )));
+
+  const updateConstantDraft = (index, changes) => setClaimRows((current) => current.map((row, ruleIndex) => (
+    ruleIndex === index ? {
+      ...row,
+      constantDraft: {
+        ...(row.constantDraft || claimConstantDraft(row.rule, claimDefinition(row.rule.claim_name))),
+        ...changes,
+        ...(Object.hasOwn(changes, 'text') ? { hasValue: true } : {}),
+      },
+    } : row
   )));
 
   const addCheck = () => {
@@ -253,6 +279,10 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
     }
     if (validityDaysError) {
       setError(validityDaysError);
+      return;
+    }
+    if (constantError) {
+      setError(constantError);
       return;
     }
     if (newCheckType.trim()) {
@@ -345,6 +375,13 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
               {credentialTemplates.map((item) => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
             </Select>
           </FormControl>
+
+          {structuredClaims.length > 0 && (
+            <Alert severity="info">
+              Object and array claims need issuer-configured JSON values or verified evidence.
+              Configure a source for {structuredClaims.map((claim) => claim.name || claim.field_id).join(', ')} in Claim collection rules below.
+            </Alert>
+          )}
 
           <Box>
             <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
@@ -448,6 +485,9 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                   <Button startIcon={<AddIcon />} onClick={addCheck} disabled={!newCheckType.trim()}>Add check</Button>
                 </Stack>
               </Box>
+            </>
+          )}
+          {(advanced || structuredClaims.length > 0 || claimRows.length > 0) && (
               <Box>
                 <Stack direction="row" sx={{ justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
                   <Typography variant="h6">Claim collection rules</Typography>
@@ -462,8 +502,12 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                   </Button>
                 </Stack>
                 <Stack spacing={1.5}>
-                  {claimRows.map(({ rowId, rule }, index) => (
-                    <Paper key={rowId} variant="outlined" sx={{ p: 2 }}>
+                  {claimRows.map((row, index) => {
+                    const { rowId, rule } = row;
+                    const constant = isConstantClaimRule(rule)
+                      ? row.constantDraft || claimConstantDraft(rule, claimDefinition(rule.claim_name)) : null;
+                    return (
+                    <Paper key={rowId} role="group" aria-label={`Claim rule ${index + 1}: ${rule.claim_name || 'New claim'}`} variant="outlined" sx={{ p: 2 }}>
                       <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ alignItems: { sm: 'center' } }}>
                         <TextField required label="Claim name" value={rule.claim_name || ''} onChange={(event) => updateClaimRule(index, { claim_name: event.target.value })} sx={{ flex: 1 }} />
                         <FormControl sx={{ minWidth: { sm: 190 } }}>
@@ -488,11 +532,31 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                             </Select>
                           </FormControl>
                         )}
-                        {rule.source === 'SYSTEM' && rule.source_config?.system_field === 'constant' && (
-                          <TextField label="Constant value" value={rule.source_config?.value ?? ''} onChange={(event) => updateClaimRule(index, { source_config: { ...rule.source_config, value: event.target.value } })} sx={{ flex: 1 }} />
-                        )}
                         <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setClaimRows((current) => current.filter((row) => row.rowId !== rowId))}><DeleteIcon /></IconButton>
                       </Stack>
+                      {constant && (
+                        <Stack spacing={1} sx={{ mt: 1.5 }}>
+                          <FormControl sx={{ maxWidth: 220 }}>
+                            <InputLabel id={`application-claim-constant-${rowId}-label`}>Constant value format</InputLabel>
+                            <Select id={`application-claim-constant-${rowId}`} labelId={`application-claim-constant-${rowId}-label`} label="Constant value format"
+                              value={constant.format} onChange={(event) => updateConstantDraft(index, { format: event.target.value })}>
+                              <MenuItem value="text">Text</MenuItem>
+                              <MenuItem value="json">JSON</MenuItem>
+                            </Select>
+                          </FormControl>
+                          <TextField
+                            label={constant.format === 'json' ? 'Constant value (JSON)' : 'Constant value'}
+                            value={constant.text}
+                            onChange={(event) => updateConstantDraft(index, { text: event.target.value })}
+                            multiline={constant.format === 'json'} minRows={constant.format === 'json' ? 3 : undefined}
+                            error={Boolean(resolvedClaimRows[index].error)}
+                            helperText={resolvedClaimRows[index].error || (constant.format === 'json'
+                              ? 'Enter the issuer-configured JSON value. The issuance service validates the credential contents.'
+                              : 'Text is saved exactly as entered. Choose JSON for object, array, number or boolean values.')}
+                            fullWidth
+                          />
+                        </Stack>
+                      )}
                       {rule.source === 'EVIDENCE_EXTRACTION' && (
                         <Stack spacing={1} sx={{ mt: 1.5 }}>
                           <Typography variant="body2">Use a verified evidence fact. Specify a requirement ID, a fact type, or both; exactly one fact must match.</Typography>
@@ -511,9 +575,13 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                         </Stack>
                       )}
                     </Paper>
-                  ))}
+                    );
+                  })}
                 </Stack>
               </Box>
+          )}
+          {advanced && (
+            <>
               <TextField label="Submission instructions" multiline minRows={2} value={data.ui_config?.submission_instructions || ''} onChange={(event) => setData({ ...data, ui_config: { ...(data.ui_config || {}), submission_instructions: event.target.value } })} />
               <Stack direction={{ xs: 'column', sm: 'row' }}>
                 <FormControlLabel control={<Checkbox checked={data.notification_config?.send_confirmation !== false} onChange={(event) => setData({ ...data, notification_config: { ...(data.notification_config || {}), send_confirmation: event.target.checked } })} />} label="Send confirmation" />
@@ -525,7 +593,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
         </Stack>
         <Stack direction="row" spacing={1} sx={{ justifyContent: 'flex-end', mt: 2.5 }}>
           <Button onClick={leaveEditor}>Cancel</Button>
-          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || Boolean(validityDaysError) || Boolean(newCheckType.trim()) || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
+          <Button variant="contained" startIcon={saving ? <CircularProgress size={18} /> : <SaveIcon />} disabled={saving || !isCurrentBrowserEntry() || !selectedCredential || Boolean(validityDaysError) || Boolean(constantError) || Boolean(newCheckType.trim()) || String(data.status || 'DRAFT').toUpperCase() !== 'DRAFT'} onClick={save}>Save draft</Button>
         </Stack>
       </Box>
     </Container>

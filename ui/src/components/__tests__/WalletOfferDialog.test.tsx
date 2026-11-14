@@ -120,4 +120,17 @@ describe('WalletOfferDialog', () => {
     await user.click(screen.getByRole('button', { name: /close/i }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
+
+  it('offers issuer guidance instead of another immediate attempt when preparation is unavailable', async () => {
+    mockWalletPreferenceState.walletIds = ['wallet-1']
+    vi.mocked(generateIssuanceOffer).mockRejectedValue({ detail: 'provider unavailable: flow offer preparation failed' })
+    const onClose = vi.fn()
+    const { user } = renderWithoutRouter(<MemoryRouter><WalletOfferDialog open onClose={onClose} applicationId="app-1" /></MemoryRouter>)
+    expect(await screen.findByText(/Your application is saved, but the issuer could not prepare a wallet invitation/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('wallet-offer-display')).not.toBeInTheDocument()
+    expect(generateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('app-1')
+    await user.click(screen.getByRole('button', { name: /close/i }))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
 })

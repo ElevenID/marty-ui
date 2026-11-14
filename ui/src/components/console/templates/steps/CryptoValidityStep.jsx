@@ -3,9 +3,10 @@
  * 
  * Configure validity periods and revocation settings.
  * Signing capabilities are resolved from the selected issuer DID.
- * This step is optional with sensible defaults.
+ * Digital revocation requires an active profile before continuing.
  */
 
+import { useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -30,7 +31,7 @@ import {
   credentialTemplateValidity, MAX_VALIDITY_DAYS, MIN_VALIDITY_OFFSET, MAX_VALIDITY_OFFSET, SECONDS_PER_DAY,
 } from '../credentialTemplateValidity';
 
-const CryptoValidityStep = ({ data, onChange }) => {
+const CryptoValidityStep = ({ data, onChange, onProfilesResolved }) => {
   const { t } = useTranslation('console');
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
@@ -49,6 +50,12 @@ const CryptoValidityStep = ({ data, onChange }) => {
   const activeRevocationProfiles = revocationProfiles.filter(
     (profile) => String(profile?.status || '').trim().toUpperCase() === 'ACTIVE',
   );
+  const selectedRevocation = activeRevocationProfiles.find((profile) => profile.id === data.revocation_profile_id);
+  useEffect(() => {
+    onProfilesResolved?.({ revocation: selectedRevocation
+      ? { organizationId: selectedRevocation.organization_id || organizationId,
+        id: selectedRevocation.id, name: selectedRevocation.name } : null });
+  }, [organizationId, selectedRevocation, onProfilesResolved]);
   
   const validity = data.validity_rules || {};
   const { values, errors } = credentialTemplateValidity(validity);
@@ -77,10 +84,10 @@ const CryptoValidityStep = ({ data, onChange }) => {
     <Box>
       <Typography variant="h6" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <VpnKeyIcon />
-        {t('wizards.credentialTemplate.cryptoValidityStep.title')}
+        {t('wizards.credentialTemplate.cryptoValidityStep.reviewTitle')}
       </Typography>
       <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
-        {t('wizards.credentialTemplate.cryptoValidityStep.description')}
+        {t('wizards.credentialTemplate.cryptoValidityStep.reviewDescription')}
       </Typography>
       {revocationProfilesError && (
         <Alert severity="warning" sx={{ mb: 3 }}>
@@ -90,12 +97,12 @@ const CryptoValidityStep = ({ data, onChange }) => {
           )}
         </Alert>
       )}
-      <Alert severity="success" sx={{ mb: 3 }}>
+      <Alert severity="info" sx={{ mb: 3 }}>
         <Typography variant="body2" gutterBottom>
-          <strong>{t('wizards.credentialTemplate.cryptoValidityStep.defaults.title')}</strong>
+          <strong>{t('wizards.credentialTemplate.cryptoValidityStep.guidance.title')}</strong>
         </Typography>
         <Typography variant="caption" color="text.secondary">
-          {t('wizards.credentialTemplate.cryptoValidityStep.defaults.description')}
+          {t('wizards.credentialTemplate.cryptoValidityStep.guidance.description')}
         </Typography>
       </Alert>
       {/* Validity Period Configuration */}
@@ -161,8 +168,8 @@ const CryptoValidityStep = ({ data, onChange }) => {
       {!errors.default_validity_days && Number.isFinite(exampleExpiry.getTime()) && <Box sx={{ mt: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
         <Typography variant="body2" color="text.secondary">
           <strong>{t('wizards.credentialTemplate.cryptoValidityStep.validity.example')}</strong>{' '}
-          {t('wizards.credentialTemplate.cryptoValidityStep.validity.exampleDescription', {
-            days: values.default_validity_days,
+          {t('wizards.credentialTemplate.cryptoValidityStep.validity.validityExample', {
+            count: Number(values.default_validity_days),
             date: exampleExpiry.toLocaleDateString(),
           })}
         </Typography>
@@ -175,6 +182,7 @@ const CryptoValidityStep = ({ data, onChange }) => {
         <Select
           id="credential-template-revocation-profile"
           labelId="credential-template-revocation-profile-label"
+          aria-describedby="credential-template-revocation-profile-help"
           value={data.revocation_profile_id || ''}
           onChange={(e) => onChange({ revocation_profile_id: e.target.value || null })}
           label={t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.label')}
@@ -189,10 +197,10 @@ const CryptoValidityStep = ({ data, onChange }) => {
             </MenuItem>
           ))}
         </Select>
-        <FormHelperText>
+        <FormHelperText id="credential-template-revocation-profile-help">
           {data.revocation_profile_id
-            ? t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.helper')
-            : 'An active Revocation Profile is required before this template can be activated.'}
+            ? t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.selectedHelper')
+            : t('wizards.credentialTemplate.cryptoValidityStep.revocationProfile.required')}
         </FormHelperText>
         {activeRevocationProfiles.length === 0 && !revocationProfilesError && (
           <Button

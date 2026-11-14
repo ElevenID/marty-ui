@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, renderWithRouter, screen, waitFor } from '@test/utils';
-import { Link, Route, Routes } from 'react-router';
+import { act, fireEvent, render, renderWithRouter, screen, waitFor, within } from '@test/utils';
+import { Link, Route, Routes, useLocation } from 'react-router';
 
 import ApplicationForm from '../applicant/ApplicationForm';
 import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
@@ -73,9 +73,19 @@ const {
   },
 }));
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
+vi.mock('react-i18next', async () => {
+  const { default: english } = await import('../../../public/locales/en/applicant.json');
+  const previewKeys = new Set(['credentialPreview', 'previewStatus', 'issuerLabel', 'plannedFormat',
+    'signingAfterIssue', 'acceptanceAfterIssue', 'requesting', 'requestHelper', 'viewSavedApplication']);
+  return {
+    useTranslation: () => ({ t: (key: string, options?: { format?: string }) => {
+      const name = key.replace('applicationForm.oneClick.', '');
+      return previewKeys.has(name)
+        ? english.applicationForm.oneClick[name as keyof typeof english.applicationForm.oneClick].replace('{{format}}', options?.format || '')
+        : key;
+    } }),
+  };
+});
 
 vi.mock('react-router', async () => {
   const actual = await vi.importActual<typeof import('react-router')>('react-router');
@@ -317,6 +327,46 @@ describe('ApplicationForm', () => {
       networkRequest, openWindow, mockNavigate]) {
       expect(effect).not.toHaveBeenCalled();
     }
+  });
+
+  it('keeps zero and false visible through field entry, review and submission', async () => {
+    mockLocationState.location.state.credential.credential_type = 'EmployeeCredential';
+    mockLocationState.location.state.applicationTemplate.form_fields = [
+      { field_id: 'required_count', label: 'Required count', field_type: 'NUMBER', required: true },
+      { field_id: 'optional_count', label: 'Optional count', field_type: 'NUMBER', required: false },
+      { field_id: 'optional_choice', label: 'Optional choice', field_type: 'BOOLEAN', required: false },
+      { field_id: 'omitted_note', label: 'Omitted note', field_type: 'TEXT', required: false },
+    ];
+    const { user } = render(<ApplicationForm />);
+    const required = screen.getByRole('spinbutton', { name: /required count/i });
+    const optional = screen.getByRole('spinbutton', { name: /optional count/i });
+    await user.type(required, '0');
+    await user.type(optional, '0');
+    expect(required).toHaveValue(0);
+    expect(optional).toHaveValue(0);
+    const choice = screen.getByRole('checkbox', { name: 'Optional choice' });
+    await user.click(choice);
+    await user.click(choice);
+    expect(choice).not.toBeChecked();
+    await user.click(screen.getByTestId('next-step-btn'));
+
+    const review = await screen.findByTestId('review-step');
+    for (const label of ['Required count', 'Optional count']) {
+      const field = within(review).getByText(label).parentElement!;
+      expect(within(field).getByText('0', { exact: true })).toBeInTheDocument();
+    }
+    const booleanField = within(review).getByText('Optional choice').parentElement!;
+    expect(within(booleanField).getByText('common.no', { exact: true })).toBeInTheDocument();
+    expect(within(review).queryByText('Omitted note')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('submit-application-btn'));
+    expect(screen.getByText('Confirm that the information you provided is accurate and complete.')).toBeInTheDocument();
+    expect(mockCreateApplication).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: { required_count: 0, optional_count: 0, optional_choice: false },
+    })));
   });
 
   it('submits a live application to its API-provided issuer organization rather than the user home organization', async () => {
@@ -684,6 +734,95 @@ describe('ApplicationForm', () => {
       expect(mockGenerateIssuanceOffer).toHaveBeenCalledWith('application-1');
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('issued-1:openid-credential-offer://offer');
     });
+  });
+
+  it.each([
+    { credential_type: 'open_badge', format: 'VC-JWT', expected: 'VC-JWT' },
+    { credential_type: 'org.iso.18013.5.1.mDL', format: 'mDoc', expected: 'mDoc' },
+    { credential_type: 'org.iso.18013.5.1.mDL', credential_payload_format: 'VC_JWT', expected: 'VC_JWT' },
+    { credential_type: 'open_badge', expected: null },
+  ])('describes the unissued preview using only the supplied format: $expected', ({ expected, ...credential }) => {
+    Object.assign(mockLocationState.location.state.credential, credential, { vendorName: 'Example Issuer' });
+    render(<ApplicationForm />);
+
+    expect(screen.getByText('Credential preview')).toBeInTheDocument();
+    expect(screen.getByText('This is a preview of the credential you are requesting. Issuance has not been confirmed.')).toBeInTheDocument();
+    expect(screen.getByText('The issuer will sign the credential if issuance succeeds.')).toBeInTheDocument();
+    expect(screen.getByText('After issuance, use it with services that accept this credential.')).toBeInTheDocument();
+    if (expected) expect(screen.getByText(`Planned format: ${expected}`)).toBeInTheDocument();
+    else expect(screen.queryByText(/Planned format:/)).not.toBeInTheDocument();
+    expect(screen.getByText('Example Issuer')).toBeInTheDocument();
+    expect(screen.queryByText('ElevenID LLC')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cryptographically signed|W3C \/ ISO|Reusable across services/)).not.toBeInTheDocument();
+    expect(mockCreateApplication).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('describes an outstanding request without claiming issuance has completed', async () => {
+    let finish!: (value: unknown) => void;
+    mockGenerateIssuanceOffer.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const { user } = render(<ApplicationForm />);
+    expect(screen.queryByText('Issuer')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    expect(await screen.findByRole('button', { name: 'Preparing wallet request…' })).toBeDisabled();
+    expect(screen.queryByText('Issuing credential…')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cryptographically signed')).not.toBeInTheDocument();
+    await act(async () => { finish({ id: 'application-1', credential_offer_uri: 'openid-credential-offer://pending' }); });
+    expect(await screen.findByTestId('claim-credential-dialog')).toHaveTextContent('application-1:');
+  });
+
+  it.each(['existing', 'newly submitted'])('keeps the %s application available after wallet preparation fails', async (phase) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const id = phase === 'existing' ? 'existing-1' : 'application-1';
+    if (phase === 'existing') mockListApplications.mockResolvedValue({ items: [{ id, credential_template_id: 'cfg-1', status: 'APPROVED' }] });
+    mockGenerateIssuanceOffer.mockRejectedValue({ detail: 'provider unavailable: flow offer preparation failed' });
+    const { user } = render(<ApplicationForm />);
+    await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    expect(await screen.findByText(/Your application is saved, but the issuer could not prepare a wallet invitation/)).toBeInTheDocument();
+    const resume = await screen.findByRole('button', { name: 'View saved application' });
+    expect(screen.queryByRole('button', { name: 'Add to Wallet' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('claim-credential-dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    expect(resume).toBeEnabled();
+    await user.click(resume);
+    expect(mockNavigate).toHaveBeenCalledWith(`/console/applicant/identity?id=${id}`);
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith(id);
+    expect(mockCreateApplication).toHaveBeenCalledTimes(phase === 'existing' ? 0 : 1);
+    expect(mockSubmitApplication).toHaveBeenCalledTimes(phase === 'existing' ? 0 : 1);
+  });
+
+  it('discards an old failed offer response after the application organization changes', async () => {
+    const pending = deferred<unknown>();
+    mockGenerateIssuanceOffer.mockReturnValueOnce(pending.promise);
+    const view = render(<ApplicationForm />);
+    await view.user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    await waitFor(() => expect(mockGenerateIssuanceOffer).toHaveBeenCalledOnce());
+    mockAuthState.organizationId = 'org-2';
+    view.rerender(<ApplicationForm />);
+    await act(async () => pending.reject({ detail: 'provider unavailable: flow offer preparation failed' }));
+    expect(screen.getByRole('button', { name: 'Add to Wallet' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'View saved application' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your application is saved/)).not.toBeInTheDocument();
+    expect(mockCreateApplication).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the saved application selection when navigating through the real router', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockLocationState.liveRouter = true;
+    mockGenerateIssuanceOffer.mockRejectedValue({ detail: 'no active issuance flow' });
+    function IdentityDestination() {
+      const location = useLocation();
+      return <div data-testid="identity-location">{location.pathname}{location.search}</div>;
+    }
+    const { user } = renderWithRouter(<Routes>
+      <Route path="/console/applicant/apply/:credentialType" element={<ApplicationForm />} />
+      <Route path="/console/applicant/identity" element={<IdentityDestination />} />
+    </Routes>, { initialEntries: [{ pathname: '/console/applicant/apply/cfg-1', state: mockLocationState.location.state }] });
+    await user.click(screen.getByRole('button', { name: 'Add to Wallet' }));
+    await user.click(await screen.findByRole('button', { name: 'View saved application' }));
+    expect(await screen.findByTestId('identity-location')).toHaveTextContent('/console/applicant/identity?id=application-1');
+    expect(mockCreateApplication).toHaveBeenCalledOnce();
+    expect(mockGenerateIssuanceOffer).toHaveBeenCalledExactlyOnceWith('application-1');
   });
 
   it('submits the application but waits for wallet selection before generating an offer', async () => {

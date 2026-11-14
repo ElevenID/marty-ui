@@ -3,20 +3,24 @@ import { Link, Route, Routes, useLocation } from 'react-router';
 import { act, fireEvent, render, screen, waitFor } from '@test/utils';
 import CredentialTemplateEditorPage from './CredentialTemplateEditorPage';
 
-const { scope, load, save, post } = vi.hoisted(() => ({
-  scope: { activeOrgId: 'org-1', principal: 'user-1', authenticated: true, loading: false, view: true, edit: true, version: true },
-  load: vi.fn(), save: vi.fn(), post: vi.fn(),
+const { scope, load, save, post, activate } = vi.hoisted(() => ({
+  scope: { activeOrgId: 'org-1', principal: 'user-1', authenticated: true, loading: false, view: true, edit: true, version: true, activate: true },
+  load: vi.fn(), save: vi.fn(), post: vi.fn(), activate: vi.fn(),
 }));
 vi.mock('../../../contexts/ConsoleContext', () => ({ useConsole: () => scope }));
 vi.mock('../../../hooks/useAuth', () => ({ useAuth: () => ({ user: { user_id: scope.principal }, isAuthenticated: scope.authenticated }) }));
 vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({
-  isLoading: scope.loading, can: (_resource: string, action: 'view' | 'edit' | 'version') => scope[action],
+  isLoading: scope.loading, can: (_resource: string, action: 'view' | 'edit' | 'version' | 'activate') => scope[action],
 }) }));
-vi.mock('../../../services/api', () => ({ post: (...args: unknown[]) => post(...args) }));
+vi.mock('../../../services/api', async (original) => ({
+  ...await original<typeof import('../../../services/api')>(),
+  post: (...args: unknown[]) => post(...args),
+}));
 vi.mock('../../../services/presentationPolicyApi', async (original) => ({
   ...await original<typeof import('../../../services/presentationPolicyApi')>(),
   getCredentialTemplate: (...args: unknown[]) => load(...args),
   updateCredentialTemplate: (...args: unknown[]) => save(...args),
+  activateCredentialTemplate: (...args: unknown[]) => activate(...args),
 }));
 
 function template(id = 'template-1', organizationId = 'org-1', status = 'draft') {
@@ -46,14 +50,126 @@ function openEditor() { return render(<EditorRoutes />); }
 beforeEach(() => {
   vi.clearAllMocks();
   sessionStorage.clear();
-  Object.assign(scope, { activeOrgId: 'org-1', principal: 'user-1', authenticated: true, loading: false, view: true, edit: true, version: true });
+  Object.assign(scope, { activeOrgId: 'org-1', principal: 'user-1', authenticated: true, loading: false, view: true, edit: true, version: true, activate: true });
   window.history.replaceState({}, '', '/console/org/templates/credentials/template-1/edit');
   load.mockResolvedValue(template());
+  activate.mockResolvedValue(template('template-1', 'org-1', 'active'));
   save.mockImplementation(async (id, patch) => ({ ...template(id, patch.organization_id), ...patch,
     validity_rules: { ...template().validity_rules, ...patch.validity_rules } }));
 });
 
 describe('CredentialTemplateEditorPage', () => {
+  it('recovers the same saved draft after a native structured rejection without creating another template', async () => {
+    activate.mockRejectedValueOnce({ detail: 'Issuer service is unavailable', status: 503 });
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Issuer service is unavailable');
+    expect(screen.getByRole('textbox', { name: 'Template name' })).toHaveValue('Review credential');
+    await user.click(screen.getByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByText('This credential template is active.')).toBeInTheDocument();
+    expect(activate.mock.calls).toEqual([['template-1'], ['template-1']]);
+    expect(load).toHaveBeenCalledTimes(3);
+    expect(post).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('explains a known dependency outage while retaining its support code and the same draft', async () => {
+    activate.mockRejectedValueOnce({ detail: 'CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE', status: 503 });
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your draft is saved. A required service is unavailable');
+    expect(screen.getByRole('alert')).toHaveTextContent('ask your administrator to check the required services');
+    const details = screen.getByText('Error code: CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE');
+    expect(details).not.toBeVisible();
+    await user.click(screen.getByText('Support details'));
+    expect(details).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Template name' })).toHaveValue('Review credential');
+    await user.click(screen.getByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByText('This credential template is active.')).toBeInTheDocument();
+    expect(screen.queryByText('Support details')).not.toBeInTheDocument();
+    expect(activate.mock.calls).toEqual([['template-1'], ['template-1']]);
+    expect(post).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('does not replace an unrelated activation diagnostic with outage guidance', async () => {
+    activate.mockRejectedValueOnce({ detail: 'CREDENTIAL_TEMPLATE.TRUST_PROFILE_INVALID', status: 422 });
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('CREDENTIAL_TEMPLATE.TRUST_PROFILE_INVALID');
+    expect(screen.queryByText('Support details')).not.toBeInTheDocument();
+    expect(screen.queryByText(/A required service is unavailable/)).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a previously successful activation without sending another activation', async () => {
+    const { user } = openEditor();
+    const action = await screen.findByRole('button', { name: 'Activate draft' });
+    load.mockResolvedValue(template('template-1', 'org-1', 'active'));
+    await user.click(action);
+    expect(await screen.findByText('This credential template is active.')).toBeInTheDocument();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('requires saved edits and a separate activation grant', async () => {
+    const view = openEditor();
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Template name' }), { target: { value: 'Unsaved name' } });
+    expect(screen.getByRole('button', { name: 'Activate draft' })).toBeDisabled();
+    expect(screen.getByText('Save your changes before activation.')).toBeInTheDocument();
+    scope.activate = false;
+    view.rerender(<EditorRoutes />);
+    await screen.findByRole('textbox', { name: 'Template name' });
+    expect(screen.queryByRole('button', { name: 'Activate draft' })).not.toBeInTheDocument();
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it('does not confuse activation permission with permission to edit settings', async () => {
+    scope.edit = false;
+    const { user } = openEditor();
+    expect(await screen.findByRole('textbox', { name: 'Template name' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByText('This credential template is active.')).toBeInTheDocument();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('requires review again when the server draft changes before activation', async () => {
+    const { user } = openEditor();
+    const action = await screen.findByRole('button', { name: 'Activate draft' });
+    load.mockResolvedValue({ ...template(), description: 'Changed by another editor' });
+    await user.click(action);
+    expect(await screen.findByRole('alert')).toHaveTextContent('changed since you opened it');
+    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('Changed by another editor');
+    expect(activate).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Activate draft' }));
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([['other-template', 'org-1', 'active'], ['template-1', 'other-org', 'active'], ['template-1', 'org-1', 'draft']])
+  ('does not claim success for activation response %s/%s/%s', async (id, org, status) => {
+    activate.mockResolvedValue(template(id, org, status));
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Activation could not be confirmed');
+    expect(screen.queryByText('This credential template is active.')).not.toBeInTheDocument();
+  });
+
+  it.each(['organization', 'principal', 'grant', 'navigation'] as const)
+  ('does not dispatch activation after the %s scope changes during readback', async (change) => {
+    const pending = deferred();
+    const view = openEditor();
+    const action = await screen.findByRole('button', { name: 'Activate draft' });
+    load.mockReturnValueOnce(pending.promise);
+    await view.user.click(action);
+    if (change === 'organization') scope.activeOrgId = 'org-2';
+    if (change === 'principal') scope.principal = 'user-2';
+    if (change === 'grant') scope.activate = false;
+    if (change === 'navigation') await view.user.click(screen.getByRole('link', { name: 'Leave editor' }));
+    else view.rerender(<EditorRoutes />);
+    await act(async () => pending.resolve(template()));
+    expect(activate).not.toHaveBeenCalled();
+    expect(screen.queryByText('This credential template is active.')).not.toBeInTheDocument();
+  });
+
   it('loads the selected draft, preserves rejected edits, and saves only the changed setting', async () => {
     const { user } = openEditor();
     const name = await screen.findByRole('textbox', { name: 'Template name' });
