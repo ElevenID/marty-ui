@@ -153,9 +153,9 @@ the existing isolated `FLOW_POSTGRES_TEST_URL` environment. Compilation or an
 early return without that database is not an executed database pass.
 
 Exact test receipts, both independent source-audit dispositions and hosted CI
-status are recorded in the publishing PR. The next canonical producer still
-must preserve the [authenticated owner acquisitions](authenticated-managed-owner-channels.md)
-and explicitly compose
-Policy observation, native validity and this durable replay outcome. The
-canonical validator's current single-time semantics are not relaxed here.
-An Issuance-owned, expiring, single-use continuation remains subsequent work.
+status are recorded in the publishing PR. The subsequent
+[managed evidence V2 producer](managed-oid4vp-evidence-v2.md) now composes
+authenticated Policy acquisition with this durable replay outcome. It retains
+distinct native observation and nonce-consumption clocks without changing V1.
+Legacy receipts alone remain noncanonical. An Issuance-owned, expiring,
+single-use continuation remains subsequent work.
