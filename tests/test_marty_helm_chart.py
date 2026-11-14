@@ -893,8 +893,13 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
         if identity not in {("Deployment", "ui"), ("ConfigMap", "nginx-prod-config")}:
             assert normal_by_id[identity] == dev_by_id[identity], identity
 
-    pod = resources(development, "Deployment")["ui"]["spec"]["template"]["spec"]
-    ordinary_pod = resources(normal, "Deployment")["ui"]["spec"]["template"]["spec"]
+    development_spec = resources(development, "Deployment")["ui"]["spec"]
+    ordinary_spec = resources(normal, "Deployment")["ui"]["spec"]
+    # The explicit null clears the API-default rollingUpdate field on upgrade.
+    assert development_spec["strategy"] == {"type": "Recreate", "rollingUpdate": None}
+    assert "strategy" not in ordinary_spec
+    pod = development_spec["template"]["spec"]
+    ordinary_pod = ordinary_spec["template"]["spec"]
     ordinary_ui = ordinary_pod["containers"][0]
     development_ui = pod["containers"][0]
     assert len(ordinary_pod["containers"]) == 1

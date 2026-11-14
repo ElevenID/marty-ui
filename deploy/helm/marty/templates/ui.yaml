@@ -41,6 +41,12 @@ metadata:
     {{- include "marty.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if $development.enabled }}
+  # A development node must not run two memory-heavy Vite pods during updates.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
