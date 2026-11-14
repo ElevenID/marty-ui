@@ -2299,6 +2299,7 @@ mod bounded_sd_jwt_query_evidence {
             StaleAfterTemplate,
             ShortTrustDeadline,
             ShortStatusDeadline,
+            LiveTrustDeadline,
         }
 
         struct Owners {
@@ -2406,10 +2407,10 @@ mod bounded_sd_jwt_query_evidence {
                     accreditations: vec![],
                     checked_at_epoch_seconds: self.now,
                     valid_until_epoch_seconds: self.now
-                        + if matches!(self.mode, Mode::ShortTrustDeadline) {
-                            5
-                        } else {
-                            60
+                        + match self.mode {
+                            Mode::ShortTrustDeadline => 5,
+                            Mode::LiveTrustDeadline => 20,
+                            _ => 60,
                         },
                     evidence_digest: String::new(),
                 };
@@ -2651,6 +2652,55 @@ mod bounded_sd_jwt_query_evidence {
                 validity.valid_until_epoch_micros,
                 (fixture.now as i64 + 60) * 1_000_000
             );
+            let canonical = marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2::from_json(
+                &output[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2].to_string(),
+            )
+            .unwrap();
+            assert_eq!(canonical.validity, validity);
+            assert_eq!(canonical.policy, policy_revision(&fixture.policy).unwrap());
+            assert_eq!(canonical.query_id, fixture.query_id);
+            assert_eq!(
+                canonical.selected_claims,
+                std::collections::BTreeMap::from([("email".into(), json!(EMAIL))])
+            );
+            assert_eq!(canonical.issued_at_epoch_seconds, fixture.now as i64 - 60);
+            assert_eq!(canonical.valid_from_epoch_seconds, fixture.now as i64 - 60);
+            assert_eq!(canonical.expires_at_epoch_seconds, fixture.now as i64 + 600);
+            assert_eq!(
+                canonical.issuer_scoped_subject_digest,
+                digest_domain_json(
+                    "marty.oid4vp/issuer-scoped-subject/v1",
+                    &json!({"issuer_id": ISSUER, "subject_id": SUBJECT}),
+                )
+                .unwrap(),
+            );
+            assert_eq!(
+                canonical.holder_key_thumbprint,
+                issuer_public_key_thumbprint(&public_key(&holder_key())).unwrap(),
+            );
+            assert_eq!(canonical.policy_result["total_requirements"], 2);
+            assert_eq!(canonical.policy_result["satisfied_requirements"], 2);
+            assert_eq!(canonical.policy_result["required_total"], 2);
+            assert_eq!(canonical.policy_result["required_satisfied"], 2);
+            assert_eq!(
+                canonical.policy_result["credential_results"][0]["requirement_id"],
+                fixture.query_id
+            );
+            assert_eq!(
+                canonical.policy_result["credential_results"][0]["credential_id"],
+                "urn:example:prerequisite-credential-001"
+            );
+            let encoded = serde_json::to_string(&canonical).unwrap();
+            for private in [
+                SUBJECT,
+                fixture.request.vp_token.as_str().unwrap(),
+                &fixture.nonce,
+            ] {
+                assert!(
+                    !encoded.contains(private),
+                    "raw private verification input must not be retained"
+                );
+            }
             let trust = owners.trust_calls.lock().unwrap();
             let status = owners.status_calls.lock().unwrap();
             assert_eq!(trust.len(), 1);
@@ -2667,6 +2717,1210 @@ mod bounded_sd_jwt_query_evidence {
             assert_eq!(
                 trust[0].request_binding_digest,
                 status[0].request_binding_digest
+            );
+        }
+
+        #[tokio::test]
+        async fn managed_policy_evidence_preserves_native_optional_claim_outcomes_and_counts() {
+            let (mut fixture, _) = fixture(Mode::Valid, 0);
+            fixture.policy.presentation_proof_required = false;
+            let requirement = &mut fixture.policy.credential_requirements[0];
+            requirement.requested_claims[0].constraints[0].constraint_type = ConstraintType::Equals;
+            requirement.requested_claims[0].constraints[0].value = Some(json!(EMAIL));
+            let mut optional = requirement.requested_claims[0].clone();
+            optional.id = Uuid::from_u128(401);
+            optional.claim_name = "nickname".into();
+            optional.required = false;
+            optional.constraints.clear();
+            requirement.requested_claims.push(optional);
+            fixture.policy.validate().unwrap();
+            let material = fixture.verify(&fixture.request).await;
+            let output =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            assert_eq!(output["decision"], "allow", "{output}");
+            let evidence = &output[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2];
+            let native = &evidence["policy_result"];
+            assert_eq!(native["total_requirements"], 1);
+            assert_eq!(native["satisfied_requirements"], 1);
+            assert_eq!(native["required_total"], 1);
+            assert_eq!(native["required_satisfied"], 1);
+            let claims = native["credential_results"][0]["claim_results"]
+                .as_array()
+                .unwrap();
+            let email = claims
+                .iter()
+                .find(|claim| claim["claim_name"] == "email")
+                .unwrap();
+            assert_eq!(email["satisfied"], true);
+            assert_eq!(email["presented_value"], EMAIL);
+            assert_eq!(email["constraint_results"][0]["constraint_type"], "equals");
+            assert_eq!(email["constraint_results"][0]["passed"], true);
+            let nickname = claims
+                .iter()
+                .find(|claim| claim["claim_name"] == "nickname")
+                .unwrap();
+            assert_eq!(nickname["satisfied"], true);
+            assert!(nickname["presented_value"].is_null());
+            assert_eq!(evidence["selected_claims"], json!({"email": EMAIL}));
+
+            fixture.policy.credential_requirements[0].requested_claims[0].constraints[0].value =
+                Some(json!("different-required-value@example.test"));
+            let material = fixture.verify(&fixture.request).await;
+            let denied =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            assert_eq!(denied["decision"], "deny", "{denied}");
+            assert!(denied
+                .get(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2)
+                .is_none());
+            assert!(denied
+                .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+                .is_none());
+        }
+
+        #[tokio::test]
+        async fn managed_policy_evidence_cannot_be_recreated_from_cached_facts_or_caller_json() {
+            let (fixture, _) = fixture(Mode::Valid, 0);
+            let material = fixture.verify(&fixture.request).await;
+            let facts = material.policy_facts().clone();
+            let output =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            let original = output[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2].clone();
+            let mut request = fixture.request.clone();
+            let mut supplied = original.clone();
+            supplied["issuer_scoped_subject_digest"] = json!(format!("sha256:{}", "a".repeat(64)));
+            supplied["holder_key_thumbprint"] = json!(URL_SAFE_NO_PAD.encode([0; 32]));
+            request.context.insert(
+                marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2.into(),
+                supplied,
+            );
+            assert!(
+                evaluate_verified_facts_for_policy(facts.clone(), &fixture.policy, &request)
+                    .is_err()
+            );
+            let material = fixture.verify(&request).await;
+            let native =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &request).unwrap();
+            let actual = &native[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2];
+            assert_eq!(
+                actual["issuer_scoped_subject_digest"],
+                original["issuer_scoped_subject_digest"]
+            );
+            assert_eq!(
+                actual["holder_key_thumbprint"],
+                original["holder_key_thumbprint"]
+            );
+            assert_ne!(
+                actual["validity"]["request_binding_digest"],
+                original["validity"]["request_binding_digest"]
+            );
+
+            let mut stripped = fixture.verify(&fixture.request).await;
+            stripped.managed_credential_authority = None;
+            assert!(evaluate_verified_material_for_policy(
+                stripped,
+                &fixture.policy,
+                &fixture.request
+            )
+            .is_err());
+            let mut stripped = fixture.verify(&fixture.request).await;
+            stripped.authenticated_sd_jwt_query = None;
+            assert!(evaluate_verified_material_for_policy(
+                stripped,
+                &fixture.policy,
+                &fixture.request
+            )
+            .is_err());
+            let mut facts_with_candidate = facts;
+            facts_with_candidate[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2] = original;
+            assert!(evaluate_verified_facts_for_policy(
+                facts_with_candidate,
+                &fixture.policy,
+                &fixture.request
+            )
+            .is_err());
+        }
+
+        struct NetworkOwners {
+            channels: crate::owner_channel::ManagedOwnerChannels,
+            catalog: Arc<Owners>,
+        }
+
+        const LIVE_OWNER_TOKEN: &str = "synthetic-managed-evidence-service-token";
+        const LIVE_OWNER_API_KEY: &str = "synthetic-managed-evidence-status-key";
+
+        #[async_trait]
+        impl PresentationTrustResolver for NetworkOwners {
+            async fn freeze_credential_authority(
+                &self,
+                organization_id: Uuid,
+                profile_id: Uuid,
+            ) -> Result<
+                AuthenticatedOwnerResponse<CredentialAuthoritySnapshotV1>,
+                PresentationVerificationError,
+            > {
+                self.channels
+                    .freeze(organization_id, profile_id, LIVE_OWNER_TOKEN)
+                    .await
+            }
+
+            async fn evaluate_credential_authority(
+                &self,
+                request: &CredentialTrustEvaluationRequestV1,
+            ) -> Result<
+                AuthenticatedOwnerResponse<CredentialTrustEvaluationResponseV1>,
+                PresentationVerificationError,
+            > {
+                self.channels.evaluate(request, LIVE_OWNER_TOKEN).await
+            }
+
+            async fn load_profile(
+                &self,
+                _: Uuid,
+                _: Uuid,
+            ) -> Result<ResolvedTrustProfile, PresentationVerificationError> {
+                panic!("managed native keys must come from the frozen owner snapshot")
+            }
+
+            async fn evaluate_issuer(
+                &self,
+                _: &ResolvedTrustProfile,
+                _: &str,
+                _: DetectedCredentialFormat,
+            ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
+                panic!("managed issuer authority must come from authenticated owner acquisition")
+            }
+
+            async fn load_credential_template(
+                &self,
+                template_id: &str,
+                organization_id: Uuid,
+            ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+                self.catalog
+                    .load_credential_template(template_id, organization_id)
+                    .await
+            }
+        }
+
+        #[async_trait]
+        impl CredentialStatusResolver for NetworkOwners {
+            async fn observe_managed_status(
+                &self,
+                request: &ManagedCredentialStatusRequestV1,
+            ) -> Result<
+                AuthenticatedOwnerResponse<ManagedCredentialStatusObservationV1>,
+                PresentationVerificationError,
+            > {
+                self.channels.observe(request, LIVE_OWNER_API_KEY).await
+            }
+
+            async fn resolve(
+                &self,
+                _: Uuid,
+                _: &str,
+                _: &[String],
+            ) -> Result<CredentialStatusEvidence, PresentationVerificationError> {
+                panic!("managed status must come from authenticated owner acquisition")
+            }
+        }
+
+        struct LivePolicyRepository(PresentationPolicy);
+
+        #[async_trait]
+        impl crate::PolicyRepository for LivePolicyRepository {
+            async fn save(&self, _: &PresentationPolicy) -> Result<(), String> {
+                Err("the live fixture policy is immutable".into())
+            }
+
+            async fn get(&self, id: Uuid) -> Result<Option<PresentationPolicy>, String> {
+                Ok((id == self.0.id).then(|| self.0.clone()))
+            }
+
+            async fn list(&self, organization_id: Uuid) -> Result<Vec<PresentationPolicy>, String> {
+                Ok((organization_id == self.0.organization_id)
+                    .then(|| self.0.clone())
+                    .into_iter()
+                    .collect())
+            }
+
+            async fn delete(&self, _: Uuid) -> Result<(), String> {
+                Err("the live fixture policy is immutable".into())
+            }
+        }
+
+        const LIVE_FLOW_PRINCIPAL: &str = "synthetic-managed-flow-principal";
+
+        struct LivePolicyAuthorization;
+
+        #[async_trait]
+        impl crate::PolicyAuthorization for LivePolicyAuthorization {
+            async fn require(
+                &self,
+                principal: &str,
+                organization_id: Uuid,
+                action: &'static str,
+            ) -> Result<(), String> {
+                if principal == LIVE_FLOW_PRINCIPAL
+                    && organization_id == ORGANIZATION_ID
+                    && action == "evaluate"
+                {
+                    Ok(())
+                } else {
+                    Err("the fixture principal cannot perform this action".into())
+                }
+            }
+        }
+
+        /// The catalog supplies public metadata only. The real Flow start
+        /// generates the query and nonce; the unsigned URL-query route never
+        /// calls a signing implementation or acquires signing authority.
+        struct LiveFlowCatalog;
+
+        #[async_trait]
+        impl marty_flow::CredentialTemplateProvider for LiveFlowCatalog {
+            async fn get_template(
+                &self,
+                id: &str,
+            ) -> Result<marty_flow::CredentialTemplateReference, marty_flow::FlowProviderError>
+            {
+                assert_eq!(id, "template-email");
+                Ok(marty_flow::CredentialTemplateReference {
+                    id: id.into(),
+                    organization_id: ORGANIZATION_ID.to_string(),
+                    status: "active".into(),
+                    credential_type: "EmailCredential".into(),
+                    vct: VCT.into(),
+                    doctype: String::new(),
+                    supported_formats: vec!["dc+sd-jwt".into()],
+                    claims: vec![marty_flow::CredentialClaimReference {
+                        name: "email".into(),
+                        display_name: "Email".into(),
+                        description: String::new(),
+                        required: true,
+                        mdoc_namespace: String::new(),
+                        mdoc_element_identifier: String::new(),
+                    }],
+                    issuer_did: ISSUER.into(),
+                    credential_format: "dc+sd-jwt".into(),
+                    jwt_vc_profile: None,
+                    issuance_protocol: "OID4VCI_PRE_AUTH".into(),
+                    wallet_configurations: Vec::new(),
+                    issuer_algorithm: Some("EdDSA".into()),
+                })
+            }
+
+            async fn wallet_formats(
+                &self,
+                organization_id: &str,
+            ) -> Result<Vec<String>, marty_flow::FlowProviderError> {
+                assert_eq!(organization_id, ORGANIZATION_ID.to_string());
+                Ok(vec!["dc+sd-jwt".into()])
+            }
+        }
+
+        #[async_trait]
+        impl marty_flow::SigningIdentityProvider for LiveFlowCatalog {
+            async fn resolve(
+                &self,
+                organization_id: &str,
+                issuer_did: &str,
+                key_purpose: &str,
+                credential_format: &str,
+                algorithm: Option<&str>,
+            ) -> Result<marty_flow::SigningIdentity, marty_flow::FlowProviderError> {
+                assert_eq!(organization_id, ORGANIZATION_ID.to_string());
+                assert_eq!(issuer_did, AUDIENCE);
+                assert_eq!(algorithm, Some("ES256"));
+                let key = p256::ecdsa::SigningKey::from_slice(&[72; 32]).unwrap();
+                let point = key.verifying_key().to_sec1_point(false);
+                Ok(marty_flow::SigningIdentity {
+                    organization_id: organization_id.into(),
+                    issuer_did: issuer_did.into(),
+                    verification_method_id: format!("{issuer_did}#request"),
+                    signing_key_reference: "synthetic-public-request-identity".into(),
+                    public_jwk: serde_json::from_value(json!({
+                        "kty": "EC", "crv": "P-256",
+                        "x": URL_SAFE_NO_PAD.encode(point.x().unwrap()),
+                        "y": URL_SAFE_NO_PAD.encode(point.y().unwrap()),
+                    }))
+                    .unwrap(),
+                    key_purpose: key_purpose.into(),
+                    credential_format: credential_format.into(),
+                    algorithm: "ES256".into(),
+                })
+            }
+
+            async fn sign(
+                &self,
+                _: &marty_flow::SigningRequest,
+            ) -> Result<marty_flow::SigningResult, marty_flow::FlowProviderError> {
+                panic!("the unsigned request transport must not sign")
+            }
+        }
+
+        struct MutatedLivePolicy(Arc<dyn marty_flow::PresentationPolicyProvider>);
+
+        #[async_trait]
+        impl marty_flow::PresentationPolicyProvider for MutatedLivePolicy {
+            async fn get_policy(
+                &self,
+                id: &str,
+            ) -> Result<marty_flow::PresentationPolicyReference, marty_flow::FlowProviderError>
+            {
+                self.0.get_policy(id).await
+            }
+
+            async fn evaluate(
+                &self,
+                request: &marty_flow::PresentationEvaluationRequest,
+            ) -> Result<marty_flow::PresentationEvaluationResult, marty_flow::FlowProviderError>
+            {
+                let mut result = self.0.evaluate(request).await?;
+                result
+                    .verified_claims
+                    .insert("email".into(), json!("substituted@example.test"));
+                Ok(result)
+            }
+        }
+
+        async fn qualify_live_managed_flow(
+            fixture: &Fixture,
+            network: Arc<NetworkOwners>,
+            values: &std::collections::BTreeMap<String, String>,
+        ) {
+            use std::{
+                path::{Path, PathBuf},
+                str::FromStr,
+                time::Duration,
+            };
+
+            use marty_flow::{
+                prepare_verification_start, prepare_verification_submission,
+                FlowGrpcChannelFactories, FlowGrpcClients, FlowProviderRegistry,
+                FlowWorkloadChannelFactory, PostgresFlowRepository, PreparedVerificationSubmission,
+                PresentationPolicyProvider as _, VerificationSubmissionInput,
+                VerificationSubmissionOptions,
+            };
+            use marty_service_runtime::{
+                RemoteTlsIdentityFiles, TlsIdentityNames, WorkloadTlsFiles,
+            };
+            use sqlx::{postgres::PgConnectOptions, Connection, PgConnection, PgPool};
+
+            fn factories(
+                target: &str,
+                identity: &RemoteTlsIdentityFiles,
+                ca: &Path,
+            ) -> FlowGrpcChannelFactories {
+                let channel = FlowWorkloadChannelFactory::Keyless {
+                    target: target.into(),
+                    files: WorkloadTlsFiles {
+                        ca_certificate: ca.into(),
+                        identity: identity.clone(),
+                    },
+                };
+                FlowGrpcChannelFactories {
+                    organization: channel.clone(),
+                    credential_template: channel.clone(),
+                    presentation_policy: channel.clone(),
+                    issuance: channel,
+                }
+            }
+
+            let database_url = std::env::var("FLOW_POSTGRES_TEST_URL")
+                .expect("the live managed Flow contract requires disposable PostgreSQL");
+            let database_options = PgConnectOptions::from_str(&database_url).unwrap();
+            assert!(matches!(
+                database_options.get_host(),
+                "localhost" | "127.0.0.1"
+            ));
+            assert_eq!(database_options.get_database(), Some("marty_atomic_test"));
+            let mut schema_lock = PgConnection::connect_with(&database_options).await.unwrap();
+            sqlx::query("SELECT pg_advisory_lock($1)")
+                .bind(718_431_212i64)
+                .execute(&mut schema_lock)
+                .await
+                .unwrap();
+            let pool = PgPool::connect_with(database_options).await.unwrap();
+            marty_flow::migrate_flow_schema(&pool).await.unwrap();
+            marty_flow::validate_flow_schema(&pool).await.unwrap();
+            let repository = PostgresFlowRepository::new(pool.clone());
+
+            let ca = PathBuf::from(values.get("MARTY_TEST_POLICY_WORKLOAD_CA_CERT").unwrap());
+            let identity = |prefix: &str, certificate_override: Option<&str>| {
+                let certificate_name = format!("{prefix}_CERT_FILE");
+                RemoteTlsIdentityFiles::from_values(
+                    |name| {
+                        values
+                            .get(if name == certificate_name {
+                                certificate_override.unwrap_or(name)
+                            } else {
+                                name
+                            })
+                            .map(String::as_str)
+                    },
+                    TlsIdentityNames::files(prefix),
+                    Duration::from_secs(5),
+                    16,
+                )
+                .unwrap()
+                .expect("the fixture must supply each separate remote workload identity")
+            };
+            let server_identity = identity("MARTY_TEST_POLICY_GRPC_SERVER_TLS", None);
+            let client_identity = identity("MARTY_TEST_POLICY_FLOW_CLIENT_TLS", None);
+            let mut config = crate::PresentationPolicyServiceConfig::from_values([
+                ("ENVIRONMENT".into(), "test".into()),
+                ("DATABASE_URL".into(), database_url),
+            ])
+            .unwrap();
+            config.workload_server_tls = Some(WorkloadTlsFiles {
+                ca_certificate: ca.clone(),
+                identity: server_identity,
+            });
+            let security = Arc::new(
+                crate::grpc_security::PresentationGrpcSecurity::from_config(&config).unwrap(),
+            );
+            let acceptor = security.server_tls_acceptor().await.unwrap().unwrap();
+            let orchestrator = Arc::new(
+                VerifiedFactsOrchestrator::new(
+                    Arc::new(RustCredentialKernel),
+                    network.clone(),
+                    network,
+                )
+                .unwrap(),
+            );
+            let application = Arc::new(crate::PolicyApplication::new(
+                Arc::new(LivePolicyRepository(fixture.policy.clone())),
+                Arc::new(LivePolicyAuthorization),
+            ));
+            let service = crate::PresentationPolicyGrpcService::new(
+                application,
+                orchestrator,
+                Some(LIVE_OWNER_TOKEN.into()),
+                true,
+            )
+            .unwrap()
+            .with_workload_security(security);
+            let wrong_name_service = service.clone();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let target = format!("https://{}", listener.local_addr().unwrap());
+            let (shutdown, receiver) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(crate::presentation_policy_proto::presentation_policy_service_server::PresentationPolicyServiceServer::new(service))
+                    .serve_with_incoming_shutdown(
+                        marty_service_runtime::keyless_incoming(listener, acceptor),
+                        async { receiver.await.unwrap(); },
+                    )
+                    .await
+                    .unwrap();
+            });
+            let clients = factories(&target, &client_identity, &ca)
+                .connect()
+                .await
+                .unwrap()
+                .providers(Some(LIVE_OWNER_TOKEN))
+                .unwrap();
+            let policy_provider: Arc<dyn marty_flow::PresentationPolicyProvider> =
+                Arc::new(clients.presentation_policy);
+            drop(clients.tenant_membership);
+            drop(clients.credential_template);
+            drop(clients.issuance);
+            let providers = FlowProviderRegistry {
+                presentation_policy: Some(policy_provider.clone()),
+                credential_template: Some(Arc::new(LiveFlowCatalog)),
+                signing_identity: Some(Arc::new(LiveFlowCatalog)),
+                ..Default::default()
+            };
+            let now = || {
+                chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+                    .unwrap()
+            };
+            let callbacks = mmf_push::WebhookDestinationRegistry::parse(&format!(
+                "{ORGANIZATION_ID}|https://callbacks.example/flows/__MARTY_TOKEN__",
+            ))
+            .unwrap();
+            let started = prepare_verification_start(
+                &providers,
+                &callbacks,
+                serde_json::from_value(json!({
+                    "organization_id": ORGANIZATION_ID,
+                    "presentation_policy_id": fixture.policy.id,
+                    "issuer_did": AUDIENCE,
+                    "trust_profile_id": POLICY_PROFILE_ID,
+                    "request_transport": "url_query",
+                    "expiry_minutes": 15,
+                    "callback_url": format!("https://callbacks.example/flows/{}", Uuid::new_v4()),
+                }))
+                .unwrap(),
+                "https://managed-flow.example.test",
+                false,
+                16_384,
+                16_384,
+                None,
+                LIVE_FLOW_PRINCIPAL,
+                now(),
+            )
+            .await
+            .unwrap();
+            assert!(repository
+                .save_started_instance(&started.instance, None)
+                .await
+                .unwrap());
+            assert!(repository
+                .managed_evidence(&started.instance.organization_id, &started.instance.id)
+                .await
+                .unwrap()
+                .is_none());
+            let emitted =
+                &started.instance.context["mip_messages"]["presentation_request"]["payload"];
+            let query_id = emitted["dcql_query"]["credentials"][0]["id"]
+                .as_str()
+                .unwrap();
+            assert_eq!(query_id, fixture.query_id);
+            let nonce = started.instance.context["nonce"].as_str().unwrap();
+            let audience = started.instance.context["oid4vp_client_id"]
+                .as_str()
+                .unwrap();
+            let token = presentation(&fixture.claims, nonce, audience, fixture.now);
+            let input = VerificationSubmissionInput {
+                vp_token: json!({(query_id): [token.clone()]}).to_string(),
+                presentation_submission: None,
+                state: Some(started.instance.id.clone()),
+                audience_override: None,
+            };
+            let options = VerificationSubmissionOptions {
+                callback_destinations: callbacks,
+                callback_secret: Some("synthetic-32-byte-callback-secret-for-managed-flow".into()),
+                verifier_sender_id: AUDIENCE.into(),
+                nonce_ttl_seconds: 900,
+                callback_retention_seconds: marty_flow::CALLBACK_RETENTION_SECONDS,
+                callback_max_attempts: marty_flow::CALLBACK_MAX_ATTEMPTS,
+            };
+
+            // Even a working raw mTLS channel does not carry the capability of
+            // the inspected Flow factory. It cannot manufacture acquisition.
+            let raw_channel = client_identity
+                .grpc_channel_connected(
+                    &target,
+                    &ca,
+                    mmf_platform::KeylessGrpcTransportOptions::default(),
+                )
+                .await
+                .unwrap();
+            let raw = FlowGrpcClients::new(
+                raw_channel.clone(),
+                raw_channel.clone(),
+                raw_channel.clone(),
+                raw_channel,
+            )
+            .providers(Some(LIVE_OWNER_TOKEN))
+            .unwrap();
+            let uninspected = FlowProviderRegistry {
+                presentation_policy: Some(Arc::new(raw.presentation_policy)),
+                ..Default::default()
+            };
+            drop(raw.tenant_membership);
+            drop(raw.credential_template);
+            drop(raw.issuance);
+            assert!(matches!(
+                prepare_verification_submission(
+                    &uninspected,
+                    started.instance.clone(),
+                    input.clone(),
+                    &options,
+                    now(),
+                )
+                .await
+                .unwrap(),
+                PreparedVerificationSubmission::Retryable(_)
+            ));
+            let mutated = FlowProviderRegistry {
+                presentation_policy: Some(Arc::new(MutatedLivePolicy(policy_provider))),
+                ..Default::default()
+            };
+            assert!(
+                prepare_verification_submission(
+                    &mutated,
+                    started.instance.clone(),
+                    input.clone(),
+                    &options,
+                    now(),
+                )
+                .await
+                .is_err(),
+                "mutation after genuine acquisition cannot retain authority"
+            );
+            let prepared = prepare_verification_submission(
+                &providers,
+                started.instance.clone(),
+                input.clone(),
+                &options,
+                now(),
+            )
+            .await
+            .unwrap();
+            let PreparedVerificationSubmission::Final(finalization) = prepared else {
+                panic!("genuine managed presentation must prepare a final result");
+            };
+            assert!(finalization.callback.is_some());
+            let memory = marty_flow::InMemoryFlowRepository::default();
+            memory
+                .save_instance(started.instance.kernel().unwrap())
+                .unwrap();
+            let model = memory
+                .finalize_verification_with_receipt(
+                    &finalization,
+                    u64::try_from(now().timestamp_millis()).unwrap() + 1,
+                )
+                .unwrap()
+                .unwrap();
+            assert!(
+                model.managed_evidence().is_none(),
+                "an in-memory commit is not durable owner evidence"
+            );
+
+            // Force the real outbox insert to fail after receipt preparation.
+            // All instance, replay, callback and evidence writes must roll back.
+            sqlx::raw_sql(
+                "CREATE OR REPLACE FUNCTION flow_service.reject_managed_fixture_callback() RETURNS trigger AS $$ \
+                 BEGIN RAISE EXCEPTION 'synthetic callback insert failure'; END; $$ LANGUAGE plpgsql; \
+                 CREATE TRIGGER reject_managed_fixture_callback BEFORE INSERT ON flow_service.flow_callback_outbox \
+                 FOR EACH ROW EXECUTE FUNCTION flow_service.reject_managed_fixture_callback()"
+            ).execute(&pool).await.unwrap();
+            let failed_commit = repository
+                .finalize_verification_with_receipt(&finalization)
+                .await;
+            sqlx::raw_sql(
+                "DROP TRIGGER reject_managed_fixture_callback ON flow_service.flow_callback_outbox; \
+                 DROP FUNCTION flow_service.reject_managed_fixture_callback()"
+            ).execute(&pool).await.unwrap();
+            assert!(failed_commit.is_err());
+            assert_eq!(
+                repository.instance(&started.instance.id).await.unwrap(),
+                Some(started.instance.clone())
+            );
+            let empty_counts: (i64, i64) = sqlx::query_as(
+                "SELECT (SELECT count(*) FROM flow_service.flow_nonce_consumptions WHERE flow_instance_id=$1), \
+                        (SELECT count(*) FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1)"
+            ).bind(&started.instance.id).fetch_one(&pool).await.unwrap();
+            assert_eq!(empty_counts, (0, 0));
+            assert!(repository
+                .managed_evidence(&started.instance.organization_id, &started.instance.id)
+                .await
+                .unwrap()
+                .is_none());
+            let committed = repository
+                .finalize_verification_with_receipt(&finalization)
+                .await
+                .unwrap()
+                .unwrap();
+            let evidence = committed
+                .managed_evidence()
+                .expect("only the committed transaction exposes authenticated evidence");
+            let projection = evidence.projection();
+            projection.validate_historical().unwrap();
+            assert_eq!(projection.policy_evidence.selected_claims["email"], EMAIL);
+            assert_eq!(
+                projection.request.initiating_principal_id,
+                LIVE_FLOW_PRINCIPAL
+            );
+            assert_eq!(
+                projection.policy_evidence.policy_result["total_requirements"],
+                2
+            );
+            assert!(
+                projection.receipt.nonce_consumed_at_epoch_micros
+                    >= projection
+                        .policy_evidence
+                        .validity
+                        .evaluated_at_epoch_micros
+            );
+            let callback_payload: Value = sqlx::query_scalar(
+                "SELECT payload FROM flow_service.flow_callback_outbox WHERE flow_instance_id=$1",
+            )
+            .bind(&started.instance.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            committed
+                .receipt()
+                .validate_callback(&callback_payload)
+                .unwrap();
+
+            let fresh = PostgresFlowRepository::new(pool.clone());
+            let recovered = fresh
+                .managed_evidence(&started.instance.organization_id, &started.instance.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(recovered.projection()).unwrap(),
+                serde_json::to_value(projection).unwrap()
+            );
+            assert!(fresh
+                .managed_evidence("different-organization", &started.instance.id)
+                .await
+                .unwrap()
+                .is_none());
+            assert!(committed
+                .instance()
+                .verification_projection()
+                .unwrap()
+                .canonical_evidence_digest
+                .is_none());
+            let immediate = committed.verification_projection().unwrap();
+            let restored = fresh
+                .verification_result(&started.instance.organization_id, &started.instance.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                immediate.canonical_evidence_digest.as_deref(),
+                Some(projection.evidence_digest.as_str())
+            );
+            assert_eq!(
+                restored.canonical_evidence_digest,
+                immediate.canonical_evidence_digest
+            );
+            for public in [
+                serde_json::to_string(&immediate).unwrap(),
+                serde_json::to_string(&restored).unwrap(),
+                serde_json::to_string(&callback_payload).unwrap(),
+            ] {
+                for private in [
+                    token.as_str(),
+                    &URL_SAFE_NO_PAD.encode(token.as_bytes()),
+                    SUBJECT,
+                    "urn:example:prerequisite-credential-001",
+                    LIVE_FLOW_PRINCIPAL,
+                    "issuer_scoped_subject_digest",
+                    "\"managed_policy_evidence\":",
+                ] {
+                    assert!(
+                        !public.contains(private),
+                        "public projection retained private evidence"
+                    );
+                }
+            }
+            let debug = format!("{committed:?} {evidence:?} {recovered:?}");
+            for private in [
+                token.as_str(),
+                SUBJECT,
+                EMAIL,
+                LIVE_FLOW_PRINCIPAL,
+                "urn:example:prerequisite-credential-001",
+            ] {
+                assert!(!debug.contains(private), "Debug retained private evidence");
+            }
+            let mut erased = committed.instance().clone();
+            erased.result = None;
+            assert!(!matches!(fresh.save_instance(&erased).await, Ok(true)));
+            let after_erasure = fresh
+                .managed_evidence(&started.instance.organization_id, &started.instance.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                after_erasure.projection().evidence_digest,
+                projection.evidence_digest
+            );
+            assert!(repository
+                .finalize_verification_with_receipt(&finalization)
+                .await
+                .unwrap()
+                .is_none());
+
+            // A sanitized generic writer must still be fenced by the stored
+            // committed row, rather than merely by reserved input fields.
+            let stored = fresh.instance(&started.instance.id).await.unwrap().unwrap();
+            let mut replacement = stored.clone();
+            replacement.context = json!({});
+            replacement.result = None;
+            replacement.updated_at += chrono::Duration::microseconds(1);
+            let artifact = marty_flow::FlowArtifactRecord {
+                id: Uuid::new_v4().to_string(),
+                flow_instance_id: stored.id.clone(),
+                issuance_transaction_id: Some(Uuid::new_v4().to_string()),
+                credential_offer_uri: Some(
+                    "openid-credential-offer://synthetic-replacement".into(),
+                ),
+                credential_offer_uris: Default::default(),
+                credential_offer_labels: Default::default(),
+                pre_authorized_code: None,
+                issuance_status: Some("offer_created".into()),
+                qr_payload: None,
+                expires_at: stored.expires_at,
+                scanned_at: None,
+                status: marty_flow::ArtifactStatus::Active,
+                state: None,
+                wallet_metadata: json!({}),
+                attempt_number: 1,
+                created_at: replacement.updated_at,
+                updated_at: replacement.updated_at,
+            };
+            assert!(!fresh
+                .replace_active_artifacts(
+                    &replacement,
+                    &artifact,
+                    stored.updated_at,
+                    replacement.updated_at,
+                )
+                .await
+                .unwrap());
+            assert_eq!(
+                fresh.instance(&stored.id).await.unwrap(),
+                Some(stored.clone())
+            );
+            assert!(fresh.artifact_record(&artifact.id).await.unwrap().is_none());
+
+            // Simulate corruption through the disposable database owner, then
+            // restore the exact authentic blobs. Recovery may never mint an
+            // authority from a mismatched envelope, result, or missing digest.
+            for corrupt in ["envelope", "result", "candidate_digest"] {
+                let mut context = stored.context.clone();
+                let mut result = stored.result.clone().unwrap();
+                match corrupt {
+                    "envelope" => {
+                        context["_marty_managed_oid4vp_evidence_v2"]["policy_evidence"]
+                            ["selected_claims"]["email"] = json!("corrupt@example.test")
+                    }
+                    "result" => result["verified_claims"]["email"] = json!("corrupt@example.test"),
+                    "candidate_digest" => {
+                        result
+                            .as_object_mut()
+                            .unwrap()
+                            .remove(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2);
+                    }
+                    _ => unreachable!(),
+                }
+                sqlx::query(
+                    "UPDATE flow_service.flow_instances SET context=$2, result=$3 WHERE id=$1",
+                )
+                .bind(&stored.id)
+                .bind(context)
+                .bind(result)
+                .execute(&pool)
+                .await
+                .unwrap();
+                let rejected = fresh
+                    .managed_evidence(&stored.organization_id, &stored.id)
+                    .await
+                    .is_err();
+                sqlx::query(
+                    "UPDATE flow_service.flow_instances SET context=$2, result=$3 WHERE id=$1",
+                )
+                .bind(&stored.id)
+                .bind(&stored.context)
+                .bind(&stored.result)
+                .execute(&pool)
+                .await
+                .unwrap();
+                assert!(rejected, "{corrupt} corruption must fail owner recovery");
+            }
+
+            // Historical recovery observes the actual passage of the short
+            // owner's deadline. No persisted timestamps or evidence are forged.
+            let deadline = projection.policy_evidence.validity.valid_until_epoch_micros;
+            assert_eq!(
+                deadline,
+                projection.policy_evidence.trust.valid_until_epoch_seconds * 1_000_000
+            );
+            let remaining = deadline - chrono::Utc::now().timestamp_micros();
+            if remaining > 0 {
+                let wait = Duration::from_micros(u64::try_from(remaining).unwrap())
+                    + Duration::from_millis(2);
+                assert!(wait <= Duration::from_secs(21));
+                tokio::time::sleep(wait).await;
+            }
+            assert!(chrono::Utc::now().timestamp_micros() >= deadline);
+            let historical = PostgresFlowRepository::new(pool.clone())
+                .managed_evidence(&stored.organization_id, &stored.id)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                historical.projection().evidence_digest,
+                projection.evidence_digest
+            );
+
+            // The Flow client pins the configured server CA and target name;
+            // the Policy server separately enforces the client SPIFFE method ACL.
+            let wrong_ca = PathBuf::from(
+                values
+                    .get("MARTY_TEST_POLICY_OWNER_TLS_KMS_CA_CERT_FILE")
+                    .unwrap(),
+            );
+            assert!(tokio::time::timeout(
+                Duration::from_secs(5),
+                factories(&target, &client_identity, &wrong_ca).connect()
+            )
+            .await
+            .expect("wrong CA must reject promptly")
+            .is_err());
+            let wrong_client = identity(
+                "MARTY_TEST_POLICY_FLOW_CLIENT_TLS",
+                Some("MARTY_TEST_POLICY_FLOW_CLIENT_WRONG_URI_CERT_FILE"),
+            );
+            let wrong_uri = factories(&target, &wrong_client, &ca)
+                .connect()
+                .await
+                .unwrap()
+                .providers(Some(LIVE_OWNER_TOKEN))
+                .unwrap();
+            assert!(matches!(
+                wrong_uri
+                    .presentation_policy
+                    .get_policy(&fixture.policy.id.to_string())
+                    .await,
+                Err(marty_flow::FlowProviderError::Rejected {
+                    provider: "presentation_policy",
+                    ..
+                })
+            ));
+            drop(wrong_uri);
+
+            let wrong_server_identity = identity(
+                "MARTY_TEST_POLICY_OWNER_TLS",
+                Some("MARTY_TEST_POLICY_OWNER_TLS_ALT_CERT_FILE"),
+            );
+            let wrong_server_files = WorkloadTlsFiles {
+                ca_certificate: ca.clone(),
+                identity: wrong_server_identity,
+            };
+            let wrong_acceptor = marty_service_runtime::workload_server_acceptor(
+                Some(&wrong_server_files),
+                64,
+                Duration::from_secs(15),
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let wrong_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let wrong_target = format!("https://{}", wrong_listener.local_addr().unwrap());
+            let (wrong_shutdown, wrong_receiver) = tokio::sync::oneshot::channel();
+            let wrong_server = tokio::spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(crate::presentation_policy_proto::presentation_policy_service_server::PresentationPolicyServiceServer::new(wrong_name_service))
+                    .serve_with_incoming_shutdown(
+                        marty_service_runtime::keyless_incoming(wrong_listener, wrong_acceptor),
+                        async { wrong_receiver.await.unwrap(); },
+                    ).await.unwrap();
+            });
+            assert!(tokio::time::timeout(
+                Duration::from_secs(5),
+                factories(&wrong_target, &client_identity, &ca).connect()
+            )
+            .await
+            .expect("wrong server DNS must reject promptly")
+            .is_err());
+            wrong_shutdown.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(20), wrong_server)
+                .await
+                .unwrap()
+                .unwrap();
+
+            drop(providers);
+            drop(uninspected);
+            drop(mutated);
+            shutdown.send(()).unwrap();
+            tokio::time::timeout(Duration::from_secs(20), server)
+                .await
+                .unwrap()
+                .unwrap();
+            pool.close().await;
+        }
+
+        /// Runs with the same disposable OpenBao fixture as the owner-channel
+        /// contract. Credential signatures are real synthetic issuer/holder
+        /// signatures; only the HTTPS owner transport uses the remote TLS keys.
+        #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+        #[ignore = "requires isolated owner OpenBao fixture and disposable PostgreSQL"]
+        async fn live_keyless_managed_policy_evidence() {
+            use std::{collections::BTreeMap, path::PathBuf, time::Duration};
+
+            use axum::{
+                extract::{Path, State},
+                http::HeaderMap,
+                routing::post,
+                Json, Router,
+            };
+            use marty_service_runtime::{
+                https::{BoundKeylessHttpsServer, ManagedAuthorityHttpsConfig},
+                RemoteTlsIdentityFiles, TlsIdentityNames,
+            };
+            use tokio::sync::watch;
+
+            async fn freeze(
+                State(owner): State<Arc<Owners>>,
+                Path(profile_id): Path<Uuid>,
+                headers: HeaderMap,
+                Json(request): Json<CredentialAuthoritySnapshotRequestV1>,
+            ) -> Json<CredentialAuthoritySnapshotV1> {
+                assert_eq!(headers.get("x-service-token").unwrap(), LIVE_OWNER_TOKEN);
+                Json(
+                    owner
+                        .freeze_credential_authority(
+                            request.organization_id.parse().unwrap(),
+                            profile_id,
+                        )
+                        .await
+                        .unwrap()
+                        .into_response(),
+                )
+            }
+
+            async fn trust(
+                State(owner): State<Arc<Owners>>,
+                Path(profile_id): Path<String>,
+                headers: HeaderMap,
+                Json(request): Json<CredentialTrustEvaluationRequestV1>,
+            ) -> Json<CredentialTrustEvaluationResponseV1> {
+                assert_eq!(headers.get("x-service-token").unwrap(), LIVE_OWNER_TOKEN);
+                assert_eq!(profile_id, request.expected_profile.id);
+                Json(
+                    owner
+                        .evaluate_credential_authority(&request)
+                        .await
+                        .unwrap()
+                        .into_response(),
+                )
+            }
+
+            async fn status(
+                State(owner): State<Arc<Owners>>,
+                headers: HeaderMap,
+                Json(request): Json<ManagedCredentialStatusRequestV1>,
+            ) -> Json<ManagedCredentialStatusObservationV1> {
+                assert_eq!(headers.get("x-api-key").unwrap(), LIVE_OWNER_API_KEY);
+                assert_eq!(
+                    headers.get("x-organization-id").unwrap().to_str().unwrap(),
+                    request.organization_id
+                );
+                Json(
+                    owner
+                        .observe_managed_status(&request)
+                        .await
+                        .unwrap()
+                        .into_response(),
+                )
+            }
+
+            let values: BTreeMap<String, String> = std::env::vars().collect();
+            let identity = RemoteTlsIdentityFiles::from_values(
+                |name| values.get(name).map(String::as_str),
+                TlsIdentityNames::files("MARTY_TEST_POLICY_OWNER_TLS"),
+                Duration::from_secs(5),
+                16,
+            )
+            .unwrap()
+            .expect("run with the isolated OpenBao owner fixture");
+            let ca = PathBuf::from(
+                values
+                    .get("MARTY_TEST_POLICY_OWNER_CA_CERT")
+                    .expect("fixture must supply the owner CA"),
+            );
+            let (mut fixture, owners) = fixture(Mode::LiveTrustDeadline, 0);
+            let trust_router = Router::new()
+                .route(
+                    "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+                    post(freeze),
+                )
+                .route(
+                    "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+                    post(trust),
+                );
+            let status_router = Router::new().route(MANAGED_STATUS_OBSERVATION_PATH, post(status));
+            let mut origins = Vec::new();
+            let mut servers = Vec::new();
+            for router in [trust_router, status_router] {
+                let server = BoundKeylessHttpsServer::bind(
+                    &ManagedAuthorityHttpsConfig {
+                        address: "127.0.0.1:0".parse().unwrap(),
+                        identity: identity.clone(),
+                    },
+                    router.with_state(owners.clone()),
+                )
+                .await
+                .expect("owner must bind through remote TLS signing");
+                origins.push(format!("https://{}", server.local_addr().unwrap()));
+                let (shutdown, receiver) = watch::channel(false);
+                let task = tokio::spawn(async move { server.serve(receiver).await.unwrap() });
+                servers.push((shutdown, task));
+            }
+            assert_ne!(origins[0], origins[1]);
+            let network = Arc::new(NetworkOwners {
+                channels: crate::owner_channel::ManagedOwnerChannels::new(
+                    &crate::ManagedOwnerChannelConfig {
+                        trust_profile_url: origins[0].clone(),
+                        issuance_url: origins[1].clone(),
+                        ca_certificate: ca,
+                    },
+                    Duration::from_secs(5),
+                )
+                .unwrap(),
+                catalog: owners.clone(),
+            });
+            fixture.orchestrator = VerifiedFactsOrchestrator::new(
+                Arc::new(RustCredentialKernel),
+                network.clone(),
+                network.clone(),
+            )
+            .unwrap();
+            let frozen = fixture
+                .orchestrator
+                .freeze_credential_authority(&fixture.policy)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(frozen, owners.snapshot);
+            fixture
+                .request
+                .oid4vp_transport
+                .as_mut()
+                .unwrap()
+                .credential_authority = Some(frozen);
+            let material = fixture.verify(&fixture.request).await;
+            let facts = material.policy_facts().clone();
+            let result =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &fixture.request)
+                    .unwrap();
+            let evidence = marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2::from_json(
+                &result[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2].to_string(),
+            )
+            .unwrap();
+            assert_eq!(evidence.selected_claims["email"], EMAIL);
+            assert_eq!(evidence.trust.profile, owners.snapshot.profile);
+            assert_eq!(evidence.status.state, ManagedCredentialStatusState::Active);
+            assert_eq!(owners.trust_calls.lock().unwrap().len(), 1);
+            assert_eq!(owners.status_calls.lock().unwrap().len(), 1);
+            assert!(
+                evaluate_verified_facts_for_policy(facts, &fixture.policy, &fixture.request)
+                    .is_err()
+            );
+
+            qualify_live_managed_flow(&fixture, network, &values).await;
+
+            for (shutdown, _) in &servers {
+                shutdown.send(true).unwrap();
+            }
+            for (_, server) in servers {
+                tokio::time::timeout(Duration::from_secs(20), server)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+            // The joined path has already observed the real owner deadline.
+            // This is an expired-input rejection, not a fresh outage/fallback
+            // qualification; the owner-channel contract covers fresh outages.
+            assert!(
+                fixture
+                    .orchestrator
+                    .verify_material(&fixture.policy, &fixture.request)
+                    .await
+                    .is_err(),
+                "expired input remains inadmissible after authenticated owner shutdown"
             );
         }
 
