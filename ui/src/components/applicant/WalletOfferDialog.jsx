@@ -47,7 +47,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
   const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
   const hasRegisteredWallet = preferredWallets.length > 0;
   const [dialogState, setDialogState] = useState(() => createWalletOfferDialogState());
-  const { offerData, loading, error } = dialogState;
+  const { offerData, loading, error, requiresIssuerHelp } = dialogState;
 
   const fetchOffer = useCallback(async () => {
     if (!applicationId) return;
@@ -156,7 +156,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-        {hasRegisteredWallet && error && (
+        {hasRegisteredWallet && error && !requiresIssuerHelp && (
           <Button
             startIcon={<RefreshIcon />}
             onClick={fetchOffer}

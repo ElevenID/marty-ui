@@ -31,6 +31,8 @@ function ResourcePage({
   resourceName,
   buildPath,
   newPath,
+  buildDescription,
+  newDescription,
   tabs,
   breadcrumbs,
   pageTestId,
@@ -144,6 +146,8 @@ function ResourcePage({
               resourceName={resourceName}
               buildPath={buildPath}
               newPath={newPath}
+              buildDescription={buildDescription}
+              newDescription={newDescription}
             />
           )}
         </Box>

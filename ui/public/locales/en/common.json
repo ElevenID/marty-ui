@@ -153,6 +153,7 @@
   },
   "buildButton": {
     "build": "Build {{resourceName}}",
+    "chooseCreationMethod": "Choose how to create {{resourceName}}",
     "guidedWizard": "Guided wizard",
     "newAdvanced": "New (Advanced)",
     "rawFormEditor": "Raw form / JSON editor"

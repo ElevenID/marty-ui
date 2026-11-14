@@ -11,7 +11,7 @@ import { useAuth } from '../../../hooks/useAuth';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { activateCredentialTemplate, getCredentialTemplate, updateCredentialTemplate } from '../../../services/presentationPolicyApi';
-import { getErrorMessage } from '../../../services/api';
+import { getErrorCode, getErrorMessage } from '../../../services/api';
 import { createTemplateVersionOperation } from '../../../services/credentialTemplateVersionOperation';
 import { MAX_VALIDITY_DAYS, MIN_VALIDITY_OFFSET, MAX_VALIDITY_OFFSET } from './credentialTemplateValidity';
 
@@ -171,7 +171,14 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
       }
       setTemplate(result); setSettings(settingsFor(result)); setActivated(true);
     } catch (cause) {
-      if (isCurrent()) setError(getErrorMessage(cause));
+      if (isCurrent()) {
+        const message = getErrorMessage(cause);
+        const dependencyCode = 'CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE';
+        setError(getErrorCode(cause) === dependencyCode || message === dependencyCode ? {
+          message: 'Your draft is saved. A required service is unavailable, so activation could not complete. Try again later, or ask your administrator to check the required services.',
+          supportCode: dependencyCode,
+        } : message);
+      }
     } finally {
       if (isCurrent()) { busyRef.current = false; setBusy(false); setActivating(false); }
     }
@@ -196,7 +203,13 @@ function CredentialTemplateEditor({ organizationId, principalId, templateId, can
             <Typography sx={{ overflowWrap: 'anywhere' }}>{template.issuer_did}</Typography>
             <Typography variant="body2">{Array.isArray(template.claims) ? template.claims.length : 0} claims</Typography>
           </Paper>
-          {error && <Alert severity="error">{error}</Alert>}
+          {error && <Alert severity="error">
+            {typeof error === 'string' ? error : error.message}
+            {error.supportCode && <Box component="details" sx={{ mt: 1 }}>
+              <Typography component="summary" variant="body2">Support details</Typography>
+              <Typography variant="caption">Error code: {error.supportCode}</Typography>
+            </Box>}
+          </Alert>}
           {saved && <Alert severity="success">Draft settings saved.</Alert>}
           {activated && <Alert severity="success">This credential template is active.</Alert>}
           {isDraft ? <>

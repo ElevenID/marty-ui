@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, within } from '@testing-library/react';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 import ApplicationTemplatesPage from './ApplicationTemplatesPage';
+import BuildButton from '../../common/BuildButton';
 
 const { mockListApplicationTemplates, mockListCredentialTemplates, consoleState, authState } = vi.hoisted(() => ({
   mockListApplicationTemplates: vi.fn(),
@@ -78,6 +79,38 @@ describe('ApplicationTemplatesPage', () => {
     expect(preview).toHaveAttribute('href', 'https://marty.example.com:8443/applicant/preview/applications/application%2Ftemplate%3Fpreview%3Done?organization_id=org%2Fselected%3Fscope%3Dtwo');
     expect(preview).toHaveAttribute('target', '_blank');
     expect(preview).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('names the creation menu and describes the actual application form editors', async () => {
+    const { user } = renderWithRouter(<ApplicationTemplatesPage />, route);
+    const toggle = screen.getByRole('button', { name: 'Choose how to create Application Template' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    toggle.focus();
+    await user.keyboard('{Enter}');
+    const menu = await screen.findByRole('menu', { name: 'Choose how to create Application Template' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(menu);
+    expect(within(menu).getByRole('menuitem', { name: 'Build Application Template Application form editor' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'New (Advanced) Additional evidence, claim and notification settings' })).toBeInTheDocument();
+    expect(screen.queryByText('Guided wizard')).not.toBeInTheDocument();
+    expect(screen.queryByText('Raw form / JSON editor')).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'false'));
+    expect(toggle).toHaveFocus();
+  });
+
+  it('keeps other resource descriptions and menu identities independent', async () => {
+    const { user } = renderWithRouter(<>
+      <ApplicationTemplatesPage />
+      <BuildButton resourceName="Trust Profile" buildPath="/build" newPath="/new" />
+    </>, route);
+    const applicationToggle = screen.getByRole('button', { name: 'Choose how to create Application Template' });
+    const trustToggle = screen.getByRole('button', { name: 'Choose how to create Trust Profile' });
+    expect(applicationToggle.id).not.toBe(trustToggle.id);
+    await user.click(trustToggle);
+    const menu = await screen.findByRole('menu', { name: 'Choose how to create Trust Profile' });
+    expect(within(menu).getByText('Guided wizard')).toBeInTheDocument();
+    expect(within(menu).getByText('Raw form / JSON editor')).toBeInTheDocument();
   });
 
   it('keeps a failed first load out of the table and retries in place', async () => {

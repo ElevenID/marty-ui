@@ -39,7 +39,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LoginIcon from '@mui/icons-material/Login';
 import BadgeIcon from '@mui/icons-material/Badge';
 import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
-import PersonIcon from '@mui/icons-material/Person';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAuth } from '../../hooks/useAuth';
 import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
@@ -646,7 +645,7 @@ function ApplicationFormSession({ previewContext }) {
   // ===========================================================================
   // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
-  const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
+  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
   const canAutoApply = isOneClickCredential && canAutoApplyApplicationTemplate({ applicationTemplate, user });
   const isOneClickApplication = canAutoApply && !isCanvasLtiApplication;
   const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || t('applicationForm.title.default');
@@ -675,7 +674,16 @@ function ApplicationFormSession({ previewContext }) {
         updateApplicantProfile: (_applicantId, data) => action.run(upsertMyApplicantProfile, data),
         createApplication: (data) => action.run(createApplicationApi, data),
         submitApplication: (id) => action.run(submitApplicationApi, id),
-        generateIssuanceOffer: (id) => action.run(generateIssuanceOffer, id),
+        generateIssuanceOffer: async (id) => {
+          try {
+            return await action.run(generateIssuanceOffer, id);
+          } catch (offerError) {
+            // The application already exists. Keep its identity so an offer
+            // failure cannot send the applicant through creation again.
+            if (action.isCurrent()) setApplicationId(id);
+            throw offerError;
+          }
+        },
         listApplications: (params) => action.run(listApplicationsApi, params),
       });
       setApplicationId(result.applicationId);
@@ -1180,7 +1188,7 @@ function ApplicationFormSession({ previewContext }) {
 
             <Button
               variant="contained"
-              onClick={() => navigate(`/console/applicant/applications${applicationId ? `?id=${applicationId}` : ''}`)}
+              onClick={() => navigate(`/console/applicant/identity${applicationId ? `?id=${encodeURIComponent(applicationId)}` : ''}`)}
             >
               {t('applicationForm.success.viewApplications')}
             </Button>
@@ -1302,10 +1310,9 @@ function ApplicationFormSession({ previewContext }) {
     const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
     const ctaLabel = isPreview
       ? t('applicationForm.oneClick.previewAction')
-      : (isMdocCredential ? 'Get Membership ID' : 'Add to Wallet');
-    const ctaSubtext = [credentialConfig?.format, credentialConfig?.issuanceProtocol]
-      .filter(Boolean)
-      .join(' - ');
+      : (applicationId ? t('applicationForm.oneClick.viewSavedApplication') : (isMdocCredential ? 'Get Membership ID' : 'Add to Wallet'));
+    const plannedFormat = credentialConfig?.format || credentialConfig?.credential_payload_format;
+    const ctaSubtext = credentialConfig?.issuanceProtocol || credentialConfig?.issuance_protocol || '';
 
     const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId: applicationOrganizationId });
 
@@ -1337,15 +1344,16 @@ function ApplicationFormSession({ previewContext }) {
               </Typography>
             </Box>
 
-            {/* Issuer info */}
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" color="text.secondary">
-                Issued by
-              </Typography>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                ElevenID LLC
-              </Typography>
-            </Box>
+            {credentialConfig?.vendorName && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="caption" color="text.secondary">
+                  {t('applicationForm.oneClick.issuerLabel')}
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {credentialConfig.vendorName}
+                </Typography>
+              </Box>
+            )}
 
             {/* Credential details */}
             <Paper
@@ -1353,7 +1361,10 @@ function ApplicationFormSession({ previewContext }) {
               sx={{ p: 2.5, mb: 2, textAlign: 'left', borderRadius: 2, bgcolor: 'background.default' }}
             >
               <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                Credential Details
+                {t('applicationForm.oneClick.credentialPreview')}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {t('applicationForm.oneClick.previewStatus')}
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                 {summaryFields.map(({ label, value }) => (
@@ -1365,11 +1376,19 @@ function ApplicationFormSession({ previewContext }) {
               </Box>
             </Paper>
 
-            {/* Trust signals */}
+            {/* Planned properties do not establish issuance or verification. */}
             <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center' }}>
-              <Typography variant="caption" color="text.secondary">🔒 Cryptographically signed</Typography>
-              <Typography variant="caption" color="text.secondary">🪪 Verifiable credential (W3C / ISO)</Typography>
-              <Typography variant="caption" color="text.secondary">🔁 Reusable across services</Typography>
+              {plannedFormat && (
+                <Typography variant="caption" color="text.secondary">
+                  {t('applicationForm.oneClick.plannedFormat', { format: plannedFormat })}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                {t('applicationForm.oneClick.signingAfterIssue')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {t('applicationForm.oneClick.acceptanceAfterIssue')}
+              </Typography>
             </Box>
 
             {/* Error */}
@@ -1385,17 +1404,19 @@ function ApplicationFormSession({ previewContext }) {
               variant="contained"
               size="large"
               fullWidth
-              onClick={handleAutoApply}
+              onClick={applicationId
+                ? () => navigate(`/console/applicant/identity?id=${encodeURIComponent(applicationId)}`)
+                : handleAutoApply}
               disabled={autoApplying}
               startIcon={autoApplying ? <CircularProgress size={20} color="inherit" /> : (isMdlCredential ? <DirectionsCarIcon /> : <BadgeIcon />)}
               sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
             >
-              {autoApplying ? 'Issuing credential…' : ctaLabel}
+              {autoApplying ? t('applicationForm.oneClick.requesting') : ctaLabel}
             </Button>
 
             {/* Helper text */}
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-              {t(isPreview ? 'applicationForm.oneClick.previewHelper' : 'applicationForm.oneClick.walletHelper')}
+              {t(isPreview ? 'applicationForm.oneClick.previewHelper' : 'applicationForm.oneClick.requestHelper')}
             </Typography>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
@@ -1404,7 +1425,7 @@ function ApplicationFormSession({ previewContext }) {
           </Paper>
         </Fade>
 
-        {/* Wallet claim dialog — opens after successful issuance */}
+        {/* The wallet invite is not evidence of completed credential issuance. */}
         <ClaimCredentialDialog
           open={claimDialogOpen}
           onClose={() => {

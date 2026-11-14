@@ -56,6 +56,8 @@ export function normalizeTemplateToFormConfig(template) {
     name: template?.name,
     display_name: template?.name,
     description: template?.description,
+    credential_payload_format: template?.credential_payload_format,
+    issuance_protocol: template?.issuance_protocol,
     required_fields: requiredClaims,
     optional_fields: optionalClaims,
     custom_fields: [],
@@ -364,54 +366,29 @@ export function canAutoApplyApplicationTemplate({ applicationTemplate, user }) {
 }
 
 export function getOneClickSummaryFields({ credentialConfig, user, organizationId }) {
-  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential } = getCredentialKindFlags(credentialConfig);
-  const displayRole = (user?.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value)) || 'applicant';
-
-  if (isOpenBadgeCredential) {
-    return [
-      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-      { label: 'Email', value: user?.email || '—' },
-      { label: 'Role', value: formatRoleLabel(displayRole) },
-      { label: 'Badge', value: credentialConfig?.name || 'Verified Member Badge' },
-    ];
+  const fields = credentialConfig?.application_template?.form_fields;
+  if (Array.isArray(fields)) {
+    // Show the same profile values that the one-click application submits.
+    // Issuer-sourced credential claims have not been resolved at this point.
+    return fields.filter((field) => field?.field_id).map((field) => ({
+      label: field.label || humanizeFieldName(field.field_id),
+      value: applicantProfileValue(field.field_id, user),
+    })).filter(({ value }) => value !== undefined && value !== null && value !== '');
   }
 
-  if (isAccessBadgeCredential) {
-    return [
-      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-      { label: 'Employee ID', value: `EMP-${user?.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}` },
-      { label: 'Department', value: 'Engineering' },
-      { label: 'Clearance', value: 'General' },
-    ];
-  }
-
-  if (isMdocMemberCredential) {
-    const roleLabel = formatRoleLabel(displayRole);
-    return [
-      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-      { label: 'Email', value: user?.email || '—' },
-      { label: 'Role', value: roleLabel },
-      { label: 'Format', value: 'mDoc (ISO 18013-5)' },
-    ];
-  }
-
-  if (isMdlCredential) {
-    return [
-      { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
-      { label: 'Document Number', value: `MDL-${user?.user_id?.slice(0, 8)?.toUpperCase() || '00000000'}` },
-      { label: 'Driving Privileges', value: 'C' },
-      { label: 'Issuing Authority', value: 'ElevenID LLC' },
-    ];
-  }
-
-  const roleLabel = formatRoleLabel(displayRole);
-
-  return [
+  const { isMemberCredential, isMdocMemberCredential, isOpenBadgeCredential } = getCredentialKindFlags(credentialConfig);
+  const displayRole = (user?.roles || []).find((value) => ['applicant', 'vendor', 'administrator'].includes(value));
+  const result = [
     { label: 'Name', value: [user?.given_name, user?.family_name].filter(Boolean).join(' ') || '—' },
     { label: 'Email', value: user?.email || '—' },
-    { label: 'Role', value: roleLabel },
-    { label: 'Organization', value: user?.organization_name || user?.default_organization_name || organizationId || 'ElevenID LLC' },
   ];
+  if ((isMemberCredential || isMdocMemberCredential || isOpenBadgeCredential) && displayRole) {
+    result.push({ label: 'Role', value: formatRoleLabel(displayRole) });
+  }
+  if (isOpenBadgeCredential && credentialConfig?.name) result.push({ label: 'Badge', value: credentialConfig.name });
+  const organizationName = user?.organization_name || user?.default_organization_name || organizationId;
+  if (isMemberCredential && organizationName) result.push({ label: 'Organization', value: organizationName });
+  return result;
 }
 
 export function validateApplicationStep({ stepIndex, steps, formData, validationRules = {} }) {

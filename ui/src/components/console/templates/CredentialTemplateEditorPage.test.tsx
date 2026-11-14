@@ -73,6 +73,35 @@ describe('CredentialTemplateEditorPage', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
+  it('explains a known dependency outage while retaining its support code and the same draft', async () => {
+    activate.mockRejectedValueOnce({ detail: 'CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE', status: 503 });
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your draft is saved. A required service is unavailable');
+    expect(screen.getByRole('alert')).toHaveTextContent('ask your administrator to check the required services');
+    const details = screen.getByText('Error code: CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE');
+    expect(details).not.toBeVisible();
+    await user.click(screen.getByText('Support details'));
+    expect(details).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Template name' })).toHaveValue('Review credential');
+    await user.click(screen.getByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByText('This credential template is active.')).toBeInTheDocument();
+    expect(screen.queryByText('Support details')).not.toBeInTheDocument();
+    expect(activate.mock.calls).toEqual([['template-1'], ['template-1']]);
+    expect(post).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('does not replace an unrelated activation diagnostic with outage guidance', async () => {
+    activate.mockRejectedValueOnce({ detail: 'CREDENTIAL_TEMPLATE.TRUST_PROFILE_INVALID', status: 422 });
+    const { user } = openEditor();
+    await user.click(await screen.findByRole('button', { name: 'Activate draft' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('CREDENTIAL_TEMPLATE.TRUST_PROFILE_INVALID');
+    expect(screen.queryByText('Support details')).not.toBeInTheDocument();
+    expect(screen.queryByText(/A required service is unavailable/)).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it('reconciles a previously successful activation without sending another activation', async () => {
     const { user } = openEditor();
     const action = await screen.findByRole('button', { name: 'Activate draft' });

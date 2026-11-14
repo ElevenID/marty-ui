@@ -29,6 +29,14 @@ describe('CryptoValidityStep', () => {
     mockUseAsyncData.mockReturnValue({ data: [], loading: false, error: null });
   })
 
+  it('explains required revocation without promising a ready default or an optional step', () => {
+    renderWithoutRouter(<CryptoValidityStep data={{ validity_rules: { ...INITIAL_TEMPLATE_VALIDITY } }} onChange={vi.fn()} />)
+    expect(screen.getByRole('heading', { name: 'Cryptography & Validity' })).toBeInTheDocument()
+    expect(screen.queryByText(/Defaults are secure|Skip this step|Cryptography & Validity \(Optional\)/)).not.toBeInTheDocument()
+    expect(screen.getByRole('combobox', { name: /Revocation Profile/ }))
+      .toHaveAccessibleDescription('Select an active Revocation Profile to continue.')
+  })
+
   it('keeps an empty draft editable and validates values without replacing them with a fallback', async () => {
     const { user } = renderWithoutRouter(<ValidityEditor />);
     const days = screen.getByRole('spinbutton', { name: /Default Validity/ });
@@ -59,6 +67,7 @@ describe('CryptoValidityStep', () => {
     expect(inputs[1]).toHaveValue(days);
     expect(inputs[2]).toHaveValue(900);
     expect(screen.getByText(/Seconds-based durations round up/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`With a default validity of ${days} ${days === 1 ? 'day,' : 'days,'}`))).toBeInTheDocument();
   });
 
   it('treats null revocation profile data as an empty list', () => {
