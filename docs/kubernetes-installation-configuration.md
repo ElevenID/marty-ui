@@ -17,6 +17,7 @@ checks for a customer UUID and issuer identity rather than the default tenant.
 | Runtime images | Authenticated `marty-images.json` from bootstrap | Keep the signed repositories and immutable digests |
 | Registry access | Bootstrap `--image-pull-secret`, repeated as needed | Each existing Secret is in the selected namespace and has a Kubernetes registry type |
 | Public URL, organization and login policy | One nonsecret `installation.yaml` | Host, origin, TLS certificate and callback identity agree |
+| Login provider | `auth.provider`, plus `auth.external` for a fresh external-OIDC installation | Retain the immutable provider selection; external administrator already exists |
 | Passwords and provider credentials | Existing Kubernetes Secrets and private bootstrap storage | Use the catalog keys and selected Secret names; never put credentials in `config` |
 | Cluster and namespace | Explicit kubeconfig, context and dedicated namespace | Use the same selections for bootstrap, Helm and kubectl |
 | Persistent data and credential lifecycle | Original bootstrap state, PVCs and retained generation receipts | Preserve identity across a reboot; check expiry before resuming |
@@ -36,7 +37,7 @@ credentials. An empty selection produces an empty list for public images.
 
 ## Select the public origin and initial login policy
 
-A DNS installation values file can contain:
+A DNS installation values file using the default managed Keycloak can contain:
 
 ```yaml
 publicHost: identity.example.org
@@ -76,6 +77,13 @@ issuer DID can depend on those exact bytes.
 
 The certificate must cover the chosen name or IP. The IP path also requires the
 controller's default TLS certificate, as described in the milestone guide.
+For an existing Traefik default TLSStore, the explicit
+`ingress.useDefaultCertificate=true` option can remove the need for an
+application-namespace certificate copy. Leave `ingress.tlsSecretName` empty in
+that mode and retain the independently managed Certificate/TLSStore owner.
+The default mode still requires the named existing Secret. See the
+[single certificate owner procedure](kubernetes-ui-live-reload.md#use-one-public-certificate-owner)
+before adopting the option on an existing installation.
 Leave `ingress.host` unset for ordinary direct hosting. A separate DNS/wildcard
 Ingress override is available for an operator-managed reverse proxy; that proxy
 must route the canonical public origin correctly. This does not create another
@@ -101,6 +109,30 @@ The packaged login realm is `11id`. The chart rejects a different
 Login policy flags reject invalid spellings rather than falling back to a
 different policy. Quote values such as `'false'` in the string-valued `config`
 mapping. The existing setup-script boolean spellings remain supported.
+
+### Select external OIDC on a fresh installation
+
+Use `auth.provider: external` with `auth.external.issuerUrl`, `clientId` and
+`allowedAlgorithms` instead of the managed `KEYCLOAK_*` settings above. The
+[chart guide](../deploy/helm/marty/README.md#external-oidc) gives the complete
+public/confidential client example, optional scopes and separate Secret boundary.
+The provider's precreated administrator must match `organization.adminEmail`
+and return verified identity claims in its signed ID token. Its registered
+callback is the exact public origin followed by `/v1/auth/callback`.
+
+Keep managed OpenBao, the complete signed image/bootstrap inventories and the
+existing credential lifecycle. External login omits the Keycloak runtime; it
+does not move workload custody to the identity provider. Use separate namespaces,
+provider clients and private credentials for beta and production. Cloudflare
+hosting controls the public route independently of that provider choice.
+Registration, email, social login and account themes are configured at the
+external provider; managed Keycloak settings in `config` conflict with this mode.
+
+The immutable `marty-auth-selection` record is required for typed upgrades and
+renewal. Provider identity inputs cannot be changed in place. Preview an existing
+external installation with `helm upgrade --dry-run=server`, using its retained
+values, so the chart can inspect the live selection. The fresh-install offline
+render below does not qualify an external upgrade or migrate an existing realm.
 
 ## Enable Keycloak mail explicitly
 
@@ -187,6 +219,13 @@ HTTPS, login and acceptance.
 Keep the AWS Free plan/credit checks and absolute shutdown timer from the
 milestone guide. Reuse the retained node, namespace, OpenBao store and private
 bootstrap evidence. Check the current public IP and certificate before access.
+
+Run the bounded, read-only
+[development resume preflight](kubernetes-ui-live-reload.md#run-the-development-resume-preflight)
+with the explicit EC2 instance, context, application namespace and public
+certificate owner. It checks fresh IP/generation/served-TLS agreement, public
+leaf lifetimes, current workload readiness and the actual gateway readiness
+contract. It does not renew credentials or qualify an authenticated demo.
 
 Development workload credentials have an **eight-hour absolute lifetime** and
 the initial migration token a **two-hour lifetime**. Stopping the node does not

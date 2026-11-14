@@ -312,7 +312,11 @@ test('applicant selects a browser wallet during login badge claim flow', async (
 
   const walletSelector = page.getByTestId('wallet-selector');
   await expect(walletSelector).toBeVisible();
-  await expect(page.getByTestId('wallet-option-wr-default')).toHaveAttribute('aria-checked', 'true');
+  const defaultWallet = walletSelector.getByRole('radio', { name: /^Any OID4VCI Wallet\b/ });
+  const browserWallet = walletSelector.getByRole('radio', { name: /^walt\.id Wallet\b/ });
+  await expect(walletSelector.getByRole('radio')).toHaveCount(walletRegistry.length + 1);
+  await expect(defaultWallet).toBeChecked();
+  await expect(browserWallet).not.toBeChecked();
   await expect(page.getByTestId('wallet-option-wr-waltid-001')).toContainText('Browser');
   await expect(page.getByTestId('wallet-option-wr-spruce-001')).toContainText('Mobile');
   for (const wallet of walletRegistry) {
@@ -333,9 +337,11 @@ test('applicant selects a browser wallet during login badge claim flow', async (
   await expect.poll(() => issueRequests.length).toBeGreaterThanOrEqual(1);
   expect(issueRequests).toEqual([{}]);
 
-  await page.getByTestId('wallet-option-wr-waltid-001').click();
+  await browserWallet.check();
 
-  await expect(page.getByTestId('wallet-option-wr-waltid-001')).toHaveAttribute('aria-checked', 'true');
+  await expect(browserWallet).toBeChecked();
+  await expect(defaultWallet).not.toBeChecked();
+  await expect(walletSelector.getByRole('radio', { checked: true })).toHaveCount(1);
   await expect(page.getByRole('heading', { name: 'Scan with walt.id Wallet' })).toBeVisible();
   await expect(page.getByText('Secure issuance via OpenID4VCI')).toBeVisible();
 

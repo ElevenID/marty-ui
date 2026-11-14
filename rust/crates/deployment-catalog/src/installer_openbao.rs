@@ -5,14 +5,14 @@
 use crate::{
     installer_compose::{ComposeInputs, ComposeReceipt, ComposeSession},
     installer_runtime::DockerRunner,
-    installer_state::{InstallerState, Phase, SCALAR_SECRETS},
+    installer_state::{InstallerState, Phase, LOCAL_AUTH_SCALAR_SECRETS, SCALAR_SECRETS},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     time::Duration,
@@ -66,6 +66,89 @@ pub(crate) fn require_binding(state: &InstallerState, bao: &OpenBaoInventory) ->
         "OpenBao observation differs from installation binding",
     )
 }
+
+/// Check the exact fresh credential set before creating any OpenBao state or
+/// contacting Docker. External login changes only the local-auth scalars and
+/// adds its already imported, selection-bound client-secret file.
+fn validate_initial_credentials(installation: &Path, state: &InstallerState) -> Result<()> {
+    const REFUSED: &str = "fresh OpenBao credential custody differs";
+    const OIDC_SECRET: &str = "external_oidc_client_secret";
+    use crate::installer_host_fs as host_fs;
+
+    state.require_live_phase(Phase::Provisioning)?;
+    state.with_inspection(|view| {
+        view.require_path_binding(installation)?;
+        require(crate::installer_foundation::load(view)?.is_none(), REFUSED)?;
+        let selected = crate::installer_oidc::load(view)?;
+        let scalars: BTreeSet<_> = SCALAR_SECRETS
+            .into_iter()
+            .filter(|name| selected.is_none() || !LOCAL_AUTH_SCALAR_SECRETS.contains(name))
+            .collect();
+        let mut expected: BTreeSet<String> = scalars.iter().map(|name| (*name).into()).collect();
+        if selected.is_some() {
+            expected.insert(OIDC_SECRET.into());
+        }
+        let path = installation.join("secrets");
+        let secrets = host_fs::directory(&path, REFUSED)?;
+        require(
+            host_fs::file_names(&secrets, REFUSED)? == expected,
+            "fresh scalar secret set differs",
+        )?;
+        for name in scalars {
+            let file = host_fs::open_child(&secrets, name, libc::O_PATH, REFUSED)?;
+            let metadata = file.metadata().map_err(|_| REFUSED)?;
+            require(
+                metadata.is_file()
+                    && metadata.nlink() == 1
+                    && metadata.uid() == unsafe { libc::geteuid() }
+                    && metadata.mode() & 0o7777 == 0o444
+                    && metadata.len() == 64,
+                "scalar credential custody differs",
+            )?;
+        }
+        if let Some(selected) = selected {
+            let file = host_fs::open_child(
+                &secrets,
+                OIDC_SECRET,
+                libc::O_RDONLY | libc::O_NONBLOCK,
+                REFUSED,
+            )?;
+            let before = file.metadata().map_err(|_| REFUSED)?;
+            require(
+                before.is_file()
+                    && before.nlink() == 1
+                    && before.uid() == unsafe { libc::geteuid() }
+                    && before.mode() & 0o7777 == 0o444
+                    && before.len() <= 65536,
+                REFUSED,
+            )?;
+            let mut bytes = Vec::new();
+            (&file)
+                .take(65537)
+                .read_to_end(&mut bytes)
+                .map_err(|_| REFUSED)?;
+            let after = file.metadata().map_err(|_| REFUSED)?;
+            require(
+                bytes.len() as u64 == before.len()
+                    && before.dev() == after.dev()
+                    && before.ino() == after.ino()
+                    && before.uid() == after.uid()
+                    && before.nlink() == after.nlink()
+                    && before.mode() == after.mode()
+                    && before.len() == after.len()
+                    && before.mtime() == after.mtime()
+                    && before.mtime_nsec() == after.mtime_nsec()
+                    && before.ctime() == after.ctime()
+                    && before.ctime_nsec() == after.ctime_nsec(),
+                REFUSED,
+            )?;
+            selected.verify_imported(&BTreeMap::from([(OIDC_SECRET.into(), bytes)]))?;
+        }
+        host_fs::require_directory_binding(&path, &secrets, REFUSED)?;
+        view.require_path_binding(installation)
+    })
+}
+
 pub fn start_openbao(
     docker_path: &Path,
     installation: &Path,
@@ -86,29 +169,8 @@ pub fn start_openbao(
             && inputs.approved_images.contains(plugin_image),
         "OpenBao requires fresh admitted project",
     )?;
+    validate_initial_credentials(installation, state)?;
     let secrets = installation.join("secrets");
-    let names = fs::read_dir(&secrets)
-        .map_err(|_| "scalar secrets unavailable")?
-        .map(|e| {
-            e.map(|v| v.file_name().to_string_lossy().into_owned())
-                .map_err(|_| "secret inventory unavailable")
-        })
-        .collect::<std::result::Result<std::collections::BTreeSet<_>, _>>()?;
-    require(
-        names == SCALAR_SECRETS.iter().map(|v| v.to_string()).collect(),
-        "fresh scalar secret set differs",
-    )?;
-    for name in SCALAR_SECRETS {
-        let m = fs::symlink_metadata(secrets.join(name)).map_err(|_| "scalar credential absent")?;
-        require(
-            m.is_file()
-                && m.nlink() == 1
-                && m.uid() == unsafe { libc::geteuid() }
-                && m.mode() & 0o7777 == 0o444
-                && m.len() == 64,
-            "scalar credential custody differs",
-        )?;
-    }
     state.create_private_directory("openbao-state")?;
     state.persist_openbao_state_creation_receipt(installation)?;
     state.prepare_openbao_control()?;
@@ -228,4 +290,173 @@ pub fn start_openbao(
         pending_receipt: pending,
     };
     Ok((result, receipt))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::installer_state::{Identity, PASSWORD_POLICY};
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn private_file(path: &Path, bytes: &[u8], mode: u32) {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    fn fixture(external_secret: Option<&[u8]>) -> (tempfile::TempDir, PathBuf, InstallerState) {
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let path = temp.path().join("installation");
+        let mut state = InstallerState::create(
+            &path,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        if let Some(secret) = external_secret {
+            let secret_path = temp.path().join("client-secret");
+            if !secret.is_empty() {
+                private_file(&secret_path, secret, 0o600);
+            }
+            let configuration = json!({
+                "schema": "elevenid.installer-external-oidc/v1",
+                "external_oidc": {
+                    "issuer_url": "https://identity.example.test/tenant",
+                    "client_id": "fixture-client",
+                    "admin_email": "operator@example.test",
+                    "allowed_algorithms": ["RS256"],
+                    "client_secret_file": (!secret.is_empty()).then_some(secret_path)
+                }
+            });
+            let input = temp.path().join("oidc.json");
+            private_file(&input, &serde_json::to_vec(&configuration).unwrap(), 0o600);
+            crate::installer_oidc::select(
+                crate::installer_oidc::prepare(Some(&input), false).unwrap(),
+                &mut state,
+            )
+            .unwrap();
+        }
+        state.advance(Phase::Provisioning).unwrap();
+        if external_secret.is_some() {
+            state.generate_external_auth_credentials().unwrap();
+            state
+                .with_inspection(crate::installer_oidc::load)
+                .unwrap()
+                .unwrap()
+                .import_inputs(&mut state)
+                .unwrap();
+        } else {
+            state
+                .generate_local_credentials(&json!({"passwordPolicy": PASSWORD_POLICY}))
+                .unwrap();
+        }
+        (temp, path, state)
+    }
+
+    #[test]
+    fn fresh_credential_preflight_preserves_managed_inventory() {
+        for mutation in ["none", "missing", "extra", "mode", "length"] {
+            let (_temp, path, state) = fixture(None);
+            let scalar = path.join("secrets/postgres_password");
+            match mutation {
+                "none" => {}
+                "missing" => fs::remove_file(scalar).unwrap(),
+                "extra" => private_file(
+                    &path.join("secrets/external_oidc_client_secret"),
+                    b"",
+                    0o444,
+                ),
+                "mode" => fs::set_permissions(scalar, fs::Permissions::from_mode(0o600)).unwrap(),
+                "length" => {
+                    fs::remove_file(&scalar).unwrap();
+                    private_file(&scalar, b"too-short", 0o444);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                validate_initial_credentials(&path, &state).is_ok(),
+                mutation == "none",
+                "{mutation}"
+            );
+            assert!(!path.join("openbao-state").exists());
+        }
+    }
+
+    #[test]
+    fn fresh_external_preflight_accepts_exact_public_and_confidential_inputs_without_mutation() {
+        for secret in [b"".as_slice(), b"synthetic-confidential-client-secret"] {
+            let (_temp, path, state) = fixture(Some(secret));
+            let journal = fs::read(path.join("installation.json")).unwrap();
+            validate_initial_credentials(&path, &state).unwrap();
+            assert_eq!(fs::read(path.join("installation.json")).unwrap(), journal);
+            assert!(!path.join("operator-password").exists());
+            assert!(!path.join("openbao-state").exists());
+            assert_eq!(
+                fs::read(path.join("secrets/external_oidc_client_secret")).unwrap(),
+                secret
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_external_preflight_rejects_missing_extra_and_changed_credentials() {
+        for secret in [b"".as_slice(), b"synthetic-confidential-client-secret"] {
+            for mutation in [
+                "missing-scalar",
+                "local-auth",
+                "extra",
+                "missing-secret",
+                "changed-secret",
+                "mode",
+                "symlink",
+                "hardlink",
+                "missing-selection",
+            ] {
+                let (temp, path, state) = fixture(Some(secret));
+                let target = path.join("secrets/external_oidc_client_secret");
+                match mutation {
+                    "missing-scalar" => {
+                        fs::remove_file(path.join("secrets/postgres_password")).unwrap()
+                    }
+                    "local-auth" => private_file(
+                        &path.join("secrets/keycloak_db_password"),
+                        &[b'x'; 64],
+                        0o444,
+                    ),
+                    "extra" => private_file(&path.join("secrets/unselected"), &[b'x'; 64], 0o444),
+                    "missing-secret" => fs::remove_file(target).unwrap(),
+                    "changed-secret" => {
+                        fs::remove_file(&target).unwrap();
+                        private_file(&target, b"changed", 0o444);
+                    }
+                    "mode" => {
+                        fs::set_permissions(target, fs::Permissions::from_mode(0o600)).unwrap()
+                    }
+                    "symlink" => {
+                        let outside = temp.path().join("replacement");
+                        private_file(&outside, secret, 0o444);
+                        fs::remove_file(&target).unwrap();
+                        symlink(outside, target).unwrap();
+                    }
+                    "hardlink" => fs::hard_link(target, temp.path().join("extra-link")).unwrap(),
+                    "missing-selection" => {
+                        fs::remove_file(path.join("evidence").join(crate::installer_oidc::RECORD))
+                            .unwrap()
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(
+                    validate_initial_credentials(&path, &state).is_err(),
+                    "accepted {mutation}"
+                );
+                assert!(!path.join("openbao-state").exists());
+                assert!(!path.join("openbao-pending.json").exists());
+            }
+        }
+    }
 }

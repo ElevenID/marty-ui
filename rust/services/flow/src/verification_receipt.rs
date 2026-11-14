@@ -37,16 +37,28 @@ pub(crate) struct PreparedVerificationReceipt {
 }
 
 /// A terminal result returned only after repository finalization succeeds.
-/// It is a Flow persistence fact, not canonical OID4VP or issuance authority.
+/// Managed Policy acquisition can additionally yield canonical historical
+/// evidence. Neither the receipt nor that evidence grants issuance authority.
 ///
 /// ```compile_fail
 /// let _: marty_flow::CommittedVerificationFinalization =
 ///     serde_json::from_str("{}").unwrap();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CommittedVerificationFinalization {
     instance: FlowInstanceRecord,
     receipt: FlowVerificationReceiptV1,
+    managed_evidence: Option<crate::AuthenticatedOid4vpEvidenceV2>,
+}
+
+impl std::fmt::Debug for CommittedVerificationFinalization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CommittedVerificationFinalization")
+            .field("receipt_digest", &self.receipt.receipt_digest)
+            .field("managed_evidence", &self.managed_evidence)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CommittedVerificationFinalization {
@@ -60,11 +72,32 @@ impl CommittedVerificationFinalization {
         &self.receipt
     }
 
+    #[must_use]
+    pub fn managed_evidence(&self) -> Option<&crate::AuthenticatedOid4vpEvidenceV2> {
+        self.managed_evidence.as_ref()
+    }
+
+    pub fn verification_projection(
+        &self,
+    ) -> Result<crate::VerificationResultResponse, crate::FlowRecordError> {
+        let mut response = self.instance.verification_projection()?;
+        response.canonical_evidence_digest = self
+            .managed_evidence
+            .as_ref()
+            .map(|evidence| evidence.projection().evidence_digest.clone());
+        Ok(response)
+    }
+
     pub(crate) fn after_commit(
         instance: FlowInstanceRecord,
         receipt: FlowVerificationReceiptV1,
+        managed_evidence: Option<crate::canonical_evidence::ValidatedManagedEvidence>,
     ) -> Self {
-        Self { instance, receipt }
+        Self {
+            instance,
+            receipt,
+            managed_evidence: managed_evidence.map(|evidence| evidence.after_owner_persistence()),
+        }
     }
 }
 
@@ -84,6 +117,32 @@ impl PreparedVerificationReceipt {
     ) -> Result<Self, RepositoryError> {
         let expected = &finalization.expected_instance;
         let instance = &finalization.instance;
+        reject_supplied_receipt(&instance.context, None)?;
+        if instance.result.as_ref().is_some_and(|result| {
+            [
+                marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+                crate::canonical_evidence::MANAGED_EVIDENCE_CONTEXT_KEY,
+                "canonical_evidence_digest",
+            ]
+            .iter()
+            .any(|field| result.get(*field).is_some())
+        }) {
+            return Err(invalid());
+        }
+        if let Some(evidence) = &finalization.managed_evidence {
+            evidence.validate_prepared(finalization)?;
+        } else if instance
+            .context
+            .get(crate::canonical_evidence::MANAGED_EVIDENCE_CONTEXT_KEY)
+            .is_some()
+            || instance.result.as_ref().is_some_and(|result| {
+                result
+                    .get(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2)
+                    .is_some()
+            })
+        {
+            return Err(invalid());
+        }
         let frozen = load_frozen_flow_presentation_request(expected).map_err(|_| invalid())?;
         let result = instance
             .result
@@ -283,9 +342,17 @@ pub(crate) fn reject_supplied_receipt(
     context: &Value,
     result: Option<&Value>,
 ) -> Result<(), RepositoryError> {
-    if context.get(VERIFICATION_RECEIPT).is_some()
-        || result.is_some_and(|value| value.get(VERIFICATION_RECEIPT).is_some())
-    {
+    if [
+        VERIFICATION_RECEIPT,
+        crate::canonical_evidence::MANAGED_EVIDENCE_CONTEXT_KEY,
+        marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+        marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2,
+        "canonical_evidence_digest",
+    ]
+    .iter()
+    .any(|field| {
+        context.get(*field).is_some() || result.is_some_and(|value| value.get(*field).is_some())
+    }) {
         return Err(invalid());
     }
     Ok(())

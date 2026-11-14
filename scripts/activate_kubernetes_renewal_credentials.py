@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import tarfile
 import time
+from urllib.parse import urlsplit
 
 import activate_kubernetes_application_credentials as application
 import bootstrap_kubernetes_openbao as bootstrap
@@ -85,6 +86,11 @@ CA_PROJECTIONS = {
     "applicant": ("ES_WORKLOAD_SERVER_CERT", ("ES_GRPC_CA_CERT",)),
 }
 REQUIRED = {row[0] for row in TLS_BINDINGS} | set(CA_PROJECTIONS) | {"keycloak"}
+RESOURCE_TYPES = application.RESOURCE_TYPES + ",configmaps"
+AUTH_PROVIDER = "marty.elevenid.com/auth-provider"
+AUTH_SELECTION = "marty.elevenid.com/auth-selection-sha256"
+OIDC_SECRET_VOLUME = "external-oidc-client"
+OIDC_SECRET_DIRECTORY = "/var/run/secrets/marty/external-oidc"
 # Both signed service and Keycloak images already qualify these GNU utilities.
 # Expected credential bytes never enter argv or diagnostics. stdout is retained
 # privately by Transport and compared as complete bytes, including PEM newlines.
@@ -96,6 +102,187 @@ DELIVERY_FILE = (
     '[ "$(readlink -f -- "$1")" = "$resolved" ]; '
     '[ "$(stat -c "%d:%i:%s:%Y:%Z" -- "$resolved")" = "$identity" ]'
 )
+
+
+def authentication_key(name: str) -> bool:
+    return name.startswith(("OIDC_", "KEYCLOAK_", "KC_", "MARTY_API_CLIENT_", "MARTY_ORG_ADMIN_")) or name in {
+        "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "CREDENTIAL_LOGIN_CREATE_USERS"}
+
+
+def external_environment(selected: dict) -> dict[str, str]:
+    oidc = selected["external"]
+    return {
+        "OIDC_PROVIDER_MODE": "external", "OIDC_CLIENT_ID": oidc["clientId"],
+        **{key: oidc["issuerUrl"] for key in ("OIDC_ISSUER_URL", "OIDC_ISSUER_URL_INTERNAL",
+                                           "OIDC_ISSUER_URL_EXTERNAL", "OIDC_EXTERNAL_ISSUER_URL")},
+        "OIDC_ALLOWED_ALGORITHMS": ",".join(oidc["allowedAlgorithms"]),
+        "OIDC_TRUSTED_ENDPOINT_ORIGINS": ",".join(oidc["trustedEndpointOrigins"]),
+        "OIDC_SCOPES": ",".join(oidc["scopes"]),
+        "OIDC_REDIRECT_URI": selected["redirectUri"],
+        "OIDC_POST_LOGOUT_REDIRECT_URI": selected["postLogoutRedirectUri"],
+        "KEYCLOAK_ADMIN_URL": "", "KEYCLOAK_TOKEN_EXCHANGE_ENABLED": "false",
+        "KEYCLOAK_PASSKEYS_ENABLED": "false", "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "false",
+        "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+    }
+
+
+def https_input(value: object, *, origin: bool = False) -> str:
+    bootstrap.require(isinstance(value, str) and 0 < len(value.encode()) <= 2048
+                      and value.startswith("https://") and not re.search(r"[\s\\?#]", value),
+                      "external OIDC HTTPS input differs")
+    url = urlsplit(value)
+    host = url.hostname or ""
+    bootstrap.require(url.scheme == "https" and url.username is None and url.password is None
+                      and re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", host) is not None
+                      and all(0 < len(label) <= 63 and not label.startswith("-") and not label.endswith("-")
+                              for label in host.split(".")) and len(host) <= 253,
+                      "external OIDC host differs")
+    port = url.port
+    bootstrap.require(port is None or 1 <= port <= 65535, "external OIDC HTTPS port differs")
+    canonical = "https://" + host + (":" + str(port) if port not in {None, 443} else "")
+    if origin:
+        bootstrap.require(value == canonical, "external OIDC origin must be canonical")
+    return value
+
+
+def authentication_selection(entries: list[dict], namespace: str) -> dict | None:
+    """A missing marker preserves the old managed graph; it never selects external."""
+    maps = {item["metadata"]["name"]: item for item in entries if item.get("kind") == "ConfigMap"}
+    marker = maps.get("marty-auth-selection")
+    if marker is None:
+        return None
+    meta = application.metadata(marker, "ConfigMap", namespace)
+    labels, annotations = meta.get("labels", {}), meta.get("annotations", {})
+    release = labels.get("app.kubernetes.io/instance")
+    bootstrap.require(isinstance(release, str) and release
+                      and labels.get("app.kubernetes.io/name") == "marty"
+                      and labels.get("app.kubernetes.io/managed-by") == "Helm"
+                      and annotations.get("meta.helm.sh/release-name") == release
+                      and annotations.get("meta.helm.sh/release-namespace") == namespace
+                      and marker.get("immutable") is True and marker.get("binaryData", {}) == {}
+                      and set(marker.get("data", {})) == {"selection.json"},
+                      "authentication selection ownership or immutability differs")
+    raw = marker["data"]["selection.json"]
+    bootstrap.require(isinstance(raw, str) and len(raw.encode()) <= 16384,
+                      "authentication selection size differs")
+    selected = application.json_bytes(raw.encode(), 16384)
+    provider = selected.get("provider")
+    bootstrap.require(selected.get("schema") == "marty.kubernetes-auth-selection/v1"
+                      and provider in {"keycloak", "external"}, "authentication selection schema differs")
+    result = {"selectionUid": meta["uid"], "releaseName": release,
+              "selectionSha256": hashlib.sha256(raw.encode()).hexdigest(), "selection": selected}
+    if provider == "keycloak":
+        bootstrap.require(set(selected) == {"schema", "provider"}, "managed authentication selection differs")
+        return result
+    bootstrap.require(set(selected) == {"schema", "provider", "external", "adminEmail", "redirectUri", "postLogoutRedirectUri"},
+                      "external authentication selection fields differ")
+    oidc = selected["external"]
+    bootstrap.require(isinstance(oidc, dict) and set(oidc) == {
+        "issuerUrl", "clientId", "allowedAlgorithms", "trustedEndpointOrigins", "scopes", "clientSecret"},
+        "external OIDC selection fields differ")
+    https_input(oidc["issuerUrl"])
+    bootstrap.require(isinstance(oidc["clientId"], str) and 0 < len(oidc["clientId"].encode()) <= 256
+                      and re.search(r"[\s\x00-\x1f\x7f]", oidc["clientId"]) is None,
+                      "external OIDC client identifier differs")
+    for name, maximum in (("allowedAlgorithms", 9), ("trustedEndpointOrigins", 8), ("scopes", 32)):
+        values = oidc[name]
+        bootstrap.require(isinstance(values, list) and len(values) <= maximum
+                          and all(isinstance(value, str) for value in values) and len(set(values)) == len(values),
+                          "external OIDC selection list differs")
+    bootstrap.require(oidc["allowedAlgorithms"] and set(oidc["allowedAlgorithms"]) <= {
+        "ES256", "ES384", "EdDSA", "RS256", "RS384", "RS512", "PS256", "PS384", "PS512"},
+        "external OIDC signing algorithms differ")
+    for origin in oidc["trustedEndpointOrigins"]:
+        https_input(origin, origin=True)
+    bootstrap.require("openid" in oidc["scopes"] and len(",".join(oidc["scopes"])) <= 2048
+                      and all(0 < len(value) <= 128 and all(33 <= ord(char) <= 126 and char not in '\"\'\\,'
+                              for char in value) for value in oidc["scopes"]), "external OIDC scopes differ")
+    secret = oidc["clientSecret"]
+    bootstrap.require(isinstance(secret, dict) and (not secret or (set(secret) == {"name", "key"}
+                      and isinstance(secret["name"], str) and len(secret["name"]) <= 253
+                      and re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", secret["name"]) is not None
+                      and isinstance(secret["key"], str) and len(secret["key"]) <= 253
+                      and re.fullmatch(r"[A-Za-z0-9._-]+", secret["key"]) is not None)),
+                      "external OIDC Secret reference differs")
+    email = selected["adminEmail"]
+    bootstrap.require(isinstance(email, str) and re.fullmatch(r"[^\s@]+@[^\s@]+", email) is not None
+                      and email.lower() not in {"admin@example.com", "user@example.com", "example@example.com"}
+                      and not email.lower().startswith("change-me"), "external OIDC administrator differs")
+    origin = https_input(selected["postLogoutRedirectUri"])
+    bootstrap.require(urlsplit(origin).path == "" and selected["redirectUri"] == origin + "/v1/auth/callback",
+                      "external OIDC callback differs")
+    config = maps.get("marty-config", {})
+    config_meta = application.metadata(config, "ConfigMap", namespace)
+    bootstrap.require(config_meta.get("labels", {}).get("app.kubernetes.io/instance") == release
+                      and config_meta.get("annotations", {}).get("meta.helm.sh/release-name") == release
+                      and config_meta.get("annotations", {}).get("meta.helm.sh/release-namespace") == namespace,
+                      "external authentication configuration ownership differs")
+    data = config.get("data", {})
+    expected = {**external_environment(selected), "MARTY_ORG_ADMIN_EMAIL": email}
+    bootstrap.require(isinstance(data, dict) and {key: value for key, value in data.items() if authentication_key(key)} == expected,
+                      "external authentication ConfigMap inputs differ")
+    result["configurationUid"] = config_meta["uid"]
+    return result
+
+
+def external_auth_consumer(spec: dict, binding: dict) -> None:
+    selected = binding["selection"]
+    container = spec["containers"][0]
+    expected = external_environment(selected)
+    secret = selected["external"]["clientSecret"]
+    if secret:
+        expected["OIDC_CLIENT_SECRET_FILE"] = OIDC_SECRET_DIRECTORY + "/client-secret"
+    actual = {entry["name"]: entry for entry in container.get("env", []) if authentication_key(entry["name"])}
+    bootstrap.require(actual == {key: {"name": key, "value": value.replace("$", "$$")} for key, value in expected.items()}
+                      and container.get("envFrom") == [{"configMapRef": {"name": "marty-config"}}],
+                      "external authentication runtime environment differs")
+    volumes = [entry for entry in spec.get("volumes", []) if entry.get("name") == OIDC_SECRET_VOLUME]
+    mounts = [entry for entry in container.get("volumeMounts", []) if entry.get("name") == OIDC_SECRET_VOLUME]
+    expected_volumes = [{"name": OIDC_SECRET_VOLUME, "secret": {"secretName": secret["name"],
+        "defaultMode": 0o440, "items": [{"key": secret["key"], "path": "client-secret"}]}}] if secret else []
+    expected_mounts = [{"name": OIDC_SECRET_VOLUME, "mountPath": OIDC_SECRET_DIRECTORY, "readOnly": True}] if secret else []
+    bootstrap.require(volumes == expected_volumes and mounts == expected_mounts,
+                      "external authentication client Secret projection differs")
+    if secret:
+        names = {secret["name"]}
+        bootstrap.require([entry for entry in spec.get("volumes", []) if references({"volumes": [entry]}, names)] == expected_volumes
+                          and not references({"containers": [container]}, names)
+                          and not any(entry.get("name") != OIDC_SECRET_VOLUME and isinstance(entry.get("mountPath"), str)
+                                      and (entry["mountPath"] == OIDC_SECRET_DIRECTORY
+                                           or entry["mountPath"].startswith(OIDC_SECRET_DIRECTORY + "/"))
+                                      for entry in container.get("volumeMounts", [])),
+                          "external OIDC Secret has an additional or shadowed projection")
+    for entry in spec.get("initContainers", []) + spec.get("ephemeralContainers", []):
+        bootstrap.require(not any(mount.get("name") == OIDC_SECRET_VOLUME for mount in entry.get("volumeMounts", []))
+                          and (not secret or not references({"containers": [entry]}, {secret["name"]})),
+                          "external OIDC Secret has another container consumer")
+
+
+def provider_binding(resource: dict, name: str, authentication: dict | None) -> None:
+    if authentication is None:
+        return
+    template = resource if resource["kind"] == "Pod" else resource.get("spec", {}).get("template", {})
+    annotations = template.get("metadata", {}).get("annotations", {})
+    selected = authentication["selection"]
+    bootstrap.require(annotations.get(AUTH_PROVIDER) == selected["provider"]
+                      and annotations.get(AUTH_SELECTION) == authentication["selectionSha256"],
+                      "runtime authentication selection annotation differs")
+    if selected["provider"] == "external":
+        spec = application.pod_spec(resource)
+        if name == "auth":
+            external_auth_consumer(spec, authentication)
+        else:
+            secret = selected["external"]["clientSecret"]
+            bootstrap.require(not secret or not references(spec, {secret["name"]}),
+                              "external OIDC Secret has another workload consumer")
+
+
+def observe_resources(context: dict, destination: Path, *, timeout: int = 60) -> dict:
+    raw = context["transport"].kubectl("Renewal workload and authentication observation",
+                                     "get", RESOURCE_TYPES, "-o", "json", timeout=timeout)
+    value = application.json_bytes(raw)
+    bootstrap.write_new(destination, raw)
+    return value
 
 
 def activation_contract(publication: dict) -> dict:
@@ -257,8 +444,10 @@ def consumer_bindings(spec: dict, name: str, image: str, contract: dict) -> None
                                   for setting in settings), "Renewal CA-only projection differs")
 
 
-def deployment_snapshot(value: dict, namespace: str, images: dict, runtime: dict, contract: dict) -> tuple[str, dict]:
+def deployment_snapshot(value: dict, namespace: str, images: dict, runtime: dict, contract: dict,
+                        authentication: dict | None = None) -> tuple[str, dict]:
     name = value.get("metadata", {}).get("name")
+    provider_binding(value, name, authentication)
     image = images["keycloak" if name == "keycloak" else "services"]
     return application.deployment_snapshot(value, namespace, image, runtime, allowed_names=REQUIRED,
         component_label_required=name != "keycloak",
@@ -305,15 +494,29 @@ def configurator_complete(job: dict, namespace: str, release_name: str, images: 
 
 def preflight_resources(value: dict, namespace: str, images: dict, runtime: dict, contract: dict) -> dict:
     entries = application.list_items(value)
+    authentication = authentication_selection(entries, namespace)
+    external = authentication is not None and authentication["selection"]["provider"] == "external"
+    required = REQUIRED - {"keycloak"} if external else REQUIRED
     deployments = {item["metadata"]["name"]: item for item in entries if item.get("kind") == "Deployment"}
-    bootstrap.require(REQUIRED <= set(deployments), "required Renewal Deployment is missing")
+    bootstrap.require(required <= set(deployments), "required Renewal Deployment is missing")
+    if authentication is None:
+        bootstrap.require(not any(AUTH_PROVIDER in deployment.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {})
+                                  or AUTH_SELECTION in deployment.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {})
+                                  for deployment in deployments.values()),
+                          "typed authentication selection ConfigMap is missing")
+    if not external:
+        env = application.pod_spec(deployments["auth"]).get("containers", [{}])[0].get("env", [])
+        bootstrap.require(not any(entry.get("name") == "OIDC_PROVIDER_MODE" and entry.get("value") != "keycloak" for entry in env),
+                          "external Auth runtime requires its retained authentication selection")
     targets, releases = {}, set()
-    for name in sorted(REQUIRED):
-        release, target = deployment_snapshot(deployments[name], namespace, images, runtime, contract)
+    for name in sorted(required):
+        release, target = deployment_snapshot(deployments[name], namespace, images, runtime, contract, authentication)
         targets[name] = target
         releases.add(release)
     bootstrap.require(len(releases) == 1, "Renewal Deployments belong to different Helm releases")
     release = next(iter(releases))
+    bootstrap.require(authentication is None or authentication["releaseName"] == release,
+                      "authentication selection belongs to another release")
     migrations, configurators = {}, {}
     for item in entries:
         if item.get("kind") != "Job":
@@ -324,18 +527,33 @@ def preflight_resources(value: dict, namespace: str, images: dict, runtime: dict
                               "application migrations are incomplete")
             migrations[item["metadata"]["uid"]] = item
         elif component == "keycloak-configurator":
+            bootstrap.require(not external, "external authentication cannot retain a Keycloak configurator")
             bootstrap.require(configurator_complete(item, namespace, release, images),
                               "Keycloak configuration has not completed")
             configurators[item["metadata"]["uid"]] = item
-    bootstrap.require(migrations and configurators, "completed migration or Keycloak evidence is unavailable")
+    bootstrap.require(migrations and (external or configurators), "completed migration or Keycloak evidence is unavailable")
     replica_sets = {item.get("metadata", {}).get("uid"): item for item in entries if item.get("kind") == "ReplicaSet"}
     names = secret_names(contract)
+    if external:
+        secret = authentication["selection"]["external"]["clientSecret"]
+        if secret:
+            bootstrap.require(secret["name"] not in names | {"marty-secrets", "marty-operator", "marty-redis-tls"},
+                              "external OIDC Secret must be separate from bootstrap credentials")
+            names = names | {secret["name"]}
     for item in entries:
         kind = item.get("kind")
+        if kind == "ConfigMap":
+            application.metadata(item, kind, namespace)
+            continue
         bootstrap.require(kind in {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod"},
                           "unsupported Renewal workload kind")
         application.metadata(item, kind, namespace)
         spec = application.pod_spec(item)
+        if external:
+            bootstrap.require(item["metadata"]["name"] != "keycloak"
+                              and item["metadata"].get("labels", {}).get("app.kubernetes.io/component") not in {"keycloak", "keycloak-configurator"}
+                              and not any(container.get("image") == images["keycloak"] for group in ("containers", "initContainers", "ephemeralContainers")
+                                          for container in spec.get(group, [])), "external authentication cannot retain a Keycloak workload")
         if not references(spec, names):
             continue
         if kind == "Deployment" and item["metadata"]["name"] in targets:
@@ -344,16 +562,18 @@ def preflight_resources(value: dict, namespace: str, images: dict, runtime: dict
         if kind == "ReplicaSet" and owner and owner[0] == "Deployment" and owner[1] in targets:
             bootstrap.require(owner[2] == targets[owner[1]]["uid"], "Renewal ReplicaSet owner changed")
             consumer_bindings(spec, owner[1], images["keycloak" if owner[1] == "keycloak" else "services"], contract)
+            provider_binding(item, owner[1], authentication)
             continue
         if kind == "Pod" and owner and owner[0] == "ReplicaSet" and owner[2] in replica_sets:
             parent = application.controller(replica_sets[owner[2]])
             bootstrap.require(parent and parent[0] == "Deployment" and parent[1] in targets
                               and parent[2] == targets[parent[1]]["uid"], "Renewal Pod owner changed")
             consumer_bindings(spec, parent[1], images["keycloak" if parent[1] == "keycloak" else "services"], contract)
+            provider_binding(item, parent[1], authentication)
             continue
         raise bootstrap.BootstrapError("an unsupported workload consumes Renewal Secrets")
     return {"releaseName": release, "deployments": targets,
-            "migrationUids": sorted(set(migrations) | set(configurators))}
+            "migrationUids": sorted(set(migrations) | set(configurators)), "authentication": authentication}
 
 
 def original_binding(state: Path) -> tuple[dict, dict, dict, bytes]:
@@ -409,9 +629,16 @@ def authenticated_context(args: argparse.Namespace, work: Path, complete: dict, 
         "transport": application.BoundedTransport(work, work / "kubeconfig", binding["namespace"], kubectl),
         "activationAnnotation": ANNOTATION, "rolloutRequestSchema": "marty.kubernetes-renewal-rollout-request/v1"}
     result["deploymentSnapshot"] = lambda resource: deployment_snapshot(
-        resource, binding["namespace"], values["images"], values["release"], activation)
-    result["preflightResources"] = lambda resources: preflight_resources(
-        resources, binding["namespace"], values["images"], values["release"], activation)
+        resource, binding["namespace"], values["images"], values["release"], activation, result.get("authentication"))
+
+    def selected_resources(resources):
+        graph = preflight_resources(resources, binding["namespace"], values["images"], values["release"], activation)
+        if "authentication" in result:
+            bootstrap.require(graph["authentication"] == result["authentication"],
+                              "retained runtime authentication selection changed")
+        return graph
+
+    result["preflightResources"] = selected_resources
     return result
 
 
@@ -675,8 +902,11 @@ def delivered_credentials(context: dict, resources: dict, workloads: list[dict],
 
 
 def validate_request(request: dict, context: dict, operation: Path, selected: object) -> None:
-    bootstrap.require(set(request) == {"schema", "binding", "runtime", "activationId", "operationDirectory",
-        "candidateDirectory", "previousDirectory", "stageDirectory", "currentFiles"}
+    keys = {"schema", "binding", "runtime", "activationId", "operationDirectory",
+            "candidateDirectory", "previousDirectory", "stageDirectory", "currentFiles"}
+    if context.get("authentication") is not None:
+        keys.add("authentication")
+    bootstrap.require(set(request) == keys and request.get("authentication") == context.get("authentication")
         and request["schema"] == "marty.kubernetes-renewal-activation-request/v1"
         and request["binding"] == context["binding"] and request["runtime"] == context["values"]["release"]
         and isinstance(request["activationId"], str) and re.fullmatch(r"[0-9a-f]{32}", request["activationId"])
@@ -723,6 +953,14 @@ def activate(args: argparse.Namespace) -> None:
                               "completed Renewal activation selection differs")
             renewal.same_metadata(finished, {**proof, "schema": "marty.kubernetes-renewal-activation-completion/v1",
                 "status": "renewal-generation-selected"}, "completed Renewal activation receipt differs")
+            request = staging.record(operation / REQUEST)
+            retained_graph = context["preflightResources"](application.private_json(operation / "workloads-before.json"))
+            bootstrap.require(retained_graph["authentication"] == request.get("authentication")
+                              and ("authentication" in request) == (retained_graph["authentication"] is not None),
+                              "completed authentication selection differs from retained evidence")
+            if retained_graph["authentication"] is not None:
+                context["authentication"] = request["authentication"]
+                context["preflightResources"](observe_resources(context, work / "workloads-completed.json"))
             print("Renewal activation was already recorded; no new cluster mutation was requested.")
             return
         context["currentDirectory"] = selected.directory
@@ -743,8 +981,9 @@ def activate(args: argparse.Namespace) -> None:
             "ca_overlap": False, "ca_retire": False}), len(current), 39)
         bootstrap.check_application_binding(context["transport"], binding)
         if not args.reconcile:
-            resources = application.observe(context, operation / "workloads-before.json", secret=False)
+            resources = observe_resources(context, operation / "workloads-before.json")
             graph = context["preflightResources"](resources)
+            context["authentication"] = graph["authentication"]
             bootstrap.require(all(target["spec"]["template"].get("metadata", {}).get("annotations", {}).get(ANNOTATION)
                                   == selected.renewal_activation_id for target in graph["deployments"].values()),
                               "active Renewal Deployment marker differs from selected generation")
@@ -754,6 +993,8 @@ def activate(args: argparse.Namespace) -> None:
                 "operationDirectory": str(operation), "candidateDirectory": str(operation / "candidate"),
                 "previousDirectory": str(selected.directory), "stageDirectory": str(args.stage_dir),
                 "currentFiles": len(current)}
+            if graph["authentication"] is not None:
+                request["authentication"] = graph["authentication"]
             for name in sorted(secret_names(context["activation"])):
                 secret = observe_secret(context, name, before_path(operation, name))
                 bootstrap.require(secret["metadata"].get("annotations", {}).get(ANNOTATION) == selected.renewal_activation_id,
@@ -764,9 +1005,10 @@ def activate(args: argparse.Namespace) -> None:
             held.begin(binding, operation, operation / "candidate", activation_id, expected=selected, domain="renewal")
         else:
             request = staging.record(operation / REQUEST)
+            graph = context["preflightResources"](application.private_json(operation / "workloads-before.json"))
+            context["authentication"] = graph["authentication"]
             validate_request(request, context, operation, selected)
             bootstrap.require(request["currentFiles"] == len(current), "retained Renewal generation count differs")
-            graph = context["preflightResources"](application.private_json(operation / "workloads-before.json"))
             bootstrap.require(all(target["spec"]["template"].get("metadata", {}).get("annotations", {}).get(ANNOTATION)
                                   == selected.renewal_activation_id for target in graph["deployments"].values()),
                               "retained Renewal Deployment marker differs")
@@ -777,16 +1019,20 @@ def activate(args: argparse.Namespace) -> None:
         deadline = fresh_proof(context, current, candidate)
         custody(context, current, candidate)
         bootstrap.check_application_binding(context["transport"], binding)
+        # Recheck live selection and every consumer before any Secret update,
+        # including reconciliation after an uncertain earlier publication.
+        context["preflightResources"](observe_resources(context, work / "workloads-before-publication.json",
+                                                       timeout=min(60, application.remaining(deadline))))
         publish_secrets(context, operation, request, current, candidate, deadline)
         verify_secrets(context, operation, request, "before-rollout", deadline)
         revisions = {target["name"]: application.rollout_one(context, operation, target, request["activationId"], deadline)
                      for target in graph["deployments"].values()}
-        resources = application.observe(context, work / "workloads-final.json", secret=False,
-                                        timeout=min(60, application.remaining(deadline)))
+        resources = observe_resources(context, work / "workloads-final.json",
+                                      timeout=min(60, application.remaining(deadline)))
         workloads = application.verified_workloads(resources, context, graph, request["activationId"], revisions)
         delivered_credentials(context, resources, workloads, candidate, deadline)
-        after = application.observe(context, work / "workloads-after-delivery.json", secret=False,
-                                    timeout=min(60, application.remaining(deadline)))
+        after = observe_resources(context, work / "workloads-after-delivery.json",
+                                  timeout=min(60, application.remaining(deadline)))
         bootstrap.require(application.verified_workloads(after, context, graph, request["activationId"], revisions) == workloads,
                           "Renewal workload identity changed during private delivery verification")
         secrets = verify_secrets(context, operation, request, "final", deadline)
