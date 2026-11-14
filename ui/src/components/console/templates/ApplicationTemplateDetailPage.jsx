@@ -31,6 +31,49 @@ function evidenceLabel(requirement) {
   return requirement?.label || requirement?.evidence_type || requirement?.check_type || 'Configured evidence';
 }
 
+function claimSourceLabel(source) {
+  const labels = { FORM_FIELD: 'Form field', SYSTEM: 'System', EVIDENCE_EXTRACTION: 'Evidence extraction' };
+  if (typeof source !== 'string' || !source.trim()) return 'Not configured';
+  return Object.hasOwn(labels, source) ? labels[source] : source;
+}
+
+function claimConfigurationText(value) {
+  if (value === undefined) return 'Not configured';
+  try {
+    return JSON.stringify(value, null, 2) ?? 'Value unavailable';
+  } catch {
+    return 'Value unavailable';
+  }
+}
+
+function ClaimCollectionRules({ rules }) {
+  return <Box component="section" aria-label="Claim collection rules">
+    <Typography component="h2" variant="subtitle2" color="text.secondary" sx={{ mb: 1 }}>Claim collection rules</Typography>
+    {rules != null && !Array.isArray(rules)
+      ? <Typography>Saved claim collection rules could not be read.</Typography>
+      : !rules?.length
+        ? <Typography>None</Typography>
+        : <Stack spacing={2}>
+          {rules.map((rule, index) => {
+            if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
+              return <Typography key={index}>Saved claim rule {index + 1} could not be read.</Typography>;
+            }
+            const claimName = typeof rule.claim_name === 'string' && rule.claim_name.trim()
+              ? rule.claim_name : 'Unnamed claim';
+            return <Paper key={index} role="group" aria-label={`Claim rule ${index + 1}: ${claimName}`} variant="outlined" sx={{ p: 2 }}>
+              <Typography component="h3" variant="body2" sx={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{claimName}</Typography>
+              <Typography variant="body2" sx={{ overflowWrap: 'anywhere' }}>Source: {claimSourceLabel(rule.source)}</Typography>
+              <Typography variant="caption" color="text.secondary">Source configuration</Typography>
+              <Typography component="pre" variant="body2" tabIndex={0} aria-label={`Source configuration for ${claimName}`}
+                sx={{ m: 0, mt: 0.5, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                {claimConfigurationText(rule.source_config)}
+              </Typography>
+            </Paper>;
+          })}
+        </Stack>}
+  </Box>;
+}
+
 function checkedValidation(value) {
   if (!value || typeof value.valid !== 'boolean' || !Array.isArray(value.errors)
     || value.valid !== (value.errors.length === 0)
@@ -213,6 +256,7 @@ function ApplicationTemplateDetailContent({ organizationId, templateId, canCreat
               {(template.form_fields || []).map((field) => <Typography key={field.field_id}>{field.label || field.field_id} ({field.field_type}){field.required ? ' - required' : ''}</Typography>)}
               {(template.form_fields || []).length === 0 && <Typography>None</Typography>}
             </Box>
+            <ClaimCollectionRules rules={template.claim_collection_rules} />
             <Box><Typography variant="subtitle2" color="text.secondary">Evidence</Typography><Typography>{(template.evidence_requirements || []).map(evidenceLabel).join(', ') || 'None'}</Typography></Box>
             <Box><Typography variant="subtitle2" color="text.secondary">Required checks</Typography><Typography>{(template.required_checks || []).map((check) => check.check_type).join(', ') || 'None'}</Typography></Box>
           </Stack>

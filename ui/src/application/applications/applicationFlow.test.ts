@@ -260,14 +260,14 @@ describe('applicationFlow helpers', () => {
     },
   )
 
-  it('validates review step terms acceptance', () => {
+  it('requires the accuracy confirmation shown on the review step', () => {
     expect(validateApplicationStep({
       stepIndex: 1,
       steps: [{ label: 'step', fields: [] }, { label: 'review', fields: [] }],
       formData: { acceptTerms: false },
     })).toEqual({
       valid: false,
-      errors: { acceptTerms: 'You must accept the terms' },
+      errors: { acceptTerms: 'Confirm that the information you provided is accurate and complete.' },
     })
   })
 
