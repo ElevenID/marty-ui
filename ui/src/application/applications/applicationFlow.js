@@ -396,7 +396,7 @@ export function validateApplicationStep({ stepIndex, steps, formData, validation
 
   if (stepIndex === steps.length - 1) {
     if (!formData.acceptTerms) {
-      errors.acceptTerms = 'You must accept the terms';
+      errors.acceptTerms = 'Confirm that the information you provided is accurate and complete.';
     }
 
     return {

@@ -1084,7 +1084,7 @@ function ApplicationFormSession({ previewContext }) {
                     const value = formData[fieldName];
                     
                     // Skip empty optional fields
-                    if (!value && !field.required) return null;
+                    if ((value === undefined || value === null || value === '') && !field.required) return null;
                     
                     // Format value for display
                     let displayValue = value;
@@ -1101,7 +1101,7 @@ function ApplicationFormSession({ previewContext }) {
                         <Typography variant="body2" color="text.secondary">
                           {field.label || fieldName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                         </Typography>
-                        <Typography>{displayValue || '-'}</Typography>
+                        <Typography>{displayValue === '' ? '-' : (displayValue ?? '-')}</Typography>
                       </Grid>
                     );
                   })}

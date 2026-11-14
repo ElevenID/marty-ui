@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { act, fireEvent, render, renderWithRouter, screen, waitFor } from '@test/utils';
+import { act, fireEvent, render, renderWithRouter, screen, waitFor, within } from '@test/utils';
 import { Link, Route, Routes, useLocation } from 'react-router';
 
 import ApplicationForm from '../applicant/ApplicationForm';
@@ -327,6 +327,46 @@ describe('ApplicationForm', () => {
       networkRequest, openWindow, mockNavigate]) {
       expect(effect).not.toHaveBeenCalled();
     }
+  });
+
+  it('keeps zero and false visible through field entry, review and submission', async () => {
+    mockLocationState.location.state.credential.credential_type = 'EmployeeCredential';
+    mockLocationState.location.state.applicationTemplate.form_fields = [
+      { field_id: 'required_count', label: 'Required count', field_type: 'NUMBER', required: true },
+      { field_id: 'optional_count', label: 'Optional count', field_type: 'NUMBER', required: false },
+      { field_id: 'optional_choice', label: 'Optional choice', field_type: 'BOOLEAN', required: false },
+      { field_id: 'omitted_note', label: 'Omitted note', field_type: 'TEXT', required: false },
+    ];
+    const { user } = render(<ApplicationForm />);
+    const required = screen.getByRole('spinbutton', { name: /required count/i });
+    const optional = screen.getByRole('spinbutton', { name: /optional count/i });
+    await user.type(required, '0');
+    await user.type(optional, '0');
+    expect(required).toHaveValue(0);
+    expect(optional).toHaveValue(0);
+    const choice = screen.getByRole('checkbox', { name: 'Optional choice' });
+    await user.click(choice);
+    await user.click(choice);
+    expect(choice).not.toBeChecked();
+    await user.click(screen.getByTestId('next-step-btn'));
+
+    const review = await screen.findByTestId('review-step');
+    for (const label of ['Required count', 'Optional count']) {
+      const field = within(review).getByText(label).parentElement!;
+      expect(within(field).getByText('0', { exact: true })).toBeInTheDocument();
+    }
+    const booleanField = within(review).getByText('Optional choice').parentElement!;
+    expect(within(booleanField).getByText('common.no', { exact: true })).toBeInTheDocument();
+    expect(within(review).queryByText('Omitted note')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('submit-application-btn'));
+    expect(screen.getByText('Confirm that the information you provided is accurate and complete.')).toBeInTheDocument();
+    expect(mockCreateApplication).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+    await waitFor(() => expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: { required_count: 0, optional_count: 0, optional_choice: false },
+    })));
   });
 
   it('submits a live application to its API-provided issuer organization rather than the user home organization', async () => {
