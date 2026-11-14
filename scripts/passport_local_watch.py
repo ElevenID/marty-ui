@@ -87,7 +87,7 @@ def main() -> int:
     compose = _compose_args(plan, env_file)
     log = root / "local-watch.log"
     output_dir = root / "bootstrap-output"
-    watch = ROOT / "docker-compose.passport-supported-disposable-watch.yml"
+    watch = ROOT / "deploy/compose/development/docker-compose.passport-supported-disposable-watch.yml"
     if args.stop:
         owned = inspect(["ps", "-aq", "--filter",
                          f"label=com.docker.compose.project={project}"]).split()

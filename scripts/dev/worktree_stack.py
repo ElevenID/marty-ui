@@ -81,7 +81,7 @@ def compose_command(root: Path, project: str) -> list[str]:
         "--project-directory", str(root),
         "-f", str(root / "docker-compose.base.yml"),
         "-f", str(root / "docker-compose.profile.dev.yml"),
-        "-f", str(root / "docker-compose.worktree-dev.yml"),
+        "-f", str(root / "deploy/compose/development/docker-compose.worktree-dev.yml"),
     ]
 
 
