@@ -61,6 +61,9 @@ def test_keeps_candidate_immutable_while_application_and_version_advance(reposit
                                   "release/revocation.json", "requirements-services.txt", ".gitattributes",
                                   "rust/Cargo.lock", "rust/Cargo.toml", "rust/.cargo/config.toml",
                                   "rust-toolchain.toml", "rust/crates/release-evidence/src/official_cli.rs",
+                                  "tools/official-suite-validator/Cargo.lock",
+                                  "tools/official-suite-validator/src/main.rs",
+                                  "tools/.gitattributes",
                                   "rust/crates/oid4vp-contract/src/lib.rs", "config/envoy/proto_descriptor.pb",
                                   "rust/.gitattributes", "rust/crates/.gitattributes", "config/.gitattributes"])
 def test_rejects_release_program_policy_or_dependency_drift(repository, name) -> None:
