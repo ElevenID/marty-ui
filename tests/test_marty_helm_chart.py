@@ -110,6 +110,27 @@ def test_chart_lints_with_verified_image_shapes(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_development_preflight_matches_rendered_native_readiness_services(rendered: list[dict]) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import check_kubernetes_dev_resume as preflight
+
+    configured = [doc["data"]["GATEWAY_REQUIRED_READY_SERVICES"]
+                  for doc in resources(rendered, "ConfigMap").values()
+                  if "GATEWAY_REQUIRED_READY_SERVICES" in doc.get("data", {})]
+    assert len(configured) == 1
+    names = configured[0].split(",")
+    assert len(names) == len(set(names)) == 9
+    assert set(names) == {"auth", "organizations", "credential-templates", "trust-profiles",
+                          "presentation-policies", "deployment-profiles", "signing-keys", "flows", "issuance-native"}
+    assert preflight.CORE_READY_SERVICES == set(names)
+    response = {"service": "api-gateway", "status": "ready", "services": {
+        name: {"status": "healthy"} for name in names}}
+    assert preflight.readiness_contract(200, "application/json", json.dumps(response).encode()) == {"healthyServices": 9}
+    response["services"]["issuance-native"]["status"] = "unhealthy"
+    with pytest.raises(preflight.CheckError, match="unhealthy"):
+        preflight.readiness_contract(200, "application/json", json.dumps(response).encode())
+
+
 def test_default_tls_store_removes_namespace_copy_without_disabling_https(tmp_path: Path) -> None:
     values = installation_values()
     values["publicHost"] = "192.0.2.20"
