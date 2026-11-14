@@ -123,12 +123,14 @@ fn app_with_dependencies(
         service: service.clone(),
         issuance_url,
         issuance_api_key: None,
-        client: reqwest::Client::new(),
-        management_client: reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .unwrap(),
+        client: marty_applicant::dependency_http::client(
+            marty_applicant::dependency_http::DEFAULT_DEPENDENCY_TIMEOUT,
+        )
+        .unwrap(),
+        management_client: marty_applicant::dependency_http::client(
+            std::time::Duration::from_secs(10),
+        )
+        .unwrap(),
     });
     (app, service)
 }
@@ -1210,10 +1212,7 @@ async fn flow_offer_server(
     let origin = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, flow).await.unwrap() });
     (
-        Arc::new(marty_applicant::providers::HttpFlowProvider::new(
-            origin,
-            authenticator,
-        )),
+        Arc::new(marty_applicant::providers::HttpFlowProvider::new(origin, authenticator).unwrap()),
         requests,
         server,
     )

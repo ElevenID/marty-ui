@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod dependency_http;
 pub mod event_stream_channel;
 pub mod http;
 pub mod issuance;
