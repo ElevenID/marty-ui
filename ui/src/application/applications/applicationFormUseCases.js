@@ -251,48 +251,51 @@ export async function autoApplyForCredential({
   // If one already exists (credentialed / approved), return its offer
   // instead of creating a duplicate.
   const configId = credentialConfig?.id || credentialConfigId;
+  let existing = null;
   if (listApplications) {
     try {
       const { items } = await listApplications({ limit: 100 });
-      const existing = items.find((a) => {
+      existing = items.find((a) => {
         const status = a.status?.toLowerCase();
         return (
           a.credential_template_id === configId &&
           ['approved', 'offered', 'credentialed', 'issued'].includes(status)
         );
       });
-      if (existing) {
-        const status = existing.status?.toLowerCase();
-        if (hasRegisteredWallet && generateIssuanceOffer) {
-          const refreshedApplication = await generateIssuanceOffer(existing.id);
-          return {
-            applicationId: refreshedApplication.id || existing.id,
-            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
-            offerData: buildOfferData(refreshedApplication),
-            existingApplication: true,
-          };
-        }
-
-        if (hasRegisteredWallet && ['approved', 'offered'].includes(status) && autoIssueApplication) {
-          const refreshedApplication = await autoIssueApplication(existing.id);
-          return {
-            applicationId: refreshedApplication.id,
-            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
-            offerData: buildOfferData(refreshedApplication),
-            existingApplication: true,
-          };
-        }
-        return {
-          applicationId: existing.id,
-          applicationReference: existing.reference_number || existing.referenceNumber || null,
-          offerData: buildOfferData(existing),
-          existingApplication: true,
-          requiresWalletSelection: !hasRegisteredWallet,
-        };
-      }
     } catch {
       // If listing fails, proceed with creation and let the backend guard catch duplicates
     }
+  }
+  // Offer preparation is outside the listing fallback. A failed claim for a
+  // known application must never fall through into another creation request.
+  if (existing) {
+    const status = existing.status?.toLowerCase();
+    if (hasRegisteredWallet && generateIssuanceOffer) {
+      const refreshedApplication = await generateIssuanceOffer(existing.id);
+      return {
+        applicationId: refreshedApplication.id || existing.id,
+        applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+        offerData: buildOfferData(refreshedApplication),
+        existingApplication: true,
+      };
+    }
+
+    if (hasRegisteredWallet && ['approved', 'offered'].includes(status) && autoIssueApplication) {
+      const refreshedApplication = await autoIssueApplication(existing.id);
+      return {
+        applicationId: refreshedApplication.id,
+        applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+        offerData: buildOfferData(refreshedApplication),
+        existingApplication: true,
+      };
+    }
+    return {
+      applicationId: existing.id,
+      applicationReference: existing.reference_number || existing.referenceNumber || null,
+      offerData: buildOfferData(existing),
+      existingApplication: true,
+      requiresWalletSelection: !hasRegisteredWallet,
+    };
   }
 
   const formData = buildAutoApplyFormData({ applicationTemplate, user });

@@ -106,6 +106,8 @@ function ApplicationTemplatesContent({ organizationId }) {
       resourceName={t('applicationTemplatesPage.resourceName')}
       buildPath="/console/org/templates/applications/new"
       newPath="/console/org/templates/applications/new?mode=advanced"
+      buildDescription={t('applicationTemplatesPage.buildDescription')}
+      newDescription={t('applicationTemplatesPage.advancedDescription')}
       tabs={getTemplatesTabs()}
       breadcrumbs={getBreadcrumbs()}
     >

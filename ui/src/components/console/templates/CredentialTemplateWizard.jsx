@@ -56,7 +56,11 @@ const CredentialTemplateWizard = () => {
   const organizationEpoch = useRef(0);
   const creation = useMemo(() => createTemplateCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
+  const [profileDisplay, setProfileDisplay] = useState({});
   const submissionPending = useRef(false);
+  const updateProfileDisplay = useCallback((profiles) => {
+    setProfileDisplay((current) => ({ ...current, ...profiles }));
+  }, []);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -69,7 +73,7 @@ const CredentialTemplateWizard = () => {
         return validCredentialTemplateClaims(data);
       case 2: // Trust & Compliance
         return validTemplateIssuerSelection(data, effectiveOrganizationId);
-      case 3: // Crypto & Validity (optional)
+      case 3: // Crypto & Validity
         return credentialTemplateValidity(data.validity_rules).valid
           && (data._issuer_selection?.requirements?.revocation_profile === false
             ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
@@ -171,6 +175,7 @@ const CredentialTemplateWizard = () => {
     organizationEpoch.current += 1;
     submissionPending.current = false;
     setCreatedDraft(null);
+    setProfileDisplay({});
     updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
       issuance_protocol: undefined, _issuer_selection: null, _organization_default_trust: null });
@@ -198,6 +203,7 @@ const CredentialTemplateWizard = () => {
           <TrustComplianceStep
             data={wizard.data}
             onChange={updateFormData}
+            onProfilesResolved={updateProfileDisplay}
           />
         );
       case 3:
@@ -205,6 +211,7 @@ const CredentialTemplateWizard = () => {
           <CryptoValidityStep
             data={wizard.data}
             onChange={updateFormData}
+            onProfilesResolved={updateProfileDisplay}
           />
         );
       case 4:
@@ -213,6 +220,8 @@ const CredentialTemplateWizard = () => {
             data={wizard.data}
             onChange={updateFormData}
             onEdit={editStep}
+            organizationId={effectiveOrganizationId}
+            profileDisplay={profileDisplay}
           />
         );
       default:
@@ -309,7 +318,7 @@ const CredentialTemplateWizard = () => {
             <Typography color="error.contrastText">
               {wizard.error}
             </Typography>
-            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>}
+            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}/edit`)}>Open created draft</Button>}
           </Box>
         )}
 
@@ -331,17 +340,6 @@ const CredentialTemplateWizard = () => {
           </Button>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
-            {/* Show Skip button for optional step (Crypto & Validity) */}
-            {wizard.activeStep === 3 && (
-              <Button
-                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
-                disabled={!wizard.isStepValid() || wizard.loading}
-                data-testid="wizard.template.skip"
-              >
-                {t('wizards.credentialTemplate.buttons.skip')}
-              </Button>
-            )}
-
             {wizard.isLastStep ? (
               <Button
                 variant="contained"

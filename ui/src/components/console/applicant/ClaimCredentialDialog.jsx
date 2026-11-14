@@ -59,7 +59,7 @@ import useWalletOpenLink from '../../../hooks/useWalletOpenLink';
 import {
   ANY_OID4VCI_WALLET_ID,
   buildClaimWalletOptions,
-  getWalletOfferDialogError,
+  getWalletOfferDialogFailure,
   resolveClaimWalletSelection,
   selectedClaimWalletIds,
   walletSupportsBrowserLaunch,
@@ -173,10 +173,14 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       setOfferRequest(null);
       return;
     }
-    if (!applicationId || !canGenerateWalletOffer) return;
-    let active = true;
-    setOfferRequest({ key: offerKey, status: 'loading' });
+    if (!applicationId || currentOffer?.status === 'ready' || currentOffer?.status === 'error') return;
     let request = pendingOffers.current.get(scopeKey);
+    // A reopened dialog must subscribe to its existing request even while
+    // the wallet catalogue reloads. Otherwise a fast response can be missed
+    // and another claim sent when discovery finishes.
+    if (!canGenerateWalletOffer && !request) return;
+    let active = true;
+    if (currentOffer?.status !== 'loading') setOfferRequest({ key: offerKey, status: 'loading' });
     if (!request) {
       request = generateOffer(applicationId).finally(() => {
         if (pendingOffers.current.get(scopeKey) === request) pendingOffers.current.delete(scopeKey);
@@ -186,10 +190,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     request.then((data) => {
       if (active) setOfferRequest({ key: offerKey, status: 'ready', data });
     }).catch((err) => {
-      if (active) setOfferRequest({ key: offerKey, status: 'error', error: getWalletOfferDialogError(err) });
+      const failure = getWalletOfferDialogFailure(err);
+      if (active) setOfferRequest({ key: offerKey, status: 'error', error: failure.message, requiresIssuerHelp: failure.requiresIssuerHelp });
     });
     return () => { active = false; };
-  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer]);
+  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer, currentOffer?.status]);
 
   // A wallet can finish on another device without closing this dialog. Observe
   // the authenticated application projection; browser return and polling never
@@ -439,18 +444,20 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
             </Typography>
           </Stack>
         )}
-        {/* ── Error state with retry ── */}
+        {/* Issuer-side preparation failures need investigation before a new attempt. */}
         {canGenerateWalletOffer && error && (
           <Stack spacing={2} sx={{ alignItems: 'center', py: 2 }}>
             <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>
-            <Button
-              variant="contained"
-              startIcon={<RefreshIcon />}
-              onClick={handleRegenerate}
-              disabled={refreshing}
-            >
-              {refreshing ? 'Retrying…' : 'Retry'}
-            </Button>
+            {!currentOffer?.requiresIssuerHelp && (
+              <Button
+                variant="contained"
+                startIcon={<RefreshIcon />}
+                onClick={handleRegenerate}
+                disabled={refreshing}
+              >
+                {refreshing ? 'Retrying…' : 'Retry'}
+              </Button>
+            )}
           </Stack>
         )}
 

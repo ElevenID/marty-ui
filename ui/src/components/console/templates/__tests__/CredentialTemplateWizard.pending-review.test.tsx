@@ -26,6 +26,12 @@ const REVOCATION_ID = '44444444-4444-4444-8444-444444444444';
 const DID = 'did:web:issuer.example.test';
 const NAME = 'Submitted employee template';
 
+function reviewEditButtons() {
+  const names = ['Edit Basic Information', 'Edit Claims', 'Edit Trust & Compliance', 'Edit Cryptography & Validity'];
+  expect(screen.getAllByRole('button', { name: /^Edit / })).toHaveLength(names.length);
+  return names.map(name => screen.getByRole('button', { name }));
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>(done => { resolve = done; });
@@ -132,7 +138,7 @@ describe('credential template pending review intent', () => {
     await waitFor(() => expect(requests.isHeld()).toBe(true));
     const toggle = screen.getByRole('switch', { name: /Activate immediately/i });
     expect(toggle).toBeDisabled(); expect(toggle).toBeChecked();
-    const edits = screen.getAllByRole('button', { name: 'Edit' });
+    const edits = reviewEditButtons();
     expect(edits).toHaveLength(4);
     for (const edit of edits) {
       expect(edit).toBeDisabled(); fireEvent.click(edit);
@@ -152,7 +158,7 @@ describe('credential template pending review intent', () => {
     const { user } = renderWithoutRouter(<BrowserRouter><CredentialTemplateWizard /></BrowserRouter>);
     await reachReview(user);
     const toggle = screen.getByRole('switch', { name: /Activate immediately/i });
-    const edit = screen.getAllByRole('button', { name: 'Edit' })[0];
+    const edit = screen.getByRole('button', { name: 'Edit Basic Information' });
     const submit = screen.getByTestId('wizard.template.submit');
     const back = screen.getByTestId('wizard.template.back');
     act(() => {
@@ -193,7 +199,7 @@ describe('credential template pending review intent', () => {
     expect(screen.getByText(/Template policy rejected the request/)).toBeInTheDocument();
     const toggle = screen.getByRole('switch', { name: /Activate immediately/i });
     expect(toggle).toBeEnabled();
-    for (const edit of screen.getAllByRole('button', { name: 'Edit' })) expect(edit).toBeEnabled();
+    for (const edit of reviewEditButtons()) expect(edit).toBeEnabled();
     expect(sessionStorage.getItem('marty:template-create:v1:org-1')).toBeNull();
     await user.click(toggle); await user.click(screen.getByTestId('wizard.template.submit'));
     await screen.findByText('"' + NAME + '" is saved as draft.');
@@ -221,7 +227,7 @@ describe('credential template pending review intent', () => {
     const requests = installRequests();
     const { user } = renderWithoutRouter(<BrowserRouter><CredentialTemplateWizard /></BrowserRouter>);
     await reachReview(user);
-    await user.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    await user.click(screen.getByRole('button', { name: 'Edit Basic Information' }));
     expect(screen.getByLabelText(/Template Name/i)).toBeEnabled();
     await user.clear(screen.getByLabelText(/Template Name/i));
     await user.type(screen.getByLabelText(/Template Name/i), 'Changed before submission');

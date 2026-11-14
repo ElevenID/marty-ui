@@ -255,6 +255,15 @@
       "terms": "I certify that all information provided is accurate and complete. I understand that providing false information may result in denial of my application."
     },
     "oneClick": {
+      "credentialPreview": "Credential preview",
+      "previewStatus": "This is a preview of the credential you are requesting. Issuance has not been confirmed.",
+      "issuerLabel": "Issuer",
+      "plannedFormat": "Planned format: {{format}}",
+      "signingAfterIssue": "The issuer will sign the credential if issuance succeeds.",
+      "acceptanceAfterIssue": "After issuance, use it with services that accept this credential.",
+      "requesting": "Preparing wallet request…",
+      "requestHelper": "Request a wallet invitation to receive this credential when it is ready.",
+      "viewSavedApplication": "View saved application",
       "previewAction": "Preview credential request",
       "previewHelper": "Simulate the request without submitting an application or opening a wallet.",
       "previewMessage": "In the live experience, the applicant would be prompted to receive the credential in a wallet when it is ready.",

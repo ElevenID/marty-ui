@@ -703,7 +703,11 @@
     },
     "usedByFlows": "{{count}} Flow",
     "usedByFlows_plural": "{{count}} Flows",
+    "usedByFlows_one": "{{count}} Flow",
+    "usedByFlows_other": "{{count}} Flows",
     "usedByFlowsTooltip": "Number of Issuance Flows using this template",
+    "notReported": "Not reported",
+    "flowUsageNotReported": "The service did not report how many flows use this template.",
     "breadcrumbs": {
       "console": "Console",
       "templates": "Templates",
@@ -714,6 +718,8 @@
     "title": "Application Templates",
     "description": "Define application forms and workflows that applicants use to request credentials.",
     "resourceName": "Application Template",
+    "buildDescription": "Application form editor",
+    "advancedDescription": "Additional evidence, claim and notification settings",
     "failedToLoad": "Failed to load application templates",
     "tableHeaders": {
       "name": "Name",
@@ -1649,6 +1655,10 @@
       "trustComplianceStep": {
         "title": "Trust & Compliance",
         "description": "Select which trust profile and compliance rules apply to this credential template.",
+        "complianceOptions_one": "{{count}} active compliance profile available.",
+        "complianceOptions_other": "{{count}} active compliance profiles available.",
+        "issuerOptions_one": "{{count}} compatible issuer DID available.",
+        "issuerOptions_other": "{{count}} compatible issuer DIDs available.",
         "errors": {
           "failedToLoadTrustProfiles": "Failed to load trust profiles"
         },
@@ -1680,11 +1690,11 @@
         }
       },
       "cryptoValidityStep": {
-        "title": "Cryptography & Validity (Optional)",
-        "description": "Configure signing and validity settings. Defaults are pre-selected based on best practices.",
-        "defaults": {
-          "title": "Defaults are secure and ready to use.",
-          "description": "Skip this step or use defaults for most use cases. Advanced users can customize crypto and validity settings below."
+        "reviewTitle": "Cryptography & Validity",
+        "reviewDescription": "Review credential lifetime settings. Signing capabilities come from the selected issuer DID.",
+        "guidance": {
+          "title": "Review the validity settings.",
+          "description": "Confirm the lifetime values below. A Revocation Profile is required when the selected issuance protocol uses digital revocation."
         },
         "validity": {
           "title": "Validity Period",
@@ -1696,7 +1706,8 @@
           "maxValidityHelper": "Maximum allowed validity period (e.g., 730 days = 2 years)",
           "notBeforeOffsetHelper": "Delay before credential becomes valid (usually 0)",
           "example": "Example:",
-          "exampleDescription": "With a default validity of {{days}} days, a credential issued today will expire on {{date}}."
+          "validityExample_one": "With a default validity of {{count}} day, a credential issued today will expire on {{date}}.",
+          "validityExample_other": "With a default validity of {{count}} days, a credential issued today will expire on {{date}}."
         },
         "advanced": {
           "show": "Show",
@@ -1718,7 +1729,8 @@
           "label": "Revocation Profile",
           "none": "None (no revocation)",
           "statusListComingSoon": "Status List 2021 (Coming Soon)",
-          "helper": "Optional: Select a revocation mechanism for credentials issued from this template"
+          "selectedHelper": "This profile defines how credentials from this template can be revoked.",
+          "required": "Select an active Revocation Profile to continue."
         },
         "validation": {
           "daysRange": "Enter a whole number of days from 1 to {{max}}.",
@@ -1737,7 +1749,8 @@
           "walletCompatibility": "Wallet Compatibility"
         },
         "actions": {
-          "edit": "Edit"
+          "edit": "Edit",
+          "editSection": "Edit {{section}}"
         },
         "fields": {
           "templateName": "Template Name",
@@ -1756,8 +1769,11 @@
         "values": {
           "notSet": "Not set",
           "notSelected": "Not selected",
+          "notConfigured": "Not configured",
           "none": "None",
           "days": "days",
+          "validityDays_one": "{{count}} day",
+          "validityDays_other": "{{count}} days",
           "trustProfileId": "ID: {{id}}"
         },
         "activationOptions": {
