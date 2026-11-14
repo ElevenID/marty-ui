@@ -55,7 +55,9 @@ pub use postgres::{
 pub use prerequisite_authority::VerifiedManagedCredentialAuthority;
 pub use profiled_jwt_vc::{AuthenticatedProfiledJwtVcEvidence, ProfiledJwtVcRequest};
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
-pub use sd_jwt_query::{AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest};
+pub use sd_jwt_query::{
+    AuthenticatedSdJwtPresentationEvidence, AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest,
+};
 pub use verification::{
     AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialStatusResolver,
     CredentialVerificationContext, CredentialVerificationEvidence, CredentialVerificationKernel,

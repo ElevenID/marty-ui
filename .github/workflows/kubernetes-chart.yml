@@ -19,6 +19,7 @@ on:
       - 'scripts/recover_kubernetes_legacy_credentials.py'
       - 'scripts/reload_kubernetes_legacy_workloads.py'
       - 'scripts/kubernetes_legacy_recovery_sources.py'
+      - 'scripts/kubernetes_legacy_recovery_lineage.py'
       - 'deploy-config/bundles/selfhost.json'
       - 'scripts/installer_*.py'
       - 'scripts/verify_installer_provenance.py'
@@ -43,6 +44,7 @@ on:
       - 'tests/test_recover_kubernetes_legacy_credentials.py'
       - 'tests/test_reload_kubernetes_legacy_workloads.py'
       - 'tests/test_kubernetes_legacy_recovery_sources.py'
+      - 'tests/test_kubernetes_legacy_recovery_lineage.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
       - 'contracts/gateway-routes.json'
@@ -105,4 +107,5 @@ jobs:
             tests/test_inspect_kubernetes_legacy_credentials.py \
             tests/test_recover_kubernetes_legacy_credentials.py \
             tests/test_reload_kubernetes_legacy_workloads.py \
-            tests/test_kubernetes_legacy_recovery_sources.py
+            tests/test_kubernetes_legacy_recovery_sources.py \
+            tests/test_kubernetes_legacy_recovery_lineage.py

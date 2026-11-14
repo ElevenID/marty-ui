@@ -1,4 +1,4 @@
-# Activate Kubernetes workload TLS and Keycloak renewal
+# Activate Kubernetes workload credential renewal
 
 The explicit activation command installs a completed [Renewal candidate](kubernetes-renewal-staging.md)
 into the existing Kubernetes Secrets and uses Deployment controllers to replace
@@ -31,14 +31,16 @@ separate requirements.
   at least 4,500 seconds of valid lifetime to retain a 3,600-second floor through
   the bounded 900-second activation. Begin well before expiration.
 - Existing supported Helm-owned Deployments, the original signed image identities,
-  completed migration/configurator evidence and the expected Secret projections.
+  completed migration evidence, managed Keycloak configurator evidence when
+  selected, and the expected Secret projections.
   Concurrent Helm upgrades, configuration changes and other lifecycle writers
   must not run during the operation.
 
 The chart sets a default 86,400-second completion TTL on both the migration Job
-and the Keycloak configurator Job. Kubernetes can therefore remove required
-evidence after 24 hours; this adapter refuses activation if either matching
-completed Job is absent. A retained standard-Job policy or authenticated durable
+and the managed Keycloak configurator Job. Kubernetes can therefore remove required
+evidence after 24 hours; this adapter refuses activation if a matching required
+completed Job is absent. External OIDC requires migration evidence but has no
+Keycloak configurator. A retained standard-Job policy or authenticated durable
 completion evidence remains necessary for repeated long-running operation.
 Do not rerun migration or configuration solely to recreate this evidence.
 
@@ -47,6 +49,32 @@ directory lock, current-generation selection and pending-operation guard. A
 pending operation blocks fresh staging and activation in either domain. Selection
 retains separate ordinary and Renewal activation markers so the next operation
 preserves the other credential family's identity.
+
+## External OIDC and retained provider selection
+
+The [Helm external-OIDC option](../deploy/helm/marty/README.md#external-oidc)
+uses these same staging and activation commands. Keep the complete native
+generation and publication inventory: activation still verifies 39 replacements
+and conditionally updates all 33 existing Secrets, including the unused
+Keycloak custody destination. Provider-owned login credentials and the dedicated
+OIDC client Secret are outside this renewal operation.
+
+The adapter selects the workload graph from the owned, immutable
+`marty-auth-selection` ConfigMap, its exact nonsecret Auth configuration, and
+matching workload annotations. Only a verified external selection removes the
+Keycloak Deployment and configurator from the required graph. A missing
+Keycloak workload alone never selects external mode. The external graph rejects
+managed Keycloak workloads and additional consumers of the confidential OIDC
+client Secret while retaining all application TLS and signing consumers.
+
+New activation requests retain the observed provider-selection identity. The
+adapter checks it before Secret publication, during workload verification and
+after private credential delivery. Reconciliation binds the same request to the
+retained pre-operation graph and current cluster evidence, including when the
+operation was already completed. Changed or missing selection/configuration
+evidence is refused. Older untyped managed installations retain their strict
+managed graph and existing receipt compatibility. Do not remove selection
+records or edit pending requests to change providers.
 
 ## Activate one candidate
 
@@ -95,8 +123,9 @@ mixed state as a completed generation.
 Only after all destinations show the intended candidate does activation request
 the existing Deployment rollouts. Workload identity, Helm ownership, signed images,
 specifications, ReplicaSet revisions and Pod UIDs stay pinned throughout admission
-and completion. The Keycloak restart reloads its same-key certificate into provider
-state; the existing configurator is not rerun. Additional projected readers are
+and completion. For managed login, the Keycloak restart reloads its same-key
+certificate into provider state; the existing configurator is not rerun. External
+OIDC rolls out only the retained application consumers. Additional projected readers are
 included in the closed workload graph.
 
 Private delivery checks compare the bytes projected into the selected containers,

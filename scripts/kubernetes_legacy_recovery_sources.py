@@ -53,6 +53,7 @@ SOURCE_FILES = (
     "scripts/kubernetes_application_state.py",
     "scripts/kubernetes_renewal_adoption_state.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
+    "scripts/kubernetes_legacy_recovery_lineage.py",
     "scripts/passport_remote_tls.py",
     "scripts/prepare_kubernetes_helm_values.py",
     "scripts/provision_selfhost_disposable_tls.py",

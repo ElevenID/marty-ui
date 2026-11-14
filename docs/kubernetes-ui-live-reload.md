@@ -19,6 +19,10 @@ was exceeded during an observed reload, causing a container restart and a
 temporary gateway error. Monitor the node's available memory when running
 additional workloads.
 
+Development UI upgrades use `Recreate`: the old UI Pod stops before its
+replacement starts, so two 4 GiB Vite containers do not overlap. The UI is
+unavailable while the replacement installs dependencies and becomes ready.
+
 The postinstall hook also applies a version- and digest-checked lifecycle repair
 to `vite-plugin-checker` 0.14.5. Its original forced worker termination left the
 native TypeScript 7 watcher running after configuration reloads. The repair waits
@@ -39,9 +43,11 @@ Keep the original installation values, image pins and namespace. Set
 `publicOrigin` in those installation values to the browser's **exact** existing
 HTTPS origin, including a port such as `https://dev.example.test:8443`.
 
-Run from the node's checkout, adapting the three installation-specific values:
+Run from the node's checkout, adapting the installation-specific values:
 
 ```sh
+set -eu
+
 MARTY_DEV_RELEASE=marty
 MARTY_DEV_NAMESPACE=marty-dev
 MARTY_DEV_VALUES=/opt/marty-install/installation-values.yaml
@@ -74,6 +80,15 @@ Create the real `ui/node_modules` directory before rollout: it is the mountpoint
 for the writable dependency volume inside the read-only source mount. A linked
 local dependency directory must not be copied to this checkout. The empty host
 mountpoint is hidden by the container's dependency volume.
+
+Repeat this preparation for **every new checkout**, including an isolated
+worktree selected when resuming an existing installation. An earlier checkout's
+directory does not supply the new checkout's mountpoint. If the UI Pod reports
+`CreateContainerError` while mounting `/workspace/ui/node_modules` on a read-only
+filesystem, check the selected checkout on the node and create that empty
+directory with the commands above. Keep the source mount read-only; dependencies
+remain in their separate writable volume. Then watch the UI rollout for startup
+and readiness.
 
 The pinned official Node 24 image runs `npm ci --include=dev` against the checked
 in lockfile. The init container needs outbound access to the package registry

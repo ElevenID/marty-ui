@@ -244,7 +244,11 @@ def flow(renewal_flow, tmp_path, monkeypatch):
             if world.fail == "before-rollout-secret-drift" and len(world.secret_patches) == 33 and name == world.fault_secret:
                 world.secrets[name]["metadata"]["uid"] = "foreign-secret-uid"
             return bootstrap.encoded(world.secrets[name])
-        if argv[:2] == ["get", application.RESOURCE_TYPES]:
+        if argv[:2] == ["get", activation.RESOURCE_TYPES]:
+            if world.fail == "auth-after-proof" and world.creates:
+                marker = next(item for item in world.resources if item.get("kind") == "ConfigMap"
+                              and item["metadata"]["name"] == "marty-auth-selection")
+                marker["metadata"]["uid"] = "replaced-auth-selection"
             return bootstrap.encoded({"kind": "List", "apiVersion": "v1", "items": world.resources})
         if argv[:2] in (["get", "deployment"], ["get", "pod"]):
             kind = "Deployment" if argv[1] == "deployment" else "Pod"
@@ -685,11 +689,16 @@ def test_private_native_verification_evidence_is_closed_and_retirement_is_requir
     no_selection(flow)
 
 
-def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp_path):
+@pytest.mark.parametrize("provider", ["keycloak", "external-public", "external-confidential"])
+def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp_path, provider):
     import test_marty_helm_chart as chart
     if chart.HELM is None:
         pytest.skip("actual Helm client required")
-    values = chart.installation_values()
+    values = (chart.installation_values() if provider == "keycloak"
+              else chart.external_installation_values(provider == "external-confidential"))
+    if provider != "keycloak":
+        values["auth"]["external"].update(clientId="client$(SERVICE_NAME)",
+            scopes=["openid", "$(SERVICE_NAME)"])
     values["release"] = {"runtimeSourceSha": "1" * 40, "chartSourceSha": "2" * 40,
         "tag": "v1.2.3-nightly.20261108.123", "buildRunId": 123, "buildRunAttempt": 1}
     values["canvasWorker"] = {"enabled": True}
@@ -700,10 +709,14 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
     consumers = set()
     for item in documents:
         kind = item["kind"]
-        if kind not in {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod"}:
+        if kind not in {"Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob", "ReplicaSet", "Pod", "ConfigMap"}:
             continue
         meta = item["metadata"]
         meta.update({"uid": kind.lower() + "-" + meta["name"], "resourceVersion": "10"})
+        if kind == "ConfigMap":
+            meta.setdefault("annotations", {}).update({
+                "meta.helm.sh/release-name": meta["labels"]["app.kubernetes.io/instance"],
+                "meta.helm.sh/release-namespace": meta["namespace"]})
         if kind == "Deployment":
             meta["generation"] = 1
             meta.setdefault("annotations", {}).update({
@@ -715,11 +728,18 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
         if kind == "Job":
             item["status"] = {"succeeded": 1, "conditions": [{"type": "Complete", "status": "True"}]}
         actual.append(item)
-    assert consumers == activation.REQUIRED and len(consumers) == 18
+    expected = activation.REQUIRED if provider == "keycloak" else activation.REQUIRED - {"keycloak"}
+    assert consumers == expected
     graph = activation.preflight_resources({"kind": "List", "items": actual}, "isolated-install",
         values["images"], values["release"], contract)
-    assert set(graph["deployments"]) == activation.REQUIRED
-    assert len(graph["migrationUids"]) == 2
+    assert set(graph["deployments"]) == expected
+    assert len(graph["migrationUids"]) == (2 if provider == "keycloak" else 1)
+    assert graph["authentication"]["selection"]["provider"] == ("keycloak" if provider == "keycloak" else "external")
+    # Ordinary-token rotation observes workloads only, and keeps its closed
+    # token graph for either login provider without a second inventory.
+    application_graph = application.preflight_resources({"kind": "List", "items": [
+        item for item in actual if item["kind"] != "ConfigMap"]}, "isolated-install", values["images"], values["release"])
+    assert set(application_graph["deployments"]) == application.REQUIRED | {"canvas-sync-worker"}
 
 
 @pytest.mark.parametrize("value", [
@@ -759,3 +779,149 @@ def test_literal_delivery_probe_checks_actual_container_file_setting(tmp_path, c
         capture_output=True, check=False)
     assert (result.returncode == 0) is correct
     assert result.stdout == (actual.read_bytes() if correct else b"")
+
+
+def select_external_graph(world, confidential=False):
+    """Use full adapter doubles with the chart's exact public selection shape."""
+    selected = {"schema": "marty.kubernetes-auth-selection/v1", "provider": "external",
+        "adminEmail": "operator@elevenid.test", "redirectUri": "https://marty.example.test/v1/auth/callback",
+        "postLogoutRedirectUri": "https://marty.example.test", "external": {
+            "issuerUrl": "https://identity.example.test/oidc", "clientId": "client$(SERVICE_NAME)",
+            "allowedAlgorithms": ["RS256"], "trustedEndpointOrigins": ["https://keys.example.test"],
+            "scopes": ["openid", "profile", "email", "custom:$(SERVICE_NAME)"],
+            "clientSecret": {"name": "beta-oidc", "key": "client-secret"} if confidential else {}}}
+    raw = json.dumps(selected, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(raw.encode()).hexdigest()
+    kept = []
+    for item in world.resources:
+        spec = application.pod_spec(item)
+        if (item["metadata"].get("labels", {}).get("app.kubernetes.io/component") == "keycloak-configurator"
+                or any(container["name"] == "keycloak" for container in spec.get("containers", []))):
+            continue
+        template = item if item["kind"] == "Pod" else item["spec"]["template"]
+        template.setdefault("metadata", {}).setdefault("annotations", {}).update({
+            activation.AUTH_PROVIDER: "external", activation.AUTH_SELECTION: digest})
+        if spec["containers"][0]["name"] == "auth":
+            container = spec["containers"][0]
+            container["env"] = [entry for entry in container["env"] if not activation.authentication_key(entry["name"])]
+            container["env"] += [{"name": key, "value": value.replace("$", "$$")}
+                                 for key, value in activation.external_environment(selected).items()]
+            if confidential:
+                container["env"].append({"name": "OIDC_CLIENT_SECRET_FILE",
+                    "value": activation.OIDC_SECRET_DIRECTORY + "/client-secret"})
+                container["volumeMounts"].append({"name": activation.OIDC_SECRET_VOLUME,
+                    "mountPath": activation.OIDC_SECRET_DIRECTORY, "readOnly": True})
+                spec["volumes"].append({"name": activation.OIDC_SECRET_VOLUME, "secret": {
+                    "secretName": "beta-oidc", "defaultMode": 0o440,
+                    "items": [{"key": "client-secret", "path": "client-secret"}]}})
+        kept.append(item)
+    for name, data in (("marty-auth-selection", {"selection.json": raw}), ("marty-config", {
+            **activation.external_environment(selected), "MARTY_ORG_ADMIN_EMAIL": selected["adminEmail"]})):
+        kept.append({"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {**resource_metadata("ConfigMap", name, world.staged.binding["namespace"]),
+                "labels": {"app.kubernetes.io/name": "marty", "app.kubernetes.io/managed-by": "Helm",
+                           "app.kubernetes.io/instance": "marty"},
+                "annotations": {"meta.helm.sh/release-name": "marty",
+                                "meta.helm.sh/release-namespace": world.staged.binding["namespace"]}},
+            "data": data, **({"immutable": True} if name == "marty-auth-selection" else {})})
+    world.resources = kept
+    return selected
+
+
+@pytest.mark.parametrize("confidential", [False, True])
+def test_external_auth_activation_retains_complete_custody_and_only_rolls_consumers(flow, confidential):
+    select_external_graph(flow, confidential)
+    activation.activate(flow.args)
+    assert set(flow.deployment_patches) == activation.REQUIRED - {"keycloak"}
+    assert len(flow.secret_patches) == 33 and "keycloak-kms" in flow.secret_patches
+    request = staging.record(flow.args.operation_dir / activation.REQUEST)
+    assert request["authentication"]["selection"]["provider"] == "external"
+    assert request["authentication"]["configurationUid"]
+    assert staging.record(flow.args.operation_dir / activation.COMPLETE)["status"] == "renewal-generation-selected"
+    before = deepcopy(flow.secret_patches), deepcopy(flow.deployment_patches)
+    flow.args.reconcile = True
+    activation.activate(flow.args)
+    assert (flow.secret_patches, flow.deployment_patches) == before
+
+
+@pytest.mark.parametrize("fault", ["missing-marker", "mutable-marker", "foreign-marker", "config-mode", "config-private-alias",
+    "missing-config", "auth-scopes", "auth-marker", "client-secret-item", "shadow-secret", "other-secret-consumer",
+    "rogue-keycloak", "auth-after-proof"])
+def test_external_auth_runtime_drift_refuses_before_secret_publication(flow, fault):
+    select_external_graph(flow, True)
+    marker = next(item for item in flow.resources if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "marty-auth-selection")
+    config = next(item for item in flow.resources if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "marty-config")
+    auth = next(item for item in flow.resources if item["kind"] == "Deployment" and item["metadata"]["name"] == "auth")
+    spec = application.pod_spec(auth)
+    if fault == "missing-marker":
+        flow.resources.remove(marker)
+    elif fault == "mutable-marker":
+        marker["immutable"] = False
+    elif fault == "foreign-marker":
+        marker["metadata"]["annotations"]["meta.helm.sh/release-name"] = "foreign"
+    elif fault == "config-mode":
+        config["data"]["OIDC_PROVIDER_MODE"] = "keycloak"
+    elif fault == "config-private-alias":
+        config["data"]["MARTY_API_CLIENT_SECRET_FILE"] = "/run/secrets/managed"
+    elif fault == "missing-config":
+        flow.resources.remove(config)
+    elif fault == "auth-scopes":
+        next(entry for entry in spec["containers"][0]["env"] if entry["name"] == "OIDC_SCOPES")["value"] = "openid,email"
+    elif fault == "auth-marker":
+        auth["spec"]["template"]["metadata"]["annotations"][activation.AUTH_SELECTION] = "0" * 64
+    elif fault == "client-secret-item":
+        next(entry for entry in spec["volumes"] if entry["name"] == activation.OIDC_SECRET_VOLUME)["secret"]["items"][0]["key"] = "other-key"
+    elif fault == "shadow-secret":
+        spec["containers"][0]["volumeMounts"].append({"name": "shadow", "mountPath": activation.OIDC_SECRET_DIRECTORY + "/client-secret"})
+        spec["volumes"].append({"name": "shadow", "emptyDir": {}})
+    elif fault == "other-secret-consumer":
+        gateway = next(item for item in flow.resources if item["kind"] == "Deployment" and item["metadata"]["name"] == "gateway")
+        application.pod_spec(gateway)["containers"][0]["env"].append({"name": "FOREIGN_TOKEN", "valueFrom": {
+            "secretKeyRef": {"name": "beta-oidc", "key": "client-secret"}}})
+    elif fault == "rogue-keycloak":
+        clone = deepcopy(auth)
+        clone["metadata"].update(name="keycloak", uid="rogue-keycloak")
+        flow.resources.append(clone)
+    else:
+        flow.fail = fault
+    with pytest.raises(bootstrap.BootstrapError):
+        activation.activate(flow.args)
+    assert not flow.secret_patches and not flow.deployment_patches
+
+
+@pytest.mark.parametrize("fault", ["lost-request-binding", "replaced-selection", "replaced-config", "missing-marker"])
+def test_completed_external_reconciliation_requires_retained_and_live_selection(flow, fault):
+    select_external_graph(flow, True)
+    activation.activate(flow.args)
+    before = deepcopy(flow.secret_patches), deepcopy(flow.deployment_patches)
+    if fault == "lost-request-binding":
+        path = flow.args.operation_dir / activation.REQUEST
+        request = staging.record(path)
+        del request["authentication"]
+        put(path, bootstrap.encoded(request))
+    else:
+        name = "marty-config" if fault == "replaced-config" else "marty-auth-selection"
+        config = next(item for item in flow.resources if item["kind"] == "ConfigMap" and item["metadata"]["name"] == name)
+        if fault == "missing-marker":
+            flow.resources.remove(config)
+        else:
+            config["metadata"]["uid"] = "replaced-object"
+    flow.args.reconcile = True
+    with pytest.raises(bootstrap.BootstrapError):
+        activation.activate(flow.args)
+    assert (flow.secret_patches, flow.deployment_patches) == before
+
+
+def test_partial_external_reconciliation_refuses_rebound_provider_before_more_publication(flow):
+    select_external_graph(flow, True)
+    flow.fail = "secret-lost-response"
+    with pytest.raises(bootstrap.BootstrapError):
+        activation.activate(flow.args)
+    before = deepcopy(flow.secret_patches), deepcopy(flow.deployment_patches)
+    marker = next(item for item in flow.resources if item["kind"] == "ConfigMap" and item["metadata"]["name"] == "marty-auth-selection")
+    marker["metadata"]["uid"] = "replaced-marker"
+    flow.fail = None
+    flow.args.reconcile = True
+    with pytest.raises(bootstrap.BootstrapError, match="authentication selection"):
+        activation.activate(flow.args)
+    assert (flow.secret_patches, flow.deployment_patches) == before

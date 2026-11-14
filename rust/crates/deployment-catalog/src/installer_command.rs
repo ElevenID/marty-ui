@@ -27,6 +27,7 @@ struct Options {
     engine: String,
     directory: Option<PathBuf>,
     foundation_file: Option<PathBuf>,
+    external_oidc_file: Option<PathBuf>,
     hosting_file: Option<PathBuf>,
     settings_file: Option<PathBuf>,
     acme_staging_roots: Option<PathBuf>,
@@ -134,6 +135,7 @@ fn options(args: &[String]) -> Result<Options> {
             "--verified-channel",
             "--runtime-profile",
             "--foundation-file",
+            "--external-oidc-file",
             "--hosting-file",
             "--settings-file",
             "--acme-staging-roots",
@@ -170,6 +172,12 @@ fn options(args: &[String]) -> Result<Options> {
     };
     let directory = values.remove("--install-dir").map(PathBuf::from);
     let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
+    let external_oidc_file = values.remove("--external-oidc-file").map(PathBuf::from);
+    if foundation_file.is_some() && external_oidc_file.is_some() {
+        return Err(
+            "--external-oidc-file and --foundation-file select conflicting OIDC owners".into(),
+        );
+    }
     let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
     let settings_file = values.remove("--settings-file").map(PathBuf::from);
     let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
@@ -177,6 +185,7 @@ fn options(args: &[String]) -> Result<Options> {
         && (yes
             || directory.is_some()
             || foundation_file.is_some()
+            || external_oidc_file.is_some()
             || hosting_file.is_some()
             || settings_file.is_some()
             || acme_staging_roots.is_some())
@@ -201,6 +210,9 @@ fn options(args: &[String]) -> Result<Options> {
         .any(|p| !p.is_absolute())
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
         || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || external_oidc_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
         || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
         || settings_file.as_ref().is_some_and(|p| !p.is_absolute())
         || acme_staging_roots
@@ -227,6 +239,7 @@ fn options(args: &[String]) -> Result<Options> {
         engine,
         directory,
         foundation_file,
+        external_oidc_file,
         hosting_file,
         settings_file,
         acme_staging_roots,
@@ -366,6 +379,10 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     {
         return Err("installer requires an exact release-built operator".into());
     }
+    let external_oidc = crate::installer_oidc::prepare(
+        o.external_oidc_file.as_deref(),
+        o.foundation_file.is_some(),
+    )?;
     let foundation_origin = o
         .foundation_file
         .as_deref()
@@ -374,7 +391,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     let hosting = crate::installer_hosting::prepare(o.hosting_file.as_deref(), foundation_origin)?;
     let settings = crate::installer_settings::prepare(
         o.settings_file.as_deref(),
-        o.foundation_file.is_none(),
+        o.foundation_file.is_none() && o.external_oidc_file.is_none(),
     )?;
     let staging_roots = initial_staging_roots(&hosting, o.acme_staging_roots.as_deref())?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
@@ -583,6 +600,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     if let Some(path) = &o.foundation_file {
         crate::installer_foundation::select(path, &directory, &mut state)?;
     }
+    crate::installer_oidc::select(external_oidc, &mut state)?;
     crate::installer_hosting::select(hosting, &mut state)?;
     crate::installer_settings::select(settings, &mut state)?;
     if let Some(roots) = &staging_roots {
@@ -645,7 +663,7 @@ pub(crate) fn provision_runtime(
         .is_none()
     {
         let managed = state
-            .with_inspection(crate::installer_foundation::load)?
+            .with_inspection(crate::installer_oidc::external)?
             .is_none();
         crate::installer_settings::select(
             crate::installer_settings::prepare(None, managed)?,
@@ -679,16 +697,30 @@ pub(crate) fn provision_runtime(
         )?;
         return validate_and_complete(docker, installation, bundle, state, inventory, invocation);
     }
-    eprintln!("Marty runtime stage: packaged realm");
-    let realm_path = bundle.join("config/keycloak/11id-realm.json");
-    let realm: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
-    )
-    .map_err(|_| "packaged Keycloak realm invalid")?;
+    let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
+    let realm = if external_oidc.is_none() {
+        eprintln!("Marty runtime stage: packaged realm");
+        let realm_path = bundle.join("config/keycloak/11id-realm.json");
+        Some(
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
+            )
+            .map_err(|_| "packaged Keycloak realm invalid")?,
+        )
+    } else {
+        None
+    };
     state.advance(Phase::Provisioning)?;
     eprintln!("Marty runtime stage: local credentials");
-    state.generate_local_credentials(&realm)?;
+    if external_oidc.is_some() {
+        state.generate_external_auth_credentials()?;
+    } else {
+        state.generate_local_credentials(realm.as_ref().ok_or("packaged realm absent")?)?;
+    }
     state.persist_credential_creation_receipt(installation)?;
+    if let Some(selection) = &external_oidc {
+        selection.import_inputs(state)?;
+    }
     hosting.import_connector(state)?;
     drop(port_reservation);
     let plugin = inventory
@@ -724,7 +756,14 @@ pub(crate) fn provision_runtime(
         "openbao-observation.json",
         &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
     )?;
-    eprintln!("Marty runtime stage: Keycloak inputs through Compose");
+    eprintln!(
+        "Marty runtime stage: {}",
+        if external_oidc.is_some() {
+            "OpenBao compatibility custody inputs through Compose (no Keycloak server)"
+        } else {
+            "Keycloak inputs through Compose"
+        }
+    );
     let (next, keycloak) = crate::installer_keycloak::provision(
         docker,
         installation,
@@ -1409,12 +1448,35 @@ mod tests {
             vec!["--check-compatibility"],
             vec!["--install-dir", "/private/installation"],
             vec!["--foundation-file", "/private/foundation.json"],
+            vec!["--external-oidc-file", "/private/oidc.json"],
             vec!["--hosting-file", "/private/hosting.json"],
             vec!["--settings-file", "/private/settings.json"],
             vec!["--acme-staging-roots", "/private/roots.pem"],
         ] {
             let mut invalid = compatibility_args.clone();
             invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
+        let mut oidc_args = args.clone();
+        oidc_args.extend(["--external-oidc-file".into(), "/private/oidc.json".into()]);
+        assert_eq!(
+            candidate_test_options(&oidc_args)
+                .unwrap()
+                .external_oidc_file,
+            Some(PathBuf::from("/private/oidc.json"))
+        );
+        let mut admitted_oidc = oidc_args.clone();
+        admitted_oidc[2] = "--verified-admission".into();
+        assert!(options(&admitted_oidc).is_ok());
+        *oidc_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&oidc_args).is_err());
+        *oidc_args.last_mut().unwrap() = "/private/oidc.json".into();
+        for extra in [
+            ["--external-oidc-file", "/private/second.json"],
+            ["--foundation-file", "/private/foundation.json"],
+        ] {
+            let mut invalid = oidc_args.clone();
+            invalid.extend(extra.map(str::to_owned));
             assert!(candidate_test_options(&invalid).is_err());
         }
         let mut hosting_args = args.clone();

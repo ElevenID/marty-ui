@@ -72,6 +72,45 @@
         animation: app-loading-spin 0.8s linear infinite;
       }
 
+      .app-loading-shell [hidden] {
+        display: none;
+      }
+
+      .app-loading-shell__recovery {
+        max-width: 32rem;
+        margin: 24px;
+        text-align: center;
+      }
+
+      .app-loading-shell__recovery h1 {
+        margin: 0 0 12px;
+        font-size: 24px;
+        line-height: 1.3;
+      }
+
+      .app-loading-shell__recovery p {
+        margin: 0 0 24px;
+        font-size: 16px;
+        line-height: 1.5;
+      }
+
+      .app-loading-shell__recovery button {
+        min-height: 44px;
+        padding: 10px 20px;
+        border: 0;
+        border-radius: 6px;
+        background: #08775b;
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .app-loading-shell__recovery button:focus-visible {
+        outline: 3px solid #173b57;
+        outline-offset: 3px;
+      }
+
       html.app-ready .app-loading-shell {
         display: none;
       }
@@ -88,9 +127,14 @@
   <body class="app-loading">
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <div class="app-loading-shell" role="status" aria-label="Loading ElevenID">
-      <div class="app-loading-shell__content">
+      <div class="app-loading-shell__content" data-app-startup-loading>
         <span class="app-loading-shell__spinner" aria-hidden="true"></span>
         <span>ElevenID</span>
+      </div>
+      <div class="app-loading-shell__recovery" data-app-startup-recovery hidden>
+        <h1 id="app-startup-title"></h1>
+        <p id="app-startup-message"></p>
+        <button type="button" data-app-startup-retry>Reload page</button>
       </div>
     </div>
     <div id="root"></div>

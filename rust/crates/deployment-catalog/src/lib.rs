@@ -72,6 +72,7 @@ pub mod installer_kms;
 pub mod installer_lifecycle;
 pub mod installer_logs;
 pub mod installer_managed_renewal;
+pub(crate) mod installer_oidc;
 pub mod installer_openbao;
 pub(crate) mod installer_openbao_control;
 #[cfg(target_os = "linux")]

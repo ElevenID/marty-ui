@@ -179,6 +179,9 @@ pub struct CredentialVerificationEvidence {
     /// Native query/subject/key evidence has no JSON promotion path.
     #[serde(skip)]
     pub authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    /// Ordinary DCQL authentication cannot become subject-bound evidence.
+    #[serde(skip)]
+    pub authenticated_sd_jwt_presentation: Option<crate::AuthenticatedSdJwtPresentationEvidence>,
     pub verified: bool,
     pub failure_reason: Option<String>,
     pub mdoc_authentication_diagnostic:
@@ -567,16 +570,33 @@ impl VerifiedFactsOrchestrator {
         if !profile_matches {
             return Err(failed("Authenticated JWT-VC profile evidence mismatch"));
         }
-        let query_evidence_matches = match (&sd_jwt_dcql, &evidence.authenticated_sd_jwt_query) {
-            (Some(prepared), Some(authenticated)) => {
+        let authenticated_query = match (
+            &sd_jwt_dcql,
+            &evidence.authenticated_sd_jwt_query,
+            &evidence.authenticated_sd_jwt_presentation,
+        ) {
+            (Some(prepared), Some(authenticated), None) => Some((
                 prepared.matches_evidence(authenticated)
-                    && authenticated.matches_claims(&evidence.claims)
-                    && evidence.issuer_id.as_deref() == Some(authenticated.issuer_id())
+                    && authenticated.matches_claims(&evidence.claims),
+                authenticated.issuer_id(),
+            )),
+            (Some(prepared), None, Some(authenticated)) => Some((
+                policy.prerequisite_evidence_profile.is_none()
+                    && prepared.matches_presentation(authenticated)
+                    && authenticated.matches_claims(&evidence.claims),
+                authenticated.issuer_id(),
+            )),
+            _ => None,
+        };
+        let query_evidence_matches = match authenticated_query {
+            Some((matches, issuer_id)) => {
+                matches
+                    && evidence.issuer_id.as_deref() == Some(issuer_id)
                     && evidence
                         .authenticated_issuer
                         .as_ref()
                         .is_some_and(|issuer| {
-                            issuer.issuer_id == authenticated.issuer_id()
+                            issuer.issuer_id == issuer_id
                                 && issuer.provenance.trust_profile_id
                                     == context.trust_profile.as_ref().map(|profile| profile.id)
                                 && issuer.provenance.organization_id
@@ -590,9 +610,11 @@ impl VerifiedFactsOrchestrator {
                     && evidence.challenge_verified
                     && evidence.audience_verified
             }
-            (Some(_), None) => !evidence.verified,
-            (None, None) => true,
-            (None, Some(_)) => false,
+            None => {
+                evidence.authenticated_sd_jwt_query.is_none()
+                    && evidence.authenticated_sd_jwt_presentation.is_none()
+                    && (sd_jwt_dcql.is_none() || !evidence.verified)
+            }
         };
         if !query_evidence_matches {
             return Err(PresentationVerificationError::Failed(
@@ -631,10 +653,13 @@ impl VerifiedFactsOrchestrator {
             evidence.issuer_id = None;
             evidence.authenticated_issuer = None;
             evidence.authenticated_sd_jwt_query = None;
+            evidence.authenticated_sd_jwt_presentation = None;
             evidence.authenticated_profiled_jwt_vc = None;
         }
 
         let mut authenticated_sd_jwt_query = evidence.authenticated_sd_jwt_query.clone();
+        let mut authenticated_sd_jwt_presentation =
+            evidence.authenticated_sd_jwt_presentation.clone();
 
         let authenticated_issuer = if evidence.verified && !presentation_only {
             evidence.authenticated_issuer.clone()
@@ -756,6 +781,9 @@ impl VerifiedFactsOrchestrator {
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
             query.revalidate_at(evaluation_time)?;
         }
+        if let Some(presentation) = authenticated_sd_jwt_presentation.as_mut() {
+            presentation.revalidate_at(evaluation_time)?;
+        }
         if let Some(profile) = evidence.authenticated_profiled_jwt_vc.as_ref() {
             profile.revalidate_at(evaluation_time)?;
         }
@@ -858,6 +886,7 @@ impl VerifiedFactsOrchestrator {
             authenticated_outer_jti,
             authenticated_issuer,
             authenticated_sd_jwt_query,
+            authenticated_sd_jwt_presentation,
             managed_credential_authority,
         })
     }
