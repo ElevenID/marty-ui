@@ -917,7 +917,18 @@ async fn get_result(
             "The verification transaction has no terminal result",
         ));
     }
-    Ok(Json(json!(instance.verification_projection()?)))
+    let response = state
+        .repository
+        .verification_result(&instance.organization_id, &instance.id)
+        .await?
+        .ok_or_else(|| {
+            FlowHttpError::new(
+                StatusCode::NOT_FOUND,
+                "flow_instance_not_found",
+                "Flow instance was not found",
+            )
+        })?;
+    Ok(Json(json!(response)))
 }
 
 #[derive(Deserialize)]
