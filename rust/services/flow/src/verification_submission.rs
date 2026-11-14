@@ -45,6 +45,7 @@ pub struct PreparedVerificationFinalization {
     pub callback: Option<Message>,
     pub submission_digest: String,
     pub(crate) receipt_input: Option<crate::verification_receipt::PreparedVerificationReceipt>,
+    pub(crate) managed_evidence: Option<crate::canonical_evidence::PreparedManagedEvidence>,
 }
 
 #[derive(Clone, Debug)]
@@ -480,15 +481,34 @@ pub async fn prepare_verification_submission(
         );
     }
     let final_allowed = evaluation.result == "passed" && evaluation.decision == "allow";
+    let managed_evidence = crate::canonical_evidence::PreparedManagedEvidence::acquire(
+        &expected_instance,
+        &evaluation_request,
+        &evaluation,
+        input.state.as_deref(),
+        &submission_digest,
+    )
+    .map_err(|_| FlowVerificationSubmissionError::InvalidContext("managed_evidence"))?;
     let verified_claims = if final_allowed {
         public_context(&json!(evaluation.verified_claims))
     } else {
         json!({})
     };
-    let credential_results = public_context(&json!(evaluation.credential_results))
+    let mut credential_results = public_context(&json!(evaluation.credential_results))
         .as_array()
         .cloned()
         .ok_or(FlowVerificationSubmissionError::Serialization)?;
+    if managed_evidence.is_some() {
+        // The canonical owner envelope retains this stable subject/key binding.
+        // Remove its legacy adjacent projection before sealing public results
+        // and callbacks; changing the stored receipt basis later is forbidden.
+        for credential in &mut credential_results {
+            if let Some(credential) = credential.as_object_mut() {
+                credential.remove("authenticated_sd_jwt_query");
+                credential.remove("managed_sd_jwt_authority");
+            }
+        }
+    }
     let error_codes = merged_error_codes(&evaluation.error_codes, &credential_results);
     let warnings = merged_warnings(&evaluation.warnings, &credential_results);
     let context = instance
@@ -569,6 +589,11 @@ pub async fn prepare_verification_submission(
             [marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
             .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
     }
+    if let Some(evidence) = &managed_evidence {
+        instance.result.as_mut().expect("result was assigned")
+            [marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2] =
+            json!(evidence.candidate_digest());
+    }
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
     let callback = build_callback(&instance, &policy_id, options, now)?;
@@ -592,6 +617,7 @@ pub async fn prepare_verification_submission(
         callback,
         submission_digest,
         receipt_input: None,
+        managed_evidence,
     };
     if evaluation.evaluation_timestamp.is_some() {
         finalization.receipt_input = Some(
@@ -892,6 +918,7 @@ fn retryable_response(
         verified_claims: json!({}),
         credential_results: Vec::new(),
         verification_receipt: None,
+        canonical_evidence_digest: None,
         last_presentation_attempt: None,
         error_codes: Vec::new(),
         warnings: Vec::new(),
@@ -1131,6 +1158,7 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            managed_evidence: None,
             evaluation_validity: None,
             evaluation_timestamp: None,
             policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
