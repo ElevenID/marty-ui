@@ -223,6 +223,7 @@ fn selected_public_values_reach_canonical_environment_and_survive_generation_sel
         None,
         None,
         Some(&selected),
+        None,
     )
     .unwrap();
     let text = String::from_utf8(result.env_bytes.clone()).unwrap();

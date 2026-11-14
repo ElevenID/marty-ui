@@ -17,6 +17,11 @@ organization:
   slug: marty
   adminEmail: ''
   did: ''
+# Login selection is independent of OpenBao. Select external only on a fresh
+# installation; its immutable selection is verified during credential renewal.
+auth:
+  provider: keycloak
+  external: {}
 openbao:
   address: https://openbao:8200
 existingSecrets:
