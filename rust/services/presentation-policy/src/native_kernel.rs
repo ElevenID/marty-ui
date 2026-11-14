@@ -1191,32 +1191,40 @@ fn verify_sd_jwt(
             ))
         }
     };
-    let (claims, authenticated_sd_jwt_query) = if let Some(query) = &context.sd_jwt_dcql {
-        match query.verify(&issuer_key, token, &allowed_algorithms) {
-            Ok((claims, evidence)) => (claims, Some(evidence)),
-            Err(reason) => return Ok(rejected(reason)),
-        }
-    } else {
-        let policy = marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
-            expected_issuer: issuer_key.issuer_id.clone(),
-            issuer_algorithm,
-            holder_algorithms: allowed_algorithms,
+    let (claims, authenticated_sd_jwt_query, authenticated_sd_jwt_presentation) =
+        if let Some(query) = &context.sd_jwt_dcql {
+            match query.verify(&issuer_key, token, &allowed_algorithms) {
+                Ok((
+                    claims,
+                    crate::sd_jwt_query::VerifiedSdJwtDcqlEvidence::SubjectBound(evidence),
+                )) => (claims, Some(evidence), None),
+                Ok((
+                    claims,
+                    crate::sd_jwt_query::VerifiedSdJwtDcqlEvidence::Presentation(evidence),
+                )) => (claims, None, Some(evidence)),
+                Err(reason) => return Ok(rejected(reason)),
+            }
+        } else {
+            let policy = marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
+                expected_issuer: issuer_key.issuer_id.clone(),
+                issuer_algorithm,
+                holder_algorithms: allowed_algorithms,
+            };
+            let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
+                token,
+                &issuer_key.public_jwk.to_string(),
+                &policy,
+                context.audience.clone(),
+                context.nonce.clone(),
+            );
+            match verified {
+                Ok(authenticated) => match authenticated.into_claims() {
+                    Value::Object(claims) => (claims, None, None),
+                    _ => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
+                },
+                Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
+            }
         };
-        let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
-            token,
-            &issuer_key.public_jwk.to_string(),
-            &policy,
-            context.audience.clone(),
-            context.nonce.clone(),
-        );
-        match verified {
-            Ok(authenticated) => match authenticated.into_claims() {
-                Value::Object(claims) => (claims, None),
-                _ => return Err(invalid_native("SD-JWT verifier returned non-object claims")),
-            },
-            Err(_) => return Ok(rejected("SD-JWT verification rejected the credential")),
-        }
-    };
     let Some(authenticated) = authenticated_issuer(
         context,
         &issuer_key,
@@ -1263,6 +1271,7 @@ fn verify_sd_jwt(
     Ok(CredentialVerificationEvidence {
         verified: true,
         authenticated_sd_jwt_query,
+        authenticated_sd_jwt_presentation,
         credential_types: claims
             .get("vct")
             .and_then(Value::as_str)

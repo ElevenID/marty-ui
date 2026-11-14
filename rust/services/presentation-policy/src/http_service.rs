@@ -91,6 +91,8 @@ pub struct VerifiedPolicyMaterial {
     pub(crate) authenticated_outer_jti: Option<String>,
     pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
     pub(crate) authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    pub(crate) authenticated_sd_jwt_presentation:
+        Option<crate::AuthenticatedSdJwtPresentationEvidence>,
     pub(crate) managed_credential_authority: Option<crate::VerifiedManagedCredentialAuthority>,
 }
 
@@ -101,6 +103,7 @@ impl VerifiedPolicyMaterial {
             authenticated_outer_jti: None,
             authenticated_issuer: None,
             authenticated_sd_jwt_query: None,
+            authenticated_sd_jwt_presentation: None,
             managed_credential_authority: None,
         }
     }
@@ -616,6 +619,7 @@ pub fn evaluate_verified_material_for_policy(
         authenticated_outer_jti,
         authenticated_issuer,
         authenticated_sd_jwt_query,
+        authenticated_sd_jwt_presentation,
         managed_credential_authority,
     } = material;
     if managed_credential_authority
@@ -651,6 +655,32 @@ pub fn evaluate_verified_material_for_policy(
                             .is_none_or(|claims| !query.matches_claims(claims))
                 })
     }) {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
+        ));
+    }
+    if authenticated_sd_jwt_presentation
+        .as_ref()
+        .is_some_and(|presentation| {
+            authenticated_sd_jwt_query.is_some()
+                || policy.prerequisite_evidence_profile.is_some()
+                || !presentation.matches_request(policy, request)
+                || authenticated_issuer
+                    .as_ref()
+                    .is_none_or(|issuer| issuer.issuer_id != presentation.issuer_id())
+                || policy_facts["credentials"]
+                    .as_array()
+                    .is_none_or(|credentials| {
+                        credentials.len() != 1
+                            || credentials[0]["signature_verified"] != true
+                            || credentials[0]["issuer_id"].as_str()
+                                != Some(presentation.issuer_id())
+                            || credentials[0]["claims"]
+                                .as_object()
+                                .is_none_or(|claims| !presentation.matches_claims(claims))
+                    })
+        })
+    {
         return Err(bad_request(
             "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
         ));
