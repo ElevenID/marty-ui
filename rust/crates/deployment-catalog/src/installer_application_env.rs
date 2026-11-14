@@ -559,7 +559,8 @@ mod tests {
     fn external_login_keeps_openbao_and_needs_no_keycloak_image() {
         let oidc: crate::installer_oidc::ExternalOidc = serde_json::from_value(serde_json::json!({
             "issuer_url": "https://identity.example.test/tenant", "client_id": "beta-client",
-            "admin_email": "owner@example.test", "allowed_algorithms": ["ES256"]
+            "admin_email": "owner@example.test", "allowed_algorithms": ["ES256"],
+            "scopes": ["openid", "email", "urn:example:groups"]
         }))
         .unwrap();
         let mut selected_images = images();
@@ -582,6 +583,7 @@ mod tests {
             text.contains("MARTY_EXTERNAL_OIDC_ISSUER='https://identity.example.test/tenant'\n")
         );
         assert!(text.contains("MARTY_ORG_ADMIN_EMAIL='owner@example.test'\n"));
+        assert!(text.contains("MARTY_EXTERNAL_OIDC_SCOPES='openid,email,urn:example:groups'\n"));
         assert!(text.contains("MARTY_OPENBAO_DIDCOMM_IMAGE="));
         assert!(text.contains("BAO_ADDR='https://openbao:8200'\n"));
         assert!(text.contains("AUTH_TLS_KMS_ADDR='https://openbao:8200'\n"));

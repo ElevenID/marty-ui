@@ -23,6 +23,7 @@ const SELECTION_SCHEMA: &str = "elevenid.installer-external-oidc-selection/v1";
 pub(crate) const RECORD: &str = "external-oidc-selection.json";
 pub(crate) const LAYER: &str = "deploy-config/compose/selfhost-installer/compose.external-oidc.yml";
 const SECRET: &str = "external_oidc_client_secret";
+const DEFAULT_SCOPES: &str = "openid,profile,email";
 
 fn require(condition: bool) -> Result<()> {
     if condition {
@@ -77,6 +78,9 @@ pub(crate) struct ExternalOidc {
     #[serde(default)]
     pub trusted_endpoint_origins: Vec<String>,
     pub allowed_algorithms: Vec<String>,
+    // Omission must stay absent in retained selections from earlier installers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
 }
 
 impl ExternalOidc {
@@ -85,14 +89,21 @@ impl ExternalOidc {
             scalar(value)?;
         }
         let issuer = url::Url::parse(&self.issuer_url).map_err(|_| REFUSED)?;
+        // Keep the bootstrap account rule aligned with run-migrations-with-secrets.sh.
+        let admin_email = self.admin_email.to_ascii_lowercase();
         require(
             issuer.scheme() == "https"
-                && issuer.host_str().is_some()
+                && issuer.host_str().is_some_and(|host| !host.contains('*'))
                 && issuer.username().is_empty()
                 && issuer.password().is_none()
                 && issuer.query().is_none()
                 && issuer.fragment().is_none()
                 && self.admin_email.contains('@')
+                && !matches!(
+                    admin_email.as_str(),
+                    "admin@example.com" | "user@example.com" | "example@example.com"
+                )
+                && !admin_email.starts_with("change-me")
                 && self.trusted_endpoint_origins.len() <= 8
                 && !self.allowed_algorithms.is_empty()
                 && self.allowed_algorithms.len() <= 16,
@@ -106,7 +117,7 @@ impl ExternalOidc {
             let origin = url::Url::parse(value).map_err(|_| REFUSED)?;
             require(
                 origin.scheme() == "https"
-                    && origin.host_str().is_some()
+                    && origin.host_str().is_some_and(|host| !host.contains('*'))
                     && origin.username().is_empty()
                     && origin.password().is_none()
                     && origin.query().is_none()
@@ -122,12 +133,33 @@ impl ExternalOidc {
             // remain the existing Auth owner's fail-closed runtime checks.
             require(
                 [
-                    "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384",
-                    "ES512", "EdDSA",
+                    "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "EdDSA",
                 ]
                 .contains(&value.as_str())
                     && algorithms.insert(value),
             )?;
+        }
+        if let Some(scopes) = &self.scopes {
+            scalar(&scopes.join(","))?;
+            require(
+                !scopes.is_empty()
+                    && scopes.len() <= 32
+                    && scopes.iter().any(|scope| scope == "openid"),
+            )?;
+            let mut unique = BTreeSet::new();
+            for scope in scopes {
+                // RFC 6749 scope-token, with comma and apostrophe excluded for
+                // the existing comma-delimited, single-quoted env transport.
+                require(
+                    !scope.is_empty()
+                        && scope.len() <= 128
+                        && scope.bytes().all(|byte| {
+                            (b'!'..=b'~').contains(&byte)
+                                && ![b'"', b'\\', b',', b'\''].contains(&byte)
+                        })
+                        && unique.insert(scope),
+                )?;
+            }
         }
         Ok(())
     }
@@ -158,7 +190,30 @@ impl ExternalOidc {
         ] {
             values.insert(name.into(), value);
         }
+        values.remove("MARTY_EXTERNAL_OIDC_SCOPES");
+        if let Some(scopes) = &self.scopes {
+            values.insert("MARTY_EXTERNAL_OIDC_SCOPES".into(), scopes.join(","));
+        }
         Ok(())
+    }
+
+    pub(crate) fn validate_model_scopes(
+        &self,
+        environment: &serde_json::Map<String, Value>,
+    ) -> Result<()> {
+        let actual = environment.get("OIDC_SCOPES");
+        if let Some(scopes) = &self.scopes {
+            // Native Compose config serializes literal dollars as doubled
+            // dollars. Compare that exact representation without rewriting it.
+            require(
+                actual.and_then(Value::as_str)
+                    == Some(scopes.join(",").replace('$', "$$").as_str()),
+            )
+        } else {
+            // Older authenticated layers omit the variable and use Auth's
+            // identical default. Keep those retained sessions readable.
+            require(actual.is_none() || actual.and_then(Value::as_str) == Some(DEFAULT_SCOPES))
+        }
     }
 
     fn secret_mount(&self) -> &'static str {
@@ -395,6 +450,7 @@ impl Selection {
         };
         let oidc = &self.configuration.external_oidc;
         let env = auth["environment"].as_object().ok_or(REFUSED)?;
+        oidc.validate_model_scopes(env)?;
         for (name, expected) in [
             ("OIDC_PROVIDER_MODE", "external"),
             ("OIDC_ISSUER_URL", oidc.issuer_url.as_str()),
@@ -406,7 +462,9 @@ impl Selection {
             ("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER", "false"),
             ("CREDENTIAL_LOGIN_CREATE_USERS", "false"),
         ] {
-            require(env.get(name).and_then(Value::as_str) == Some(expected))?;
+            require(
+                env.get(name).and_then(Value::as_str) == Some(expected.replace('$', "$$").as_str()),
+            )?;
         }
         require(
             env.get("OIDC_ALLOWED_ALGORITHMS").and_then(Value::as_str)
@@ -414,7 +472,12 @@ impl Selection {
                 && env
                     .get("OIDC_TRUSTED_ENDPOINT_ORIGINS")
                     .and_then(Value::as_str)
-                    == Some(oidc.trusted_endpoint_origins.join(",").as_str()),
+                    == Some(
+                        oidc.trusted_endpoint_origins
+                            .join(",")
+                            .replace('$', "$$")
+                            .as_str(),
+                    ),
         )?;
         for name in [
             "KEYCLOAK_REALM",

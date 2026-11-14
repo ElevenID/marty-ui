@@ -508,6 +508,11 @@ impl Selection {
                         .contains(&role.as_str()),
             )?;
             let environment = service["environment"].as_object().ok_or(REFUSED)?;
+            if role == "auth" {
+                self.configuration
+                    .external_oidc
+                    .validate_model_scopes(environment)?;
+            }
             require(
                 environment
                     .get("AWS_EC2_METADATA_DISABLED")

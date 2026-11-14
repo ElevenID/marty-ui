@@ -105,10 +105,10 @@ false
 {{- if ne $cfg.MARTY_ORG_SLUG $root.Values.organization.slug -}}
 {{- fail "config.MARTY_ORG_SLUG must match organization.slug; select the organization through organization.slug so its default issuer DID uses the same identity" -}}
 {{- end -}}
-{{- if ne $cfg.KEYCLOAK_REALM "11id" -}}
+{{- if and (eq (include "marty.authProvider" $root) "keycloak") (ne $cfg.KEYCLOAK_REALM "11id") -}}
 {{- fail "config.KEYCLOAK_REALM must be 11id; this chart imports and probes the 11id realm" -}}
 {{- end -}}
-{{- if $root.Values.keycloak.configurator.enabled -}}
+{{- if and (eq (include "marty.authProvider" $root) "keycloak") $root.Values.keycloak.configurator.enabled -}}
 {{- $login := dict -}}
 {{- range $name, $default := dict "KEYCLOAK_USER_REGISTRATION_ENABLED" "true" "KEYCLOAK_VERIFY_EMAIL" "false" "KEYCLOAK_RESET_PASSWORD_ENABLED" "true" "KEYCLOAK_SOCIAL_LOGIN_ENABLED" "true" "KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED" "false" -}}
 {{- $_ := set $login $name (include "marty.keycloakBoolean" (dict "name" $name "value" (get $cfg $name) "default" $default)) -}}
@@ -145,6 +145,7 @@ false
 {{- $host := include "marty.publicHost" . -}}
 {{- $email := required "organization.adminEmail must identify the installation operator" .Values.organization.adminEmail -}}
 {{- $origin := include "marty.publicOrigin" . -}}
+{{- include "marty.validateAuthOverrides" . -}}
 {{- $privateKeys := required "chart private configuration key contract is missing" (.Files.Get "files/private-config-keys.yaml") | fromYamlArray -}}
 {{- range $key := $privateKeys -}}
 {{- if hasKey $.Values.config $key -}}
@@ -186,6 +187,14 @@ false
 {{- $_ := set $cfg "OIDC_POST_LOGOUT_REDIRECT_URI" $origin -}}
 {{- $_ := set $cfg "FLOW_CALLBACK_DESTINATIONS" (printf "%s|http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__" .Values.organization.id) -}}
 {{- $cfg = mergeOverwrite $cfg .Values.config -}}
+{{- if eq (include "marty.authProvider" .) "external" -}}
+{{- range $key, $_ := deepCopy $cfg -}}
+{{- if or (hasPrefix "KEYCLOAK_" $key) (hasPrefix "KC_" $key) (hasPrefix "MARTY_API_CLIENT_" $key) -}}
+{{- $_ := unset $cfg $key -}}
+{{- end -}}
+{{- end -}}
+{{- $cfg = mergeOverwrite $cfg (include "marty.externalAuthConfig" . | fromYaml) -}}
+{{- end -}}
 {{- include "marty.validateCustomerConfiguration" (dict "root" . "config" $cfg) -}}
 {{- range $key, $value := $cfg }}
 {{ $key }}: {{ $value | toString | quote }}
@@ -214,7 +223,14 @@ affinity:
 {{- end -}}
 
 {{- define "marty.podAnnotations" -}}
+{{- range $name := list "marty.elevenid.com/auth-provider" "marty.elevenid.com/auth-selection-sha256" -}}
+{{- if hasKey $.Values.podAnnotations $name -}}
+{{- fail (printf "podAnnotations.%s is owned by the authentication selection" $name) -}}
+{{- end -}}
+{{- end -}}
 checksum/config: {{ include "marty.configData" . | sha256sum | quote }}
+marty.elevenid.com/auth-provider: {{ include "marty.authProvider" . | quote }}
+marty.elevenid.com/auth-selection-sha256: {{ include "marty.authSelection" . | sha256sum | quote }}
 {{- range $key, $value := .Values.release }}
 {{- if $value }}
 marty.11id.dev/{{ $key }}: {{ $value | toString | quote }}

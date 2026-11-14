@@ -50,12 +50,46 @@ valid installer input alone does not prove the provider supports the complete
 browser journey. Test login and logout against the selected issuer and client
 before relying on a deployment.
 
-Registration and account recovery belong to the external provider. Marty's
-external registration entry point requires discovery to advertise `prompt=create`;
-otherwise use the provider's own registration flow. Provider-wide logout is
-available only when discovery supplies a supported `end_session_endpoint`.
-Marty's local session logout remains separate. Managed Keycloak account and
-passkey-enrollment actions are unavailable for external OIDC.
+### Discovery compatibility and account lifecycle
+
+If discovery includes `id_token_signing_alg_values_supported`, Auth requires a
+well-formed list with at least one signed algorithm from the configured
+`allowed_algorithms`. An empty list or a list with no overlap fails provider
+readiness before a code or client secret is sent to the token endpoint.
+Discovery does not add algorithms to the configured token policy. The adapter
+preserves its existing behavior when this metadata field is absent; token
+signature, issuer, audience and nonce validation still apply.
+
+The pinned token validator supports `RS256`, `RS384`, `RS512`, `ES256`, `ES384`,
+`PS256`, `PS384`, `PS512` and `EdDSA` signatures. `ES512` is not supported. Its
+access-token hash (`at_hash`) verification currently supports `RS256`, `PS256`,
+`ES256`, `ES384` and `EdDSA`; tokens using `RS384`, `RS512`, `PS384` or `PS512`
+with an `at_hash` claim fail verification. Select and test the actual algorithm
+and claims issued by the provider.
+
+Auth defaults to the `openid profile email` scopes. A provider may omit supported
+scopes from `scopes_supported`, as described in
+[OpenID Connect Discovery section 3](https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata).
+The adapter therefore does not infer that a requested scope is unsupported just
+because it is absent from that list. The selected provider must include a
+nonempty `sub` and `email`, with `email_verified: true`, in the signed ID token.
+This adapter does not fetch missing identity claims from a UserInfo endpoint.
+
+The external provider owns registration, recovery, MFA and account presentation:
+
+- Marty's `/v1/auth/register` flow requires discovery to advertise `create` in
+  `prompt_values_supported`. Without that capability, create accounts through
+  the provider and use normal login. A discovery `registration_endpoint` is for
+  registering OAuth clients, not for registering people.
+- The Keycloak account console and native Keycloak passkey-enrollment actions
+  are unavailable with external OIDC. Use the provider's account-management
+  features for those operations.
+- Logout ends the local Marty session. When discovery supplies an
+  `end_session_endpoint`, Marty also redirects the browser there. Without that
+  endpoint, the provider's browser session can remain active. Normal login
+  requests `prompt=consent login` and `max_age=0`; qualify the provider's actual
+  browser behavior rather than treating those parameters as proof of a new
+  authentication event.
 
 ## Private configuration
 
@@ -115,6 +149,28 @@ entry only when discovery uses an endpoint on that separate origin. Each entry
 must be an exact HTTPS origin without a path, query, fragment or trailing slash;
 at most eight distinct origins are accepted. This list authorizes discovery
 endpoint locations, not additional application callback URLs.
+
+### Optional scopes
+
+`external_oidc.scopes` optionally selects the scopes requested at authorization,
+for example `["openid", "email"]` when the provider supplies the required claims
+with that narrower set. Omit it to retain `openid`, `profile` and `email`. The
+same optional field is supported within the existing AWS foundation's
+`external_oidc` object.
+
+An explicit list must include `openid` and contain at most 32 distinct,
+case-sensitive scope tokens. Each token must be 1–128 printable ASCII characters
+with no whitespace, double quotes, backslashes, commas or apostrophes; the
+comma-joined list is limited to 2,048 bytes. Provider-specific tokens such as
+`urn:example:groups` are allowed when configured at that provider. The character
+restrictions preserve the existing environment-file transport. The provider
+must still issue the verified email and subject needed for membership, even
+when the chosen scope list differs from the default.
+
+The selected list is retained with the installation and checked against the
+resolved Auth configuration. Existing selections that omit this field keep
+their original default behavior. Supply scopes through this input file rather
+than editing generated environments or retained selection records.
 
 ## Install with the existing hosting selection
 

@@ -1698,16 +1698,21 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
         .filter(|line| !line.starts_with("KEYCLOAK_PASSKEYS_ENABLED="))
         .map(|line| format!("{line}\n"))
         .collect::<String>();
-    for (client, secret_file) in [
-        ("public", ""),
-        ("confidential", "/run/secrets/external_oidc_client_secret"),
+    for (client, secret_file, scopes, scope_env) in [
+        ("public", "", "openid,profile,email", ""),
+        (
+            "confidential",
+            "/run/secrets/external_oidc_client_secret",
+            "openid,email,urn:example:$$groups",
+            "MARTY_EXTERNAL_OIDC_SCOPES='openid,email,urn:example:$groups'\n",
+        ),
     ] {
         let env = temp.path().join(format!("{client}.env"));
         private_write(
             &env,
             format!(
-                "{original_env}MARTY_EXTERNAL_OIDC_ISSUER='https://identity.example.invalid/auth/v1'\n\
-                 MARTY_EXTERNAL_OIDC_CLIENT_ID='fixture-client'\n\
+                "{original_env}{scope_env}MARTY_EXTERNAL_OIDC_ISSUER='https://identity.example.invalid/auth/$tenant'\n\
+                 MARTY_EXTERNAL_OIDC_CLIENT_ID='fixture-$client'\n\
                  MARTY_EXTERNAL_OIDC_ALGORITHMS='ES256'\n\
                  MARTY_EXTERNAL_OIDC_TRUSTED_ORIGINS='https://login.example.invalid'\n\
                  MARTY_EXTERNAL_OIDC_SECRET_FILE='{secret_file}'\n\
@@ -1778,14 +1783,15 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
             ("OIDC_PROVIDER_MODE", "external"),
             (
                 "OIDC_ISSUER_URL",
-                "https://identity.example.invalid/auth/v1",
+                "https://identity.example.invalid/auth/$$tenant",
             ),
             (
                 "OIDC_EXTERNAL_ISSUER_URL",
-                "https://identity.example.invalid/auth/v1",
+                "https://identity.example.invalid/auth/$$tenant",
             ),
-            ("OIDC_CLIENT_ID", "fixture-client"),
+            ("OIDC_CLIENT_ID", "fixture-$$client"),
             ("OIDC_ALLOWED_ALGORITHMS", "ES256"),
+            ("OIDC_SCOPES", scopes),
             (
                 "OIDC_TRUSTED_ENDPOINT_ORIGINS",
                 "https://login.example.invalid",
@@ -1965,6 +1971,10 @@ fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycl
         ),
         ("MARTY_EXTERNAL_OIDC_CLIENT_ID", "fixture".into()),
         ("MARTY_EXTERNAL_OIDC_ALGORITHMS", "RS256".into()),
+        (
+            "MARTY_EXTERNAL_OIDC_SCOPES",
+            "openid,email,urn:example:groups".into(),
+        ),
     ] {
         values.insert(name.into(), value);
     }
@@ -2047,6 +2057,10 @@ fn actual_aws_foundation_removes_managed_providers_and_preserves_native_lifecycl
     );
     let services = install["services"].as_object().unwrap();
     assert_eq!(services.len(), 27);
+    assert_eq!(
+        services["auth"]["environment"]["OIDC_SCOPES"],
+        "openid,email,urn:example:groups"
+    );
     assert_eq!(
         services["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"],
         "false"

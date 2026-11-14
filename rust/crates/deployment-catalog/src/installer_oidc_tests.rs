@@ -46,10 +46,12 @@ fn choose(parent: &Path, state: &mut InstallerState, config: &Value) -> Selectio
 #[test]
 fn absence_preserves_managed_default_and_selection_is_fresh_only() {
     let (parent, path, mut state) = installation();
-    select(prepare(None, false).unwrap(), &mut state).unwrap();
-    assert!(state.with_inspection(external).unwrap().is_none());
-    assert!(state.journal().external_oidc_selection_sha256().is_none());
-    assert!(!path.join("evidence").join(RECORD).exists());
+    for aws_foundation in [false, true] {
+        select(prepare(None, aws_foundation).unwrap(), &mut state).unwrap();
+        assert!(state.with_inspection(external).unwrap().is_none());
+        assert!(state.journal().external_oidc_selection_sha256().is_none());
+        assert!(!path.join("evidence").join(RECORD).exists());
+    }
     choose(parent.path(), &mut state, &configuration());
     let input = parent.path().join("oidc.json");
     assert!(select(prepare(Some(&input), false).unwrap(), &mut state).is_err());
@@ -64,6 +66,8 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
     let input = parent.path().join("oidc.json");
     for (field, invalid) in [
         ("issuer_url", json!("http://identity.example.test")),
+        ("issuer_url", json!("https://*.example.test/tenant")),
+        ("issuer_url", json!("https://%2A.example.test/tenant")),
         (
             "issuer_url",
             json!("https://user:password@identity.example.test"),
@@ -76,9 +80,43 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
         ("client_id", json!("")),
         ("client_id", json!("unsafe\nvalue")),
         ("admin_email", json!("no-email")),
+        ("admin_email", json!("admin@example.com")),
+        ("admin_email", json!("Admin@Example.Com")),
+        ("admin_email", json!("USER@EXAMPLE.COM")),
+        ("admin_email", json!("Example@example.com")),
+        ("admin_email", json!("change-me@example.test")),
+        ("admin_email", json!("CHANGE-ME-operator@example.test")),
         ("allowed_algorithms", json!([])),
         ("allowed_algorithms", json!(["HS256"])),
+        ("allowed_algorithms", json!(["ES512"])),
+        ("allowed_algorithms", json!(["RS256", "ES512"])),
         ("allowed_algorithms", json!(["RS256", "RS256"])),
+        ("scopes", json!([])),
+        ("scopes", json!(["email"])),
+        ("scopes", json!(["openid", "openid"])),
+        ("scopes", json!(["openid", ""])),
+        ("scopes", json!(["openid", "email profile"])),
+        ("scopes", json!(["openid", "email,profile"])),
+        ("scopes", json!(["openid", "email\nprofile"])),
+        ("scopes", json!(["openid", "email\"profile"])),
+        ("scopes", json!(["openid", "email'profile"])),
+        ("scopes", json!(["openid", "email\\profile"])),
+        ("scopes", json!(["openid", "équipe"])),
+        ("scopes", json!(["openid", "a".repeat(129)])),
+        ("scopes", json!(["openid", false])),
+        ("scopes", json!("openid,email")),
+        (
+            "scopes",
+            json!(std::iter::once("openid".to_string())
+                .chain((0..16).map(|n| format!("{}{:02}", "a".repeat(126), n)))
+                .collect::<Vec<_>>()),
+        ),
+        (
+            "scopes",
+            json!(std::iter::once("openid".to_string())
+                .chain((0..32).map(|n| format!("group:{n}")))
+                .collect::<Vec<_>>()),
+        ),
         (
             "trusted_endpoint_origins",
             json!(["https://login.example.test/path"]),
@@ -90,6 +128,14 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
         (
             "trusted_endpoint_origins",
             json!(["http://login.example.test"]),
+        ),
+        (
+            "trusted_endpoint_origins",
+            json!(["https://*.example.test"]),
+        ),
+        (
+            "trusted_endpoint_origins",
+            json!(["https://%2A.example.test"]),
         ),
         (
             "trusted_endpoint_origins",
@@ -114,6 +160,132 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
         before
     );
     assert!(state.journal().external_oidc_selection_sha256().is_none());
+    assert!(!path.join("evidence").join(RECORD).exists());
+}
+
+#[test]
+fn supported_provider_inputs_preserve_exact_identity_and_bootstrap_email() {
+    let (parent, path, state) = installation();
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let input = parent.path().join("oidc.json");
+    for email in [
+        "operator@example.com",
+        "admin@example.test",
+        "Administrator@EXAMPLE.COM",
+        "operator+beta@example.test",
+        "my-change-me@example.test",
+    ] {
+        let mut config = configuration();
+        config["external_oidc"]["issuer_url"] = json!("https://identity.example.test/tenants/*");
+        config["external_oidc"]["admin_email"] = json!(email);
+        config["external_oidc"]["allowed_algorithms"] = json!([
+            "RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "EdDSA"
+        ]);
+        private_file(&input, &serde_json::to_vec(&config).unwrap());
+        let prepared = prepare(Some(&input), false).unwrap().unwrap();
+        let mut environment = BTreeMap::new();
+        prepared
+            .configuration
+            .external_oidc
+            .apply_environment(&mut environment)
+            .unwrap();
+        assert_eq!(environment["MARTY_ORG_ADMIN_EMAIL"], email);
+        assert_eq!(
+            environment["MARTY_EXTERNAL_OIDC_ISSUER"],
+            "https://identity.example.test/tenants/*"
+        );
+    }
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        before
+    );
+    assert!(state.journal().external_oidc_selection_sha256().is_none());
+    assert!(!path.join("evidence").join(RECORD).exists());
+}
+
+#[test]
+fn optional_scopes_preserve_existing_records_and_bind_explicit_runtime_selection() {
+    for scopes in [None, Some(vec!["openid", "email", "urn:example:$groups"])] {
+        let (parent, path, mut state) = installation();
+        let mut config = configuration();
+        if let Some(scopes) = &scopes {
+            config["external_oidc"]["scopes"] = json!(scopes);
+            config["external_oidc"]["issuer_url"] = json!("https://identity.example.test/$tenant");
+            config["external_oidc"]["client_id"] = json!("client-${literal}");
+        }
+        let selected = choose(parent.path(), &mut state, &config);
+        let oidc = &selected.configuration.external_oidc;
+        let retained: Value =
+            serde_json::from_slice(&std::fs::read(path.join("evidence").join(RECORD)).unwrap())
+                .unwrap();
+        let mut environment = BTreeMap::new();
+        oidc.apply_environment(&mut environment).unwrap();
+        if let Some(scopes) = &scopes {
+            assert_eq!(
+                retained["configuration"]["external_oidc"]["scopes"],
+                json!(scopes)
+            );
+            assert_eq!(environment["MARTY_EXTERNAL_OIDC_SCOPES"], scopes.join(","));
+        } else {
+            assert!(retained["configuration"]["external_oidc"]
+                .get("scopes")
+                .is_none());
+            assert!(!environment.contains_key("MARTY_EXTERNAL_OIDC_SCOPES"));
+        }
+        assert_eq!(
+            state.with_inspection(external).unwrap().as_ref(),
+            Some(oidc)
+        );
+
+        let mut model = json!({"services": {"auth": {"environment": {
+            "OIDC_PROVIDER_MODE": "external",
+            "OIDC_ISSUER_URL": oidc.issuer_url.replace('$', "$$"),
+            "OIDC_EXTERNAL_ISSUER_URL": oidc.issuer_url.replace('$', "$$"),
+            "OIDC_CLIENT_ID": oidc.client_id.replace('$', "$$"),
+            "OIDC_CLIENT_SECRET_FILE": "",
+            "OIDC_ALLOWED_ALGORITHMS": oidc.allowed_algorithms.join(","),
+            "OIDC_TRUSTED_ENDPOINT_ORIGINS": oidc.trusted_endpoint_origins.join(","),
+            "KEYCLOAK_TOKEN_EXCHANGE_ENABLED": "false",
+            "KEYCLOAK_PASSKEYS_ENABLED": "false",
+            "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "false",
+            "CREDENTIAL_LOGIN_CREATE_USERS": "false"
+        }}}});
+        // Old retained layers may omit this variable only for the old default.
+        assert_eq!(selected.validate_model(&model).is_ok(), scopes.is_none());
+        model["services"]["auth"]["environment"]["OIDC_SCOPES"] =
+            json!(scopes.as_ref().map_or_else(
+                || DEFAULT_SCOPES.into(),
+                |values| values.join(",").replace('$', "$$")
+            ));
+        selected.validate_model(&model).unwrap();
+        if let Some(scopes) = &scopes {
+            let mut unescaped = model.clone();
+            unescaped["services"]["auth"]["environment"]["OIDC_SCOPES"] = json!(scopes.join(","));
+            assert!(selected.validate_model(&unescaped).is_err());
+            for name in [
+                "OIDC_ISSUER_URL",
+                "OIDC_EXTERNAL_ISSUER_URL",
+                "OIDC_CLIENT_ID",
+            ] {
+                let mut unescaped = model.clone();
+                let value = unescaped["services"]["auth"]["environment"][name]
+                    .as_str()
+                    .unwrap()
+                    .replace("$$", "$");
+                unescaped["services"]["auth"]["environment"][name] = json!(value);
+                assert!(selected.validate_model(&unescaped).is_err());
+            }
+        }
+        for invalid in [
+            json!(null),
+            json!(""),
+            json!("openid"),
+            json!("openid,profile,email,groups"),
+        ] {
+            model["services"]["auth"]["environment"]["OIDC_SCOPES"] = invalid;
+            assert!(selected.validate_model(&model).is_err());
+        }
+    }
 }
 
 #[test]
