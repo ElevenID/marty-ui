@@ -119,7 +119,7 @@ fn credential_names(
     Ok(entries)
 }
 fn corpus(state: &LockedInspection, entries: &BTreeSet<String>) -> Result<Vec<Vec<u8>>> {
-    let external = crate::installer_foundation::load(state)?.is_some();
+    let external = crate::installer_oidc::external(state)?.is_some();
     let mut result = if external {
         Vec::new()
     } else {
@@ -267,6 +267,61 @@ fn logs_inner(args: &[String]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn external_installation(
+        confidential: bool,
+    ) -> (
+        tempfile::TempDir,
+        PathBuf,
+        crate::installer_state::InstallerState,
+    ) {
+        use crate::installer_state::{Identity, InstallerState, Phase};
+        let parent = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let installation = parent.path().join("installation");
+        let mut state = InstallerState::create(
+            &installation,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        let secret = parent.path().join("client-secret");
+        std::fs::write(&secret, b"synthetic-external-secret").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let configuration = json!({
+            "schema": "elevenid.installer-external-oidc/v1",
+            "external_oidc": {
+                "issuer_url": "https://identity.example/tenant",
+                "client_id": "installed-client",
+                "admin_email": "operator@example.com",
+                "client_secret_file": confidential.then_some(secret),
+                "allowed_algorithms": ["RS256"]
+            }
+        });
+        let input = parent.path().join("oidc.json");
+        std::fs::write(&input, serde_json::to_vec(&configuration).unwrap()).unwrap();
+        std::fs::set_permissions(&input, std::fs::Permissions::from_mode(0o600)).unwrap();
+        crate::installer_oidc::select(
+            crate::installer_oidc::prepare(Some(&input), false).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state.generate_external_auth_credentials().unwrap();
+        state
+            .with_inspection(crate::installer_oidc::load)
+            .unwrap()
+            .unwrap()
+            .import_inputs(&mut state)
+            .unwrap();
+        (parent, installation, state)
+    }
     fn args(extra: &[&str]) -> Vec<String> {
         [
             vec!["--install-dir", "/private/install", "--service", "gateway"],
@@ -357,5 +412,106 @@ mod tests {
         assert!(!names.contains("unused_optional_token"));
         model["secrets"]["gateway_token"]["file"] = json!("/outside/token");
         assert!(credential_names(&model, Path::new("/private/install"), None).is_err());
+    }
+
+    #[test]
+    fn public_external_corpus_filters_original_and_renewed_compatibility_credentials() {
+        use crate::installer_generation_binding::{
+            GenerationBinding, GenerationFile, GenerationSource,
+        };
+        let (_parent, installation, mut state) = external_installation(false);
+        let renewable = crate::installer_renewal_bootstrap::current_inputs();
+        let original: BTreeMap<_, _> = renewable
+            .iter()
+            .map(|name| {
+                (
+                    name.clone(),
+                    format!("synthetic-original-{name}").into_bytes(),
+                )
+            })
+            .collect();
+        state.stage_application_inputs(&original).unwrap();
+        state
+            .create_private_directory("application-generation")
+            .unwrap();
+        let mut files = BTreeMap::new();
+        for name in renewable
+            .iter()
+            .map(String::as_str)
+            .chain(["external_oidc_client_secret"])
+        {
+            let bytes = if name == "external_oidc_client_secret" {
+                Vec::new()
+            } else {
+                format!("synthetic-current-{name}").into_bytes()
+            };
+            let path = installation.join("application-generation").join(name);
+            std::fs::write(&path, &bytes).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
+            files.insert(
+                name.into(),
+                GenerationFile {
+                    source: if renewable.contains(name) {
+                        GenerationSource::Candidate
+                    } else {
+                        GenerationSource::Original
+                    },
+                    sha256: crate::installer_release::sha256(&bytes),
+                    size: bytes.len() as u64,
+                    source_mode: 0o444,
+                    mode: 0o444,
+                },
+            );
+        }
+        let generation = GenerationBinding {
+            schema: "elevenid.installer-application-generation/v1".into(),
+            installation_id: state.journal().installation_id().to_string(),
+            engine_id: "fixture-engine".into(),
+            network_id: Some("a".repeat(64)),
+            generation_receipt_sha256: "b".repeat(64),
+            files,
+            activated: false,
+            root_retired: false,
+            installation_ready: false,
+            successor: None,
+        };
+        drop(state);
+        let view = LockedInspection::open(&installation).unwrap();
+        assert!(view
+            .read_secret("external_oidc_client_secret")
+            .unwrap()
+            .is_empty());
+        // Runtime has no Keycloak service; the generation inventory supplies
+        // the retained original and renewed custody inputs to log filtering.
+        let model = json!({"services":{"auth":{"secrets":[{"source":"external_oidc_client_secret"}]}},
+            "secrets":{"external_oidc_client_secret":{"file":installation.join("application-generation/external_oidc_client_secret")}}});
+        let mut names = credential_names(
+            &model,
+            &installation,
+            Some(&installation.join("application-generation")),
+        )
+        .unwrap();
+        names.extend(generation.files.keys().cloned());
+        let corpus = selected_corpus(&view, &names, &installation, Some(&generation)).unwrap();
+        let patterns = patterns(&corpus).unwrap();
+        let old = "synthetic-original-keycloak_signing_kms_token";
+        let current = "synthetic-current-keycloak_signing_kms_token";
+        assert!(patterns.contains(&old.into()));
+        assert!(patterns.contains(&current.into()));
+        let output = redact(&format!("old {old}\ncurrent {current}\n"), &patterns).unwrap();
+        assert!(!output.contains(old) && !output.contains(current));
+        assert!(!installation.join("operator-password").exists());
+    }
+
+    #[test]
+    fn diagnostic_empty_external_secret_requires_a_selected_public_client() {
+        let (_parent, installation, state) = external_installation(true);
+        drop(state);
+        let path = installation.join("secrets/external_oidc_client_secret");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, []).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let view = LockedInspection::open(&installation).unwrap();
+        assert!(view.read_secret("external_oidc_client_secret").is_err());
     }
 }

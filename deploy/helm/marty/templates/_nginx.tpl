@@ -89,7 +89,11 @@ server {
         default_type application/json;
         return 404 '{"error":"not_found"}';
     }
+    {{- if eq (include "marty.authProvider" .) "keycloak" }}
     location ~ ^/(realms|resources)/ { proxy_pass http://keycloak:8080; }
+    {{- else }}
+    location ~ ^/(realms|resources)/ { return 404; }
+    {{- end }}
     location ^~ /v1/integrations/canvas/lti/ {
         proxy_pass http://gateway:8000;
         proxy_hide_header X-Frame-Options;

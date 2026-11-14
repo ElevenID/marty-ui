@@ -282,6 +282,8 @@ pub struct Journal {
     hosting_addon_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_settings_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_oidc_selection_sha256: Option<String>,
 }
 impl Journal {
     pub fn installation_id(&self) -> uuid::Uuid {
@@ -311,11 +313,27 @@ impl Journal {
     pub(crate) fn application_settings_sha256(&self) -> Option<&str> {
         self.application_settings_sha256.as_deref()
     }
+    pub(crate) fn external_oidc_selection_sha256(&self) -> Option<&str> {
+        self.external_oidc_selection_sha256.as_deref()
+    }
     pub fn compose_project(&self) -> String {
         format!("marty-install-{}", self.installation_id.simple())
     }
     fn validate(&self) -> Result<()> {
         self.identity.validate()?;
+        if self
+            .external_oidc_selection_sha256
+            .as_ref()
+            .is_some_and(|value| {
+                self.phase == Phase::Initialized
+                    || value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+            })
+        {
+            return Err("invalid external OIDC selection binding".into());
+        }
         if self
             .application_settings_sha256
             .as_ref()
@@ -871,7 +889,10 @@ impl LockedInspection {
         }
         let bytes = self.read_credential_bytes(
             reopen_regular(&file)?,
-            crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS.contains(&entry),
+            crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS.contains(&entry)
+                || (entry == "external_oidc_client_secret"
+                    && crate::installer_oidc::external(self)?
+                        .is_some_and(|oidc| oidc.client_secret_file.is_none())),
         )?;
         if entry == "openbao_tls_ca_cert" {
             use x509_cert::der::DecodePem;
@@ -2541,6 +2562,7 @@ impl InstallerState {
             hosting_selection_sha256: None,
             hosting_addon_sha256: None,
             application_settings_sha256: None,
+            external_oidc_selection_sha256: None,
         };
         let mut state = Self {
             directory,
@@ -2709,6 +2731,27 @@ impl InstallerState {
         }
         let mut journal = self.journal.clone();
         journal.application_settings_sha256 = Some(digest.into());
+        self.persist(&journal)?;
+        self.journal = journal;
+        Ok(())
+    }
+    /// Bind the independent login selection once before any credentials exist.
+    /// Absent remains the managed Keycloak default for legacy journals.
+    pub(crate) fn bind_external_oidc_selection(&mut self, digest: &str) -> Result<()> {
+        self.require_live_phase(Phase::Verified)?;
+        if self.journal.external_oidc_selection_sha256.is_some()
+            || self.journal.application_settings_sha256.is_some()
+            || digest.len() != 64
+            || !digest
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        {
+            return Err(
+                "external OIDC can be selected only once before application settings".into(),
+            );
+        }
+        let mut journal = self.journal.clone();
+        journal.external_oidc_selection_sha256 = Some(digest.into());
         self.persist(&journal)?;
         self.journal = journal;
         Ok(())

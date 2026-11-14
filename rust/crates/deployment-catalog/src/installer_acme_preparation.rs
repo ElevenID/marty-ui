@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
+    io::Read,
     os::unix::fs::MetadataExt,
     path::Path,
 };
@@ -81,6 +82,8 @@ struct Preparation {
     hosting_selection_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_settings_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    external_oidc_selection_sha256: Option<String>,
     entries: BTreeMap<String, Entry>,
     prior_evidence_sha256: BTreeMap<String, String>,
     storage_created: bool,
@@ -182,14 +185,34 @@ fn entries(state: &LockedInspection) -> Result<BTreeMap<String, Entry>> {
         ("backups".to_owned(), true, 0o700, None),
         ("openbao-exports".to_owned(), true, 0o700, None),
         ("openbao-snapshot-identity".to_owned(), true, 0o700, None),
-        ("operator-password".to_owned(), false, 0o600, Some(69)),
-        (
-            "secrets/operator_bootstrap_password".to_owned(),
+    ];
+    if crate::installer_oidc::external(state)?.is_none() {
+        paths.extend([
+            ("operator-password".to_owned(), false, 0o600, Some(69)),
+            (
+                "secrets/operator_bootstrap_password".to_owned(),
+                false,
+                0o444,
+                Some(69),
+            ),
+        ]);
+    } else {
+        let secrets = fs::open_child(root, "secrets", libc::O_RDONLY | libc::O_DIRECTORY, REFUSED)?;
+        let names = fs::file_names(&secrets, REFUSED)?;
+        require(
+            !fs::file_names(root, REFUSED)?.contains("operator-password")
+                && !names.contains("operator_bootstrap_password")
+                && crate::installer_state::LOCAL_AUTH_SCALAR_SECRETS
+                    .iter()
+                    .all(|name| !names.contains(*name)),
+        )?;
+        paths.push((
+            "secrets/external_oidc_client_secret".to_owned(),
             false,
             0o444,
-            Some(69),
-        ),
-    ];
+            Some(verify_external_oidc_secret(state)?),
+        ));
+    }
     paths.extend(
         crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
             .into_iter()
@@ -233,9 +256,52 @@ fn entries(state: &LockedInspection) -> Result<BTreeMap<String, Entry>> {
     Ok(observed)
 }
 
+fn external_oidc_selection_sha256(state: &LockedInspection) -> Result<Option<String>> {
+    let selected = crate::installer_oidc::load(state)?;
+    let bytes = state.diagnostic_record(crate::installer_oidc::RECORD, true)?;
+    require(selected.is_some() == bytes.is_some())?;
+    Ok(bytes.map(|bytes| installer_release::sha256(&bytes)))
+}
+
+/// Public clients have an intentionally empty file. Bind that exact file and
+/// the selected secret digest before an ACME pause; no password is synthesized.
+fn verify_external_oidc_secret(state: &LockedInspection) -> Result<u64> {
+    let selected = crate::installer_oidc::load(state)?.ok_or(REFUSED)?;
+    let secrets = fs::open_child(
+        state.installation_directory(),
+        "secrets",
+        libc::O_RDONLY | libc::O_DIRECTORY,
+        REFUSED,
+    )?;
+    let file = fs::open_child(
+        &secrets,
+        "external_oidc_client_secret",
+        libc::O_RDONLY | libc::O_NONBLOCK,
+        REFUSED,
+    )?;
+    let length = file.metadata().map_err(|_| REFUSED)?.len();
+    require(length <= 65536)?;
+    let before = Entry::observe(&file, false, 0o444, Some(length))?;
+    let mut bytes = Vec::new();
+    (&file)
+        .take(65537)
+        .read_to_end(&mut bytes)
+        .map_err(|_| REFUSED)?;
+    require(
+        bytes.len() as u64 == length
+            && before == Entry::observe(&file, false, 0o444, Some(length))?,
+    )?;
+    selected.verify_imported(&BTreeMap::from([(
+        "external_oidc_client_secret".into(),
+        bytes,
+    )]))?;
+    Ok(length)
+}
+
 fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation> {
     state.require_path_binding(installation)?;
     require(state.journal().phase() == Phase::Provisioning)?;
+    let external_oidc = crate::installer_oidc::external(state)?.is_some();
     let mut prior_evidence_sha256 = BTreeMap::new();
     let provenance = match state.journal().execution_scope() {
         ExecutionScope::Unclassified => {
@@ -246,7 +312,11 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
                 ),
                 (
                     installer_creation_identity::CREDENTIAL_RECEIPT,
-                    "elevenid.installer-created-credentials/v1",
+                    if external_oidc {
+                        "elevenid.installer-created-credentials/v2"
+                    } else {
+                        "elevenid.installer-created-credentials/v1"
+                    },
                 ),
                 (
                     installer_creation_identity::APPLICATION_RECEIPT,
@@ -263,6 +333,13 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
                         && value["local_historical_evidence"] == true
                         && value["deletion_authorized"] == false,
                 )?;
+                if external_oidc && name == installer_creation_identity::CREDENTIAL_RECEIPT {
+                    require(
+                        value
+                            .get("operator_password")
+                            .is_some_and(serde_json::Value::is_null),
+                    )?;
+                }
                 prior_evidence_sha256.insert(name.into(), installer_release::sha256(&bytes));
             }
             Provenance::OriginalCreationReceipts
@@ -300,10 +377,11 @@ fn observe(state: &LockedInspection, installation: &Path) -> Result<Preparation>
             .journal()
             .application_settings_sha256()
             .map(str::to_owned),
+        external_oidc_selection_sha256: external_oidc_selection_sha256(state)?,
         entries: entries(state)?,
         prior_evidence_sha256,
         storage_created: true,
-        operator_projection_created: true,
+        operator_projection_created: !external_oidc,
         application_started: false,
         deletion_authorized: false,
         installation_ready: false,
@@ -344,8 +422,10 @@ pub(crate) fn verify_retained_provenance(
                 == state.journal().hosting_selection_sha256()
             && preparation.application_settings_sha256.as_deref()
                 == state.journal().application_settings_sha256()
+            && preparation.external_oidc_selection_sha256 == external_oidc_selection_sha256(state)?
             && preparation.storage_created
             && preparation.operator_projection_created
+                == crate::installer_oidc::external(state)?.is_none()
             && !preparation.application_started
             && !preparation.deletion_authorized
             && !preparation.installation_ready,
@@ -383,6 +463,9 @@ pub(crate) fn verify_retained_provenance(
     if let Some(settings) = crate::installer_settings::load(state)? {
         settings.verify_secrets(state.installation_directory())?;
     }
+    if preparation.external_oidc_selection_sha256.is_some() {
+        verify_external_oidc_secret(state)?;
+    }
     state.require_path_binding(installation)
 }
 
@@ -397,7 +480,12 @@ pub(crate) fn prepare(state: &mut InstallerState, installation: &Path) -> Result
     )?;
     state.prepare_application_storage()?;
     state.persist_application_storage_creation_receipt(installation)?;
-    state.stage_operator_password()?;
+    if state
+        .with_inspection(crate::installer_oidc::external)?
+        .is_none()
+    {
+        state.stage_operator_password()?;
+    }
     let prepared = state.with_inspection(|view| observe(view, installation))?;
     state.write_evidence(RECORD, &serde_json::to_vec(&prepared).map_err(|_| REFUSED)?)?;
     state.with_inspection(|view| verify(view, installation))
@@ -407,6 +495,15 @@ pub(crate) fn prepare(state: &mut InstallerState, installation: &Path) -> Result
 pub(crate) fn prepared_fixture(
     hosting: &serde_json::Value,
     runtime: RuntimeBinding,
+) -> (tempfile::TempDir, std::path::PathBuf, InstallerState) {
+    prepared_fixture_with_oidc(hosting, runtime, None)
+}
+
+#[cfg(test)]
+fn prepared_fixture_with_oidc(
+    hosting: &serde_json::Value,
+    runtime: RuntimeBinding,
+    external_secret: Option<&str>,
 ) -> (tempfile::TempDir, std::path::PathBuf, InstallerState) {
     use std::os::unix::fs::PermissionsExt;
     let files = tempfile::tempdir().unwrap();
@@ -436,12 +533,45 @@ pub(crate) fn prepared_fixture(
         &mut state,
     )
     .unwrap();
+    if let Some(secret) = external_secret {
+        let secret_file = files.path().join("oidc-client-secret");
+        if !secret.is_empty() {
+            std::fs::write(&secret_file, secret).unwrap();
+            std::fs::set_permissions(&secret_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let configuration = serde_json::json!({
+            "schema": "elevenid.installer-external-oidc/v1",
+            "external_oidc": {
+                "issuer_url": "https://identity.example/tenant",
+                "client_id": "installed-client",
+                "admin_email": "operator@example.com",
+                "client_secret_file": (!secret.is_empty()).then_some(secret_file),
+                "trusted_endpoint_origins": [],
+                "allowed_algorithms": ["RS256"]
+            }
+        });
+        let path = files.path().join("external-oidc.json");
+        std::fs::write(&path, serde_json::to_vec(&configuration).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let selected = crate::installer_oidc::prepare(Some(&path), false).unwrap();
+        crate::installer_oidc::select(selected, &mut state).unwrap();
+    }
     state.advance(Phase::Provisioning).unwrap();
-    state
-        .generate_local_credentials(&serde_json::json!({
-            "passwordPolicy": crate::installer_state::PASSWORD_POLICY
-        }))
-        .unwrap();
+    if external_secret.is_some() {
+        state.generate_external_auth_credentials().unwrap();
+        state
+            .with_inspection(crate::installer_oidc::load)
+            .unwrap()
+            .unwrap()
+            .import_inputs(&mut state)
+            .unwrap();
+    } else {
+        state
+            .generate_local_credentials(&serde_json::json!({
+                "passwordPolicy": crate::installer_state::PASSWORD_POLICY
+            }))
+            .unwrap();
+    }
     state
         .persist_credential_creation_receipt(&installation)
         .unwrap();
@@ -714,6 +844,94 @@ mod tests {
                 std::fs::read(installation.join("evidence").join(RECORD)).unwrap(),
                 evidence
             );
+        }
+    }
+
+    #[test]
+    fn external_oidc_preparation_reopens_without_operator_password_and_pins_selection() {
+        let hosting = serde_json::json!({
+            "schema":"elevenid.installation-hosting/v1", "mode":"direct",
+            "public_origin":"https://login.example.com",
+            "listener":{"bind_address":"0.0.0.0","port":8443},
+            "tls":{"termination":"marty-keyless","certificate_source":"acme",
+                "http01_host_port":18080,
+                "acme":{"environment":"production",
+                    "directory_url":"https://acme-v02.api.letsencrypt.org/directory",
+                    "profile":"shortlived",
+                    "terms_url":"https://letsencrypt.org/documents/LE-SA-v1.6-August-18-2025.pdf",
+                    "terms_agreed":true}}
+        });
+        for secret in ["", "synthetic-external-client-secret"] {
+            for mutation in [
+                "none",
+                "selection-bytes",
+                "secret-inode",
+                "operator-password",
+            ] {
+                let (_files, installation, state) = prepared_fixture_with_oidc(
+                    &hosting,
+                    RuntimeBinding {
+                        docker_host: "unix:///var/run/docker.sock".into(),
+                        engine_id: "fixture-engine".into(),
+                        openbao_port: 18200,
+                        profile: crate::installer_state::RuntimeProfile::Rootful,
+                    },
+                    Some(secret),
+                );
+                assert!(!installation.join("operator-password").exists());
+                assert!(!installation
+                    .join("secrets/operator_bootstrap_password")
+                    .exists());
+                for name in crate::installer_state::LOCAL_AUTH_SCALAR_SECRETS {
+                    assert!(!installation.join("secrets").join(name).exists());
+                }
+                let evidence = std::fs::read(installation.join("evidence").join(RECORD)).unwrap();
+                let prepared: Preparation = serde_json::from_slice(&evidence).unwrap();
+                assert!(!prepared.operator_projection_created);
+                assert!(prepared.external_oidc_selection_sha256.is_some());
+                assert_eq!(
+                    prepared.entries["secrets/external_oidc_client_secret"].length,
+                    Some(secret.len() as u64)
+                );
+                state
+                    .with_inspection(|view| verify_retained_provenance(view, &installation))
+                    .unwrap();
+                drop(state);
+                match mutation {
+                    "selection-bytes" => {
+                        let path = installation
+                            .join("evidence")
+                            .join(crate::installer_oidc::RECORD);
+                        let mut bytes = std::fs::read(&path).unwrap();
+                        bytes.push(b' ');
+                        std::fs::write(path, bytes).unwrap();
+                    }
+                    "secret-inode" => {
+                        let path = installation.join("secrets/external_oidc_client_secret");
+                        std::fs::rename(&path, installation.join("retained-external-secret"))
+                            .unwrap();
+                        std::fs::write(&path, secret).unwrap();
+                        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o444))
+                            .unwrap();
+                    }
+                    "operator-password" => {
+                        std::fs::write(installation.join("operator-password"), b"unexpected")
+                            .unwrap();
+                    }
+                    _ => {}
+                }
+                let view = LockedInspection::open(&installation).unwrap();
+                assert_eq!(
+                    verify(&view, &installation).is_ok(),
+                    mutation == "none",
+                    "{mutation}, public client: {}",
+                    secret.is_empty()
+                );
+                assert_eq!(
+                    std::fs::read(installation.join("evidence").join(RECORD)).unwrap(),
+                    evidence
+                );
+            }
         }
     }
 
