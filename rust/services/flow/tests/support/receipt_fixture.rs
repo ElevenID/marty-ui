@@ -52,6 +52,7 @@ impl PresentationPolicyProvider for ReceiptPolicies {
         assert_eq!(request.audience, "did:web:receipt-verifier.example");
         assert!(request.oid4vp_transport.is_some());
         let mut result = PresentationEvaluationResult {
+            managed_evidence: None,
             evaluation_validity: None,
             evaluation_timestamp: self.evaluated_at.map(|value| value.to_rfc3339()),
             policy_revision: request.expected_policy_revision.clone(),
