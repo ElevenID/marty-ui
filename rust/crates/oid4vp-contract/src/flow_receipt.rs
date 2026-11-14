@@ -57,6 +57,10 @@ pub struct FlowVerificationReceiptV1 {
     pub result_digest: String,
     pub callback_payload_digest: String,
     pub policy_evaluated_at_epoch_micros: i64,
+    /// The exclusive deadline Policy admitted for this evaluation. Omission
+    /// preserves historical receipts and never establishes live authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy_valid_until_epoch_micros: Option<i64>,
     pub nonce_consumed_at_epoch_micros: i64,
     pub nonce_retention_expires_at_epoch_micros: i64,
     pub receipt_digest: String,
@@ -74,6 +78,8 @@ struct ReceiptDigestBasis<'a> {
     result_digest: &'a str,
     callback_payload_digest: &'a str,
     policy_evaluated_at_epoch_micros: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_valid_until_epoch_micros: Option<i64>,
     nonce_consumed_at_epoch_micros: i64,
     nonce_retention_expires_at_epoch_micros: i64,
 }
@@ -96,6 +102,7 @@ impl FlowVerificationReceiptV1 {
                 result_digest: &self.result_digest,
                 callback_payload_digest: &self.callback_payload_digest,
                 policy_evaluated_at_epoch_micros: self.policy_evaluated_at_epoch_micros,
+                policy_valid_until_epoch_micros: self.policy_valid_until_epoch_micros,
                 nonce_consumed_at_epoch_micros: self.nonce_consumed_at_epoch_micros,
                 nonce_retention_expires_at_epoch_micros: self
                     .nonce_retention_expires_at_epoch_micros,
@@ -124,6 +131,22 @@ impl FlowVerificationReceiptV1 {
         let object = result.as_object().ok_or(Oid4vpContractError::InvalidField(
             "flow_verification_result",
         ))?;
+        let validity: Option<crate::PolicyEvaluationValidityV1> = object
+            .get(crate::POLICY_EVALUATION_VALIDITY)
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|_| Oid4vpContractError::Deserialization)
+            })
+            .transpose()?;
+        if let Some(validity) = &validity {
+            validity.validate()?;
+            if validity.organization_id != self.organization_id
+                || validity.policy != self.policy
+                || validity.evaluated_at_epoch_micros != self.policy_evaluated_at_epoch_micros
+            {
+                return Err(Oid4vpContractError::DecisionMismatch);
+            }
+        }
         if object.get("submission_digest").and_then(Value::as_str)
             != Some(self.submission_digest.as_str())
             || object.get("policy_revision")
@@ -132,6 +155,8 @@ impl FlowVerificationReceiptV1 {
                         .map_err(|_| Oid4vpContractError::Serialization)?,
                 )
             || self.result_digest != flow_result_digest(result)?
+            || self.policy_valid_until_epoch_micros
+                != validity.map(|validity| validity.valid_until_epoch_micros)
         {
             return Err(Oid4vpContractError::DecisionMismatch);
         }
@@ -185,6 +210,9 @@ impl FlowVerificationReceiptV1 {
         if self.policy_evaluated_at_epoch_micros <= 0
             || self.policy_evaluated_at_epoch_micros > self.nonce_consumed_at_epoch_micros
             || self.nonce_consumed_at_epoch_micros >= self.nonce_retention_expires_at_epoch_micros
+            || self
+                .policy_valid_until_epoch_micros
+                .is_some_and(|deadline| deadline <= self.nonce_consumed_at_epoch_micros)
         {
             return Err(Oid4vpContractError::InvalidLifetime);
         }

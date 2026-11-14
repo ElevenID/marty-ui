@@ -204,9 +204,25 @@ async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_re
     managed.context[presentation_snapshot::SNAPSHOT_KEY]["credential_authority"] = json!(authority);
     let mut evaluation = allowed();
     evaluation.evaluation_timestamp = Some(now().to_rfc3339());
-    let (ports, seen) = providers(Ok(evaluation));
+    let (ports, seen) = providers(Ok(evaluation.clone()));
     let mut wallet = input("header.payload.signature");
     wallet.presentation_submission = None;
+    // A managed positive result cannot silently omit its bounded validity.
+    assert!(prepare_verification_submission(
+        &ports,
+        managed.clone(),
+        wallet.clone(),
+        &options(None),
+        now(),
+    )
+    .await
+    .is_err());
+    bind_validity(
+        &mut evaluation,
+        &seen.lock().unwrap()[0],
+        now() + Duration::seconds(30),
+    );
+    let (ports, seen) = providers(Ok(evaluation));
     prepare_verification_submission(
         &ports,
         managed.clone(),
@@ -233,6 +249,7 @@ async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_re
 
 fn allowed() -> PresentationEvaluationResult {
     PresentationEvaluationResult {
+        evaluation_validity: None,
         evaluation_timestamp: None,
         policy_revision: presentation_snapshot::revision("policy-1"),
         authentication_diagnostic: None,
@@ -249,6 +266,161 @@ fn allowed() -> PresentationEvaluationResult {
         })],
         error_codes: vec!["policy-code".into()],
         warnings: vec!["policy-warning".into()],
+    }
+}
+
+fn bind_validity(
+    evaluation: &mut PresentationEvaluationResult,
+    request: &PresentationEvaluationRequest,
+    deadline: chrono::DateTime<Utc>,
+) {
+    let context = serde_json::to_value(&request.context).unwrap();
+    let evaluated_at =
+        chrono::DateTime::parse_from_rfc3339(evaluation.evaluation_timestamp.as_deref().unwrap())
+            .unwrap();
+    evaluation.evaluation_validity = Some(
+        marty_oid4vp_contract::PolicyEvaluationValidityV1::bind(
+            &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                organization_id: &request.organization_id,
+                policy: &request.expected_policy_revision,
+                nonce: &request.nonce,
+                audience: &request.audience,
+                vp_token: &request.presentation,
+                trust_profile_id: request
+                    .context
+                    .get("trust_profile_id")
+                    .and_then(Value::as_str),
+                context: &context,
+                oid4vp_transport: request.oid4vp_transport.as_ref().unwrap(),
+            },
+            &serde_json::to_value(&*evaluation).unwrap(),
+            evaluated_at.timestamp_micros(),
+            deadline.timestamp_micros(),
+        )
+        .unwrap(),
+    );
+}
+
+async fn bounded_receipt_preparation() -> marty_flow::PreparedVerificationFinalization {
+    bounded_receipt_preparation_at(now() + Duration::seconds(2), now() + Duration::seconds(10))
+        .await
+}
+
+async fn bounded_receipt_preparation_at(
+    evaluated_at: chrono::DateTime<Utc>,
+    deadline: chrono::DateTime<Utc>,
+) -> marty_flow::PreparedVerificationFinalization {
+    let mut evaluation = allowed();
+    evaluation.evaluation_timestamp = Some(evaluated_at.to_rfc3339());
+    let (ports, seen) = providers(Ok(evaluation.clone()));
+    prepare_verification_submission(
+        &ports,
+        instance(true),
+        input("header.payload.signature"),
+        &options(Some("0123456789abcdef0123456789abcdef")),
+        now(),
+    )
+    .await
+    .unwrap();
+    bind_validity(&mut evaluation, &seen.lock().unwrap()[0], deadline);
+    let (ports, _) = providers(Ok(evaluation));
+    match prepare_verification_submission(
+        &ports,
+        instance(true),
+        input("header.payload.signature"),
+        &options(Some("0123456789abcdef0123456789abcdef")),
+        now(),
+    )
+    .await
+    .unwrap()
+    {
+        PreparedVerificationSubmission::Final(prepared) => *prepared,
+        other => panic!("expected bounded finalization: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn expired_policy_validity_does_not_consume_nonce_or_publish_result() {
+    let prepared = bounded_receipt_preparation().await;
+    let repository = marty_flow::InMemoryFlowRepository::default();
+    repository
+        .save_instance(prepared.expected_instance.kernel().unwrap())
+        .unwrap();
+    let expired = u64::try_from((now() + Duration::seconds(10)).timestamp_millis()).unwrap();
+    assert!(repository
+        .finalize_verification_with_receipt(&prepared, expired)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        repository.instance(&prepared.instance.id).unwrap().unwrap(),
+        prepared.expected_instance.kernel().unwrap()
+    );
+    assert!(repository
+        .callback(&prepared.instance.id)
+        .unwrap()
+        .is_none());
+    // A new live Policy result can use the nonce rejected by the expired result.
+    let fresh_deadline = now() + Duration::seconds(30);
+    let fresh = bounded_receipt_preparation_at(now() + Duration::seconds(11), fresh_deadline).await;
+    let live = u64::try_from((now() + Duration::seconds(12)).timestamp_millis()).unwrap();
+    let committed = repository
+        .finalize_verification_with_receipt(&fresh, live)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        committed.receipt().policy_valid_until_epoch_micros,
+        Some(fresh_deadline.timestamp_micros())
+    );
+}
+
+#[tokio::test]
+async fn prepared_policy_validity_cannot_be_removed_extended_or_bypassed() {
+    use marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY;
+    let prepared = bounded_receipt_preparation().await;
+    for mutation in 0..3 {
+        let mut changed = prepared.clone();
+        let result = changed
+            .instance
+            .result
+            .as_mut()
+            .unwrap()
+            .as_object_mut()
+            .unwrap();
+        match mutation {
+            0 => {
+                result.remove(POLICY_EVALUATION_VALIDITY);
+            }
+            1 => {
+                result[POLICY_EVALUATION_VALIDITY]["valid_until_epoch_micros"] =
+                    json!((now() + Duration::seconds(11)).timestamp_micros())
+            }
+            _ => {
+                result[POLICY_EVALUATION_VALIDITY]["request_binding_digest"] =
+                    json!(format!("sha256:{}", "f".repeat(64)))
+            }
+        }
+        let repository = marty_flow::InMemoryFlowRepository::default();
+        repository
+            .save_instance(prepared.expected_instance.kernel().unwrap())
+            .unwrap();
+        let live = u64::try_from((now() + Duration::seconds(5)).timestamp_millis()).unwrap();
+        assert!(repository
+            .finalize_verification_with_receipt(&changed, live)
+            .is_err());
+        assert!(repository
+            .finalize_verification(
+                prepared.instance.kernel().unwrap(),
+                &prepared.nonce_digest,
+                prepared.replay_expires_at_ms,
+                &prepared.expected_instance.kernel().unwrap(),
+                prepared.callback.clone(),
+                live
+            )
+            .is_err());
+        assert!(repository
+            .callback(&prepared.instance.id)
+            .unwrap()
+            .is_none());
     }
 }
 

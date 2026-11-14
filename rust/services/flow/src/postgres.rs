@@ -1047,6 +1047,9 @@ impl PostgresFlowRepository {
             result
                 .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
                 .is_some()
+                || result
+                    .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
+                    .is_some()
         }) || callback.is_some_and(|message| {
             message
                 .payload
@@ -1183,6 +1186,26 @@ impl PostgresFlowRepository {
             return Ok(None);
         };
         let consumed_at: DateTime<Utc> = replay.try_get("consumed_at").map_err(storage)?;
+        // INSERT may wait on another nonce owner after evaluating its timestamp.
+        // Read a fresh database clock after that wait, within this transaction.
+        let observed_at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        let still_live = |at: DateTime<Utc>| {
+            expected.expires_at.is_none_or(|deadline| at < deadline)
+                && at < replay_expires_at
+                && receipt_preparation.is_none_or(|prepared| {
+                    prepared
+                        .receipt_input
+                        .as_ref()
+                        .is_some_and(|input| input.is_live_at(at))
+                })
+        };
+        if observed_at < consumed_at || !still_live(observed_at) {
+            transaction.rollback().await.map_err(storage)?;
+            return Ok(None);
+        }
         let (committed_instance, committed_callback, receipt) =
             if let Some(prepared) = receipt_preparation {
                 let (instance, callback, receipt) = prepared
@@ -1241,6 +1264,17 @@ impl PostgresFlowRepository {
 
         if let Some(callback) = committed_callback.as_ref() {
             insert_callback(&mut transaction, callback).await?;
+        }
+        // Outbox insertion and triggers can wait as well. Reject the entire
+        // result/nonce/callback unit if its admitted validity expired meanwhile.
+        // This is a precommit observation, not a claim about COMMIT's timestamp.
+        let checked_at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(storage)?;
+        if checked_at < observed_at || !still_live(checked_at) {
+            transaction.rollback().await.map_err(storage)?;
+            return Ok(None);
         }
         transaction.commit().await.map_err(storage)?;
         Ok(Some((committed_instance, receipt)))

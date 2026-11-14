@@ -1886,6 +1886,7 @@ mod flow_receipt {
             nonce_digest: "c".repeat(64),
             result_digest: flow_result_digest(result).unwrap(),
             callback_payload_digest: flow_callback_payload_digest(&callback(result)).unwrap(),
+            policy_valid_until_epoch_micros: None,
             policy_evaluated_at_epoch_micros: 1_787_227_200_000_000,
             nonce_consumed_at_epoch_micros: 1_787_227_202_123_456,
             nonce_retention_expires_at_epoch_micros: 1_787_228_100_000_000,
@@ -1921,6 +1922,37 @@ mod flow_receipt {
         // No current-clock argument is involved: this is a historical persistence
         // projection, not a validity lease or proof that a transaction committed.
         decoded.validate().unwrap();
+    }
+
+    #[test]
+    fn optional_policy_deadline_preserves_legacy_digest_and_rejects_expired_capture() {
+        let legacy = receipt(&result());
+        let mut legacy_body = serde_json::to_value(&legacy).unwrap();
+        assert!(legacy_body.get("policy_valid_until_epoch_micros").is_none());
+        legacy_body
+            .as_object_mut()
+            .unwrap()
+            .remove("receipt_digest");
+        assert_eq!(
+            legacy.receipt_digest,
+            digest_domain_json(
+                marty_oid4vp_contract::FLOW_VERIFICATION_RECEIPT_DIGEST_DOMAIN,
+                &legacy_body,
+            )
+            .unwrap()
+        );
+
+        let mut bounded = legacy.clone();
+        bounded.policy_valid_until_epoch_micros = Some(bounded.nonce_consumed_at_epoch_micros + 1);
+        assert_ne!(bounded.recompute_digest().unwrap(), legacy.receipt_digest);
+        bounded.receipt_digest = bounded.recompute_digest().unwrap();
+        bounded.validate().unwrap();
+        // The private result must carry the matching Policy validity projection.
+        assert!(bounded.validate_result(&result()).is_err());
+        bounded.policy_valid_until_epoch_micros = Some(bounded.nonce_consumed_at_epoch_micros);
+        assert!(bounded.recompute_digest().is_err());
+        bounded.policy_valid_until_epoch_micros = None;
+        assert!(bounded.validate().is_err());
     }
 
     #[test]

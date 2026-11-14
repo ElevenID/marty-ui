@@ -935,6 +935,7 @@ async fn run_verification_receipt_contract(
     run_receipt_snapshot_waits(pool, repository).await?;
     run_receipt_callback_rollback(pool, repository).await?;
     run_receipt_future_policy_rejection(pool, repository).await?;
+    run_policy_deadline_waits(pool, repository).await?;
     run_receipt_race(pool, repository, true).await?;
     Ok(())
 }
@@ -946,7 +947,10 @@ async fn save_receipt_instance(
     expires_at: Option<chrono::DateTime<Utc>>,
 ) -> Result<FlowInstanceRecord, Box<dyn Error + Send + Sync>> {
     let instance = receipt_fixture::instance(id, now, expires_at);
-    assert!(repository.save_instance(&instance).await?);
+    assert!(
+        repository.save_instance(&instance).await?,
+        "receipt fixture {id} must not overwrite a terminal instance"
+    );
     // Preparation must use the actual database representation, including its
     // microsecond precision, just as a production request does.
     Ok(repository.instance(id).await?.unwrap())
@@ -1243,6 +1247,146 @@ async fn run_receipt_future_policy_rejection(
         Err(RepositoryError::InvalidVerificationReceipt)
     ));
     assert_no_receipt_effects(pool, repository, &expected).await?;
+    Ok(())
+}
+
+async fn run_policy_deadline_waits(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+) -> TestResult {
+    for (id, stage) in [
+        ("91000000-0000-0000-0000-000000000109", "instance"),
+        ("91000000-0000-0000-0000-000000000110", "nonce"),
+        ("91000000-0000-0000-0000-000000000111", "callback"),
+        ("91000000-0000-0000-0000-000000000112", "legacy_session"),
+    ] {
+        let now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(pool)
+            .await?;
+        let deadline = now + Duration::seconds(3);
+        let legacy = stage == "legacy_session";
+        let expected =
+            save_receipt_instance(repository, id, now, legacy.then_some(deadline)).await?;
+        let prepared = if legacy {
+            receipt_fixture::finalization(expected.clone(), None, "header.deadline.signature", now)
+                .await?
+        } else {
+            receipt_fixture::finalization_with_validity(
+                expected.clone(),
+                now,
+                deadline,
+                "header.deadline.signature",
+                now,
+            )
+            .await?
+        };
+        let mut blocker = pool.begin().await?;
+        let waiting_query = match stage {
+            "instance" => {
+                sqlx::query("SELECT id FROM flow_service.flow_instances WHERE id=$1 FOR UPDATE")
+                    .bind(id)
+                    .fetch_one(&mut *blocker)
+                    .await?;
+                "%FROM flow_service.flow_instances%FOR UPDATE%"
+            }
+            "nonce" => {
+                // Roll this uncommitted competing nonce claim back only after
+                // the finalizer has actually blocked on its unique constraint.
+                sqlx::query(
+                    "INSERT INTO flow_service.flow_nonce_consumptions \
+                    (nonce_digest,flow_instance_id,expires_at) VALUES ($1,$2,$3)",
+                )
+                .bind(&prepared.nonce_digest)
+                .bind(id)
+                .bind(now + Duration::minutes(15))
+                .execute(&mut *blocker)
+                .await?;
+                "%INSERT INTO flow_service.flow_nonce_consumptions%"
+            }
+            _ => {
+                sqlx::query("LOCK TABLE flow_service.flow_callback_outbox IN SHARE MODE")
+                    .execute(&mut *blocker)
+                    .await?;
+                "%INSERT INTO flow_service.flow_callback_outbox%"
+            }
+        };
+        let release = async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let waiting: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() \
+                         AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE $1",
+                    )
+                    .bind(waiting_query)
+                    .fetch_one(pool)
+                    .await?;
+                    if waiting > 0 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                Ok::<_, Box<dyn Error + Send + Sync>>(())
+            })
+            .await??;
+            sqlx::query("SELECT pg_sleep(GREATEST(0, EXTRACT(EPOCH FROM ($1::timestamptz - clock_timestamp()))) + 0.05)")
+                .bind(deadline).execute(&mut *blocker).await?;
+            blocker.rollback().await?;
+            Ok::<_, Box<dyn Error + Send + Sync>>(())
+        };
+        let finalize = async {
+            if legacy {
+                repository
+                    .finalize_verification(
+                        &prepared.instance,
+                        &prepared.nonce_digest,
+                        prepared.replay_expires_at_ms,
+                        &prepared.expected_instance,
+                        prepared.callback.as_ref(),
+                    )
+                    .await
+            } else {
+                repository
+                    .finalize_verification_with_receipt(&prepared)
+                    .await
+                    .map(|value| value.is_some())
+            }
+        };
+        let (outcome, released) = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            tokio::join!(finalize, release)
+        })
+        .await?;
+        released?;
+        assert!(
+            !outcome?,
+            "expired {stage} wait must roll back, without a storage error"
+        );
+        assert_no_receipt_effects(pool, repository, &expected).await?;
+        if !legacy {
+            // Expiry did not burn the nonce: a fresh Policy observation can
+            // finalize this still-live, unchanged request exactly once.
+            let fresh_now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+                .fetch_one(pool)
+                .await?;
+            let fresh_deadline = fresh_now + Duration::seconds(30);
+            let fresh = receipt_fixture::finalization_with_validity(
+                expected,
+                fresh_now,
+                fresh_deadline,
+                "header.deadline.signature",
+                fresh_now,
+            )
+            .await?;
+            let committed = repository
+                .finalize_verification_with_receipt(&fresh)
+                .await?
+                .unwrap();
+            assert_eq!(
+                committed.receipt().policy_valid_until_epoch_micros,
+                Some(fresh_deadline.timestamp_micros())
+            );
+            assert_eq!(receipt_counts(pool, id).await?, (1, 1));
+        }
+    }
     Ok(())
 }
 
