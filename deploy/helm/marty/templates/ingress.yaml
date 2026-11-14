@@ -1,5 +1,28 @@
 {{- if .Values.ingress.enabled -}}
 {{- $host := include "marty.ingressHost" . -}}
+{{- $_ := include "marty.publicOrigin" . -}}
+{{- $annotations := deepCopy (.Values.ingress.annotations | default dict) -}}
+{{- if .Values.ingress.useDefaultCertificate -}}
+{{- if ne .Values.ingress.className "traefik" -}}
+{{- fail "ingress.useDefaultCertificate requires ingress.className=traefik and an existing default TLSStore" -}}
+{{- end -}}
+{{- if .Values.ingress.tlsSecretName -}}
+{{- fail "ingress.useDefaultCertificate and ingress.tlsSecretName are mutually exclusive" -}}
+{{- end -}}
+{{- $certificateAnnotations := list "cert-manager.io/issuer" "cert-manager.io/cluster-issuer" "cert-manager.io/issuer-kind" "cert-manager.io/issuer-group" "kubernetes.io/tls-acme" "acme.cert-manager.io/http01-edit-in-place" "acme.cert-manager.io/http01-ingress-class" "acme.cert-manager.io/http01-ingress-ingressclassname" "traefik.ingress.kubernetes.io/router.tls.certresolver" -}}
+{{- range $key, $value := $annotations -}}
+{{- if or (has $key $certificateAnnotations) (hasPrefix "traefik.ingress.kubernetes.io/router.tls.domains." $key) -}}
+{{- fail (printf "ingress.useDefaultCertificate conflicts with certificate ownership annotation %s" $key) -}}
+{{- end -}}
+{{- if and (eq $key "kubernetes.io/ingress.class") (ne $value "traefik") -}}
+{{- fail "ingress.useDefaultCertificate requires the Traefik ingress class annotation, if present, to be traefik" -}}
+{{- end -}}
+{{- if and (eq $key "traefik.ingress.kubernetes.io/router.tls") (ne $value "true") -}}
+{{- fail "ingress.useDefaultCertificate requires router.tls=true" -}}
+{{- end -}}
+{{- end -}}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.tls" "true" -}}
+{{- end -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,7 +30,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "marty.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
@@ -15,12 +38,14 @@ spec:
   {{- with .Values.ingress.className }}
   ingressClassName: {{ . | quote }}
   {{- end }}
+  {{- if not .Values.ingress.useDefaultCertificate }}
   tls:
     - secretName: {{ required "ingress.tlsSecretName must identify an existing TLS Secret" .Values.ingress.tlsSecretName }}
       {{- if $host }}
       hosts:
         - {{ $host | quote }}
       {{- end }}
+  {{- end }}
   rules:
     - {{ if $host }}host: {{ $host | quote }}{{ end }}
       http:

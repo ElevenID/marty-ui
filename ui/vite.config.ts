@@ -331,7 +331,9 @@ export default defineConfig(async ({ mode }) => {
         eslint: {
           lintCommand: 'eslint src --ext .js,.jsx',
         },
-        overlay: {
+        // Shared source demos keep diagnostics in the terminal without a badge
+        // over the product UI. Local development retains the existing overlay.
+        overlay: env.MARTY_DEV_CHECKER_OVERLAY === '0' ? false : {
           initialIsOpen: false,
           position: 'br',
         },

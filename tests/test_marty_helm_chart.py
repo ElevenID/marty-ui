@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -106,6 +107,88 @@ def test_chart_lints_with_verified_image_shapes(tmp_path: Path) -> None:
     values_file.write_text(yaml.safe_dump(installation_values()), encoding="utf-8")
     result = subprocess.run(helm_command(values_file, "lint"), capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_default_tls_store_removes_namespace_copy_without_disabling_https(tmp_path: Path) -> None:
+    values = installation_values()
+    values["publicHost"] = "192.0.2.20"
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": ""}
+    docs = render(tmp_path, values)
+    ingress = resources(docs, "Ingress")["marty"]
+    assert ingress["spec"]["ingressClassName"] == "traefik"
+    assert ingress["metadata"]["annotations"]["traefik.ingress.kubernetes.io/router.tls"] == "true"
+    assert "tls" not in ingress["spec"]
+    assert "host" not in ingress["spec"]["rules"][0]
+    assert not resources(docs, "Secret")
+    assert not resources(docs, "Certificate")
+    assert not resources(docs, "TLSStore")
+
+
+def test_default_tls_store_adds_explicit_tls_annotation(tmp_path: Path) -> None:
+    values = installation_values()
+    values["ingress"] = {
+        "useDefaultCertificate": True, "tlsSecretName": "", "className": "traefik",
+        "annotations": {"example.test/operator-note": "shared public certificate owner"},
+    }
+    values_file = tmp_path / "no-tls-annotation.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    # Do not load the K3s overlay, which already supplies router.tls=true.
+    result = subprocess.run([HELM, "template", "marty-test", str(CHART), "--namespace", "isolated-install",
+                             "-f", str(values_file)], capture_output=True, text=True, check=True)
+    docs = [doc for doc in yaml.load_all(result.stdout, Loader=UniqueLoader) if doc]
+    ingress = resources(docs, "Ingress")["marty"]
+    assert ingress["metadata"]["annotations"]["traefik.ingress.kubernetes.io/router.tls"] == "true"
+    assert ingress["metadata"]["annotations"]["example.test/operator-note"] == "shared public certificate owner"
+    assert ingress["spec"]["rules"][0]["host"] == "marty.example.test"
+
+
+def test_existing_secret_ingress_remains_the_default(rendered: list[dict]) -> None:
+    ingress = resources(rendered, "Ingress")["marty"]
+    assert ingress["spec"]["tls"] == [{"secretName": "customer-edge-tls", "hosts": ["marty.example.test"]}]
+
+
+def test_resume_preflight_discovers_real_chart_public_leaf_projections(rendered: list[dict]) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from check_kubernetes_dev_resume import public_cert_targets
+    workloads = [doc for doc in rendered if doc["kind"] in {"Deployment", "StatefulSet"}]
+    targets = public_cert_targets(workloads)
+    assert len(targets) == 19  # 16 workload leaves, two Keycloak signing leaves, Redis.
+    assert targets[("gateway-auth-tls", "tls.crt")] == ["gateway"]
+    assert targets[("keycloak-kms", "keycloak-11id-rs256.crt")] == ["keycloak"]
+    assert targets[("marty-redis-tls", "tls.crt")] == ["redis"]
+    assert not any("token" in field for _, field in targets)
+
+
+@pytest.mark.parametrize("override", [
+    {"tlsSecretName": "stale-copy"},
+    {"className": "nginx"},
+    {"annotations": {"kubernetes.io/ingress.class": "nginx"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls": "false"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls.certresolver": "other-owner"}},
+    {"annotations": {"traefik.ingress.kubernetes.io/router.tls.domains.0.main": "example.test"}},
+    {"annotations": {"cert-manager.io/issuer": "other-owner"}},
+    {"annotations": {"acme.cert-manager.io/http01-edit-in-place": "true"}},
+    {"annotations": {"kubernetes.io/tls-acme": "true"}},
+])
+def test_default_tls_store_rejects_conflicting_ownership(tmp_path: Path, override: dict) -> None:
+    values = installation_values()
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": "", **override}
+    values_file = tmp_path / "conflict.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "ingress" in result.stderr
+
+
+def test_default_tls_store_rejects_plaintext_origin(tmp_path: Path) -> None:
+    values = installation_values()
+    values["ingress"] = {"useDefaultCertificate": True, "tlsSecretName": ""}
+    values["publicOrigin"] = "http://marty.example.test"
+    values_file = tmp_path / "plaintext.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    result = subprocess.run(helm_command(values_file), capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "publicOrigin" in result.stderr
 
 
 def test_portable_namespace_and_complete_config_references(rendered: list[dict]) -> None:
@@ -790,7 +873,15 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
 
     pod = resources(development, "Deployment")["ui"]["spec"]["template"]["spec"]
     ordinary_pod = resources(normal, "Deployment")["ui"]["spec"]["template"]["spec"]
-    assert ordinary_pod["containers"] == [pod["containers"][0]]
+    ordinary_ui = ordinary_pod["containers"][0]
+    development_ui = pod["containers"][0]
+    assert len(ordinary_pod["containers"]) == 1
+    assert ordinary_ui["readinessProbe"]["httpGet"]["path"] == "/health/ready"
+    assert development_ui["readinessProbe"]["httpGet"]["path"] == "/edge-healthz"
+    assert {key: value for key, value in ordinary_ui.items() if key != "readinessProbe"} == {
+        key: value for key, value in development_ui.items() if key != "readinessProbe"
+    }
+    assert {**development_ui["readinessProbe"], "httpGet": ordinary_ui["readinessProbe"]["httpGet"]} == ordinary_ui["readinessProbe"]
     assert "initContainers" not in ordinary_pod
     assert all("hostPath" not in volume for volume in ordinary_pod["volumes"])
     assert pod["automountServiceAccountToken"] is False
@@ -802,6 +893,7 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
     assert pod["initContainers"][0]["resources"]["limits"]["memory"] == "1536Mi"
     assert "ports" not in node
     assert node["readinessProbe"]["exec"]["command"][0] == "node"
+    assert "/@vite/client" in node["readinessProbe"]["exec"]["command"][-1]
     for container in (pod["initContainers"][0], node):
         assert "@sha256:" in container["image"]
         assert "envFrom" not in container
@@ -813,6 +905,7 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
         assert env["VITE_API_URL"] == ""
         assert env["VITE_DEV_PUBLIC_ORIGIN"] == values["publicOrigin"]
         assert env["VITE_UI_VARIANT"] == "selfhost"
+        assert env["MARTY_DEV_CHECKER_OVERLAY"] == "0"
         mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
         assert set(mounts) == {"ui-dev-source", "ui-dev-contracts", "ui-dev-dependencies", "ui-dev-tmp"}
         assert mounts["ui-dev-source"]["readOnly"] is True
