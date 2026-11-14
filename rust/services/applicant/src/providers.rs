@@ -148,6 +148,72 @@ pub struct HttpFlowProvider {
     authenticator: ApplicationEventAuthenticator,
 }
 
+#[derive(serde::Deserialize)]
+struct ApplicationApprovalResponse {
+    success: bool,
+    flows_triggered: usize,
+    #[serde(default)]
+    instance_ids: Vec<String>,
+    #[serde(default)]
+    offers: Vec<Value>,
+    #[serde(default)]
+    failed_flow_ids: Vec<String>,
+    reason: Option<String>,
+}
+
+impl ApplicationApprovalResponse {
+    fn offer(&self, application: &Application) -> Result<&Value, ProviderError> {
+        if !self.failed_flow_ids.is_empty() {
+            // Flow has already reserved the matching instance. Keep the current
+            // issuance attempt so a later retry uses that same durable plan.
+            return Err(ProviderError::Unavailable(
+                "flow offer preparation failed".into(),
+            ));
+        }
+        if self.offers.is_empty() {
+            // The released Flow owner emits this reason only for an empty
+            // matching plan. An absent offer alone does not prove flow absence.
+            let no_match = format!(
+                "No active custom OID4VCI extension handling APPLICATION_APPROVED matched org {} and credential template {}",
+                application.organization_id, application.credential_template_id
+            );
+            if !self.success
+                && self.flows_triggered == 0
+                && self.instance_ids.is_empty()
+                && self.reason.as_deref() == Some(no_match.as_str())
+            {
+                return Err(ProviderError::NoActiveFlow);
+            }
+            return Err(ProviderError::Unavailable(
+                "flow issuance response contains no offer".into(),
+            ));
+        }
+        if !self.success || self.flows_triggered == 0 {
+            return Err(ProviderError::Unavailable(
+                "flow offer preparation failed".into(),
+            ));
+        }
+        self.offers
+            .iter()
+            .find(|offer| {
+                offer
+                    .get("credential_offer_uri")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uri| !uri.trim().is_empty())
+                    || offer
+                        .get("credential_offer_uris")
+                        .and_then(Value::as_object)
+                        .is_some_and(|uris| {
+                            uris.values()
+                                .any(|uri| uri.as_str().is_some_and(|uri| !uri.trim().is_empty()))
+                        })
+            })
+            .ok_or_else(|| {
+                ProviderError::Unavailable("flow issuance response contains no offer".into())
+            })
+    }
+}
+
 impl HttpFlowProvider {
     pub fn new(base_url: String, authenticator: ApplicationEventAuthenticator) -> Self {
         Self {
@@ -220,19 +286,10 @@ impl FlowProvider for HttpFlowProvider {
             )));
         }
         let body = response
-            .json::<Value>()
+            .json::<ApplicationApprovalResponse>()
             .await
-            .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
-        let offer = body
-            .get("offers")
-            .and_then(Value::as_array)
-            .and_then(|offers| {
-                offers.iter().find(|offer| {
-                    offer.get("credential_offer_uri").is_some()
-                        || offer.get("credential_offer_uris").is_some()
-                })
-            })
-            .ok_or(ProviderError::NoActiveFlow)?;
+            .map_err(|_| ProviderError::Unavailable("flow issuance response is invalid".into()))?;
+        let offer = body.offer(application)?;
         let transaction_id = offer
             .get("credential_offer_transaction_id")
             .or_else(|| offer.get("flow_instance_id"))

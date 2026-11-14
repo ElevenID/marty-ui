@@ -1162,3 +1162,288 @@ async fn per_offer_lifetime_does_not_expand_issue_authority_or_tenant_scope() {
         );
     }
 }
+
+type FlowRequests = Arc<std::sync::Mutex<Vec<Value>>>;
+
+async fn flow_offer_server(
+    responses: Vec<Value>,
+) -> (
+    Arc<dyn FlowProvider>,
+    FlowRequests,
+    tokio::task::JoinHandle<()>,
+) {
+    let authenticator = mmf_security::ApplicationEventAuthenticator::new(
+        b"synthetic-flow-offer-test-key-0001",
+        60,
+        300,
+    )
+    .unwrap();
+    let verifier = authenticator.clone();
+    let requests = FlowRequests::default();
+    let captured = requests.clone();
+    let responses = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::from(
+        responses,
+    )));
+    let flow = axum::Router::new().route(
+        "/v1/flows/webhooks/application-approved",
+        axum::routing::post(
+            move |headers: axum::http::HeaderMap, axum::Json(body): axum::Json<Value>| {
+                let verifier = verifier.clone();
+                let captured = captured.clone();
+                let responses = responses.clone();
+                async move {
+                    let metadata = headers
+                        .iter()
+                        .map(|(name, value)| (name.to_string(), value.to_str().unwrap().to_owned()))
+                        .collect();
+                    verifier
+                        .authenticate(&body, &metadata, chrono::Utc::now().timestamp())
+                        .unwrap();
+                    captured.lock().unwrap().push(body);
+                    let response = responses.lock().unwrap().pop_front().unwrap();
+                    axum::Json(response)
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, flow).await.unwrap() });
+    (
+        Arc::new(marty_applicant::providers::HttpFlowProvider::new(
+            origin,
+            authenticator,
+        )),
+        requests,
+        server,
+    )
+}
+
+fn prepared_flow_offer() -> Value {
+    json!({
+        "success":true, "flows_triggered":1, "instance_ids":["flow-instance-1"],
+        "offers":[{
+            "credential_offer_transaction_id":"transaction-1",
+            "flow_instance_id":"flow-instance-1", "flow_definition_id":"flow-1",
+            "credential_offer_uri":"openid-credential-offer://synthetic-offer",
+            "expires_at":"2099-01-01T00:00:00Z", "issuance_status":"pending"
+        }]
+    })
+}
+
+#[tokio::test]
+async fn flow_offer_failures_are_not_reported_as_missing_flows() {
+    let no_match = "No active custom OID4VCI extension handling APPLICATION_APPROVED matched org issuer-org and credential template credential-template-1";
+    let mut partial_failure = prepared_flow_offer();
+    partial_failure["failed_flow_ids"] = json!(["flow-1"]);
+    let mut failed_with_offer = prepared_flow_offer();
+    failed_with_offer["success"] = json!(false);
+    let mut empty_offer = prepared_flow_offer();
+    empty_offer["offers"][0]["credential_offer_uri"] = Value::Null;
+    empty_offer["offers"][0]["credential_offer_uris"] = json!({});
+    let mut wallet_offer = prepared_flow_offer();
+    wallet_offer["offers"][0]["credential_offer_uri"] = Value::Null;
+    wallet_offer["offers"][0]["credential_offer_uris"] =
+        json!({"web-wallet":"openid-credential-offer://synthetic-wallet-offer"});
+    for (body, expected) in [
+        (
+            json!({"success":false, "flows_triggered":0, "reason":no_match}),
+            StatusCode::CONFLICT,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            "offers":[], "instance_ids":[], "failed_flow_ids":[]}),
+            StatusCode::CONFLICT,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "failed_flow_ids":["flow-1"]}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            "failed_flow_ids":["flow-1"]}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (partial_failure, StatusCode::SERVICE_UNAVAILABLE),
+        (failed_with_offer, StatusCode::SERVICE_UNAVAILABLE),
+        (
+            json!({"success":false, "flows_triggered":0}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":"issuer unavailable"}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0,
+            "reason":no_match.replace("issuer-org", "another-org")}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "reason":no_match,
+            "instance_ids":["reserved-instance"]}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":true, "flows_triggered":0}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":true, "flows_triggered":1, "instance_ids":["reserved-instance"]}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (json!({"offers":[]}), StatusCode::SERVICE_UNAVAILABLE),
+        (
+            json!({"success":false, "flows_triggered":0, "failed_flow_ids":"flow-1"}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            json!({"success":false, "flows_triggered":0, "offers":{}}),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (Value::Null, StatusCode::SERVICE_UNAVAILABLE),
+        (empty_offer, StatusCode::SERVICE_UNAVAILABLE),
+        (prepared_flow_offer(), StatusCode::OK),
+        (wallet_offer, StatusCode::OK),
+    ] {
+        let (flow, requests, server) = flow_offer_server(vec![body.clone()]).await;
+        let before = withdrawal_store(LifecycleStatus::Approved);
+        let (app, service) = app_with_dependencies(
+            before.clone(),
+            "http://127.0.0.1:1".into(),
+            flow,
+            Arc::new(MemoryPersistence),
+        );
+        let response = app
+            .oneshot(
+                Request::post("/v1/me/applications/application-1/claim")
+                    .header("x-user-id", "user-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "Flow response: {body}");
+        let response: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await.unwrap())
+                .unwrap();
+        let store = service.store().read().await;
+        let application = &store.applications[0];
+        assert_eq!(store.applications.len(), 1);
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        if expected == StatusCode::CONFLICT {
+            assert_eq!(response["detail"], "no active issuance flow");
+            assert_eq!(
+                application.claim_blocker.as_ref().unwrap()["code"],
+                "NO_ACTIVE_ISSUANCE_FLOW"
+            );
+        } else if expected == StatusCode::SERVICE_UNAVAILABLE {
+            assert_ne!(response["detail"], "no active issuance flow");
+            assert_eq!(application.status, LifecycleStatus::Approved);
+            assert_eq!(application.claim_state, before.applications[0].claim_state);
+            assert_eq!(application.claim_blocker, None);
+            assert!(application.system_data["active_issuance_attempt"]["id"].is_string());
+            assert!(!application.system_data.contains_key("credential_offer_uri"));
+        } else {
+            assert_eq!(application.status, LifecycleStatus::Offered);
+            assert_eq!(
+                application.claim_state,
+                marty_applicant::ClaimState::OfferReady
+            );
+            assert!(!application
+                .system_data
+                .contains_key("active_issuance_attempt"));
+        }
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn flow_offer_failure_retry_reuses_exact_reserved_attempt_claims_and_lifetime() {
+    let failure = json!({"success":false, "flows_triggered":0, "failed_flow_ids":["flow-1"]});
+    let (flow, requests, server) =
+        flow_offer_server(vec![failure.clone(), failure, prepared_flow_offer()]).await;
+    let mut before = withdrawal_store(LifecycleStatus::Approved);
+    let claims = serde_json::from_value(
+        json!({"achievement":{"type":"Achievement", "name":"Workplace Safety"}}),
+    )
+    .unwrap();
+    let (attempt, _) = marty_applicant::issuance::reserve_attempt_with_lifetime(
+        &mut before.applications[0],
+        claims,
+        chrono::Utc::now(),
+        Some(60),
+    )
+    .unwrap();
+    let reserved = before.applications[0].system_data["active_issuance_attempt"].clone();
+    let (app, service) = app_with_dependencies(
+        before,
+        "http://127.0.0.1:1".into(),
+        flow,
+        Arc::new(MemoryPersistence),
+    );
+    for expected in [
+        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::OK,
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/organizations/issuer-org/applicants/application-1/issue")
+                    .header("x-user-id", "operator")
+                    .header("x-organization-id", "issuer-org")
+                    .header("x-org-permissions", "issuance:initiate")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"offer_ttl_seconds":60}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_048_576).await.unwrap())
+                .unwrap();
+        let store = service.store().read().await;
+        if expected == StatusCode::SERVICE_UNAVAILABLE {
+            assert_eq!(
+                body["detail"],
+                "provider unavailable: flow offer preparation failed"
+            );
+            assert_eq!(
+                store.applications[0].system_data["active_issuance_attempt"],
+                reserved
+            );
+            assert_eq!(store.applications[0].claim_blocker, None);
+        } else {
+            assert_eq!(
+                store.applications[0].system_data["last_issuance_attempt_id"],
+                attempt.to_string()
+            );
+            assert_eq!(
+                store.applications[0].system_data["flow_instance_id"],
+                "flow-instance-1"
+            );
+            assert_eq!(
+                store.applications[0].system_data["issuance_transaction_id"],
+                "transaction-1"
+            );
+            assert!(!store.applications[0]
+                .system_data
+                .contains_key("active_issuance_attempt"));
+        }
+    }
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    for event in requests.iter() {
+        assert_eq!(event["data"]["issuance_attempt_id"], attempt.to_string());
+        assert_eq!(event["data"]["claims"], reserved["claims"]);
+        assert_eq!(event["data"]["offer_ttl_seconds"], 60);
+        assert_eq!(event["data"]["application_id"], "application-1");
+        assert_eq!(
+            event["data"]["credential_template_id"],
+            "credential-template-1"
+        );
+    }
+    server.abort();
+}
