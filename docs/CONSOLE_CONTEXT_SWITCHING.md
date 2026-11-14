@@ -374,7 +374,7 @@ VITE_ENABLE_JOIN_BY_CODE=true
 
 ### Documentation Links
 - [Backend Implementation Summary](../BACKEND_IMPLEMENTATION_SUMMARY.md)
-- [Microservices Architecture](../MICROSERVICES.md)
+- [Microservices Architecture](architecture/MICROSERVICES.md)
 - [Development Setup](../DEVELOPMENT_SETUP.md)
 
 ### Contact
