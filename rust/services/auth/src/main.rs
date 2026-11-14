@@ -26,6 +26,18 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     marty_service_runtime::install_tls_crypto_provider();
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments == ["oidc-preflight"] {
+        // This branch deliberately precedes complete service configuration and
+        // all database/cache connections, migrations and listener startup.
+        let config = marty_auth::oidc_preflight_config_from_values(std::env::vars())?;
+        let report = marty_auth::preflight_oidc(config).await?;
+        println!("{}", serde_json::to_string(&report)?);
+        return Ok(());
+    }
+    if !arguments.is_empty() {
+        return Err("Usage: marty-auth [oidc-preflight]".into());
+    }
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(

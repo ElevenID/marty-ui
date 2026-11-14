@@ -132,6 +132,7 @@ impl Fixture {
         };
         let mut previous = parent.clone();
         previous.successor = Some(SuccessorBinding {
+            oidc_secret_rotation_sha256: None,
             sequence: 1,
             attempt: 0,
             parent_attempt: 0,
@@ -237,6 +238,7 @@ impl Fixture {
             helper_model: model.clone(),
             created_at: metadata.token_observed_at - 10,
             recovery_baseline_sha256: None,
+            oidc_secret_rotation_sha256: None,
         };
         let scope = old.scope();
         let next = Attempt::new(1, 1);

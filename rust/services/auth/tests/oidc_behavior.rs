@@ -19,10 +19,45 @@ struct FakeHttp {
     get_urls: Mutex<Vec<String>>,
     posted_form: Mutex<Vec<(String, String)>>,
     post_urls: Mutex<Vec<String>>,
+    basic_auth: Mutex<Option<(String, String)>>,
+    userinfo: Mutex<Option<Value>>,
+    userinfo_requests: Mutex<Vec<(String, String)>>,
 }
 
 #[async_trait]
 impl OidcHttpClient for FakeHttp {
+    async fn get_userinfo_json_object(
+        &self,
+        url: &str,
+        token: &str,
+        max_bytes: usize,
+    ) -> Result<Value, PortError> {
+        assert_eq!(max_bytes, marty_auth::OIDC_USERINFO_MAX_BYTES);
+        self.userinfo_requests
+            .lock()
+            .unwrap()
+            .push((url.into(), token.into()));
+        self.userinfo
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| PortError::new("missing_fixture", "missing UserInfo"))
+    }
+
+    async fn post_form_json_object_basic(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+        client_id: &str,
+        client_secret: &str,
+        max_bytes: usize,
+        document_name: &str,
+    ) -> Result<Value, PortError> {
+        *self.basic_auth.lock().unwrap() = Some((client_id.into(), client_secret.into()));
+        self.post_form_json_object(url, form, max_bytes, document_name)
+            .await
+    }
+
     async fn get_json_object(
         &self,
         url: &str,
@@ -73,6 +108,16 @@ fn config() -> OidcConfig {
         external_issuer_url: "https://identity.example/realms/marty/".to_owned(),
         client_id: "marty-ui".to_owned(),
         client_secret: Some("secret".to_owned()),
+        client_auth_method: None,
+        userinfo_mode: marty_auth::OidcUserInfoMode::Disabled,
+        prompt: vec![
+            marty_auth::OidcPrompt::Consent,
+            marty_auth::OidcPrompt::Login,
+        ],
+        max_age: marty_auth::OidcMaxAge::default(),
+        provider_name: None,
+        account_url: None,
+        recovery_url: None,
         redirect_uri: "https://ui.example/v1/auth/callback".to_owned(),
         scopes: vec![
             "openid".to_owned(),
@@ -109,6 +154,8 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
             nonce: "nonce-1".to_owned(),
             redirect_uri: None,
             registration: false,
+            ui_locales: None,
+            reauthenticate: false,
         })
         .expect("login URL");
     let login = Url::parse(&login).expect("parse login URL");
@@ -137,6 +184,8 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
             nonce: "nonce-1".to_owned(),
             redirect_uri: None,
             registration: true,
+            ui_locales: None,
+            reauthenticate: false,
         })
         .expect("registration URL");
     let registration = Url::parse(&registration).expect("parse registration URL");
@@ -307,6 +356,8 @@ fn authorization_request(registration: bool) -> OidcAuthorizationRequest {
         nonce: "nonce-1".into(),
         redirect_uri: None,
         registration,
+        ui_locales: None,
+        reauthenticate: false,
     }
 }
 
@@ -330,6 +381,27 @@ fn management_console_uses_only_managed_public_issuer_and_encodes_the_return_loc
     let external =
         KeycloakOidcProvider::new(external_config(), Arc::new(FakeHttp::default())).unwrap();
     assert!(external.passkey_management_url(target).is_none());
+}
+
+#[test]
+fn managed_capabilities_keep_provider_details_without_publishing_http_account_links() {
+    for (issuer, account_url) in [
+        ("http://localhost:8180/realms/marty", None),
+        (
+            "https://identity.example/realms/marty",
+            Some("https://identity.example/realms/marty/account/"),
+        ),
+    ] {
+        let mut config = config();
+        config.external_issuer_url = issuer.into();
+        let provider = KeycloakOidcProvider::new(config, Arc::new(FakeHttp::default())).unwrap();
+        let capabilities = provider.capabilities().unwrap();
+        assert_eq!(capabilities.provider_mode, "keycloak");
+        assert_eq!(capabilities.provider_name, "11ID");
+        assert!(capabilities.registration_supported);
+        assert!(capabilities.provider_logout_supported);
+        assert_eq!(capabilities.account_url.as_deref(), account_url);
+    }
 }
 
 #[test]
@@ -645,17 +717,16 @@ async fn external_incompatible_signing_metadata_fails_before_jwks_or_token_excha
             .iter()
             .all(|url| url.ends_with("/.well-known/openid-configuration")));
     }
-    // The canonical token validator always refuses unsigned ID tokens, even
-    // if an out-of-band configuration mistakenly lists that value.
+    // Unsigned ID tokens are refused before discovery, including an
+    // out-of-band configuration that mistakenly lists that value.
     let http = external_http();
     http.discovery.lock().unwrap().as_mut().unwrap()["id_token_signing_alg_values_supported"] =
         json!(["none"]);
     let mut config = external_config();
     config.allowed_algorithms = vec!["none".into()];
-    let provider = KeycloakOidcProvider::new(config, http).unwrap();
     assert_eq!(
-        provider.health_check().await.unwrap_err().code,
-        "unsupported_oidc_signing_algorithm"
+        KeycloakOidcProvider::new(config, http).err().unwrap().code,
+        "invalid_oidc_configuration"
     );
 }
 
@@ -805,4 +876,341 @@ fn external_configuration_rejects_ambiguous_or_unbounded_endpoint_authority() {
     let mut legacy = config();
     legacy.trusted_endpoint_origins = vec!["https://login.example".into()];
     assert!(legacy.validate().is_err());
+}
+
+#[tokio::test]
+async fn basic_auth_is_explicit_and_discovery_omission_uses_the_standard_default() {
+    for advertised in [
+        None,
+        Some(json!(["client_secret_basic", "client_secret_post"])),
+    ] {
+        let http = external_http();
+        let mut config = external_config();
+        config.client_auth_method = Some(marty_auth::OidcClientAuthMethod::ClientSecretBasic);
+        config.client_id = "client:id+with spaces".into();
+        config.client_secret = Some("synthetic:secret+with spaces".into());
+        if let Some(methods) = advertised {
+            http.discovery.lock().unwrap().as_mut().unwrap()
+                ["token_endpoint_auth_methods_supported"] = methods;
+        } else {
+            http.discovery
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .remove("token_endpoint_auth_methods_supported");
+        }
+        let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+        provider.exchange_code(&exchange_request()).await.unwrap();
+        assert_eq!(
+            *http.basic_auth.lock().unwrap(),
+            Some((
+                "client:id+with spaces".into(),
+                "synthetic:secret+with spaces".into()
+            ))
+        );
+        let form = http.posted_form.lock().unwrap();
+        assert!(!form
+            .iter()
+            .any(|(name, _)| matches!(name.as_str(), "client_id" | "client_secret")));
+        assert!(form.iter().any(|(name, _)| name == "code_verifier"));
+    }
+}
+
+#[test]
+fn explicit_client_authentication_and_account_links_fail_closed() {
+    use marty_auth::OidcClientAuthMethod as Method;
+    for (method, secret) in [
+        (Method::None, Some("secret".into())),
+        (Method::ClientSecretBasic, None),
+        (Method::ClientSecretPost, None),
+    ] {
+        let mut config = external_config();
+        config.client_auth_method = Some(method);
+        config.client_secret = secret;
+        assert!(config.validate().is_err());
+    }
+    for account_url in [
+        "http://identity.example/account",
+        "https://other.example/account",
+        "https://user@identity.example/account",
+        "javascript:alert(1)",
+    ] {
+        let mut config = external_config();
+        config.account_url = Some(account_url.into());
+        assert!(config.validate().is_err());
+    }
+    let mut config = external_config();
+    config.account_url = Some("https://identity.example/account#security".into());
+    config.recovery_url = Some("https://help.example/recovery".into());
+    config.trusted_endpoint_origins = vec!["https://help.example".into()];
+    assert!(config.validate().is_ok());
+}
+
+fn userinfo_http(response: Value) -> Arc<FakeHttp> {
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["userinfo_endpoint"] =
+        json!("https://identity.example/profile");
+    *http.userinfo.lock().unwrap() = Some(response);
+    http
+}
+
+fn userinfo_config() -> OidcConfig {
+    let mut config = external_config();
+    config.userinfo_mode = marty_auth::OidcUserInfoMode::Fallback;
+    config
+}
+
+#[tokio::test]
+async fn userinfo_fills_verified_profile_only_and_preserves_signed_claims() {
+    let fixture = external_fixture();
+    for token in ["missing_verification", "missing_email"] {
+        let http = userinfo_http(json!({
+            "sub": "user-1", "email": "alice@example.com", "email_verified": true,
+            "name": "Alice Example", "given_name": "Alice", "family_name": "Example",
+            "roles": ["administrator"], "realm_access": {"roles": ["admin"]},
+            "organization_id": "attacker-org", "auth_time": 4_102_444_800_i64,
+        }));
+        let provider = KeycloakOidcProvider::new(userinfo_config(), http.clone()).unwrap();
+        let identity = provider
+            .validate_tokens(
+                fixture["tokens"][token].as_str().unwrap(),
+                "synthetic-access-token",
+                "nonce-1",
+            )
+            .await
+            .unwrap();
+        assert_eq!(identity.user_info.email, "alice@example.com");
+        assert!(identity.user_info.email_verified);
+        let signed = marty_auth::OidcUserInfo::from_claims(&identity.id_token_claims, None);
+        assert_eq!(identity.user_info.roles, signed.roles);
+        assert_eq!(identity.user_info.organization_id, signed.organization_id);
+        assert!(identity.id_token_claims.get("auth_time").is_none());
+        assert_eq!(identity.access_token_claims, json!({}));
+        assert_eq!(
+            *http.userinfo_requests.lock().unwrap(),
+            [(
+                "https://identity.example/profile".into(),
+                "synthetic-access-token".into()
+            )]
+        );
+        assert!(http.post_urls.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn userinfo_rejects_identity_conflicts_and_never_repairs_invalid_tokens() {
+    let fixture = external_fixture();
+    for (response, expected) in [
+        (
+            json!({"sub": "other-user", "email": "alice@example.com", "email_verified": true}),
+            "oidc_userinfo_subject_mismatch",
+        ),
+        (
+            json!({"sub": "user-1", "email": "other@example.com", "email_verified": true}),
+            "oidc_userinfo_email_mismatch",
+        ),
+        (
+            json!({"sub": "user-1", "email": "alice@example.com", "email_verified": false}),
+            "oidc_verified_email_required",
+        ),
+        (
+            json!({"sub": "user-1", "email": "alice@example.com", "email_verified": "true"}),
+            "oidc_verified_email_required",
+        ),
+        (
+            json!({"sub": "user-1", "email_verified": true}),
+            "oidc_verified_email_required",
+        ),
+    ] {
+        let http = userinfo_http(response);
+        let provider = KeycloakOidcProvider::new(userinfo_config(), http).unwrap();
+        let error = provider
+            .validate_tokens(
+                fixture["tokens"]["missing_verification"].as_str().unwrap(),
+                "access",
+                "nonce-1",
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected);
+    }
+    for (token, nonce, expected) in [
+        ("unverified", "nonce-1", "oidc_verified_email_required"),
+        (
+            "string_verification",
+            "nonce-1",
+            "oidc_verified_email_required",
+        ),
+        ("verified", "wrong-nonce", "oidc_token_validation_failed"),
+    ] {
+        let http = userinfo_http(
+            json!({"sub": "user-1", "email": "alice@example.com", "email_verified": true}),
+        );
+        let provider = KeycloakOidcProvider::new(userinfo_config(), http.clone()).unwrap();
+        assert_eq!(
+            provider
+                .validate_tokens(fixture["tokens"][token].as_str().unwrap(), "access", nonce)
+                .await
+                .unwrap_err()
+                .code,
+            expected
+        );
+        assert!(http.userinfo_requests.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn userinfo_is_opt_in_and_never_sends_bearer_tokens_to_untrusted_endpoints() {
+    for endpoint in [
+        "https://attacker.example/profile",
+        "http://identity.example/profile",
+        "https://identity.example/profile?access_token=preset",
+        "https://identity.example/profile#fragment",
+    ] {
+        let http = userinfo_http(json!({}));
+        http.discovery.lock().unwrap().as_mut().unwrap()["userinfo_endpoint"] = json!(endpoint);
+        let provider = KeycloakOidcProvider::new(userinfo_config(), http.clone()).unwrap();
+        assert!(provider.health_check().await.is_err());
+        assert!(http.userinfo_requests.lock().unwrap().is_empty());
+        assert_eq!(http.get_urls.lock().unwrap().len(), 1);
+    }
+    let http = userinfo_http(
+        json!({"sub": "user-1", "email": "alice@example.com", "email_verified": true}),
+    );
+    let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+    assert!(provider
+        .validate_tokens(
+            external_fixture()["tokens"]["missing_verification"]
+                .as_str()
+                .unwrap(),
+            "access",
+            "nonce-1"
+        )
+        .await
+        .is_err());
+    assert!(http.userinfo_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn configured_prompts_locales_and_freshness_are_typed_and_step_up_only_strengthens() {
+    let http = external_http();
+    let mut config = external_config();
+    config.prompt = vec![marty_auth::OidcPrompt::SelectAccount];
+    config.max_age = marty_auth::OidcMaxAge::Omit;
+    let provider = KeycloakOidcProvider::new(config, http).unwrap();
+    provider.health_check().await.unwrap();
+    let mut request = authorization_request(false);
+    request.ui_locales = Some("fr-CA en".into());
+    let url = Url::parse(&provider.authorization_url(&request).unwrap()).unwrap();
+    assert!(url
+        .query_pairs()
+        .any(|(name, value)| name == "prompt" && value == "select_account"));
+    assert!(url
+        .query_pairs()
+        .any(|(name, value)| name == "ui_locales" && value == "fr-CA en"));
+    assert!(!url.query_pairs().any(|(name, _)| name == "max_age"));
+    assert!(provider.authentication_freshness(&request).is_none());
+    request.reauthenticate = true;
+    let url = Url::parse(&provider.authorization_url(&request).unwrap()).unwrap();
+    assert!(url
+        .query_pairs()
+        .any(|(name, value)| name == "max_age" && value == "0"));
+    assert!(url
+        .query_pairs()
+        .any(|(name, value)| name == "prompt" && value == "select_account"));
+    assert_eq!(
+        provider
+            .authentication_freshness(&request)
+            .unwrap()
+            .max_age_seconds,
+        0
+    );
+    request.ui_locales = Some("en&prompt=none".into());
+    assert!(provider.authorization_url(&request).is_err());
+}
+
+#[tokio::test]
+async fn unsupported_prompt_policy_fails_before_credentials_or_key_fetch() {
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["prompt_values_supported"] =
+        json!(["consent", "select_account"]);
+    let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+    assert_eq!(
+        provider
+            .exchange_code(&exchange_request())
+            .await
+            .unwrap_err()
+            .code,
+        "unsupported_oidc_prompt"
+    );
+    assert_eq!(http.get_urls.lock().unwrap().len(), 1);
+    assert!(http.post_urls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn preflight_is_read_only_and_capabilities_contain_no_credentials() {
+    let http = external_http();
+    let mut config = external_config();
+    config.provider_name = Some("Example identity".into());
+    config.account_url = Some("https://identity.example/account#security".into());
+    config.recovery_url = Some("https://identity.example/recover".into());
+    let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+    let report = provider.preflight().await.unwrap();
+    assert_eq!(report.status, "metadata_compatible");
+    assert_eq!(report.compatible_signing_algorithms, ["ES256"]);
+    assert_eq!(report.provider.provider_name, "Example identity");
+    assert!(!report.provider.registration_supported);
+    assert!(!report.provider.passkey_enrollment_supported);
+    assert!(!report.provider.provider_logout_supported);
+    let serialized = serde_json::to_value(&report).unwrap();
+    assert!(serialized.get("client_secret").is_none());
+    assert!(serialized["provider"].get("client_id").is_none());
+    assert!(http.post_urls.lock().unwrap().is_empty());
+    assert!(http.userinfo_requests.lock().unwrap().is_empty());
+    for jwks in [
+        json!({"keys": []}),
+        json!({"keys": [{"kty": "oct", "k": "private"}]}),
+        json!({"keys": [{"kty": "RSA", "n": "invalid", "e": "AQAB"}]}),
+    ] {
+        let http = external_http();
+        *http.jwks.lock().unwrap() = VecDeque::from([jwks]);
+        assert!(KeycloakOidcProvider::new(external_config(), http)
+            .unwrap()
+            .preflight()
+            .await
+            .is_err());
+    }
+}
+
+#[tokio::test]
+async fn preflight_requires_a_public_signing_key_that_core_can_select_unambiguously() {
+    let valid_key = external_fixture()["jwks"]["keys"][0].clone();
+    let mut missing_kid = valid_key.clone();
+    missing_kid.as_object_mut().unwrap().remove("kid");
+    let mut private_key = valid_key.clone();
+    private_key["rsa_d"] = json!("synthetic-private-material");
+    for keys in [
+        vec![missing_kid.clone()],
+        vec![valid_key.clone(), valid_key.clone()],
+        vec![valid_key.clone(), private_key],
+    ] {
+        let http = external_http();
+        *http.jwks.lock().unwrap() = VecDeque::from([json!({"keys": keys})]);
+        assert!(KeycloakOidcProvider::new(external_config(), http)
+            .unwrap()
+            .preflight()
+            .await
+            .is_err());
+    }
+    // An unusable unrelated key does not hide a usable unique signing key.
+    let http = external_http();
+    *http.jwks.lock().unwrap() = VecDeque::from([json!({"keys": [missing_kid, valid_key]})]);
+    assert!(KeycloakOidcProvider::new(external_config(), http)
+        .unwrap()
+        .preflight()
+        .await
+        .is_ok());
 }

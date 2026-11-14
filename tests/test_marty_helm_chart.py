@@ -1075,6 +1075,50 @@ def test_external_oidc_preserves_literal_provider_values_and_custom_scopes(tmp_p
         assert env[name] == config[name].replace("$", "$$")
 
 
+@pytest.mark.parametrize("method", ["none", "client_secret_post", "client_secret_basic"])
+def test_external_oidc_compatibility_options_retain_typed_runtime_binding(tmp_path: Path, method: str) -> None:
+    values = external_installation_values(confidential=method != "none")
+    options = {"clientAuthMethod": method, "userinfoMode": "fallback", "prompt": [], "maxAge": "omit",
+               "providerName": "Example Identity $(SERVICE_NAME)",
+               "accountUrl": "https://identity.example.test/account?tab=security#sessions",
+               "recoveryUrl": "https://identity.example.test/recover?client=$(SERVICE_NAME)"}
+    values["auth"]["external"].update(options)
+    documents = render(tmp_path, values)
+    maps = resources(documents, "ConfigMap")
+    selection = json.loads(maps["marty-auth-selection"]["data"]["selection.json"])
+    assert {key: selection["external"][key] for key in options} == options
+    config = maps["marty-config"]["data"]
+    expected = {"OIDC_TOKEN_ENDPOINT_AUTH_METHOD": method, "OIDC_USERINFO_MODE": "fallback",
+                "OIDC_PROMPT": "", "OIDC_MAX_AGE_SECONDS": "omit",
+                "OIDC_PROVIDER_NAME": options["providerName"], "OIDC_ACCOUNT_URL": options["accountUrl"],
+                "OIDC_RECOVERY_URL": options["recoveryUrl"]}
+    auth = resources(documents, "Deployment")["auth"]["spec"]["template"]["spec"]["containers"][0]
+    env = {entry["name"]: entry.get("value") for entry in auth["env"]}
+    assert {key: config[key] for key in expected} == expected
+    assert {key: env[key] for key in expected} == {key: value.replace("$", "$$") for key, value in expected.items()}
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import activate_kubernetes_renewal_credentials as renewal
+    for item in maps.values():
+        item["metadata"].update(uid="fixture-" + item["metadata"]["name"], resourceVersion="10")
+        item["metadata"].setdefault("annotations", {}).update({
+            "meta.helm.sh/release-name": "marty-test", "meta.helm.sh/release-namespace": "isolated-install"})
+    binding = renewal.authentication_selection(list(maps.values()), "isolated-install")
+    assert binding["selection"] == selection
+    renewal.external_auth_consumer(resources(documents, "Deployment")["auth"]["spec"]["template"]["spec"], binding)
+    auth["env"].append({"name": "OIDC_UNOWNED_OVERRIDE", "value": "true"})
+    with pytest.raises(renewal.bootstrap.BootstrapError, match="environment"):
+        renewal.external_auth_consumer(resources(documents, "Deployment")["auth"]["spec"]["template"]["spec"], binding)
+
+
+def test_external_oidc_omitted_compatibility_options_preserve_existing_selection(tmp_path: Path) -> None:
+    documents = render(tmp_path, external_installation_values())
+    maps = resources(documents, "ConfigMap")
+    selected = json.loads(maps["marty-auth-selection"]["data"]["selection.json"])["external"]
+    assert set(selected) == {"issuerUrl", "clientId", "allowedAlgorithms", "trustedEndpointOrigins", "scopes", "clientSecret"}
+    for name in ("TOKEN_ENDPOINT_AUTH_METHOD", "USERINFO_MODE", "PROMPT", "MAX_AGE_SECONDS", "PROVIDER_NAME", "ACCOUNT_URL", "RECOVERY_URL"):
+        assert "OIDC_" + name not in maps["marty-config"]["data"]
+
+
 @pytest.mark.parametrize("field,value", [
     ("issuerUrl", "http://identity.example.test"), ("issuerUrl", "https://*.example.test/oidc"),
     ("issuerUrl", "https://%2A.example.test/oidc"), ("issuerUrl", "https://user@identity.example.test/oidc"),
@@ -1096,6 +1140,14 @@ def test_external_oidc_preserves_literal_provider_values_and_custom_scopes(tmp_p
     ("clientSecret", {"name": "beta-oidc"}),
     ("clientSecret", {"name": "beta-oidc", "key": "../key"}),
     ("clientSecret", {"name": "beta-oidc", "key": "client-secret", "value": "SYNTHETIC_PRIVATE_OIDC_CANARY"}),
+    ("clientAuthMethod", "private_key_jwt"), ("clientAuthMethod", "client_secret_basic"),
+    ("userinfoMode", "always"), ("prompt", "login"), ("prompt", ["none", "login"]),
+    ("prompt", ["create"]), ("prompt", ["login", "login"]), ("maxAge", -1),
+    ("maxAge", 86401), ("maxAge", True), ("maxAge", "0"),
+    ("providerName", " "), ("providerName", "é" * 41), ("providerName", "Example\x85Name"),
+    ("accountUrl", "http://identity.example.test/account"), ("accountUrl", "https://other.example.test/account"),
+    ("recoveryUrl", "https://user:password@identity.example.test/recover"),
+    ("recoveryUrl", "https://*.example.test/recover"),
 ])
 def test_external_oidc_invalid_selection_fails_before_manifest_output(tmp_path: Path, field: str, value: object) -> None:
     values = external_installation_values()

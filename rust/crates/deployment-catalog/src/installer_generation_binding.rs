@@ -76,6 +76,8 @@ pub(crate) struct SuccessorBinding {
     pub parent_attempt: u64,
     pub parent_binding_sha256: String,
     pub native_operation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) oidc_secret_rotation_sha256: Option<String>,
 }
 
 /// In-memory evidence for the immediately preceding generation in one forward
@@ -483,6 +485,15 @@ impl GenerationBinding {
                     && successor.sequence > 0
                     && (successor.sequence > 1 || successor.parent_attempt == 0)
                     && hex(&successor.parent_binding_sha256)
+                    && successor
+                        .oidc_secret_rotation_sha256
+                        .as_deref()
+                        .is_none_or(hex)
+                    && (successor.oidc_secret_rotation_sha256.is_none()
+                        || self
+                            .files
+                            .get("external_oidc_client_secret")
+                            .is_some_and(|value| value.size > 0))
                     && regex::Regex::new(&format!(
                         r"\A{}-wait-[0-9]{{6}}\z",
                         self.attempt_id().operation_prefix()
@@ -547,7 +558,12 @@ impl GenerationBinding {
                     && if self.imported_foundation() {
                         file.source == GenerationSource::Original
                     } else {
-                        (file.source == GenerationSource::Candidate) == renewable.contains(name)
+                        (file.source == GenerationSource::Candidate)
+                            == (renewable.contains(name)
+                                || (name == "external_oidc_client_secret"
+                                    && self.successor.as_ref().is_some_and(|value| {
+                                        value.oidc_secret_rotation_sha256.is_some()
+                                    })))
                     },
             )?;
         }
@@ -880,6 +896,15 @@ fn candidate_with_parent(
         for (name, bytes) in current {
             require(parent.binding.read(installation, &name)? == bytes)?;
         }
+        if let Some(secret) =
+            crate::installer_oidc_rotation::candidate(installation, &parent.binding, next)?
+        {
+            require(
+                outputs
+                    .insert("external_oidc_client_secret".into(), secret)
+                    .is_none(),
+            )?;
+        }
     } else {
         let secrets = directory(&installation.join("secrets"))?;
         for (name, bytes) in current {
@@ -1202,12 +1227,10 @@ fn verify_one_attempt(
                     && b.read(installation, name)? == bytes,
             )?;
         }
-        if let Some(selected) = &oidc {
-            selected.verify_imported(&BTreeMap::from([(
-                "external_oidc_client_secret".into(),
-                b.read(installation, "external_oidc_client_secret")?,
-            )]))?;
-        }
+        // An unchanged secret is copied from the already verified parent. A
+        // replacement is admitted by the separate parent/provider-bound request
+        // only after the complete original custody candidate has been checked.
+        // The initial generation below still verifies the original fingerprint.
         let public_metadata = public_metadata_from_candidate(
             installation,
             &b,

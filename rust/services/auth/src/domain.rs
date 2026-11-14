@@ -214,6 +214,8 @@ pub struct PkceState {
     pub oidc_redirect_uri: Option<String>,
     pub nonce: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication_freshness: Option<crate::OidcAuthenticationFreshness>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub passkey_enrollment: Option<PasskeyEnrollmentBinding>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,

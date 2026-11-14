@@ -76,7 +76,7 @@ export async function getCurrentUser() {
 /**
  * Initiate login by redirecting to OIDC provider
  * @param {string} [redirectUri] - Where to redirect after login
- * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
+ * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateLogin(redirectUri = '/', locale = null) {
   // Build login URL - always use relative path to go through nginx proxy
@@ -87,9 +87,9 @@ export function initiateLogin(redirectUri = '/', locale = null) {
     params.append('redirect_uri', redirectUri);
   }
   
-  // Pass locale to Keycloak if provided
+  // The Auth service validates and forwards the standard OIDC locale parameter.
   if (locale) {
-    params.append('kc_locale', locale);
+    params.append('ui_locales', locale);
   }
   
   const queryString = params.toString();
@@ -101,9 +101,9 @@ export function initiateLogin(redirectUri = '/', locale = null) {
 }
 
 /**
- * Initiate registration by redirecting to Keycloak registration page
+ * Initiate registration through the configured identity provider
  * @param {string} [redirectUri] - Where to redirect after registration
- * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
+ * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateRegister(redirectUri = '/', locale = null) {
   // Build registration URL - always use relative path to go through nginx proxy
@@ -114,9 +114,9 @@ export function initiateRegister(redirectUri = '/', locale = null) {
     params.append('redirect_uri', redirectUri);
   }
   
-  // Pass locale to Keycloak if provided
+  // Use the same provider-neutral locale contract as login.
   if (locale) {
-    params.append('kc_locale', locale);
+    params.append('ui_locales', locale);
   }
   
   const queryString = params.toString();
@@ -128,7 +128,7 @@ export function initiateRegister(redirectUri = '/', locale = null) {
 }
 
 /**
- * Initiate logout (full SSO logout)
+ * End the application session and use provider logout when available
  */
 export function initiateLogout() {
   const canonical = getPublicEntryCanonicalOrigin();
@@ -137,7 +137,7 @@ export function initiateLogout() {
     return;
   }
   window.dispatchEvent(new Event(LOGOUT_STARTED_EVENT));
-  // POST to logout endpoint via nginx proxy, which will redirect to Keycloak logout
+  // Auth deletes the local session and redirects to provider logout when supported.
   // Using relative path ensures cookies are sent correctly (same origin)
   const form = document.createElement('form');
   form.method = 'POST';

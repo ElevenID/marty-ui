@@ -8,7 +8,8 @@ use url::Url;
 use mmf_messaging::OutboxDispatcherConfig;
 
 use crate::{
-    KeycloakAdminConfig, OidcConfig, OidcProviderMode, SessionCookieConfig, UiOriginPolicy,
+    KeycloakAdminConfig, OidcClientAuthMethod, OidcConfig, OidcMaxAge, OidcPreflightConfig,
+    OidcPrompt, OidcProviderMode, OidcUserInfoMode, SessionCookieConfig, UiOriginPolicy,
 };
 
 #[derive(Clone, Debug)]
@@ -70,6 +71,139 @@ pub enum AuthConfigError {
     Invalid(String),
 }
 
+/// Parse only OIDC settings. Discovery preflight does not need database,
+/// cache, service credentials, migration or workload TLS configuration.
+pub fn oidc_config_from_values(
+    values: impl IntoIterator<Item = (String, String)>,
+) -> Result<OidcConfig, AuthConfigError> {
+    oidc_config_from_map(&values.into_iter().collect())
+}
+
+/// Metadata preflight never loads a secret file or uses an operator secret.
+/// Confidential clients select their method explicitly. The private marker
+/// exists only inside this opaque value and is never used in an HTTP request.
+pub fn oidc_preflight_config_from_values(
+    values: impl IntoIterator<Item = (String, String)>,
+) -> Result<OidcPreflightConfig, AuthConfigError> {
+    let mut inherited_credential = false;
+    let mut values = values
+        .into_iter()
+        .filter(|(name, _)| {
+            let secret = matches!(
+                name.as_str(),
+                "OIDC_CLIENT_SECRET" | "OIDC_CLIENT_SECRET_FILE"
+            );
+            inherited_credential |= secret;
+            !secret
+        })
+        .collect::<HashMap<_, _>>();
+    if inherited_credential
+        && values
+            .get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .is_none_or(String::is_empty)
+    {
+        return Err(invalid("OIDC metadata preflight requires an explicit client authentication method when credential settings are inherited"));
+    }
+    let method = OidcClientAuthMethod::parse(
+        values
+            .get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("none"),
+    )
+    .map_err(|error| invalid(error.to_string()))?;
+    values.insert(
+        "OIDC_TOKEN_ENDPOINT_AUTH_METHOD".into(),
+        method.as_str().into(),
+    );
+    if method != OidcClientAuthMethod::None {
+        values.insert(
+            "OIDC_CLIENT_SECRET".into(),
+            "metadata-preflight-private-marker".into(),
+        );
+    }
+    oidc_config_from_map(&values).map(OidcPreflightConfig)
+}
+
+fn oidc_config_from_map(values: &HashMap<String, String>) -> Result<OidcConfig, AuthConfigError> {
+    let get = |name: &str| values.get(name).map(String::as_str);
+    let provider_mode = match get("OIDC_PROVIDER_MODE").unwrap_or("keycloak") {
+        "keycloak" => OidcProviderMode::Keycloak,
+        "external" => OidcProviderMode::External,
+        _ => return Err(invalid("OIDC_PROVIDER_MODE must be keycloak or external")),
+    };
+    let realm = if provider_mode == OidcProviderMode::Keycloak {
+        required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?
+    } else {
+        String::new()
+    };
+    let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
+    let (issuer, client_id) = if provider_mode == OidcProviderMode::External {
+        (
+            required(get("OIDC_ISSUER_URL"), "OIDC_ISSUER_URL")?,
+            required(get("OIDC_CLIENT_ID"), "OIDC_CLIENT_ID")?,
+        )
+    } else {
+        (
+            get("OIDC_ISSUER_URL")
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}")),
+            get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
+        )
+    };
+    let redirect_uri = get("OIDC_REDIRECT_URI")
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
+    let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
+    OidcConfig {
+        provider_mode,
+        trusted_endpoint_origins: list(get("OIDC_TRUSTED_ENDPOINT_ORIGINS").unwrap_or_default()),
+        issuer_url: issuer.clone(),
+        external_issuer_url: get("OIDC_EXTERNAL_ISSUER_URL").unwrap_or(&issuer).into(),
+        client_id,
+        client_secret: get("OIDC_CLIENT_SECRET").map(str::to_owned),
+        client_auth_method: get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .filter(|value| !value.is_empty())
+            .map(OidcClientAuthMethod::parse)
+            .transpose()
+            .map_err(|error| invalid(error.to_string()))?,
+        userinfo_mode: OidcUserInfoMode::parse(
+            get("OIDC_USERINFO_MODE")
+                .filter(|value| !value.is_empty())
+                .unwrap_or("disabled"),
+        )
+        .map_err(|error| invalid(error.to_string()))?,
+        prompt: OidcPrompt::parse_list(get("OIDC_PROMPT").unwrap_or("consent login"))
+            .map_err(|error| invalid(error.to_string()))?,
+        max_age: OidcMaxAge::parse(
+            get("OIDC_MAX_AGE_SECONDS")
+                .filter(|value| !value.is_empty())
+                .unwrap_or("0"),
+        )
+        .map_err(|error| invalid(error.to_string()))?,
+        provider_name: get("OIDC_PROVIDER_NAME")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        account_url: get("OIDC_ACCOUNT_URL")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        recovery_url: get("OIDC_RECOVERY_URL")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        redirect_uri,
+        scopes: list(get("OIDC_SCOPES").unwrap_or("openid,profile,email")),
+        allowed_algorithms,
+        leeway_seconds: number(get("OIDC_LEEWAY_SECONDS"), 60, "OIDC_LEEWAY_SECONDS")?,
+        jwks_cache_seconds: number(
+            get("OIDC_JWKS_CACHE_SECONDS"),
+            300,
+            "OIDC_JWKS_CACHE_SECONDS",
+        )?,
+    }
+    .validate()
+    .map_err(|error| invalid(error.to_string()))
+}
+
 impl AuthServiceConfig {
     pub fn from_env() -> Result<Self, AuthConfigError> {
         Self::from_values(std::env::vars())
@@ -111,44 +245,7 @@ impl AuthServiceConfig {
             .collect::<Vec<_>>();
         let ui_origins = UiOriginPolicy::new(ui_base, ui_additional)
             .map_err(|error| invalid(error.to_string()))?;
-        let (issuer, client_id) = if provider_mode == OidcProviderMode::External {
-            (
-                required(get("OIDC_ISSUER_URL"), "OIDC_ISSUER_URL")?,
-                required(get("OIDC_CLIENT_ID"), "OIDC_CLIENT_ID")?,
-            )
-        } else {
-            (
-                get("OIDC_ISSUER_URL")
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}")),
-                get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
-            )
-        };
-        let redirect_uri = get("OIDC_REDIRECT_URI")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
-        let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
-        let oidc = OidcConfig {
-            provider_mode,
-            trusted_endpoint_origins: list(
-                get("OIDC_TRUSTED_ENDPOINT_ORIGINS").unwrap_or_default(),
-            ),
-            issuer_url: issuer.clone(),
-            external_issuer_url: get("OIDC_EXTERNAL_ISSUER_URL").unwrap_or(&issuer).into(),
-            client_id,
-            client_secret: get("OIDC_CLIENT_SECRET").map(str::to_owned),
-            redirect_uri,
-            scopes: list(get("OIDC_SCOPES").unwrap_or("openid,profile,email")),
-            allowed_algorithms,
-            leeway_seconds: number(get("OIDC_LEEWAY_SECONDS"), 60, "OIDC_LEEWAY_SECONDS")?,
-            jwks_cache_seconds: number(
-                get("OIDC_JWKS_CACHE_SECONDS"),
-                300,
-                "OIDC_JWKS_CACHE_SECONDS",
-            )?,
-        }
-        .validate()
-        .map_err(|error| invalid(error.to_string()))?;
+        let oidc = oidc_config_from_map(&values)?;
         let session_ttl_seconds = number(
             get("SESSION_TTL_SECONDS"),
             86_400_i64,

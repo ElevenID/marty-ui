@@ -31,7 +31,6 @@ import EmailIcon from '@mui/icons-material/Email';
 import BadgeIcon from '@mui/icons-material/Badge';
 import PublicIcon from '@mui/icons-material/Public';
 import CakeIcon from '@mui/icons-material/Cake';
-import SecurityIcon from '@mui/icons-material/Security';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BusinessIcon from '@mui/icons-material/Business';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
@@ -45,6 +44,7 @@ import {
 } from '../services/profilePicturePayload';
 import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
 import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
+import IdentityProviderDetails from './IdentityProviderDetails';
 
 function ProfilePage() {
   const auth = useAuth();
@@ -430,15 +430,7 @@ function AccountProfile({ auth }) {
               </Typography>
 
               <List>
-                <ListItem>
-                  <ListItemIcon>
-                    <SecurityIcon />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Authentication Provider"
-                    secondary="Keycloak OpenID Connect"
-                  />
-                </ListItem>
+                <IdentityProviderDetails />
 
                 {user.applicant_id && (
                   <ListItem>

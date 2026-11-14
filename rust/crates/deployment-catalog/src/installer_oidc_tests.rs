@@ -142,6 +142,27 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
             json!(["https://login.example.test", "https://login.example.test"]),
         ),
         ("client_secret_file", json!("relative-secret")),
+        ("client_auth_method", json!("private_key_jwt")),
+        ("client_auth_method", json!("client_secret_basic")),
+        ("userinfo_mode", json!("always")),
+        ("prompt", json!("login")),
+        ("prompt", json!(["none", "login"])),
+        ("prompt", json!(["login", "login"])),
+        ("prompt", json!(["create"])),
+        ("max_age", json!(-1)),
+        ("max_age", json!(86401)),
+        ("max_age", json!(false)),
+        ("max_age", json!("0")),
+        ("provider_name", json!(" ")),
+        ("provider_name", json!("é".repeat(41))),
+        ("provider_name", json!("Example\u{0085}Name")),
+        ("account_url", json!("http://identity.example.test/account")),
+        ("account_url", json!("https://other.example.test/account")),
+        (
+            "recovery_url",
+            json!("https://user:password@identity.example.test/recovery"),
+        ),
+        ("recovery_url", json!("https://*.example.test/recovery")),
         ("unrecognized", json!(true)),
     ] {
         let mut config = configuration();
@@ -161,6 +182,108 @@ fn invalid_provider_contracts_are_rejected_before_selection() {
     );
     assert!(state.journal().external_oidc_selection_sha256().is_none());
     assert!(!path.join("evidence").join(RECORD).exists());
+}
+
+#[test]
+fn optional_provider_compatibility_fields_preserve_omission_and_exact_environment() {
+    let config: Configuration = serde_json::from_value(configuration()).unwrap();
+    let old = serde_json::to_value(&config).unwrap();
+    let mut env = BTreeMap::new();
+    config.external_oidc.apply_environment(&mut env).unwrap();
+    for field in [
+        "client_auth_method",
+        "userinfo_mode",
+        "prompt",
+        "max_age",
+        "provider_name",
+        "account_url",
+        "recovery_url",
+    ] {
+        assert!(old["external_oidc"].get(field).is_none());
+    }
+    let mut value = configuration();
+    value["external_oidc"]["client_auth_method"] = json!("none");
+    value["external_oidc"]["userinfo_mode"] = json!("fallback");
+    value["external_oidc"]["prompt"] = json!([]);
+    value["external_oidc"]["max_age"] = json!("omit");
+    value["external_oidc"]["provider_name"] = json!("Example Identity");
+    value["external_oidc"]["account_url"] =
+        json!("https://identity.example.test/account?tab=security#settings");
+    value["external_oidc"]["recovery_url"] =
+        json!("https://login.example.test/recover?application=$(marty)");
+    let chosen: Configuration = serde_json::from_value(value).unwrap();
+    chosen.external_oidc.apply_environment(&mut env).unwrap();
+    let expected = BTreeMap::from([
+        ("TOKEN_ENDPOINT_AUTH_METHOD", "none"),
+        ("USERINFO_MODE", "fallback"),
+        ("PROMPT", ""),
+        ("MAX_AGE_SECONDS", "omit"),
+        ("PROVIDER_NAME", "Example Identity"),
+        (
+            "ACCOUNT_URL",
+            "https://identity.example.test/account?tab=security#settings",
+        ),
+        (
+            "RECOVERY_URL",
+            "https://login.example.test/recover?application=$(marty)",
+        ),
+    ]);
+    let mut model = serde_json::Map::new();
+    for (key, value) in expected {
+        assert_eq!(env[&format!("MARTY_EXTERNAL_OIDC_{key}")], value);
+        model.insert(format!("OIDC_{key}"), json!(value.replace('$', "$$")));
+    }
+    chosen.external_oidc.validate_model_scopes(&model).unwrap();
+    model.insert("OIDC_PROMPT".into(), json!("consent login"));
+    assert!(chosen.external_oidc.validate_model_scopes(&model).is_err());
+    config.external_oidc.apply_environment(&mut env).unwrap();
+    assert!(!env.contains_key("MARTY_EXTERNAL_OIDC_PROMPT"));
+}
+
+#[test]
+fn explicit_confidential_client_authentication_requires_private_secret_reference() {
+    let (parent, _, mut state) = installation();
+    let secret = parent.path().join("client-secret");
+    private_file(&secret, b"fixture-confidential-value");
+    for method in ["client_secret_post", "client_secret_basic"] {
+        let mut value = configuration();
+        value["external_oidc"]["client_secret_file"] = json!(secret);
+        value["external_oidc"]["client_auth_method"] = json!(method);
+        let input = parent.path().join("confidential.json");
+        private_file(&input, &serde_json::to_vec(&value).unwrap());
+        assert!(prepare(Some(&input), false).is_ok());
+        value["external_oidc"]["client_auth_method"] = json!("none");
+        private_file(&input, &serde_json::to_vec(&value).unwrap());
+        assert!(prepare(Some(&input), false).is_err());
+    }
+    select(None, &mut state).unwrap();
+}
+
+#[test]
+fn confidential_secret_transport_is_rejected_during_input_preparation() {
+    let (parent, path, state) = installation();
+    let before = std::fs::read(path.join("installation.json")).unwrap();
+    let secret = parent.path().join("client-secret");
+    let input = parent.path().join("provider.json");
+    let mut value = configuration();
+    value["external_oidc"]["client_secret_file"] = json!(secret);
+    private_file(&input, &serde_json::to_vec(&value).unwrap());
+    for raw in [
+        Vec::new(),
+        b"  \n".to_vec(),
+        "confidential-é".as_bytes().to_vec(),
+        b"value\0value".to_vec(),
+        b"-----BEGIN PRIVATE KEY-----".to_vec(),
+        vec![b'a'; 65537],
+    ] {
+        private_file(&secret, &raw);
+        assert!(prepare(Some(&input), false).is_err());
+    }
+    assert_eq!(
+        std::fs::read(path.join("installation.json")).unwrap(),
+        before
+    );
+    assert!(state.journal().external_oidc_selection_sha256().is_none());
 }
 
 #[test]

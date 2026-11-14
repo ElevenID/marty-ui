@@ -116,8 +116,15 @@ Use `auth.provider: external` with `auth.external.issuerUrl`, `clientId` and
 `allowedAlgorithms` instead of the managed `KEYCLOAK_*` settings above. The
 [chart guide](../deploy/helm/marty/README.md#external-oidc) gives the complete
 public/confidential client example, optional scopes and separate Secret boundary.
+Use `clientAuthMethod` for explicit `none`, POST or Basic client authentication;
+`userinfoMode: fallback` for a provider that supplies required email claims via
+UserInfo; and typed `prompt`/`maxAge` values for its authorization requirements.
+Optional `providerName`, `accountUrl` and `recoveryUrl` control the displayed
+provider and fixed trusted account links. Omitting these fields preserves the
+existing defaults and serialized selection.
 The provider's precreated administrator must match `organization.adminEmail`
-and return verified identity claims in its signed ID token. Its registered
+and return verified identity claims in its signed ID token or the explicitly
+enabled, subject-matched UserInfo fallback. Its registered
 callback is the exact public origin followed by `/v1/auth/callback`.
 
 Keep managed OpenBao, the complete signed image/bootstrap inventories and the
