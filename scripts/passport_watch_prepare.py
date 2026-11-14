@@ -18,6 +18,11 @@ import sys
 import tempfile
 import uuid
 
+if __package__:
+    from . import passport_watch_git_seed as git_seed
+else:
+    import passport_watch_git_seed as git_seed
+
 
 SEED_LABEL = "com.marty.passport.watch.seed"
 LOCK_LABEL = "com.marty.passport.watch.cargo-lock"
@@ -33,6 +38,8 @@ PREPARATION_FILES = (
     "services/Dockerfile.passport-watch.dockerignore",
     ".github/scripts/private-forks.py",
     "scripts/passport_watch_prepare.py",
+    "scripts/passport_watch_git_seed.py",
+    "scripts/scoped_native_cargo_cache.py",
 )
 FETCH_MEMORY = 2 * 1024 ** 3
 FETCH_PIDS = 128
@@ -356,17 +363,23 @@ class WatchPreparationCleanupError(WatchPreparationError):
 
 
 def _prepare_phase(root: Path, source: Path, cargo: Path, directory: Path, phase: str,
-                   token_file: Path, token_identity: tuple[int, int, int, int],
-                   identity: tuple[str, str], base: dict, environment: dict[str, str], log: Path) -> None:
+                   token_file: Path | None, token_identity: tuple[int, int, int, int] | None,
+                   identity: tuple[str, str], base: dict, environment: dict[str, str], log: Path,
+                   *, git_source_seed: Path | None = None, git_seed_digest: str | None = None) -> None:
     owner = uuid.uuid4().hex
     name = f"marty-passport-prepare-{phase}-{owner}"
     cidfile = directory / f"{phase}-container-id"
     mounts = [(source, "/workspace", True), (cargo, "/cargo-cache", phase == "probe")]
     if phase == "fetch":
-        mounts.append((token_file, TOKEN_TARGET, True))
+        if git_source_seed is not None:
+            mounts.append((git_source_seed, git_seed.MOUNT, True))
+        else:
+            mounts.append((token_file, TOKEN_TARGET, True))
     values = {"CARGO_HOME": "/cargo-cache", "HOME": "/tmp", "PYTHONDONTWRITEBYTECODE": "1",
               "CARGO_NET_OFFLINE": "false" if phase == "fetch" else "true",
               "PASSPORT_WATCH_SEED_ID": identity[0], "PASSPORT_WATCH_LOCK_SHA256": identity[1]}
+    if git_seed_digest is not None:
+        values["PASSPORT_WATCH_GIT_SEED_SHA256"] = git_seed_digest
     # Docker's CLI may supply proxy defaults from its config; preparation admits
     # no ambient routing or credentials into either container.
     values.update({name: "" for upper in ("HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "ALL_PROXY", "NO_PROXY")
@@ -396,8 +409,12 @@ def _prepare_phase(root: Path, source: Path, cargo: Path, directory: Path, phase
         _verify_container(row, base["Id"], mounts, expected_env, phase, command)
         if seed_identity(root) != identity or seed_identity(source) != identity:
             raise WatchPreparationError("Watcher dependency inputs changed before preparation")
-        if phase == "fetch" and checked_token_file(token_file, root) != token_identity:
-            raise WatchPreparationError("Source-reader file changed before preparation")
+        if phase == "fetch":
+            if git_source_seed is not None:
+                if git_seed.checked_seed(git_source_seed, (source / "rust/Cargo.lock").read_bytes())[1] != git_seed_digest:
+                    raise WatchPreparationError("Watcher Git source seed changed before preparation")
+            elif checked_token_file(token_file, root) != token_identity:
+                raise WatchPreparationError("Source-reader file changed before preparation")
         _private_run(["start", "--attach", container_id], environment, log)
         row = _owned_container(container_id, owner, name, environment)
         state = row.get("State") or {}
@@ -405,6 +422,9 @@ def _prepare_phase(root: Path, source: Path, cargo: Path, directory: Path, phase
             raise WatchPreparationError(f"Watcher preparation container failed; private log: {log}")
         if seed_identity(root) != identity or seed_identity(source) != identity:
             raise WatchPreparationError("Watcher dependency inputs changed during preparation")
+        if phase == "fetch" and git_source_seed is not None:
+            if git_seed.checked_seed(git_source_seed, (source / "rust/Cargo.lock").read_bytes())[1] != git_seed_digest:
+                raise WatchPreparationError("Watcher Git source seed changed during preparation")
     finally:
         try:
             # The daemon may create a container before an interrupted CLI writes
@@ -426,9 +446,17 @@ def _prepare_phase(root: Path, source: Path, cargo: Path, directory: Path, phase
                 f"Watcher preparation cleanup requires inspection of {name}; private log: {log}") from exc
 
 
-def prepare(root: Path, token_file: Path, environment: dict[str, str]) -> tuple[dict[str, str], Path]:
-    token_identity = checked_token_file(token_file, root)
+def prepare(root: Path, token_file: Path | None, environment: dict[str, str],
+            *, git_source_seed: Path | None = None) -> tuple[dict[str, str], Path]:
+    if (token_file is None) == (git_source_seed is None):
+        raise WatchPreparationError("Watcher preparation requires exactly one reader file or Git source seed")
     root = root.resolve(strict=True)
+    token_identity = checked_token_file(token_file, root) if token_file is not None else None
+    try:
+        input_digest = (git_seed.checked_seed(git_source_seed, (root / "rust/Cargo.lock").read_bytes(), root)[1]
+                        if git_source_seed is not None else None)
+    except (OSError, ValueError) as exc:
+        raise WatchPreparationError("Watcher Git source seed is invalid") from exc
     selected = docker_environment(environment)
     require_resource_limits(selected)
     require_local_builder(selected)
@@ -440,10 +468,14 @@ def prepare(root: Path, token_file: Path, environment: dict[str, str]) -> tuple[
     log = directory / "prepare.log"
     log.touch(mode=0o600, exist_ok=False)
     source, context, iid = directory / "source", directory / "context", directory / "image-id"
+    staged_git = directory / "git-source-seed" if git_source_seed is not None else None
     cleanup_safe = True
     try:
         snapshot_source(root, source, selected)
         cargo = assembly_context(source, context)
+        if staged_git is not None:
+            if git_seed.stage_seed(git_source_seed, staged_git, (source / "rust/Cargo.lock").read_bytes(), root) != input_digest:
+                raise WatchPreparationError("Watcher Git source seed changed before staging")
         _private_run(["pull", BASE_IMAGE], selected, log)
         base = _one_record(["image", "inspect", BASE_IMAGE], selected)
         if (not re.fullmatch(r"sha256:[a-f0-9]{64}", base.get("Id", ""))
@@ -452,7 +484,8 @@ def prepare(root: Path, token_file: Path, environment: dict[str, str]) -> tuple[
             raise WatchPreparationError("Pinned watcher base image is invalid")
         for phase in ("probe", "fetch", "offline"):
             _prepare_phase(root, source, cargo, directory, phase, token_file, token_identity,
-                           identity, base, selected, log)
+                           identity, base, selected, log,
+                           git_source_seed=staged_git, git_seed_digest=input_digest)
         check_seed(source, cargo, {"PASSPORT_WATCH_SEED_ID": identity[0],
                                   "PASSPORT_WATCH_LOCK_SHA256": identity[1]})
         if any((cargo / name).exists() or (cargo / name).is_symlink()
@@ -473,10 +506,12 @@ def prepare(root: Path, token_file: Path, environment: dict[str, str]) -> tuple[
     except WatchPreparationCleanupError:
         cleanup_safe = False
         raise
+    except git_seed.GitSeedError as exc:
+        raise WatchPreparationError(str(exc)) from exc
     finally:
         if cleanup_safe:
-            for path in (source, context):
-                if path.exists():
+            for path in (source, context, staged_git):
+                if path is not None and path.exists():
                     shutil.rmtree(path)
 
 
@@ -508,7 +543,7 @@ def require_runtime_resources(cgroup: Path = Path("/sys/fs/cgroup")) -> None:
 
 def container_dependencies(phase: str, root: Path, cargo: Path, environment: dict[str, str],
                            cgroup: Path = Path("/sys/fs/cgroup")) -> None:
-    """Only this short-lived, bounded fetch process can see the source reader."""
+    """Only the bounded fetch phase receives a reader or verified Git seed."""
     expected = {"memory.max": str(FETCH_MEMORY), "memory.swap.max": "0",
                 "cpu.max": "100000 100000", "pids.max": str(FETCH_PIDS)}
     try:
@@ -526,23 +561,36 @@ def container_dependencies(phase: str, root: Path, cargo: Path, environment: dic
         or environment.get("CARGO_HOME") != str(cargo)
         or any(shutil.which(name) is None for name in ("cargo", "rustc", "git", "curl"))):
         raise WatchPreparationError("Watcher fetch requires the pinned tools and credential-free environment")
-    if phase != "fetch" and Path(TOKEN_TARGET).exists():
+    git_digest = environment.get("PASSPORT_WATCH_GIT_SEED_SHA256")
+    if git_digest is not None and not re.fullmatch(r"[a-f0-9]{64}", git_digest):
+        raise WatchPreparationError("Watcher Git seed binding is invalid")
+    if (phase != "fetch" or git_digest is not None) and Path(TOKEN_TARGET).exists():
         raise WatchPreparationError("Watcher probe and offline verification must not receive a source reader")
+    if Path(git_seed.MOUNT).exists() and (phase != "fetch" or git_digest is None):
+        raise WatchPreparationError("Only the credential-free Git fetch phase may receive a source seed")
     if phase == "probe":
         return
     os.umask(0o077)
-    if phase == "fetch":
+    if phase == "fetch" and git_digest is not None:
+        git_seed.import_seed(Path(git_seed.MOUNT), cargo, (root / "rust/Cargo.lock").read_bytes(),
+                             git_digest, environment)
+        command = ["cargo", "fetch", "--locked", "--manifest-path", str(root / "rust/Cargo.toml")]
+    elif phase == "fetch":
         command = [sys.executable, str(root / ".github/scripts/private-forks.py"), "fetch", "--container",
                    "--token-file", TOKEN_TARGET, "--manifest-path", str(root / "rust/Cargo.toml")]
     else:
         command = ["cargo", "fetch", "--offline", "--locked", "--manifest-path", str(root / "rust/Cargo.toml")]
+    fetch_environment = (git_seed.cargo_environment(environment, cargo, offline=phase == "offline")
+                         if git_digest is not None else environment)
     try:
-        subprocess.run(command, env=environment, check=True)
+        subprocess.run(command, env=fetch_environment, check=True)
     except (OSError, subprocess.SubprocessError) as exc:
         raise WatchPreparationError("Watcher locked dependency fetch failed") from exc
     if seed_identity(root) != (seed, lock):
         raise WatchPreparationError("Watcher dependency inputs changed during fetch")
     if phase == "offline":
+        if git_digest is not None:
+            git_seed.verify_offline(root, cargo, git_digest, environment)
         for name in ("registry", "git"):
             path = cargo / name
             if not path.is_dir() or path.is_symlink():

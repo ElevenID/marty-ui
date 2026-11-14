@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from scripts import passport_watch_prepare as preparation
+from tests.test_passport_watch_git_seed import cache_template  # noqa: F401 - shared real Git fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,6 +49,15 @@ def reader(tmp_path):
     path.write_text("test-reader-not-an-actual-credential\n")
     path.chmod(0o600)
     return path
+
+
+@pytest.fixture
+def git_seed_input(source, cache_template, tmp_path):
+    seed_root, cargo = cache_template
+    (source / "rust/Cargo.lock").write_bytes((seed_root / "rust/Cargo.lock").read_bytes())
+    output = tmp_path / "git-source-seed"
+    preparation.git_seed.export_seed(source, cargo, output, dict(os.environ))
+    return output
 
 
 def image_row(source, image_id=IMAGE_ID):
@@ -287,6 +297,74 @@ def test_private_context_stays_outside_checkout_despite_ambient_temp_directory(s
     assert log.parent.parent == Path("/tmp") and not log.is_relative_to(source)
 
 
+def test_git_seed_mode_stages_only_verified_objects_in_fetch_without_any_reader(source, git_seed_input, engine):
+    original = {path.relative_to(git_seed_input).as_posix(): path.read_bytes()
+                for path in git_seed_input.rglob("*") if path.is_file()}
+    result, log = preparation.prepare(source, None, {"PRIVATE_FORKS_READ_TOKEN": "foreign-reader"},
+                                      git_source_seed=git_seed_input)
+    assert result["PASSPORT_WATCH_IMAGE"] == IMAGE_ID
+    assert engine.starts == engine.removed == ["1" * 64, "2" * 64, "3" * 64]
+    probe, fetch, offline = engine.created
+    assert not any(entry["Destination"] == preparation.git_seed.MOUNT for row in (probe, offline) for entry in row["Mounts"])
+    mounts = [entry for entry in fetch["Mounts"] if entry["Destination"] == preparation.git_seed.MOUNT]
+    assert mounts == [{"Type": "bind", "Source": str(log.parent / "git-source-seed"),
+                      "Destination": preparation.git_seed.MOUNT, "RW": False, "Propagation": "rprivate"}]
+    for row in engine.created:
+        assert not any(entry["Destination"] == preparation.TOKEN_TARGET for entry in row["Mounts"])
+        assert row["HostConfig"]["Memory"] == row["HostConfig"]["MemorySwap"] == preparation.FETCH_MEMORY
+        assert row["HostConfig"]["CpuQuota"] == row["HostConfig"]["CpuPeriod"] == 100000
+        assert row["HostConfig"]["PidsLimit"] == preparation.FETCH_PIDS
+    assert not (log.parent / "git-source-seed").exists()
+    assert original == {path.relative_to(git_seed_input).as_posix(): path.read_bytes()
+                        for path in git_seed_input.rglob("*") if path.is_file()}
+    for command, _ in engine.calls:
+        assert str(git_seed_input) not in " ".join(command)
+
+
+def test_changed_staged_seed_is_rejected_before_fetch_starts(source, git_seed_input, engine):
+    def change(row):
+        if row["HostConfig"]["NetworkMode"] == "bridge":
+            mounted = Path(next(entry["Source"] for entry in row["Mounts"]
+                                if entry["Destination"] == preparation.git_seed.MOUNT))
+            path = mounted / preparation.git_seed.MANIFEST
+            path.write_text(path.read_text() + "\n")
+            engine.inspect_hook = None
+    engine.inspect_hook = change
+    with pytest.raises(preparation.WatchPreparationError, match="changed before preparation"):
+        preparation.prepare(source, None, {}, git_source_seed=git_seed_input)
+    assert engine.starts == ["1" * 64] and engine.removed == ["1" * 64, "2" * 64]
+    assert git_seed_input.is_dir()
+
+
+@pytest.mark.parametrize("both", (False, True))
+def test_prepare_requires_exactly_one_dependency_input_before_docker(source, reader, git_seed_input, monkeypatch, both):
+    monkeypatch.setattr(preparation, "docker_environment", lambda env: pytest.fail("Docker must not run"))
+    with pytest.raises(preparation.WatchPreparationError, match="exactly one"):
+        preparation.prepare(source, reader if both else None, {}, git_source_seed=git_seed_input if both else None)
+
+
+def test_seed_cleanup_failure_retains_only_owned_staging_and_preserves_input(source, git_seed_input, engine, monkeypatch):
+    select = preparation.docker_environment
+    changed = False
+    def selected(environment):
+        if changed:
+            raise ValueError("synthetic pinned socket replacement")
+        return select(environment)
+    def interrupted(row):
+        nonlocal changed
+        if row["HostConfig"]["NetworkMode"] == "bridge":
+            row["State"] = {"Status": "running"}
+            changed = True
+            raise subprocess.TimeoutExpired("synthetic fetch", 900)
+    engine.start_hook = interrupted
+    monkeypatch.setattr(preparation, "docker_environment", selected)
+    with pytest.raises(preparation.WatchPreparationCleanupError):
+        preparation.prepare(source, None, {}, git_source_seed=git_seed_input)
+    assert git_seed_input.is_dir() and engine.removed == ["1" * 64]
+    for mount in engine.containers["2" * 64]["Mounts"]:
+        assert Path(mount["Source"]).exists()
+
+
 @pytest.mark.parametrize("changed", ("memory", "cpu", "pids", "network", "reader-write", "extra-mount", "privileged", "image", "environment"))
 def test_created_container_drift_is_refused_before_reader_bearing_start_and_cleaned(source, reader, engine, changed):
     def drift(row):
@@ -513,6 +591,39 @@ def test_offline_phase_refuses_an_unexpected_reader_mount(source, dependency_pha
     assert calls == []
 
 
+def test_git_fetch_and_offline_proof_use_no_helper_or_reader_and_pin_rustup(source, dependency_phase, tmp_path, monkeypatch):
+    cargo, cgroup, env, calls = dependency_phase
+    env.update(PASSPORT_WATCH_GIT_SEED_SHA256="a" * 64, RUSTUP_HOME="/usr/local/rustup",
+               GIT_CONFIG_COUNT="99", CARGO_REGISTRIES_CRATES_IO_INDEX="https://foreign.invalid")
+    imports, proofs = [], []
+    monkeypatch.setattr(preparation.git_seed, "MOUNT", str(tmp_path / "seed"))
+    monkeypatch.setattr(preparation.git_seed, "import_seed", lambda *args: imports.append(args))
+    monkeypatch.setattr(preparation.git_seed, "verify_offline", lambda *args: proofs.append(args))
+    preparation.container_dependencies("fetch", source, cargo, env, cgroup)
+    assert len(imports) == 1 and not proofs
+    assert calls[0][0] == ["cargo", "fetch", "--locked", "--manifest-path", str(source / "rust/Cargo.toml")]
+    assert not (cargo / "git/.marty-passport-watch-seed").exists()
+    preparation.container_dependencies("offline", source, cargo, env, cgroup)
+    assert len(proofs) == 1
+    for _, kwargs in calls:
+        actual = kwargs["env"]
+        assert actual["RUSTUP_HOME"] == "/usr/local/rustup" and actual["CARGO_NET_GIT_FETCH_WITH_CLI"] == "true"
+        assert actual["GIT_ALLOW_PROTOCOL"] == "" and "CARGO_REGISTRIES_CRATES_IO_INDEX" not in actual
+    preparation.check_seed(source, cargo, env)
+
+
+def test_failed_git_offline_proof_cannot_write_prepared_seed_markers(source, dependency_phase, monkeypatch):
+    cargo, cgroup, env, _ = dependency_phase
+    env["PASSPORT_WATCH_GIT_SEED_SHA256"] = "a" * 64
+    def failure(*args):
+        raise preparation.git_seed.GitSeedError("synthetic incomplete Git proof")
+    monkeypatch.setattr(preparation.git_seed, "verify_offline", failure)
+    with pytest.raises(preparation.git_seed.GitSeedError, match="incomplete Git proof"):
+        preparation.container_dependencies("offline", source, cargo, env, cgroup)
+    assert not (cargo / "git/.marty-passport-watch-seed").exists()
+    assert not (cargo / "registry/.marty-passport-watch-seed").exists()
+
+
 @pytest.mark.parametrize("changed", ("seed", "lock", "image_id"))
 def test_prepared_image_requires_current_seed_and_full_image_id(source, monkeypatch, changed):
     row = image_row(source)
@@ -650,6 +761,32 @@ def test_prepare_does_not_require_or_read_a_plan(launcher, reader, monkeypatch):
     assert len(calls) == 1 and calls[0][1] == reader
     assert "PRIVATE_FORKS_READ_TOKEN" not in calls[0][2]
     assert "BUILDX_BUILDER" not in calls[0][2]
+
+
+def test_git_seed_prepare_cli_is_plan_independent_and_explicit(launcher, monkeypatch):
+    scope, _, _ = launcher
+    monkeypatch.setattr(scope["sys"], "argv", ["passport_local_watch.py", "--prepare", "--git-source-seed", "/private/seed"])
+    calls = []
+    def prepare(root, token, environment, **options):
+        calls.append((token, options, environment))
+        return {"PASSPORT_WATCH_IMAGE": IMAGE_ID}, Path("/private/prepare.log")
+    monkeypatch.setattr(scope["preparation"], "prepare", prepare)
+    assert scope["main"]() == 0
+    assert len(calls) == 1 and calls[0][:2] == (None, {"git_source_seed": Path("/private/seed")})
+    assert "PRIVATE_FORKS_READ_TOKEN" not in calls[0][2] and "BUILDX_BUILDER" not in calls[0][2]
+
+
+@pytest.mark.parametrize("arguments", (
+    ["--prepare", "--git-source-seed", "/private/seed", "--private-forks-token-file", "/private/reader"],
+    ["--git-source-seed", "/private/seed"],
+))
+def test_git_seed_cli_cannot_combine_reader_or_enter_startup(launcher, monkeypatch, arguments):
+    scope, argv, _ = launcher
+    monkeypatch.setattr(scope["sys"], "argv", argv[:1] + arguments)
+    monkeypatch.setattr(scope["preparation"], "prepare", lambda *args, **kwargs: pytest.fail("preparation must not run"))
+    with pytest.raises(SystemExit) as error:
+        scope["main"]()
+    assert error.value.code == 2
 
 
 def test_resume_uses_prepared_image_without_build_or_reader(launcher, monkeypatch):

@@ -47,8 +47,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare", action="store_true",
                         help="prepare the local dependency image before obtaining a disposable plan")
-    parser.add_argument("--private-forks-token-file", type=Path,
+    dependency_input = parser.add_mutually_exclusive_group()
+    dependency_input.add_argument("--private-forks-token-file", type=Path,
                         help="owned mode-0600 reader file outside the checkout; --prepare only")
+    dependency_input.add_argument("--git-source-seed", type=Path,
+                        help="private exact-lock Git seed exported by passport_watch_git_seed.py; --prepare only")
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--port", type=int, default=29878)
@@ -65,18 +68,19 @@ def main() -> int:
     os.environ.clear()
     os.environ.update(safe_environment)
     if args.prepare:
-        if (not args.private_forks_token_file or args.plan or args.manifest
+        if (not (args.private_forks_token_file or args.git_source_seed) or args.plan or args.manifest
             or args.resume or args.watch_only or args.stop):
-            parser.error("--prepare requires only --private-forks-token-file")
+            parser.error("--prepare requires one of --private-forks-token-file or --git-source-seed")
         try:
-            prepared, log = preparation.prepare(ROOT, args.private_forks_token_file, safe_environment)
+            options = {"git_source_seed": args.git_source_seed} if args.git_source_seed else {}
+            prepared, log = preparation.prepare(ROOT, args.private_forks_token_file, safe_environment, **options)
         except preparation.WatchPreparationError as exc:
             raise SystemExit(str(exc)) from None
         print(f"Prepared local watcher image: {prepared['PASSPORT_WATCH_IMAGE']}", flush=True)
         print(f"Private preparation log: {log}", flush=True)
         return 0
-    if not args.plan or not args.manifest or args.private_forks_token_file:
-        parser.error("startup and teardown require --plan and --manifest; reader files are preparation-only")
+    if not args.plan or not args.manifest or args.private_forks_token_file or args.git_source_seed:
+        parser.error("startup and teardown require --plan and --manifest; dependency inputs are preparation-only")
     if (args.watch_only or args.stop) and not args.resume:
         parser.error("--watch-only and --stop require --resume")
     plan = json.loads(args.plan.read_text(encoding="utf-8"))

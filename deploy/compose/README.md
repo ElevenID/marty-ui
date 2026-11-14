@@ -56,6 +56,41 @@ container receives it, as a read-only bind at the canonical helper's secret
 path. The credential is never a build argument, image environment variable,
 builder input, or application mount.
 
+An existing authorized Cargo cache can supply the same locked Git sources when
+a reader file is unavailable. Create a private parent directory outside the
+checkout, then export the exact objects and prepare from that directory:
+
+```sh
+python scripts/passport_watch_git_seed.py \
+  --cargo-home /absolute/authorized/cargo \
+  --output /absolute/private/watch-seed-inputs/source-seed
+python scripts/passport_local_watch.py --prepare \
+  --git-source-seed /absolute/private/watch-seed-inputs/source-seed
+```
+
+The output parent must already be owned by the current user and mode `0700`,
+with canonical paths and safe ancestors. The exporter reads only the supplied
+cache's Git objects and shallow boundaries through fresh configuration-free
+views. It creates new minimal bare databases, a complete file inventory, and a
+manifest bound to the original lockfile, every locked Git revision/tree, and the
+RDF gitlink derived from the locked SSI tree. Original Git configuration, hooks,
+credentials, alternates and replacement refs are excluded. A partial-clone cache
+is usable only if all required objects are already present; it is never hydrated
+from a remote during export. Missing objects fail closed. The bounded seed is
+at most 128 MiB and 8192 data files; its directories are mode `0700` and files
+mode `0600`, without symlinks or hardlinks. Keep it private when transferring it
+through an authorized route; it contains private dependency source.
+
+`--git-source-seed` and `--private-forks-token-file` are mutually exclusive.
+The launcher validates and privately copies a seed before Docker receives it.
+Only the bounded fetch container mounts that copy, read-only. Imports use fresh
+Git views with no input configuration. Git network transports and credential
+helpers are disabled while Cargo fetches public crates.io packages against the
+unchanged lockfile checksums. The separate offline phase verifies resolution,
+all locked Git checkout contents and the nested RDF checkout before writing
+seed markers. The original input directory is preserved; only owned staging is
+removed. Neither preparation mode changes Cargo URLs or the lockfile.
+
 Preparation uses the existing daemon's default local builder and discards
 ambient builder-routing overrides. Probe, fetch and offline verification run in
 three ordinary rootless containers, each with one CPU, 2 GiB RAM, no swap and at most
@@ -66,7 +101,9 @@ already contains the required tools; preparation installs no packages.
 The first container checks these tools and limits without a reader, network or
 writable cache before the fetch container is created.
 
-The canonical private-fork helper performs a locked fetch without compiling.
+With a reader file, the canonical private-fork helper performs the locked fetch.
+With a Git seed, Cargo fetches the public registry using the imported objects.
+Neither path compiles.
 A separate network-disabled container, without the reader mount, proves the
 exact workspace can fetch offline. Each receives only a read-only snapshot of
 tracked Rust files and the required helpers/recipe, excluding local Git, Cargo,
