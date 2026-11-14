@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     official::{digest, LaneReceipt},
-    official_review::{is_digest, prepare_official_review, OfficialReviewPlan},
+    official_review::{
+        is_digest, prepare_official_review, prepare_released_official_review, OfficialReviewPlan,
+    },
 };
 
 pub const AUTOMATED_POLICY: &str = "marty.official-verifier-outcome/v1";
@@ -115,12 +117,55 @@ pub fn validate_automated_official_suite(
     run_id: u64,
     run_attempt: u64,
 ) -> Result<AutomatedOfficialReceipt, &'static str> {
+    validate_automated_context(
+        manifest,
+        summaries,
+        source,
+        harness,
+        run_id,
+        run_attempt,
+        false,
+    )
+}
+
+pub fn validate_automated_released_official_suite(
+    manifest: &[u8],
+    summaries: &[Vec<u8>],
+    source: &str,
+    harness: &str,
+    run_id: u64,
+    run_attempt: u64,
+) -> Result<AutomatedOfficialReceipt, &'static str> {
+    validate_automated_context(
+        manifest,
+        summaries,
+        source,
+        harness,
+        run_id,
+        run_attempt,
+        true,
+    )
+}
+
+fn validate_automated_context(
+    manifest: &[u8],
+    summaries: &[Vec<u8>],
+    source: &str,
+    harness: &str,
+    run_id: u64,
+    run_attempt: u64,
+    released: bool,
+) -> Result<AutomatedOfficialReceipt, &'static str> {
     if run_attempt != 1 {
         return Err("automated qualification requires the original official evidence attempt");
     }
     // Reuse the full raw-result assessment. An automated outcome cannot excuse
     // a failed process, a failed module, missing coverage or foreign evidence.
-    let plan = prepare_official_review(manifest, summaries, source, harness, run_id, run_attempt)?;
+    let plan = if released {
+        prepare_released_official_review(manifest, summaries, source, harness, run_id, run_attempt)?
+    } else {
+        prepare_official_review(manifest, summaries, source, harness, run_id, run_attempt)?
+    };
     validate_automated_cases(&plan)?;
     let qualification = AutomatedQualification {
         schema: "marty.automated-official-qualification/v1",
@@ -131,12 +176,20 @@ pub fn validate_automated_official_suite(
         original_official_results_unchanged: true,
     };
     Ok(AutomatedOfficialReceipt {
-        schema: "marty.official-release-gate/v2",
+        schema: if released {
+            "marty.official-released-gate/v1"
+        } else {
+            "marty.official-release-gate/v2"
+        },
         source_sha: plan.source_sha,
         harness_sha: plan.harness_sha,
         manifest_sha256: plan.manifest_sha256,
         run_id,
-        qualification_context: "PRE_PUBLICATION_CANDIDATE",
+        qualification_context: if released {
+            "PUBLISHED_RELEASE"
+        } else {
+            "PRE_PUBLICATION_CANDIDATE"
+        },
         lanes: plan.lanes,
         automated_qualification: qualification,
     })

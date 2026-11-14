@@ -1,8 +1,10 @@
 use marty_release_evidence::official::{validate_official_suite, LANES};
-use marty_release_evidence::official_automation::validate_automated_official_suite;
+use marty_release_evidence::official_automation::{
+    validate_automated_official_suite, validate_automated_released_official_suite,
+};
 use marty_release_evidence::official_review::{
-    prepare_official_review, validate_official_review, validate_official_suite_with_review,
-    OfficialReviewPlan,
+    prepare_official_review, prepare_released_official_review, validate_official_review,
+    validate_official_suite_with_review, OfficialReviewPlan,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -38,6 +40,119 @@ fn summary(lane: &str) -> Value {
         });
     }
     value
+}
+
+fn released_fixture() -> (Vec<u8>, [Value; 7]) {
+    let manifest = serde_json::to_vec(&json!({
+        "schema":"marty.stack/v1", "release":"marty-ui@1.1.274",
+        "components":[{"name":"marty-ui","commit":"a".repeat(40)}]
+    }))
+    .unwrap();
+    let mut values = automated_values();
+    for value in &mut values {
+        let stack = value["stack"].as_object_mut().unwrap();
+        stack.remove("qualification_context");
+        stack.remove("published_release");
+        stack.insert("release_tag".into(), json!("v1.1.274"));
+        stack.insert("stack_release".into(), json!("marty-ui@1.1.274"));
+        stack.insert("repository".into(), json!("ElevenID/marty-ui"));
+        stack.insert(
+            "manifest_sha256".into(),
+            json!(format!("sha256:{:x}", Sha256::digest(&manifest))),
+        );
+    }
+    (manifest, values)
+}
+
+fn released_receipt(manifest: &[u8], values: &[Value]) -> Result<Value, &'static str> {
+    validate_automated_released_official_suite(
+        manifest,
+        &review_bytes(values),
+        &"a".repeat(40),
+        &"b".repeat(40),
+        17,
+        1,
+    )
+    .map(|receipt| serde_json::to_value(receipt).unwrap())
+}
+
+#[test]
+fn released_stack_qualifies_only_original_complete_automated_evidence() {
+    let (manifest, values) = released_fixture();
+    let before = review_bytes(&values);
+    let plan = prepare_released_official_review(
+        &manifest,
+        &before,
+        &"a".repeat(40),
+        &"b".repeat(40),
+        17,
+        1,
+    )
+    .unwrap();
+    assert_eq!(plan.schema, "marty.official-released-review-plan/v1");
+    assert_eq!(plan.pending.len(), 4);
+    let receipt = released_receipt(&manifest, &values).unwrap();
+    assert_eq!(receipt["schema"], "marty.official-released-gate/v1");
+    assert_eq!(receipt["qualification_context"], "PUBLISHED_RELEASE");
+    assert_eq!(receipt["automated_qualification"]["automated_cases"], 4);
+    assert_eq!(before, review_bytes(&values));
+    assert!(automated_receipt(&values).is_err());
+}
+
+#[test]
+fn released_stack_rejects_foreign_metadata_and_failed_review_outcomes() {
+    let (manifest, values) = released_fixture();
+    for (pointer, replacement) in [
+        ("/stack/release_tag", json!("v1.1.275")),
+        ("/stack/stack_release", json!("marty-ui@1.1.275")),
+        ("/stack/repository", json!("another/repository")),
+        (
+            "/stack/qualification_context",
+            json!("PRE_PUBLICATION_CANDIDATE"),
+        ),
+        ("/stack/published_release", json!(false)),
+        ("/result/exit_code", json!(0)),
+        (
+            "/review_requests/0/modules/0/automated_assessment/api_outcome/decision",
+            json!("deny"),
+        ),
+    ] {
+        let mut changed = values.clone();
+        if let Some(slot) = changed[1].pointer_mut(pointer) {
+            *slot = replacement;
+        } else {
+            changed[1]
+                .pointer_mut("/stack")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(
+                    pointer.trim_start_matches("/stack/").to_owned(),
+                    replacement,
+                );
+        }
+        assert!(
+            released_receipt(&manifest, &changed).is_err(),
+            "must reject {pointer}"
+        );
+    }
+    for bad in [
+        json!({"schema":"marty.stack/v1","release":"marty-ui@1.1.274","components":[]}),
+        json!({"schema":"marty.stack/v1","release":"marty-ui@1.1.274","components":[{"name":"marty-ui","commit":"c".repeat(40)}]}),
+        json!({"schema":"marty.stack/v1","release":"marty-ui@latest","components":[{"name":"marty-ui","commit":"a".repeat(40)}]}),
+    ] {
+        let bytes = serde_json::to_vec(&bad).unwrap();
+        assert!(released_receipt(&bytes, &values).is_err());
+    }
+    assert!(validate_automated_released_official_suite(
+        &manifest,
+        &review_bytes(&values),
+        &"a".repeat(40),
+        &"b".repeat(40),
+        17,
+        2,
+    )
+    .is_err());
 }
 
 fn validate(values: &[Value]) -> Result<(), &'static str> {
