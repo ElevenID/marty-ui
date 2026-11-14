@@ -34,7 +34,7 @@ MAX_CERT_BYTES = 64 * 1024
 PUBLIC_LEAF_KEYS = {"tls.crt", "keycloak-master-rs256.crt", "keycloak-11id-rs256.crt"}
 CORE_DEPLOYMENTS = {"ui", "gateway", "auth", "keycloak", "issuance-native", "verification", "signing-keys"}
 CORE_READY_SERVICES = {"auth", "organizations", "credential-templates", "trust-profiles",
-                       "presentation-policies", "deployment-profiles", "signing-keys", "flows", "issuance"}
+                       "presentation-policies", "deployment-profiles", "signing-keys", "flows", "issuance-native"}
 RESUME_GUIDE = "docs/kubernetes-ui-live-reload.md#resume-an-existing-development-installation"
 CREDENTIAL_GUIDE = "docs/kubernetes-installation-configuration.md#resume-a-stopped-development-node"
 
