@@ -22,6 +22,21 @@ This validates configuration without starting containers. The passport watcher
 still requires its existing release-matched disposable plan and manifest; moving
 its overlay does not remove those checks or make it a customer installer.
 
+The worktree helper starts only PostgreSQL and Redis. Compose still interpolates
+the full base file, so the helper supplies deliberately unusable application-only
+image, managed-key endpoint, and secret-file values for rendering. It creates no
+certificate or token files and imports no other stack's service credentials.
+Starting application services requires their normal managed-key configuration.
+
+On Linux, both helpers preserve an existing rootless Docker daemon at the current user's
+`/run/user/<uid>/docker.sock`, after checking the private runtime directory and
+socket ownership. Remote Docker hosts and context overrides are discarded. The
+selected endpoint stays fixed for the process and is rechecked before Docker
+calls; a missing, unsafe, or replaced rootless socket fails closed. Hosts without
+a rootless selection retain the existing local `/var/run/docker.sock` default.
+The worktree helper keeps its existing Docker Desktop lookup on Windows while
+discarding ambient host/context overrides. The helpers never start a daemon.
+
 ## Path and ordering contract
 
 Do not pass these overlays as the first or only Compose file. All relative build

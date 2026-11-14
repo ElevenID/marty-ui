@@ -3,6 +3,7 @@
 from pathlib import Path
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,8 @@ class WorktreeStackTests(unittest.TestCase):
             "POSTGRES_PASSWORD": "not-for-this-worktree",
             "MARTY_RS_URI": "https://outside.invalid/wheel",
             "GOOGLE_CLIENT_SECRET": "not-for-this-worktree",
+            "KEYCLOAK_KMS_ADDR": "https://other-stack.invalid",
+            "SIGNING_KEYS_TLS_KMS_TOKEN_FILE": "/other-stack/managed-token",
         }, clear=True):
             env = worktree_stack.environment(Path("/tmp/worktree"), "marty-wt-test", 28000)
         self.assertNotIn("POSTGRES_PASSWORD", env)
@@ -35,6 +38,44 @@ class WorktreeStackTests(unittest.TestCase):
         self.assertEqual(env["COMPOSE_DISABLE_ENV_FILE"], "1")
         self.assertEqual(env["PUBLIC_API_URL"], "http://127.0.0.1:28000")
         self.assertEqual(env["WT_UI_PORT"], "28001")
+        self.assertEqual(env["KEYCLOAK_KMS_ADDR"], "https://worktree-dev-infra-only.invalid")
+        self.assertEqual(env["KEYCLOAK_KMS_KEY_VERSION"], "0")
+        self.assertEqual(env["SIGNING_KEYS_TLS_KMS_TOKEN_FILE"],
+                         str(Path("/tmp/worktree") / ".worktree-dev-infra-only"
+                             / "signing_keys_tls_kms_token_file"))
+
+    def test_full_base_required_inputs_are_explicit_and_create_no_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            env = worktree_stack.environment(root, "marty-wt-test", 28000)
+            source = (worktree_stack.ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+            required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", source))
+            self.assertTrue(required)
+            self.assertEqual(required - env.keys(), set())
+            self.assertEqual(list(root.iterdir()), [])
+
+    @unittest.skipUnless(shutil.which("docker"), "Docker CLI is unavailable")
+    def test_real_worktree_model_renders_with_isolated_infrastructure(self):
+        root = worktree_stack.ROOT
+        project = "marty-wt-real-render"
+        env = worktree_stack.environment(root, project, 28000)
+        command = worktree_stack.compose_command(root, project)
+        rendered = subprocess.run(
+            [*command, "config", "--format", "json"],
+            env=env, text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        model = json.loads(rendered.stdout)
+        worktree_stack.validate_config(command, env)
+        for service in ("postgres", "redis"):
+            config = model["services"][service]
+            self.assertFalse(config.get("secrets"))
+            self.assertNotIn("worktree-dev-infra-only", json.dumps(config))
+            self.assertEqual(config["networks"], {"marty-network": None})
+        self.assertEqual(model["volumes"]["postgres_data"]["name"],
+                         f"{project}_postgres_data")
+        self.assertEqual(model["volumes"]["redis_data"]["name"],
+                         f"{project}_redis_data")
 
     @unittest.skipUnless(shutil.which("docker"), "Docker CLI is unavailable")
     def test_compose_does_not_load_worktree_dotenv(self):

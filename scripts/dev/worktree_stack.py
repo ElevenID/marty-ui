@@ -18,6 +18,9 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
+from scripts.local_docker import local_docker_environment
+
 PORT_OFFSETS = {
     "WT_GATEWAY_PORT": 0,
     "WT_UI_PORT": 1,
@@ -29,6 +32,25 @@ PORT_OFFSETS = {
     "WT_SMTP_PORT": 7,
 }
 WHEEL_NAMES = ("MARTY_RS", "MARTY_VERIFICATION", "MARTY_ISO18013")
+# Compose interpolates the complete base model even when `up` selects only
+# PostgreSQL and Redis. These application-only inputs are deliberately unusable;
+# this helper must not import another stack's managed keys or certificates.
+APP_KMS_PREFIXES = (
+    "KEYCLOAK_KMS", "SIGNING_KEYS_TLS_KMS", "FLOW_CLIENT_TLS_KMS",
+    "ENVOY_ISSUANCE_TLS_KMS",
+)
+APP_SECRET_FILE_INPUTS = (
+    "DEV_INTEGRATION_SECRET_CA_FILE",
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE", "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
+    "FLOW_CLIENT_TLS_KMS_TOKEN_FILE", "FLOW_WORKLOAD_CLIENT_CERT_FILE",
+    "ISSUANCE_TLS_KMS_TOKEN_FILE", "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
+    "KEYCLOAK_11ID_CIBA_TOKEN_FILE", "KEYCLOAK_11ID_COOKIE_TOKEN_FILE",
+    "KEYCLOAK_11ID_RS256_CERT_FILE", "KEYCLOAK_MASTER_CIBA_TOKEN_FILE",
+    "KEYCLOAK_MASTER_COOKIE_TOKEN_FILE", "KEYCLOAK_MASTER_RS256_CERT_FILE",
+    "KEYCLOAK_SIGNING_KMS_TOKEN_FILE", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "OPENBAO_TLS_CA_CERT_FILE", "SIGNING_KEYS_TLS_KMS_TOKEN_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+)
 
 
 def identity(root: Path) -> tuple[str, int]:
@@ -46,6 +68,7 @@ def environment(root: Path, project: str, port_base: int) -> dict[str, str]:
         "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
         "HOMEDRIVE", "HOMEPATH", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
         "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA", "DOCKER_CONFIG",
+        "DOCKER_HOST",  # Validated and pinned to a local socket before returning.
     }
     env = {key: value for key, value in os.environ.items()
            if key.upper() in safe_host_names}
@@ -72,7 +95,29 @@ def environment(root: Path, project: str, port_base: int) -> dict[str, str]:
     for name in WHEEL_NAMES:
         env[f"{name}_URI"] = "file:///worktree-dev-infra-only"
         env[f"{name}_DIGEST"] = "0" * 64
-    return env
+    env["KEYCLOAK_KMS_IMAGE_DIGEST"] = "sha256:" + "0" * 64
+    for prefix in APP_KMS_PREFIXES:
+        env[f"{prefix}_ADDR"] = "https://worktree-dev-infra-only.invalid"
+        env[f"{prefix}_KEY_VERSION"] = "0"
+        if prefix != "KEYCLOAK_KMS":
+            env[f"{prefix}_KEY_NAME"] = "worktree-dev-infra-only"
+    for name in APP_SECRET_FILE_INPUTS:
+        # Do not create these files. Application startup still fails closed;
+        # the two infrastructure services have no reference to these inputs.
+        env[name] = str(root / ".worktree-dev-infra-only" / name.lower())
+    return _docker_environment(env)
+
+
+def _docker_environment(env: dict[str, str]) -> dict[str, str]:
+    if os.name == "nt":
+        # Preserve Docker Desktop's existing Windows default/context lookup.
+        # The helper previously discarded these ambient overrides; in particular
+        # it must not replace Desktop's named pipe with a Linux Unix socket.
+        local = env.copy()
+        for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
+            local.pop(name, None)
+        return local
+    return local_docker_environment(env)
 
 
 def compose_command(root: Path, project: str) -> list[str]:
@@ -87,7 +132,8 @@ def compose_command(root: Path, project: str) -> list[str]:
 
 def validate_config(command: list[str], env: dict[str, str]) -> None:
     result = subprocess.run([*command, "config", "--format", "json"],
-                            env=env, text=True, capture_output=True, check=False)
+                            env=_docker_environment(env), text=True,
+                            capture_output=True, check=False)
     if result.returncode:
         raise SystemExit("Worktree Compose configuration failed to render")
     config = json.loads(result.stdout)
@@ -155,17 +201,18 @@ def main() -> int:
     if args.action == "up":
         existing = subprocess.run(
             ["docker", "ps", "-aq", "--filter", f"label=com.docker.compose.project={project}"],
-            env=env, text=True, capture_output=True, check=True,
+            env=_docker_environment(env), text=True, capture_output=True, check=True,
         ).stdout.strip()
         if not existing:
             require_free_ports(env)
-        result = subprocess.call([*command, "up", "-d", "--wait", "postgres", "redis"], env=env)
+        result = subprocess.call([*command, "up", "-d", "--wait", "postgres", "redis"],
+                                 env=_docker_environment(env))
         if result:
             return result
         print(f"Isolated {project}: PostgreSQL 127.0.0.1:{env['WT_POSTGRES_PORT']}, "
               f"Redis 127.0.0.1:{env['WT_REDIS_PORT']}")
         return 0
-    return subprocess.call([*command, args.action], env=env)
+    return subprocess.call([*command, args.action], env=_docker_environment(env))
 
 
 if __name__ == "__main__":

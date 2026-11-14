@@ -15,6 +15,9 @@ from scripts.passport_supported_private_bureau_poll import (
 from scripts.passport_supported_provisioning_producer import PARTIAL_ONLY_SERVICES
 
 
+pytestmark = pytest.mark.usefixtures("rootful_docker_environment")
+
+
 JOB = "be6bccf4-51eb-4985-a079-6424bf5c5685"
 NOW = datetime(2026, 9, 28, 17, tzinfo=timezone.utc)
 
