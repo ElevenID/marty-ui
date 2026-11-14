@@ -90,12 +90,32 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('step 2: claims', () => {
+    it('requires an object criteria source for an Open Badge and accepts the canonical achievement shape', async () => {
+      const { user } = render(<CredentialTemplateWizard />)
+      await user.type(screen.getByLabelText(/Template Name/i), 'Course Completion Badge')
+      await user.click(screen.getByRole('combobox', { name: /Credential Type/i }))
+      await user.click(screen.getByRole('option', { name: 'Open Badge Credential' }))
+      await user.click(screen.getByTestId('wizard.template.next'))
+      await user.click(screen.getByRole('button', { name: /Identity Profile/i }))
+      expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+      await user.click(screen.getByRole('button', { name: 'Open Badges achievement' }))
+      expect(screen.getByTestId('wizard.template.next')).toBeEnabled()
+      await user.click(screen.getByRole('button', { name: 'Remove achievement_criteria' }))
+      expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+
+      await user.type(screen.getByRole('textbox', { name: 'Claim Name' }), 'achievement')
+      await user.click(screen.getByRole('combobox', { name: 'Type' }))
+      await user.click(screen.getByRole('option', { name: 'Object (nested)' }))
+      await user.click(screen.getByRole('button', { name: 'Add', exact: true }))
+      expect(screen.getByTestId('wizard.template.next')).toBeEnabled()
+    })
+
     it('should require at least one claim', async () => {
       const { user } = render(<CredentialTemplateWizard />)
 
       // Complete basics step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -110,7 +130,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Navigate to claims step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -138,7 +158,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Navigate to trust & compliance step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -350,7 +370,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Basics
       await user.type(screen.getByLabelText(/Template Name/i), 'Production mDL Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.iso.18013.5.1.mDL')
 
       // Note: Full navigation test would require implementing claims addition
@@ -408,7 +428,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Enter data
       await user.type(screen.getByLabelText(/Template Name/i), templateName)
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.test')
 
       // Go forward
@@ -453,7 +473,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Fill required fields
       await user.type(screen.getByLabelText(/Template Name/i), 'Test')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
 
       // VCT should follow a specific format (namespace.type)
       const vctInput = screen.getByLabelText(/VCT/i)

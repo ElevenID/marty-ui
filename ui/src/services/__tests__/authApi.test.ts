@@ -106,6 +106,34 @@ describe('authApi', () => {
       await expect(getCurrentUser()).rejects.toThrow(`HTTP error! status: ${status}`)
     })
 
+    it.each([[404, 'AUTH_CONFIGURATION'], [503, 'AUTH_UNAVAILABLE']])('classifies HTTP %s for retry guidance', async (status, code) => {
+      server.use(http.get('/v1/auth/me', () => new HttpResponse('Proxy response', { status: Number(status) })))
+      await expect(getCurrentUser()).rejects.toMatchObject({ status, code })
+    })
+
+    it('recognizes a malformed success response without exposing a proxy body', async () => {
+      server.use(http.get('/v1/auth/me', () => new HttpResponse('<html>private proxy details</html>')))
+      await expect(getCurrentUser()).rejects.toMatchObject({ code: 'AUTH_RESPONSE_INVALID' })
+    })
+
+    it('aborts a stalled session request and reports a retryable timeout', async () => {
+      vi.useFakeTimers()
+      let requestSignal: AbortSignal | undefined
+      vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => new Promise((_resolve, reject) => {
+        requestSignal = options?.signal || undefined
+        requestSignal?.addEventListener('abort', () => reject(new DOMException('Request aborted', 'AbortError')))
+      }))
+      try {
+        const result = expect(getCurrentUser()).rejects.toMatchObject({ code: 'AUTH_TIMEOUT' })
+        await vi.advanceTimersByTimeAsync(15_000)
+        await result
+        expect(requestSignal?.aborted).toBe(true)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it.each([null, {}, { authenticated: 'true', user: mockUsers.admin }, { authenticated: true, user: {} }])('rejects an unconfirmed identity response: %j', async payload => {
       server.use(http.get('/v1/auth/me', () => HttpResponse.json(payload)))
       await expect(getCurrentUser()).rejects.toThrow('The account response could not be read.')

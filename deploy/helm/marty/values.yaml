@@ -17,6 +17,11 @@ organization:
   slug: marty
   adminEmail: ''
   did: ''
+# Login selection is independent of OpenBao. Select external only on a fresh
+# installation; its immutable selection is verified during credential renewal.
+auth:
+  provider: keycloak
+  external: {}
 openbao:
   address: https://openbao:8200
 existingSecrets:
@@ -177,6 +182,9 @@ ingress:
   enabled: true
   className: ''
   annotations: {}
+  # Opt in only when Traefik already serves an independently managed default
+  # TLSStore. No per-namespace Secret copy or certificate is created by this chart.
+  useDefaultCertificate: false
   tlsSecretName: ''
   host: ''
 publicOrigin: ''

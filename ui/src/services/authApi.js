@@ -12,6 +12,14 @@ import { createProfilePictureBody } from './profilePicturePayload';
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
 const AUTH_BASE_URL = '/v1/auth';
+const SESSION_CHECK_TIMEOUT_MS = 15_000;
+
+function sessionCheckError(message, code, status) {
+  const error = new Error(message);
+  error.code = code;
+  if (status !== undefined) error.status = status;
+  return error;
+}
 
 /**
  * Get current authenticated user info
@@ -19,29 +27,50 @@ const AUTH_BASE_URL = '/v1/auth';
  */
 export async function getCurrentUser() {
   if (getPublicEntryCanonicalOrigin()) return { authenticated: false, user: null };
-  const response = await fetch(`${AUTH_BASE_URL}/me`, {
-    method: 'GET',
-    credentials: 'include', // Include cookies
-    cache: 'no-store',
-    headers: {
-      'Accept': 'application/json',
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_CHECK_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/me`, {
+      method: 'GET',
+      credentials: 'include', // Include cookies
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
 
-  // Only an explicit unauthenticated result ends a known session. Transport,
-  // server, and malformed-response failures are not authentication decisions.
-  if (response.status === 401) return { authenticated: false, user: null };
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  const result = await response.json();
-  if (result?.authenticated === false) return { authenticated: false, user: null };
-  const principalId = result?.user?.user_id || result?.user?.sub || result?.user?.id;
-  const hasPrincipal = typeof principalId === 'string'
-    ? Boolean(principalId.trim())
-    : typeof principalId === 'number' && Number.isFinite(principalId);
-  if (result?.authenticated !== true || !result.user || Array.isArray(result.user) || !hasPrincipal) {
-    throw new Error('The account response could not be read. Please try again.');
+    // Only an explicit unauthenticated result ends a known session. Transport,
+    // server, and malformed-response failures are not authentication decisions.
+    if (response.status === 401) return { authenticated: false, user: null };
+    if (!response.ok) {
+      throw sessionCheckError(`HTTP error! status: ${response.status}`,
+        response.status >= 500 ? 'AUTH_UNAVAILABLE' : 'AUTH_CONFIGURATION', response.status);
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      throw sessionCheckError('The account response could not be read. Please try again.', 'AUTH_RESPONSE_INVALID');
+    }
+    if (result?.authenticated === false) return { authenticated: false, user: null };
+    const principalId = result?.user?.user_id || result?.user?.sub || result?.user?.id;
+    const hasPrincipal = typeof principalId === 'string'
+      ? Boolean(principalId.trim())
+      : typeof principalId === 'number' && Number.isFinite(principalId);
+    if (result?.authenticated !== true || !result.user || Array.isArray(result.user) || !hasPrincipal) {
+      throw sessionCheckError('The account response could not be read. Please try again.', 'AUTH_RESPONSE_INVALID');
+    }
+    return result;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw sessionCheckError('The sign-in service took too long to respond.', 'AUTH_TIMEOUT');
+    }
+    if (typeof error?.code === 'string' && error.code.startsWith('AUTH_')) throw error;
+    throw sessionCheckError('The sign-in service could not be reached.', 'AUTH_NETWORK');
+  } finally {
+    clearTimeout(timeout);
   }
-  return result;
 }
 
 /**
