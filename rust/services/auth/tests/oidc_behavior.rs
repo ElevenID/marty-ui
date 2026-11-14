@@ -602,6 +602,120 @@ async fn external_unsupported_client_authentication_fails_before_post() {
 }
 
 #[tokio::test]
+async fn external_incompatible_signing_metadata_fails_before_jwks_or_token_exchange() {
+    for (advertised, expected) in [
+        (json!([]), "unsupported_oidc_signing_algorithm"),
+        (json!(["RS256"]), "unsupported_oidc_signing_algorithm"),
+        (json!(["HS256"]), "unsupported_oidc_signing_algorithm"),
+        (json!(["none"]), "unsupported_oidc_signing_algorithm"),
+        (json!(null), "invalid_oidc_metadata"),
+        (json!("ES256"), "invalid_oidc_metadata"),
+        (json!({"alg": "ES256"}), "invalid_oidc_metadata"),
+        (json!([""]), "invalid_oidc_metadata"),
+        (json!(["ES256", false]), "invalid_oidc_metadata"),
+        (json!(vec!["ES256"; 65]), "invalid_oidc_metadata"),
+    ] {
+        let http = external_http();
+        http.discovery.lock().unwrap().as_mut().unwrap()["id_token_signing_alg_values_supported"] =
+            advertised;
+        let provider = KeycloakOidcProvider::new(external_config(), http.clone()).unwrap();
+        assert_eq!(provider.health_check().await.unwrap_err().code, expected);
+        assert_eq!(
+            provider
+                .authorization_url(&authorization_request(false))
+                .unwrap_err()
+                .code,
+            "oidc_metadata_unavailable"
+        );
+        assert_eq!(
+            provider
+                .exchange_code(&exchange_request())
+                .await
+                .unwrap_err()
+                .code,
+            expected
+        );
+        assert!(http.post_urls.lock().unwrap().is_empty());
+        assert!(http.posted_form.lock().unwrap().is_empty());
+        assert_eq!(http.get_urls.lock().unwrap().len(), 2);
+        assert!(http
+            .get_urls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|url| url.ends_with("/.well-known/openid-configuration")));
+    }
+    // The canonical token validator always refuses unsigned ID tokens, even
+    // if an out-of-band configuration mistakenly lists that value.
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["id_token_signing_alg_values_supported"] =
+        json!(["none"]);
+    let mut config = external_config();
+    config.allowed_algorithms = vec!["none".into()];
+    let provider = KeycloakOidcProvider::new(config, http).unwrap();
+    assert_eq!(
+        provider.health_check().await.unwrap_err().code,
+        "unsupported_oidc_signing_algorithm"
+    );
+}
+
+#[tokio::test]
+async fn external_signing_metadata_requires_intersection_without_expanding_token_policy() {
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["id_token_signing_alg_values_supported"] =
+        json!(["ES256"]);
+    let mut config = external_config();
+    config.allowed_algorithms = vec!["RS256".into(), "ES256".into()];
+    let provider = KeycloakOidcProvider::new(config, http).unwrap();
+    provider.health_check().await.unwrap();
+    let fixture = external_fixture();
+    let token = fixture["tokens"]["verified"].as_str().unwrap();
+    assert!(provider
+        .validate_tokens(token, "access", "nonce-1")
+        .await
+        .is_ok());
+
+    let http = external_http();
+    http.discovery.lock().unwrap().as_mut().unwrap()["id_token_signing_alg_values_supported"] =
+        json!(["ES256", "RS256"]);
+    let mut config = external_config();
+    config.allowed_algorithms = vec!["RS256".into()];
+    let provider = KeycloakOidcProvider::new(config, http).unwrap();
+    provider.health_check().await.unwrap();
+    assert_eq!(
+        provider
+            .validate_tokens(token, "access", "nonce-1")
+            .await
+            .unwrap_err()
+            .code,
+        "oidc_token_validation_failed"
+    );
+}
+
+#[tokio::test]
+async fn external_omitted_algorithm_metadata_and_unadvertised_scopes_remain_compatible() {
+    let http = external_http();
+    // Discovery allows providers to omit supported scopes from this list.
+    http.discovery.lock().unwrap().as_mut().unwrap()["scopes_supported"] = json!(["openid"]);
+    let mut config = external_config();
+    config.scopes.push("private:groups".into());
+    let expected_scopes = config.scopes.join(" ");
+    let provider = KeycloakOidcProvider::new(config, http.clone()).unwrap();
+    provider.health_check().await.unwrap();
+    let login = Url::parse(
+        &provider
+            .authorization_url(&authorization_request(false))
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(login
+        .query_pairs()
+        .any(|(name, value)| name == "scope" && value == expected_scopes));
+    provider.exchange_code(&exchange_request()).await.unwrap();
+    assert_eq!(http.post_urls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn external_verified_identity_gate_runs_after_signature_nonce_and_issuer_validation() {
     let fixture = external_fixture();
     let http = external_http();

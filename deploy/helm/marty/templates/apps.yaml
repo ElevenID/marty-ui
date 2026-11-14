@@ -5,6 +5,25 @@
 {{- $override := index $root.Values.apps.overrides $name | default dict -}}
 {{- $replicas := ternary 1 $root.Values.apps.replicas (eq $name "applicant") -}}
 {{- $resources := mergeOverwrite (deepCopy $root.Values.apps.resources) ($override.resources | default dict) }}
+{{- $externalAuth := and (eq $name "auth") (eq (include "marty.authProvider" $root) "external") -}}
+{{- $oidcSecret := dict -}}
+{{- $env := $workload.env -}}
+{{- if $externalAuth -}}
+{{- $oidcSecret = $root.Values.auth.external.clientSecret | default dict -}}
+{{- $env = list -}}
+{{- range $entry := $workload.env -}}
+{{- if not (has $entry.name (list "MARTY_API_CLIENT_ID" "MARTY_API_CLIENT_SECRET" "OIDC_ISSUER_URL" "OIDC_EXTERNAL_ISSUER_URL")) -}}
+{{- $env = append $env $entry -}}
+{{- end -}}
+{{- end -}}
+{{- range $key, $value := (include "marty.externalAuthConfig" $root | fromYaml) -}}
+{{- /* Explicit Kubernetes env values expand $(NAME); preserve provider bytes. */ -}}
+{{- $env = append $env (dict "name" $key "value" ($value | toString | replace "$" "$$")) -}}
+{{- end -}}
+{{- if $oidcSecret -}}
+{{- $env = append $env (dict "name" "OIDC_CLIENT_SECRET_FILE" "value" "/var/run/secrets/marty/external-oidc/client-secret") -}}
+{{- end -}}
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -68,7 +87,7 @@ spec:
               value: /etc/marty/trust/ca-certificates.crt
             - name: SERVICE_NAME
               value: {{ $workload.serviceName | quote }}
-            {{- include "marty.env" (dict "root" $root "env" $workload.env) | nindent 12 }}
+            {{- include "marty.env" (dict "root" $root "env" $env) | nindent 12 }}
           {{- with $workload.ports }}
           ports:
             {{- toYaml . | nindent 12 }}
@@ -81,6 +100,11 @@ spec:
               readOnly: true
             {{- with $workload.volumeMounts }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $oidcSecret }}
+            - name: external-oidc-client
+              mountPath: /var/run/secrets/marty/external-oidc
+              readOnly: true
             {{- end }}
           {{- with $workload.livenessProbe }}
           startupProbe:
@@ -103,6 +127,15 @@ spec:
         {{- include "marty.redisTrustVolumes" (dict "root" $root "withSigningCa" (eq $name "flow")) | nindent 8 }}
         {{- with $workload.volumes }}
         {{- include "marty.volumes" (dict "root" $root "volumes" .) | nindent 8 }}
+        {{- end }}
+        {{- if $oidcSecret }}
+        - name: external-oidc-client
+          secret:
+            secretName: {{ $oidcSecret.name | quote }}
+            defaultMode: 0440
+            items:
+              - key: {{ $oidcSecret.key | quote }}
+                path: client-secret
         {{- end }}
 {{- if $workload.ports }}
 ---

@@ -1,14 +1,22 @@
 Marty is installed in namespace {{ .Release.Namespace }}.
 
 Public origin: {{ include "marty.publicOrigin" . }}
+Login provider: {{ include "marty.authProvider" . }}
 
 Check completion and evidence with standard tools:
   helm status {{ .Release.Name }} -n {{ .Release.Namespace }}
   kubectl get pods,jobs,pvc,ingress -n {{ .Release.Namespace }}
   kubectl logs job/marty-migrate-{{ .Release.Revision }} -n {{ .Release.Namespace }} --all-containers
+{{- if and (eq (include "marty.authProvider" .) "keycloak") .Values.keycloak.configurator.enabled }}
   kubectl logs job/marty-keycloak-{{ .Release.Revision }} -n {{ .Release.Namespace }}
+{{- end }}
   kubectl get events -n {{ .Release.Namespace }} --sort-by=.metadata.creationTimestamp
 
 OpenBao, its seal key, credential bootstrap and TLS certificate issuance are
 managed separately. PersistentVolumes must remain available across node reboot.
 This single-node development chart does not establish high availability.
+{{- if eq (include "marty.authProvider" .) "external" }}
+The external administrator must already exist and return a verified email
+matching organization.adminEmail. Account policy belongs to that provider.
+Retain marty-auth-selection and the bootstrap custody inventory for renewal.
+{{- end }}

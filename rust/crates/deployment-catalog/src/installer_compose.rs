@@ -2360,7 +2360,7 @@ impl ComposeSession {
                     .unwrap()
                     .is_match(&inputs.project)
                 && !inputs.files.is_empty()
-                && inputs.files.len() <= 8
+                && inputs.files.len() <= 10
                 && inputs.bound_inputs.len() <= 16
                 && inputs.profiles.len() <= 8
                 && inputs.profiles.iter().all(|v| name(v))
@@ -2382,6 +2382,7 @@ impl ComposeSession {
             )?;
         }
         let foundation = crate::installer_foundation::for_inputs(&inputs)?;
+        let external_oidc = crate::installer_oidc::for_inputs(&inputs)?;
         crate::installer_settings::for_inputs(&inputs)?;
         for root in inputs
             .writable_bind_roots
@@ -2470,6 +2471,9 @@ impl ComposeSession {
         if let Some(foundation) = foundation {
             foundation.validate_model(&model)?;
         }
+        if let Some(selection) = external_oidc {
+            selection.validate_model(&model)?;
+        }
         if cleanup_only {
             validate_failed_runtime_cleanup(session.inputs.prior.as_ref().ok_or(REFUSED)?, &model)?;
         }
@@ -2534,6 +2538,11 @@ impl ComposeSession {
         if let Some(foundation) = crate::installer_foundation::for_inputs(&self.inputs)? {
             if !self.model.is_null() {
                 foundation.validate_model(&self.model)?;
+            }
+        }
+        if let Some(selection) = crate::installer_oidc::for_inputs(&self.inputs)? {
+            if !self.model.is_null() {
+                selection.validate_model(&self.model)?;
             }
         }
         #[cfg(feature = "installer-development")]
