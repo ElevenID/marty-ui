@@ -129,6 +129,7 @@
     "scripts/kubernetes_application_state.py",
     "scripts/kubernetes_renewal_adoption_state.py",
     "scripts/kubernetes_legacy_recovery_sources.py",
+    "scripts/kubernetes_legacy_recovery_lineage.py",
     "scripts/prepare_kubernetes_helm_values.py",
     "scripts/recover_kubernetes_legacy_credentials.py",
     "scripts/reload_kubernetes_legacy_workloads.py",

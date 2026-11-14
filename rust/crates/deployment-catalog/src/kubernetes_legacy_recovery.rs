@@ -57,6 +57,10 @@ struct Context {
     // Private transport binds this to root_token from the original retained
     // initialization. Lookup metadata alone cannot distinguish generate-root.
     retained_root_sha256: String,
+    // Optional completed predecessor chain. Omission retains the original
+    // bootstrap-only protocol; it never selects arbitrary live Secret bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    predecessors: Option<PathBuf>,
 }
 
 fn decode_context(request: &[u8]) -> Result<Context> {
@@ -505,6 +509,7 @@ async fn role_issuer(
 async fn inspect_with(api: &impl ReadApi, context: &Context) -> Result<Value> {
     let binding = binding(context)?;
     let current = generation(&context.current)?;
+    let predecessors = lineage::verify(context)?;
     let root_bytes = read_input(&context.root_token_file, &[0o400, 0o600], false)?.0;
     let root = std::str::from_utf8(&root_bytes).map_err(|_| REFUSAL)?;
     if !(20..=256).contains(&root.len())
@@ -654,6 +659,7 @@ async fn inspect_with(api: &impl ReadApi, context: &Context) -> Result<Value> {
     health(api, &binding).await?;
     if generation(&context.current)? != current
         || read_input(&context.root_token_file, &[0o400, 0o600], false)?.0 != root_bytes
+        || lineage::verify(context)? != predecessors
     {
         return Err(REFUSAL);
     }
@@ -661,7 +667,7 @@ async fn inspect_with(api: &impl ReadApi, context: &Context) -> Result<Value> {
         .iter()
         .map(|(name, (bytes, mode))| (name.clone(), json!({"sha256":sha256(bytes), "mode":mode})))
         .collect();
-    Ok(json!({
+    let mut report = json!({
         "schema":SCHEMA, "status":"inspected-not-staged", "mutationAvailable":false,
         "binding":binding, "inputBindings":inputs,
         "observed": {"openbaoVersion":LEGACY_OPENBAO_VERSION, "keys":keys, "pkiRoles":roles, "policies":policies,
@@ -674,7 +680,11 @@ async fn inspect_with(api: &impl ReadApi, context: &Context) -> Result<Value> {
             "symmetricKeys":"observed current key/version selection; historical material continuity unproven",
             "pkiRoles":"observed full documents and original configured security fields; no historical default-field claim"
         }
-    }))
+    });
+    if let Some(predecessors) = predecessors {
+        report["predecessorChain"] = predecessors;
+    }
+    Ok(report)
 }
 
 /// The CLI writes the detailed report privately and emits only this bounded summary.
@@ -734,6 +744,11 @@ mod qualification;
 
 #[path = "kubernetes_legacy_recovery_commands.rs"]
 mod recovery_commands;
+
+#[path = "kubernetes_legacy_recovery_lineage.rs"]
+mod lineage;
+
+pub use lineage::inspect as inspect_predecessors;
 
 pub use recovery_commands::{
     contract as stage_contract, qualify as qualify_candidate, stage as stage_candidate,

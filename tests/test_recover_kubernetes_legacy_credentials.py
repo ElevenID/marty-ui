@@ -79,7 +79,7 @@ def recovery_flow(flow, monkeypatch):
     def stage_output():
         candidate = deepcopy(item.snapshot)
         for name in item.replacements:
-            candidate[name] = (b"PRIVATE_REPLACEMENT_" + name.encode(), candidate[name][1])
+            candidate[name] = (getattr(item, "replacement_prefix", b"PRIVATE_REPLACEMENT_") + name.encode(), candidate[name][1])
             item.remote["stage/inputs/" + name] = candidate[name][0], 0o600
         item.candidate = candidate
         item.remote.update({"stage/candidate/" + name: value for name, value in candidate.items()})
@@ -248,7 +248,7 @@ def recovery_flow(flow, monkeypatch):
                 key = operation["path"][len("/data/"):].replace("~1", "/").replace("~0", "~")
                 assert key in after["data"]
                 after["data"][key] = operation["value"]
-        after["metadata"]["resourceVersion"] = str(2000 + index)
+        after["metadata"]["resourceVersion"] = str(getattr(item, "patch_version_base", 2000) + index)
         after["metadata"]["managedFields"] = [{"manager": "recovery-json-patch"}]
         item.secrets[name] = after
         if failure == "timeout-after-write":
