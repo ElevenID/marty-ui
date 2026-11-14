@@ -905,6 +905,7 @@ def test_development_ui_keeps_backend_tls_routes_and_public_ports_unchanged(tmp_
         assert env["VITE_API_URL"] == ""
         assert env["VITE_DEV_PUBLIC_ORIGIN"] == values["publicOrigin"]
         assert env["VITE_UI_VARIANT"] == "selfhost"
+        assert env["MARTY_DEV_CHECKER_OVERLAY"] == "0"
         mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
         assert set(mounts) == {"ui-dev-source", "ui-dev-contracts", "ui-dev-dependencies", "ui-dev-tmp"}
         assert mounts["ui-dev-source"]["readOnly"] is True

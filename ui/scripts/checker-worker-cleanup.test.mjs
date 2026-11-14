@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
-import { createServer } from 'vite';
+import { createServer, loadConfigFromFile } from 'vite';
 import { applyCheckerPatch, patches, sha256, cleanupFilename } from './patch-checker-worker-cleanup.mjs';
 import { DISPOSE_REQUEST, DISPOSE_COMPLETE, DISPOSE_ERROR, disposeCheckerWorker, disposeDiagnostic, stopOwnedProcess } from './checker-worker-cleanup.mjs';
 
@@ -35,6 +35,32 @@ function copyPristinePackage(t) {
   }
   return root;
 }
+
+test('the real Vite config only opts out of the development overlay for explicit 0', async (t) => {
+  const names = ['VITE_UI_VARIANT', 'MARTY_UI_SURFACE', 'MARTY_DEV_CHECKER_OVERLAY'];
+  const original = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  t.after(() => {
+    for (const name of names) {
+      if (original[name] === undefined) delete process.env[name];
+      else process.env[name] = original[name];
+    }
+  });
+  process.env.VITE_UI_VARIANT = 'selfhost';
+  process.env.MARTY_UI_SURFACE = 'combined';
+  const configFile = path.join(uiRoot, 'vite.config.ts');
+  for (const flag of [undefined, '0', '1', 'false']) {
+    if (flag === undefined) delete process.env.MARTY_DEV_CHECKER_OVERLAY;
+    else process.env.MARTY_DEV_CHECKER_OVERLAY = flag;
+    const { config } = await loadConfigFromFile({ mode: 'development', command: 'serve' }, configFile);
+    const plugin = config.plugins.flat(Infinity).find((entry) => entry && entry.name === 'vite-plugin-checker');
+    assert.ok(plugin, 'the checker remains enabled');
+    const preamble = plugin.transformIndexHtml()[0].children;
+    const overlay = JSON.parse(preamble.match(/overlayConfig: (.*),/)[1]);
+    assert.deepEqual(overlay, flag === '0' ? {} : { initialIsOpen: false, position: 'br' });
+  }
+  const { config } = await loadConfigFromFile({ mode: 'selfhost', command: 'build' }, configFile);
+  assert.ok(!config.plugins.flat(Infinity).some((entry) => entry && entry.name === 'vite-plugin-checker'));
+});
 
 test('the locked package patch is complete and idempotent', (t) => {
   const root = copyPristinePackage(t);
@@ -175,7 +201,7 @@ async function waitFor(check, message, timeout = 15_000) {
   }
 }
 
-test('real Vite restarts retain both diagnostics and reap each previous native TypeScript watcher', { skip: process.platform !== 'linux', timeout: 45_000 }, async (t) => {
+for (const overlay of [undefined, false]) test(`real Vite restarts retain both terminal diagnostics and reap watchers with overlay ${overlay ?? 'default'}`, { skip: process.platform !== 'linux', timeout: 45_000 }, async (t) => {
   applyCheckerPatch();
   // Native TypeScript uses fanotify, which cannot watch this executor's overlayfs.
   // Keep the small fixture on tmpfs and supply its globals locally so no default
@@ -190,7 +216,7 @@ test('real Vite restarts retain both diagnostics and reap each previous native T
   writeFileSync(path.join(root, 'source.js'), 'const unused = 42;\n');
   writeFileSync(path.join(root, 'eslint.config.mjs'), 'export default [{ rules: { "no-unused-vars": "error" } }];\n');
   const configFile = path.join(root, 'vite.config.mjs');
-  writeFileSync(configFile, `import checker from 'vite-plugin-checker';\nexport default { plugins: [checker({ typescript: { tsconfigPath: 'tsconfig.json', typescriptPath: ${JSON.stringify(path.join(uiRoot, 'node_modules/typescript/lib/version.cjs'))} }, eslint: { lintCommand: 'eslint source.js' } })] };\n`);
+  writeFileSync(configFile, `import checker from 'vite-plugin-checker';\nexport default { plugins: [checker({ overlay: ${overlay}, typescript: { tsconfigPath: 'tsconfig.json', typescriptPath: ${JSON.stringify(path.join(uiRoot, 'node_modules/typescript/lib/version.cjs'))} }, eslint: { lintCommand: 'eslint source.js' } })] };\n`);
   const watchers = () => readdirSync('/proc').filter((name) => /^\d+$/.test(name)).filter((name) => {
     try { const args = readFileSync(`/proc/${name}/cmdline`, 'utf8').split('\0'); return args.includes('--watch') && args.includes(tsconfig); }
     catch { return false; }
@@ -198,9 +224,20 @@ test('real Vite restarts retain both diagnostics and reap each previous native T
   const logs = [];
   const log = (message) => logs.push(String(message));
   const logger = { info: log, warn: log, error: log, warnOnce: log, clearScreen() {}, hasWarned: false, hasErrorLogged: () => false };
+  const browserDiagnostics = [];
+  const captureBrowserDiagnostics = {
+    name: 'capture-browser-diagnostics',
+    configureServer(server) {
+      const send = server.ws.send.bind(server.ws);
+      server.ws.send = (event, ...args) => {
+        if (event === 'vite-plugin-checker') browserDiagnostics.push(args[0]);
+        return send(event, ...args);
+      };
+    },
+  };
   let server;
   t.after(async () => { if (server) await server.close(); });
-  server = await createServer({ root, configFile, customLogger: logger, server: { middlewareMode: true, watch: { ignored: ['**/vite.config.mjs'] } }, appType: 'custom' });
+  server = await createServer({ root, configFile, plugins: [captureBrowserDiagnostics], customLogger: logger, server: { middlewareMode: true, watch: { ignored: ['**/vite.config.mjs'] } }, appType: 'custom' });
   const diagnosticsReady = () => logs.some((line) => line.includes('TS2322'))
     && logs.some((line) => line.includes('no-unused-vars'))
     && logs.some((line) => line.includes('[TypeScript]') && line.includes('Found 1 error'))
@@ -218,6 +255,8 @@ test('real Vite restarts retain both diagnostics and reap each previous native T
   await server.close();
   server = null;
   assert.deepEqual(watchers(), [], 'no native checker remains after server close');
+  if (overlay === false) assert.deepEqual(browserDiagnostics, [], 'disabled overlay sends no diagnostics to the browser');
+  else assert.ok(browserDiagnostics.length > 0, 'local development still receives browser diagnostics');
 });
 
 test('ordinary native checker startup errors remain observable', { timeout: 10_000 }, async () => {
