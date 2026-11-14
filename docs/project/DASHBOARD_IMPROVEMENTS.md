@@ -6,7 +6,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ## Features Implemented
 
 ### 1. ✅ Organization Health Overview
-**File:** [`OrganizationHealthPanel.jsx`](ui/src/components/console/dashboard/OrganizationHealthPanel.jsx)
+**File:** [`OrganizationHealthPanel.jsx`](../../ui/src/components/console/dashboard/OrganizationHealthPanel.jsx)
 
 **What it shows:**
 - Active/inactive organization status
@@ -27,7 +27,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ---
 
 ### 2. ✅ Runtime Readiness Signals
-**File:** [`RuntimeReadinessPanel.jsx`](ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx)
+**File:** [`RuntimeReadinessPanel.jsx`](../../ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx)
 
 **What it shows:**
 - Can issue credentials? (keys valid, issuer active)
@@ -47,7 +47,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ---
 
 ### 3. ✅ Critical Events Panel
-**File:** [`CriticalEventsPanel.jsx`](ui/src/components/console/dashboard/CriticalEventsPanel.jsx)
+**File:** [`CriticalEventsPanel.jsx`](../../ui/src/components/console/dashboard/CriticalEventsPanel.jsx)
 
 **What it shows:**
 - Failed flows
@@ -68,7 +68,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ---
 
 ### 4. ✅ Team Snapshot
-**File:** [`TeamSnapshotPanel.jsx`](ui/src/components/console/dashboard/TeamSnapshotPanel.jsx)
+**File:** [`TeamSnapshotPanel.jsx`](../../ui/src/components/console/dashboard/TeamSnapshotPanel.jsx)
 
 **What it shows:**
 - Total team member count
@@ -92,7 +92,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ---
 
 ### 5. ✅ Environment Awareness
-**File:** [`EnvironmentBadge.jsx`](ui/src/components/console/dashboard/EnvironmentBadge.jsx)
+**File:** [`EnvironmentBadge.jsx`](../../ui/src/components/console/dashboard/EnvironmentBadge.jsx)
 
 **What it provides:**
 - Environment badge (Dev/Staging/Prod)
@@ -113,7 +113,7 @@ Implemented the top 5 priority features for the Organization Dashboard to enhanc
 ## Supporting Infrastructure
 
 ### Data Layer
-**File:** [`dashboardApi.js`](ui/src/services/dashboardApi.js)
+**File:** [`dashboardApi.js`](../../ui/src/services/dashboardApi.js)
 
 New API service functions created:
 - `getTeamSnapshot(organizationId)` - Team data with members and roles
@@ -125,7 +125,7 @@ New API service functions created:
 - `getOrganizationLifecycle(organizationId)` - Compliance and retention metadata
 
 ### Data Hook
-**File:** [`useDashboardData.js`](hooks/useDashboardData.js)
+**File:** [`useDashboardData.js`](../../ui/src/hooks/useDashboardData.js)
 
 Extended to fetch new data in parallel:
 - Team snapshot data
@@ -136,7 +136,7 @@ Extended to fetch new data in parallel:
 All data loads in parallel for optimal performance with graceful fallbacks.
 
 ### Main Dashboard
-**File:** [`ConsoleDashboard.jsx`](ui/src/components/console/ConsoleDashboard.jsx)
+**File:** [`ConsoleDashboard.jsx`](../../ui/src/components/console/ConsoleDashboard.jsx)
 
 Updated layout order:
 1. Header & Environment Context
@@ -265,18 +265,18 @@ The following API endpoints need to be implemented on the backend:
 
 ## Files Created
 
-1. [`OrganizationHealthPanel.jsx`](ui/src/components/console/dashboard/OrganizationHealthPanel.jsx) - Org health overview
-2. [`RuntimeReadinessPanel.jsx`](ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx) - Operational status
-3. [`CriticalEventsPanel.jsx`](ui/src/components/console/dashboard/CriticalEventsPanel.jsx) - Failed operations
-4. [`TeamSnapshotPanel.jsx`](ui/src/components/console/dashboard/TeamSnapshotPanel.jsx) - Team overview
-5. [`EnvironmentBadge.jsx`](ui/src/components/console/dashboard/EnvironmentBadge.jsx) - Environment context
-6. [`dashboardApi.js`](ui/src/services/dashboardApi.js) - API service layer
+1. [`OrganizationHealthPanel.jsx`](../../ui/src/components/console/dashboard/OrganizationHealthPanel.jsx) - Org health overview
+2. [`RuntimeReadinessPanel.jsx`](../../ui/src/components/console/dashboard/RuntimeReadinessPanel.jsx) - Operational status
+3. [`CriticalEventsPanel.jsx`](../../ui/src/components/console/dashboard/CriticalEventsPanel.jsx) - Failed operations
+4. [`TeamSnapshotPanel.jsx`](../../ui/src/components/console/dashboard/TeamSnapshotPanel.jsx) - Team overview
+5. [`EnvironmentBadge.jsx`](../../ui/src/components/console/dashboard/EnvironmentBadge.jsx) - Environment context
+6. [`dashboardApi.js`](../../ui/src/services/dashboardApi.js) - API service layer
 
 ## Files Modified
 
-1. [`ConsoleDashboard.jsx`](ui/src/components/console/ConsoleDashboard.jsx) - Main dashboard layout
-2. [`useDashboardData.js`](hooks/useDashboardData.js) - Data fetching hook
-3. [`index.js`](ui/src/components/console/dashboard/index.js) - Component exports
+1. [`ConsoleDashboard.jsx`](../../ui/src/components/console/ConsoleDashboard.jsx) - Main dashboard layout
+2. [`useDashboardData.js`](../../ui/src/hooks/useDashboardData.js) - Data fetching hook
+3. [`index.js`](../../ui/src/components/console/dashboard/index.js) - Component exports
 
 ---
 

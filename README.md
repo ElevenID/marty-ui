@@ -5,6 +5,19 @@
 Microservice-based control plane and UI for Marty credential, trust, policy,
 applicant, and flow management.
 
+## Repository navigation
+
+| Start here | Location |
+| --- | --- |
+| Documentation and operator guides | [Documentation index](docs/README.md) |
+| Console and applicant UI | [ui/](ui/) |
+| Canonical Rust backend services | [rust/services/](rust/services/) |
+| Remaining Python services and compatibility code | [services/](services/) |
+| gRPC definitions and service contracts | [proto/](proto/) · [contracts/](contracts/) |
+| Installation and deployment | [Installation paths](docs/installation-paths.md) · [deploy/](deploy/) · [k8s/](k8s/) |
+| Tests and developer tools | [tests/](tests/) · [scripts/](scripts/) |
+| File-placement conventions and remaining cleanup | [Repository layout](docs/development/repository-layout.md) |
+
 Marty is one customer-operated product with education/workforce credential,
 applicant/document-verification, and Travel Trust use cases. The customer or
 their selected integrator owns production operation. The current commercial

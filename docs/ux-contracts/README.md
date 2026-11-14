@@ -138,7 +138,7 @@ src/components/
 
 ### Review Checklist
 - [ ] All core sections present
-- [ ] States clearly defined with triggers
+- [ ] States clearly defined with triggers and transitions
 - [ ] Accessibility requirements comprehensive
 - [ ] Test scenarios cover edge cases
 - [ ] API contracts match backend specs
@@ -148,7 +148,7 @@ src/components/
 ## References
 
 ### Related Documentation
-- [Component Quick Reference](../../COMPONENT_QUICK_REFERENCE.md)
+- [Component Quick Reference](../reference/COMPONENT_QUICK_REFERENCE.md)
 - [Testing Philosophy](../../docs/TESTING.md) (if exists)
 
 ### External Standards
