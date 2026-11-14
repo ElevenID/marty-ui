@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -42,6 +43,12 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return b'{"unit_fixture_only":true}'
 
     monkeypatch.setattr(gate, "command", validator)
+
+    def source_authority(github, source, executable, **kwargs):
+        calls.append(("source_authority", source, executable))
+        return github.main()["commit"]["sha"]
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", source_authority)
     frozen = tmp_path / "frozen"
     frozen.mkdir()
     (frozen / "stack-manifest.json").write_bytes(args.manifest.read_bytes())
@@ -184,6 +191,71 @@ def test_local_forged_record_is_never_used_as_authorization(fixture, monkeypatch
         gate.qualify(args, github)
     assert record.read_bytes() == b'{"verdict":"accepted"}'
     assert not args.output.exists()
+
+
+def _original_dispatch(fixture, monkeypatch: pytest.MonkeyPatch):
+    args, github, calls, _ = fixture
+    gate.snapshot(args, github)
+    args.current_attempt = 1
+    for key, value in {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                       "GITHUB_SHA": args.source, "GITHUB_REPOSITORY_ID": gate.REPOSITORY_ID}.items():
+        monkeypatch.setenv(key, value)
+    return args, github, calls
+
+
+def test_policy_compatible_descendant_is_checked_before_automated_evidence(fixture, monkeypatch) -> None:
+    args, github, calls = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+    with pytest.raises(ValueError, match="automated v2"):
+        gate.qualify(args, github)
+    assert ("source_authority", args.source, args.source) in calls
+    assert not args.output.exists()
+
+
+def test_source_authority_rejection_stops_before_automated_evidence(fixture, monkeypatch) -> None:
+    args, github, calls = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+
+    def reject(*_args, **_kwargs):
+        raise gate.source_authority.SourceAuthorityError("release program changed")
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", reject)
+    with pytest.raises(ValueError, match="release program changed"):
+        gate.qualify(args, github)
+    assert not any(isinstance(call, list) and "--automated" in call for call in calls)
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("reject_second", [False, True])
+def test_compatible_main_is_rechecked_before_exclusive_gate_output(fixture, monkeypatch, reject_second) -> None:
+    args, github, _ = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+    request = (args.snapshot / "assessment.json").read_bytes()
+    result = json.dumps({"schema": "marty.official-release-gate/v2",
+                         "automated_qualification": {"request_sha256": "sha256:" + hashlib.sha256(request).hexdigest(),
+                                                     "automated_cases": 1}}).encode()
+    monkeypatch.setattr(gate, "validator", lambda _args, _attempt, mode: request if mode == ["--prepare-review"] else result)
+    monkeypatch.setattr(gate, "gate_authority", lambda *_args, **_kwargs: {
+        "protected_main_commit": args.source, "review_required": False, "harness_sha": args.harness,
+        "manifest_sha256": "sha256:" + hashlib.sha256(args.manifest.read_bytes()).hexdigest()})
+    reads = []
+
+    def source_authority(github, source, executable, **kwargs):
+        reads.append((source, executable, kwargs["verified"]))
+        if reject_second and len(reads) == 2:
+            raise gate.source_authority.SourceAuthorityError("protected main policy changed")
+        return github.main()["commit"]["sha"]
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", source_authority)
+    if reject_second:
+        with pytest.raises(ValueError, match="protected main policy changed"):
+            gate.qualify(args, github)
+        assert not args.output.exists()
+    else:
+        gate.qualify(args, github)
+        assert args.output.read_bytes() == result
+    assert len(reads) == 2 and all(row[:2] == (args.source, args.source) for row in reads)
+    assert reads[0][2] is reads[1][2]
 
 
 def test_github_host_cannot_be_redirected_by_local_defaults(monkeypatch) -> None:
