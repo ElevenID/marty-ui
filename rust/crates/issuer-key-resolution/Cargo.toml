@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-key-material-policy = { path = "../key-material-policy" }
 serde_json.workspace = true
