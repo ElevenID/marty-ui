@@ -17,14 +17,20 @@ import re
 import secrets
 import stat
 import subprocess
+import sys
 import tempfile
 from typing import Callable
 import uuid
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 if __package__:
+    from .local_docker import local_bind_mount_user
     from .passport_model_policy import evaluate as evaluate_policy
     from .passport_disposable_identity import ORGANIZATION_ID
 else:
+    from scripts.local_docker import local_bind_mount_user
     from passport_model_policy import evaluate as evaluate_policy
     from passport_disposable_identity import ORGANIZATION_ID
 
@@ -349,13 +355,18 @@ def _remove_staged_inputs(root: Path) -> None:
     root.rmdir()
 
 
-def _tls_bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
+def _tls_bootstrap_args(
+    plan: dict, root: Path, output_dir: Path, *,
+    environment: dict[str, str] | None = None,
+) -> list[str]:
     """Run the signed Rust keyless TLS issuer after disposable OpenBao is live."""
     project = plan["project"]
     labels = {"com.docker.compose.project": project,
               "com.docker.compose.service": "passport-tls-bootstrap",
               **plan["owner_labels"]}
     user = f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"
+    if environment is not None:
+        user = local_bind_mount_user(environment)
     return [
         "docker", "run", "--rm", "--name", f"{project}-passport-tls-bootstrap-1",
         "--network", f"{project}_private", "--user", user,

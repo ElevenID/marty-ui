@@ -15,6 +15,7 @@ from scripts import passport_supported_disposable_ceremony as ceremony
 from scripts.passport_supported_infra_rehearsal import _local_docker_environment
 from scripts import passport_supported_infra_rehearsal as infrastructure
 from scripts import passport_supported_protected_producer as producer
+from scripts import passport_supported_provisioning_producer as provisioning
 from scripts import verify_passport_beta_issuer_profiles as profiles
 
 
@@ -87,6 +88,131 @@ def test_current_user_rootless_socket_wins_without_trusting_context_or_xdg(
     assert all(name not in selected for name in (
         "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH",
     ))
+
+
+@pytest.mark.parametrize("rootless", (False, True))
+def test_private_tls_bind_user_matches_verified_daemon_without_changing_permissions(
+    local_filesystem, monkeypatch, tmp_path, rootless,
+):
+    if not rootless:
+        del local_filesystem[SOCKET]
+    monkeypatch.setattr(local_docker.os, "getgid", lambda: 1002)
+    host = ROOTLESS_HOST if rootless else local_docker.ROOTFUL_HOST
+    calls = []
+
+    def inspect(command, **kwargs):
+        calls.append(command)
+        assert command[:5] == ["docker", "--host", host, "info", "--format"]
+        assert command[5] == ('{"ID":{{json .ID}},"OSType":{{json .OSType}},'
+                              '"SecurityOptions":{{json .SecurityOptions}}}')
+        assert kwargs["env"]["DOCKER_HOST"] == host
+        assert "DOCKER_CONTEXT" not in kwargs["env"]
+        assert kwargs["timeout"] == 25 and kwargs["check"] is True
+        assert kwargs["stderr"] == subprocess.DEVNULL
+        return SimpleNamespace(stdout=json.dumps({
+            "ID": "existing-daemon-id", "OSType": "linux",
+            "SecurityOptions": ["name=rootless"] if rootless else ["name=seccomp,profile=builtin"],
+        }))
+
+    monkeypatch.setattr(local_docker.subprocess, "run", inspect)
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    (root / "secrets").mkdir(mode=0o700)
+    token = root / "secrets/bao_root_token"
+    token.write_text("synthetic-test-token")
+    token.chmod(0o600)
+    output = root / "tls-output"
+    output.mkdir(mode=0o700)
+    plan = {"project": "marty-passport-unit-test", "owner_labels": {
+        "com.marty.passport.acceptance.owner": "supported-consumer",
+    }, "services_reference": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64}
+    command = provisioning._tls_bootstrap_args(plan, root, output, environment={
+        "DOCKER_HOST": "tcp://remote.invalid:2376", "DOCKER_CONTEXT": "foreign",
+    })
+    assert command[command.index("--user") + 1] == ("0:0" if rootless else "1001:1002")
+    assert command[-1] == plan["services_reference"]
+    assert "type=bind,src=" + str(token) + ",dst=/run/secrets/bao_root_token,readonly" in command
+    assert "type=bind,src=" + str(output) + ",dst=/work/output" in command
+    assert token.stat().st_mode & 0o777 == 0o600
+    assert output.stat().st_mode & 0o777 == 0o700
+    assert len(calls) == 1
+
+
+def test_other_tls_callers_keep_legacy_user_without_daemon_inspection(monkeypatch, tmp_path):
+    monkeypatch.setattr(provisioning.os, "getuid", lambda: UID)
+    monkeypatch.setattr(provisioning.os, "getgid", lambda: 1002)
+    monkeypatch.setattr(local_docker.subprocess, "run",
+                        lambda *args, **kwargs: pytest.fail("legacy caller must not inspect a daemon"))
+    command = provisioning._tls_bootstrap_args({
+        "project": "marty-passport-unit-test", "owner_labels": {},
+        "services_reference": "services@sha256:" + "b" * 64,
+    }, tmp_path, tmp_path / "tls-output")
+    assert command[command.index("--user") + 1] == "1001:1002"
+
+
+@pytest.mark.parametrize("socket_rootless", (False, True))
+def test_private_bind_user_refuses_socket_daemon_mismatch(
+    local_filesystem, monkeypatch, socket_rootless,
+):
+    if not socket_rootless:
+        del local_filesystem[SOCKET]
+    monkeypatch.setattr(local_docker.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(
+        stdout=json.dumps({"ID": "existing-daemon-id", "OSType": "linux",
+                           "SecurityOptions": [] if socket_rootless else ["name=rootless"]})))
+    with pytest.raises(ValueError, match="rootless identity differ"):
+        local_docker.local_bind_mount_user({})
+
+
+@pytest.mark.parametrize("field,value", (
+    ("ID", ""), ("ID", 1), ("ID", "has whitespace"), ("ID", "x" * 129),
+    ("OSType", "windows"), ("OSType", None),
+    ("SecurityOptions", None), ("SecurityOptions", "name=rootless"),
+    ("SecurityOptions", [1]), ("SecurityOptions", [""]),
+    ("SecurityOptions", ["x" * 257]), ("SecurityOptions", ["name=rootless"] * 33),
+))
+def test_private_bind_user_rejects_invalid_daemon_identity(
+    local_filesystem, monkeypatch, field, value,
+):
+    daemon = {"ID": "existing-daemon-id", "OSType": "linux", "SecurityOptions": ["name=rootless"]}
+    daemon[field] = value
+    monkeypatch.setattr(local_docker.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps(daemon)))
+    with pytest.raises(ValueError, match="daemon identity is invalid"):
+        local_docker.local_bind_mount_user({})
+
+
+@pytest.mark.parametrize("response", ("not-json", "x" * 4097, "[]", "{}"))
+def test_private_bind_user_rejects_unusable_daemon_response(local_filesystem, monkeypatch, response):
+    monkeypatch.setattr(local_docker.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=response))
+    with pytest.raises(ValueError, match="daemon identity"):
+        local_docker.local_bind_mount_user({})
+
+
+@pytest.mark.parametrize("failure", (
+    OSError("daemon unavailable"), subprocess.TimeoutExpired("docker", 25),
+    subprocess.CalledProcessError(1, "docker"),
+))
+def test_private_bind_user_does_not_fall_back_after_inspection_failure(
+    local_filesystem, monkeypatch, failure,
+):
+    calls = []
+    def inspect(command, **kwargs):
+        calls.append(command)
+        raise failure
+    monkeypatch.setattr(local_docker.subprocess, "run", inspect)
+    with pytest.raises(ValueError, match="identity cannot be verified"):
+        local_docker.local_bind_mount_user({})
+    assert len(calls) == 1 and calls[0][2] == ROOTLESS_HOST
+
+
+def test_private_bind_user_refuses_socket_replacement_during_inspection(local_filesystem, monkeypatch):
+    def inspect(*args, **kwargs):
+        local_filesystem[SOCKET] = info(stat.S_IFSOCK | 0o660, UID, 21)
+        return SimpleNamespace(stdout=json.dumps({
+            "ID": "existing-daemon-id", "OSType": "linux", "SecurityOptions": ["name=rootless"],
+        }))
+    monkeypatch.setattr(local_docker.subprocess, "run", inspect)
+    with pytest.raises(ValueError, match="socket changed"):
+        local_docker.local_bind_mount_user({})
 
 
 @pytest.mark.parametrize("path,replacement", (

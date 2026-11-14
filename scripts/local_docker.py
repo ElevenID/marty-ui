@@ -9,9 +9,11 @@ daemon. This helper does not start a daemon or authorize any Docker mutation.
 from __future__ import annotations
 
 from functools import lru_cache
+import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 
 
 ROOTFUL_HOST = "unix:///var/run/docker.sock"
@@ -83,3 +85,45 @@ def local_docker_environment(environment: dict[str, str]) -> dict[str, str]:
     for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
         local.pop(name, None)
     return local
+
+
+def local_bind_mount_user(environment: dict[str, str]) -> str:
+    """Map private host-owned binds through the verified local daemon.
+
+    A current-user rootless daemon maps container root to its host owner.
+    Numeric host UIDs inside that namespace instead map to subordinate users.
+    The socket and daemon must agree before selecting that mapping.
+    """
+    selected = local_docker_environment(environment)
+    fields = ('{"ID":{{json .ID}},"OSType":{{json .OSType}},'
+              '"SecurityOptions":{{json .SecurityOptions}}}')
+    try:
+        result = subprocess.run(
+            ["docker", "--host", selected["DOCKER_HOST"], "info", "--format", fields],
+            env=selected, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", timeout=25, check=True,
+        )
+        if len(result.stdout) > 4096:
+            raise ValueError("Local Docker daemon identity is oversized")
+        daemon = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as exc:
+        raise ValueError("Local Docker daemon identity cannot be verified") from exc
+    # A replaced endpoint must not turn a previously admitted inspection into
+    # permission to select a user for another daemon.
+    local_docker_environment(selected)
+    if (not isinstance(daemon, dict) or set(daemon) != {"ID", "OSType", "SecurityOptions"}
+        or not isinstance(daemon["ID"], str) or not 1 <= len(daemon["ID"]) <= 128
+        or not all(33 <= ord(char) <= 126 for char in daemon["ID"])
+        or daemon["OSType"] != "linux"
+        or not isinstance(daemon["SecurityOptions"], list)
+        or len(daemon["SecurityOptions"]) > 32
+        or any(not isinstance(option, str) or not 1 <= len(option) <= 256
+               for option in daemon["SecurityOptions"])):
+        raise ValueError("Local Docker daemon identity is invalid")
+    _, uid, _ = _selected_endpoint()
+    rootless = "name=rootless" in daemon["SecurityOptions"]
+    if rootless != (uid is not None):
+        raise ValueError("Local Docker socket and daemon rootless identity differ")
+    if rootless:
+        return "0:0"
+    return f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"

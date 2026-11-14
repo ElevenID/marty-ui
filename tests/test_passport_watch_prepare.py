@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from scripts import passport_watch_prepare as preparation
+from scripts.passport_remote_tls import PUBLIC_TLS_FILES
 from tests.test_passport_watch_git_seed import cache_template  # noqa: F401 - shared real Git fixture
 
 
@@ -789,9 +790,12 @@ def test_git_seed_cli_cannot_combine_reader_or_enter_startup(launcher, monkeypat
     assert error.value.code == 2
 
 
-def test_resume_uses_prepared_image_without_build_or_reader(launcher, monkeypatch):
+@pytest.mark.parametrize("watch_only", (False, True))
+def test_resume_uses_prepared_image_without_build_or_reader(launcher, monkeypatch, watch_only):
     scope, argv, directory = launcher
-    argv.extend(["--resume", "--watch-only"])
+    argv.append("--resume")
+    if watch_only:
+        argv.append("--watch-only")
     project = directory / "marty-passport-unit-test"
     project.mkdir()
     (project / "acceptance.env").write_text("unused fixture")
@@ -805,11 +809,13 @@ def test_resume_uses_prepared_image_without_build_or_reader(launcher, monkeypatc
     })
     monkeypatch.setitem(scope, "_compose_args", lambda *args: ["docker", "compose"])
     monkeypatch.setitem(scope, "_bootstrap_args", lambda *args: [])
+    monkeypatch.setitem(scope, "_tls_bootstrap_args", lambda *args, **kwargs: pytest.fail("resume must not reissue TLS"))
+    monkeypatch.setitem(scope, "accept_remote_tls", lambda *args: pytest.fail("resume must reuse accepted TLS"))
     calls = []
     monkeypatch.setitem(scope, "run", lambda command, env, *args: calls.append((command, env)) or True)
     assert scope["main"]() == 0
-    assert len(validated) == 1 and len(calls) == 1
-    command, env = calls[0]
+    assert len(validated) == 1 and len(calls) == (1 if watch_only else 2)
+    command, env = calls[-1]
     assert "--no-build" in command and "--build" not in command
     assert all(env[key] == value for key, value in expected.items())
     assert "PRIVATE_FORKS_READ_TOKEN" not in env
@@ -843,12 +849,126 @@ def test_old_project_teardown_does_not_require_prepared_image(launcher, monkeypa
     monkeypatch.setitem(scope, "_staged_environment", lambda path: {"PASSPORT_ACCEPTANCE_GATEWAY_PORT": "29979"})
     monkeypatch.setitem(scope, "_compose_args", lambda *args: ["docker", "compose"])
     monkeypatch.setitem(scope, "_inspect_local", lambda *args: "")
+    monkeypatch.setitem(scope, "_tls_bootstrap_args", lambda *args, **kwargs: pytest.fail("teardown must not require TLS bootstrap"))
     monkeypatch.setitem(scope, "_remove_bootstrap_output", lambda *args: None)
     monkeypatch.setitem(scope, "_remove_staged_inputs", lambda *args: None)
     calls = []
     monkeypatch.setitem(scope, "run", lambda command, *args: calls.append(command) or True)
     assert scope["main"]() == 0
     assert len(calls) == 1 and "down" in calls[0] and "--volumes" in calls[0]
+
+
+@pytest.fixture
+def fresh_launcher(launcher, monkeypatch):
+    """Exercise real output admission with synthetic Docker/bootstrap responses."""
+    scope, argv, directory = launcher
+    project = directory / "marty-passport-unit-test"
+    events = []
+    commands = []
+    control = {"tls_ok": True, "tls_invalid": None}
+    prepared = {"PASSPORT_WATCH_IMAGE": IMAGE_ID, "PASSPORT_WATCH_SEED_ID": "a" * 64,
+                "PASSPORT_WATCH_LOCK_SHA256": "b" * 64}
+    monkeypatch.setattr(scope["preparation"], "prepared_image", lambda *args: prepared)
+    monkeypatch.setitem(scope, "_require_empty_project", lambda *args: events.append("empty-project"))
+
+    def stage(*args, **kwargs):
+        events.append("stage")
+        project.mkdir(mode=0o700)
+        (project / "secrets").mkdir(mode=0o700)
+        token = project / "secrets/bao_root_token"
+        token.write_text("synthetic-root-token-never-issued")
+        token.chmod(0o600)
+        env_file = project / "acceptance.env"
+        env_file.write_text("PASSPORT_ACCEPTANCE_GATEWAY_PORT=29878\n")
+        env_file.chmod(0o600)
+        return project, env_file
+
+    monkeypatch.setitem(scope, "stage_disposable_inputs", stage)
+    monkeypatch.setitem(scope, "_bootstrap_args", lambda *args: ["docker", "run", "openbao-fixture"])
+
+    def tls_args(plan, root, output, *, environment):
+        assert root == project and output == project / "tls-output"
+        assert environment["PASSPORT_WATCH_IMAGE"] == IMAGE_ID
+        assert "PRIVATE_FORKS_READ_TOKEN" not in environment
+        events.append("tls-user-admission")
+        return ["docker", "run", "tls-fixture"]
+
+    monkeypatch.setitem(scope, "_tls_bootstrap_args", tls_args)
+
+    def run(command, environment, log, timeout):
+        commands.append(command)
+        if command[-1] == "openbao-fixture":
+            events.append("openbao-tokens")
+            for name in ("bao_token", "callback_signer_bao_token", "notification_openbao_token"):
+                (project / "bootstrap-output" / name).write_text(f"hvs.synthetic-{name}")
+        elif command[-1] == "tls-fixture":
+            events.append("tls")
+            assert (project / "secrets/bao_token").is_file()
+            assert not any((project / "secrets" / name).exists() for name in PUBLIC_TLS_FILES)
+            if not control["tls_ok"]:
+                return False
+            certificate = (ROOT / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem").read_text()
+            for name in PUBLIC_TLS_FILES:
+                value = certificate if name.endswith("_cert") else f"hvs.synthetic-distinct-{name}"
+                (project / "tls-output" / name).write_text(value)
+            if control["tls_invalid"] == "missing":
+                (project / "tls-output/signing_keys_workload_server_cert").unlink()
+            elif control["tls_invalid"] == "private-key":
+                (project / "tls-output/signing_keys_workload_server_cert").write_text("-----BEGIN PRIVATE KEY-----\n")
+        elif command[-1] == "signing-keys":
+            events.append("signer")
+            assert all((project / "secrets" / name).is_file() for name in PUBLIC_TLS_FILES)
+            assert list((project / "tls-output").iterdir()) == []
+        elif command[-1] == "issuance-native":
+            events.append("watcher")
+        elif command[-3:] == list(scope["INFRA"]):
+            events.append("infra")
+        else:
+            events.append("stack")
+        return True
+
+    monkeypatch.setitem(scope, "run", run)
+    monkeypatch.setitem(scope, "bootstrap_certificate_chain", lambda *args, **kwargs: events.append("certificate") or {"certificate": "fixture"})
+    monkeypatch.setitem(scope, "validate_certificate_setup", lambda *args: events.append("certificate-validation"))
+    return scope, argv, project, events, commands, control
+
+
+def test_fresh_watcher_admits_keyless_tls_before_signer(fresh_launcher):
+    scope, _, project, events, _, _ = fresh_launcher
+    assert scope["main"]() == 0
+    assert events == ["empty-project", "stage", "tls-user-admission",
+                      "infra", "openbao-tokens", "tls", "signer", "certificate",
+                      "certificate-validation", "stack", "watcher"]
+    assert (project / "secrets/bao_root_token").stat().st_mode & 0o777 == 0o600
+    assert (project / "tls-output").stat().st_mode & 0o777 == 0o700
+
+
+def test_failed_tls_bootstrap_cannot_start_signer_or_application(fresh_launcher):
+    scope, _, _, events, _, control = fresh_launcher
+    control["tls_ok"] = False
+    assert scope["main"]() == 1
+    assert events[-1] == "tls"
+    assert not {"signer", "certificate", "stack", "watcher"}.intersection(events)
+
+
+def test_tls_user_admission_failure_precedes_any_watcher_mutation(fresh_launcher, monkeypatch):
+    scope, _, _, _, commands, _ = fresh_launcher
+    def reject(*args, **kwargs):
+        raise ValueError("Local Docker socket and daemon rootless identity differ")
+    monkeypatch.setitem(scope, "_tls_bootstrap_args", reject)
+    with pytest.raises(ValueError, match="rootless identity differ"):
+        scope["main"]()
+    assert not commands
+
+
+@pytest.mark.parametrize("invalid", ("missing", "private-key"))
+def test_unaccepted_tls_outputs_cannot_reach_signer(fresh_launcher, invalid):
+    scope, _, project, events, _, control = fresh_launcher
+    control["tls_invalid"] = invalid
+    with pytest.raises(ValueError, match="incomplete|private material"):
+        scope["main"]()
+    assert events[-1] == "tls"
+    assert not any((project / "secrets" / name).exists() for name in PUBLIC_TLS_FILES)
 
 
 def test_watcher_recipe_only_copies_verified_caches_and_runtime_stays_offline():

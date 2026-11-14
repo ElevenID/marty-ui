@@ -133,6 +133,14 @@ reject mismatches, including dependency changes before a watched rebuild.
 The existing `--resume --stop` path remains available for an old or expired
 project without requiring a prepared image.
 
+Fresh startup obtains public workload certificates and distinct scoped TLS
+tokens from the signed keyless bootstrap after OpenBao initialization and before
+starting the managed signer. A verified current-user rootless daemon runs this
+bootstrap as container UID 0, which maps to the host owner of the private input
+and output files; rootful Docker retains the host UID and GID. Token permissions
+and the private output directory are unchanged. Resume reuses already
+bootstrapped TLS inputs; it does not issue replacement certificates or tokens.
+
 ## Path and ordering contract
 
 Do not pass these overlays as the first or only Compose file. All relative build

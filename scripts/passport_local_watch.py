@@ -17,13 +17,14 @@ import sys
 
 from passport_supported_certificate_rehearsal import validate_certificate_setup
 from passport_supported_disposable_ceremony import bootstrap_certificate_chain
+from passport_remote_tls import accept_remote_tls
 from passport_supported_infra_rehearsal import (
     INFRA, ROOT, _accept_bootstrap_files, _bootstrap_args, _compose_args, _inspect_local,
     _prepare_bootstrap_output, _remove_bootstrap_output,
     _require_empty_project, _staged_environment,
 )
 from passport_supported_provisioning_producer import (
-    _remove_staged_inputs, stage_disposable_inputs,
+    _remove_staged_inputs, _tls_bootstrap_args, stage_disposable_inputs,
 )
 import passport_watch_prepare as preparation
 
@@ -132,6 +133,7 @@ def main() -> int:
     compose = _compose_args(plan, env_file)
     log = root / "local-watch.log"
     output_dir = root / "bootstrap-output"
+    tls_output_dir = root / "tls-output"
     watch = ROOT / "deploy/compose/development/docker-compose.passport-supported-disposable-watch.yml"
     if args.stop:
         owned = inspect(["ps", "-aq", "--filter",
@@ -159,6 +161,7 @@ def main() -> int:
         ("OpenBao bootstrap", _bootstrap_args(plan, root, output_dir, args.port), 180),
     )
     if not args.resume:
+        tls_command = _tls_bootstrap_args(plan, root, tls_output_dir, environment=env)
         _prepare_bootstrap_output(output_dir)
         for name, command, timeout in phases:
             print(f"Starting {name}...", flush=True)
@@ -166,6 +169,15 @@ def main() -> int:
                 print(f"{name} failed. Inspect {log} and project containers.", flush=True)
                 return 1
         _accept_bootstrap_files(root, output_dir)
+        _prepare_bootstrap_output(tls_output_dir)
+        print("Starting managed keyless TLS bootstrap...", flush=True)
+        if not run(tls_command, env, log, 180):
+            print(f"Managed keyless TLS bootstrap failed. Inspect {log}.", flush=True)
+            return 1
+        accept_remote_tls(
+            tls_output_dir, root / "secrets",
+            (root / "secrets" / "bao_root_token").read_text(encoding="ascii"),
+        )
         print("Starting managed signer...", flush=True)
         if not run([*compose, "up", "-d", "--wait", "--wait-timeout", "360",
                     "signing-keys"], env, log, 600):
