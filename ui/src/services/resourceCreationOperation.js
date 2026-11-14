@@ -1,4 +1,5 @@
 import { createIdempotencyKey } from './idempotency';
+import { getErrorMessage } from './api';
 
 // One instance belongs to one mounted, organization-scoped creation journey.
 // Acknowledged creates are never repeated to recover a later activation failure.
@@ -107,10 +108,12 @@ export function createResourceCreationOperation(organizationId, principalId, {
       if (String(current.status).toUpperCase() !== 'DRAFT') throw new Error(`The created ${resourceName} is no longer a draft. Open it to inspect its state.`);
       const activated = await activate(current.id);
       if (activated.id !== current.id || activated.organization_id !== organizationId) throw new Error('Activated resource ownership could not be confirmed.');
+      if (String(activated.status).toUpperCase() !== 'ACTIVE') throw new Error('The server did not confirm an active resource. Retry activation to check its current state.');
       assertCurrent();
       return complete(activated);
     } catch (cause) {
-      const error = new Error(`${displayName} ${operation.resource.id} was created, but activation is incomplete. Retry activation or open the draft. ${cause.message || ''}`);
+      const reason = getErrorMessage(cause);
+      const error = new Error(`${displayName} ${operation.resource.id} was created, but activation is incomplete. Retry activation or open the draft. ${reason}`);
       error.createdResource = operation.resource;
       error.cause = cause;
       throw error;

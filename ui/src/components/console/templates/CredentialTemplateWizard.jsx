@@ -309,7 +309,7 @@ const CredentialTemplateWizard = () => {
             <Typography color="error.contrastText">
               {wizard.error}
             </Typography>
-            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>}
+            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}/edit`)}>Open created draft</Button>}
           </Box>
         )}
 
