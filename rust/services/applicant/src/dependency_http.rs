@@ -114,7 +114,11 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0; 4096];
-            socket.read(&mut request).await.unwrap();
+            assert_ne!(
+                socket.read(&mut request).await.unwrap(),
+                0,
+                "client closed before sending its request"
+            );
             socket
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
                 .await
