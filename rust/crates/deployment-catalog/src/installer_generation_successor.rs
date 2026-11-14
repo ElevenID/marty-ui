@@ -66,6 +66,7 @@ pub(crate) fn stage_successor(
     parent: &GenerationBinding,
     attempt: u64,
     native_operation: &str,
+    oidc_secret_rotation_sha256: Option<String>,
 ) -> Result<GenerationBinding> {
     state.inspection().require_path_binding(installation)?;
     parent.validate()?;
@@ -77,6 +78,7 @@ pub(crate) fn stage_successor(
         parent_attempt: parent.attempt(),
         parent_binding_sha256: parent.sha256()?,
         native_operation: native_operation.into(),
+        oidc_secret_rotation_sha256,
     };
     let (receipt, candidates, plan) = candidate_at(
         installation,

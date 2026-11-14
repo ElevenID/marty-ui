@@ -670,6 +670,20 @@ pub(crate) fn provision_runtime(
             state,
         )?;
     }
+    if state
+        .with_inspection(crate::installer_oidc::external)?
+        .is_some()
+    {
+        crate::installer_oidc_command::before_provisioning(
+            installation,
+            docker,
+            inventory
+                .images
+                .get("auth")
+                .ok_or("admitted Auth image missing")?,
+            state,
+        )?;
+    }
     if let Some(foundation) = state.with_inspection(crate::installer_foundation::load)? {
         state.advance(Phase::Provisioning)?;
         eprintln!("Marty runtime stage: local credentials and preprovisioned AWS inputs");

@@ -47,7 +47,7 @@ describe('public entry authentication', () => {
     const navigate = vi.spyOn(handoff, 'redirectBrowser').mockReturnValue(true);
     const submit = vi.spyOn(HTMLFormElement.prototype, 'submit');
     initiateLogin('/console', 'en');
-    expect(navigate).toHaveBeenLastCalledWith(`${canonical}/v1/auth/login?redirect_uri=%2Fconsole&kc_locale=en`, { replace: false });
+    expect(navigate).toHaveBeenLastCalledWith(`${canonical}/v1/auth/login?redirect_uri=%2Fconsole&ui_locales=en`, { replace: false });
     initiateRegister('/console/org/setup');
     expect(navigate).toHaveBeenLastCalledWith(`${canonical}/v1/auth/register?redirect_uri=%2Fconsole%2Forg%2Fsetup`, { replace: false });
     initiateLogout();

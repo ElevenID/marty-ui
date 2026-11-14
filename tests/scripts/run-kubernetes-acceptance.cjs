@@ -2,7 +2,7 @@
 'use strict';
 
 // Direct issuance and persistence acceptance for an existing installation.
-// Authentication and OID4VCI verification remain owned by existing helpers.
+// Password login and OID4VCI verification reuse existing helpers.
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -32,26 +32,39 @@ const list = (value) => Array.isArray(value) ? value
 function options(argv) {
   const result = {
     phase: 'accept', repo: path.resolve(__dirname, '../..'),
-    origin: '', 'password-file': '', 'state-dir': '', email: 'operator@localhost',
+    origin: '', 'password-file': '', 'storage-state-file': '', 'state-dir': '',
+    email: 'operator@localhost', 'user-id': '',
     'organization-id': '00000000-0000-0000-0000-000000000001',
     'credential-template-id': '50000000-0000-0000-0000-000000000040',
     'issuer-did': '', 'scenario-claims-file': '',
   };
+  const seen = new Set();
   for (let i = 0; i < argv.length; i += 2) {
     check(argv[i]?.startsWith('--') && Object.hasOwn(result, argv[i].slice(2))
-      && typeof argv[i + 1] === 'string', 'invalid_arguments');
+      && typeof argv[i + 1] === 'string' && !seen.has(argv[i]), 'invalid_arguments');
+    seen.add(argv[i]);
     result[argv[i].slice(2)] = argv[i + 1];
   }
-  for (const name of ['origin', 'password-file', 'state-dir', 'issuer-did']) {
+  for (const name of ['origin', 'state-dir', 'issuer-did']) {
     check(result[name].trim(), 'missing_required_argument_' + name.replaceAll('-', '_'));
   }
+  check(!(seen.has('--password-file') && seen.has('--storage-state-file'))
+    && Boolean(result['password-file']) !== Boolean(result['storage-state-file']),
+  'exactly_one_authentication_source_required');
   check(['accept', 'resume'].includes(result.phase), 'invalid_phase');
+  if (seen.has('--user-id')) check(result['user-id'].trim() === result['user-id']
+    && result['user-id'].length > 0 && result['user-id'].length <= 256
+    && !/[\u0000-\u001f\u007f-\u009f]/.test(result['user-id']), 'operator_user_id_invalid');
+  if (result['storage-state-file'] && result.phase === 'accept') {
+    check(result['user-id'], 'expected_operator_user_id_required');
+  }
   const origin = new URL(result.origin);
   check(origin.protocol === 'https:' && origin.origin === result.origin,
     'canonical_https_origin_required');
   check(result['issuer-did'].startsWith('did:web:'), 'managed_did_web_issuer_required');
   check(process.env.NODE_TLS_REJECT_UNAUTHORIZED !== '0', 'normal_tls_validation_required');
-  for (const name of ['repo', 'password-file', 'state-dir']) {
+  for (const name of ['repo', 'state-dir',
+    result['storage-state-file'] ? 'storage-state-file' : 'password-file']) {
     check(path.isAbsolute(result[name]) && path.resolve(result[name]) === result[name],
       'absolute_paths_required');
   }
@@ -113,19 +126,104 @@ function privateRead(file, maximum = 65536) {
   } finally { fs.closeSync(fd); }
 }
 
+function privateStorageState(file, origin) {
+  // Reject symlinks in the entire supplied path, then bind the opened regular
+  // file to that observation. Never write imported browser state to evidence.
+  let entry = path.parse(file).root;
+  let observed;
+  for (const component of file.slice(entry.length).split(path.sep)) {
+    entry = path.join(entry, component);
+    observed = fs.lstatSync(entry);
+    check(!observed.isSymbolicLink(), 'storage_state_symlink_refused');
+  }
+  check(observed.isFile(), 'private_storage_state_required');
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  let raw;
+  try {
+    const info = fs.fstatSync(fd);
+    check(info.isFile() && info.dev === observed.dev && info.ino === observed.ino
+      && info.nlink === 1 && (info.mode & 0o777) === 0o600
+      && info.size > 0 && info.size <= MAXIMUM_STATE_FILE_BYTES, 'private_storage_state_required');
+    const buffer = Buffer.alloc(info.size + 1);
+    let count = 0;
+    while (count < buffer.length) {
+      const read = fs.readSync(fd, buffer, count, buffer.length - count, count);
+      if (!read) break;
+      count += read;
+    }
+    const after = fs.fstatSync(fd);
+    const current = fs.lstatSync(file);
+    check(count === info.size && after.size === info.size
+      && after.mtimeMs === info.mtimeMs && after.ctimeMs === info.ctimeMs
+      && current.dev === info.dev && current.ino === info.ino && !current.isSymbolicLink(),
+    'private_storage_state_changed');
+    raw = buffer.subarray(0, count);
+  } finally { fs.closeSync(fd); }
+  let input;
+  try {
+    const text = raw.toString('utf8');
+    check(Buffer.from(text, 'utf8').equals(raw), 'storage_state_invalid');
+    input = JSON.parse(text);
+  } catch { check(false, 'storage_state_invalid'); }
+  check(input && typeof input === 'object' && !Array.isArray(input)
+    && Array.isArray(input.cookies)
+    && (input.origins === undefined || Array.isArray(input.origins)), 'storage_state_invalid');
+  const hostname = new URL(origin).hostname;
+  const now = Date.now() / 1000;
+  const cookies = [];
+  const names = new Set();
+  for (const cookie of input.cookies) {
+    check(cookie && typeof cookie === 'object' && !Array.isArray(cookie)
+      && typeof cookie.domain === 'string', 'storage_state_cookie_invalid');
+    // Leading-dot/domain-wide cookies, other hosts and provider cookies are
+    // not imported. Path-specific cookies must not change identity between
+    // /v1/auth/me and the issuance/readback routes.
+    if (cookie.domain !== hostname) continue;
+    check(typeof cookie.name === 'string' && cookie.name.length <= 256
+      && /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(cookie.name)
+      && typeof cookie.value === 'string' && cookie.value.length <= 8192
+      && /^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]*$/.test(cookie.value)
+      && typeof cookie.path === 'string' && cookie.path.startsWith('/')
+      && cookie.path.length <= 2048 && !/[\u0000-\u001f\u007f-\u009f]/.test(cookie.path)
+      && typeof cookie.secure === 'boolean' && typeof cookie.httpOnly === 'boolean'
+      && typeof cookie.expires === 'number' && Number.isFinite(cookie.expires)
+      && (cookie.expires === -1 || cookie.expires >= 0)
+      && ['Strict', 'Lax', 'None'].includes(cookie.sameSite), 'storage_state_cookie_invalid');
+    if (!cookie.secure || (cookie.expires !== -1 && cookie.expires <= now)
+      || !['/', '/v1', '/v1/'].includes(cookie.path) || Object.hasOwn(cookie, 'partitionKey')) continue;
+    check(!names.has(cookie.name), 'storage_state_cookie_ambiguous');
+    names.add(cookie.name);
+    cookies.push({ name: cookie.name, value: cookie.value, domain: hostname,
+      path: cookie.path, expires: cookie.expires, httpOnly: cookie.httpOnly,
+      secure: true, sameSite: cookie.sameSite });
+  }
+  check(cookies.length > 0, 'storage_state_scoped_cookies_required');
+  // Provider localStorage and application localStorage have no authority here.
+  return { cookies, origins: [] };
+}
+
 async function main(argv) {
   if (argv.includes('--help')) {
     process.stdout.write('Usage: node tests/scripts/run-kubernetes-acceptance.cjs\n'
       + '  --origin HTTPS_ORIGIN --issuer-did DID_WEB\n'
-      + '  --password-file ABSOLUTE_PATH --state-dir ABSOLUTE_PATH\n'
+      + '  (--password-file ABSOLUTE_PATH | --storage-state-file ABSOLUTE_PATH)\n'
+      + '  --state-dir ABSOLUTE_PATH [--user-id EXPECTED_USER_ID]\n'
       + '  [--phase accept|resume] [--repo ABSOLUTE_CHECKOUT] [--email EMAIL]\n'
       + '  [--organization-id UUID] [--credential-template-id SOURCE_UUID]\n'
       + '  [--scenario-claims-file ABSOLUTE_NONSECRET_JSON]\n'
       + '\naccept creates private state and issues one synthetic credential.\n'
-      + 'resume requires a successful accept receipt and only verifies retained state.\n');
+      + 'Storage-state accept requires --user-id and a private 0600 Playwright JSON export.\n'
+      + 'resume verifies the retained operator and state; legacy receipts require --user-id.\n');
     return;
   }
   const cfg = options(argv);
+  stage = 'authentication-input';
+  const storageState = cfg['storage-state-file']
+    ? privateStorageState(cfg['storage-state-file'], cfg.origin) : null;
+  const password = storageState ? null
+    : privateRead(cfg['password-file'], 4096).toString('utf8').trimEnd();
+  if (!storageState) check(password.length >= 16, 'operator_password_invalid');
+  stage = 'state-scope';
   let descriptiveClaims = null;
   if (cfg['scenario-claims-file']) {
     stage = 'scenario-claims';
@@ -144,6 +242,15 @@ async function main(argv) {
     && original.organizationId === cfg['organization-id']
     && original.issuerDid === cfg['issuer-did']
     && original.sourceCredentialTemplateId === cfg['credential-template-id'], 'readback_scope_changed');
+  let expectedUserId = cfg['user-id'];
+  if (original) {
+    if (Object.hasOwn(original, 'operatorUserId') || Object.hasOwn(original, 'operatorEmail')) {
+      check(typeof original.operatorUserId === 'string' && original.operatorUserId
+        && original.operatorEmail === cfg.email
+        && (!expectedUserId || expectedUserId === original.operatorUserId), 'readback_operator_changed');
+      expectedUserId = original.operatorUserId;
+    } else check(expectedUserId, 'legacy_receipt_operator_user_id_required');
+  }
   if (original && (descriptiveClaims || Object.hasOwn(original, 'scenarioClaims')
     || Object.hasOwn(original, 'scenarioClaimsSha256'))) {
     stage = 'state-scope';
@@ -155,7 +262,8 @@ async function main(argv) {
   stage = 'load-existing-helpers';
   const fromTests = createRequire(path.join(cfg.repo, 'tests/package.json'));
   const { chromium } = fromTests('@playwright/test');
-  const { AuthHelpers } = require(path.join(cfg.repo, 'tests/utils/test-helpers.js'));
+  const AuthHelpers = storageState ? null
+    : require(path.join(cfg.repo, 'tests/utils/test-helpers.js')).AuthHelpers;
   const helpers = require(path.join(cfg.repo, 'tests/scripts/run-canvas-oss-standard-contract.js'));
   const { requireSignedCredentialBinding } = require(
     path.join(cfg.repo, 'tests/scripts/canvas-credential-identity.js'));
@@ -163,7 +271,7 @@ async function main(argv) {
   // diagnostics out of the operator transcript; only explicit public receipts
   // below are emitted.
   console.log = console.warn = console.error = () => {};
-  process.env.KEYCLOAK_URL = cfg.origin + '/auth';
+  if (!storageState) process.env.KEYCLOAK_URL = cfg.origin + '/auth';
   process.env.API_BASE_URL = cfg.origin;
   process.env.API_URL = cfg.origin;
   check(new URL(helpers.didWebResolutionUrl(cfg['issuer-did'])).origin === cfg.origin,
@@ -173,14 +281,15 @@ async function main(argv) {
   try {
     stage = 'browser-launch';
     browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({ baseURL: cfg.origin, ignoreHTTPSErrors: false });
+    const context = await browser.newContext({ baseURL: cfg.origin, ignoreHTTPSErrors: false,
+      ...(storageState ? { storageState } : {}) });
     context.setDefaultTimeout(60000);
     const page = await context.newPage();
-    stage = 'operator-login';
-    const password = privateRead(cfg['password-file'], 4096).toString('utf8').trimEnd();
-    check(password.length >= 16, 'operator_password_invalid');
-    await page.goto(cfg.origin, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await new AuthHelpers(page).login(cfg.email, password);
+    if (!storageState) {
+      stage = 'operator-login';
+      await page.goto(cfg.origin, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await new AuthHelpers(page).login(cfg.email, password);
+    }
 
     async function api(method, route, data, headers = {}) {
       const response = await page.request.fetch(cfg.origin + route, {
@@ -188,7 +297,9 @@ async function main(argv) {
         headers, timeout: 90000, maxRedirects: 0,
       });
       if (!response.ok()) {
-        privateWrite(`http-failure-${++diagnostic}.bin`,
+        // A remote error body could reflect an imported bearer cookie. Retain
+        // only the status in session-import mode, never raw response content.
+        if (!storageState) privateWrite(`http-failure-${++diagnostic}.bin`,
           (await response.body()).subarray(0, MAXIMUM_DIAGNOSTIC_BYTES));
         check(false, `api_http_${response.status()}`);
       }
@@ -198,10 +309,12 @@ async function main(argv) {
     stage = 'authenticated-identity';
     const me = await api('GET', '/v1/auth/me');
     const user = me.user || me;
-    check(me.authenticated === true && (user.email === cfg.email || user.username === cfg.email
-      || user.preferred_username === cfg.email), 'authenticated_operator_mismatch');
+    check(me.authenticated === true && (storageState ? user.email === cfg.email
+      : (user.email === cfg.email || user.username === cfg.email || user.preferred_username === cfg.email)),
+    'authenticated_operator_mismatch');
     const memberId = user.user_id || user.id;
     check(typeof memberId === 'string' && memberId, 'authenticated_user_id_missing');
+    check(!expectedUserId || memberId === expectedUserId, 'authenticated_operator_id_mismatch');
 
     let receipt;
     if (cfg.phase === 'accept') {
@@ -307,7 +420,7 @@ async function main(argv) {
         transactionId: offer.id, applicationId: null, credentialId,
         credentialSha256: sha256(received.credential), issuerDid: received.payload.iss,
         vct: identity.vct, signatureVerified: true, holderBindingVerified: true,
-        loginVerified: true, at: new Date().toISOString() };
+        at: new Date().toISOString() };
       if (descriptiveClaims) {
         receipt.scenarioClaims = descriptiveClaims;
         receipt.scenarioClaimsSha256 = scenarioHash;
@@ -350,6 +463,11 @@ async function main(argv) {
     receipt.transactionStatus = transaction.status;
     receipt.credentialStatus = record.status;
     receipt.persistenceVerified = true;
+    receipt.operatorEmail = cfg.email;
+    receipt.operatorUserId = memberId;
+    receipt.authenticationMethod = storageState ? 'stored-session' : 'password';
+    receipt.sessionVerified = true;
+    receipt.loginVerified = !storageState;
     receipt.result = 'passed';
     privateWrite(cfg.phase === 'accept' ? 'accept-receipt.json'
       : `resume-receipt-${Date.now()}.json`, receipt);

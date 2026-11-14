@@ -67,6 +67,48 @@ fn decode<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T> {
         .map_err(|_| REFUSED.into())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ClientAuthMethod {
+    None,
+    ClientSecretPost,
+    ClientSecretBasic,
+}
+impl ClientAuthMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::ClientSecretPost => "client_secret_post",
+            Self::ClientSecretBasic => "client_secret_basic",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UserinfoMode {
+    Disabled,
+    Fallback,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum OmitMaxAge {
+    Omit,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum MaxAge {
+    Seconds(u32),
+    Omit(OmitMaxAge),
+}
+impl MaxAge {
+    fn environment(self) -> String {
+        match self {
+            Self::Seconds(value) => value.to_string(),
+            Self::Omit(_) => "omit".into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ExternalOidc {
@@ -81,6 +123,20 @@ pub(crate) struct ExternalOidc {
     // Omission must stay absent in retained selections from earlier installers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scopes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_auth_method: Option<ClientAuthMethod>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub userinfo_mode: Option<UserinfoMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_age: Option<MaxAge>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_url: Option<String>,
 }
 
 impl ExternalOidc {
@@ -161,7 +217,125 @@ impl ExternalOidc {
                 )?;
             }
         }
+        if let Some(method) = self.client_auth_method {
+            require((method != ClientAuthMethod::None) == self.client_secret_file.is_some())?;
+        }
+        if let Some(prompt) = &self.prompt {
+            let mut unique = BTreeSet::new();
+            require(
+                prompt.len() <= 4 && (!prompt.iter().any(|v| v == "none") || prompt.len() == 1),
+            )?;
+            for value in prompt {
+                require(
+                    ["login", "consent", "select_account", "none"].contains(&value.as_str())
+                        && unique.insert(value),
+                )?;
+            }
+        }
+        if let Some(MaxAge::Seconds(value)) = self.max_age {
+            require(value <= 86400)?;
+        }
+        if let Some(name) = &self.provider_name {
+            // The private native env transport is single-quoted. Reject its
+            // unrepresentable characters before any installation side effect.
+            scalar(name)?;
+            require(name.len() <= 80)?;
+        }
+        for value in [&self.account_url, &self.recovery_url]
+            .into_iter()
+            .flatten()
+        {
+            scalar(value)?;
+            let link = url::Url::parse(value).map_err(|_| REFUSED)?;
+            require(
+                link.scheme() == "https"
+                    && link.host_str().is_some_and(|v| !v.contains('*'))
+                    && link.username().is_empty()
+                    && link.password().is_none()
+                    && (link.origin() == issuer.origin()
+                        || self
+                            .trusted_endpoint_origins
+                            .contains(&link.origin().ascii_serialization())),
+            )?;
+        }
         Ok(())
+    }
+
+    /// Optional overrides retain omission, so old authenticated Compose layers
+    /// and previously serialized provider selections remain byte compatible.
+    fn optional_environment(&self) -> BTreeMap<&'static str, String> {
+        let mut values = BTreeMap::new();
+        if let Some(value) = self.client_auth_method {
+            values.insert("TOKEN_ENDPOINT_AUTH_METHOD", value.as_str().into());
+        }
+        if let Some(value) = self.userinfo_mode {
+            values.insert(
+                "USERINFO_MODE",
+                match value {
+                    UserinfoMode::Disabled => "disabled",
+                    UserinfoMode::Fallback => "fallback",
+                }
+                .into(),
+            );
+        }
+        if let Some(value) = &self.prompt {
+            values.insert("PROMPT", value.join(" "));
+        }
+        if let Some(value) = self.max_age {
+            values.insert("MAX_AGE_SECONDS", value.environment());
+        }
+        for (key, value) in [
+            ("PROVIDER_NAME", &self.provider_name),
+            ("ACCOUNT_URL", &self.account_url),
+            ("RECOVERY_URL", &self.recovery_url),
+        ] {
+            if let Some(value) = value {
+                values.insert(key, value.clone());
+            }
+        }
+        values
+    }
+
+    pub(crate) fn preflight_environment(&self) -> Result<BTreeMap<String, String>> {
+        self.validate()?;
+        let mut values = BTreeMap::from([
+            ("OIDC_PROVIDER_MODE".into(), "external".into()),
+            ("OIDC_ISSUER_URL".into(), self.issuer_url.clone()),
+            ("OIDC_EXTERNAL_ISSUER_URL".into(), self.issuer_url.clone()),
+            ("OIDC_CLIENT_ID".into(), self.client_id.clone()),
+            (
+                "OIDC_ALLOWED_ALGORITHMS".into(),
+                self.allowed_algorithms.join(","),
+            ),
+            (
+                "OIDC_TRUSTED_ENDPOINT_ORIGINS".into(),
+                self.trusted_endpoint_origins.join(","),
+            ),
+            (
+                "OIDC_REDIRECT_URI".into(),
+                "https://preflight.invalid/v1/auth/callback".into(),
+            ),
+        ]);
+        if let Some(scopes) = &self.scopes {
+            values.insert("OIDC_SCOPES".into(), scopes.join(","));
+        }
+        for (key, value) in self.optional_environment() {
+            values.insert(format!("OIDC_{key}"), value);
+        }
+        // Auth's separate metadata-only parser takes an explicit client type
+        // without reading or constructing operational customer credentials.
+        let method = self
+            .client_auth_method
+            .unwrap_or(if self.client_secret_file.is_some() {
+                ClientAuthMethod::ClientSecretPost
+            } else {
+                ClientAuthMethod::None
+            });
+        values.insert(
+            "OIDC_TOKEN_ENDPOINT_AUTH_METHOD".into(),
+            method.as_str().into(),
+        );
+        Ok(values)
     }
 
     pub(crate) fn apply_environment(&self, values: &mut BTreeMap<String, String>) -> Result<()> {
@@ -194,6 +368,20 @@ impl ExternalOidc {
         if let Some(scopes) = &self.scopes {
             values.insert("MARTY_EXTERNAL_OIDC_SCOPES".into(), scopes.join(","));
         }
+        for key in [
+            "TOKEN_ENDPOINT_AUTH_METHOD",
+            "USERINFO_MODE",
+            "PROMPT",
+            "MAX_AGE_SECONDS",
+            "PROVIDER_NAME",
+            "ACCOUNT_URL",
+            "RECOVERY_URL",
+        ] {
+            values.remove(&format!("MARTY_EXTERNAL_OIDC_{key}"));
+        }
+        for (key, value) in self.optional_environment() {
+            values.insert(format!("MARTY_EXTERNAL_OIDC_{key}"), value);
+        }
         Ok(())
     }
 
@@ -201,6 +389,23 @@ impl ExternalOidc {
         &self,
         environment: &serde_json::Map<String, Value>,
     ) -> Result<()> {
+        let selected = self.optional_environment();
+        for (key, default) in [
+            ("TOKEN_ENDPOINT_AUTH_METHOD", ""),
+            ("USERINFO_MODE", "disabled"),
+            ("PROMPT", "consent login"),
+            ("MAX_AGE_SECONDS", "0"),
+            ("PROVIDER_NAME", ""),
+            ("ACCOUNT_URL", ""),
+            ("RECOVERY_URL", ""),
+        ] {
+            let actual = environment.get(&format!("OIDC_{key}"));
+            if let Some(value) = selected.get(key) {
+                require(actual.and_then(Value::as_str) == Some(value.replace('$', "$$").as_str()))?;
+            } else {
+                require(actual.is_none() || actual.and_then(Value::as_str) == Some(default))?;
+            }
+        }
         let actual = environment.get("OIDC_SCOPES");
         if let Some(scopes) = &self.scopes {
             // Native Compose config serializes literal dollars as doubled
@@ -254,9 +459,20 @@ fn imported_secret(oidc: &ExternalOidc) -> Result<Vec<u8>> {
         return Ok(Vec::new());
     };
     let raw = private_bytes(path)?;
-    let text = std::str::from_utf8(&raw).map_err(|_| REFUSED)?;
-    require(!text.trim().is_empty() && !text.contains('\0') && raw.len() <= 65536)?;
+    validate_secret_bytes(&raw)?;
     Ok(raw)
+}
+pub(crate) fn validate_secret_bytes(bytes: &[u8]) -> Result<()> {
+    // Immutable generation files already require this transport. Fail during
+    // input preparation instead of after OpenBao has minted credentials.
+    require(
+        !bytes.is_empty()
+            && bytes.len() <= 65536
+            && bytes.is_ascii()
+            && !bytes.contains(&0)
+            && !bytes.iter().all(u8::is_ascii_whitespace)
+            && !bytes.windows(11).any(|value| value == b"PRIVATE KEY"),
+    )
 }
 pub(crate) struct Prepared {
     source_sha256: String,

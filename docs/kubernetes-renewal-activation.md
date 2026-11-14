@@ -67,6 +67,15 @@ Keycloak workload alone never selects external mode. The external graph rejects
 managed Keycloak workloads and additional consumers of the confidential OIDC
 client Secret while retaining all application TLS and signing consumers.
 
+When selected, client-authentication method, UserInfo mode, prompt/max-age,
+provider display name and account/recovery links are part of that same immutable
+selection. The adapter binds their exact ConfigMap values and the literal Auth
+environment, including Kubernetes dollar escaping. Omitted optional fields keep
+the old selection shape. A renewal operation cannot introduce or change those
+provider options. Rotation of the dedicated OIDC Secret under its existing
+name/key remains an independent operator action followed by an Auth restart and
+a real login check; no OIDC client secret enters the custody publication set.
+
 New activation requests retain the observed provider-selection identity. The
 adapter checks it before Secret publication, during workload verification and
 after private credential delivery. Reconciliation binds the same request to the

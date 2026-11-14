@@ -12,7 +12,7 @@
 
 {{- define "marty.externalHttpsUrl" -}}
 {{- $value := .value -}}
-{{- if or (gt (len $value) 2048) (not (hasPrefix "https://" $value)) (regexMatch "[[:space:]\\\\?#]" $value) -}}
+{{- if or (gt (len $value) 2048) (not (hasPrefix "https://" $value)) (regexMatch "[[:space:]\\\\]" $value) (and (not .displayLink) (regexMatch "[?#]" $value)) -}}
 {{- fail (printf "%s must be an HTTPS URL of at most 2048 UTF-8 bytes without whitespace, a query or fragment" .name) -}}
 {{- end -}}
 {{- $url := urlParse $value -}}
@@ -38,6 +38,16 @@
 {{- if and .originOnly (ne $value $canonicalOrigin) -}}
 {{- fail (printf "%s must use canonical HTTPS origins: lowercase host, no path or trailing slash, and no default or padded port" .name) -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "marty.externalUrlOrigin" -}}
+{{- $url := urlParse . -}}
+{{- $authority := splitList ":" $url.host -}}
+{{- $origin := printf "https://%s" (lower (index $authority 0)) -}}
+{{- if and (eq (len $authority) 2) (ne (atoi (index $authority 1)) 443) -}}
+{{- $origin = printf "%s:%d" $origin (atoi (index $authority 1)) -}}
+{{- end -}}
+{{- $origin -}}
 {{- end -}}
 
 {{- define "marty.authSelection" -}}
@@ -87,6 +97,30 @@
 {{- end -}}
 {{- end -}}
 {{- $_ := set $external "clientSecret" $secret -}}
+{{- if hasKey $external "clientAuthMethod" -}}
+{{- if or (and (eq $external.clientAuthMethod "none") (not (empty $secret))) (and (ne $external.clientAuthMethod "none") (empty $secret)) -}}
+{{- fail "auth.external.clientAuthMethod must be none for a public client, or client_secret_post/client_secret_basic with a dedicated clientSecret" -}}
+{{- end -}}
+{{- end -}}
+{{- if and (hasKey $external "prompt") (has "none" $external.prompt) (ne (len $external.prompt) 1) -}}
+{{- fail "auth.external.prompt none cannot be combined with another prompt" -}}
+{{- end -}}
+{{- if hasKey $external "providerName" -}}
+{{- if or (gt (len $external.providerName) 80) (ne (trim $external.providerName) $external.providerName) (regexMatch "[[:cntrl:]\\x{0080}-\\x{009f}]" $external.providerName) -}}
+{{- fail "auth.external.providerName must be trimmed, at most 80 UTF-8 bytes, and contain no control characters" -}}
+{{- end -}}
+{{- end -}}
+{{- $issuerOrigin := include "marty.externalUrlOrigin" $issuer -}}
+{{- range $name := list "accountUrl" "recoveryUrl" -}}
+{{- if hasKey $external $name -}}
+{{- $link := index $external $name -}}
+{{- include "marty.externalHttpsUrl" (dict "name" (printf "auth.external.%s" $name) "value" $link "originOnly" false "displayLink" true) -}}
+{{- $origin := include "marty.externalUrlOrigin" $link -}}
+{{- if and (ne $origin $issuerOrigin) (not (has $origin $origins)) -}}
+{{- fail (printf "auth.external.%s must use the issuer or an explicit trustedEndpointOrigins origin" $name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- $email := required "organization.adminEmail must identify the precreated external administrator" .Values.organization.adminEmail -}}
 {{- $lowerEmail := lower $email -}}
 {{- if or (has $lowerEmail (list "admin@example.com" "user@example.com" "example@example.com")) (hasPrefix "change-me" $lowerEmail) -}}
@@ -118,6 +152,27 @@ OIDC_EXTERNAL_ISSUER_URL: {{ $external.issuerUrl | quote }}
 OIDC_ALLOWED_ALGORITHMS: {{ join "," $external.allowedAlgorithms | quote }}
 OIDC_TRUSTED_ENDPOINT_ORIGINS: {{ join "," $external.trustedEndpointOrigins | quote }}
 OIDC_SCOPES: {{ join "," $external.scopes | quote }}
+{{- if hasKey $external "clientAuthMethod" }}
+OIDC_TOKEN_ENDPOINT_AUTH_METHOD: {{ $external.clientAuthMethod | quote }}
+{{- end }}
+{{- if hasKey $external "userinfoMode" }}
+OIDC_USERINFO_MODE: {{ $external.userinfoMode | quote }}
+{{- end }}
+{{- if hasKey $external "prompt" }}
+OIDC_PROMPT: {{ join " " $external.prompt | quote }}
+{{- end }}
+{{- if hasKey $external "maxAge" }}
+OIDC_MAX_AGE_SECONDS: {{ $external.maxAge | toString | quote }}
+{{- end }}
+{{- if hasKey $external "providerName" }}
+OIDC_PROVIDER_NAME: {{ $external.providerName | quote }}
+{{- end }}
+{{- if hasKey $external "accountUrl" }}
+OIDC_ACCOUNT_URL: {{ $external.accountUrl | quote }}
+{{- end }}
+{{- if hasKey $external "recoveryUrl" }}
+OIDC_RECOVERY_URL: {{ $external.recoveryUrl | quote }}
+{{- end }}
 OIDC_REDIRECT_URI: {{ $selection.redirectUri | quote }}
 OIDC_POST_LOGOUT_REDIRECT_URI: {{ $selection.postLogoutRedirectUri | quote }}
 KEYCLOAK_ADMIN_URL: ""

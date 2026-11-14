@@ -16,17 +16,18 @@ use tracing::warn;
 
 use crate::{
     build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
-    render_credential_login_error_page, sanitize_redirect_uri, AuthApplication,
-    AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication, CredentialCallbackContext,
-    CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
-    CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
-    CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
-    HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PasskeyEnrollmentStart,
-    PortError, Session, SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS,
-    CREDENTIAL_LOGIN_JAVASCRIPT,
+    render_credential_login_error_page, sanitize_redirect_uri, validate_ui_locales,
+    AuthApplication, AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication,
+    CredentialCallbackContext, CredentialCallbackError, CredentialCallbackHeaders,
+    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
+    CredentialLoginErrorPage, CredentialLoginHttpService, CredentialStateError,
+    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand,
+    OidcProviderCapabilities, PasskeyEnrollmentStart, PortError, Session, SessionRepository,
+    UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/v1/auth/provider"),
     ("GET", "/v1/auth/login"),
     ("GET", "/v1/auth/register"),
     ("POST", "/v1/auth/passkeys/enroll"),
@@ -87,6 +88,12 @@ impl SessionCookieConfig {
 
 #[async_trait]
 pub trait AuthHttpApplication: Send + Sync {
+    fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+        Err(PortError::new(
+            "oidc_capabilities_unavailable",
+            "OIDC provider capabilities are unavailable",
+        ))
+    }
     fn passkey_management_url(&self, _session: &Session, _return_uri: &str) -> Option<String> {
         None
     }
@@ -109,6 +116,8 @@ pub trait AuthHttpApplication: Send + Sync {
         registration: bool,
         redirect_uri: String,
         oidc_redirect_uri: String,
+        ui_locales: Option<String>,
+        reauthenticate: bool,
     ) -> Result<String, PortError>;
     async fn callback(
         &self,
@@ -120,6 +129,9 @@ pub trait AuthHttpApplication: Send + Sync {
 
 #[async_trait]
 impl AuthHttpApplication for AuthApplication {
+    fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+        AuthApplication::provider_capabilities(self)
+    }
     fn passkey_management_url(&self, session: &Session, return_uri: &str) -> Option<String> {
         AuthApplication::passkey_management_url(self, session, return_uri)
     }
@@ -138,6 +150,8 @@ impl AuthHttpApplication for AuthApplication {
             InitiateLoginCommand {
                 redirect_uri: Some(redirect_uri),
                 oidc_redirect_uri: Some(oidc_redirect_uri),
+                ui_locales: None,
+                reauthenticate: true,
             },
             Utc::now(),
         )
@@ -149,10 +163,14 @@ impl AuthHttpApplication for AuthApplication {
         registration: bool,
         redirect_uri: String,
         oidc_redirect_uri: String,
+        ui_locales: Option<String>,
+        reauthenticate: bool,
     ) -> Result<String, PortError> {
         let command = InitiateLoginCommand {
             redirect_uri: Some(redirect_uri),
             oidc_redirect_uri: Some(oidc_redirect_uri),
+            ui_locales,
+            reauthenticate,
         };
         let result = if registration {
             self.initiate_registration(command, Utc::now()).await
@@ -239,6 +257,7 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
         )
         .route_layer(middleware::map_response(credential_login_no_store));
     Ok(Router::new()
+        .route("/v1/auth/provider", get(provider_capabilities))
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
         .route("/v1/auth/passkeys/enroll", post(enroll_passkey))
@@ -273,6 +292,22 @@ async fn credential_login_no_store(mut response: Response) -> Response {
 #[derive(Deserialize)]
 struct LoginQuery {
     redirect_uri: Option<String>,
+    ui_locales: Option<String>,
+    kc_locale: Option<String>,
+    #[serde(default)]
+    reauthenticate: bool,
+}
+
+async fn provider_capabilities(State(state): State<AuthHttpState>) -> Response {
+    let mut response = match state.application.provider_capabilities() {
+        Ok(capabilities) => Json(capabilities).into_response(),
+        Err(_) => detail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Identity provider capabilities are unavailable",
+        ),
+    };
+    no_store(&mut response);
+    response
 }
 
 async fn enroll_passkey(
@@ -365,12 +400,51 @@ async fn initiate(
 ) -> Response {
     let ui_base = request_ui_base(&state.origins, &headers);
     let redirect = sanitize_redirect_uri(query.redirect_uri.as_deref(), ui_base);
+    if query.ui_locales.is_some() && query.kc_locale.is_some() {
+        return detail(
+            StatusCode::BAD_REQUEST,
+            "Supply ui_locales or the legacy kc_locale alias, not both",
+        );
+    }
+    if registration && query.reauthenticate {
+        return detail(
+            StatusCode::BAD_REQUEST,
+            "Reauthentication is a login operation",
+        );
+    }
+    let locales = match query
+        .ui_locales
+        .or(query.kc_locale)
+        .map(|value| validate_ui_locales(&value))
+        .transpose()
+    {
+        Ok(locales) => locales,
+        Err(_) => return detail(StatusCode::BAD_REQUEST, "Authentication locale is invalid"),
+    };
     match state
         .application
-        .initiate(registration, redirect, oidc_callback_url(ui_base))
+        .initiate(
+            registration,
+            redirect,
+            oidc_callback_url(ui_base),
+            locales,
+            query.reauthenticate,
+        )
         .await
     {
         Ok(location) => redirect_response(&location),
+        Err(error) if error.code == "oidc_registration_unsupported" => {
+            let mut response = (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "code": "oidc_registration_unsupported",
+                    "detail": "Registration is managed by your identity provider",
+                })),
+            )
+                .into_response();
+            no_store(&mut response);
+            response
+        }
         Err(_) => detail(
             StatusCode::SERVICE_UNAVAILABLE,
             "Authentication service unavailable",
@@ -917,6 +991,11 @@ fn title_case(value: &str) -> &'static str {
 }
 
 fn application_error(error: AuthApplicationError) -> PortError {
+    if let AuthApplicationError::Port { source, .. } = &error {
+        if source.code == "oidc_registration_unsupported" {
+            return source.clone();
+        }
+    }
     let code = match &error {
         AuthApplicationError::InvalidState => "auth_oidc_state_invalid",
         AuthApplicationError::ExpiredState => "auth_oidc_state_expired",

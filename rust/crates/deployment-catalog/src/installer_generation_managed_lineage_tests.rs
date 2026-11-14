@@ -343,6 +343,7 @@ impl Fixture {
                 root_retired: false,
                 installation_ready: false,
                 successor: generations.last().map(|parent| SuccessorBinding {
+                    oidc_secret_rotation_sha256: None,
                     sequence,
                     attempt: 0,
                     parent_attempt: 0,

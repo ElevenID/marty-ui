@@ -4,6 +4,63 @@ use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase,
 use serde_json::Value;
 
 #[test]
+fn external_oidc_operator_commands_are_discoverable_and_never_accept_inline_secrets_or_provider_changes(
+) {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["external-oidc", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        text.contains("preflight --install-dir")
+            && text.contains("rotate-secret --install-dir")
+            && text.contains("--client-secret-file")
+    );
+    for args in [
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--client-secret",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--issuer-url",
+            "https://SYNTHETIC_PRIVATE_CANARY.example",
+        ],
+        vec![
+            "external-oidc",
+            "preflight",
+            "--client-id",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--client-secret-file",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--install-dir",
+            "/missing",
+            "--client-secret-file",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("SYNTHETIC_PRIVATE_CANARY"));
+    }
+}
+
+#[test]
 fn external_oidc_arguments_are_checked_before_installation_without_echoing_paths() {
     for verb in ["install", "candidate-test"] {
         let record = if verb == "install" {

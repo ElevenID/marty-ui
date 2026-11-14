@@ -1704,7 +1704,14 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
             "confidential",
             "/run/secrets/external_oidc_client_secret",
             "openid,email,urn:example:$$groups",
-            "MARTY_EXTERNAL_OIDC_SCOPES='openid,email,urn:example:$groups'\n",
+            concat!("MARTY_EXTERNAL_OIDC_SCOPES='openid,email,urn:example:$groups'\n",
+                "MARTY_EXTERNAL_OIDC_TOKEN_ENDPOINT_AUTH_METHOD='client_secret_basic'\n",
+                "MARTY_EXTERNAL_OIDC_USERINFO_MODE='fallback'\n",
+                "MARTY_EXTERNAL_OIDC_PROMPT=''\n",
+                "MARTY_EXTERNAL_OIDC_MAX_AGE_SECONDS='omit'\n",
+                "MARTY_EXTERNAL_OIDC_PROVIDER_NAME='Example $provider'\n",
+                "MARTY_EXTERNAL_OIDC_ACCOUNT_URL='https://identity.example.invalid/account?tab=$security#profile'\n",
+                "MARTY_EXTERNAL_OIDC_RECOVERY_URL='https://login.example.invalid/recover'\n"),
         ),
     ] {
         let env = temp.path().join(format!("{client}.env"));
@@ -1803,6 +1810,16 @@ fn assert_native_external_oidc_models(executable: &OsString, bundle: &Path, supp
             ("CREDENTIAL_LOGIN_CREATE_USERS", "false"),
         ] {
             assert_eq!(auth[name], value, "wrong external auth setting {name}");
+        }
+        let confidential = client == "confidential";
+        for (name, selected, default) in [
+            ("OIDC_TOKEN_ENDPOINT_AUTH_METHOD", "client_secret_basic", ""),
+            ("OIDC_USERINFO_MODE", "fallback", "disabled"), ("OIDC_PROMPT", "", "consent login"),
+            ("OIDC_MAX_AGE_SECONDS", "omit", "0"), ("OIDC_PROVIDER_NAME", "Example $$provider", ""),
+            ("OIDC_ACCOUNT_URL", "https://identity.example.invalid/account?tab=$$security#profile", ""),
+            ("OIDC_RECOVERY_URL", "https://login.example.invalid/recover", ""),
+        ] {
+            assert_eq!(auth[name], if confidential { selected } else { default }, "wrong external compatibility setting {name}");
         }
         for removed in [
             "KEYCLOAK_REALM",

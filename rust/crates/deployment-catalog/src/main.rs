@@ -812,6 +812,18 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer lifecycle currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "external-oidc") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_oidc_command::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("external OIDC operator commands currently require Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "root-retirement") {
         #[cfg(target_os = "linux")]
         {

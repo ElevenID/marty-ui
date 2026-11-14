@@ -147,6 +147,10 @@ fn selected_corpus(
             result.push(generation.read(installation, name)?);
         }
     }
+    result.extend(crate::installer_oidc_rotation::redaction_values(
+        state,
+        installation,
+    )?);
     Ok(result)
 }
 fn patterns(corpus: &[Vec<u8>]) -> Result<Vec<String>> {

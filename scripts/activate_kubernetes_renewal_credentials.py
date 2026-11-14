@@ -123,12 +123,19 @@ def external_environment(selected: dict) -> dict[str, str]:
         "KEYCLOAK_ADMIN_URL": "", "KEYCLOAK_TOKEN_EXCHANGE_ENABLED": "false",
         "KEYCLOAK_PASSKEYS_ENABLED": "false", "CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER": "false",
         "CREDENTIAL_LOGIN_CREATE_USERS": "false",
+        **{env: str(oidc[key]) for key, env in (
+            ("clientAuthMethod", "OIDC_TOKEN_ENDPOINT_AUTH_METHOD"),
+            ("userinfoMode", "OIDC_USERINFO_MODE"), ("maxAge", "OIDC_MAX_AGE_SECONDS"),
+            ("providerName", "OIDC_PROVIDER_NAME"), ("accountUrl", "OIDC_ACCOUNT_URL"),
+            ("recoveryUrl", "OIDC_RECOVERY_URL")) if key in oidc},
+        **({"OIDC_PROMPT": " ".join(oidc["prompt"])} if "prompt" in oidc else {}),
     }
 
 
-def https_input(value: object, *, origin: bool = False) -> str:
+def https_input(value: object, *, origin: bool = False, display_link: bool = False) -> str:
     bootstrap.require(isinstance(value, str) and 0 < len(value.encode()) <= 2048
-                      and value.startswith("https://") and not re.search(r"[\s\\?#]", value),
+                      and value.startswith("https://") and not re.search(r"[\s\\]", value)
+                      and (display_link or not re.search(r"[?#]", value)),
                       "external OIDC HTTPS input differs")
     url = urlsplit(value)
     host = url.hostname or ""
@@ -177,8 +184,9 @@ def authentication_selection(entries: list[dict], namespace: str) -> dict | None
     bootstrap.require(set(selected) == {"schema", "provider", "external", "adminEmail", "redirectUri", "postLogoutRedirectUri"},
                       "external authentication selection fields differ")
     oidc = selected["external"]
-    bootstrap.require(isinstance(oidc, dict) and set(oidc) == {
-        "issuerUrl", "clientId", "allowedAlgorithms", "trustedEndpointOrigins", "scopes", "clientSecret"},
+    required = {"issuerUrl", "clientId", "allowedAlgorithms", "trustedEndpointOrigins", "scopes", "clientSecret"}
+    optional = {"clientAuthMethod", "userinfoMode", "prompt", "maxAge", "providerName", "accountUrl", "recoveryUrl"}
+    bootstrap.require(isinstance(oidc, dict) and required <= set(oidc) <= required | optional,
         "external OIDC selection fields differ")
     https_input(oidc["issuerUrl"])
     bootstrap.require(isinstance(oidc["clientId"], str) and 0 < len(oidc["clientId"].encode()) <= 256
@@ -204,6 +212,40 @@ def authentication_selection(entries: list[dict], namespace: str) -> dict | None
                       and isinstance(secret["key"], str) and len(secret["key"]) <= 253
                       and re.fullmatch(r"[A-Za-z0-9._-]+", secret["key"]) is not None)),
                       "external OIDC Secret reference differs")
+    if "clientAuthMethod" in oidc:
+        method = oidc["clientAuthMethod"]
+        bootstrap.require(method in {"none", "client_secret_post", "client_secret_basic"}
+                          and (method != "none") == bool(secret),
+                          "external OIDC client authentication method differs")
+    if "userinfoMode" in oidc:
+        bootstrap.require(oidc["userinfoMode"] in {"disabled", "fallback"},
+                          "external OIDC UserInfo mode differs")
+    if "prompt" in oidc:
+        prompt = oidc["prompt"]
+        bootstrap.require(isinstance(prompt, list) and len(prompt) <= 4
+                          and all(isinstance(value, str) for value in prompt)
+                          and len(set(prompt)) == len(prompt)
+                          and set(prompt) <= {"login", "consent", "select_account", "none"}
+                          and ("none" not in prompt or len(prompt) == 1),
+                          "external OIDC authorization prompt differs")
+    if "maxAge" in oidc:
+        age = oidc["maxAge"]
+        bootstrap.require(age == "omit" or (type(age) is int and 0 <= age <= 86400),
+                          "external OIDC maximum authentication age differs")
+    if "providerName" in oidc:
+        name = oidc["providerName"]
+        bootstrap.require(isinstance(name, str) and 0 < len(name.encode()) <= 80
+                          and name.strip() == name and not re.search(r"[\x00-\x1f\x7f-\x9f]", name),
+                          "external OIDC provider name differs")
+    def link_origin(value: str) -> str:
+        parsed = urlsplit(value)
+        return "https://" + parsed.hostname + (":" + str(parsed.port) if parsed.port not in {None, 443} else "")
+    allowed_origins = {link_origin(oidc["issuerUrl"]), *oidc["trustedEndpointOrigins"]}
+    for key in ("accountUrl", "recoveryUrl"):
+        if key in oidc:
+            link = https_input(oidc[key], display_link=True)
+            bootstrap.require(link_origin(link) in allowed_origins,
+                              "external OIDC provider link origin differs")
     email = selected["adminEmail"]
     bootstrap.require(isinstance(email, str) and re.fullmatch(r"[^\s@]+@[^\s@]+", email) is not None
                       and email.lower() not in {"admin@example.com", "user@example.com", "example@example.com"}

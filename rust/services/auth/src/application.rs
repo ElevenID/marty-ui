@@ -9,6 +9,7 @@ use crate::domain::{
     generate_pkce_pair, random_urlsafe_token, AuthenticatedUser, OidcValidatedIdentity,
     PasskeyEnrollmentBinding, PkceState, Session, SessionSpec,
 };
+use crate::{OidcAuthenticationFreshness, OidcProviderCapabilities};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{code}: {message}")]
@@ -59,6 +60,8 @@ fn port(operation: &'static str, source: PortError) -> AuthApplicationError {
 pub struct InitiateLoginCommand {
     pub redirect_uri: Option<String>,
     pub oidc_redirect_uri: Option<String>,
+    pub ui_locales: Option<String>,
+    pub reauthenticate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +157,8 @@ pub struct OidcAuthorizationRequest {
     pub nonce: String,
     pub redirect_uri: Option<String>,
     pub registration: bool,
+    pub ui_locales: Option<String>,
+    pub reauthenticate: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,6 +228,18 @@ pub trait PkceStateRepository: Send + Sync {
 
 #[async_trait]
 pub trait OidcProvider: Send + Sync {
+    fn capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+        Err(PortError::new(
+            "oidc_capabilities_unavailable",
+            "OIDC provider capabilities are unavailable",
+        ))
+    }
+    fn authentication_freshness(
+        &self,
+        _request: &OidcAuthorizationRequest,
+    ) -> Option<OidcAuthenticationFreshness> {
+        None
+    }
     fn passkey_management_url(&self, _return_uri: &str) -> Option<String> {
         None
     }
@@ -308,6 +325,12 @@ pub struct AuthApplicationConfig {
 }
 
 impl AuthApplication {
+    pub fn provider_capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+        let mut capabilities = self.oidc.capabilities()?;
+        capabilities.passkey_enrollment_supported &= self.passkeys_enabled;
+        Ok(capabilities)
+    }
+
     pub fn passkey_management_url(&self, session: &Session, return_uri: &str) -> Option<String> {
         self.passkey_enrollment_available(session)
             .then(|| self.oidc.passkey_management_url(return_uri))
@@ -428,12 +451,13 @@ impl AuthApplication {
         let pkce = generate_pkce_pair();
         let state = random_urlsafe_token(32);
         let nonce = random_urlsafe_token(32);
-        let stored = PkceState {
+        let mut stored = PkceState {
             state: state.clone(),
             code_verifier: pkce.verifier,
             redirect_uri: command.redirect_uri.unwrap_or_else(|| "/".to_owned()),
             oidc_redirect_uri: command.oidc_redirect_uri.clone(),
             nonce: Some(nonce.clone()),
+            authentication_freshness: None,
             passkey_enrollment: enrollment.map(|session| PasskeyEnrollmentBinding {
                 session_id: session.session_id.clone(),
                 subject: keycloak_subject(session).unwrap_or_default().to_owned(),
@@ -447,7 +471,10 @@ impl AuthApplication {
             nonce,
             redirect_uri: command.oidc_redirect_uri,
             registration,
+            ui_locales: command.ui_locales,
+            reauthenticate: command.reauthenticate || enrollment.is_some(),
         };
+        stored.authentication_freshness = self.oidc.authentication_freshness(&request);
         let authorization_url = if let Some(session) = enrollment {
             self.oidc
                 .passkey_enrollment_url(&request, session.id_token.as_deref().unwrap_or_default())
@@ -503,6 +530,15 @@ impl AuthApplication {
             .validate_tokens(&id_token, &tokens.access_token, nonce)
             .await
             .map_err(|error| port("validate OIDC tokens", error))?;
+        if let Some(freshness) = &state.authentication_freshness {
+            freshness
+                .validate(
+                    &identity.id_token_claims,
+                    state.created_at.timestamp(),
+                    now.timestamp(),
+                )
+                .map_err(|error| port("validate OIDC tokens", error))?;
+        }
         if let Some(binding) = state.passkey_enrollment {
             // The ID-token hint constrains Keycloak before the required action.
             // Independently bind the callback before provisioning or issuing any

@@ -133,11 +133,14 @@ auth:
 
 Use the actual issuer, client ID and signing algorithm selected at the provider.
 The provider must support authorization code with S256 PKCE and advertise
-`none` token-endpoint authentication for a public client, or `client_secret_post`
-for a confidential client. Register the exact callback
+`none` token-endpoint authentication for a public client, or the selected
+`client_secret_post`/`client_secret_basic` method for a confidential client. When
+the standard methods metadata is absent, OIDC defaults to Basic. Register the exact callback
 `https://beta.example.org/v1/auth/callback` in this example. Create the operator
 account there before installation; its signed ID token must include a nonempty
 subject, an email matching `organization.adminEmail`, and `email_verified: true`.
+Explicit UserInfo fallback may supply missing email/profile claims after token
+validation and an exact subject match.
 Marty seeds administrator membership from that email. It does not create the
 remote account, and the existing bootstrap password is not an external login
 credential.
@@ -154,13 +157,32 @@ the file. Do not change the reference to migrate an existing provider selection.
 `openid`, contain at most 32 unique tokens of 1–128 printable ASCII characters
 each, and fit within 2,048 bytes when comma-joined. Whitespace, double quotes,
 backslashes, commas and apostrophes are excluded. Additional provider-specific
-scopes are supported; the signed ID token must still contain the required
-identity claims. `trustedEndpointOrigins` defaults to an empty list. Add at most
+scopes are supported; the selected token/UserInfo policy must still supply the
+required verified identity claims. `trustedEndpointOrigins` defaults to an empty list. Add at most
 eight exact HTTPS origins when discovery uses other origins: lowercase DNS host
 or canonical IPv4, no path or trailing slash, and no default `:443` or padded
 port. The issuer can include a path; this chart does not accept IPv6 provider
 endpoints. See the [provider compatibility guide](../../../docs/installer-external-oidc.md#provider-prerequisites)
 for discovery, supported algorithms, registration and logout behavior.
+
+Optional typed provider settings use these names in `auth.external`:
+
+| Field | Selection |
+| --- | --- |
+| `clientAuthMethod` | `none`, `client_secret_post`, or `client_secret_basic`. Omission preserves `none` for public clients and POST for clients with `clientSecret`. Explicit `none` refuses a Secret; POST/Basic require the dedicated Secret reference. |
+| `userinfoMode` | `disabled` (default) or `fallback`. Fallback uses the trusted discovered UserInfo endpoint only after ID-token validation and requires an exact subject match. |
+| `prompt` | Distinct `login`, `consent`, `select_account`, `none` values. Omission keeps `[consent, login]`; `[]` omits the parameter; `none` must appear alone. |
+| `maxAge` | Integer `0`–`86400`, or `omit`. Omission keeps `0`. |
+| `providerName` | Optional trimmed display name, at most 80 UTF-8 bytes without controls. |
+| `accountUrl`, `recoveryUrl` | Optional fixed HTTPS provider links, at most 2,048 UTF-8 bytes, on the issuer or an explicit trusted origin. Queries/fragments are allowed; credentials and wildcard hosts are refused. |
+
+For example, add `clientAuthMethod: client_secret_basic`, `userinfoMode: fallback`,
+`prompt: []` and `maxAge: omit` when those choices match the registered provider.
+Set `providerName` and the optional links to present the selected provider in the
+application. Hosted login themes, recovery, MFA and account-management behavior
+remain with that provider. Provider metadata preflight uses the same Auth
+validator; see [the read-only compatibility command](../../../docs/installer-external-oidc.md#read-only-provider-compatibility-check).
+It does not validate the real credential or replace a live callback/login test.
 
 External mode omits the Keycloak Deployment, Service, configurator, realm and
 theme ConfigMaps. PostgreSQL skips Keycloak database initialization and readiness,
@@ -173,8 +195,10 @@ The absent workloads do not pull or consume those Keycloak runtime inputs.
 
 The chart stores the resolved selection in the immutable `marty-auth-selection`
 ConfigMap and binds its digest to workload annotations. The provider, external
-issuer/client/scopes/allowlists/Secret reference, administrator email and callback
-origin cannot be changed in place. Retain this record for upgrades and renewal;
+issuer/client/scopes/allowlists/Secret reference, optional authentication and
+account-link settings, administrator email and callback origin cannot be changed
+in place. New fields remain absent in old selections when omitted; upgrades do
+not silently rewrite those records. Retain this record for upgrades and renewal;
 missing or conflicting typed evidence is refused. Use `helm upgrade --dry-run=server`
 when previewing an existing typed installation so Helm can inspect that evidence.
 An offline `helm template --is-upgrade` cannot qualify an external upgrade.

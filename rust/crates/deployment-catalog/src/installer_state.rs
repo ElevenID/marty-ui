@@ -1130,7 +1130,8 @@ impl LockedMaintenance {
             || entry.starts_with("openbao-tls-recovery-")
             || entry.starts_with("openbao-root-retirement-")
             || entry.starts_with("rootless-canary-")
-            || entry.starts_with("kms-registration-"))
+            || entry.starts_with("kms-registration-")
+            || entry.starts_with("oidc-provider-preflight-"))
             || bytes.is_empty()
             || bytes.len() > 4 * 1024 * 1024
         {
