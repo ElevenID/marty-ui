@@ -177,6 +177,9 @@ ingress:
   enabled: true
   className: ''
   annotations: {}
+  # Opt in only when Traefik already serves an independently managed default
+  # TLSStore. No per-namespace Secret copy or certificate is created by this chart.
+  useDefaultCertificate: false
   tlsSecretName: ''
   host: ''
 publicOrigin: ''

@@ -36,6 +36,7 @@ import ReviewStep from './steps/ReviewStep';
 import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { templateIssuerRequest, templateIssuerRequirementsSatisfied, validTemplateIssuerSelection } from './templateIssuerSelection';
 import { buildWizardValidityRules, credentialTemplateValidity, INITIAL_TEMPLATE_VALIDITY } from './credentialTemplateValidity';
+import { validCredentialTemplateClaims } from './credentialTemplateClaims';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
@@ -65,7 +66,7 @@ const CredentialTemplateWizard = () => {
           data.credential_type?.trim().length > 0
         );
       case 1: // Claims
-        return data.claims && data.claims.length > 0;
+        return validCredentialTemplateClaims(data);
       case 2: // Trust & Compliance
         return validTemplateIssuerSelection(data, effectiveOrganizationId);
       case 3: // Crypto & Validity (optional)
@@ -73,7 +74,8 @@ const CredentialTemplateWizard = () => {
           && (data._issuer_selection?.requirements?.revocation_profile === false
             ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       case 4: // Review
-        return validTemplateIssuerSelection(data, effectiveOrganizationId)
+        return validCredentialTemplateClaims(data)
+          && validTemplateIssuerSelection(data, effectiveOrganizationId)
           && credentialTemplateValidity(data.validity_rules).valid
           && (data._issuer_selection?.requirements?.revocation_profile === false ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       default:
@@ -91,6 +93,11 @@ const CredentialTemplateWizard = () => {
     if (!credentialTemplateValidity(data.validity_rules).valid) {
       throw new Error(t('wizards.credentialTemplate.cryptoValidityStep.validation.reviewSettings', {
         defaultValue: 'Review the highlighted validity settings before creating the template.',
+      }));
+    }
+    if (!validCredentialTemplateClaims(data)) {
+      throw new Error(t('wizards.credentialTemplate.claimsStep.reviewClaims', {
+        defaultValue: 'Return to Claims and review the credential structure before creating the template.',
       }));
     }
     const { _organization_default_trust: _defaultTrust, ...templateData } = data;
