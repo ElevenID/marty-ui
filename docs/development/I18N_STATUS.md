@@ -1,5 +1,10 @@
 # Multi-Language Implementation Status
 
+> Historical translation checklist. Some components named below have since been
+> retired, including the unused vendor compliance, flow status, issuance, lane,
+> mDoc configuration, and trust pages. Active screens are defined in
+> [`ConsoleRoutes`](../../ui/src/apps/console/ConsoleRoutes.jsx).
+
 ## ✅ Completed
 
 ### Foundation (100% Complete)

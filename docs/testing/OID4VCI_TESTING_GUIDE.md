@@ -1,5 +1,11 @@
 # OID4VCI Implementation - Testing Guide
 
+> Historical implementation record. The Python services and vendor `Issuance`
+> page described below have been retired. Current issuance starts in
+> [`IssuancePage`](../../ui/src/components/console/operate/IssuancePage.jsx);
+> [`ConsoleRoutes`](../../ui/src/apps/console/ConsoleRoutes.jsx) defines the active
+> application routes. The results below describe the earlier implementation.
+
 ## Status Summary
 
 ### ✅ Implementation Complete
