@@ -1603,6 +1603,344 @@ mod bounded_sd_jwt_query_evidence {
     }
 
     #[tokio::test]
+    async fn ordinary_oid4vp_dcql_accepts_holder_bound_sd_jwt_without_subject() {
+        let fixture = Fixture::new();
+        assert!(fixture.policy.prerequisite_evidence_profile.is_none());
+
+        // The unmodified OIDF release-v5.3.3 producer at
+        // 7d420f716e49d44f8a6b04f0a3e240ad6d68ab55 supplies iss, iat, exp,
+        // vct, cnf and selected disclosures, but no sub or jti. Isolate that
+        // shape difference with genuine issuer and holder signatures.
+        let claims = subjectless_claims(&fixture);
+        let token = presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now);
+        let native = generic_core_verification(&token, &fixture.nonce);
+        assert!(native.claims().get("sub").is_none());
+        assert_eq!(native.claims()["email"], EMAIL);
+
+        let mut request = fixture.request_for_token(token);
+        request
+            .context
+            .insert("oid4vp_verifier_context".into(), json!(true));
+        request
+            .context
+            .insert("replay_check_verified".into(), json!(true));
+        let material = fixture.verify(&request).await;
+        assert_eq!(
+            material.policy_facts()["credentials"][0]["signature_verified"],
+            true,
+            "ordinary authentication must not require managed prerequisite subject identity: {}",
+            material.policy_facts()["credentials"][0]["signature_failure_reason"],
+        );
+        for binding in [
+            "holder_binding_verified",
+            "challenge_verified",
+            "audience_verified",
+        ] {
+            assert_eq!(material.policy_facts()[binding], true, "{binding}");
+        }
+        assert!(material.authenticated_sd_jwt_presentation.is_some());
+        assert!(material.authenticated_sd_jwt_query().is_none());
+        assert!(material.managed_credential_authority().is_none());
+        let output =
+            evaluate_verified_material_for_policy(material, &fixture.policy, &request).unwrap();
+        assert_eq!(output["decision"], "allow", "{output}");
+        for field in [
+            "authenticated_sd_jwt_query",
+            "authenticated_sd_jwt_presentation",
+            "managed_sd_jwt_authority",
+            marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+        ] {
+            assert!(output.get(field).is_none(), "{field}");
+            assert!(
+                output["credential_results"][0].get(field).is_none(),
+                "{field}"
+            );
+        }
+    }
+
+    fn subjectless_claims(fixture: &Fixture) -> Value {
+        let mut claims = fixture.claims.clone();
+        claims.as_object_mut().unwrap().remove("sub");
+        claims.as_object_mut().unwrap().remove("jti");
+        claims
+    }
+
+    async fn assert_subjectless_rejected(fixture: &Fixture, label: &str, token: String) {
+        let request = fixture.request_for_token(token);
+        match fixture
+            .orchestrator
+            .verify_material(&fixture.policy, &request)
+            .await
+        {
+            Ok(material) => {
+                assert_ne!(
+                    material.policy_facts()["credentials"][0]["signature_verified"],
+                    true,
+                    "{label} must not authenticate an ordinary presentation"
+                );
+                assert!(
+                    material.authenticated_sd_jwt_presentation.is_none(),
+                    "{label}"
+                );
+                assert!(material.authenticated_sd_jwt_query().is_none(), "{label}");
+            }
+            Err(PresentationVerificationError::Failed(_)) => {}
+            Err(other) => panic!("{label} must reject input, not lose its backend: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_subjectless_dcql_preserves_credential_and_holder_guards() {
+        let fixture = Fixture::new();
+        let claims = subjectless_claims(&fixture);
+        for (label, token) in [
+            (
+                "wrong holder nonce",
+                presentation(&claims, &fixture.different_nonce(), AUDIENCE, fixture.now),
+            ),
+            (
+                "wrong holder audience",
+                presentation(
+                    &claims,
+                    &fixture.nonce,
+                    "did:web:other.example",
+                    fixture.now,
+                ),
+            ),
+            (
+                "tampered issuer signature",
+                bind_issuer_jwt(
+                    &tamper_signature(&issuer_jwt(&claims)),
+                    &fixture.nonce,
+                    AUDIENCE,
+                    fixture.now,
+                ),
+            ),
+            (
+                "tampered holder signature",
+                tamper_signature(&presentation(
+                    &claims,
+                    &fixture.nonce,
+                    AUDIENCE,
+                    fixture.now,
+                )),
+            ),
+            (
+                "missing holder proof",
+                disclosed_sd_jwt(&claims, &["email"]),
+            ),
+            (
+                "stale holder proof",
+                presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now - 301),
+            ),
+            (
+                "future holder proof",
+                presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now + 61),
+            ),
+        ] {
+            assert_subjectless_rejected(&fixture, label, token).await;
+        }
+        for (label, field, value) in [
+            ("wrong issuer", "iss", json!("did:web:foreign.example")),
+            ("wrong VCT", "vct", json!("urn:example:other")),
+            ("expired credential", "exp", json!(fixture.now - 1)),
+            ("future credential", "iat", json!(fixture.now + 1)),
+            ("future not-before", "nbf", json!(fixture.now + 1)),
+            ("missing holder key", "cnf", json!({})),
+            ("null subject", "sub", Value::Null),
+            ("non-string subject", "sub", json!(7)),
+            ("empty subject", "sub", json!("")),
+            ("oversized subject", "sub", json!("s".repeat(2_049))),
+        ] {
+            let mut invalid = claims.clone();
+            invalid[field] = value;
+            assert_subjectless_rejected(
+                &fixture,
+                label,
+                presentation(&invalid, &fixture.nonce, AUDIENCE, fixture.now),
+            )
+            .await;
+        }
+        let issuer = sign_jwt(
+            &issuer_key(),
+            json!({"alg":"EdDSA", "typ":"JWT", "kid":ISSUER_KEY_ID}),
+            &claims,
+        );
+        assert_subjectless_rejected(
+            &fixture,
+            "wrong protected type",
+            bind_issuer_jwt(&issuer, &fixture.nonce, AUDIENCE, fixture.now),
+        )
+        .await;
+        let disclosed_expiry = bind_disclosed_sd_jwt(
+            &disclosed_sd_jwt(&claims, &["email", "exp"]),
+            &fixture.nonce,
+            AUDIENCE,
+            fixture.now,
+        );
+        assert_subjectless_rejected(&fixture, "disclosed security metadata", disclosed_expiry)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn ordinary_subjectless_dcql_still_requires_explicitly_requested_subject() {
+        let mut fixture = Fixture::new();
+        let claim = &mut fixture.policy.credential_requirements[0].requested_claims[0];
+        claim.claim_name = "sub".into();
+        claim.constraints[0].claim_name = "sub".into();
+        fixture
+            .request
+            .oid4vp_transport
+            .as_mut()
+            .unwrap()
+            .query_document["credentials"][0]["claims"] = json!([{"id":"subject", "path":["sub"]}]);
+        refresh_query_digest(&mut fixture.request);
+        assert_subjectless_rejected(
+            &fixture,
+            "requested subject is absent",
+            presentation(
+                &subjectless_claims(&fixture),
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn ordinary_subjectless_dcql_rechecks_validity_after_awaited_work() {
+        for (advance, expected) in [
+            (
+                1_000,
+                "PRESENTATION_POLICY.SD_JWT_EXPIRED_DURING_EVALUATION",
+            ),
+            (
+                301,
+                "PRESENTATION_POLICY.SD_JWT_HOLDER_PROOF_EXPIRED_DURING_EVALUATION",
+            ),
+        ] {
+            let fixture =
+                Fixture::with_kernel_and_clock_advance(Arc::new(RustCredentialKernel), advance);
+            let claims = subjectless_claims(&fixture);
+            let request = fixture.request_for_token(presentation(
+                &claims,
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ));
+            assert!(
+                matches!(fixture.orchestrator.verify_material(&fixture.policy, &request).await,
+                Err(PresentationVerificationError::Failed(reason)) if reason == expected)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_subjectless_dcql_evidence_cannot_be_rebound_or_replace_claims() {
+        let fixture = Fixture::with_kernel(Arc::new(CachedNativeKernel::default()));
+        let mut claims = subjectless_claims(&fixture);
+        let request =
+            fixture.request_for_token(presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now));
+        let original = fixture.verify(&request).await;
+        assert!(original.authenticated_sd_jwt_presentation.is_some());
+        claims["email"] = json!("different-authenticated@example.test");
+        let different =
+            fixture.request_for_token(presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now));
+        assert!(
+            matches!(fixture.orchestrator.verify_material(&fixture.policy, &different).await,
+            Err(PresentationVerificationError::Failed(reason)) if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH")
+        );
+        assert!(
+            evaluate_verified_material_for_policy(original, &fixture.policy, &different).is_err()
+        );
+
+        let mut altered = fixture.verify(&request).await;
+        altered.policy_facts["credentials"][0]["claims"]["email"] =
+            json!("substituted@example.test");
+        assert!(evaluate_verified_material_for_policy(altered, &fixture.policy, &request).is_err());
+        let mut other_policy = fixture.policy.clone();
+        other_policy.version += 1;
+        assert!(evaluate_verified_material_for_policy(
+            fixture.verify(&request).await,
+            &other_policy,
+            &request
+        )
+        .is_err());
+
+        let replacing = Fixture::with_kernel(Arc::new(ClaimsReplacingNativeKernel));
+        let request = replacing.request_for_token(presentation(
+            &subjectless_claims(&replacing),
+            &replacing.nonce,
+            AUDIENCE,
+            replacing.now,
+        ));
+        assert!(
+            matches!(replacing.orchestrator.verify_material(&replacing.policy, &request).await,
+            Err(PresentationVerificationError::Failed(reason)) if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH")
+        );
+    }
+
+    struct SubjectlessProofMutatingKernel {
+        strip_presentation: bool,
+        extra_subject_proof: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    }
+
+    #[async_trait]
+    impl CredentialVerificationKernel for SubjectlessProofMutatingKernel {
+        async fn verify(
+            &self,
+            context: &CredentialVerificationContext,
+        ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+            let mut verified = RustCredentialKernel.verify(context).await?;
+            assert!(verified.verified && verified.authenticated_sd_jwt_presentation.is_some());
+            let serialized = serde_json::to_value(&verified).unwrap();
+            assert!(serialized
+                .get("authenticated_sd_jwt_presentation")
+                .is_none());
+            if self.strip_presentation {
+                verified = serde_json::from_value(serialized).unwrap();
+                assert!(verified.authenticated_sd_jwt_presentation.is_none());
+            }
+            verified.authenticated_sd_jwt_query = self.extra_subject_proof.clone();
+            Ok(verified)
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_subjectless_dcql_rejects_stripped_or_ambiguous_native_proofs() {
+        let strict = Fixture::new();
+        let strict_material = strict.verify(&strict.request).await;
+        let subject_proof = strict_material
+            .authenticated_sd_jwt_query()
+            .unwrap()
+            .clone();
+        for mutation in [
+            SubjectlessProofMutatingKernel {
+                strip_presentation: true,
+                extra_subject_proof: None,
+            },
+            SubjectlessProofMutatingKernel {
+                strip_presentation: false,
+                extra_subject_proof: Some(subject_proof),
+            },
+        ] {
+            let fixture = Fixture::with_kernel(Arc::new(mutation));
+            let request = fixture.request_for_token(presentation(
+                &subjectless_claims(&fixture),
+                &fixture.nonce,
+                AUDIENCE,
+                fixture.now,
+            ));
+            assert!(matches!(
+                fixture.orchestrator.verify_material(&fixture.policy, &request).await,
+                Err(PresentationVerificationError::Failed(reason))
+                    if reason == "PRESENTATION_POLICY.AUTHENTICATED_QUERY_EVIDENCE_MISMATCH"
+            ));
+        }
+    }
+
+    #[tokio::test]
     async fn invalid_signed_identity_or_holder_proof_cannot_produce_query_evidence() {
         let fixture = Fixture::new();
         let mut variants = vec![
@@ -2611,6 +2949,32 @@ mod bounded_sd_jwt_query_evidence {
             )
             .unwrap();
             (fixture, owners)
+        }
+
+        #[tokio::test]
+        async fn managed_prerequisites_still_reject_absent_subject_identity() {
+            let (fixture, owners) = fixture(Mode::Valid, 0);
+            let mut claims = fixture.claims.clone();
+            claims.as_object_mut().unwrap().remove("sub");
+            let token = presentation(&claims, &fixture.nonce, AUDIENCE, fixture.now);
+            generic_core_verification(&token, &fixture.nonce);
+            let request = fixture.request_for_token(token);
+            let material = fixture.verify(&request).await;
+            assert_eq!(
+                material.policy_facts()["credentials"][0]["signature_verified"],
+                false
+            );
+            assert!(material.authenticated_sd_jwt_query().is_none());
+            assert!(material.authenticated_sd_jwt_presentation.is_none());
+            assert!(material.managed_credential_authority().is_none());
+            assert!(owners.trust_calls.lock().unwrap().is_empty());
+            assert!(owners.status_calls.lock().unwrap().is_empty());
+            let output =
+                evaluate_verified_material_for_policy(material, &fixture.policy, &request).unwrap();
+            assert_eq!(output["decision"], "deny");
+            assert!(output
+                .get(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2)
+                .is_none());
         }
 
         #[tokio::test]

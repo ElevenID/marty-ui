@@ -72,6 +72,81 @@ impl std::fmt::Debug for SdJwtDcqlRequest {
     }
 }
 
+/// Native authentication of an ordinary DCQL presentation without a subject
+/// identifier. It cannot supply subject-bound prerequisite evidence or be
+/// deserialized from caller facts. No projection is exposed to callers.
+///
+/// ```compile_fail
+/// let _: marty_presentation_policy::AuthenticatedSdJwtPresentationEvidence =
+///     serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Clone, PartialEq)]
+pub struct AuthenticatedSdJwtPresentationEvidence {
+    request: SdJwtDcqlRequest,
+    issuer_id: String,
+    policy_claims_digest: String,
+    valid_from_epoch_seconds: u64,
+    expires_at_epoch_seconds: u64,
+    holder_proof_issued_at: f64,
+    holder_proof_not_before: Option<f64>,
+    holder_proof_expires_at: Option<f64>,
+}
+
+impl std::fmt::Debug for AuthenticatedSdJwtPresentationEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthenticatedSdJwtPresentationEvidence")
+            .field("query_digest", &self.request.query_digest)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AuthenticatedSdJwtPresentationEvidence {
+    pub(crate) fn issuer_id(&self) -> &str {
+        &self.issuer_id
+    }
+
+    pub(crate) fn matches_request(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> bool {
+        SdJwtDcqlRequest::prepare(
+            policy,
+            request,
+            DetectedCredentialFormat::SdJwt,
+            self.request.checked_at_epoch_seconds,
+        )
+        .ok()
+        .flatten()
+        .is_some_and(|prepared| prepared.matches_presentation(self))
+    }
+
+    pub(crate) fn matches_claims(&self, claims: &Map<String, Value>) -> bool {
+        digest_domain_json("marty.oid4vp/selected-claims/v1", claims)
+            .is_ok_and(|digest| digest == self.policy_claims_digest)
+    }
+
+    pub(crate) fn revalidate_at(&mut self, now: u64) -> Result<(), PresentationVerificationError> {
+        revalidate_sd_jwt_times(
+            now,
+            self.request.checked_at_epoch_seconds,
+            self.valid_from_epoch_seconds,
+            self.expires_at_epoch_seconds,
+            self.holder_proof_issued_at,
+            self.holder_proof_not_before,
+            self.holder_proof_expires_at,
+        )?;
+        self.request.checked_at_epoch_seconds = now;
+        Ok(())
+    }
+}
+
+pub(crate) enum VerifiedSdJwtDcqlEvidence {
+    SubjectBound(AuthenticatedSdJwtQueryEvidence),
+    Presentation(AuthenticatedSdJwtPresentationEvidence),
+}
+
 /// Native proof of query/subject/key binding, separate from policy acceptance.
 ///
 /// No raw subject, credential, disclosure, public key or claim value is retained
@@ -375,27 +450,15 @@ impl AuthenticatedSdJwtQueryEvidence {
     /// Refresh the observation after awaited key/trust/status work. A native
     /// library's JWT leeway must not extend this profile's live validity window.
     pub(crate) fn revalidate_at(&mut self, now: u64) -> Result<(), PresentationVerificationError> {
-        if now < self.checked_at_epoch_seconds
-            || now < self.valid_from_epoch_seconds
-            || now >= self.expires_at_epoch_seconds
-        {
-            return Err(PresentationVerificationError::Failed(
-                "PRESENTATION_POLICY.SD_JWT_EXPIRED_DURING_EVALUATION".into(),
-            ));
-        }
-        // Match the pinned Core verifier's NumericDate window, including
-        // fractional seconds. Trust/status awaits must not age a holder proof
-        // past that window while refreshing its final observation time.
-        if !holder_proof_is_live(
+        revalidate_sd_jwt_times(
             now,
+            self.checked_at_epoch_seconds,
+            self.valid_from_epoch_seconds,
+            self.expires_at_epoch_seconds,
             self.holder_proof_issued_at,
             self.holder_proof_not_before,
             self.holder_proof_expires_at,
-        ) {
-            return Err(PresentationVerificationError::Failed(
-                "PRESENTATION_POLICY.SD_JWT_HOLDER_PROOF_EXPIRED_DURING_EVALUATION".into(),
-            ));
-        }
+        )?;
         self.checked_at_epoch_seconds = now;
         Ok(())
     }
@@ -646,6 +709,13 @@ impl SdJwtDcqlRequest {
             && evidence.checked_at_epoch_seconds == self.checked_at_epoch_seconds
     }
 
+    pub(crate) fn matches_presentation(
+        &self,
+        evidence: &AuthenticatedSdJwtPresentationEvidence,
+    ) -> bool {
+        self.expected_trust_profile.is_none() && self == &evidence.request
+    }
+
     pub(crate) fn policy_claims(&self, verified: &Map<String, Value>) -> Map<String, Value> {
         self.claims
             .iter()
@@ -665,7 +735,7 @@ impl SdJwtDcqlRequest {
         key: &ResolvedIssuerKey,
         token: &str,
         allowed_algorithms: &[SigningAlgorithm],
-    ) -> Result<(Map<String, Value>, AuthenticatedSdJwtQueryEvidence), &'static str> {
+    ) -> Result<(Map<String, Value>, VerifiedSdJwtDcqlEvidence), &'static str> {
         if digest_response_item(token, &self.query_id, "0").map_err(|_| PROFILE_ERROR)?
             != self.response_token_digest
         {
@@ -739,13 +809,20 @@ impl SdJwtDcqlRequest {
         ) {
             return Err("SD-JWT holder proof freshness rejected");
         }
-        let subject = claims
-            .get("sub")
-            .and_then(Value::as_str)
-            .ok_or(PROFILE_ERROR)?;
-        if !bounded_text(subject, MAX_IDENTIFIER_BYTES)
-            || claims.get("vct").and_then(Value::as_str) != Some(self.vct.as_str())
-        {
+        // SD-JWT VC permits an absent subject identifier. Managed
+        // prerequisites still require that identity; ordinary presentation
+        // authentication binds the issuer, holder key and complete query.
+        let subject = match claims.get("sub") {
+            Some(Value::String(subject)) if bounded_text(subject, MAX_IDENTIFIER_BYTES) => {
+                Some(subject.as_str())
+            }
+            None if self.expected_trust_profile.is_none() => None,
+            Some(Value::String(_)) => {
+                return Err("SD-JWT subject or exact VCT is missing or mismatched");
+            }
+            _ => return Err(PROFILE_ERROR),
+        };
+        if claims.get("vct").and_then(Value::as_str) != Some(self.vct.as_str()) {
             return Err("SD-JWT subject or exact VCT is missing or mismatched");
         }
         let issued_at = claims
@@ -788,6 +865,36 @@ impl SdJwtDcqlRequest {
         }
         let holder = confirmation.get("jwk").ok_or(PROFILE_ERROR)?;
         let holder_key_thumbprint = public_key_thumbprint(holder)?;
+        let issuer_key_thumbprint = public_key_thumbprint(&key.public_jwk)?;
+        let issuer_jwt_digest =
+            marty_oid4vp_contract::managed_status::digest_sd_jwt_issuer_jws(token)
+                .map_err(|_| PROFILE_ERROR)?;
+        let policy_claims_digest = digest_domain_json(
+            "marty.oid4vp/selected-claims/v1",
+            &self.policy_claims(claims),
+        )
+        .map_err(|_| PROFILE_ERROR)?;
+        let valid_from_epoch_seconds = issued_at.max(
+            claims
+                .get("nbf")
+                .and_then(Value::as_u64)
+                .unwrap_or(issued_at),
+        );
+        let Some(subject) = subject else {
+            return Ok((
+                claims.clone(),
+                VerifiedSdJwtDcqlEvidence::Presentation(AuthenticatedSdJwtPresentationEvidence {
+                    request: self.clone(),
+                    issuer_id: verified.issuer().to_owned(),
+                    policy_claims_digest,
+                    valid_from_epoch_seconds,
+                    expires_at_epoch_seconds: expires_at,
+                    holder_proof_issued_at,
+                    holder_proof_not_before,
+                    holder_proof_expires_at,
+                }),
+            ));
+        };
         let evidence = AuthenticatedSdJwtQueryEvidence {
             contract: "marty.sd-jwt-dcql-query-evidence/v1",
             organization_id: self.organization_id.clone(),
@@ -809,37 +916,52 @@ impl SdJwtDcqlRequest {
             issuer_algorithm: issuer_algorithm.as_str().to_owned(),
             matched_claims: self.claims.clone(),
             checked_at_epoch_seconds: self.checked_at_epoch_seconds,
-            policy_claims_digest: digest_domain_json(
-                "marty.oid4vp/selected-claims/v1",
-                &self.policy_claims(claims),
-            )
-            .map_err(|_| PROFILE_ERROR)?,
+            policy_claims_digest,
             issued_at_epoch_seconds: issued_at,
-            valid_from_epoch_seconds: issued_at.max(
-                claims
-                    .get("nbf")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(issued_at),
-            ),
+            valid_from_epoch_seconds,
             expires_at_epoch_seconds: expires_at,
             holder_proof_issued_at,
             holder_proof_not_before,
             holder_proof_expires_at,
             selected_trust_profile_id: self.selected_trust_profile_id,
             expected_trust_profile: self.expected_trust_profile.clone(),
-            issuer_key_thumbprint: public_key_thumbprint(&key.public_jwk)?,
+            issuer_key_thumbprint,
             credential_id: claims
                 .get("jti")
                 .and_then(Value::as_str)
                 .filter(|value| bounded_text(value, MAX_IDENTIFIER_BYTES))
                 .map(str::to_owned),
-            issuer_jwt_digest: marty_oid4vp_contract::managed_status::digest_sd_jwt_issuer_jws(
-                token,
-            )
-            .map_err(|_| PROFILE_ERROR)?,
+            issuer_jwt_digest,
         };
-        Ok((claims.clone(), evidence))
+        Ok((
+            claims.clone(),
+            VerifiedSdJwtDcqlEvidence::SubjectBound(evidence),
+        ))
     }
+}
+
+fn revalidate_sd_jwt_times(
+    now: u64,
+    checked_at: u64,
+    valid_from: u64,
+    expires_at: u64,
+    holder_issued_at: f64,
+    holder_not_before: Option<f64>,
+    holder_expires_at: Option<f64>,
+) -> Result<(), PresentationVerificationError> {
+    if now < checked_at || now < valid_from || now >= expires_at {
+        return Err(PresentationVerificationError::Failed(
+            "PRESENTATION_POLICY.SD_JWT_EXPIRED_DURING_EVALUATION".into(),
+        ));
+    }
+    // Match Core's NumericDate window, including fractional seconds, after
+    // all awaited trust/status/policy work for either authenticated proof.
+    if !holder_proof_is_live(now, holder_issued_at, holder_not_before, holder_expires_at) {
+        return Err(PresentationVerificationError::Failed(
+            "PRESENTATION_POLICY.SD_JWT_HOLDER_PROOF_EXPIRED_DURING_EVALUATION".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn authenticated_payload(compact_jwt: &str) -> Result<Map<String, Value>, &'static str> {
