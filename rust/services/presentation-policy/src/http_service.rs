@@ -561,7 +561,13 @@ async fn evaluate(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
-    evaluate_policy(state.verification.as_ref(), policy, request).await
+    let mut result = evaluate_policy(state.verification.as_ref(), policy, request).await?;
+    // Full native evidence belongs to the authenticated internal producer path.
+    // Public evaluations retain their existing minimized result projection.
+    if let Some(object) = result.as_object_mut() {
+        object.remove(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2);
+    }
+    Ok(result)
 }
 
 pub(crate) async fn evaluate_policy(
@@ -668,6 +674,10 @@ pub fn evaluate_verified_material_for_policy(
             "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
         ));
     }
+    let managed_native_result = policy
+        .prerequisite_evidence_profile
+        .is_some()
+        .then(|| native.clone());
     let mut result = project_evaluation(
         native,
         request,
@@ -719,9 +729,31 @@ pub fn evaluate_verified_material_for_policy(
             policy, request, query, authority, &result,
         )
         .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let selected_claims = policy_facts["credentials"][0]["claims"]
+            .as_object()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
+        let managed_evidence = query
+            .managed_policy_evidence(
+                authority,
+                crate::sd_jwt_query::ManagedPolicyEvidenceInput {
+                    policy,
+                    request,
+                    selected_claims,
+                    native_result: managed_native_result.as_ref().ok_or_else(|| {
+                        bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
+                    })?,
+                    projected_result: &result,
+                    validity: &validity,
+                },
+            )
+            .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
         result[marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
             .map_err(|_| {
                 service_unavailable("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY")
+            })?;
+        result[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2] =
+            serde_json::to_value(managed_evidence).map_err(|_| {
+                service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
             })?;
     }
     Ok(result)

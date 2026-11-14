@@ -25,9 +25,22 @@ use uuid::Uuid;
 use crate::{
     normalize_credential_format, policy_revision, EvaluatePresentationRequest, PolicyStatus,
     PresentationPolicy, PresentationVerificationError, ResolvedIssuerKey,
+    VerifiedManagedCredentialAuthority,
 };
 
 const PROFILE_ERROR: &str = "PRESENTATION_POLICY.UNSUPPORTED_SD_JWT_DCQL_PROFILE";
+
+/// Borrowed native evaluation state; it is never a transport or cached-facts
+/// constructor. Producing evidence additionally requires this module's sealed
+/// query and the exact authenticated owner acquisitions.
+pub(crate) struct ManagedPolicyEvidenceInput<'a> {
+    pub policy: &'a PresentationPolicy,
+    pub request: &'a EvaluatePresentationRequest,
+    pub selected_claims: &'a Map<String, Value>,
+    pub native_result: &'a Value,
+    pub projected_result: &'a Value,
+    pub validity: &'a marty_oid4vp_contract::PolicyEvaluationValidityV1,
+}
 
 /// Prepared only from a saved policy and workload-authenticated query transport.
 /// It retains digests, not the wallet token. This type has no JSON constructor.
@@ -127,6 +140,107 @@ impl std::fmt::Debug for AuthenticatedSdJwtQueryEvidence {
 }
 
 impl AuthenticatedSdJwtQueryEvidence {
+    pub(crate) fn managed_policy_evidence(
+        &self,
+        authority: &VerifiedManagedCredentialAuthority,
+        input: ManagedPolicyEvidenceInput<'_>,
+    ) -> Result<
+        marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2,
+        PresentationVerificationError,
+    > {
+        use marty_oid4vp_contract::{
+            ManagedPolicyEvidenceProjectionV2, PolicyEvaluationValidityRequest,
+            MANAGED_POLICY_EVIDENCE_CONTRACT_V2,
+        };
+
+        let invalid = || {
+            PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE".into(),
+            )
+        };
+        let credential_id = self.credential_id.as_deref().ok_or_else(invalid)?;
+        let [credential] = input.native_result["credential_results"]
+            .as_array()
+            .map(Vec::as_slice)
+            .ok_or_else(invalid)?
+        else {
+            return Err(invalid());
+        };
+        if input.policy.prerequisite_evidence_profile.is_none()
+            || !input.request.trusted_internal_context
+            || !self.matches_request(input.policy, input.request)
+            || !self.matches_claims(input.selected_claims)
+            || input.native_result["policy_id"].as_str() != Some(self.policy.id.as_str())
+            || credential["requirement_id"].as_str() != Some(self.query_id.as_str())
+            || credential["credential_template_id"].as_str()
+                != Some(self.credential_template_id.as_str())
+            || credential["credential_id"].as_str() != Some(credential_id)
+            || credential["issuer_id"].as_str() != Some(self.issuer_id.as_str())
+        {
+            return Err(invalid());
+        }
+        let (trust, status) = authority.managed_evidence_parts(self)?;
+        let mut projection = ManagedPolicyEvidenceProjectionV2 {
+            contract: MANAGED_POLICY_EVIDENCE_CONTRACT_V2.into(),
+            organization_id: self.organization_id.clone(),
+            policy: self.policy.clone(),
+            query_id: self.query_id.clone(),
+            query_digest: self.query_digest.clone(),
+            response_token_digest: self.response_token_digest.clone(),
+            nonce_digest: self.nonce_digest.clone(),
+            audience_digest: self.audience_digest.clone(),
+            credential_template_id: self.credential_template_id.clone(),
+            issuer_id: self.issuer_id.clone(),
+            vct: self.vct.clone(),
+            issuer_algorithm: self.issuer_algorithm.clone(),
+            issuer_scoped_subject_digest: self.issuer_scoped_subject_digest.clone(),
+            holder_key_thumbprint: self.holder_key_thumbprint.clone(),
+            issuer_key_thumbprint: self.issuer_key_thumbprint.clone(),
+            issuer_jwt_digest: self.issuer_jwt_digest.clone(),
+            issued_at_epoch_seconds: i64::try_from(self.issued_at_epoch_seconds)
+                .map_err(|_| invalid())?,
+            valid_from_epoch_seconds: i64::try_from(self.valid_from_epoch_seconds)
+                .map_err(|_| invalid())?,
+            expires_at_epoch_seconds: i64::try_from(self.expires_at_epoch_seconds)
+                .map_err(|_| invalid())?,
+            selected_claims: input
+                .selected_claims
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            policy_result: input.native_result.clone(),
+            trust,
+            status,
+            validity: input.validity.clone(),
+            evidence_digest: String::new(),
+        };
+        projection.evidence_digest = projection.recompute_digest().map_err(|_| invalid())?;
+        let token = input.request.vp_token.as_str().ok_or_else(invalid)?;
+        let context = Value::Object(input.request.context.clone());
+        let binding = PolicyEvaluationValidityRequest {
+            organization_id: &self.organization_id,
+            policy: &self.policy,
+            nonce: input.request.nonce.as_deref().ok_or_else(invalid)?,
+            audience: input.request.audience.as_deref().ok_or_else(invalid)?,
+            vp_token: token,
+            trust_profile_id: input.request.trust_profile_id.as_deref(),
+            context: &context,
+            oid4vp_transport: input
+                .request
+                .oid4vp_transport
+                .as_ref()
+                .ok_or_else(invalid)?,
+        };
+        projection.validate_historical().map_err(|_| invalid())?;
+        projection
+            .validate_for_request(&binding, input.projected_result)
+            .map_err(|_| invalid())?;
+        projection
+            .validate_original_tokens(&[token])
+            .map_err(|_| invalid())?;
+        Ok(projection)
+    }
+
     /// Exact owner requests derive only from private, natively verified fields.
     /// In particular, public kernel status IDs and caller context are not inputs.
     pub(crate) fn authority_requests(
