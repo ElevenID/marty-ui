@@ -552,6 +552,116 @@ pub struct GrpcPresentationPolicyProvider {
     workload_mtls: bool,
 }
 
+/// A Policy observation acquired by the exact inspected workload-mTLS client.
+/// The serialized candidate alone has no authority. A cloned acquisition cannot
+/// be attached to a changed request or evaluation.
+///
+/// ```compile_fail
+/// let _: marty_flow::AcquiredManagedPolicyEvidence =
+///     serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Clone, PartialEq)]
+pub struct AcquiredManagedPolicyEvidence {
+    candidate: marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2,
+    acquisition_digest: String,
+}
+
+impl std::fmt::Debug for AcquiredManagedPolicyEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AcquiredManagedPolicyEvidence")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AcquiredManagedPolicyEvidence {
+    fn acquire(
+        wire: &str,
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+        counts: [i32; 4],
+    ) -> Result<Self, FlowProviderError> {
+        let invalid = || {
+            invalid_response(
+                "presentation_policy",
+                "invalid managed evidence acquisition",
+            )
+        };
+        if wire.len() > marty_oid4vp_contract::MAX_EVIDENCE_PROJECTION_BYTES {
+            return Err(invalid());
+        }
+        let candidate = marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2::from_json(wire)
+            .map_err(|_| invalid())?;
+        let transport = request.oid4vp_transport.as_ref().ok_or_else(invalid)?;
+        let context = serde_json::to_value(&request.context).map_err(|_| invalid())?;
+        let mut result = serde_json::to_value(evaluation).map_err(|_| invalid())?;
+        for (field, value) in [
+            "total_requirements",
+            "satisfied_requirements",
+            "required_satisfied",
+            "required_total",
+        ]
+        .into_iter()
+        .zip(counts)
+        {
+            result[field] = serde_json::json!(value);
+        }
+        candidate
+            .validate_for_request(
+                &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                    organization_id: &request.organization_id,
+                    policy: &request.expected_policy_revision,
+                    nonce: &request.nonce,
+                    audience: &request.audience,
+                    vp_token: &request.presentation,
+                    trust_profile_id: request
+                        .context
+                        .get("trust_profile_id")
+                        .and_then(serde_json::Value::as_str),
+                    context: &context,
+                    oid4vp_transport: transport,
+                },
+                &result,
+            )
+            .map_err(|_| invalid())?;
+        candidate
+            .validate_original_tokens(&[
+                request.presentation.as_str(),
+                transport.vp_token_raw.as_str(),
+            ])
+            .map_err(|_| invalid())?;
+        Ok(Self {
+            candidate,
+            acquisition_digest: Self::binding_digest(request, evaluation)?,
+        })
+    }
+
+    fn binding_digest(
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+    ) -> Result<String, FlowProviderError> {
+        marty_oid4vp_contract::digest_domain_json(
+            "marty.flow/managed-policy-acquisition/v2",
+            &serde_json::json!({"request": request, "evaluation": evaluation}),
+        )
+        .map_err(|_| invalid_response("presentation_policy", "invalid managed acquisition binding"))
+    }
+
+    pub(crate) fn candidate_for(
+        &self,
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+    ) -> Result<&marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2, FlowProviderError> {
+        if Self::binding_digest(request, evaluation)? != self.acquisition_digest {
+            return Err(invalid_response(
+                "presentation_policy",
+                "managed acquisition changed",
+            ));
+        }
+        Ok(&self.candidate)
+    }
+}
+
 impl GrpcPresentationPolicyProvider {
     pub fn new(
         client: PresentationPolicyServiceClient<Channel>,
@@ -656,7 +766,15 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 })?,
             )
         };
-        let evaluation = PresentationEvaluationResult {
+        let managed_evidence_json = response.managed_policy_evidence_json;
+        let counts = [
+            response.total_requirements,
+            response.satisfied_requirements,
+            response.required_satisfied,
+            response.required_total,
+        ];
+        let mut evaluation = PresentationEvaluationResult {
+            managed_evidence: None,
             evaluation_validity,
             evaluation_timestamp: nonempty(response.evaluation_timestamp),
             policy_revision: decode_policy_revision(
@@ -689,6 +807,20 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
             warnings: Vec::new(),
         };
         evaluation.validate_validity_for(request)?;
+        if !managed_evidence_json.is_empty() {
+            if !self.workload_mtls {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "uninspected managed evidence channel",
+                ));
+            }
+            evaluation.managed_evidence = Some(AcquiredManagedPolicyEvidence::acquire(
+                &managed_evidence_json,
+                request,
+                &evaluation,
+                counts,
+            )?);
+        }
         Ok(evaluation)
     }
 }

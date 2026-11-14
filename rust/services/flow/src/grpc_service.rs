@@ -531,7 +531,15 @@ impl FlowService for FlowGrpcService {
             .await?;
         self.authorize(&request, &instance.organization_id, "flow-instance:view")
             .await?;
-        Ok(Response::new(proto_result(&instance)?))
+        let mut response = proto_result(&instance)?;
+        response.canonical_evidence_digest = self
+            .repository
+            .managed_evidence(&instance.organization_id, &instance.id)
+            .await
+            .map_err(repository_status)?
+            .map(|evidence| evidence.projection().evidence_digest.clone())
+            .unwrap_or_default();
+        Ok(Response::new(response))
     }
 
     async fn list_flow_artifacts(
@@ -939,7 +947,7 @@ fn proto_instance(record: &FlowInstanceRecord) -> Result<ProtoInstance, Status> 
         started_at: timestamp(record.started_at),
         completed_at: timestamp(record.completed_at),
         expires_at: timestamp(record.expires_at),
-        result: optional_json(record.result.as_ref())?,
+        result: optional_json(public_result(record)?.as_ref())?,
         error: record.error.clone().unwrap_or_default(),
         created_at: record.created_at.to_rfc3339(),
         updated_at: record.updated_at.to_rfc3339(),
@@ -960,7 +968,8 @@ fn proto_instance(record: &FlowInstanceRecord) -> Result<ProtoInstance, Status> 
 }
 
 fn proto_result(record: &FlowInstanceRecord) -> Result<FlowResultResponse, Status> {
-    let result = record.result.as_ref();
+    let projected_result = public_result(record)?;
+    let result = projected_result.as_ref();
     let object = result.and_then(Value::as_object);
     let verified_claims = object
         .map(json_object_to_string_map)
@@ -986,7 +995,32 @@ fn proto_result(record: &FlowInstanceRecord) -> Result<FlowResultResponse, Statu
             .and_then(Value::as_str)
             .map(str::to_owned)
             .unwrap_or_else(|| timestamp(record.completed_at)),
+        canonical_evidence_digest: String::new(),
     })
+}
+
+fn public_result(record: &FlowInstanceRecord) -> Result<Option<Value>, Status> {
+    // Validate the complete stored receipt basis before removing owner fields.
+    // Public wire JSON is a minimized projection and cannot recover authority.
+    if record.result.as_ref().is_some_and(|result| {
+        result
+            .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
+            .is_some()
+    }) {
+        record.verification_projection().map_err(record_status)?;
+    }
+    let mut result = record.result.clone();
+    if let Some(object) = result.as_mut().and_then(Value::as_object_mut) {
+        for field in [
+            marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+            marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2,
+            crate::canonical_evidence::MANAGED_EVIDENCE_CONTEXT_KEY,
+            "canonical_evidence_digest",
+        ] {
+            object.remove(field);
+        }
+    }
+    Ok(result)
 }
 
 fn proto_artifact(record: &FlowArtifactRecord) -> Result<ProtoArtifact, Status> {

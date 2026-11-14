@@ -220,6 +220,9 @@ message PolicyEvaluationResponse {
   // Optional request/result-bound finalization deadline from native managed evidence.
   // Correspondence only; consumers must authenticate the Policy channel.
   string evaluation_validity_json = 16;
+  // Native managed evidence before durable replay finalization. This projection
+  // requires an authenticated Policy acquisition and a committed Flow receipt.
+  string managed_policy_evidence_json = 17;
 }
 
 message HealthCheckRequest {}
