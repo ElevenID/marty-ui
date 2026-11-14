@@ -90,6 +90,7 @@ PROTECTED_FILES = (
     "scripts/passport_supported_flow_start.py",
     "scripts/probe_passport_beta_chain.py",
     "scripts/verify_passport_beta_issuer_profiles.py",
+    "scripts/local_docker.py",
     "scripts/probe_passport_beta_credentials_continuity.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
     "rust/services/issuance/src/dependency_probe.rs",

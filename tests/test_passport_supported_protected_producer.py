@@ -26,6 +26,9 @@ from scripts.probe_passport_supported_routes import _frozen_routes
 from scripts.passport_supported_provisioning_producer import ProducerError, WORKFLOW_REF
 
 
+pytestmark = pytest.mark.usefixtures("rootful_docker_environment")
+
+
 NOW = datetime(2026, 9, 28, 17, tzinfo=timezone.utc)
 SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64

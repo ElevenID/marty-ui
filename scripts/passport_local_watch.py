@@ -18,7 +18,7 @@ import sys
 from passport_supported_certificate_rehearsal import validate_certificate_setup
 from passport_supported_disposable_ceremony import bootstrap_certificate_chain
 from passport_supported_infra_rehearsal import (
-    INFRA, ROOT, _accept_bootstrap_files, _bootstrap_args, _compose_args,
+    INFRA, ROOT, _accept_bootstrap_files, _bootstrap_args, _compose_args, _inspect_local,
     _local_docker_environment, _prepare_bootstrap_output, _remove_bootstrap_output,
     _require_empty_project, _staged_environment,
 )
@@ -32,9 +32,10 @@ def run(args: list[str], env: dict[str, str], log: Path, timeout: int) -> bool:
         output.write(("\nCOMMAND: " + " ".join(args[:3]) + " ...\n").encode())
         output.flush()
         try:
-            result = subprocess.run(args, env=env, stdout=output, stderr=output,
+            result = subprocess.run(args, env=_local_docker_environment(env),
+                                    stdout=output, stderr=output,
                                     timeout=timeout, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
             output.write(f"\nERROR: {type(exc).__name__}\n".encode())
             return False
         output.write(f"\nEXIT: {result.returncode}\n".encode())
@@ -70,8 +71,7 @@ def main() -> int:
     docker_env = _local_docker_environment(os.environ.copy())
 
     def inspect(command: list[str]) -> str:
-        return subprocess.check_output(["docker", *command], env=docker_env,
-                                       text=True, timeout=30)
+        return _inspect_local(command, docker_env)
 
     if args.resume:
         root = Path("/tmp") / project
@@ -87,7 +87,7 @@ def main() -> int:
     compose = _compose_args(plan, env_file)
     log = root / "local-watch.log"
     output_dir = root / "bootstrap-output"
-    watch = ROOT / "docker-compose.passport-supported-disposable-watch.yml"
+    watch = ROOT / "deploy/compose/development/docker-compose.passport-supported-disposable-watch.yml"
     if args.stop:
         owned = inspect(["ps", "-aq", "--filter",
                          f"label=com.docker.compose.project={project}"]).split()

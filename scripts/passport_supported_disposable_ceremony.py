@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+from scripts.local_docker import local_docker_environment
 
 if __package__:
     from .check_passport_supported_compose_ownership import _inspect, _labels
@@ -110,11 +111,7 @@ def _operator_key(secret_dir: Path, name: str) -> str:
 
 
 def _local_docker_env() -> dict[str, str]:
-    environment = os.environ.copy()
-    environment["DOCKER_HOST"] = "unix:///var/run/docker.sock"
-    for name in ("DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CERT_PATH"):
-        environment.pop(name, None)
-    return environment
+    return local_docker_environment(os.environ.copy())
 
 
 def _local_inspect(args: list[str]) -> str:
@@ -126,7 +123,7 @@ def _local_inspect(args: list[str]) -> str:
         _require(len(result.stdout) <= 1024 * 1024,
                  "Disposable Docker inspection is oversized")
         return result.stdout
-    except (OSError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         raise DisposableCeremonyError("Disposable Docker inspection failed") from error
 
 
