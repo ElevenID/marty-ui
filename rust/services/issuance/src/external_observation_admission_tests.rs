@@ -491,3 +491,10 @@ fn snapshots_are_not_mutated_and_claim_maps_are_detached() {
     assert_eq!(f.input.claims.len(), 2);
     assert_eq!(f.binding.resource_scope.len(), 1);
 }
+
+#[test]
+fn application_expiry_is_checked_against_the_final_decision_clock() {
+    let mut f = Fixture::new();
+    f.application.expires_at_ms = NOW - 1;
+    assert_eq!(f.fresh().err(), Some(Denial::ApplicationClosed));
+}
