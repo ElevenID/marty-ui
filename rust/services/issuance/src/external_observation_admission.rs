@@ -168,13 +168,17 @@ pub enum Denial {
 fn id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
 }
 
 fn label(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
-        && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.:-".contains(&c))
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_.:-".contains(&c))
 }
 
 fn text(value: &str, max: usize) -> bool {
@@ -189,10 +193,24 @@ fn claim_name(value: &str) -> bool {
     label(value)
         && !matches!(
             value.to_ascii_lowercase().as_str(),
-            "verified" | "verification" | "policy_allowed" | "approved"
-                | "organization_id" | "subject_id" | "application_id" | "provider"
-                | "fact_type" | "scope" | "issuer_key" | "signing_key" | "private_key"
-                | "token" | "access_token" | "refresh_token" | "client_secret" | "password"
+            "verified"
+                | "verification"
+                | "policy_allowed"
+                | "approved"
+                | "organization_id"
+                | "subject_id"
+                | "application_id"
+                | "provider"
+                | "fact_type"
+                | "scope"
+                | "issuer_key"
+                | "signing_key"
+                | "private_key"
+                | "token"
+                | "access_token"
+                | "refresh_token"
+                | "client_secret"
+                | "password"
         )
 }
 
@@ -215,11 +233,17 @@ fn valid_claims(input: &Observation, binding: &EvidenceBinding) -> bool {
     if input.claims.is_empty() || input.claims.len() > 32 {
         return false;
     }
-    if binding.claims.iter().any(|(name, rule)| rule.required && !input.claims.contains_key(name)) {
+    if binding
+        .claims
+        .iter()
+        .any(|(name, rule)| rule.required && !input.claims.contains_key(name))
+    {
         return false;
     }
     input.claims.iter().all(|(name, value)| {
-        let Some(rule) = binding.claims.get(name) else { return false };
+        let Some(rule) = binding.claims.get(name) else {
+            return false;
+        };
         match (value, &rule.kind) {
             (Scalar::Null, _) => rule.nullable,
             (Scalar::Boolean(_), ClaimKind::Boolean) => true,
@@ -247,10 +271,15 @@ pub fn plan_admission(
     replay: ReplaySnapshot<'_>,
     now_ms: u64,
 ) -> Result<Admission, Denial> {
-    if !positive(now_ms) || !id(&input.binding_id) || !id(&input.observation_id)
-        || idempotency_key != input.observation_id || !positive(input.binding_revision)
-        || !positive(input.sequence) || !positive(input.observed_at_ms)
-        || !positive(input.effective_at_ms) || input.effective_at_ms > input.observed_at_ms
+    if !positive(now_ms)
+        || !id(&input.binding_id)
+        || !id(&input.observation_id)
+        || idempotency_key != input.observation_id
+        || !positive(input.binding_revision)
+        || !positive(input.sequence)
+        || !positive(input.observed_at_ms)
+        || !positive(input.effective_at_ms)
+        || input.effective_at_ms > input.observed_at_ms
     {
         return Err(Denial::InvalidRequest);
     }
@@ -262,11 +291,16 @@ pub fn plan_admission(
     if !principal.scopes.contains(SUBMIT_SCOPE) {
         return Err(Denial::ScopeMissing);
     }
-    if !grant.active || grant.expires_at_ms <= now_ms || !binding.active
+    if !grant.active
+        || grant.expires_at_ms <= now_ms
+        || !binding.active
         || principal.organization_id != grant.organization_id
-        || principal.id != grant.api_key_id || binding.organization_id != grant.organization_id
-        || binding.source_id != grant.source_id || !grant.bindings.contains(&binding.id)
-        || input.binding_id != binding.id || application.id != binding.application_id
+        || principal.id != grant.api_key_id
+        || binding.organization_id != grant.organization_id
+        || binding.source_id != grant.source_id
+        || !grant.bindings.contains(&binding.id)
+        || input.binding_id != binding.id
+        || application.id != binding.application_id
         || application.organization_id != binding.organization_id
         || application.subject_id != binding.subject_id
     {
@@ -275,16 +309,29 @@ pub fn plan_admission(
     if input.binding_revision != binding.revision {
         return Err(Denial::BindingChanged);
     }
-    if !id(&principal.id) || !id(&principal.organization_id) || !id(&grant.source_id)
-        || !id(&binding.id) || !id(&binding.application_id) || !text(&binding.subject_id, 1024)
-        || !label(&binding.provider) || !label(&binding.fact_type)
-        || !positive(principal.revision) || !positive(grant.revision)
-        || !positive(binding.revision) || !positive(application.revision)
-        || !positive(principal.expires_at_ms) || !positive(grant.expires_at_ms)
+    if !id(&principal.id)
+        || !id(&principal.organization_id)
+        || !id(&grant.source_id)
+        || !id(&binding.id)
+        || !id(&binding.application_id)
+        || !text(&binding.subject_id, 1024)
+        || !label(&binding.provider)
+        || !label(&binding.fact_type)
+        || !positive(principal.revision)
+        || !positive(grant.revision)
+        || !positive(binding.revision)
+        || !positive(application.revision)
+        || !positive(principal.expires_at_ms)
+        || !positive(grant.expires_at_ms)
         || !(1..=MAX_AGE_MS).contains(&binding.max_age_ms)
-        || binding.max_clock_skew_ms > MAX_SKEW_MS || !valid_rules(&binding.claims)
-        || binding.resource_scope.is_empty() || binding.resource_scope.len() > 16
-        || binding.resource_scope.iter().any(|(key, value)| !label(key) || !text(value, 512))
+        || binding.max_clock_skew_ms > MAX_SKEW_MS
+        || !valid_rules(&binding.claims)
+        || binding.resource_scope.is_empty()
+        || binding.resource_scope.len() > 16
+        || binding
+            .resource_scope
+            .iter()
+            .any(|(key, value)| !label(key) || !text(value, 512))
     {
         return Err(Denial::InvalidAuthority);
     }
@@ -293,15 +340,19 @@ pub fn plan_admission(
     }
     let current_sequence = match replay {
         ReplaySnapshot::Existing(receipt) => {
-            if !id(&receipt.id) || receipt.organization_id != principal.organization_id
-                || receipt.source_id != grant.source_id || receipt.api_key_id != principal.id
+            if !id(&receipt.id)
+                || receipt.organization_id != principal.organization_id
+                || receipt.source_id != grant.source_id
+                || receipt.api_key_id != principal.id
                 || receipt.observation != *input
             {
                 return Err(Denial::ReplayConflict);
             }
             // Return the ORIGINAL receipt after current authorization checks.
             // No new fact, freshness, policy evaluation or application mutation.
-            return Ok(Admission::Replay { receipt_id: receipt.id.clone() });
+            return Ok(Admission::Replay {
+                receipt_id: receipt.id.clone(),
+            });
         }
         ReplaySnapshot::Missing { current_sequence } => current_sequence,
     };

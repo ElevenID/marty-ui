@@ -37,20 +37,5 @@ jobs:
           "$RUNNER_TEMP/external-observation-admission-tests"
       - name: Check candidate schema parses
         run: python3 -m json.tool contracts/external-observation-v1.schema.json > /dev/null
-      - name: Prepare formatting diagnostic
-        id: format
-        continue-on-error: true
-        shell: bash
-        run: |
-          rustfmt --edition 2021 rust/services/issuance/src/external_observation_admission.rs
-          git diff --exit-code -- rust/services/issuance/src/external_observation_admission*.rs > "$RUNNER_TEMP/admission-format.patch"
-      - name: Upload formatting patch on mismatch
-        if: steps.format.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: admission-format-patch
-          path: ${{ runner.temp }}/admission-format.patch
-          retention-days: 3
       - name: Require checked-in formatting
-        if: steps.format.outcome == 'failure'
-        run: exit 1
+        run: rustfmt --edition 2021 --check rust/services/issuance/src/external_observation_admission.rs
