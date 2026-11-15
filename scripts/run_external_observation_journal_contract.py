@@ -52,7 +52,7 @@ def run(command, *, cwd, log, environment):
 def compile_contract(artifacts):
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text())
     service = tomllib.loads((ROOT / "rust/services/issuance/Cargo.toml").read_text())
-    names = ("async-trait", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
+    names = ("async-trait", "chrono", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
     declarations = []
     for name in names:
         value = workspace["workspace"]["dependencies"][name]
