@@ -5,7 +5,7 @@
     "contracts/gateway-routes.json",
     "rust/services/gateway/src/authorization.rs"
   ],
-  "route_count": 68,
+  "route_count": 63,
   "notes": [
     "This is an extraction baseline, not a claim that every operation is approved for the external connector.",
     "Routes with current_tenant_authorization_skipped are Canvas-facing protocol callbacks and must move to the connector edge; they are not connector-to-core authentication exemptions.",
@@ -623,56 +623,6 @@
       "target_owner": "Marty Common Gateway",
       "target_auth": "organization-scoped X-API-Key via Common Gateway",
       "rule_pattern": "^/v1/issuance/delivery-records/canvas-credentials/provenance$"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
-      "current_permission": "integration-connector:edit",
-      "current_api_key_scope": "integrations:write",
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": "^/v1/issuance/delivery-records/canvas-credentials/(?:process-pending|process-status-sync-failures|run-automation-cycle)$"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
-      "current_permission": "integration-connector:view",
-      "current_api_key_scope": "integrations:read",
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": "^/v1/issuance/organizations/[^/]+/canvas-mirror-health$"
-    },
-    {
-      "method": "GET",
-      "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
-      "current_permission": "integration-connector:view",
-      "current_api_key_scope": "integrations:read",
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": "^/v1/issuance/delivery-records/canvas-credentials/provenance$"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
-      "current_permission": "integration-connector:edit",
-      "current_api_key_scope": "integrations:write",
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": "^/v1/issuance/delivery-records/canvas-credentials/(?:process-pending|process-status-sync-failures|run-automation-cycle)$"
-    },
-    {
-      "method": "POST",
-      "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
-      "current_permission": "integration-connector:edit",
-      "current_api_key_scope": "integrations:write",
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": "^/v1/issuance/delivery-records/canvas-credentials/(?:process-pending|process-status-sync-failures|run-automation-cycle)$"
     },
     {
       "method": "POST",
