@@ -276,7 +276,7 @@ struct CredentialReceipt {
     installation_id: uuid::Uuid,
     source_sha: String,
     secrets: RawDirectory,
-    operator_password: RawFile,
+    operator_password: Option<RawFile>,
     local_historical_evidence: bool,
     deletion_authorized: bool,
 }
@@ -286,7 +286,7 @@ struct CredentialReceipt {
 pub(crate) struct ObservedCredentialCreation {
     pub initial: ObservedInitialCreation,
     pub secrets: ObservedDirectory,
-    pub operator_password: ObservedFile,
+    pub operator_password: Option<ObservedFile>,
     pub receipt_sha256: String,
 }
 pub(crate) enum CredentialInspectionOutcome {
@@ -309,7 +309,13 @@ fn verify_credentials(
     let bytes = read_regular(&record)?;
     let receipt: CredentialReceipt = serde_json::from_slice(&bytes).map_err(|_| ())?;
     if serde_json::to_vec(&receipt).map_err(|_| ())? != bytes
-        || receipt.schema != "elevenid.installer-created-credentials/v1"
+        || !matches!(
+            receipt.schema.as_str(),
+            "elevenid.installer-created-credentials/v1"
+                | "elevenid.installer-created-credentials/v2"
+        )
+        || (receipt.schema == "elevenid.installer-created-credentials/v1"
+            && receipt.operator_password.is_none())
         || receipt.installation_id != locked.journal().installation_id()
         || receipt.source_sha != locked.journal().identity().source_sha
         || !receipt.local_historical_evidence
@@ -319,23 +325,38 @@ fn verify_credentials(
         return Err(());
     }
     let secrets = child(root, "secrets", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
-    let operator = child(root, "operator-password", libc::O_PATH)?.ok_or(())?;
+    let operator = child(root, "operator-password", libc::O_PATH)?;
     let observed_secrets = observe(&secrets).map_err(|_| ())?;
-    let observed_operator = observe_operator(&operator).map_err(|_| ())?;
+    let observed_operator = operator
+        .as_ref()
+        .map(observe_operator)
+        .transpose()
+        .map_err(|_| ())?;
     if !receipt.secrets.matches(&observed_secrets)
-        || !receipt.operator_password.matches(&observed_operator)
+        || !match (&receipt.operator_password, &observed_operator) {
+            (Some(recorded), Some(observed)) => recorded.matches(observed),
+            (None, None) => true,
+            _ => false,
+        }
         || observed_secrets.mount_id != initial.root.mount_id
-        || observed_operator.mount_id != initial.root.mount_id
+        || observed_operator
+            .as_ref()
+            .is_some_and(|observed| observed.mount_id != initial.root.mount_id)
     {
         return Err(());
     }
     let latest_secrets = child(root, "secrets", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
-    let latest_operator = child(root, "operator-password", libc::O_PATH)?.ok_or(())?;
+    let latest_operator = child(root, "operator-password", libc::O_PATH)?;
     let latest_record = child(&evidence, CREDENTIAL_RECEIPT, libc::O_PATH)?.ok_or(())?;
     let before = record.metadata().map_err(|_| ())?;
     let after = latest_record.metadata().map_err(|_| ())?;
     if observe(&latest_secrets).map_err(|_| ())? != observed_secrets
-        || observe_operator(&latest_operator).map_err(|_| ())? != observed_operator
+        || latest_operator
+            .as_ref()
+            .map(observe_operator)
+            .transpose()
+            .map_err(|_| ())?
+            != observed_operator
         || before.dev() != after.dev()
         || before.ino() != after.ino()
         || read_regular(&latest_record)? != bytes
@@ -1185,6 +1206,75 @@ pub(crate) mod tests {
         state.persist_credential_creation_receipt(&path).unwrap();
         (parent, path, state)
     }
+    #[test]
+    fn external_auth_v2_receipt_preserves_absence_and_rejects_later_operator_file() {
+        // Synthetic reader fixture for current main's v2 external-auth shape;
+        // this does not qualify the native credential writer or a live install.
+        let (_parent, path, state) = credential_fixture();
+        let record_path = path.join("evidence").join(CREDENTIAL_RECEIPT);
+        let mut record: CredentialReceipt =
+            serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        record.schema = "elevenid.installer-created-credentials/v2".into();
+        record.operator_password = None;
+        let receipt = serde_json::to_vec(&record).unwrap();
+        fs::write(&record_path, &receipt).unwrap();
+        fs::remove_file(path.join("operator-password")).unwrap();
+        let CredentialInspectionOutcome::MatchedLocalReceipt(observed) =
+            inspect_credential_state(&state, &path)
+        else {
+            panic!("v2 external authentication receipt must match without local credentials");
+        };
+        assert!(observed.operator_password.is_none());
+        assert!(!path.join("operator-password").exists());
+        fs::write(path.join("operator-password"), b"unexpected local operator").unwrap();
+        fs::set_permissions(
+            path.join("operator-password"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+        assert_eq!(fs::read(&record_path).unwrap(), receipt);
+    }
+    #[test]
+    fn receipt_v1_cannot_omit_the_operator_identity() {
+        let (_parent, path, state) = credential_fixture();
+        let record_path = path.join("evidence").join(CREDENTIAL_RECEIPT);
+        let mut record: CredentialReceipt =
+            serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        record.operator_password = None;
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        fs::remove_file(path.join("operator-password")).unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+    }
+    #[test]
+    fn receipt_v2_with_local_operator_retains_exact_identity_checks() {
+        let (_parent, path, state) = credential_fixture();
+        let record_path = path.join("evidence").join(CREDENTIAL_RECEIPT);
+        let mut record: CredentialReceipt =
+            serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        record.schema = "elevenid.installer-created-credentials/v2".into();
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::MatchedLocalReceipt(_)
+        ));
+        fs::rename(
+            path.join("operator-password"),
+            path.join("saved-operator-password"),
+        )
+        .unwrap();
+        assert!(matches!(
+            inspect_credential_state(&state, &path),
+            CredentialInspectionOutcome::Unusable
+        ));
+    }
+
     fn inspect_credential_state(
         state: &InstallerState,
         path: &Path,
@@ -1207,10 +1297,13 @@ pub(crate) mod tests {
             observed.secrets,
             observe(&File::open(path.join("secrets")).unwrap()).unwrap()
         );
-        assert_eq!(observed.operator_password.identity.kind, Kind::File);
+        assert_eq!(
+            observed.operator_password.as_ref().unwrap().identity.kind,
+            Kind::File
+        );
         assert_eq!(
             observed.initial.root.mount_id,
-            observed.operator_password.mount_id
+            observed.operator_password.as_ref().unwrap().mount_id
         );
         assert_eq!(
             observed.receipt_sha256,

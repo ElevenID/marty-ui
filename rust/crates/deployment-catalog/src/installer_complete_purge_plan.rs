@@ -127,13 +127,18 @@ fn receipts_match_fixed_specs(
     observed: &ObservedNormalCreation,
 ) -> bool {
     let credentials = &observed.application.credentials;
+    // normal_31_v1 includes a local operator file. External-auth layouts need
+    // their own accurately versioned complete census; never synthesize a file.
+    let Some(operator_password) = credentials.operator_password.as_ref() else {
+        return false;
+    };
     let initial = &credentials.initial;
     let mount = initial.root.mount_id;
     if mount == 0
         || initial.evidence.mount_id != mount
         || initial.downloads.mount_id != mount
         || credentials.secrets.mount_id != mount
-        || credentials.operator_password.mount_id != mount
+        || operator_password.mount_id != mount
         || observed.openbao_state.mount_id != mount
         || !receipt_bound(specs, TopLevelName::Evidence, &initial.evidence)
         || !receipt_bound(specs, TopLevelName::Downloads, &initial.downloads)
@@ -141,7 +146,7 @@ fn receipts_match_fixed_specs(
         || !receipt_bound(specs, TopLevelName::OpenBaoState, &observed.openbao_state)
         || !specs.iter().any(|spec| {
             spec.name == TopLevelName::OperatorPassword
-                && spec.identity == credentials.operator_password.identity
+                && spec.identity == operator_password.identity
         })
     {
         return false;
