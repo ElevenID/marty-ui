@@ -41,6 +41,12 @@ metadata:
     {{- include "marty.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  {{- if $development.enabled }}
+  # A development node must not run two memory-heavy Vite pods during updates.
+  strategy:
+    type: Recreate
+    rollingUpdate: null
+  {{- end }}
   revisionHistoryLimit: 2
   selector:
     matchLabels:
@@ -100,7 +106,10 @@ spec:
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /health/ready
+              # Development keeps the UI available to explain backend outages.
+              # The ui-dev container separately verifies Vite; API readiness is
+              # a strict gate in check_kubernetes_dev_resume.py before demo use.
+              path: {{ ternary "/edge-healthz" "/health/ready" $development.enabled }}
               port: http
             periodSeconds: 10
             timeoutSeconds: 5

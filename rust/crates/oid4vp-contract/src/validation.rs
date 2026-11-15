@@ -2503,6 +2503,49 @@ fn contains_sensitive_string(value: &Value, sensitive_patterns: &[String]) -> bo
     }
 }
 
+/// Shared bounded privacy policy for the additive managed projection. This is
+/// correspondence validation, not evidence authentication. V1 callers retain
+/// their existing projection-specific fragment scan unchanged.
+pub(crate) fn validate_managed_projection_privacy(
+    value: &Value,
+    raw_tokens: &[&str],
+) -> Result<(), Oid4vpContractError> {
+    // The issuer JWS, each disclosure and the key-binding JWS remain original
+    // wallet material even when separated from the complete SD-JWT. Do not
+    // decode their payloads into scalar patterns: selected claim values are an
+    // intentional part of this internal projection. V1 policy is unchanged.
+    let mut original_parts = BTreeSet::new();
+    let mut original_bytes = 0usize;
+    for token in raw_tokens {
+        original_bytes = original_bytes
+            .checked_add(token.len())
+            .filter(|bytes| *bytes <= MAX_TRANSPORT_RAW_TOKEN_BYTES * 2)
+            .ok_or(Oid4vpContractError::PrivacyViolation)?;
+        original_parts.insert(*token);
+        for part in token.split('~').filter(|part| !part.is_empty()) {
+            original_parts.insert(part);
+            if original_parts.len() > MAX_PRIVACY_FRAGMENT_PARTS {
+                return Err(Oid4vpContractError::PrivacyViolation);
+            }
+        }
+    }
+    let original_parts = original_parts.into_iter().collect::<Vec<_>>();
+    let patterns = sensitive_token_patterns(&original_parts);
+    if contains_sensitive_string(value, &patterns) {
+        return Err(Oid4vpContractError::PrivacyViolation);
+    }
+    let mut values = String::new();
+    let mut keys = String::new();
+    let mut parts = 0usize;
+    if !collect_claim_fragments(value, &mut values, &mut keys, &mut parts)
+        || normalized_value_is_forbidden(&values, &patterns, false, MAX_PRIVACY_FRAGMENT_BYTES)
+        || normalized_value_is_forbidden(&keys, &patterns, true, MAX_PRIVACY_FRAGMENT_BYTES)
+    {
+        return Err(Oid4vpContractError::PrivacyViolation);
+    }
+    Ok(())
+}
+
 fn fragmented_claim_material_is_forbidden(
     projection: &Oid4vpEvidenceProjectionV1,
     sensitive_patterns: &[String],

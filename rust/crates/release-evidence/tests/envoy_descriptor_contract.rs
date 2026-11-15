@@ -82,10 +82,12 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // additive saved-policy revision and managed prerequisite authority fields,
     // direct jwt_vc_profile_json template fields (create 28/update 24/response 34),
     // PolicyResponse holder_binding_required bool field 16, and
-    // PolicyEvaluationResponse evaluation_validity_json string field 16.
+    // PolicyEvaluationResponse evaluation_validity_json string field 16,
+    // managed_policy_evidence_json string field 17, and
+    // FlowResultResponse canonical_evidence_digest string field 8.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "86f0ce632815c5f54d578c5c66b941935ffc7a63448fd1ffab0649a97056b2b7"
+        "87cbb781472d86bfbcdf7df242b275ad21bd44fff8ab8b9a7b988da284c7c43a"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -256,6 +258,12 @@ fn managed_prerequisite_fields_are_additive_and_keep_explicit_update_presence() 
             false,
         ),
         (
+            "PolicyEvaluationResponse",
+            "managed_policy_evidence_json",
+            17,
+            false,
+        ),
+        (
             "Oid4vpEvaluationTransport",
             "credential_authority_snapshot_json",
             8,
@@ -276,4 +284,27 @@ fn managed_prerequisite_fields_are_additive_and_keep_explicit_update_presence() 
         assert_eq!(field.kind, 9);
         assert_eq!(field.proto3_optional, optional);
     }
+}
+
+#[test]
+fn managed_evidence_result_digest_is_an_additive_string_field() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.package == "marty.ui.flow.v1")
+        .unwrap();
+    let message = file
+        .messages
+        .iter()
+        .find(|message| message.name == "FlowResultResponse")
+        .unwrap();
+    let field = message
+        .fields
+        .iter()
+        .find(|field| field.name == "canonical_evidence_digest")
+        .unwrap();
+    assert_eq!(field.number, 8);
+    assert_eq!(field.kind, 9);
+    assert!(!field.proto3_optional);
 }

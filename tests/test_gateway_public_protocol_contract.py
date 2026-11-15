@@ -1,4 +1,5 @@
 import json
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,154 @@ def _vector_owner_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
         },
     )
     return source
+
+
+def _external_vector_owner_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Path, Path]:
+    source = _vector_owner_fixture(monkeypatch, tmp_path)
+    original = source.read_text(encoding="utf-8")
+    test_source = source.with_name("vector_tests_body.rs")
+    test_source.write_text(
+        textwrap.dedent(
+            original.removeprefix("#[cfg(test)]\nmod tests {\n").removesuffix("}\n")
+        ),
+        encoding="utf-8",
+    )
+    source.write_text(
+        '#[cfg(test)]\n#[path = "vector_tests_body.rs"]\nmod tests;\n',
+        encoding="utf-8",
+    )
+    return source, test_source
+
+
+@pytest.mark.parametrize("reverse_attributes", [False, True])
+@pytest.mark.parametrize("separator", ["\n", "\n\n", "\n// test module\n"])
+def test_vector_owner_guard_follows_registered_external_test_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reverse_attributes: bool,
+    separator: str,
+) -> None:
+    source, _ = _external_vector_owner_fixture(monkeypatch, tmp_path)
+    attributes = ["#[cfg(test)]", '#[path = "vector_tests_body.rs"]']
+    if reverse_attributes:
+        attributes.reverse()
+    source.write_text(separator.join(attributes) + "\nmod tests;\n", encoding="utf-8")
+    _assert_rust_behavior_vector_test_owners()
+
+
+@pytest.mark.parametrize(
+    "old,new,error",
+    [
+        ("mod tests;", "// mod tests;", "not annotated"),
+        ("mod tests;", 'const UNUSED: &str = r#"\nmod tests;\n"#;', "not annotated"),
+        ("#[cfg(test)]\n", "", "requires only cfg\\(test\\)"),
+        ("#[cfg(test)]", "#[cfg(any())]", "requires only cfg\\(test\\)"),
+        ("#[cfg(test)]", "#[cfg(test)]\n#[cfg(any())]", "requires only cfg\\(test\\)"),
+        ("#[cfg(test)]", "#[cfg(any())]\n\n#[cfg(test)]", "requires only cfg\\(test\\)"),
+        (
+            "#[cfg(test)]",
+            "#[cfg(any())]\n// condition still applies\n#[cfg(test)]",
+            "requires only cfg\\(test\\)",
+        ),
+        (
+            "#[cfg(test)]",
+            "#[cfg_attr(\n    test,\n    cfg(any())\n)]\n#[cfg(test)]",
+            "requires only cfg\\(test\\)",
+        ),
+        (
+            "#[cfg(test)]",
+            '#[cfg_attr(test, cfg(any()), doc = r#"[ignored]"#)]\n#[cfg(test)]',
+            "requires only cfg\\(test\\)",
+        ),
+        ("#[cfg(test)]", "# [cfg(any())]\n#[cfg(test)]", "malformed outer attributes"),
+        (
+            "#[cfg(test)]",
+            "#[cfg(test)]\n#[cfg_attr(test, ignore)]",
+            "requires only cfg\\(test\\)",
+        ),
+        ('#[path = "vector_tests_body.rs"]\n', "", "requires only cfg\\(test\\)"),
+        ("vector_tests_body.rs", "../vector_tests_body.rs", "sibling path"),
+        ("vector_tests_body.rs", "missing.rs", "not a sibling source"),
+        ("vector_tests_body.rs", "vector_tests.rs", "not a sibling source"),
+        ("mod tests;", "mod tests;\nmod tests;", "ambiguous registration"),
+    ],
+)
+def test_vector_owner_guard_rejects_inactive_or_unbound_external_modules(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    old: str,
+    new: str,
+    error: str,
+) -> None:
+    source, _ = _external_vector_owner_fixture(monkeypatch, tmp_path)
+    original = source.read_text(encoding="utf-8")
+    assert old in original
+    source.write_text(original.replace(old, new), encoding="utf-8")
+    with pytest.raises(AssertionError, match=error):
+        _assert_rust_behavior_vector_test_owners()
+
+
+@pytest.mark.parametrize(
+    "old,new,error",
+    [
+        ("#[test]\n", "", "not annotated"),
+        ("#[test]", "#[ignore]\n#[test]", "ignored"),
+        ("#[test]", '#[ignore = "service"]\n#[test]', "ignored"),
+        ("#[test]", "#[cfg(any())]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#[cfg_attr(test, ignore)]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#![cfg(any())]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#![cfg_attr(test, cfg(any()))]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#! [cfg(any())]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#! /* gap */ [cfg(any())]\n#[test]", "conditionally compiled"),
+        ("#[test]", "#![r#cfg(any())]\n#[test]", "conditionally compiled"),
+        (
+            "#[test]",
+            "#![r#cfg_attr(all(), cfg(any()))]\n#[test]",
+            "conditionally compiled",
+        ),
+        (
+            "#[test]",
+            "#![allow(dead_code)] #![cfg(any())]\n#[test]",
+            "conditionally compiled",
+        ),
+        (
+            "#[test]",
+            "# /* gap */ ! [cfg_attr(test, cfg(any()))]\n#[test]",
+            "conditionally compiled",
+        ),
+        (
+            'include_str!("../../../../contracts/gateway-example-behavior.json")',
+            '"gateway-example-behavior.json"',
+            "not loaded by its Rust test",
+        ),
+    ],
+)
+def test_external_vector_tests_retain_annotation_and_fixture_guards(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    old: str,
+    new: str,
+    error: str,
+) -> None:
+    _, test_source = _external_vector_owner_fixture(monkeypatch, tmp_path)
+    original = test_source.read_text(encoding="utf-8")
+    assert old in original
+    test_source.write_text(original.replace(old, new), encoding="utf-8")
+    with pytest.raises(AssertionError, match=error):
+        _assert_rust_behavior_vector_test_owners()
+
+
+def test_vector_owner_guard_rejects_external_module_symlinks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, test_source = _external_vector_owner_fixture(monkeypatch, tmp_path)
+    outside_source = tmp_path / "outside.rs"
+    test_source.rename(outside_source)
+    test_source.symlink_to(outside_source)
+    with pytest.raises(AssertionError, match="not a sibling source"):
+        _assert_rust_behavior_vector_test_owners()
 
 
 def test_vector_owner_guard_rejects_dead_or_nonexecuting_owners(

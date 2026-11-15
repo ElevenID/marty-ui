@@ -302,6 +302,25 @@ describe('applicationForm use cases', () => {
     expect(generateIssuanceOffer).toHaveBeenCalledWith('existing-1');
   });
 
+  it.each(['claim', 'legacy'])('never creates another application when an existing %s offer request fails', async (mode) => {
+    const failure = { detail: 'provider unavailable: flow offer preparation failed' };
+    const requestOffer = vi.fn().mockRejectedValue(failure);
+    const createApplication = vi.fn();
+    const submitApplication = vi.fn();
+    await expect(autoApplyForCredential({
+      organizationId: 'org-1', user: { user_id: 'user-1', email: 'user@example.com' },
+      credentialConfig: { id: 'cfg-1' },
+      resolveApplicantId: vi.fn().mockResolvedValue('applicant-1'), createApplicant: vi.fn(),
+      createApplication, submitApplication, hasRegisteredWallet: true,
+      generateIssuanceOffer: mode === 'claim' ? requestOffer : undefined,
+      autoIssueApplication: mode === 'legacy' ? requestOffer : undefined,
+      listApplications: vi.fn().mockResolvedValue({ items: [{ id: 'existing-1', credential_template_id: 'cfg-1', status: 'APPROVED' }] }),
+    })).rejects.toBe(failure);
+    expect(requestOffer).toHaveBeenCalledExactlyOnceWith('existing-1');
+    expect(createApplication).not.toHaveBeenCalled();
+    expect(submitApplication).not.toHaveBeenCalled();
+  });
+
   it('submits applications and uploads biometrics when a portrait is provided', async () => {
     const createApplication = vi.fn().mockResolvedValue({ id: 'application-1', reference_number: 'APP-20260317-CREATED' });
     const submitApplication = vi.fn().mockResolvedValue({ id: 'submitted-1', reference_number: 'APP-20260317-SUBMIT' });

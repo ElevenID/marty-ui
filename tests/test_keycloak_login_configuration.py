@@ -11,6 +11,14 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 MATCHING = '{"registrationAllowed":true,"verifyEmail":false,"resetPasswordAllowed":false}'
+AUTH_TIME_MAPPER = {
+    "id": "77d88d3d-5860-44f1-9598-5b528566fd4a", "name": "marty-auth-time",
+    "protocol": "openid-connect", "protocolMapper": "oidc-usersessionmodel-note-mapper",
+    "config": {"user.session.note": "AUTH_TIME", "claim.name": "auth_time",
+               "jsonType.label": "long", "id.token.claim": "true",
+               "access.token.claim": "false", "userinfo.token.claim": "false"},
+}
+AUTH_TIME_SETUP = 'get_client_uuid() { echo fixture-ui-client; }; configure_marty_ui_auth_time'
 
 PASSKEY_POLICY = {
     "RpId": "login.example.test", "RpEntityName": "ElevenID",
@@ -86,6 +94,49 @@ sys.exit(int(os.environ['TEST_UPDATE_EXIT']))
     )
     calls = [json.loads(line) for line in calls_path.read_text().splitlines()] if calls_path.exists() else []
     return result, calls
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_auth_timestamp_mapper_is_created_or_reconciled_and_verified(tmp_path, existing):
+    prior = [{"id": AUTH_TIME_MAPPER["id"]}] if existing else []
+    result, calls = run_setup(tmp_path, AUTH_TIME_SETUP,
+                             readbacks=[json.dumps(prior), json.dumps(AUTH_TIME_MAPPER)])
+    assert result.returncode == 0, result.stderr
+    assert [c["args"][0] for c in calls] == ["get", "update" if existing else "create", "get"]
+    payload = calls[1]["payload"]
+    assert payload == {**AUTH_TIME_MAPPER, "consentRequired": False}
+    assert calls[-1]["args"][1].endswith("/" + AUTH_TIME_MAPPER["id"])
+    assert "configured and verified" in result.stdout
+
+
+@pytest.mark.parametrize("field", list(AUTH_TIME_MAPPER["config"]))
+def test_auth_timestamp_mapper_rejects_missing_or_changed_claim_settings(tmp_path, field):
+    final = json.loads(json.dumps(AUTH_TIME_MAPPER))
+    final["config"][field] += " "  # Values must not be normalized into acceptance.
+    result, _ = run_setup(tmp_path, AUTH_TIME_SETUP,
+                          readbacks=["[]", json.dumps(final)])
+    assert result.returncode != 0
+    assert "configured and verified" not in result.stdout
+
+
+@pytest.mark.parametrize("readbacks,update_exit", [
+    (["__unavailable__"], 0), (["[]"], 1),
+    (["[]", "__unavailable__"], 0), (["[]", "{}"], 0),
+])
+def test_auth_timestamp_mapper_fails_closed_on_admin_failure(tmp_path, readbacks, update_exit):
+    result, _ = run_setup(tmp_path, AUTH_TIME_SETUP, readbacks=readbacks, update_exit=update_exit)
+    assert result.returncode != 0
+    assert "configured and verified" not in result.stdout
+
+
+def test_fresh_imports_and_helm_include_provider_owned_authentication_time():
+    for relative in ("config/keycloak/11id-realm.json", "deploy/helm/marty/files/keycloak/11id-realm.json"):
+        realm = json.loads((ROOT / relative).read_text(encoding="utf-8"))
+        client = next(c for c in realm["clients"] if c["clientId"] == "marty-ui")
+        mapper = next(m for m in client["protocolMappers"] if m["id"] == AUTH_TIME_MAPPER["id"])
+        assert mapper == {**AUTH_TIME_MAPPER, "consentRequired": False}
+    assert (ROOT / "scripts/setup-keycloak.sh").read_bytes() == (
+        ROOT / "deploy/helm/marty/files/keycloak/setup-keycloak.sh").read_bytes()
 
 
 def test_passkeys_enable_only_after_policy_and_optional_enrollment_are_verified(tmp_path):

@@ -76,6 +76,8 @@ pub(crate) struct SuccessorBinding {
     pub parent_attempt: u64,
     pub parent_binding_sha256: String,
     pub native_operation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) oidc_secret_rotation_sha256: Option<String>,
 }
 
 /// In-memory evidence for the immediately preceding generation in one forward
@@ -297,6 +299,42 @@ fn closure(installation: &Path, model: &serde_json::Value, root: &str) -> Result
     }
     Ok(result)
 }
+
+/// The existing OpenBao renewal transaction owns a fixed credential inventory.
+/// External login removes the Keycloak runtime consumers, while the genuine
+/// setup/renewal receipts and their seven custody inputs remain part of that
+/// transaction. Keep those files in the private generation without mounting
+/// them into unrelated application services.
+fn selected_closure(
+    installation: &Path,
+    model: &serde_json::Value,
+    root: &str,
+    independent_oidc: bool,
+) -> Result<BTreeSet<String>> {
+    let mut names = closure(installation, model, root)?;
+    if independent_oidc {
+        names.extend(crate::installer_keycloak_bridge::OUTPUTS.map(String::from));
+    }
+    Ok(names)
+}
+
+fn external_oidc_for_binding(
+    installation: &Path,
+    binding: &GenerationBinding,
+) -> Result<Option<crate::installer_oidc::Selection>> {
+    // Historical generations have no external secret or provider journal. The
+    // external field is introduced only by a selected, validated Compose layer;
+    // every such OpenBao generation must retain that exact selection.
+    if binding.imported_foundation() || !binding.files.contains_key("external_oidc_client_secret") {
+        return Ok(None);
+    }
+    let (_, selection) = crate::installer_oidc::record(
+        installation,
+        uuid::Uuid::parse_str(&binding.installation_id).map_err(|_| REFUSED)?,
+    )?
+    .ok_or(REFUSED)?;
+    Ok(Some(selection))
+}
 impl GenerationBinding {
     pub(crate) fn sequence(&self) -> u64 {
         self.successor.as_ref().map_or(0, |value| value.sequence)
@@ -447,6 +485,15 @@ impl GenerationBinding {
                     && successor.sequence > 0
                     && (successor.sequence > 1 || successor.parent_attempt == 0)
                     && hex(&successor.parent_binding_sha256)
+                    && successor
+                        .oidc_secret_rotation_sha256
+                        .as_deref()
+                        .is_none_or(hex)
+                    && (successor.oidc_secret_rotation_sha256.is_none()
+                        || self
+                            .files
+                            .get("external_oidc_client_secret")
+                            .is_some_and(|value| value.size > 0))
                     && regex::Regex::new(&format!(
                         r"\A{}-wait-[0-9]{{6}}\z",
                         self.attempt_id().operation_prefix()
@@ -504,14 +551,19 @@ impl GenerationBinding {
                     && (file.size > 0
                         || crate::installer_application_env::OPTIONAL_INTEGRATION_SECRETS
                             .contains(&name.as_str())
-                        || (self.imported_foundation() && name == "external_oidc_client_secret"))
+                        || name == "external_oidc_client_secret")
                     && file.mode == 0o444
                     && (file.source_mode == 0o444
                         || (name == "openbao_tls_ca_cert" && file.source_mode == 0o644))
                     && if self.imported_foundation() {
                         file.source == GenerationSource::Original
                     } else {
-                        (file.source == GenerationSource::Candidate) == renewable.contains(name)
+                        (file.source == GenerationSource::Candidate)
+                            == (renewable.contains(name)
+                                || (name == "external_oidc_client_secret"
+                                    && self.successor.as_ref().is_some_and(|value| {
+                                        value.oidc_secret_rotation_sha256.is_some()
+                                    })))
                     },
             )?;
         }
@@ -844,6 +896,15 @@ fn candidate_with_parent(
         for (name, bytes) in current {
             require(parent.binding.read(installation, &name)? == bytes)?;
         }
+        if let Some(secret) =
+            crate::installer_oidc_rotation::candidate(installation, &parent.binding, next)?
+        {
+            require(
+                outputs
+                    .insert("external_oidc_client_secret".into(), secret)
+                    .is_none(),
+            )?;
+        }
     } else {
         let secrets = directory(&installation.join("secrets"))?;
         for (name, bytes) in current {
@@ -904,7 +965,8 @@ pub fn stage(
     state.require_live_phase(Phase::Provisioning)?;
     let id = state.journal().installation_id().to_string();
     let engine = state.journal().runtime().ok_or(REFUSED)?.engine_id.clone();
-    let wanted = closure(installation, model, "secrets")?;
+    let oidc = crate::installer_oidc::record(installation, state.journal().installation_id())?;
+    let wanted = selected_closure(installation, model, "secrets", oidc.is_some())?;
     let proof = provenance(installation, &id, &engine)?;
     if let Some(plan) = &proof.public_plan {
         state.with_inspection(|view| {
@@ -942,6 +1004,9 @@ pub fn stage(
     if let Some(foundation) = &proof.foundation {
         foundation.verify_imported(&values)?;
         state.write_evidence(IMPORTED_PROVENANCE, &proof.bytes)?;
+    }
+    if let Some((_, selected)) = &oidc {
+        selected.verify_imported(&values)?;
     }
     let result = GenerationBinding {
         schema: if proof.foundation.is_some() {
@@ -1131,6 +1196,7 @@ fn verify_one_attempt(
 ) -> Result<VerifiedGeneration> {
     b.validate()?;
     crate::installer_settings::verify_generation(installation, &b.files)?;
+    let oidc = external_oidc_for_binding(installation, &b)?;
     if let Some(successor) = &b.successor {
         let parent = parent.ok_or(REFUSED)?;
         let (bytes, candidates, plan) = candidate_with_parent(
@@ -1161,6 +1227,10 @@ fn verify_one_attempt(
                     && b.read(installation, name)? == bytes,
             )?;
         }
+        // An unchanged secret is copied from the already verified parent. A
+        // replacement is admitted by the separate parent/provider-bound request
+        // only after the complete original custody candidate has been checked.
+        // The initial generation below still verifies the original fingerprint.
         let public_metadata = public_metadata_from_candidate(
             installation,
             &b,
@@ -1209,6 +1279,9 @@ fn verify_one_attempt(
     }
     if let Some(foundation) = &proof.foundation {
         foundation.verify_imported(&originals)?;
+    }
+    if let Some(selected) = oidc {
+        selected.verify_imported(&originals)?;
     }
     let public_metadata = public_metadata_from_candidate(
         installation,
@@ -1453,6 +1526,7 @@ pub fn verify_model(
         network_id == b.network_id.as_deref()
             && model["name"] == format!("marty-install-{}", b.installation_id.replace('-', "")),
     )?;
+    let independent_oidc = external_oidc_for_binding(installation, b)?.is_some();
     if b.successor.is_some() {
         return crate::installer_generation_maintenance::require_runtime_model(
             installation,
@@ -1466,7 +1540,10 @@ pub fn verify_model(
         .map_err(|_| REFUSED)?
         .to_str()
         .ok_or(REFUSED)?;
-    require(closure(installation, model, relative)? == b.files.keys().cloned().collect())
+    require(
+        selected_closure(installation, model, relative, independent_oidc)?
+            == b.files.keys().cloned().collect(),
+    )
 }
 
 #[cfg(test)]
@@ -1561,6 +1638,141 @@ mod tests {
         }
         assert!(verify_model(root, &binding, &model, Some(&"c".repeat(64))).is_err());
     }
+
+    #[test]
+    fn external_login_retains_only_the_existing_keycloak_custody_inventory() {
+        let root = Path::new("/private/install $path");
+        let (mut binding, mut model) = fixture();
+        let custody: BTreeSet<_> = crate::installer_keycloak_bridge::OUTPUTS
+            .map(String::from)
+            .into();
+        model["services"]["synthetic"]["secrets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|reference| !custody.contains(reference["source"].as_str().unwrap()));
+        let runtime = closure(root, &model, "application-generation").unwrap();
+        assert!(runtime.is_disjoint(&custody));
+        assert_eq!(
+            selected_closure(root, &model, "application-generation", true).unwrap(),
+            binding.files.keys().cloned().collect()
+        );
+        assert_eq!(
+            selected_closure(root, &model, "application-generation", false).unwrap(),
+            runtime
+        );
+        // Public clients add one intentionally empty, original input. The
+        // existing renewal inventory and candidate proof remain mandatory.
+        binding.files.insert(
+            "external_oidc_client_secret".into(),
+            GenerationFile {
+                source: GenerationSource::Original,
+                sha256: digest(&[]),
+                size: 0,
+                source_mode: 0o444,
+                mode: 0o444,
+            },
+        );
+        binding.validate().unwrap();
+        binding.files.remove("keycloak_signing_kms_token");
+        assert!(binding.validate().is_err());
+    }
+
+    #[test]
+    fn external_login_model_requires_its_bound_selection_and_secret_mount() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let installation = temp.path().join("installation");
+        let mut state = InstallerState::create(
+            &installation,
+            crate::installer_state::Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.2.3".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        state.create_private_directory("evidence").unwrap();
+        state.advance(Phase::Verified).unwrap();
+        let configuration = json!({
+            "schema": "elevenid.installer-external-oidc/v1",
+            "external_oidc": {
+                "issuer_url": "https://identity.example/tenant",
+                "client_id": "installed-client",
+                "admin_email": "operator@example.com",
+                "allowed_algorithms": ["RS256"]
+            }
+        });
+        let path = temp.path().join("external-oidc.json");
+        std::fs::write(&path, serde_json::to_vec(&configuration).unwrap()).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        crate::installer_oidc::select(
+            crate::installer_oidc::prepare(Some(&path), false).unwrap(),
+            &mut state,
+        )
+        .unwrap();
+        let id = state.journal().installation_id().to_string();
+        drop(state);
+        let (mut binding, mut model) = fixture();
+        binding.installation_id = id.clone();
+        binding.files.remove("operator_bootstrap_password");
+        binding.files.insert(
+            "external_oidc_client_secret".into(),
+            GenerationFile {
+                source: GenerationSource::Original,
+                sha256: digest(&[]),
+                size: 0,
+                source_mode: 0o444,
+                mode: 0o444,
+            },
+        );
+        model["name"] = json!(format!("marty-install-{}", id.replace('-', "")));
+        let references = model["services"]["synthetic"]["secrets"]
+            .as_array_mut()
+            .unwrap();
+        references.retain(|reference| {
+            let name = reference["source"].as_str().unwrap();
+            name != "operator_bootstrap_password"
+                && !crate::installer_keycloak_bridge::OUTPUTS.contains(&name)
+        });
+        references.push(json!({"source":"external_oidc_client_secret"}));
+        model["secrets"]["external_oidc_client_secret"] = json!({});
+        for (name, declaration) in model["secrets"].as_object_mut().unwrap() {
+            *declaration = json!({"file":installation.join(ROOT).join(name)});
+        }
+        verify_model(
+            &installation,
+            &binding,
+            &model,
+            binding.network_id.as_deref(),
+        )
+        .unwrap();
+        let mut missing_mount = model.clone();
+        missing_mount["services"]["synthetic"]["secrets"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|reference| reference["source"] != "external_oidc_client_secret");
+        assert!(verify_model(
+            &installation,
+            &binding,
+            &missing_mount,
+            binding.network_id.as_deref()
+        )
+        .is_err());
+        std::fs::remove_file(
+            installation
+                .join("evidence")
+                .join(crate::installer_oidc::RECORD),
+        )
+        .unwrap();
+        assert!(verify_model(
+            &installation,
+            &binding,
+            &model,
+            binding.network_id.as_deref()
+        )
+        .is_err());
+    }
+
     #[test]
     fn managed_generation_requires_all_three_ingress_files_from_renewed_candidate() {
         let (mut binding, _) = fixture();

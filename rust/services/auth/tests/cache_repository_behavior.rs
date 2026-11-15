@@ -124,6 +124,7 @@ async fn pkce_state_is_consumed_atomically() {
     let repository = repository(Arc::new(MemoryCache::default()));
     let now = Utc::now();
     let state = PkceState {
+        authentication_freshness: None,
         state: "state-1".to_owned(),
         code_verifier: "verifier".to_owned(),
         redirect_uri: "/console".to_owned(),

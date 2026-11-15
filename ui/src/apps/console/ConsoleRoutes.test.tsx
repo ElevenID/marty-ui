@@ -289,6 +289,24 @@ describe('ConsoleRoutes login routing', () => {
     });
   });
 
+  it('keeps the console entry available for a failed session check and retries without starting SSO', async () => {
+    const refreshUser = vi.fn();
+    mockUseAuth.mockReturnValue({
+      isAuthenticated: false,
+      isLoading: false,
+      authError: Object.assign(new Error('Unavailable'), { code: 'AUTH_UNAVAILABLE' }),
+      refreshUser,
+      login: mockLogin,
+    });
+    const { user } = renderConsoleRoutes('/console');
+
+    expect(screen.getByRole('heading', { name: 'Sign-in is temporarily unavailable' })).toBeVisible();
+    expect(screen.getByTestId('current-path')).toHaveTextContent('/console');
+    expect(mockLogin).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Retry sign-in check' }));
+    expect(refreshUser).toHaveBeenCalledWith();
+  });
+
   it('centers the console initialization state without forwarding layout props to the DOM', () => {
     mockUseConsole.mockReturnValue({ isLoading: true });
 
@@ -315,6 +333,11 @@ describe('ConsoleRoutes login routing', () => {
     await waitFor(() => expect(mockLogin).toHaveBeenCalledWith('/console'));
     expect(screen.getByTestId('current-path')).toHaveTextContent('/console/login');
     expect(screen.queryByTestId('web-section-unavailable')).not.toBeInTheDocument();
+  });
+
+  it('preserves console entry query and fragment through sign-in', async () => {
+    renderConsoleRoutes('/console?invite=original#details');
+    await waitFor(() => expect(mockLogin).toHaveBeenCalledWith('/console?invite=original#details'));
   });
 
   it('exchanges a shared callback served by the console entry when public pages are disabled', () => {

@@ -1,11 +1,12 @@
 import { isWebSectionEnabled } from '../../utils/runtimeConfig';
 import WebSectionUnavailable from '../../components/WebSectionUnavailable';
-import { Navigate, Route, Routes } from 'react-router';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
 import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
 import AuthCallback from '../../components/AuthCallback';
+import AuthUnavailable from '../../components/AuthUnavailable';
 import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
@@ -128,7 +129,8 @@ function resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrap
 }
 
 function ConsoleEntryRoute() {
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, authError, refreshUser } = useAuth();
+  const location = useLocation();
   const {
     mode,
     activeOrgId,
@@ -139,12 +141,16 @@ function ConsoleEntryRoute() {
     reloadConsoleState,
   } = useConsole();
 
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={authLoading} />;
+  }
+
   if (authLoading || consoleLoading) {
     return <GuardLoadingState message="Loading console..." />;
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/console/login" state={{ from: { pathname: '/console' } }} replace />;
+    return <Navigate to="/console/login" state={{ from: location }} replace />;
   }
 
   if (membershipLoadError && isOrgBootstrapRequired) {

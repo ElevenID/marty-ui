@@ -292,6 +292,23 @@
   "clients": [
     {
       "clientId": "marty-ui",
+      "protocolMappers": [
+        {
+          "id": "77d88d3d-5860-44f1-9598-5b528566fd4a",
+          "name": "marty-auth-time",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "AUTH_TIME",
+            "claim.name": "auth_time",
+            "jsonType.label": "long",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false"
+          }
+        }
+      ],
       "name": "Marty Trust Services UI",
       "description": "Frontend application for Marty Trust Services",
       "enabled": true,

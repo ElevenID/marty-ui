@@ -221,6 +221,7 @@ impl Fixture {
             current,
             root_token_file,
             retained_root_sha256: sha256(ROOT.as_bytes()),
+            predecessors: None,
         };
         let certificates = Certificates::new();
         let ec_pem = pem(&certificates.ec);

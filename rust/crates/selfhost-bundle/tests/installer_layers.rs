@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Read, path::Path};
 
-const LAYERS: [(&str, &str); 3] = [
+const LAYERS: [(&str, &str); 4] = [
     (
         "deploy-config/compose/selfhost-installer/compose.installer.yml",
         "x-installer-defaults: &installer-defaults\n  init: true\nservices:\n  app:\n    <<: *installer-defaults\n    ports: !override [\"127.0.0.1:${MARTY_LOCAL_PORT:?}:8000\"]\n",
@@ -18,6 +18,10 @@ const LAYERS: [(&str, &str); 3] = [
     (
         "deploy-config/compose/selfhost-installer/compose.bootstrap.yml",
         "services:\n  setup:\n    image: ${MARTY_INSTALLER_HELPER_IMAGE:?approved digest required}\n    command: [tls-finalize]\n    profiles: [setup]\n",
+    ),
+    (
+        "deploy-config/compose/selfhost-installer/compose.external-oidc.yml",
+        "services:\n  keycloak: !reset null\n  auth:\n    environment:\n      OIDC_PROVIDER_MODE: external\n      OIDC_ISSUER_URL: ${MARTY_EXTERNAL_OIDC_ISSUER:?external OIDC selection required}\n",
     ),
 ];
 

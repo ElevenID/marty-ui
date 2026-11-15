@@ -195,6 +195,14 @@ function CredentialTemplatesPage() {
     return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString();
   };
 
+  const getVersionLabel = (template) => {
+    const version = template.version;
+    return (typeof version === 'number' && Number.isFinite(version))
+      || (typeof version === 'string' && version.trim())
+      ? version
+      : t('templates.notReported', { defaultValue: 'Not reported' });
+  };
+
   return (
     <ResourcePage
       title={t('templates.credentialTemplates')}
@@ -273,15 +281,19 @@ function CredentialTemplatesPage() {
                         variant="outlined" 
                       />
                     </TableCell>
-                    <TableCell>{template.version}</TableCell>
+                    <TableCell>{getVersionLabel(template)}</TableCell>
                     <TableCell align="right">{getClaimsCount(template)}</TableCell>
                     <TableCell>
                       <IssuerDidStatus issuerDid={template.issuer_did} />
                     </TableCell>
                     <TableCell>
-                      <Tooltip title={t('templates.usedByFlowsTooltip')}>
+                      <Tooltip title={template.usedByFlowsCount == null
+                        ? t('templates.flowUsageNotReported', { defaultValue: 'The service did not report how many flows use this template.' })
+                        : t('templates.usedByFlowsTooltip')}>
                         <Chip 
-                          label={t('templates.usedByFlows', { count: template.usedByFlowsCount })}
+                          label={template.usedByFlowsCount == null
+                            ? t('templates.notReported', { defaultValue: 'Not reported' })
+                            : t('templates.usedByFlows', { count: template.usedByFlowsCount })}
                           size="small"
                           color={template.usedByFlowsCount > 0 ? 'primary' : 'default'}
                           variant={template.usedByFlowsCount > 0 ? 'filled' : 'outlined'}

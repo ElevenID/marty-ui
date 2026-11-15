@@ -6,9 +6,11 @@ the native [SD-JWT prerequisite producer](sd-jwt-prerequisite-evidence.md) and t
 landed [Flow verification receipt](flow-verification-receipts.md).
 
 The contract is deliberately narrower than completed prerequisite issuance.
-Canonical evidence composition and an Issuance-owned, expiring, single-use
-continuation remain required. The canonical validator and existing atomic
-`claim_for_signing` boundary are unchanged.
+[Managed evidence V2](managed-oid4vp-evidence-v2.md) now supplies canonical
+composition through authenticated Policy acquisition and durable Flow
+finalization. An Issuance-owned, expiring, single-use continuation remains
+required. The V1 validator and existing atomic `claim_for_signing` boundary
+are unchanged.
 
 ## Acquisition and native provenance
 

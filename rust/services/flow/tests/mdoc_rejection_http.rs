@@ -150,6 +150,7 @@ impl PresentationPolicyProvider for Policies {
             revision.version += 1;
         }
         Ok(PresentationEvaluationResult {
+            managed_evidence: None,
             evaluation_validity: None,
             evaluation_timestamp: self.evaluation_timestamp.lock().unwrap().clone(),
             policy_revision: revision,

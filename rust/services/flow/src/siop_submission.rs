@@ -200,6 +200,7 @@ pub fn prepare_siop_submission(
         PreparedSiopFinalization {
             finalization: PreparedVerificationFinalization {
                 receipt_input: None,
+                managed_evidence: None,
                 instance,
                 expected_instance,
                 nonce_digest: sha256_hex(expected_nonce.as_bytes()),

@@ -91,6 +91,8 @@ pub struct VerifiedPolicyMaterial {
     pub(crate) authenticated_outer_jti: Option<String>,
     pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
     pub(crate) authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    pub(crate) authenticated_sd_jwt_presentation:
+        Option<crate::AuthenticatedSdJwtPresentationEvidence>,
     pub(crate) managed_credential_authority: Option<crate::VerifiedManagedCredentialAuthority>,
 }
 
@@ -101,6 +103,7 @@ impl VerifiedPolicyMaterial {
             authenticated_outer_jti: None,
             authenticated_issuer: None,
             authenticated_sd_jwt_query: None,
+            authenticated_sd_jwt_presentation: None,
             managed_credential_authority: None,
         }
     }
@@ -561,7 +564,13 @@ async fn evaluate(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
-    evaluate_policy(state.verification.as_ref(), policy, request).await
+    let mut result = evaluate_policy(state.verification.as_ref(), policy, request).await?;
+    // Full native evidence belongs to the authenticated internal producer path.
+    // Public evaluations retain their existing minimized result projection.
+    if let Some(object) = result.as_object_mut() {
+        object.remove(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2);
+    }
+    Ok(result)
 }
 
 pub(crate) async fn evaluate_policy(
@@ -610,6 +619,7 @@ pub fn evaluate_verified_material_for_policy(
         authenticated_outer_jti,
         authenticated_issuer,
         authenticated_sd_jwt_query,
+        authenticated_sd_jwt_presentation,
         managed_credential_authority,
     } = material;
     if managed_credential_authority
@@ -649,6 +659,32 @@ pub fn evaluate_verified_material_for_policy(
             "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
         ));
     }
+    if authenticated_sd_jwt_presentation
+        .as_ref()
+        .is_some_and(|presentation| {
+            authenticated_sd_jwt_query.is_some()
+                || policy.prerequisite_evidence_profile.is_some()
+                || !presentation.matches_request(policy, request)
+                || authenticated_issuer
+                    .as_ref()
+                    .is_none_or(|issuer| issuer.issuer_id != presentation.issuer_id())
+                || policy_facts["credentials"]
+                    .as_array()
+                    .is_none_or(|credentials| {
+                        credentials.len() != 1
+                            || credentials[0]["signature_verified"] != true
+                            || credentials[0]["issuer_id"].as_str()
+                                != Some(presentation.issuer_id())
+                            || credentials[0]["claims"]
+                                .as_object()
+                                .is_none_or(|claims| !presentation.matches_claims(claims))
+                    })
+        })
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
+        ));
+    }
     let object = policy_facts
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
@@ -668,6 +704,10 @@ pub fn evaluate_verified_material_for_policy(
             "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
         ));
     }
+    let managed_native_result = policy
+        .prerequisite_evidence_profile
+        .is_some()
+        .then(|| native.clone());
     let mut result = project_evaluation(
         native,
         request,
@@ -719,9 +759,31 @@ pub fn evaluate_verified_material_for_policy(
             policy, request, query, authority, &result,
         )
         .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let selected_claims = policy_facts["credentials"][0]["claims"]
+            .as_object()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
+        let managed_evidence = query
+            .managed_policy_evidence(
+                authority,
+                crate::sd_jwt_query::ManagedPolicyEvidenceInput {
+                    policy,
+                    request,
+                    selected_claims,
+                    native_result: managed_native_result.as_ref().ok_or_else(|| {
+                        bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
+                    })?,
+                    projected_result: &result,
+                    validity: &validity,
+                },
+            )
+            .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
         result[marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
             .map_err(|_| {
                 service_unavailable("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY")
+            })?;
+        result[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2] =
+            serde_json::to_value(managed_evidence).map_err(|_| {
+                service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
             })?;
     }
     Ok(result)

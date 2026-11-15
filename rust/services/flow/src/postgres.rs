@@ -839,12 +839,16 @@ impl PostgresFlowRepository {
         let mut transaction = self.pool.begin().await.map_err(storage)?;
         let updated = sqlx::query(
             "UPDATE flow_service.flow_instances SET context=$1, updated_at=$2 \
-             WHERE id=$3 AND updated_at=$4",
+             WHERE id=$3 AND updated_at=$4 AND organization_id=$5 \
+             AND NOT (context::jsonb ? '_marty_managed_oid4vp_evidence_v2') \
+             AND NOT (COALESCE(result, '{}'::json)::jsonb ?| \
+                      ARRAY['verification_receipt', 'managed_policy_evidence_digest'])",
         )
         .bind(&instance.context)
         .bind(instance.updated_at)
         .bind(&instance.id)
         .bind(expected_updated_at)
+        .bind(&instance.organization_id)
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
@@ -906,6 +910,44 @@ impl PostgresFlowRepository {
             .map_err(storage)?
             .map(|row| instance_from_row(&row))
             .transpose()
+    }
+
+    /// Recover owner-produced evidence from protected committed state. A
+    /// caller-supplied record or deserialized projection cannot enter this path.
+    pub async fn managed_evidence(
+        &self,
+        organization_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<crate::AuthenticatedOid4vpEvidenceV2>, RepositoryError> {
+        let Some(instance) = self
+            .instance(instance_id)
+            .await?
+            .filter(|instance| instance.organization_id == organization_id)
+        else {
+            return Ok(None);
+        };
+        Ok(crate::canonical_evidence::validate_owner_record(&instance)?
+            .map(|evidence| evidence.after_owner_persistence()))
+    }
+
+    pub async fn verification_result(
+        &self,
+        organization_id: &str,
+        instance_id: &str,
+    ) -> Result<Option<crate::VerificationResultResponse>, RepositoryError> {
+        let Some(instance) = self
+            .instance(instance_id)
+            .await?
+            .filter(|instance| instance.organization_id == organization_id)
+        else {
+            return Ok(None);
+        };
+        let evidence = crate::canonical_evidence::validate_owner_record(&instance)?
+            .map(|evidence| evidence.after_owner_persistence());
+        let mut response = instance.verification_projection()?;
+        response.canonical_evidence_digest =
+            evidence.map(|evidence| evidence.projection().evidence_digest.clone());
+        Ok(Some(response))
     }
 
     pub async fn cancel_instance(
@@ -1051,10 +1093,7 @@ impl PostgresFlowRepository {
                     .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
                     .is_some()
         }) || callback.is_some_and(|message| {
-            message
-                .payload
-                .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
-                .is_some()
+            crate::verification_receipt::reject_supplied_receipt(&message.payload, None).is_err()
         }) || expected.context[crate::presentation_request::FROZEN_PRESENTATION_REQUEST_KEY]
             .get("credential_authority")
             .is_some_and(|authority| !authority.is_null())
@@ -1095,10 +1134,11 @@ impl PostgresFlowRepository {
             )
             .await?;
         committed
-            .map(|(instance, receipt)| {
+            .map(|(instance, receipt, evidence)| {
                 Ok(crate::CommittedVerificationFinalization::after_commit(
                     instance,
                     receipt.ok_or(RepositoryError::InvalidVerificationReceipt)?,
+                    evidence,
                 ))
             })
             .transpose()
@@ -1117,10 +1157,20 @@ impl PostgresFlowRepository {
         Option<(
             FlowInstanceRecord,
             Option<marty_oid4vp_contract::FlowVerificationReceiptV1>,
+            Option<crate::canonical_evidence::ValidatedManagedEvidence>,
         )>,
         RepositoryError,
     > {
-        validate_instance_record(instance)?;
+        if let Some(prepared) = receipt_preparation {
+            validate_instance_shape(instance)?;
+            prepared
+                .receipt_input
+                .as_ref()
+                .ok_or(RepositoryError::InvalidVerificationReceipt)?
+                .validate_prepared(prepared)?;
+        } else {
+            validate_instance_record(instance)?;
+        }
         if !valid_sha256(nonce_digest) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
@@ -1206,20 +1256,25 @@ impl PostgresFlowRepository {
             transaction.rollback().await.map_err(storage)?;
             return Ok(None);
         }
-        let (committed_instance, committed_callback, receipt) =
+        let (committed_instance, committed_callback, receipt, evidence) =
             if let Some(prepared) = receipt_preparation {
-                let (instance, callback, receipt) = prepared
+                let (mut instance, callback, receipt) = prepared
                     .receipt_input
                     .as_ref()
                     .ok_or(RepositoryError::InvalidVerificationReceipt)?
                     .attach(prepared, consumed_at)?;
+                let evidence = prepared
+                    .managed_evidence
+                    .as_ref()
+                    .map(|evidence| evidence.attach(prepared, &mut instance, &receipt))
+                    .transpose()?;
                 // This is the sole write path allowed to attach a receipt,
                 // after preparation and the locked nonce observation agree.
                 validate_instance_shape(&instance)?;
                 validate_callback(&instance, callback.as_ref())?;
-                (instance, callback, Some(receipt))
+                (instance, callback, Some(receipt), evidence)
             } else {
-                (instance.clone(), callback.cloned(), None)
+                (instance.clone(), callback.cloned(), None, None)
             };
         let instance = &committed_instance;
 
@@ -1277,7 +1332,7 @@ impl PostgresFlowRepository {
             return Ok(None);
         }
         transaction.commit().await.map_err(storage)?;
-        Ok(Some((committed_instance, receipt)))
+        Ok(Some((committed_instance, receipt, evidence)))
     }
 
     pub async fn claim_due_callbacks(

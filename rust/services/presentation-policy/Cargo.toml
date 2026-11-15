@@ -46,6 +46,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-flow = { path = "../flow" }
+mmf-push.workspace = true
 marty-service-runtime = { path = "../../crates/service-runtime", features = ["https"] }
 isomdl.workspace = true
 ed25519-dalek.workspace = true

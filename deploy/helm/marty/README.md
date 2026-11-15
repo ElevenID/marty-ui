@@ -1,7 +1,8 @@
 # Marty Helm chart
 
-This chart installs the current Marty services, UI, remote-key Keycloak,
-PostgreSQL and Redis into an existing Kubernetes cluster. It uses native
+This chart installs the current Marty services, UI, PostgreSQL and Redis into
+an existing Kubernetes cluster. Managed remote-key Keycloak is the default
+login provider; a fresh installation can instead select external OIDC. It uses native
 Deployments, StatefulSets, PVCs, Jobs, Services, NetworkPolicies and Ingress.
 There is one native issuance owner (`issuance-native`). The current Rust graph
 uses event-stream and durable outboxes, so it does not install RabbitMQ.
@@ -81,7 +82,7 @@ refused before initialization. The bootstrap publishes default catalog names;
 chart `existingSecrets` overrides still require the caller to provision the
 corresponding names and keys.
 
-An additional `marty-operator` Secret (also configurable through
+With managed Keycloak, an additional `marty-operator` Secret (also configurable through
 `existingSecrets`) has a `password` key for the initial organization
 administrator. The configurator reads it using `secretKeyRef` as
 `MARTY_ORG_ADMIN_PASSWORD`; keep that generated credential in the bootstrap
@@ -96,7 +97,7 @@ with the existing self-host bootstrap. Applications use `DATABASE_SYNC_URL`
 from `marty-secrets`, which must contain a URL-escaped `postgresql://` connection
 string. The older catalog's `DATABASE_URL` Python driver scheme is not used.
 
-The first milestone keeps the canonical `11id` Keycloak realm and KMS key
+The managed provider keeps the canonical `11id` Keycloak realm and KMS key
 filenames. The packaged realm is derived from `config/keycloak/11id-realm.json`:
 known demo-password users are removed before import, the service-account role
 mapping is retained, and the API client secret is resolved from its Kubernetes
@@ -104,6 +105,114 @@ Secret. The existing strict configurator and theme are packaged unchanged.
 Optional social login defaults to disabled. Enable
 `config.KEYCLOAK_SOCIAL_LOGIN_ENABLED: 'true'` only after providing both Google
 client credentials through the existing `marty-secrets` contract.
+
+## External OIDC
+
+For a fresh installation, select `auth.provider: external` independently of
+OpenBao and public hosting. Add the following nonsecret inputs to the installation
+values file, alongside the ordinary ingress and OpenBao settings:
+
+```yaml
+publicHost: beta.example.org
+publicOrigin: https://beta.example.org
+organization:
+  adminEmail: operator@example.org
+auth:
+  provider: external
+  external:
+    issuerUrl: https://identity.example.org/tenant
+    clientId: marty-beta
+    allowedAlgorithms: [RS256]
+    scopes: [openid, profile, email]
+    trustedEndpointOrigins: []
+    # For a confidential client, add a dedicated existing Secret reference:
+    # clientSecret:
+    #   name: marty-beta-oidc
+    #   key: client-secret
+```
+
+Use the actual issuer, client ID and signing algorithm selected at the provider.
+The provider must support authorization code with S256 PKCE and advertise
+`none` token-endpoint authentication for a public client, or the selected
+`client_secret_post`/`client_secret_basic` method for a confidential client. When
+the standard methods metadata is absent, OIDC defaults to Basic. Register the exact callback
+`https://beta.example.org/v1/auth/callback` in this example. Create the operator
+account there before installation; its signed ID token must include a nonempty
+subject, an email matching `organization.adminEmail`, and `email_verified: true`.
+Explicit UserInfo fallback may supply missing email/profile claims after token
+validation and an exact subject match.
+Marty seeds administrator membership from that email. It does not create the
+remote account, and the existing bootstrap password is not an external login
+credential.
+
+Omit `clientSecret` for a public client. For a confidential client, provision its
+named Secret in the installation namespace using the private credential procedure.
+The chart projects only the selected key into Auth as a read-only file; it does
+not copy the secret into values or ConfigMaps. The Secret must be dedicated to
+this OIDC client, separate from the bootstrap and workload Secret inventory.
+Rotating its value under the same name/key requires restarting Auth so it reloads
+the file. Do not change the reference to migrate an existing provider selection.
+
+`scopes` defaults to `[openid, profile, email]`. An explicit list must include
+`openid`, contain at most 32 unique tokens of 1–128 printable ASCII characters
+each, and fit within 2,048 bytes when comma-joined. Whitespace, double quotes,
+backslashes, commas and apostrophes are excluded. Additional provider-specific
+scopes are supported; the selected token/UserInfo policy must still supply the
+required verified identity claims. `trustedEndpointOrigins` defaults to an empty list. Add at most
+eight exact HTTPS origins when discovery uses other origins: lowercase DNS host
+or canonical IPv4, no path or trailing slash, and no default `:443` or padded
+port. The issuer can include a path; this chart does not accept IPv6 provider
+endpoints. See the [provider compatibility guide](../../../docs/installer-external-oidc.md#provider-prerequisites)
+for discovery, supported algorithms, registration and logout behavior.
+
+Optional typed provider settings use these names in `auth.external`:
+
+| Field | Selection |
+| --- | --- |
+| `clientAuthMethod` | `none`, `client_secret_post`, or `client_secret_basic`. Omission preserves `none` for public clients and POST for clients with `clientSecret`. Explicit `none` refuses a Secret; POST/Basic require the dedicated Secret reference. |
+| `userinfoMode` | `disabled` (default) or `fallback`. Fallback uses the trusted discovered UserInfo endpoint only after ID-token validation and requires an exact subject match. |
+| `prompt` | Distinct `login`, `consent`, `select_account`, `none` values. Omission keeps `[consent, login]`; `[]` omits the parameter; `none` must appear alone. |
+| `maxAge` | Integer `0`–`86400`, or `omit`. Omission keeps `0`. |
+| `providerName` | Optional trimmed display name, at most 80 UTF-8 bytes without controls. |
+| `accountUrl`, `recoveryUrl` | Optional fixed HTTPS provider links, at most 2,048 UTF-8 bytes, on the issuer or an explicit trusted origin. Queries/fragments are allowed; credentials and wildcard hosts are refused. |
+
+For example, add `clientAuthMethod: client_secret_basic`, `userinfoMode: fallback`,
+`prompt: []` and `maxAge: omit` when those choices match the registered provider.
+Set `providerName` and the optional links to present the selected provider in the
+application. Hosted login themes, recovery, MFA and account-management behavior
+remain with that provider. Provider metadata preflight uses the same Auth
+validator; see [the read-only compatibility command](../../../docs/installer-external-oidc.md#read-only-provider-compatibility-check).
+It does not validate the real credential or replace a live callback/login test.
+
+External mode omits the Keycloak Deployment, Service, configurator, realm and
+theme ConfigMaps. PostgreSQL skips Keycloak database initialization and readiness,
+Auth receives no managed API/admin credentials, and nginx stops proxying local
+Keycloak routes. Workload TLS, managed signing and the existing OpenBao lifecycle remain.
+Keep the full authenticated image inventory, including the unused Keycloak image
+reference. Keep the complete bootstrap and renewal credential inventory, including
+currently unused Keycloak custody data and the generated local operator password.
+The absent workloads do not pull or consume those Keycloak runtime inputs.
+
+The chart stores the resolved selection in the immutable `marty-auth-selection`
+ConfigMap and binds its digest to workload annotations. The provider, external
+issuer/client/scopes/allowlists/Secret reference, optional authentication and
+account-link settings, administrator email and callback origin cannot be changed
+in place. New fields remain absent in old selections when omitted; upgrades do
+not silently rewrite those records. Retain this record for upgrades and renewal;
+missing or conflicting typed evidence is refused. Use `helm upgrade --dry-run=server`
+when previewing an existing typed installation so Helm can inspect that evidence.
+An offline `helm template --is-upgrade` cannot qualify an external upgrade.
+The chart can adopt an older untyped managed-Keycloak installation as managed;
+it does not convert it to external OIDC.
+
+Login settings belong in `auth.external` and `organization.adminEmail`.
+Conflicting `OIDC_*`, `KEYCLOAK_*`, `KC_*`, managed API/admin or Keycloak-dependent
+credential-login overrides in `config` are rejected. Configure registration,
+email, social login, MFA and account presentation at the external provider.
+Use separate namespaces, provider tenants/clients, Secret references and callback
+origins for beta and production. Cloudflare routing remains an independent hosting
+choice and must preserve the canonical application origin. The legacy
+`k8s/oracle` manifests retain managed Keycloak; this option applies to this chart.
 
 ## Install
 
@@ -205,6 +314,12 @@ values for these keys in `config` take precedence over the generated defaults.
 
 ## Direct issuance and persistence acceptance
 
+The runner below uses the existing managed-Keycloak password login flow. It does
+not qualify generic external-provider authentication. For external OIDC, complete
+the actual provider's browser login, logout and administrator-membership checks
+alongside the existing issuance, verification and restart acceptance. Rendering
+the chart does not establish a live provider integration.
+
 Once the required workloads and setup Jobs are ready, run
 `tests/scripts/run-kubernetes-acceptance.cjs` from a machine that can reach the
 public HTTPS origin. It uses the existing browser `AuthHelpers` and OID4VCI
@@ -288,8 +403,10 @@ existing rolling strategy with one unavailable replica and no surge; applicant
 remains a single writer. Upgrade and multi-replica qualification remain
 separate work.
 
-The development profile requests **875 millicores and 2336 MiB** for its steady
-workloads, leaving room on a 2 CPU / 8 GiB node for K3s, the Ingress controller,
+With managed Keycloak, the development profile requests **875 millicores and
+2336 MiB** for its steady workloads. External OIDC removes Keycloak's **150
+millicores and 512 MiB** reservation, reducing those requests to **725 millicores
+and 1824 MiB**. The remaining node capacity serves K3s, the Ingress controller,
 OpenBao and setup Jobs. Requests are a
 scheduling budget, not a measured peak or production sizing guarantee. Measure
 actual usage and reboot survival on the target. K3s local-path storage remains
@@ -310,10 +427,13 @@ runtime. Set `canvasWorker.enabled=false` if that integration is not selected.
 helm status marty -n marty-dev
 kubectl get pods,jobs,pvc,ingress -n marty-dev
 kubectl logs job/marty-migrate-1 -n marty-dev --all-containers
-kubectl logs job/marty-keycloak-1 -n marty-dev
 kubectl get events -n marty-dev --sort-by=.metadata.creationTimestamp
 kubectl top pods -n marty-dev
 ```
+
+For managed Keycloak, also inspect `kubectl logs job/marty-keycloak-1 -n marty-dev`.
+For a typed login selection, retain and inspect `marty-auth-selection` with the
+installation's nonsecret configuration evidence.
 
 Job names contain the Helm release revision. Existing Secrets are not hashed
 into chart metadata: after rotating startup-read credentials, use the normal

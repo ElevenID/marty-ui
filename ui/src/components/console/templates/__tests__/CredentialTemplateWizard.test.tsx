@@ -90,12 +90,32 @@ describe('CredentialTemplateWizard', () => {
   })
 
   describe('step 2: claims', () => {
+    it('requires an object criteria source for an Open Badge and accepts the canonical achievement shape', async () => {
+      const { user } = render(<CredentialTemplateWizard />)
+      await user.type(screen.getByLabelText(/Template Name/i), 'Course Completion Badge')
+      await user.click(screen.getByRole('combobox', { name: /Credential Type/i }))
+      await user.click(screen.getByRole('option', { name: 'Open Badge Credential' }))
+      await user.click(screen.getByTestId('wizard.template.next'))
+      await user.click(screen.getByRole('button', { name: /Identity Profile/i }))
+      expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+      await user.click(screen.getByRole('button', { name: 'Open Badges achievement' }))
+      expect(screen.getByTestId('wizard.template.next')).toBeEnabled()
+      await user.click(screen.getByRole('button', { name: 'Remove achievement_criteria' }))
+      expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+
+      await user.type(screen.getByRole('textbox', { name: 'Claim Name' }), 'achievement')
+      await user.click(screen.getByRole('combobox', { name: 'Type' }))
+      await user.click(screen.getByRole('option', { name: 'Object (nested)' }))
+      await user.click(screen.getByRole('button', { name: 'Add', exact: true }))
+      expect(screen.getByTestId('wizard.template.next')).toBeEnabled()
+    })
+
     it('should require at least one claim', async () => {
       const { user } = render(<CredentialTemplateWizard />)
 
       // Complete basics step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -110,7 +130,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Navigate to claims step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -138,7 +158,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Navigate to trust & compliance step
       await user.type(screen.getByLabelText(/Template Name/i), 'Test Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.example.test')
       await user.click(screen.getByTestId('wizard.template.next'))
 
@@ -269,11 +289,14 @@ describe('CredentialTemplateWizard', () => {
       await waitFor(() => expect(screen.getByTestId('wizard.template.next')).toBeEnabled())
       await user.click(screen.getByTestId('wizard.template.next'))
 
+      expect(screen.queryByTestId('wizard.template.skip')).not.toBeInTheDocument()
       if (physical) {
         expect(await screen.findByText(/does not use a digital Revocation Profile/)).toBeInTheDocument()
         expect(screen.queryByRole('combobox', { name: /revocation profile/i })).not.toBeInTheDocument()
       } else {
         const revocationSelect = await screen.findByLabelText(/revocation profile/i)
+        expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
+        expect(revocationSelect).toHaveAccessibleDescription('Select an active Revocation Profile to continue.')
         await user.click(revocationSelect)
         await user.click(await screen.findByRole('option', { name: /lifecycle status/i }))
       }
@@ -283,7 +306,7 @@ describe('CredentialTemplateWizard', () => {
         await user.clear(validity)
         expect(validity).toHaveValue(null)
         expect(screen.getByTestId('wizard.template.next')).toBeDisabled()
-        expect(screen.getByTestId('wizard.template.skip')).toBeDisabled()
+        expect(screen.queryByTestId('wizard.template.skip')).not.toBeInTheDocument()
         await user.type(validity, '0')
         expect(validity).toHaveValue(0)
         expect(validity).toHaveAttribute('aria-invalid', 'true')
@@ -297,6 +320,12 @@ describe('CredentialTemplateWizard', () => {
       }
       await user.click(screen.getByTestId('wizard.template.next'))
 
+      expect(await screen.findByText('Production Trust')).toBeInTheDocument()
+      expect(screen.getByText('OID4VC Core')).toBeInTheDocument()
+      if (!physical) expect(screen.getByText('Lifecycle Status')).toBeInTheDocument()
+      for (const section of ['Basic Information', 'Claims', 'Trust & Compliance', 'Cryptography & Validity']) {
+        expect(screen.getByRole('button', { name: `Edit ${section}` })).toBeInTheDocument()
+      }
       if (mode === 'digital') {
         expect(screen.getByText('31 days')).toBeInTheDocument()
         expect(screen.getByText('90 days')).toBeInTheDocument()
@@ -336,6 +365,10 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('_issuer_selection')
         expect(createdPayload).not.toHaveProperty('_organization_default_trust')
+        expect(createdPayload).not.toHaveProperty('profileDisplay')
+        expect(JSON.stringify(createdPayload)).not.toContain('Production Trust')
+        expect(JSON.stringify(createdPayload)).not.toContain('Lifecycle Status')
+        expect(JSON.stringify(createdPayload)).not.toContain('OID4VC Core')
         expect(createdPayload?.validity_rules).toEqual(mode === 'digital'
           ? { default_validity_days: 31, max_validity_days: 90, not_before_offset_seconds: -900 }
           : { default_validity_days: 365, max_validity_days: 730, not_before_offset_seconds: 0 })
@@ -350,7 +383,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Basics
       await user.type(screen.getByLabelText(/Template Name/i), 'Production mDL Template')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.iso.18013.5.1.mDL')
 
       // Note: Full navigation test would require implementing claims addition
@@ -408,7 +441,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Enter data
       await user.type(screen.getByLabelText(/Template Name/i), templateName)
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
       await user.type(screen.getByLabelText(/VCT/i), 'org.test')
 
       // Go forward
@@ -453,7 +486,7 @@ describe('CredentialTemplateWizard', () => {
 
       // Fill required fields
       await user.type(screen.getByLabelText(/Template Name/i), 'Test')
-      await user.type(screen.getByLabelText(/Credential Type/i), 'VerifiableCredential')
+      expect(screen.getByRole('combobox', { name: /Credential Type/i })).toHaveTextContent('Verifiable Credential (W3C)')
 
       // VCT should follow a specific format (namespace.type)
       const vctInput = screen.getByLabelText(/VCT/i)

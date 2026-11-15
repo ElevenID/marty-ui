@@ -1,4 +1,5 @@
 use marty_applicant::{
+    dependency_http::{client, DEFAULT_DEPENDENCY_TIMEOUT},
     event_stream_channel::event_stream_channel,
     http::{router, HttpState},
     migration::migrate_file,
@@ -8,7 +9,6 @@ use marty_applicant::{
 };
 use marty_service_runtime::shutdown_signal_best_effort as shutdown;
 use mmf_security::ApplicationEventAuthenticator;
-use reqwest::Client;
 use std::{
     collections::BTreeMap,
     env, fs,
@@ -100,15 +100,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(HttpTemplateProvider::new(
             issuance_native_url.clone(),
             issuance_api_key.clone(),
-        )),
-        Arc::new(HttpFlowProvider::new(flow_url, application_auth)),
+        )?),
+        Arc::new(HttpFlowProvider::new(flow_url, application_auth)?),
         Arc::new(MmfApprovalAuthorizer::new()?),
         Arc::new(GrpcEventPublisher::new(
             event_channel,
             notification_url,
             notification_token,
             event_stream_token,
-        )),
+        )?),
         persistence,
     ));
     let event_delivery_service = Arc::clone(&service);
@@ -139,11 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             service,
             issuance_url: issuance_native_url,
             issuance_api_key,
-            client: Client::new(),
-            management_client: Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(10))
-                .build()?,
+            client: client(DEFAULT_DEPENDENCY_TIMEOUT)?,
+            management_client: client(Duration::from_secs(10))?,
         }),
     )
     .with_graceful_shutdown(shutdown())

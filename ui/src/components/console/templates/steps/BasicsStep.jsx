@@ -48,8 +48,9 @@ const BasicsStep = ({ data, onChange }) => {
 
       {/* Credential Type */}
       <FormControl fullWidth required sx={{ mb: 3 }}>
-        <InputLabel>{t('wizards.credentialTemplate.basicsStep.fields.credentialType')}</InputLabel>
+        <InputLabel id="credential-template-type-label">{t('wizards.credentialTemplate.basicsStep.fields.credentialType')}</InputLabel>
         <Select
+          labelId="credential-template-type-label"
           value={data.credential_type || 'VerifiableCredential'}
           onChange={(e) => onChange({ credential_type: e.target.value })}
           label={t('wizards.credentialTemplate.basicsStep.fields.credentialType')}

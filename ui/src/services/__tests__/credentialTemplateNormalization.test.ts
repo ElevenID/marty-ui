@@ -6,6 +6,27 @@ import {
 } from '../presentationPolicyApi'
 
 describe('credential template normalization', () => {
+  it('does not invent version or flow usage when the HTTP response omits them', () => {
+    const template = normalizeCredentialTemplate({ id: 'ct-1', status: 'ACTIVE' })
+    expect(template).not.toHaveProperty('version')
+    expect(template.usedByFlowsCount).toBeNull()
+  })
+
+  it.each([0, 1, 2])('preserves an explicitly reported flow count of %s', (count) => {
+    expect(normalizeCredentialTemplate({ version: 3, used_by_flows_count: count })).toMatchObject({
+      version: 3, usedByFlowsCount: count,
+    })
+    expect(normalizeCredentialTemplate({ usedByFlowsCount: count }).usedByFlowsCount).toBe(count)
+  })
+
+  it('preserves an explicit zero over the existing fallback field', () => {
+    expect(normalizeCredentialTemplate({ usedByFlowsCount: 0, used_by_flows_count: 9 }).usedByFlowsCount).toBe(0)
+  })
+
+  it.each([null, -1, 1.5, '0', true])('does not turn invalid flow usage into an authoritative count: %s', (count) => {
+    expect(normalizeCredentialTemplate({ used_by_flows_count: count }).usedByFlowsCount).toBeNull()
+  })
+
   it('normalizes canonical protocol response fields for UI consumers', () => {
     const template = normalizeCredentialTemplate({
       id: 'ct-1',

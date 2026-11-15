@@ -19,6 +19,13 @@ a scoped signer-token file reach the test; the administrative token is confined
 to provisioning and the OpenBao child environment. All fixture state is removed
 when the command exits. This script never contacts an existing OpenBao service.
 
+The same public CA also issues separate Flow-client and Policy-server identities
+for the joined managed-evidence contract. Their file-based identity prefixes are
+MARTY_TEST_POLICY_FLOW_CLIENT_TLS and MARTY_TEST_POLICY_GRPC_SERVER_TLS; the CA
+path is MARTY_TEST_POLICY_WORKLOAD_CA_CERT. Each signer token is restricted to its
+own non-exportable key. The existing MARTY_TEST_POLICY_OWNER_TLS values remain
+available for the independent owner HTTPS contract.
+
 The ordinary run clears HTTP proxy variables in the test child so its legacy
 HTTP decoy remains reachable. Repeat with --poison-proxy to prove that owner and
 remote-signer HTTPS bypass ambient proxies. Build dependencies first: that option
@@ -28,6 +35,7 @@ deliberately makes proxy-dependent downloads fail in the child.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 from pathlib import Path
 import re
@@ -37,12 +45,15 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.error import HTTPError
 
 from selfhost_openbao_client import Bao
 from with_disposable_event_stream_kms import provision_server_identity
 
 
 TLS_PREFIX = "MARTY_TEST_POLICY_OWNER_TLS_"
+FLOW_TLS_PREFIX = "MARTY_TEST_POLICY_FLOW_CLIENT_TLS_"
+POLICY_TLS_PREFIX = "MARTY_TEST_POLICY_GRPC_SERVER_TLS_"
 OPENBAO_VERSION = re.compile(r"\AOpenBao v2\.5\.5(?:\s|$)")
 
 
@@ -90,6 +101,7 @@ def public_certificate(
     role: str,
     common_name: str,
     ip_sans: str | None = None,
+    uri_sans: str | None = None,
 ) -> str:
     csr = bao.request(
         "POST", f"transit/keys/{key_name}/csr", {"version": key_version}
@@ -97,6 +109,8 @@ def public_certificate(
     request = {"csr": csr, "common_name": common_name, "ttl": "1h"}
     if ip_sans is not None:
         request["ip_sans"] = ip_sans
+    if uri_sans is not None:
+        request["uri_sans"] = uri_sans
     signed = bao.request("POST", f"pki/sign/{role}", request)["data"]
     if "private_key" in signed:
         raise RuntimeError("PKI returned private key material")
@@ -170,6 +184,139 @@ def owner_environment(bao: Bao, root: Path, address: str) -> dict[str, str]:
     }
 
 
+def policy_workload_environment(
+    bao: Bao, root: Path, address: str, owner: dict[str, str]
+) -> dict[str, str]:
+    """Add a workload pair to the already provisioned owner CA and Transit mount."""
+    environment = {
+        "MARTY_TEST_POLICY_WORKLOAD_CA_CERT": owner["MARTY_TEST_POLICY_OWNER_CA_CERT"],
+    }
+    signers = {
+        owner[TLS_PREFIX + "KMS_KEY_NAME"]: Path(
+            owner[TLS_PREFIX + "KMS_TOKEN_FILE"]
+        ).read_text(encoding="ascii"),
+    }
+    for prefix, role, common_name, service, server in (
+        (FLOW_TLS_PREFIX, "policy-flow-client", "flow", "flow", False),
+        (
+            POLICY_TLS_PREFIX,
+            "policy-grpc-server",
+            "localhost",
+            "presentation-policy",
+            True,
+        ),
+    ):
+        key_name = role + "-tls-" + secrets.token_hex(8)
+        bao.request("POST", f"transit/keys/{key_name}", {
+            "type": "ecdsa-p256",
+            "exportable": False,
+            "allow_plaintext_backup": False,
+        })
+        metadata = bao.request("GET", f"transit/keys/{key_name}")["data"]
+        if (
+            metadata["type"] != "ecdsa-p256"
+            or metadata["latest_version"] != 1
+            or metadata["exportable"] is not False
+            or metadata["allow_plaintext_backup"] is not False
+        ):
+            raise RuntimeError("unexpected workload signer metadata")
+        uri = f"spiffe://marty.internal/service/{service}"
+        role_configuration = {
+            "allowed_domains": [common_name],
+            "allow_bare_domains": True,
+            "allow_any_name": False,
+            "allow_subdomains": False,
+            "allow_localhost": server,
+            "allow_ip_sans": server,
+            "allowed_uri_sans": [uri],
+            "server_flag": server,
+            "client_flag": not server,
+            "key_type": "ec",
+            "key_bits": 256,
+            "max_ttl": "1h",
+            "use_csr_common_name": False,
+            "use_csr_sans": False,
+        }
+        bao.request("POST", f"pki/roles/{role}", role_configuration)
+        certificate = root / f"{role}-public.pem"
+        certificate.write_text(
+            public_certificate(
+                bao, key_name, 1, role, common_name,
+                ip_sans="127.0.0.1" if server else None,
+                uri_sans=uri,
+            ),
+            encoding="ascii",
+        )
+        if not server:
+            # Same CA, public key and client-only EKU; only the workload URI is
+            # different, so the live negative proves the Policy method ACL.
+            wrong_uri = "spiffe://marty.internal/service/auth"
+            wrong_uri_role = role + "-wrong-uri"
+            bao.request("POST", f"pki/roles/{wrong_uri_role}", {
+                **role_configuration,
+                "allowed_uri_sans": [wrong_uri],
+            })
+            wrong_uri_certificate = root / f"{wrong_uri_role}-public.pem"
+            wrong_uri_certificate.write_text(
+                public_certificate(
+                    bao, key_name, 1, wrong_uri_role, common_name,
+                    uri_sans=wrong_uri,
+                ),
+                encoding="ascii",
+            )
+            environment["MARTY_TEST_POLICY_FLOW_CLIENT_WRONG_URI_CERT_FILE"] = str(
+                wrong_uri_certificate
+            )
+        policy_name = role + "-" + secrets.token_hex(4)
+        bao.request("PUT", f"sys/policies/acl/{policy_name}", {
+            "policy": (
+                f'path "transit/keys/{key_name}" {{ capabilities = ["read"] }}\n'
+                f'path "transit/sign/{key_name}" {{ capabilities = ["update"] }}'
+            ),
+        })
+        token = bao.request("POST", "auth/token/create", {
+            "policies": [policy_name],
+            "no_default_policy": True,
+            "ttl": "1h",
+        })["auth"]["client_token"]
+        if token == bao.token or token in signers.values():
+            raise RuntimeError("workload signer tokens are reused or administrative")
+        signers[key_name] = token
+        token_file = root / f"{role}-signer-token"
+        token_file.write_text(token, encoding="ascii")
+        if os.name != "nt":
+            token_file.chmod(0o600)
+        environment.update({
+            prefix + "CERT_FILE": str(certificate),
+            prefix + "KMS_CA_CERT_FILE": str(root / "vault-ca.pem"),
+            prefix + "KMS_TOKEN_FILE": str(token_file),
+            prefix + "KMS_KEY_NAME": key_name,
+            prefix + "KMS_KEY_VERSION": "1",
+            prefix + "KMS_ADDR": address,
+            prefix + "KMS_PROVIDER": "openbao-transit",
+        })
+
+    # Prove each real token can sign only with its own key, including separation
+    # from the pre-existing owner TLS key. Never expose signatures or tokens.
+    proof = {
+        "input": base64.b64encode(b"policy-workload-signer-scope").decode("ascii"),
+        "key_version": 1,
+    }
+    for own_key, token in signers.items():
+        for target_key in signers:
+            try:
+                signed = bao.request(
+                    "POST", f"transit/sign/{target_key}", proof, token=token
+                )
+            except HTTPError as error:
+                if own_key == target_key or error.code != 403:
+                    raise RuntimeError("workload signer scope proof failed") from None
+            else:
+                if own_key != target_key or not signed.get("data", {}).get("signature"):
+                    raise RuntimeError("workload signer scope proof failed")
+    return environment
+
+
 def execute(executable: Path, command: list[str], *, poison_proxy: bool = False) -> int:
     with tempfile.TemporaryDirectory(prefix="marty-policy-owner-kms-") as temporary:
         root = Path(temporary)
@@ -200,7 +347,9 @@ def execute(executable: Path, command: list[str], *, poison_proxy: bool = False)
         try:
             bao = wait_for_openbao(server, address, root / "vault-ca.pem", root_token)
             environment = os.environ.copy()
-            environment.update(owner_environment(bao, root, address))
+            owner = owner_environment(bao, root, address)
+            environment.update(owner)
+            environment.update(policy_workload_environment(bao, root, address, owner))
             environment["MARTY_TEST_OPENBAO_EXECUTABLE"] = str(executable)
             # The ordinary run must keep its legacy HTTP decoy reachable:
             # an inherited dead proxy could otherwise conceal a fallback attempt.

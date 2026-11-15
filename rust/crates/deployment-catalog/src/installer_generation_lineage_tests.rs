@@ -93,6 +93,9 @@ impl Fixture {
         Self::with_engine(last, "engine")
     }
     pub(super) fn with_engine(last: u64, engine: &str) -> Self {
+        Self::with_external_rotation(last, engine, false)
+    }
+    fn with_external_rotation(last: u64, engine: &str, external: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         for name in [
@@ -102,6 +105,42 @@ impl Fixture {
             "generation-work",
         ] {
             private_directory(&root.path().join(name));
+        }
+        if external {
+            // Synthetic typed selection uses this historical fixture's fixed
+            // owner; it grants local lineage evidence, never live admission.
+            let seed = tempfile::tempdir().unwrap();
+            std::fs::set_permissions(seed.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut state = InstallerState::create(
+                &seed.path().join("seed"),
+                crate::installer_state::Identity {
+                    source_sha: "a".repeat(40),
+                    release_tag: "v1.2.3".into(),
+                    inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+                },
+            )
+            .unwrap();
+            state.advance(Phase::Verified).unwrap();
+            let selected = json!({"schema":"elevenid.installer-external-oidc-selection/v1",
+                "installation_id":public_fixture::OWNER,"source_sha256":"e".repeat(64),
+                "configuration":{"schema":"elevenid.installer-external-oidc/v1", "external_oidc":{
+                    "issuer_url":"https://identity.example.test", "client_id":"same-client", "admin_email":"operator@example.test",
+                    "client_secret_file":"/private/original-secret", "trusted_endpoint_origins":[], "allowed_algorithms":["RS256"]}},
+                "secret":{"sha256":digest(b"old-secret"),"size_bytes":10}});
+            let selected = record(root.path(), crate::installer_oidc::RECORD, &selected);
+            let mut journal = serde_json::to_value(state.journal()).unwrap();
+            journal["installation_id"] = json!(public_fixture::OWNER);
+            journal["external_oidc_selection_sha256"] = json!(digest(&selected));
+            write(
+                &root.path().join("installation.json"),
+                &encode(&journal),
+                0o600,
+            );
+            write(
+                &root.path().join("secrets/external_oidc_client_secret"),
+                b"old-secret",
+                0o444,
+            );
         }
         let (initial_plan, initial) = public_fixture::fixture();
         let mut before = initial.clone();
@@ -324,7 +363,21 @@ impl Fixture {
                 },
                 &plan,
             );
-            let binding = GenerationBinding {
+            let rotation = if external && sequence == 1 {
+                let parent = generations.last().unwrap();
+                let rotation =
+                    crate::installer_oidc_rotation::test_stage(root.path(), parent, b"next-secret");
+                record(
+                    root.path(),
+                    &format!("generation-{sequence:020}-intent.json"),
+                    &json!({
+                    "parent_binding_sha256":parent.sha256().unwrap(),"oidc_secret_rotation_sha256":rotation}),
+                );
+                Some(rotation)
+            } else {
+                None
+            };
+            let mut binding = GenerationBinding {
                 schema: "elevenid.installer-application-generation/v4".into(),
                 installation_id: public_fixture::OWNER.into(),
                 engine_id: engine.into(),
@@ -349,6 +402,7 @@ impl Fixture {
                 root_retired: false,
                 installation_ready: false,
                 successor: generations.last().map(|parent| SuccessorBinding {
+                    oidc_secret_rotation_sha256: rotation.clone(),
                     sequence,
                     attempt: 0,
                     parent_attempt: parent.attempt(),
@@ -356,10 +410,38 @@ impl Fixture {
                     native_operation: operation.clone(),
                 }),
             };
+            let external_secret = if sequence == 0 {
+                b"old-secret".as_slice()
+            } else {
+                b"next-secret".as_slice()
+            };
+            if external {
+                binding.files.insert(
+                    "external_oidc_client_secret".into(),
+                    GenerationFile {
+                        source: if rotation.is_some() {
+                            GenerationSource::Candidate
+                        } else {
+                            GenerationSource::Original
+                        },
+                        sha256: digest(external_secret),
+                        size: external_secret.len() as u64,
+                        source_mode: 0o444,
+                        mode: 0o444,
+                    },
+                );
+            }
             let output = binding.secret_dir(root.path()).unwrap();
             private_directory(&output);
             for (name, bytes) in &after {
                 write(&output.join(name), bytes, 0o444);
+            }
+            if external {
+                write(
+                    &output.join("external_oidc_client_secret"),
+                    external_secret,
+                    0o444,
+                );
             }
             record(
                 root.path(),
@@ -376,6 +458,80 @@ impl Fixture {
         }
         Self { root, generations }
     }
+}
+
+#[test]
+fn external_secret_rotation_preserves_full_custody_proof_and_subsequent_generations() {
+    let fixture = Fixture::with_external_rotation(2, "engine", true);
+    let selected = std::fs::read(
+        fixture
+            .root
+            .path()
+            .join("evidence")
+            .join(crate::installer_oidc::RECORD),
+    )
+    .unwrap();
+    let current = load_sequence(fixture.root.path(), 2).unwrap();
+    assert_eq!(current, fixture.generations[2]);
+    assert_eq!(
+        fixture.generations[0]
+            .read(fixture.root.path(), "external_oidc_client_secret")
+            .unwrap(),
+        b"old-secret"
+    );
+    assert_eq!(
+        current
+            .read(fixture.root.path(), "external_oidc_client_secret")
+            .unwrap(),
+        b"next-secret"
+    );
+    assert!(fixture.generations[1]
+        .successor
+        .as_ref()
+        .unwrap()
+        .oidc_secret_rotation_sha256
+        .is_some());
+    assert!(fixture.generations[2]
+        .successor
+        .as_ref()
+        .unwrap()
+        .oidc_secret_rotation_sha256
+        .is_none());
+    assert_eq!(current.files.len(), 43); // The complete 42-file public custody proof plus one independent input.
+    let report: Value = serde_json::from_slice(
+        &std::fs::read(
+            fixture
+                .root
+                .path()
+                .join("evidence/generation-00000000000000000001-candidate.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["candidate_sha256"].as_object().unwrap().len(), 42);
+    assert!(report["candidate_sha256"]
+        .get("external_oidc_client_secret")
+        .is_none());
+    assert_eq!(
+        std::fs::read(
+            fixture
+                .root
+                .path()
+                .join("evidence")
+                .join(crate::installer_oidc::RECORD)
+        )
+        .unwrap(),
+        selected
+    );
+    write(
+        &fixture
+            .root
+            .path()
+            .join("evidence/generation-oidc-00000000000000000001-secret"),
+        b"tampered",
+        0o600,
+    );
+    assert!(load_sequence(fixture.root.path(), 2).is_err());
 }
 
 #[test]

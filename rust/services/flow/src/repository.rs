@@ -167,10 +167,7 @@ impl InMemoryFlowRepository {
                     .get(marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY)
                     .is_some()
         }) || callback.as_ref().is_some_and(|message| {
-            message
-                .payload
-                .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
-                .is_some()
+            crate::verification_receipt::reject_supplied_receipt(&message.payload, None).is_err()
         }) || expected.context[crate::presentation_request::FROZEN_PRESENTATION_REQUEST_KEY]
             .get("credential_authority")
             .is_some_and(|authority| !authority.is_null())
@@ -229,7 +226,8 @@ impl InMemoryFlowRepository {
 
     /// Atomic in-memory model of the receipt-bearing PostgreSQL transaction.
     /// The supplied clock is the model's nonce-consumption observation; this
-    /// adapter does not claim durable storage across process restarts.
+    /// adapter does not claim durable storage across process restarts and
+    /// cannot mint authenticated managed evidence.
     pub fn finalize_verification_with_receipt(
         &self,
         prepared: &crate::PreparedVerificationFinalization,
@@ -265,7 +263,12 @@ impl InMemoryFlowRepository {
         if now_ms >= prepared.replay_expires_at_ms || !receipt_input.is_live_at(consumed_at) {
             return Ok(None);
         }
-        let (instance, callback, receipt) = receipt_input.attach(prepared, consumed_at)?;
+        let (mut instance, callback, receipt) = receipt_input.attach(prepared, consumed_at)?;
+        let _validated_model_evidence = prepared
+            .managed_evidence
+            .as_ref()
+            .map(|evidence| evidence.attach(prepared, &mut instance, &receipt))
+            .transpose()?;
         let stored = instance.kernel()?;
         checked_public_record(&stored)?;
         if let Some(callback) = &callback {
@@ -286,7 +289,7 @@ impl InMemoryFlowRepository {
         }
         state.instances.insert(instance.id.clone(), stored);
         Ok(Some(
-            crate::CommittedVerificationFinalization::after_commit(instance, receipt),
+            crate::CommittedVerificationFinalization::after_commit(instance, receipt, None),
         ))
     }
 

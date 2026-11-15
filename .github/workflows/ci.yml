@@ -1730,6 +1730,47 @@ jobs:
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
           run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1
+      - name: Exercise managed Policy evidence through Flow PostgreSQL commit
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        env:
+          FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("#marty-presentation-policy@"))
+            | select(.target.name == "marty_presentation_policy")
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          test_name=verification_tests::bounded_sd_jwt_query_evidence::managed_authority::live_keyless_managed_policy_evidence
+          "${executables[0]}" "$test_name" --ignored --exact --list | grep -Fx "$test_name: test"
+          # Reuse the reviewed 2.5.5 base identity from openbao/didcomm-authcrypt/Dockerfile.
+          # The shared contracts daemon is older; this fixture owns an isolated native child.
+          image=quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
+          bash ../scripts/ci/pull-pinned-quay-openbao.sh "$image"
+          container="$(docker create "$image")"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          binary="$RUNNER_TEMP/managed-policy-openbao"
+          docker cp "$container:/bin/bao" "$binary"
+          chmod 700 "$binary"
+          "$binary" version | grep -F '028992583c693c4de6350b8aa52ff85e30375a99'
+          run_timed managed_policy_evidence python3 ../scripts/with_disposable_policy_owner_kms.py \
+            --openbao "$binary" -- "${executables[0]}" "$test_name" \
+            --ignored --exact --nocapture | tee "$RUNNER_TEMP/managed-policy-evidence.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/managed-policy-evidence.log"
+          owner_executable="$(resolve_recorded_contract_executable marty-presentation-policy control_plane_behavior)"
+          owner_test=managed_authority_http::live_keyless_managed_owner_channels
+          "$owner_executable" "$owner_test" --ignored --exact --list | grep -Fx "$owner_test: test"
+          run_timed managed_owner_channels python3 ../scripts/with_disposable_policy_owner_kms.py \
+            --openbao "$binary" -- "$owner_executable" "$owner_test" \
+            --ignored --exact --nocapture | tee "$RUNNER_TEMP/managed-owner-channels.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/managed-owner-channels.log"
       - name: Prepare owned runtime failure diagnostics
         if: matrix.lane == 'canvas'
         shell: bash

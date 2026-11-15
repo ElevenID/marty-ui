@@ -743,9 +743,11 @@ async fn evaluate_submission(
                 "Verification transaction has expired",
             ))
         }
-        PreparedVerificationSubmission::SameTerminal(response) if permit_terminal_replay => {
-            Ok(response)
-        }
+        PreparedVerificationSubmission::SameTerminal(response) if permit_terminal_replay => state
+            .repository
+            .verification_result(&expected_instance.organization_id, &response.instance_id)
+            .await?
+            .ok_or_else(verification_request_changed),
         PreparedVerificationSubmission::SameTerminal(_) => Err(already_processed()),
         PreparedVerificationSubmission::ReplayConflict => Err(replay_conflict()),
     }
@@ -761,7 +763,7 @@ async fn commit_verification(
             .repository
             .finalize_verification_with_receipt(finalization)
             .await?
-            .map(|committed| committed.instance().verification_projection())
+            .map(|committed| committed.verification_projection())
             .transpose()?
     } else if state
         .repository
@@ -789,7 +791,11 @@ async fn commit_verification(
         .and_then(Value::as_str)
         .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
     if same_digest && permit_terminal_replay {
-        return Ok(current.verification_projection()?);
+        return state
+            .repository
+            .verification_result(&current.organization_id, &current.id)
+            .await?
+            .ok_or_else(verification_request_changed);
     }
     if same_digest {
         return Err(already_processed());

@@ -51,11 +51,16 @@ spec:
             secretKeyRef:
               name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
               key: POSTGRES_PASSWORD
+        {{- if eq (include "marty.authProvider" .) "keycloak" }}
         - name: KEYCLOAK_DB_PASSWORD
           valueFrom:
             secretKeyRef:
               name: {{ include "marty.secretName" (dict "root" . "name" "marty-secrets") }}
               key: KEYCLOAK_DB_PASSWORD
+        {{- else }}
+        - name: MARTY_INITIALIZE_KEYCLOAK_DATABASE
+          value: "false"
+        {{- end }}
         - name: MARTY_DB_PASSWORD
           valueFrom:
             secretKeyRef:
@@ -85,7 +90,7 @@ spec:
             command:
             - /bin/sh
             - -ec
-            - pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty
+            - {{ if eq (include "marty.authProvider" .) "keycloak" }}pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty{{ else }}pg_isready -U postgres && pg_isready -U marty -d marty{{ end }}
           periodSeconds: 5
           failureThreshold: 3
           timeoutSeconds: 5

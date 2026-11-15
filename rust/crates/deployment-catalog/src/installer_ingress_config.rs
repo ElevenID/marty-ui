@@ -26,6 +26,14 @@ fn normalized(text: &str) -> Result<String> {
 /// authority and resolve the fixed container DNS upstreams. Unknown source drift
 /// is refused rather than rewritten heuristically. This does not provision TLS.
 pub fn render(template: &str, origin: &str) -> Result<String> {
+    render_selected(template, origin, true)
+}
+
+pub(crate) fn render_selected(
+    template: &str,
+    origin: &str,
+    managed_keycloak: bool,
+) -> Result<String> {
     let text = normalized(template)?;
     if text != normalized(TEMPLATE)? {
         return Err(REFUSED.into());
@@ -40,9 +48,30 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
     let mut output = String::new();
     let mut hosts = 0;
     let mut proxies = 0;
+    let mut skipped_keycloak_routes = 0;
+    let mut skipping_keycloak_route = false;
     for line in text.lines() {
         let trimmed = line.trim_start();
         let indent = &line[..line.len() - trimmed.len()];
+        if !managed_keycloak {
+            // The exact authenticated template above has two flat provider
+            // routes. Remove only those blocks, leaving application assets and
+            // all API/callback routes intact; fail closed if that contract drifts.
+            if matches!(trimmed, "location /realms/ {" | "location ~ ^/resources/ {") {
+                skipping_keycloak_route = true;
+                skipped_keycloak_routes += 1;
+            }
+            if skipping_keycloak_route {
+                if trimmed == "}" {
+                    skipping_keycloak_route = false;
+                }
+                continue;
+            }
+            if trimmed == "# Keep exact /resources in the UI; only descendants belong to Keycloak."
+            {
+                continue;
+            }
+        }
         if trimmed.starts_with("proxy_pass ") {
             proxies += 1;
         }
@@ -97,7 +126,15 @@ pub fn render(template: &str, origin: &str) -> Result<String> {
             }
         }
     }
-    if proxies == 0 || hosts != proxies || output.contains("${") {
+    if proxies == 0
+        || hosts != proxies
+        || output.contains("${")
+        || (!managed_keycloak
+            && (skipping_keycloak_route
+                || skipped_keycloak_routes != 2
+                || output.contains("$keycloak")
+                || output.contains("keycloak:8080")))
+    {
         return Err(REFUSED.into());
     }
     Ok(output)
@@ -170,6 +207,33 @@ mod tests {
         for upstream in ["ui:80", "gateway:8000", "flow:8011", "keycloak:8080"] {
             assert!(output.contains(upstream));
         }
+    }
+    #[test]
+    fn external_login_removes_only_managed_provider_routes() {
+        let managed = render(TEMPLATE, "https://beta.example.test").unwrap();
+        let external = render_selected(TEMPLATE, "https://beta.example.test", false).unwrap();
+        let expected: Vec<_> = route_lines(&managed)
+            .into_iter()
+            .filter(|line| {
+                !matches!(
+                    *line,
+                    "location /realms/ {"
+                        | "location ~ ^/resources/ {"
+                        | "proxy_pass http://$keycloak;"
+                )
+            })
+            .collect();
+        assert_eq!(route_lines(&external), expected);
+        assert!(!external.contains("keycloak"));
+        assert!(external.contains("gateway:8000"));
+        assert!(external.contains("ui:80"));
+        assert!(external.contains("flow:8011"));
+        assert!(render_selected(
+            &format!("{TEMPLATE}\n# drift"),
+            "https://beta.example.test",
+            false
+        )
+        .is_err());
     }
     #[test]
     fn refuses_origin_injection_and_template_drift() {

@@ -66,6 +66,7 @@ export {
   createWalletOfferDialogState,
   enrichWalletOfferForRouting,
   getWalletOfferDialogError,
+  getWalletOfferDialogFailure,
   getWalletOfferPrimaryUri,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,

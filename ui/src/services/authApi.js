@@ -12,6 +12,14 @@ import { createProfilePictureBody } from './profilePicturePayload';
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
 const AUTH_BASE_URL = '/v1/auth';
+const SESSION_CHECK_TIMEOUT_MS = 15_000;
+
+function sessionCheckError(message, code, status) {
+  const error = new Error(message);
+  error.code = code;
+  if (status !== undefined) error.status = status;
+  return error;
+}
 
 /**
  * Get current authenticated user info
@@ -19,35 +27,56 @@ const AUTH_BASE_URL = '/v1/auth';
  */
 export async function getCurrentUser() {
   if (getPublicEntryCanonicalOrigin()) return { authenticated: false, user: null };
-  const response = await fetch(`${AUTH_BASE_URL}/me`, {
-    method: 'GET',
-    credentials: 'include', // Include cookies
-    cache: 'no-store',
-    headers: {
-      'Accept': 'application/json',
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SESSION_CHECK_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${AUTH_BASE_URL}/me`, {
+      method: 'GET',
+      credentials: 'include', // Include cookies
+      cache: 'no-store',
+      signal: controller.signal,
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
 
-  // Only an explicit unauthenticated result ends a known session. Transport,
-  // server, and malformed-response failures are not authentication decisions.
-  if (response.status === 401) return { authenticated: false, user: null };
-  if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-  const result = await response.json();
-  if (result?.authenticated === false) return { authenticated: false, user: null };
-  const principalId = result?.user?.user_id || result?.user?.sub || result?.user?.id;
-  const hasPrincipal = typeof principalId === 'string'
-    ? Boolean(principalId.trim())
-    : typeof principalId === 'number' && Number.isFinite(principalId);
-  if (result?.authenticated !== true || !result.user || Array.isArray(result.user) || !hasPrincipal) {
-    throw new Error('The account response could not be read. Please try again.');
+    // Only an explicit unauthenticated result ends a known session. Transport,
+    // server, and malformed-response failures are not authentication decisions.
+    if (response.status === 401) return { authenticated: false, user: null };
+    if (!response.ok) {
+      throw sessionCheckError(`HTTP error! status: ${response.status}`,
+        response.status >= 500 ? 'AUTH_UNAVAILABLE' : 'AUTH_CONFIGURATION', response.status);
+    }
+    let result;
+    try {
+      result = await response.json();
+    } catch {
+      throw sessionCheckError('The account response could not be read. Please try again.', 'AUTH_RESPONSE_INVALID');
+    }
+    if (result?.authenticated === false) return { authenticated: false, user: null };
+    const principalId = result?.user?.user_id || result?.user?.sub || result?.user?.id;
+    const hasPrincipal = typeof principalId === 'string'
+      ? Boolean(principalId.trim())
+      : typeof principalId === 'number' && Number.isFinite(principalId);
+    if (result?.authenticated !== true || !result.user || Array.isArray(result.user) || !hasPrincipal) {
+      throw sessionCheckError('The account response could not be read. Please try again.', 'AUTH_RESPONSE_INVALID');
+    }
+    return result;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw sessionCheckError('The sign-in service took too long to respond.', 'AUTH_TIMEOUT');
+    }
+    if (typeof error?.code === 'string' && error.code.startsWith('AUTH_')) throw error;
+    throw sessionCheckError('The sign-in service could not be reached.', 'AUTH_NETWORK');
+  } finally {
+    clearTimeout(timeout);
   }
-  return result;
 }
 
 /**
  * Initiate login by redirecting to OIDC provider
  * @param {string} [redirectUri] - Where to redirect after login
- * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
+ * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateLogin(redirectUri = '/', locale = null) {
   // Build login URL - always use relative path to go through nginx proxy
@@ -58,9 +87,9 @@ export function initiateLogin(redirectUri = '/', locale = null) {
     params.append('redirect_uri', redirectUri);
   }
   
-  // Pass locale to Keycloak if provided
+  // The Auth service validates and forwards the standard OIDC locale parameter.
   if (locale) {
-    params.append('kc_locale', locale);
+    params.append('ui_locales', locale);
   }
   
   const queryString = params.toString();
@@ -72,9 +101,9 @@ export function initiateLogin(redirectUri = '/', locale = null) {
 }
 
 /**
- * Initiate registration by redirecting to Keycloak registration page
+ * Initiate registration through the configured identity provider
  * @param {string} [redirectUri] - Where to redirect after registration
- * @param {string} [locale] - Language code to pass to Keycloak (e.g., 'en', 'de', 'ja')
+ * @param {string} [locale] - Preferred sign-in language (e.g., 'en', 'de', 'ja')
  */
 export function initiateRegister(redirectUri = '/', locale = null) {
   // Build registration URL - always use relative path to go through nginx proxy
@@ -85,9 +114,9 @@ export function initiateRegister(redirectUri = '/', locale = null) {
     params.append('redirect_uri', redirectUri);
   }
   
-  // Pass locale to Keycloak if provided
+  // Use the same provider-neutral locale contract as login.
   if (locale) {
-    params.append('kc_locale', locale);
+    params.append('ui_locales', locale);
   }
   
   const queryString = params.toString();
@@ -99,7 +128,7 @@ export function initiateRegister(redirectUri = '/', locale = null) {
 }
 
 /**
- * Initiate logout (full SSO logout)
+ * End the application session and use provider logout when available
  */
 export function initiateLogout() {
   const canonical = getPublicEntryCanonicalOrigin();
@@ -108,7 +137,7 @@ export function initiateLogout() {
     return;
   }
   window.dispatchEvent(new Event(LOGOUT_STARTED_EVENT));
-  // POST to logout endpoint via nginx proxy, which will redirect to Keycloak logout
+  // Auth deletes the local session and redirects to provider logout when supported.
   // Using relative path ensures cookies are sent correctly (same origin)
   const form = document.createElement('form');
   form.method = 'POST';

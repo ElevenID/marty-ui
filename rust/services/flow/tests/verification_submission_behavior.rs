@@ -249,6 +249,7 @@ async fn managed_owner_snapshot_reaches_policy_and_changed_authority_requires_re
 
 fn allowed() -> PresentationEvaluationResult {
     PresentationEvaluationResult {
+        managed_evidence: None,
         evaluation_validity: None,
         evaluation_timestamp: None,
         policy_revision: presentation_snapshot::revision("policy-1"),
@@ -919,37 +920,45 @@ async fn legacy_finalization_cannot_sign_or_store_a_caller_supplied_receipt() {
         .finalize_verification_with_receipt(&prepared, now_ms)
         .unwrap()
         .unwrap();
-    for attach_to_callback in [false, true] {
-        let repository = marty_flow::InMemoryFlowRepository::default();
-        let expected = prepared.expected_instance.kernel().unwrap();
-        repository.save_instance(expected.clone()).unwrap();
-        let mut terminal = prepared.instance.kernel().unwrap();
-        let mut callback = prepared.callback.clone().unwrap();
-        if attach_to_callback {
-            callback.payload[VERIFICATION_RECEIPT] = json!(committed.receipt());
-        } else {
-            terminal.result.as_mut().unwrap()[VERIFICATION_RECEIPT] = json!(committed.receipt());
+    for field in [
+        VERIFICATION_RECEIPT,
+        "_marty_managed_oid4vp_evidence_v2",
+        marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+        marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2,
+        "canonical_evidence_digest",
+    ] {
+        for attach_to_callback in [false, true] {
+            let repository = marty_flow::InMemoryFlowRepository::default();
+            let expected = prepared.expected_instance.kernel().unwrap();
+            repository.save_instance(expected.clone()).unwrap();
+            let mut terminal = prepared.instance.kernel().unwrap();
+            let mut callback = prepared.callback.clone().unwrap();
+            if attach_to_callback {
+                callback.payload[field] = json!(committed.receipt());
+            } else {
+                terminal.result.as_mut().unwrap()[field] = json!(committed.receipt());
+            }
+            assert!(matches!(
+                repository.finalize_verification(
+                    terminal,
+                    &prepared.nonce_digest,
+                    prepared.replay_expires_at_ms,
+                    &expected,
+                    Some(callback),
+                    now_ms,
+                ),
+                Err(marty_flow::RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert_eq!(repository.instance(&expected.id).unwrap(), Some(expected));
+            assert!(repository
+                .callback(&prepared.instance.id)
+                .unwrap()
+                .is_none());
+            assert!(repository
+                .finalize_verification_with_receipt(&prepared, now_ms)
+                .unwrap()
+                .is_some());
         }
-        assert!(matches!(
-            repository.finalize_verification(
-                terminal,
-                &prepared.nonce_digest,
-                prepared.replay_expires_at_ms,
-                &expected,
-                Some(callback),
-                now_ms,
-            ),
-            Err(marty_flow::RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert_eq!(repository.instance(&expected.id).unwrap(), Some(expected));
-        assert!(repository
-            .callback(&prepared.instance.id)
-            .unwrap()
-            .is_none());
-        assert!(repository
-            .finalize_verification_with_receipt(&prepared, now_ms)
-            .unwrap()
-            .is_some());
     }
 }
 
@@ -987,59 +996,78 @@ async fn generic_writers_cannot_store_even_a_digest_consistent_receipt() {
         .connect_lazy("postgres://localhost:1/flow_test")
         .unwrap();
     let postgres = PostgresFlowRepository::new(pool);
-    for attach_to_context in [false, true] {
-        let mut candidate = committed.instance().clone();
-        if attach_to_context {
-            candidate.result = None;
-            candidate.context[VERIFICATION_RECEIPT] = receipt.clone();
-        }
-        let kernel = candidate.kernel().unwrap();
-        let memory = InMemoryFlowRepository::default();
-        assert!(matches!(
-            memory.save_instance(kernel.clone()),
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert!(matches!(
-            memory.reserve_application_event_plan(
-                event.clone(),
-                vec![PlannedApplicationFlow {
-                    instance: kernel,
-                    plan_entry: Default::default(),
-                }],
-            ),
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert!(memory.instance(&candidate.id).unwrap().is_none());
-        assert!(matches!(
-            postgres.save_instance(&candidate).await,
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert!(matches!(
-            postgres.save_started_instance(&candidate, None).await,
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert!(matches!(
-            postgres
-                .compare_and_swap_instance(
-                    &candidate,
-                    prepared.expected_instance.status,
-                    prepared.expected_instance.updated_at,
-                )
-                .await,
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
-        assert!(matches!(
-            postgres
-                .reserve_application_event_plan(
+    for (field, supplied) in [
+        (VERIFICATION_RECEIPT, receipt),
+        ("_marty_managed_oid4vp_evidence_v2", json!({"forged": true})),
+        (
+            marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2,
+            json!({"forged": true}),
+        ),
+        (
+            marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2,
+            json!(format!("sha256:{}", "a".repeat(64))),
+        ),
+        (
+            "canonical_evidence_digest",
+            json!(format!("sha256:{}", "b".repeat(64))),
+        ),
+    ] {
+        for attach_to_context in [false, true] {
+            let mut candidate = prepared.instance.clone();
+            if attach_to_context {
+                candidate.result = None;
+                candidate.context[field] = supplied.clone();
+            } else {
+                candidate.result.as_mut().unwrap()[field] = supplied.clone();
+            }
+            let kernel = candidate.kernel().unwrap();
+            let memory = InMemoryFlowRepository::default();
+            assert!(matches!(
+                memory.save_instance(kernel.clone()),
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert!(matches!(
+                memory.reserve_application_event_plan(
                     event.clone(),
-                    &[PlannedApplicationFlowRecord {
-                        instance: candidate,
+                    vec![PlannedApplicationFlow {
+                        instance: kernel,
                         plan_entry: Default::default(),
                     }],
-                )
-                .await,
-            Err(RepositoryError::InvalidVerificationReceipt)
-        ));
+                ),
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert!(memory.instance(&candidate.id).unwrap().is_none());
+            assert!(matches!(
+                postgres.save_instance(&candidate).await,
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert!(matches!(
+                postgres.save_started_instance(&candidate, None).await,
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert!(matches!(
+                postgres
+                    .compare_and_swap_instance(
+                        &candidate,
+                        prepared.expected_instance.status,
+                        prepared.expected_instance.updated_at,
+                    )
+                    .await,
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+            assert!(matches!(
+                postgres
+                    .reserve_application_event_plan(
+                        event.clone(),
+                        &[PlannedApplicationFlowRecord {
+                            instance: candidate,
+                            plan_entry: Default::default(),
+                        }],
+                    )
+                    .await,
+                Err(RepositoryError::InvalidVerificationReceipt)
+            ));
+        }
     }
     // The original owner-created record remains recoverable without any
     // generic write or a second nonce consumption.

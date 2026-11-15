@@ -44,6 +44,38 @@ struct ManagedStatusProjection {
 }
 
 impl VerifiedManagedCredentialAuthority {
+    /// Copy the minimized owner facts only while their authenticated acquisitions
+    /// still correspond to the same native query. The resulting DTO retains no
+    /// acquisition capability and cannot authenticate a different producer.
+    pub(crate) fn managed_evidence_parts(
+        &self,
+        query: &AuthenticatedSdJwtQueryEvidence,
+    ) -> Result<
+        (
+            CredentialTrustEvaluationResponseV1,
+            marty_oid4vp_contract::ManagedStatusEvidenceProjectionV2,
+        ),
+        PresentationVerificationError,
+    > {
+        if !self.matches_query(query) {
+            return Err(PresentationVerificationError::Failed(
+                "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID".into(),
+            ));
+        }
+        Ok((
+            self.trust.clone(),
+            marty_oid4vp_contract::ManagedStatusEvidenceProjectionV2 {
+                authority: self.status.authority.clone(),
+                state: self.status.state,
+                request_binding_digest: self.status.request_binding_digest.clone(),
+                issuer_jwt_digest: self.status.issuer_jwt_digest.clone(),
+                checked_at_epoch_seconds: self.status.checked_at_epoch_seconds,
+                valid_until_epoch_seconds: self.status.valid_until_epoch_seconds,
+                evidence_digest: self.status.evidence_digest.clone(),
+            },
+        ))
+    }
+
     pub(crate) fn finalization_deadline_micros(
         &self,
         policy: &crate::PresentationPolicy,

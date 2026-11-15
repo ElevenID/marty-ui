@@ -2,8 +2,8 @@
 """Freeze same-run official evidence and qualify it without a human review wait.
 
 The shared Rust validator owns protocol and browser outcome requirements.
-This file authenticates current-run artifact transport and unchanged protected
-main. It never reads a manual disposition or turns an upstream REVIEW into PASS.
+This file authenticates current-run artifact transport and policy-compatible
+protected main. It never reads a manual disposition or turns REVIEW into PASS.
 """
 
 from __future__ import annotations
@@ -20,8 +20,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 if __package__:
+    from . import release_source_authority as source_authority
     from .release_review_main import gate_authority, strict_json
 else:
+    import release_source_authority as source_authority
     from release_review_main import gate_authority, strict_json
 
 REPOSITORY = "ElevenID/marty-ui"
@@ -69,6 +71,17 @@ def remaining(deadline: float, clock: Callable[[], float] = time.monotonic) -> f
 
 
 class GitHub:
+    def main(self) -> dict:
+        branch = strict_json(self.api("branches/main"))
+        if not isinstance(branch, dict):
+            raise ValueError("official evidence authorization must come from protected main")
+        commit = branch.get("commit")
+        main_commit = commit.get("sha") if isinstance(commit, dict) else None
+        if (branch.get("name") != "main" or branch.get("protected") is not True
+                or not isinstance(main_commit, str) or SOURCE.fullmatch(main_commit) is None):
+            raise ValueError("official evidence authorization must come from protected main")
+        return branch
+
     def timeout(self) -> float:
         deadline = getattr(self, "deadline", None)
         return 120 if deadline is None else min(120, remaining(deadline, getattr(self, "clock", time.monotonic)))
@@ -191,18 +204,6 @@ def snapshot(args: argparse.Namespace, github: GitHub) -> bool:
     return True
 
 
-def protected_main(github: GitHub) -> str:
-    branch = strict_json(github.api("branches/main"))
-    if not isinstance(branch, dict):
-        raise ValueError("official evidence authorization must come from protected main")
-    commit = branch.get("commit")
-    main_commit = commit.get("sha") if isinstance(commit, dict) else None
-    if (branch.get("name") != "main" or branch.get("protected") is not True
-            or not isinstance(main_commit, str) or SOURCE.fullmatch(main_commit) is None):
-        raise ValueError("official evidence authorization must come from protected main")
-    return main_commit
-
-
 def write_exclusive(path: Path, value: bytes) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, "wb") as output:
@@ -226,8 +227,9 @@ def qualify(
             or plan.get("release_qualified") is not False):
         raise ValueError("bounded qualification requires the original complete frozen assessment")
     remaining(deadline, clock)
-    if protected_main(github) != args.source:
-        raise ValueError("automated qualification requires unchanged protected main")
+    verified_sources: set[tuple[str, str, str]] = set()
+    source_authority.authenticated_current(github, args.source, args.source,
+                                           verified=verified_sources)
     remaining(deadline, clock)
     result = validator(args, attempt, ["--automated"])
     digest = "sha256:" + hashlib.sha256(result).hexdigest()
@@ -248,8 +250,8 @@ def qualify(
             or assessment["automated_cases"] != len(plan["pending"])):
         raise ValueError("official Rust gate output differs from the frozen original assessment")
     remaining(deadline, clock)
-    if protected_main(github) != args.source:
-        raise ValueError("protected main changed after automated official qualification")
+    source_authority.authenticated_current(github, args.source, args.source,
+                                           verified=verified_sources)
     remaining(deadline, clock)
     write_exclusive(args.output, result)
 

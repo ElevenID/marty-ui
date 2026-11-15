@@ -80,7 +80,6 @@ describe('mounted policy recovery and scope lifecycle', () => {
   it.each([
     { activateImmediately: false, status: 'DRAFT', active: false },
     { activateImmediately: true, status: 'ACTIVE', active: true },
-    { activateImmediately: true, status: 'DRAFT', active: false },
   ])('uses returned $status for delayed completion (activation requested: $activateImmediately)', async ({ activateImmediately, status, active }) => {
     await finishCreation(activateImmediately, status);
     expect(screen.getByText(active ? '"Policy" is active and ready to use.' : '"Policy" is saved as draft.')).toBeInTheDocument();
@@ -94,6 +93,21 @@ describe('mounted policy recovery and scope lifecycle', () => {
     expect(scope.navigate).toHaveBeenCalledWith(active
       ? '/console/org/deploy/profiles'
       : '/console/org/policies/presentation/policy%2Fcreated%3Fsource%3Dwizard');
+  });
+
+  it('retains the acknowledged draft when activation does not confirm ACTIVE', async () => {
+    await finishCreation(true, 'DRAFT');
+    expect(screen.getByRole('button', { name: 'Retry activation' })).toBeEnabled();
+    expect(screen.getByText(/The server did not confirm an active resource/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open created draft' })).toBeEnabled();
+    expect(screen.queryByText('"Policy" is saved as draft.')).not.toBeInTheDocument();
+    expect(screen.queryByText('"Policy" is active and ready to use.')).not.toBeInTheDocument();
+    expect(JSON.parse(sessionStorage.getItem('marty:policy-create:v1:org-a')!).resourceId)
+      .toBe('policy/created?source=wizard');
+    expect(createPresentationPolicy).toHaveBeenCalledTimes(1);
+    expect(activatePresentationPolicy).toHaveBeenCalledExactlyOnceWith('policy/created?source=wizard');
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(scope.navigate).not.toHaveBeenCalled();
   });
 
   it('retries activation of the same acknowledged draft', async () => {

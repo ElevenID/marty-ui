@@ -2,6 +2,137 @@
 
 use marty_deployment_catalog::installer_state::{Identity, InstallerState, Phase, RuntimeBinding};
 use serde_json::Value;
+
+#[test]
+fn external_oidc_operator_commands_are_discoverable_and_never_accept_inline_secrets_or_provider_changes(
+) {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+        .args(["external-oidc", "--help"])
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        text.contains("preflight --install-dir")
+            && text.contains("rotate-secret --install-dir")
+            && text.contains("--client-secret-file")
+    );
+    for args in [
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--client-secret",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--issuer-url",
+            "https://SYNTHETIC_PRIVATE_CANARY.example",
+        ],
+        vec![
+            "external-oidc",
+            "preflight",
+            "--client-id",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--client-secret-file",
+            "SYNTHETIC_PRIVATE_CANARY",
+        ],
+        vec![
+            "external-oidc",
+            "rotate-secret",
+            "--install-dir",
+            "/missing",
+            "--client-secret-file",
+        ],
+    ] {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("SYNTHETIC_PRIVATE_CANARY"));
+    }
+}
+
+#[test]
+fn external_oidc_arguments_are_checked_before_installation_without_echoing_paths() {
+    for verb in ["install", "candidate-test"] {
+        let record = if verb == "install" {
+            "--verified-admission"
+        } else {
+            "--verified-inventory"
+        };
+        let base = [
+            verb,
+            "--version",
+            "v1.2.3-nightly.20261027.42",
+            record,
+            "/unopened/record.json",
+            "--verification-tools",
+            "/unopened/tools",
+            "--gh-bin",
+            "/unopened/gh",
+            "--docker-bin",
+            "/unopened/docker",
+            "--docker-host",
+            "unix:///run/user/1000/docker.sock",
+            "--docker-engine-id",
+            "synthetic-engine",
+            "--runtime-profile",
+            "rootless",
+        ];
+        let sensitive = "/private/never-echo-external-oidc.json";
+        for (extra, expected) in [
+            (vec!["--external-oidc-file"], "requires a value"),
+            (vec!["--external-oidc-file", ""], "requires a value"),
+            (vec!["--external-oidc-file", "--yes"], "requires a value"),
+            (
+                vec![
+                    "--external-oidc-file",
+                    sensitive,
+                    "--external-oidc-file",
+                    "/other/input.json",
+                ],
+                "repeated installer option",
+            ),
+            (
+                vec!["--external-oidc-file", "never-echo-external-oidc.json"],
+                "paths must be absolute",
+            ),
+            (
+                vec![
+                    "--external-oidc-file",
+                    sensitive,
+                    "--foundation-file",
+                    "/other/foundation.json",
+                ],
+                "conflicting OIDC owners",
+            ),
+            (
+                vec!["--external-oidc-file", sensitive, "--check-compatibility"],
+                "compatibility checking cannot be combined",
+            ),
+        ] {
+            let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))
+                .args(base)
+                .args(extra)
+                .output()
+                .unwrap();
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(error.contains(expected), "{verb}: {error}");
+            assert!(!error.contains("never-echo-external-oidc"));
+        }
+    }
+}
+
 #[test]
 fn kms_registration_cli_is_discoverable_and_rejects_unsafe_arguments_without_echo() {
     let help = std::process::Command::new(env!("CARGO_BIN_EXE_marty-deploy"))

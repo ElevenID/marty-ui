@@ -124,7 +124,7 @@ describe('Revocation catalog creation access with real shared controls', () => {
     const view = renderPage();
     await screen.findByText('No revocation profiles configured.');
     const group = screen.getByRole('group', { name: BUILD_NAME });
-    await view.user.click(within(group).getByRole('button', { name: '' }));
+    await view.user.click(within(group).getByRole('button', { name: 'Choose how to create Revocation Profile' }));
     expect(screen.getByRole('menuitem', { name: /new \(advanced\)/i })).toBeInTheDocument();
     grants.delete('revocation-profile:create'); view.rerender(page());
     expectNoCreationEntry();
@@ -167,7 +167,7 @@ describe('Revocation catalog creation access with real shared controls', () => {
     const { user } = renderPage();
     await screen.findByText('No revocation profiles configured.');
     const group = screen.getByRole('group', { name: BUILD_NAME });
-    await user.click(within(group).getByRole('button', { name: '' }));
+    await user.click(within(group).getByRole('button', { name: 'Choose how to create Revocation Profile' }));
     await user.click(screen.getByRole('menuitem', { name: /new \(advanced\)/i }));
     expect(screen.getByRole('heading', { name: 'Revocation creation entry' })).toBeInTheDocument();
   });

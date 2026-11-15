@@ -11,16 +11,15 @@ The native query record remains partial. The opt-in managed profile now adds
 Trust Profile-owned issuer/type authorization and Issuance-owned lifecycle
 observations, bound to that native record. Neither record is
 `AuthenticatedOid4vpEvidenceV1`, asserts durable replay consumption, or grants
-issuance authority. Canonical replay composition and an issuance-owned
-continuation remain required before the prerequisite-to-issuance workflow is
-complete.
+issuance authority. The separate [managed evidence V2 producer](managed-oid4vp-evidence-v2.md)
+now composes their authenticated acquisitions with durable Flow finalization.
+An issuance-owned continuation remains required before the workflow is complete.
 
 [Flow verification receipts](flow-verification-receipts.md) now provide a
 separate postcommit persistence record for the frozen request, submission,
-terminal result and nonce consumption. This does not promote either native
-record to canonical evidence or establish policy freshness at commit. Canonical
-composition and an issuance-owned
-continuation remain required.
+terminal result and nonce consumption. A receipt alone does not promote either
+native record. Managed V2 requires inspected Policy acquisition, the exact
+original request and bounded validity checks in the finalization transaction.
 
 ## Supported profile
 
@@ -233,9 +232,9 @@ cannot change after the read. No cross-service atomic lock is claimed. Flow's
 existing finalization still commits nonce consumption, original request context,
 result and callback together after evaluation. Its precommit replay flag is not
 a durable consumption receipt. The separate Flow receipt is constructed inside
-that transaction and exposed only after successful commit. Composing it into
-canonical replay evidence, and then an issuance-owned continuation, remains
-separate work.
+that transaction and exposed only after successful commit. Managed V2 composes
+that receipt through its private acquisition and repository path. The
+issuance-owned continuation remains separate work.
 
 ## Review and regression coverage
 
@@ -286,11 +285,9 @@ separate gate from compilation and tests that return early without a database.
 
 ## Next implementation boundary
 
-Complete the canonical evidence producer by composing the authenticated owner
-acquisitions and the separately persisted Flow replay receipt. Policy
-observation time and Flow commit time must remain distinct; do not label a
-precommit timestamp as nonce consumption. Then bind
-that evidence to one tenant, issuing template and exact dataset through an
+Bind the [managed V2 evidence](managed-oid4vp-evidence-v2.md) to an immutable
+issuing intent, including tenant, applicant/session, holder, template version,
+configuration, policy and exact dataset, through an
 issuance-owned single-use continuation with expiry. Revalidate and consume
 that continuation under the existing atomic signing claim before enabling the
 prerequisite-to-issuance workflow.

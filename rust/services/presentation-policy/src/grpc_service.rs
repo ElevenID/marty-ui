@@ -528,6 +528,11 @@ fn evaluation_message(value: &Value) -> Result<PolicyEvaluationResponse, Status>
             .map(serialize)
             .transpose()?
             .unwrap_or_default(),
+        managed_policy_evidence_json: value
+            .get(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2)
+            .map(serialize)
+            .transpose()?
+            .unwrap_or_default(),
         nonce: value["nonce"].as_str().unwrap_or_default().to_owned(),
         policy_revision: Some(result_policy_revision(value)?),
     })

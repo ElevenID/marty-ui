@@ -280,6 +280,7 @@ main() {
     configure_google_idp
     configure_google_picture_mapper
     configure_profile_scope_picture_mapper
+    configure_marty_ui_auth_time
     configure_marty_ui_redirect_uris
     configure_marty_api_secret
     ensure_marty_org_exists
@@ -1125,6 +1126,66 @@ PROTOEOF
 }
 
 # ─── Marty UI Client Configuration ───────────────────────────────────────────
+configure_marty_ui_auth_time() {
+    # Imported realms do not necessarily have Keycloak's built-in basic scope.
+    # Auth requires this provider-owned session timestamp for max_age checks.
+    local client_uuid mapper_id existing payload operation readback compact field
+    mapper_id="77d88d3d-5860-44f1-9598-5b528566fd4a"
+    client_uuid=$(get_client_uuid "marty-ui")
+    if [ -z "$client_uuid" ] || ! existing=$(kcadm_safe get \
+        "clients/$client_uuid/protocol-mappers/models" -r "$REALM" --fields id); then
+        log_error "Cannot inspect Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    payload=$(create_temp_file)
+    cat > "$payload" <<'AUTHTIME'
+{
+  "id": "77d88d3d-5860-44f1-9598-5b528566fd4a",
+  "name": "marty-auth-time",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usersessionmodel-note-mapper",
+  "consentRequired": false,
+  "config": {
+    "user.session.note": "AUTH_TIME",
+    "claim.name": "auth_time",
+    "jsonType.label": "long",
+    "id.token.claim": "true",
+    "access.token.claim": "false",
+    "userinfo.token.claim": "false"
+  }
+}
+AUTHTIME
+    operation=create
+    if printf '%s' "$existing" | grep -Fq "\"$mapper_id\""; then
+        operation=update
+    fi
+    local resource="clients/$client_uuid/protocol-mappers/models"
+    if [ "$operation" = update ]; then resource="$resource/$mapper_id"; fi
+    if ! kcadm_safe "$operation" "$resource" -r "$REALM" -f "$payload" >/dev/null; then
+        log_error "Cannot configure Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    if ! readback=$(kcadm_safe get "clients/$client_uuid/protocol-mappers/models/$mapper_id" \
+        -r "$REALM"); then
+        log_error "Cannot verify Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    # Normalize delimiter whitespace only; spaces inside a claim value matter.
+    compact=$(printf '%s' "$readback" | sed -E 's/"[[:space:]]*:[[:space:]]*/":/g' | tr -d '\n\r')
+    for field in '"id":"77d88d3d-5860-44f1-9598-5b528566fd4a"' \
+        '"name":"marty-auth-time"' '"protocol":"openid-connect"' \
+        '"protocolMapper":"oidc-usersessionmodel-note-mapper"' \
+        '"user.session.note":"AUTH_TIME"' '"claim.name":"auth_time"' \
+        '"jsonType.label":"long"' '"id.token.claim":"true"' \
+        '"access.token.claim":"false"' '"userinfo.token.claim":"false"'; do
+        if ! printf '%s' "$compact" | grep -Fq "$field"; then
+            log_error "Marty UI authentication timestamp mapper readback differs"
+            return 1
+        fi
+    done
+    log_success "Marty UI authentication timestamp mapper configured and verified"
+}
+
 configure_marty_ui_redirect_uris() {
     if [ -z "$PUBLIC_DOMAIN" ] && [ -z "$UI_BASE_URL" ]; then
         log_warning "PUBLIC_DOMAIN and UI_BASE_URL are not set — skipping marty-ui client redirect URI configuration"

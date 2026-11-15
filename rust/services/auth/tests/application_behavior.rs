@@ -113,10 +113,18 @@ struct FakeOidc {
     enrollment_hint: Mutex<Option<String>>,
     authorization: Mutex<Option<OidcAuthorizationRequest>>,
     validated_nonce: Mutex<Option<String>>,
+    freshness: Mutex<Option<marty_auth::OidcAuthenticationFreshness>>,
+    claims: Mutex<Option<serde_json::Value>>,
 }
 
 #[async_trait]
 impl OidcProvider for FakeOidc {
+    fn authentication_freshness(
+        &self,
+        _request: &OidcAuthorizationRequest,
+    ) -> Option<marty_auth::OidcAuthenticationFreshness> {
+        self.freshness.lock().unwrap().clone()
+    }
     fn passkey_management_url(&self, _return_uri: &str) -> Option<String> {
         Some("https://login.example/account/account-security/signing-in".into())
     }
@@ -154,7 +162,9 @@ impl OidcProvider for FakeOidc {
         expected_nonce: &str,
     ) -> Result<OidcValidatedIdentity, PortError> {
         *self.validated_nonce.lock().expect("nonce lock") = Some(expected_nonce.to_owned());
-        let claims = json!({"sub": "user-1", "email": "alice@example.com", "trusted": true});
+        let claims = self.claims.lock().unwrap().clone().unwrap_or_else(
+            || json!({"sub": "user-1", "email": "alice@example.com", "trusted": true}),
+        );
         Ok(OidcValidatedIdentity {
             user_info: OidcUserInfo::from_claims(&claims, None),
             id_token_claims: claims,
@@ -286,6 +296,8 @@ async fn login_and_callback_bind_nonce_consume_state_and_persist_only_validated_
         .app
         .initiate_login(
             InitiateLoginCommand {
+                ui_locales: None,
+                reauthenticate: false,
                 redirect_uri: Some("/console".to_owned()),
                 oidc_redirect_uri: Some("https://ui.example/v1/auth/callback".to_owned()),
             },
@@ -360,6 +372,7 @@ async fn pre_cutover_state_without_nonce_fails_closed_after_single_use_consumpti
     harness
         .states
         .save(&PkceState {
+            authentication_freshness: None,
             state: "legacy".to_owned(),
             code_verifier: "verifier".to_owned(),
             redirect_uri: "/".to_owned(),
@@ -604,8 +617,72 @@ fn management_requires_an_enabled_bound_non_impersonated_session() {
 
 fn enrollment_command() -> InitiateLoginCommand {
     InitiateLoginCommand {
+        ui_locales: None,
+        reauthenticate: false,
         redirect_uri: Some("/console/profile".into()),
         oidc_redirect_uri: Some("https://ui.example/v1/auth/callback".into()),
+    }
+}
+
+#[tokio::test]
+async fn callback_enforces_retained_freshness_before_provisioning_even_if_config_changes() {
+    let started = now().timestamp();
+    for (auth_time, expected_success) in [
+        (None, false),
+        (Some(started - 61), false),
+        (Some(started + 900), false),
+        (Some(started), true),
+        (Some(started + 240), true),
+    ] {
+        let harness = harness();
+        *harness.oidc.freshness.lock().unwrap() = Some(marty_auth::OidcAuthenticationFreshness {
+            max_age_seconds: 0,
+            leeway_seconds: 60,
+        });
+        let mut claims =
+            json!({"sub": "user-1", "email": "alice@example.com", "iat": started + 240});
+        if let Some(auth_time) = auth_time {
+            claims["auth_time"] = json!(auth_time);
+        }
+        *harness.oidc.claims.lock().unwrap() = Some(claims);
+        let initiated = harness
+            .app
+            .initiate_login(enrollment_command(), now())
+            .await
+            .unwrap();
+        let saved = harness
+            .states
+            .0
+            .lock()
+            .unwrap()
+            .get(&initiated.state)
+            .unwrap()
+            .clone();
+        assert_eq!(saved.authentication_freshness.unwrap().max_age_seconds, 0);
+        // A changed runtime policy cannot downgrade the in-flight request.
+        *harness.oidc.freshness.lock().unwrap() = None;
+        let callback = HandleCallbackCommand {
+            code: "code".into(),
+            state: initiated.state,
+            ip_address: None,
+            user_agent: None,
+        };
+        let result = harness
+            .app
+            .handle_callback(callback.clone(), now() + Duration::minutes(5))
+            .await;
+        assert_eq!(result.is_ok(), expected_success);
+        assert_eq!(
+            harness.sessions.0.lock().unwrap().len(),
+            usize::from(expected_success)
+        );
+        assert!(matches!(
+            harness
+                .app
+                .handle_callback(callback, now() + Duration::minutes(5))
+                .await,
+            Err(AuthApplicationError::InvalidState)
+        ));
     }
 }
 

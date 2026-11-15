@@ -58,7 +58,7 @@ class Fixture:
         self.after_validation = lambda: None
         owner = self
 
-        class GitHub:
+        class GitHub(gate.GitHub):
             def api(self, path: str) -> bytes:
                 assert path == "branches/main", "qualification must never request a review record"
                 owner.api_calls.append(path)
@@ -83,7 +83,19 @@ class Fixture:
         }.items():
             monkeypatch.setenv(key, value)
         monkeypatch.setattr(gate, "command", self.validator)
+        monkeypatch.setattr(gate.source_authority, "authenticated_current", self.authorize_source)
         monkeypatch.setattr(gate.time, "sleep", lambda *_args: pytest.fail("qualification must not wait for a person"))
+
+    def authorize_source(self, github, source, executable, *, verified):
+        assert source == SOURCE and executable == SOURCE
+        main = github.main()["commit"]["sha"]
+        if main == "c" * 40:
+            raise gate.source_authority.SourceAuthorityError("protected main is incompatible")
+        if main == SOURCE and any(entry[2] == "d" * 40 for entry in verified):
+            raise gate.source_authority.SourceAuthorityError("protected main rewound")
+        assert main in {SOURCE, "d" * 40}
+        verified.add((source, executable, main))
+        return main
 
     def set_plan(self, count: int) -> None:
         self.plan = encoded({"pending": [{"transport_fixture_only": index} for index in range(count)],
@@ -131,7 +143,8 @@ def test_qualification_is_immediate_and_keeps_the_original_source(fixture, pendi
     fixture.set_plan(pending)
     fixture.qualify()
     assert fixture.args.output.read_bytes() == fixture.result()
-    assert fixture.args.output.stat().st_mode & 0o777 == 0o600
+    if os.name != "nt":
+        assert fixture.args.output.stat().st_mode & 0o777 == 0o600
     assert fixture.api_calls == ["branches/main", "branches/main"]
     assert [arguments[1] for arguments, _ in fixture.validator_calls] == ["--prepare-review", "--automated"]
     assert fixture.clock.now == 0
@@ -174,6 +187,20 @@ def test_protected_main_cannot_move_during_qualification(fixture, changed) -> No
         fixture.qualify()
     assert not fixture.args.output.exists()
     assert len(fixture.validator_calls) == (1 if changed == "before" else 2)
+
+
+def test_policy_compatible_main_can_advance_during_qualification(fixture) -> None:
+    fixture.mains = [SOURCE, "d" * 40]
+    fixture.qualify()
+    assert fixture.args.output.read_bytes() == fixture.result()
+    assert fixture.api_calls == ["branches/main", "branches/main"]
+
+
+def test_protected_main_rewind_after_compatible_advance_fails(fixture) -> None:
+    fixture.mains = ["d" * 40, SOURCE]
+    with pytest.raises(ValueError, match="protected main rewound"):
+        fixture.qualify()
+    assert not fixture.args.output.exists()
 
 
 @pytest.mark.parametrize("protected", [False, None, "true"])

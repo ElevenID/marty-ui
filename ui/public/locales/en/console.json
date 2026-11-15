@@ -703,7 +703,11 @@
     },
     "usedByFlows": "{{count}} Flow",
     "usedByFlows_plural": "{{count}} Flows",
+    "usedByFlows_one": "{{count}} Flow",
+    "usedByFlows_other": "{{count}} Flows",
     "usedByFlowsTooltip": "Number of Issuance Flows using this template",
+    "notReported": "Not reported",
+    "flowUsageNotReported": "The service did not report how many flows use this template.",
     "breadcrumbs": {
       "console": "Console",
       "templates": "Templates",
@@ -714,6 +718,8 @@
     "title": "Application Templates",
     "description": "Define application forms and workflows that applicants use to request credentials.",
     "resourceName": "Application Template",
+    "buildDescription": "Application form editor",
+    "advancedDescription": "Additional evidence, claim and notification settings",
     "failedToLoad": "Failed to load application templates",
     "tableHeaders": {
       "name": "Name",
@@ -1605,18 +1611,32 @@
         "info": "Claims are the individual pieces of information in the credential (e.g., \"family_name\", \"birth_date\", \"license_number\").",
         "quickStart": {
           "title": "Quick Start Templates",
-          "description": "Choose a preset to auto-populate common claim structures",
+          "description": "Choose a preset to replace the current claims with a common structure.",
           "identity": "Identity Profile",
           "age": "Age Verification",
-          "employee": "Employee Badge"
+          "employee": "Employee Badge",
+          "openBadge": "Open Badges achievement"
         },
+        "openBadge": {
+          "missingCriteria": "Add achievement_criteria as an Object claim, or use an achievement Object containing criteria.",
+          "criteriaObject": "Open Badges criteria must come from an Object claim, not text or a list.",
+          "guidance": "These fields define the badge structure. In the application template, map achievement details and criteria from issuer configuration or verified evidence. For example, criteria can contain a narrative describing the required assessment. The issuer validates those values before issuance."
+        },
+        "actions": {
+          "remove": "Remove {{name}}",
+          "moveUp": "Move {{name}} up",
+          "moveDown": "Move {{name}} down",
+          "required": "Require {{name}}"
+        },
+        "reviewClaims": "Return to Claims and review the credential structure before creating the template.",
         "addClaim": {
           "title": "Add Claim",
           "nameLabel": "Claim Name",
           "namePlaceholder": "given_name",
           "typeLabel": "Type",
           "requiredLabel": "Required",
-          "addButton": "Add"
+          "addButton": "Add",
+          "duplicate": "A claim with this name already exists."
         },
         "claimTypeLabels": {
           "string": "Text (string)",
@@ -1635,6 +1655,10 @@
       "trustComplianceStep": {
         "title": "Trust & Compliance",
         "description": "Select which trust profile and compliance rules apply to this credential template.",
+        "complianceOptions_one": "{{count}} active compliance profile available.",
+        "complianceOptions_other": "{{count}} active compliance profiles available.",
+        "issuerOptions_one": "{{count}} compatible issuer DID available.",
+        "issuerOptions_other": "{{count}} compatible issuer DIDs available.",
         "errors": {
           "failedToLoadTrustProfiles": "Failed to load trust profiles"
         },
@@ -1666,11 +1690,11 @@
         }
       },
       "cryptoValidityStep": {
-        "title": "Cryptography & Validity (Optional)",
-        "description": "Configure signing and validity settings. Defaults are pre-selected based on best practices.",
-        "defaults": {
-          "title": "Defaults are secure and ready to use.",
-          "description": "Skip this step or use defaults for most use cases. Advanced users can customize crypto and validity settings below."
+        "reviewTitle": "Cryptography & Validity",
+        "reviewDescription": "Review credential lifetime settings. Signing capabilities come from the selected issuer DID.",
+        "guidance": {
+          "title": "Review the validity settings.",
+          "description": "Confirm the lifetime values below. A Revocation Profile is required when the selected issuance protocol uses digital revocation."
         },
         "validity": {
           "title": "Validity Period",
@@ -1682,7 +1706,8 @@
           "maxValidityHelper": "Maximum allowed validity period (e.g., 730 days = 2 years)",
           "notBeforeOffsetHelper": "Delay before credential becomes valid (usually 0)",
           "example": "Example:",
-          "exampleDescription": "With a default validity of {{days}} days, a credential issued today will expire on {{date}}."
+          "validityExample_one": "With a default validity of {{count}} day, a credential issued today will expire on {{date}}.",
+          "validityExample_other": "With a default validity of {{count}} days, a credential issued today will expire on {{date}}."
         },
         "advanced": {
           "show": "Show",
@@ -1704,7 +1729,8 @@
           "label": "Revocation Profile",
           "none": "None (no revocation)",
           "statusListComingSoon": "Status List 2021 (Coming Soon)",
-          "helper": "Optional: Select a revocation mechanism for credentials issued from this template"
+          "selectedHelper": "This profile defines how credentials from this template can be revoked.",
+          "required": "Select an active Revocation Profile to continue."
         },
         "validation": {
           "daysRange": "Enter a whole number of days from 1 to {{max}}.",
@@ -1723,7 +1749,8 @@
           "walletCompatibility": "Wallet Compatibility"
         },
         "actions": {
-          "edit": "Edit"
+          "edit": "Edit",
+          "editSection": "Edit {{section}}"
         },
         "fields": {
           "templateName": "Template Name",
@@ -1742,8 +1769,11 @@
         "values": {
           "notSet": "Not set",
           "notSelected": "Not selected",
+          "notConfigured": "Not configured",
           "none": "None",
           "days": "days",
+          "validityDays_one": "{{count}} day",
+          "validityDays_other": "{{count}} days",
           "trustProfileId": "ID: {{id}}"
         },
         "activationOptions": {

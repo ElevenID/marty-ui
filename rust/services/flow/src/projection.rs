@@ -267,6 +267,9 @@ pub struct VerificationResultResponse {
     /// Untrusted wire projection of Flow's persisted finalization receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_receipt: Option<marty_oid4vp_contract::FlowVerificationReceiptV1>,
+    /// Digest supplied only by committed owner finalization or repository recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_evidence_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_presentation_attempt: Option<marty_oid4vp_contract::RejectedPresentationAttemptV1>,
     pub error_codes: Vec<String>,
@@ -321,6 +324,7 @@ pub fn project_verification_result(
         verified_claims,
         credential_results: public_object_array(result, "credential_results"),
         verification_receipt,
+        canonical_evidence_digest: None,
         last_presentation_attempt: last_presentation_attempt(input),
         error_codes: public_string_array(result, "error_codes"),
         warnings: public_string_array(result, "warnings"),

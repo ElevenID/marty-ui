@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Link, Route, Routes, useNavigate } from 'react-router';
-import { act, fireEvent, renderWithRouter, screen, waitFor } from '@test/utils';
+import { act, fireEvent, renderWithRouter, screen, waitFor, within } from '@test/utils';
 
 import ApplicationTemplateDetailPage from './ApplicationTemplateDetailPage';
 
@@ -111,6 +111,87 @@ describe('ApplicationTemplateDetailPage', () => {
     expect(screen.queryByRole('link', { name: /edit/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /validate|activate|delete/i })).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: /preview/i })).toHaveAttribute('href', expect.stringContaining('organization_id=org-1'));
+  });
+
+  it('lets a viewer review the saved structured claim source without lifecycle requests', async () => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    const configuration = {
+      system_field: 'constant',
+      value: { id: 'https://issuer.example.test/criteria/workplace-safety', narrative: 'Complete the workplace safety assessment.' },
+    };
+    mockGet.mockResolvedValue({ ...draft, claim_collection_rules: [
+      { claim_name: 'achievement_criteria', source: 'SYSTEM', source_config: configuration },
+    ] });
+    renderPage();
+    const rule = await screen.findByRole('group', { name: 'Claim rule 1: achievement_criteria' });
+    expect(within(rule).getByRole('heading', { name: 'achievement_criteria' })).toBeInTheDocument();
+    expect(within(rule).getByText('Source: System')).toBeInTheDocument();
+    expect(within(rule).getByLabelText('Source configuration for achievement_criteria').textContent).toBe(JSON.stringify(configuration, null, 2));
+    expect(mockGet).toHaveBeenCalledExactlyOnceWith('application-template-1', 'org-1');
+    for (const operation of [mockValidate, mockActivate, mockDelete, mockDeprecate]) expect(operation).not.toHaveBeenCalled();
+  });
+
+  it.each([false, 0, null, '', ['Safety', { passed: false, score: 0 }]])('preserves the stored constant %j in its read-only JSON projection', async (value) => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    const configuration = { system_field: 'constant', value };
+    mockGet.mockResolvedValue({ ...draft, claim_collection_rules: [
+      { claim_name: 'saved_value', source: 'SYSTEM', source_config: configuration },
+    ] });
+    renderPage();
+    const display = await screen.findByLabelText('Source configuration for saved_value');
+    expect(display.textContent).toBe(JSON.stringify(configuration, null, 2));
+    expect(display).not.toHaveTextContent('Not configured');
+    expect(mockValidate).not.toHaveBeenCalled();
+  });
+
+  it('renders form, evidence and unknown sources as saved text without interpreting HTML', async () => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    const unsafeLookingText = '<img src=x onerror="alert(1)"><script>alert(2)</script>';
+    const configurations = [{ form_field_id: 'email' }, { evidence_type: 'training', field_path: 'completion.score' }, { value: unsafeLookingText }, { value: 0 }];
+    mockGet.mockResolvedValue({ ...draft, claim_collection_rules: [
+      { claim_name: 'contact_email', source: 'FORM_FIELD', source_config: configurations[0] },
+      { claim_name: 'assessment_score', source: 'EVIDENCE_EXTRACTION', source_config: configurations[1] },
+      { claim_name: unsafeLookingText, source: 'CUSTOM_SOURCE', source_config: configurations[2] },
+      { claim_name: 'unknown_source', source: '__proto__', source_config: configurations[3] },
+    ] });
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Claim collection rules' });
+    expect(within(section).getByText('Source: Form field')).toBeInTheDocument();
+    expect(within(section).getByText('Source: Evidence extraction')).toBeInTheDocument();
+    expect(within(section).getByText('Source: CUSTOM_SOURCE')).toBeInTheDocument();
+    expect(within(section).getByText('Source: __proto__')).toBeInTheDocument();
+    const displays = within(section).getAllByLabelText(/^Source configuration for/);
+    expect(displays.map((element) => element.textContent)).toEqual(configurations.map((value) => JSON.stringify(value, null, 2)));
+    expect(section.querySelector('img,script')).toBeNull();
+  });
+
+  it.each([undefined, []])('shows no collection rules when the saved template has none: %j', async (rules) => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    mockGet.mockResolvedValue({ ...draft, claim_collection_rules: rules });
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Claim collection rules' });
+    expect(within(section).getByText('None')).toBeInTheDocument();
+  });
+
+  it('distinguishes an unreadable rules response from an empty configuration', async () => {
+    permissions.can.mockImplementation((_resource, action) => action === 'view');
+    mockGet.mockResolvedValue({ ...draft, claim_collection_rules: { unexpected: true } });
+    renderPage();
+    const section = await screen.findByRole('region', { name: 'Claim collection rules' });
+    expect(within(section).getByText('Saved claim collection rules could not be read.')).toBeInTheDocument();
+    expect(within(section).queryByText('None')).not.toBeInTheDocument();
+    expect(mockValidate).not.toHaveBeenCalled();
+  });
+
+  it('never exposes collection rules from a foreign organization response', async () => {
+    mockGet.mockResolvedValue({ ...draft, organization_id: 'org-2', claim_collection_rules: [
+      { claim_name: 'foreign_claim', source: 'SYSTEM', source_config: { value: 'foreign configuration' } },
+    ] });
+    renderPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/selected organization/i);
+    expect(screen.queryByRole('region', { name: 'Claim collection rules' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/foreign configuration/)).not.toBeInTheDocument();
+    expect(mockValidate).not.toHaveBeenCalled();
   });
 
   it('validates drafts before exposing activation', async () => {

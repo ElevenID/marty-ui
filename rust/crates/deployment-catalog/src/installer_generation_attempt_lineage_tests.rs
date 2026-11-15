@@ -205,6 +205,7 @@ pub(super) fn chain() -> (tempfile::TempDir, GenerationBinding, GenerationBindin
         helper_model: model.clone(),
         created_at: old_metadata.token_observed_at - 1,
         recovery_baseline_sha256: None,
+        oidc_secret_rotation_sha256: None,
     };
     write(root.path(), &scope.record("intent"), &old);
     generation::load_attempt(root.path(), 1, 0).unwrap();

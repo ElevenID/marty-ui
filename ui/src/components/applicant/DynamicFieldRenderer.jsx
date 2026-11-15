@@ -128,7 +128,7 @@ function NumberFieldRenderer({ field, value, onChange, error, required, validati
       fullWidth
       type="number"
       label={field.label || formatFieldLabel(field.name)}
-      value={value || ''}
+      value={value ?? ''}
       onChange={(e) => onChange(field.name, e.target.value === '' ? '' : Number(e.target.value))}
       required={required}
       error={!!error}

@@ -17,6 +17,8 @@ env:
     value: /tmp/npm-cache
   - name: NODE_ENV
     value: development
+  - name: MARTY_DEV_CHECKER_OVERLAY
+    value: '0'
   - name: PUPPETEER_SKIP_DOWNLOAD
     value: 'true'
   - name: VITE_UI_VARIANT

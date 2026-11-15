@@ -504,10 +504,7 @@ impl ValidateRequest for AdvanceFlowRequest {
 }
 
 fn reject_supplied_receipt(value: &Value, field: &str) -> Result<(), FlowApiError> {
-    if value
-        .get(marty_oid4vp_contract::VERIFICATION_RECEIPT)
-        .is_some()
-    {
+    if crate::verification_receipt::reject_supplied_receipt(value, None).is_err() {
         return Err(api_error(
             "FLOW.INVALID_REQUEST",
             field,

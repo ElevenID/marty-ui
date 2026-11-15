@@ -131,6 +131,8 @@ tmp/
 vite.config.ts.timestamp*
 
 # Lint/debug output
+/ui/build_log.txt
+/ui/build_output.txt
 eslint_output*
 full_eslint_output*
 api.log

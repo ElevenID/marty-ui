@@ -2256,6 +2256,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Exercise live Signing Keys public contracts on disposable Redis",
         "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
         "Run Flow database contract after workspace suite",
+        "Exercise managed Policy evidence through Flow PostgreSQL commit",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
         "Test native Canvas operation timeout TLS parity",
@@ -5869,12 +5870,15 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     }
     # DIDComm exercises the real signing service; the existing issuance_credential
     # PostgreSQL contract exercises template storage and the explicit-profile
-    # migration together. No other service composition is admitted here.
+    # migration together. Managed evidence needs Policy's private native fixture
+    # and real gRPC acquisition through Flow's durable owner repository; keeping
+    # that joined test here avoids a public test-only authority constructor.
     assert edges == {
         ("marty-issuance-service", "marty-signing-keys"),
         ("marty-issuance-service", "marty-credential-template"),
+        ("marty-presentation-policy", "marty-flow"),
     }, (
-        "Only the registered DIDComm and explicit-profile fixtures may add service test edges: "
+        "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
         f"{sorted(edges)}"
     )
     issuance = documents[rust / "services/issuance/Cargo.toml"]
@@ -5883,6 +5887,10 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     )
     _assert_service_fixture_dependency(
         issuance, workspace_dependencies, "marty-credential-template", "../credential-template"
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/presentation-policy/Cargo.toml"],
+        workspace_dependencies, "marty-flow", "../flow",
     )
 
 
@@ -5926,6 +5934,7 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
 @pytest.mark.parametrize("dependency,path", [
     ("marty-signing-keys", "../signing-keys"),
     ("marty-credential-template", "../credential-template"),
+    ("marty-flow", "../flow"),
 ])
 def test_service_fixture_dependencies_reject_production_edges(
     kind: str, target_specific: bool, dependency: str, path: str
@@ -6218,3 +6227,30 @@ def test_retired_shadow_planner_paths_cannot_bypass_full_validation(tmp_path: Pa
     assert "planner_only" not in workflow["jobs"]["changes"]["outputs"]
     assert not any("shadow mode" in step.get("name", "")
                    for step in workflow["jobs"]["test-release-contracts"]["steps"])
+
+
+def test_managed_policy_evidence_ci_requires_real_positive_fixture_execution() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    name = "Exercise managed Policy evidence through Flow PostgreSQL commit"
+    step = named[name]
+    assert step["if"] == "matrix.lane == 'contracts'"
+    assert not step.get("continue-on-error", False)
+    assert steps.index(named["Run Flow database contract after workspace suite"]) < steps.index(step)
+    assert step["env"]["FLOW_POSTGRES_TEST_URL"].endswith("/marty_atomic_test")
+    run = step["run"]
+    assert '"#marty-presentation-policy@"' in run
+    assert 'select(.target.kind | index("lib"))' in run
+    assert 'select(.profile.test == true)' in run
+    assert '"$RUNNER_TEMP/rust-test-artifacts.json"' in run
+    assert 'live_keyless_managed_policy_evidence' in run
+    assert 'resolve_recorded_contract_executable marty-presentation-policy control_plane_behavior' in run
+    assert 'managed_authority_http::live_keyless_managed_owner_channels' in run
+    assert run.count('--ignored --exact --list') == 2
+    assert run.count('--ignored --exact --nocapture') == 2
+    assert run.count('1 passed; 0 failed; 0 ignored;') == 2
+    assert run.count('with_disposable_policy_owner_kms.py') == 2
+    image = re.search(r'image=(quay\.io/openbao/openbao@sha256:[a-f0-9]{64})', run).group(1)
+    assert image.split('@')[1] in (ROOT / 'openbao/didcomm-authcrypt/Dockerfile').read_text()
+    assert '028992583c693c4de6350b8aa52ff85e30375a99' in run
