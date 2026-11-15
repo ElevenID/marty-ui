@@ -4,7 +4,7 @@ Status: architecture decision and extraction baseline. No production routing or 
 
 ## Non-negotiable boundary
 
-The new `ElevenID/canvas-integration` repository is an external API consumer. Every request it makes to ElevenID core MUST use the public Common Gateway API with an organization-scoped API key, exactly as a customer-operated integration would.
+The new public `ElevenID/canvas-integration` repository is an external API consumer. Every request it makes to ElevenID core MUST use the public Common Gateway API with an organization-scoped API key, exactly as a customer-operated integration would.
 
 The connector MUST NOT:
 - connect to any Marty database or read/write core-owned tables;
@@ -135,7 +135,7 @@ Core Marty CI must also test the Gateway contract: API-key-only success, missing
 
 1. **Inventory and contract freeze:** complete file-level ownership map and public API gap matrix. No runtime changes.
 2. **Gateway readiness:** implement missing public APIs and permission tests. Connector can perform all required operations using a customer-style API key.
-3. **Create new repository:** private initially; independent CI, release policy, threat model, server-side Gateway client, connector DB and deployment skeleton. No core source copied into it.
+3. **Create new repository:** public from creation; independent CI, release policy, threat model, server-side Gateway client, connector DB and deployment skeleton. No core source copied into it.
 4. **Extract provider layer:** LTI/OAuth/Canvas REST/AGS/NRPS, Canvas token custody, resource mapping and Canvas-side sync state.
 5. **Extract UI:** connector UI package/app; Marty console may link to it but must not import internal connector implementation. All privileged API calls remain server-side.
 6. **Rebuild worker and mirror:** no SQL against Marty; only public Gateway APIs for core actions.
@@ -144,3 +144,17 @@ Core Marty CI must also test the Gateway contract: API-key-only success, missing
 9. **Retirement:** remove old Canvas provider/runtime code only after every consumer and required acceptance suite has moved or been replaced.
 
 No production or beta service is changed by this baseline.
+
+
+## Public repository publication requirements
+
+The repository is public from its initial creation; there is no private staging repository. Public visibility does not relax the integration boundary or data hygiene requirements.
+
+- Match the existing Marty-ui repository's AGPL-3.0 license unless a deliberate legal review approves a different license. Preserve upstream license and copyright notices for every extracted source file.
+- Do not publish credentials, tokens, signing material, customer data, real Canvas tenant identifiers, private hostnames, internal recovery records, proprietary binaries, production dumps, private logs, or unredacted security findings.
+- Before first push, scan all staged files and Git history for secrets and private operational artifacts. Do not copy the full Marty-ui history or bulk-import every path containing "canvas".
+- Publish only reviewed source, tests, fixtures with synthetic data, public API schemas, reproducible build/deployment manifests, and documentation cleared for public use.
+- Use a clean initial history for the new repository. Import selected source with preserved copyright/license notices and documented provenance; do not expose unrelated Marty-ui history.
+- Enable secret scanning/push protection where available, dependency review, CodeQL, signed release provenance, issue/PR templates, SECURITY.md, CODE_OF_CONDUCT.md, CONTRIBUTING.md, and a CI policy gate before accepting contributions.
+- Keep runtime credentials and API keys in deployment secret storage. Examples use obvious placeholders only.
+- Public README must state that Canvas-to-core calls use only the public Common Gateway and organization-scoped API keys; no direct core access is supported.
