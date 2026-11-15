@@ -37,17 +37,34 @@ expiry cannot pass while a COMMIT response is in transit.
 
 ## Mandatory authority adapter; no shadow authorization database
 
-No production implementation of `ObservationAuthority` is installed. An adapter
-must load canonical current key/grant/binding/application records and serialize
-all corresponding edits/revocations with the journal transaction. Stable lock
-ordering and revision increments are part of that contract. An unlocked RPC,
-a stale replica, cached key scopes, or a disconnected authorization copy does
-not satisfy it. Bridging the actual service owners is a separate activation gate.
+`PostgresObservationAuthority` now implements the canonical adapter as a core
+module. It locks the canonical `organization_service.api_keys` row, then the
+producer grant, grant-membership rows, evidence binding and application row in
+one PostgreSQL transaction. The organization and issuance schemas share the
+same `marty` database in the supported Compose topology, so API-key revocation
+and journal admission serialize on the same key row. The organization revoke
+path uses `api_key_by_id_for_update_in_transaction`.
 
-The contract tests use an explicitly synthetic authority table to exercise row
-locks, rollback and revocation ordering. That table is fixture code, NOT a
-proposed replacement for organization-service API keys or application ownership.
-Passing these tests does not establish production revocation integration.
+Grant and binding records are candidate core-owned tables in the journal schema.
+Grant/binding revision triggers invalidate old fences; membership changes bump
+the grant revision. The adapter carries API-key, grant, binding and application
+expiry into the admission decision. Application expiry is checked by the
+admission kernel against the database clock after lock waits, not frozen as an
+early boolean snapshot. Required lock order is key -> grant -> membership ->
+binding -> application. Admin grant/binding handlers must preserve that order.
+
+This is not yet wired to a public Gateway route or production startup migration.
+No admin grant/binding management endpoints or least-privilege DB role grants
+are installed. A stale replica, unlocked RPC, cached key scopes or disconnected
+authorization copy still does not satisfy the contract.
+
+The journal tests retain a synthetic adapter for isolated transaction-failure
+cases and now also exercise `PostgresObservationAuthority` against disposable
+canonical-shaped `organization_service.api_keys`, grant, binding and application
+tables. They verify the exact scope, tenant and lifecycle decisions and that a
+concurrent API-key revocation waits for the admission row lock. These tables are
+created only in the loopback fixture; they are not production migrations or a
+replacement for the canonical organization/application owners.
 
 ## Test isolation
 
@@ -73,10 +90,12 @@ EXTERNAL_OBSERVATION_CONTRACT_TEST=synthetic-local-only \
 
 ## Still required before activation
 
-- Canonical authority locking/revocation integration and administrator-controlled
-  grant/binding persistence; do not deploy the synthetic test adapter.
-- Strict duplicate/unknown-field HTTP decoding, Gateway API-key authentication,
-  purpose-specific scope provisioning and OpenAPI contracts.
+- Organization-admin grant/binding management APIs, audited approval/revocation,
+  production startup migration registration and least-privilege database roles.
+- Gateway route wiring that passes only authenticated API-key identity into the
+  core ingress, exact `evidence:submit` scope enforcement and OpenAPI contract.
+  Original-byte decoding and transactional journal composition are implemented,
+  but no public endpoint is mounted.
 - Reviewed production migration, least-privilege database roles, retention and
   operational recovery for the receipt journal.
 - Explicit policy admission for producer-attested observations; receipts never
