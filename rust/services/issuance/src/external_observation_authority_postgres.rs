@@ -334,8 +334,8 @@ impl ObservationAuthority for PostgresObservationAuthority {
                 organization_id: application_organization,
                 subject_id: application_subject,
                 revision: revision(application_updated_at)?,
-                accepts_observations: matches!(application_status.as_str(), "pending" | "under_review")
-                    && application_expiry_ms > now_ms,
+                expires_at_ms: application_expiry_ms,
+                accepts_observations: matches!(application_status.as_str(), "pending" | "under_review"),
             },
         })
     }
