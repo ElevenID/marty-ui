@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "External observation admission candidate v1",
-  "description": "Proposed unsigned producer envelope. Not an enabled public endpoint or a verified EvidenceFact. Identity, resource scope and fact type come from the core-owned binding.",
+  "description": "Proposed unsigned producer envelope. Not an enabled public endpoint or a verified EvidenceFact. Identity, resource scope and fact type come from the core-owned binding. The byte decoder also enforces a 65536-byte body limit, unique decoded member names, UTF-8 byte limits, integer JSON tokens for revisions/sequences/timestamps, and no numerical overflow or nonzero underflow.",
   "type": "object",
   "additionalProperties": false,
   "required": ["binding_id", "binding_revision", "observation_id", "sequence", "observed_at_ms", "effective_at_ms", "claims"],
@@ -17,7 +17,7 @@
       "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$"},
       "additionalProperties": {
         "oneOf": [
-          {"type": "null"}, {"type": "boolean"}, {"type": "number"},
+          {"type": "null"}, {"type": "boolean"}, {"type": "number", "minimum": -9007199254740991, "maximum": 9007199254740991},
           {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"}
         ]
       },
