@@ -15,6 +15,23 @@ struct FixtureTrust {
 }
 #[async_trait]
 impl pp::PresentationTrustResolver for FixtureTrust {
+    async fn load_credential_template(
+        &self,
+        id: &str,
+        organization_id: Uuid,
+    ) -> Result<pp::ResolvedCredentialTemplate, pp::PresentationVerificationError> {
+        assert_eq!(id, "demo-age");
+        assert_eq!(organization_id, Uuid::parse_str(ORG).unwrap());
+        Ok(pp::ResolvedCredentialTemplate {
+            id: id.into(),
+            organization_id,
+            credential_type: "MartyDemoAgeCredential".into(),
+            vct: Some(VCT.into()),
+            doctype: None,
+            status: "ACTIVE".into(),
+        })
+    }
+
     async fn load_profile(
         &self,
         id: Uuid,
@@ -181,7 +198,7 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
         Ok(crate::PresentationPolicyReference {
             id: id.into(),
             organization_id: ORG.into(),
-            status: "active".into(),
+            status: "ACTIVE".into(),
             policy_revision: pp::policy_revision(&self.policy).unwrap(),
             holder_binding_required: self.policy.holder_binding.required,
             prerequisite_evidence_profile: None,
@@ -214,7 +231,14 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
             oid4vp_transport: input.oid4vp_transport.clone(),
             trusted_internal_context: true,
         };
-        let facts = self.verifier.verify(&self.policy, &request).await.unwrap();
+        let facts = self
+            .verifier
+            .verify(&self.policy, &request)
+            .await
+            .map_err(|_| FlowProviderError::InvalidResponse {
+                provider: "presentation_policy",
+                message: "policy verification input rejected".into(),
+            })?;
         let mut result =
             pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
         // HTTP projection carries tenant identity; the gRPC adapter validates it
