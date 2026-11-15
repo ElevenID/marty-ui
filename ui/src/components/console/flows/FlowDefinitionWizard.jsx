@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useBrowserEntry, useIsCurrentBrowserEntry } from '../../../hooks/useBrowserEntry';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -18,6 +19,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import RefreshIcon from '@mui/icons-material/Refresh';
 
 import { useWizard } from '../../../hooks/useWizard';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createFlow, getFlowCapabilities } from '../../../services/flowsApi';
 import { getCredentialTemplate } from '../../../services/presentationPolicyApi';
@@ -38,6 +40,7 @@ const INITIAL_DATA = {
   selectedDeployment: null,
   triggerType: 'API_CALL',
   trustProfileId: null,
+  _organization_default_bindings: null,
 };
 
 const CREDENTIAL_TYPES = new Set([
@@ -67,7 +70,7 @@ export function buildFlowPayload(data, organizationId) {
   };
 }
 
-const FlowDefinitionWizard = () => {
+const FlowDefinitionWizardContent = ({ browserEntry }) => {
   const navigate = useNavigate();
   const [search] = useSearchParams();
   const requestedTemplateId = search.get('templateId');
@@ -76,6 +79,17 @@ const FlowDefinitionWizard = () => {
   const [capabilityError, setCapabilityError] = useState('');
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
   const [templateError, setTemplateError] = useState('');
+  const startAction = useAsyncActionScope();
+  const completedActionIsCurrent = useRef(null);
+  const isCurrentBrowserEntry = useIsCurrentBrowserEntry(browserEntry);
+  useLayoutEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    // Invalidate the old action before a Back event can restore its URL and
+    // before the router commits the fresh form for that returned entry.
+    const invalidateAction = () => { startAction(); };
+    window.addEventListener('popstate', invalidateAction, true);
+    return () => window.removeEventListener('popstate', invalidateAction, true);
+  }, [startAction]);
 
   const loadCapabilities = useCallback(async () => {
     setCapabilitiesLoading(true);
@@ -114,14 +128,35 @@ const FlowDefinitionWizard = () => {
     initialData: INITIAL_DATA,
     validateStep,
     onSubmit: async (data) => {
+      if (!isCurrentBrowserEntry()) return null;
       if (!organizationId) throw new Error('Select an organization before creating a flow.');
-      return createFlow(buildFlowPayload(data, organizationId));
+      completedActionIsCurrent.current = null;
+      const action = startAction();
+      const isCurrent = () => action.isCurrent() && isCurrentBrowserEntry();
+      try {
+        const flow = await action.run(createFlow, buildFlowPayload(data, organizationId), { isCurrent });
+        if (!isCurrent()) return null;
+        completedActionIsCurrent.current = isCurrent;
+        return flow;
+      } catch (error) {
+        if (isCurrent()) throw error;
+        return null;
+      }
     },
-    onComplete: (flow) => navigate(`/console/org/flows/definitions/${flow.id}`),
-    onCancel: () => navigate('/console/org/flows/definitions'),
+    onComplete: (flow) => {
+      if (flow && completedActionIsCurrent.current?.() && isCurrentBrowserEntry()) {
+        navigate('/console/org/flows/definitions/' + flow.id);
+      }
+    },
+    onCancel: () => {
+      if (isCurrentBrowserEntry()) navigate('/console/org/flows/definitions');
+    },
   });
 
-  const updateData = wizard.updateData;
+  const updateWizardData = wizard.updateData;
+  const updateData = useCallback((updates) => {
+    if (isCurrentBrowserEntry()) updateWizardData(updates);
+  }, [isCurrentBrowserEntry, updateWizardData]);
   useEffect(() => {
     let current = true;
     setTemplateError('');
@@ -144,24 +179,26 @@ const FlowDefinitionWizard = () => {
       key="type"
       capabilities={capabilities}
       selectedType={wizard.data.flowType}
-      onSelectType={(flowType) => wizard.updateData({ ...INITIAL_DATA, ...(flowType === wizard.data.flowType ? { credentialTemplateId: wizard.data.credentialTemplateId, trustProfileId: wizard.data.trustProfileId } : {}), flowType })}
-      onOpenCustomBuilder={() => navigate(`/console/org/flows/definitions/new/custom${requestedTemplateId ? `?templateId=${encodeURIComponent(requestedTemplateId)}` : ''}`)}
+      onSelectType={(flowType) => {
+        if (flowType !== wizard.data.flowType) updateData({ ...INITIAL_DATA, flowType });
+      }}
+      onOpenCustomBuilder={() => { if (isCurrentBrowserEntry()) navigate(`/console/org/flows/definitions/new/custom${requestedTemplateId ? `?templateId=${encodeURIComponent(requestedTemplateId)}` : ''}`); }}
     />,
     <FlowStepsConfigStep
       key="definition"
       {...wizard.data}
       capabilities={capabilities}
-      onUpdate={wizard.updateData}
+      onUpdate={updateData}
     />,
     <DeploymentBindingStep
       key="dependencies"
       {...wizard.data}
-      onUpdate={wizard.updateData}
+      onUpdate={updateData}
     />,
     <ReviewStep key="review" capabilities={capabilities} data={wizard.data} />,
   ];
 
-  if (capabilitiesLoading && !capabilities) {
+  if (!isCurrentBrowserEntry() || (capabilitiesLoading && !capabilities)) {
     return <Box sx={{ display: 'flex', justifyContent: 'center', py: 10 }}><CircularProgress /></Box>;
   }
 
@@ -193,7 +230,7 @@ const FlowDefinitionWizard = () => {
         </Alert>
       )}
       {wizard.error && <Alert severity="error" sx={{ mb: 3 }}>{wizard.error}</Alert>}
-      {wizard.success && <Alert severity="success" sx={{ mb: 3 }}>Draft created. Opening validation workspace...</Alert>}
+      {wizard.success && wizard.result && <Alert severity="success" sx={{ mb: 3 }}>Draft created. Opening validation workspace...</Alert>}
 
       <Stepper activeStep={wizard.activeStep} sx={{ mb: 3 }}>
         {STEPS.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
@@ -206,7 +243,7 @@ const FlowDefinitionWizard = () => {
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 3 }}>
         <Button
           startIcon={<ArrowBackIcon />}
-          onClick={wizard.activeStep === 0 ? wizard.cancel : wizard.goBack}
+          onClick={() => { if (isCurrentBrowserEntry()) (wizard.activeStep === 0 ? wizard.cancel : wizard.goBack)(); }}
           disabled={wizard.loading || wizard.success}
           data-testid={wizard.activeStep === 0 ? 'wizard.flow.cancel' : 'wizard.flow.back'}
         >
@@ -216,7 +253,7 @@ const FlowDefinitionWizard = () => {
           <Button
             variant="contained"
             startIcon={wizard.loading ? <CircularProgress size={18} /> : <CheckIcon />}
-            onClick={wizard.submit}
+            onClick={() => { if (isCurrentBrowserEntry()) wizard.submit(); }}
             disabled={wizard.loading || wizard.success || !wizard.isStepValid()}
             data-testid="wizard.flow.submit"
           >
@@ -226,7 +263,7 @@ const FlowDefinitionWizard = () => {
           <Button
             variant="contained"
             endIcon={<ArrowForwardIcon />}
-            onClick={wizard.goNext}
+            onClick={() => { if (isCurrentBrowserEntry()) wizard.goNext(); }}
             disabled={!wizard.isStepValid() || wizard.loading || capabilitiesLoading || !capabilities}
             data-testid="wizard.flow.next"
           >
@@ -238,4 +275,10 @@ const FlowDefinitionWizard = () => {
   );
 };
 
-export default FlowDefinitionWizard;
+export default function FlowDefinitionWizard() {
+  const { activeOrgId: organizationId } = useConsole();
+  const location = useLocation();
+  const browserEntry = useBrowserEntry(location, { matchReturnByRouteKey: true });
+  return <FlowDefinitionWizardContent browserEntry={browserEntry} key={JSON.stringify([organizationId, location.key,
+    location.pathname, location.search, location.hash, browserEntry.generation])} />;
+}

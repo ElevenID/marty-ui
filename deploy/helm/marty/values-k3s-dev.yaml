@@ -1,0 +1,33 @@
+# Single-node development only. Actual peak memory must be measured on the target.
+# Default StorageClass is intentional; K3s local-path PVCs remain tied to this node.
+ingress:
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: 'true'
+apps:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+  overrides:
+    gateway:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+    auth:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+    issuance-native:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 192Mi
+    signing-keys:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi

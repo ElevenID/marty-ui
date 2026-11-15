@@ -12,7 +12,8 @@
       "title": "Actions rapides",
       "applyForCredential": "Demander un justificatif",
       "viewMyCredentials": "Voir mes justificatifs"
-    }
+    },
+    "loadError": "Le récapitulatif de vos justificatifs n’a pas pu être chargé. Veuillez réessayer."
   },
   "credentials": {
     "title": "Mes justificatifs",
@@ -40,6 +41,71 @@
   "catalog": {
     "title": "Catalogue de justificatifs",
     "description": "Parcourez et demandez les justificatifs disponibles",
-    "searchPlaceholder": "Rechercher des justificatifs..."
+    "searchPlaceholder": "Rechercher des justificatifs...",
+    "searchLabel": "Rechercher des justificatifs",
+    "filters": {
+      "clear": "Effacer les filtres"
+    },
+    "errorLoading": "Impossible de charger le catalogue de justificatifs. Réessayez ou contactez le support si le problème persiste.",
+    "empty": {
+      "launchUnavailable": "Le justificatif de ce cours n’est pas disponible actuellement. Contactez le fournisseur du cours.",
+      "title": "Aucun justificatif disponible",
+      "description": "Aucun justificatif n’est disponible pour votre organisation pour le moment."
+    }
+  },
+  "settings": {
+    "profile": {
+      "loadError": "Votre profil n’a pas pu être chargé. Veuillez réessayer.",
+      "saved": "Profil enregistré.",
+      "save": "Enregistrer le profil"
+    },
+    "notifications": {
+      "unavailable": "Les préférences de notification ne sont pas disponibles dans ce déploiement."
+    },
+    "wallets": {
+      "loadError": "Les portefeuilles disponibles n’ont pas pu être chargés. Veuillez réessayer.",
+      "savedAutomatically": "Vos choix de portefeuilles sont enregistrés automatiquement dans ce navigateur."
+    }
+  },
+  "identity": {
+    "details": {
+      "linkedCredentials": "Justificatifs émis",
+      "viewApplication": "Voir les détails de la demande",
+      "applicationStatus": "Statut de la demande",
+      "credentialId": "ID du justificatif"
+    },
+    "guidance": {
+      "walletPresentation": "Pour présenter un justificatif, utilisez le portefeuille dans lequel il est enregistré.",
+      "expired": "Ce justificatif a expiré. Contactez l’émetteur pour le renouveler.",
+      "revoked": "Ce justificatif a été révoqué. Contactez l’émetteur pour obtenir de l’aide.",
+      "additionalInformation": "L’émetteur a besoin d’informations supplémentaires. Contactez-le pour savoir comment les fournir."
+    }
+  },
+  "devices": {
+    "loading": "Chargement des appareils",
+    "searchLabel": "Rechercher des appareils",
+    "noMatches": "Aucun appareil ne correspond à votre recherche.",
+    "clearSearch": "Effacer la recherche",
+    "tableLabel": "Appareils enregistrés",
+    "notReported": "Non renseigné",
+    "signInRequired": "Connectez-vous pour consulter vos appareils enregistrés.",
+    "tableHeaders": {
+      "status": "Enregistrement"
+    },
+    "status": {
+      "inactive": "Inactif"
+    },
+    "actions": {
+      "unregisterNamed": "Désenregistrer l’appareil {{deviceId}}"
+    },
+    "errorUnregisteringFallback": "Impossible de désenregistrer l’appareil. Réessayez.",
+    "info": "Consultez vos appareils enregistrés et désenregistrez ceux que vous n’utilisez plus. Un enregistrement actif n’indique pas si un appareil est en ligne.",
+    "empty": {
+      "description": "Les appareils apparaissent ici une fois enregistrés auprès de votre compte."
+    },
+    "unregisterDialog": {
+      "message": "Désenregistrer cet appareil ? Son enregistrement deviendra inactif. Pour l’utiliser à nouveau, enregistrez-le à nouveau."
+    },
+    "description": "Gérez les enregistrements de vos appareils."
   }
 }

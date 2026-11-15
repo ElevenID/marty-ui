@@ -30,6 +30,7 @@ NAME = 'installer-startup-observation.json'
 MAX_BYTES = 256 * 1024
 OWNER_NAMES = {'artifacts','native_before','native_after','browser','host_after'}
 HARNESS_FILES = (
+    'scripts/installer_acceptance_acquisition.py',
     'scripts/installer_acceptance_startup.py','scripts/installer_startup_observation.py',
     'scripts/installer_startup_browser.py','scripts/installer_startup_browser.cjs',
     'scripts/installer_startup_process.py',

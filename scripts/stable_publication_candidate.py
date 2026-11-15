@@ -15,21 +15,24 @@ from pathlib import Path
 
 import release_tag_handoff as h
 import stable_publication_checkpoint as cp
+import release_source_authority as source_authority
 
 SCHEMA = "elevenid.stable-publication-candidate/v2"
 PUBLISHER_WORKFLOW = ".github/workflows/publish-stable-candidate.yml"
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = "release/stable-publication-policy.json"
-POLICY = {"schema": "elevenid.stable-publication-policy/v2", "repository": h.REPOSITORY,
+POLICY = {"schema": "elevenid.stable-publication-policy/v4", "repository": h.REPOSITORY,
           "producer_workflow": h.CD_WORKFLOW, "publisher_workflow": PUBLISHER_WORKFLOW,
-          "candidate_lifetime_seconds": 86400, "authorization_lifetime_seconds": 900}
+          "candidate_lifetime_seconds": 86400, "authorization_lifetime_seconds": 900,
+          "tag_handoff_contract": h.TAG_HANDOFF_CONTRACT,
+          "source_authority_policy": "marty.immutable-source-authority/v1"}
 FIELDS = {"schema", "repository", "producer_workflow", "source_sha", "run_id", "run_attempt", "tag",
           "created_at", "not_after", "policy_sha256", "files", "candidate_id"}
 LIMITS = {"checkpoint/" + name: size for name, size in cp.MAX_FILE_BYTES.items()}
 LIMITS.update({"tag-admission.json": 65536, "candidate.json": 65536})
 FILES = {"checkpoint/" + name for name in cp.CHECKPOINT_FILES} | {"tag-admission.json"}
-ADMISSION_FIELDS = {"operator_run_id", "operator_run_attempt", "result_artifact_id",
-                    "result_artifact_sha256", "result_sha256", "tag_object_sha"}
+ADMISSION_FIELDS = {"schema", "tag_handoff_contract", "operator_run_id", "operator_run_attempt", "result_artifact_id",
+                    "result_artifact_sha256", "result_sha256", "tag_object_sha", "intent_tag", "intent_object_sha"}
 
 
 def utc(now: datetime | None = None) -> datetime:
@@ -39,7 +42,16 @@ def utc(now: datetime | None = None) -> datetime:
 def policy_digest(root: Path = ROOT) -> str:
     raw = h.bounded_file(root / POLICY_PATH, 65536)
     h.require(h.decode(raw) == POLICY, "publication policy differs from the supported v2 contract")
-    return h.sha256(raw)
+    return h.sha256(h.encoded({"policy_sha256": h.sha256(raw),
+                               "program_sha256": program_digest(root)}))
+
+
+def program_digest(root: Path) -> str:
+    """Bind policy to the clean, actual release program, including native inputs."""
+    history = source_authority.History(root, 30)
+    source = history.git("rev-parse", "HEAD^{commit}").decode("ascii").strip()
+    history.git("diff", "--exit-code", "HEAD", "--", *source_authority.PATHS)
+    return source_authority.require_compatible_source(source, source, source, repository=root)
 
 
 def candidate_identity(value: dict) -> str:
@@ -74,6 +86,11 @@ def validate_manifest(value: object, *, now: datetime | None = None) -> dict:
 
 def validate_admission(value: object) -> dict:
     h.require(type(value) is dict and set(value) == ADMISSION_FIELDS, "tag admission fields differ")
+    h.require(value["schema"] == h.TAG_ADMISSION_SCHEMA and value["tag_handoff_contract"] == h.TAG_HANDOFF_CONTRACT,
+              "tag admission contract differs")
+    h.require(isinstance(value["intent_tag"], str) and h.INTENT_TAG.fullmatch(value["intent_tag"]) is not None
+              and isinstance(value["intent_object_sha"], str) and h.SHA.fullmatch(value["intent_object_sha"]) is not None
+              and value["intent_object_sha"] != "0" * 40, "tag admission requires a retained original operator intent")
     h.require(all(h.positive(value[key]) for key in ("operator_run_id", "operator_run_attempt", "result_artifact_id"))
               and value["operator_run_attempt"] == 1
               and all(isinstance(value[key], str) and h.DIGEST.fullmatch(value[key]) for key in
@@ -118,6 +135,8 @@ def load_candidate(directory: Path, *, now: datetime | None = None) -> tuple[dic
         meta, raw = root.read("tag-admission.json", LIMITS["tag-admission.json"])
         admission = validate_admission(h.decode(raw))
         request, files = archived_checkpoint(directory / "checkpoint")
+        h.require(admission["intent_tag"] == h.release_intent_tag(request["tag"]),
+                  "candidate retained intent belongs to another release version")
         files["tag-admission.json"] = meta
         h.require(files == candidate["files"], "candidate bytes differ from immutable inventory")
         h.require(all(candidate[key] == request[key] for key in ("source_sha", "run_id", "run_attempt", "tag"))
@@ -134,6 +153,8 @@ def seal(checkpoint: Path, admission_path: Path, output: Path, *, root: Path = R
     run = cp._producer_context(request["source_sha"], os.environ if environment is None else environment)
     h.require(run == request["run_id"], "candidate producer differs from checkpoint")
     admission = validate_admission(h.decode(h.bounded_file(admission_path, 65536)))
+    h.require(admission["intent_tag"] == h.release_intent_tag(request["tag"]),
+              "candidate retained intent belongs to another release version")
     created = utc(now)
     with cp._Directory(output.parent) as parent:
         os.mkdir(output.name, 0o700, dir_fd=parent.fd)

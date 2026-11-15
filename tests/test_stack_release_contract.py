@@ -659,7 +659,7 @@ def test_passport_publication_installs_pinned_chromium_before_verification() -> 
 
 
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
-    action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    action = "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"
     matched_steps: list[tuple[str, dict[str, object]]] = []
 
     for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
@@ -847,11 +847,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.90"
-    assert integration["commit"] == "5b3ec6a802a5e13201be8883741889405a86d146"
+    assert integration["version"] == "1.2.96"
+    assert integration["commit"] == "b46fbd7bc79135e715efb1d5cfe271778d712313"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:2dddf814b58d0214c41407c92eca331e54ff85ee30990c224fb3a82dccec589c"
+            "sha256:3d9d285c9addb885b897ba1d9193912ef46cadca761e7266080309a0ff344d27"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -880,7 +880,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.90"
+    assert components["marty-integration-tests"]["version"] == "1.2.96"
 
     # Detailed producer incident history belongs in the incident/runbook owners,
     # rather than being duplicated in the current migration requirements.
@@ -994,15 +994,29 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
 def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
     release = yaml.safe_load(_text(".github/workflows/cd.yml"))
     steps = release["jobs"]["verifier-differential"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    fetch = next(step for step in steps if step.get("name") == "Fetch the attested Core private fork dependencies")
     producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
-    assert "--source-digest \"$commit\"" in producer["run"]
-    assert "--deny-self-hosted-runners" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
-    assert "--expected-sha256 \"$digest\"" in producer["run"]
-    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert steps.index(prepare) < steps.index(fetch) < steps.index(producer)
+    for step in (prepare, producer):
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+    assert fetch == {
+        "name": "Fetch the attested Core private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "shell": "bash",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": "python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml",
+    }
+    assert "config/credentials-verifier-positive-producer.json" in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in prepare["run"]
+    assert "--source-digest \"$commit\"" in prepare["run"]
+    assert "--deny-self-hosted-runners" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
+    assert "--expected-sha256 \"$digest\"" in prepare["run"]
+    assert "--expected-commit \"$commit\"" in prepare["run"]
     assert "cargo +1.97.1 build --locked" in producer["run"]
     verifier = next(
         step for step in steps
@@ -1112,25 +1126,28 @@ def test_release_workflows_never_checkout_dispatch_or_transaction_data() -> None
         assert all(reference not in workflow for reference in forbidden_refs)
 
 
-def test_stack_release_uses_read_only_default_permissions() -> None:
+def test_stack_release_uses_read_only_defaults_and_scoped_operator_dispatch() -> None:
     document = yaml.safe_load(_text(".github/workflows/cd.yml"))
 
     assert document["permissions"] == {"contents": "read"}
-    for job in document["jobs"].values():
+    for name, job in document["jobs"].items():
         permissions = job.get("permissions", {})
-        assert permissions.get("actions") != "write"
+        if name == "publish-manifest":
+            assert permissions.get("actions") == "write"
+        else:
+            assert permissions.get("actions") != "write"
         assert permissions.get("security-events") != "write"
 
 
 def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     verifier = jobs["verifier-differential"]
-    producer = next(step for step in verifier["steps"]
-                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
-    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
+    prepare = next(step for step in verifier["steps"]
+                   if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    assert 'select(.repository == "ElevenID/marty-core")' in prepare["run"]
+    assert 'all(.[]; . == [$commit, $version])' in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
     script = next(step["run"] for step in verifier["steps"]
                   if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
     assert "--jwk-tool" in script
@@ -1305,13 +1322,78 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Wait for the exact operator tag handoff" in workflow
-    helper = (_text("scripts/push_promoted_release_tag.py")
-              + _text("scripts/release_tag_handoff.py")
-              + _text("scripts/release_git_atomic.py"))
-    assert '"atomic", "report-status", "side-band-64k"' in helper
-    assert '"old_oid"' in helper and '"new_oid"' in helper
-    assert "marty.native-git-atomic-transaction/v1" in helper
-    assert "marty.release-tag-operator-observations/v2" in helper
+    operator = _text("scripts/push_promoted_release_tag.py")
+    handoff = _text("scripts/release_tag_handoff.py")
+    native = _text("scripts/release_git_atomic.py")
+    helper = operator + handoff + native
+    # Native atomic transport remains available for the real negative probe
+    # and historical replay. The new positive path promises tag absence only.
+    assert '"atomic", "report-status", "side-band-64k"' in native
+    assert '"old_oid"' in native and '"new_oid"' in native
+    assert "marty.native-git-atomic-transaction/v1" in native
+    assert "marty.release-tag-operator-observations/v3" in operator
+    assert 'TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"' in handoff
+    assert 'TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"' in handoff
+    assert 'TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"' in handoff
+    assert 'REF_CREATION_SCOPE = "absent_tag_only"' in handoff
+    assert 'MAIN_CHECK_SCOPE = "before_after_observation"' in handoff
+    assert '"tag_alone_authorizes_publication": False' in operator
+    assert 'SCHEMA = "elevenid.stable-publication-checkpoint/v2"' in _text("scripts/stable_publication_checkpoint.py")
+    policy = json.loads(_text("release/stable-publication-policy.json"))
+    assert policy["schema"] == "elevenid.stable-publication-policy/v4"
+    assert policy["source_authority_policy"] == "marty.immutable-source-authority/v1"
+    assert policy["tag_handoff_contract"] == "marty.create-only-annotated-tag/v1"
+
+    capability = operator.split("def qualify_capability(", 1)[1].split("\ndef verify_crypto(", 1)[0]
+    assert "marty.release-tag-capability/v5" in capability
+    assert '"negative_probe_scope": "stale_or_policy_refusal_only"' in capability
+    assert capability.count("native.exchange(") == 1
+    assert 'f"capability-negative-{run_id}-1"' in capability
+    assert '"confirmed_stale_main_refusal", "confirmed_main_policy_refusal"' in capability
+    assert capability.index("negative = native.exchange(") < capability.index("intent_reservation = github.create_tag_ref(")
+    assert capability.index("intent_reservation = github.create_tag_ref(") < capability.index("positive = github.create_tag_ref(")
+    assert '"positive_ref_creation": positive' in capability
+    assert "positive_transaction" not in capability
+
+    production = operator.split("def create_qualified_tag(", 1)[1].split("\ndef main(", 1)[0]
+    first_write = production.index("intent_object = create_tag_object(")
+    # Exact source, original claim/CD, review, signatures, immutable bytes,
+    # promoted digests, protection and deadline gates precede BOTH tag objects.
+    for gate in (
+        "require_capability_main_protection(inspection)", "request = load_checkpoint(checkpoint)",
+        'request["run_id"] == cd_run', 'request["source_sha"] == source',
+        'request["claim_run_id"] == claim_run', 'request["protected_main_commit"] == source',
+        'required_state="promoted"', "authority = gate_authority(", "require_review_only_history(",
+        'claim.get("conclusion") == "success"', 'required_state="claimed"',
+        'seed["transaction_id"] == transaction["transaction_id"]', "verify_crypto(",
+        "promoted_digests(", 'git/ref/tags/{intent_tag}', 'releases/tags/{request[\'tag\']}',
+        "github.artifact(cd_run, artifact_name, source) == artifact", "waiting_run(github, cd_run, source)",
+        "handoff.candidate_main(github, source, main)", "handoff.remaining(github.deadline)",
+    ):
+        assert production.index(gate) < first_write, gate
+    assert production.count("load_checkpoint(checkpoint)") == 2
+    assert "native.exchange(" not in production
+    assert production.count("github.create_tag_ref(") == 2
+    owner_write = production.index("intent_reservation = github.create_tag_ref(intent_tag,")
+    production_object = production.index("tag_object = create_tag_object(")
+    production_write = production.index('reservation = github.create_tag_ref(request["tag"],')
+    owner_reads = [match.start() for match in re.finditer(re.escape("read_exact_tag(github, intent_tag,"), production)]
+    assert len(owner_reads) == 3
+    assert first_write < owner_write < owner_reads[0] < production_object < owner_reads[1] < production_write < owner_reads[2]
+    assert production_write < production.index('read_exact_tag(github, request["tag"],')
+    source_reads = [match.start() for match in re.finditer(re.escape("handoff.candidate_main(github, source, main)"), production)]
+    assert len(source_reads) == 6
+    assert source_reads[0] < source_reads[1] < first_write < source_reads[2] < owner_write
+    assert owner_reads[0] < source_reads[3] < production_object < source_reads[4] < production_write < source_reads[5]
+    assert production_write < production.index("main_after = handoff.candidate_main(github, source, main)")
+    assert production_write < production.index("final_run, final_source, final_inspection = inspect_repository(")
+    for field in ('"intent_tag"', '"intent_object_sha"', '"intent_ref_creation"', '"tag_ref_creation"'):
+        assert field in production
+    assert "A retained original operator already owns this release version" in production
+    assert "Intent-Ref: refs/tags/" in handoff and "Intent-Object:" in handoff
+    assert "owned_intent(github, request, request_sha, artifact, operator_run)" in handoff
+    assert "h.owned_intent(" in _text("scripts/stable_publication.py")
+
     assert "updateRefs" not in helper
     assert '"--atomic"' not in helper
     assert "git push" not in workflow
@@ -1338,6 +1420,13 @@ def test_workflow_changing_source_tag_uses_authenticated_operator_handoff() -> N
     assert "--artifact-id" in tag_step["run"]
     assert "--artifact-digest" in tag_step["run"]
     assert "release_tag_handoff.py wait" in tag_step["run"]
+    assert '--dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json"' in tag_step["run"]
+    dispatch_receipt = next(
+        step for step in publisher["steps"]
+        if step.get("with", {}).get("path") == "${{ runner.temp }}/stable-tag-dispatch.json"
+    )
+    assert dispatch_receipt["uses"].startswith("actions/upload-artifact@")
+    assert dispatch_receipt["with"]["if-no-files-found"] == "error"
     assert "gh release create" not in tag_step["run"]
     helper = _text("scripts/push_promoted_release_tag.py")
     assert "setup-git" not in helper
@@ -1354,7 +1443,7 @@ def test_bounded_publication_rejects_later_attempt_and_resume_before_builds() ->
     assert 'test "$GITHUB_REF" = refs/heads/main' in first["run"]
     assert '[ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]' in first["run"]
     assert "exit 1" in first["run"]
-    assert jobs["official-gate-evidence"]["timeout-minutes"] == 90
+    assert jobs["official-gate-evidence"]["timeout-minutes"] == 30
     assert jobs["publish-manifest"]["timeout-minutes"] == 90
 
 

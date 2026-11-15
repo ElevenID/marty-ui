@@ -81,6 +81,7 @@ async fn transaction_contract(claims_type: &str) {
             pre_auth_code TEXT NOT NULL UNIQUE,
             credential_type TEXT,
             credential_payload_format character varying(30) NOT NULL,
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,
             created_at TIMESTAMPTZ NOT NULL,
             expires_at TIMESTAMPTZ NOT NULL,
             issued_at TIMESTAMPTZ,

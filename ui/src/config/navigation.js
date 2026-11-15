@@ -18,6 +18,7 @@ import BadgeIcon from '@mui/icons-material/Badge';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import SettingsIcon from '@mui/icons-material/Settings';
+import DevicesIcon from '@mui/icons-material/Devices';
 import DesignServicesIcon from '@mui/icons-material/DesignServices';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 
@@ -172,7 +173,6 @@ export const ADMIN_VENDOR_NAV = [
       { id: 'team', label: 'Team', path: '/console/org/team', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'membership-requests', label: 'Membership Requests', path: '/console/org/membership-requests', requiredPermission: { resource: 'team', action: 'view' } },
       { id: 'roles', label: 'Roles', path: '/console/org/roles', requiredPermission: { resource: 'role', action: 'view' } },
-      { id: 'role-requests', label: 'Role Requests', path: '/console/org/role-requests', requiredPermission: { resource: 'role', action: 'view' } },
       { id: 'notifications', label: 'Notifications', path: '/console/org/notifications', requiredPermission: { resource: 'notification', action: 'view' } },
     ],
   },
@@ -211,6 +211,13 @@ export const APPLICANT_NAV = [
     label: 'Organizations',
     path: '/console/organizations',
     icon: BusinessIcon,
+    exact: true,
+  },
+  {
+    id: 'devices',
+    label: 'Devices',
+    path: '/console/applicant/devices',
+    icon: DevicesIcon,
     exact: true,
   },
   {

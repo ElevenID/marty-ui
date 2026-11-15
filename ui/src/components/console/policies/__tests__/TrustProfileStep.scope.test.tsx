@@ -6,6 +6,7 @@ import { listTrustProfiles } from '../../../../services/presentationPolicyApi';
 const scope = vi.hoisted(() => ({ org: 'org-a' }));
 vi.mock('../../../../contexts/ConsoleContext', () => ({ useConsole: () => ({ activeOrgId: scope.org }) }));
 vi.mock('../../../../services/presentationPolicyApi', () => ({ listTrustProfiles: vi.fn() }));
+vi.mock('../../../../services/organizationsApi', () => ({ getOrganizationDefaults: async () => ({}) }));
 beforeEach(() => { scope.org = 'org-a'; vi.resetAllMocks(); });
 it('does not auto-select a late previous-organization response', async () => {
   let resolve!: (value: unknown[]) => void;

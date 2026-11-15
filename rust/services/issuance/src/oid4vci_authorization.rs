@@ -458,6 +458,16 @@ impl Oid4vciAuthorizationService {
                 return authorization_error_outcome(&query.parameters, error);
             }
         };
+        if session
+            .credential_configuration_ids
+            .iter()
+            .any(|id| id.ends_with(marty_jwt_vc_issuance::DIRECT_CONFIGURATION_SUFFIX))
+        {
+            return authorization_error_outcome(
+                &query.parameters,
+                ProtocolError::invalid_request("explicit JWT-VC requires pre-authorized issuance"),
+            );
+        }
         let persisted_lifetime_seconds = self
             .authorization_session_ttl_minutes
             .to_i64()

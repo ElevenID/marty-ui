@@ -2,9 +2,9 @@
 import base64
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -50,6 +50,10 @@ public static class DockerRecorder {
   if(args.Contains("--services")) {
    Console.WriteLine("openbao");
    Console.WriteLine(env("LEGACY") == "1" ? "openbao-bootstrap" : "openbao-unseal");
+   if(env("TLS_INIT") == "product" && args.Contains("isolated-product") ||
+      env("TLS_INIT") == "bao" && args.Contains("isolated-bao")) {
+    Console.WriteLine("openbao-tls-init");
+   }
   }
   return 0;
  }
@@ -64,7 +68,8 @@ public static class DockerRecorder {
     assert result.returncode == 0, result.stderr
 
 def invoke(tmp_path, *, check=True, omit=False, config_failure=False, missing=False,
-           context="desktop-linux", retained=False, malformed=False, permanent=False, legacy_bao=False):
+           context="desktop-linux", retained=False, malformed=False, permanent=False, legacy_bao=False,
+           tls_init=""):
     stack = tmp_path / "stack with spaces"
     stack.mkdir()
     files = [stack / name for name in ("base.yml", "private-overlay.yml", "bao.yml", "production.env")]
@@ -125,7 +130,7 @@ function global:docker {
     environment = {**os.environ, "MARTY_TEST_DOCKER_LOG": str(log), "MARTY_TEST_DOCKER_STARTED": str(started),
                    "MARTY_TEST_DOCKER_CONTEXT": context, "MARTY_TEST_DOCKER_FAILURE": str(int(config_failure)),
                    "MARTY_TEST_DOCKER_MISSING": str(int(missing)), "MARTY_TEST_DOCKER_PERMANENT": str(int(permanent)),
-                   "MARTY_TEST_DOCKER_LEGACY": str(int(legacy_bao))}
+                   "MARTY_TEST_DOCKER_LEGACY": str(int(legacy_bao)), "MARTY_TEST_DOCKER_TLS_INIT": tls_init}
     result = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
                              base64.b64encode(script.encode("utf-16le")).decode()],
                             capture_output=True, encoding="utf-8", errors="replace", timeout=30, env=environment)
@@ -190,6 +195,16 @@ def test_legacy_openbao_model_is_refused_before_any_mutation(tmp_path):
     result, calls, _ = invoke(tmp_path, legacy_bao=True)
     assert result.returncode != 0
     assert "persistent unseal service" in result.stderr
+    assert not any("up" in call for call in calls)
+
+
+@pytest.mark.parametrize("check", [False, True])
+@pytest.mark.parametrize("retained", [False, True])
+@pytest.mark.parametrize("tls_init", ["product", "bao"])
+def test_managed_tls_initializer_is_refused_before_any_mutation(tmp_path, check, retained, tls_init):
+    result, calls, _ = invoke(tmp_path, check=check, retained=retained, tls_init=tls_init)
+    assert result.returncode != 0
+    assert "completed TLS initializer must not be replayed" in result.stderr
     assert not any("up" in call for call in calls)
 
 

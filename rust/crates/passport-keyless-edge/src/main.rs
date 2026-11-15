@@ -128,6 +128,7 @@ async fn proxy(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     let tls = keyless_tls_config("PASSPORT_EDGE").await?;
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())

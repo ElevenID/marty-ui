@@ -28,6 +28,7 @@ The deployment package includes these authenticated source files:
 | `deploy-config/compose/selfhost-installer/compose.installer.yml` | Installer service policy, dependencies, scoped storage, and loopback ingress. |
 | `deploy-config/compose/selfhost-installer/compose.runtime.yml` | Ordinary runtime selection with completed setup dependencies removed. |
 | `deploy-config/compose/selfhost-installer/compose.aws-foundation.yml` | Fresh installation with preprovisioned AWS KMS and external OIDC. |
+| `deploy-config/compose/selfhost-installer/compose.external-oidc.yml` | Fresh external OIDC login selection with managed OpenBao retained. |
 | `deploy-config/compose/selfhost-installer/compose.organization-bootstrap.yml` | Scoped first-boot organization credential issuance and revocation. |
 
 Compose resolves the final model through `config`. The installer inspects that
@@ -53,11 +54,28 @@ configuration hashes, `up --wait`, and explicit setup-job exit status. The
 qualified build passed the real Compose baseline parser fixture. Parsing alone
 does not establish daemon execution or full application qualification.
 
+The release's native `COMPOSE_VERSION` constant is the version authority. The
+public bootstrap's `--check-host` checks only bootstrap prerequisites and Docker
+connectivity. Run the same exact release selector with `--check-compatibility`
+to authenticate the operator and exercise its native Docker/Compose preflight
+without creating an installation. The result identifies the required Compose
+version and makes no capacity, payload, image, or readiness claim. Follow the
+[Linux tester host preparation](linux-installer-tester.md) before installing;
+the latest Docker plugin package is not necessarily the selected baseline.
+
 Private inputs remain in the installation's owned directories. File-backed
 Compose secrets are files, not an encrypted vault; the existing file-type, mode,
 owner, link, and retained-directory checks still apply. Narrow bind mounts remain
 where credential custody or component storage requires them. Compatible new data
 uses installation-scoped named volumes; this change does not migrate old data.
+
+The shared Redis service retains signing identities, configuration and one-use
+grant replay markers alongside cache data. Its memory policy is `noeviction`:
+when the configured memory ceiling is reached, writes that need more memory
+fail instead of deleting retained keys. The existing memory limit and AOF
+persistence remain in place. Operators must investigate memory-pressure write
+failures and size a production deployment for its workload; deleting Redis data
+or switching to an eviction policy is not a safe capacity remedy.
 
 ## Trust boundary
 
@@ -143,6 +161,24 @@ same ID or retry an uncertain write. Provider keys are not created, rotated or
 deleted. The HTTPS certificate is pinned before the API key is sent.
 This command requires an existing installation and operator credential; it does
 not establish AWS-only installation readiness or remove the OpenBao dependency.
+
+## External OIDC with managed OpenBao
+
+For a fresh installation, pass `--external-oidc-file /absolute/private/oidc.json`
+to select an existing external login provider independently of workload key
+custody. Managed OpenBao, workload TLS and credential signing remain in place;
+the selected application model omits the Keycloak server and configurator.
+Managed Keycloak remains the default. The existing one-shot OpenBao custody
+helper and its generation/renewal receipts remain retained.
+
+The input uses schema `elevenid.installer-external-oidc/v1` with an
+`external_oidc` object. The existing `--hosting-file` controls the canonical
+origin and optional Cloudflare hosting; `--settings-file` controls supported
+application policy. Do not combine this flag with `--foundation-file`, whose AWS
+selection already owns external OIDC. See [external OIDC installation](installer-external-oidc.md)
+for public/confidential client examples, provider requirements and separate
+beta/production inputs. This fresh-install selection does not migrate an
+existing issuer or installed user identities.
 
 ## Preprovisioned AWS foundation
 

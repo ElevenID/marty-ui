@@ -117,10 +117,24 @@ def validate_source(repository: Path, tag: str, expected_commit: str) -> None:
     require_release_eligible(repository, tag)
     head = _git(repository, "rev-parse", "HEAD^{commit}")
     main = _git(repository, "rev-parse", "refs/remotes/origin/main^{commit}")
-    if head != expected_commit or main != expected_commit:
+    if head != expected_commit:
         raise StackTagGateError(
             f"source mismatch: HEAD={head}, origin/main={main}, expected={expected_commit}"
         )
+    if main != expected_commit:
+        if __package__:
+            from . import release_source_authority as authority
+            from . import release_tag_handoff as handoff
+        else:
+            import release_source_authority as authority
+            import release_tag_handoff as handoff
+        try:
+            # Reject unsupported historical sources locally before any API read.
+            authority.require_compatible_source(expected_commit, expected_commit, main, repository=repository)
+            authority.authenticated_current(handoff.GitHub(), expected_commit, expected_commit,
+                                            repository=repository)
+        except (ValueError, OSError):
+            raise StackTagGateError("source mismatch: advanced main does not preserve admitted release policy") from None
 
 
 def _workflow_runs(payload: Any) -> list[dict[str, Any]]:
@@ -143,6 +157,7 @@ def validate_workflow_runs(
     policy: Any,
     expected_commit: str,
     current_run_id: int,
+    qualification_run_id: int | None = None,
 ) -> list[dict[str, Any]]:
     document = _object(policy, "stack-tag policy")
     if document.get("schema") != SCHEMA:
@@ -211,6 +226,13 @@ def validate_workflow_runs(
     if not qualification_runs:
         raise StackTagGateError("exact-main full Canvas qualification is missing")
     latest_qualification = max(qualification_runs, key=_execution_order)
+    if qualification_run_id is not None and (
+        type(qualification_run_id) is not int or qualification_run_id <= 0
+        or latest_qualification.get("id") != qualification_run_id
+        or type(latest_qualification.get("run_attempt")) is not int
+        or latest_qualification["run_attempt"] != 1
+    ):
+        raise StackTagGateError("full Canvas qualification differs from its admitted original run")
     if latest_qualification.get("status") != "completed":
         raise StackTagGateError("full Canvas qualification is still pending")
     if latest_qualification.get("conclusion") != "success":
@@ -341,6 +363,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--commit", required=True)
     prepare.add_argument("--run-id", type=int, required=True)
     prepare.add_argument("--runs-json", type=Path, required=True)
+    prepare.add_argument("--qualification-run-id", type=int)
     prepare.add_argument("--policy", type=Path, required=True)
     prepare.add_argument("--evidence", type=Path, required=True)
     record = subparsers.add_parser("record-tag")
@@ -370,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
                 _load_json(args.policy, "stack-tag policy"),
                 args.commit,
                 args.run_id,
+                args.qualification_run_id,
             )
             evidence = preparation_evidence(
                 args.repository_name, args.tag, args.commit, args.run_id, workflows

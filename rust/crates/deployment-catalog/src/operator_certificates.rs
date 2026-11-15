@@ -168,7 +168,16 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
     issuer_matches(&cert, &cert)?;
     // Reuse webpki's existing verification algorithms, including P-256 with
     // SHA-384/512. Match both AlgorithmIdentifiers, including parameters.
-    let public_algorithm = tbs
+    certificate_signature(&cert, &cert)
+}
+
+fn certificate_signature(cert: &Certificate, signer: &Certificate) -> Result<()> {
+    let tbs = &cert.tbs_certificate;
+    if cert.signature_algorithm != tbs.signature {
+        return Err(REFUSAL);
+    }
+    let public_algorithm = signer
+        .tbs_certificate
         .subject_public_key_info
         .algorithm
         .to_der()
@@ -179,7 +188,8 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
     let signature_algorithm =
         spki::der::asn1::AnyRef::from_der(&signature_algorithm).map_err(|_| REFUSAL)?;
     let message = tbs.to_der().map_err(|_| REFUSAL)?;
-    let public = tbs
+    let public = signer
+        .tbs_certificate
         .subject_public_key_info
         .subject_public_key
         .as_bytes()
@@ -195,6 +205,25 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
         return Err(REFUSAL);
     }
     Ok(())
+}
+
+/// Recovery checks the retained leaf's signature against the observed current
+/// issuer, without claiming that issuer's certificate bytes existed at bootstrap.
+/// This does not make the expired leaf usable for live TLS or alter check_chain.
+pub(crate) fn retained_leaf_signature(pem: &[u8], issuer_pem: &[u8], now: Duration) -> Result<()> {
+    let leaf = first_certificate(pem)?;
+    let issuer = first_certificate(issuer_pem)?;
+    let validity = &leaf.tbs_certificate.validity;
+    if validity.not_before.to_unix_duration() > now
+        || validity.not_after.to_unix_duration() <= validity.not_before.to_unix_duration()
+        || issuer.tbs_certificate.subject != issuer.tbs_certificate.issuer
+    {
+        return Err(REFUSAL);
+    }
+    issuer_constraints(&issuer, now, 0)?;
+    issuer_matches(&leaf, &issuer)?;
+    certificate_signature(&issuer, &issuer)?;
+    certificate_signature(&leaf, &issuer)
 }
 
 // The old `openssl verify` invocation had no purpose or hostname option. Parse

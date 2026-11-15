@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { useState } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { renderWithoutRouter, screen, waitFor } from '../../test/utils'
+import { renderWithoutRouter, screen, waitFor, within } from '../../test/utils'
 import SidebarNavigation from './SidebarNavigation'
 
 const {
@@ -82,6 +83,20 @@ function NavigationHarness() {
   )
 }
 
+function MobileNavigationHarness() {
+  const [open, setOpen] = useState(true)
+  return <>
+    <button onClick={() => setOpen(true)}>Open navigation</button>
+    <SidebarNavigation mobileOpen={open} onMobileClose={() => setOpen(false)} />
+    <LocationProbe />
+    <Routes>
+      <Route path="/console/org" element={<div>Dashboard Page</div>} />
+      <Route path="/console/org/team" element={<div>Team Page</div>} />
+      <Route path="/console/org/audit" element={<div>Audit Page</div>} />
+    </Routes>
+  </>
+}
+
 describe('SidebarNavigation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -101,6 +116,8 @@ describe('SidebarNavigation', () => {
     expect(screen.getByText('Dashboard Page')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Org' }))
+    expect(screen.queryByRole('link', { name: 'Role Requests' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Roles' })).toBeInTheDocument()
     await user.click(screen.getByRole('link', { name: 'My Organizations' }))
 
     await waitFor(() => {
@@ -210,5 +227,57 @@ describe('SidebarNavigation', () => {
 
     expect(onMobileClose).toHaveBeenCalledTimes(1)
     expect(mockLogout).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows the complete mobile menu while preserving the collapsed desktop preference', async () => {
+    window.localStorage.setItem('sidebar-collapsed', 'true')
+    const menu = <MemoryRouter initialEntries={['/console/org']}>
+      <SidebarNavigation mobileOpen onMobileClose={vi.fn()} />
+    </MemoryRouter>
+    const { user, rerender } = renderWithoutRouter(menu)
+    expect(within(screen.getByRole('button', { name: 'Deploy' })).queryByText('Deploy')).not.toBeInTheDocument()
+
+    mockUseMediaQuery.mockReturnValue(true)
+    rerender(<MemoryRouter initialEntries={['/console/org']}>
+      <SidebarNavigation mobileOpen onMobileClose={vi.fn()} />
+    </MemoryRouter>)
+    expect(within(screen.getByRole('button', { name: 'Deploy' })).getByText('Deploy')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    await user.click(screen.getByRole('button', { name: 'Deploy' }))
+    expect(await screen.findByRole('link', { name: 'Deployment Profiles' })).toBeVisible()
+    expect(window.localStorage.getItem('sidebar-collapsed')).toBe('true')
+
+    mockUseMediaQuery.mockReturnValue(false)
+    rerender(<MemoryRouter initialEntries={['/console/org']}>
+      <SidebarNavigation mobileOpen onMobileClose={vi.fn()} />
+    </MemoryRouter>)
+    expect(screen.getByRole('button', { name: 'Expand navigation' })).toBeVisible()
+    expect(within(screen.getByRole('button', { name: 'Deploy' })).queryByText('Deploy')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Expand navigation' }))
+    expect(window.localStorage.getItem('sidebar-collapsed')).toBe('false')
+    expect(within(screen.getByRole('button', { name: 'Deploy' })).getByText('Deploy')).toBeVisible()
+  })
+
+  it('keeps mobile section expansion open and closes after child, current-route, and top-level destinations', async () => {
+    mockUseMediaQuery.mockReturnValue(true)
+    const { user } = renderWithoutRouter(<MemoryRouter initialEntries={['/console/org']}>
+      <MobileNavigationHarness />
+    </MemoryRouter>)
+    await user.click(screen.getByRole('button', { name: 'Org' }))
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible()
+    await user.click(await screen.findByRole('link', { name: 'Team' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument())
+    expect(screen.getByText('Team Page')).toBeVisible()
+    expect(screen.getByTestId('location')).toHaveTextContent('/console/org/team')
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await user.click(await screen.findByRole('link', { name: 'Team' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument())
+    expect(screen.getByTestId('location')).toHaveTextContent('/console/org/team')
+
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await user.click(await screen.findByRole('button', { name: 'Audit' }))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument())
+    expect(screen.getByText('Audit Page')).toBeVisible()
   })
 })

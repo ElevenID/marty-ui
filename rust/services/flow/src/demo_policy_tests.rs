@@ -74,6 +74,7 @@ fn policy(claim: &str) -> pp::PresentationPolicy {
         name: format!("Synthetic demo requires {claim}"),
         description: Some("Fixed fictional age-20 specimen".into()),
         status: pp::PolicyStatus::Active,
+        prerequisite_evidence_profile: None,
         display_metadata: pp::DisplayMetadata {
             title: "Marty age demonstration".into(),
             description: "Synthetic data only".into(),
@@ -91,6 +92,7 @@ fn policy(claim: &str) -> pp::PresentationPolicy {
         credential_requirements: vec![pp::CredentialRequirement {
             id: Uuid::from_u128(19),
             credential_template_id: "demo-age".into(),
+            expected_securing_profile: None,
             display_name: "Synthetic age".into(),
             description: None,
             required: true,
@@ -180,7 +182,10 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
             id: id.into(),
             organization_id: ORG.into(),
             status: "active".into(),
-            configuration_digest: pp::policy_configuration_digest(&self.policy).unwrap(),
+            policy_revision: pp::policy_revision(&self.policy).unwrap(),
+            holder_binding_required: self.policy.holder_binding.required,
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             credential_requirements: serde_json::from_value(
                 serde_json::to_value(&self.policy.credential_requirements).unwrap(),
             )
@@ -191,24 +196,16 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
         &self,
         input: &crate::PresentationEvaluationRequest,
     ) -> Result<crate::PresentationEvaluationResult, FlowProviderError> {
-        let mut context = input
+        let context = input
             .context
             .clone()
             .into_iter()
             .collect::<serde_json::Map<_, _>>();
-        let expected = context
-            .remove(crate::defined_verification::EXPECTED_POLICY_DIGEST)
-            .and_then(|v| v.as_str().map(str::to_owned));
         assert_eq!(
-            expected.as_deref(),
-            Some(
-                pp::policy_configuration_digest(&self.policy)
-                    .unwrap()
-                    .as_str()
-            )
+            input.expected_policy_revision,
+            pp::policy_revision(&self.policy).unwrap()
         );
         let request = pp::EvaluatePresentationRequest {
-            expected_configuration_digest: expected,
             vp_token: json!(input.presentation),
             trust_profile_id: None,
             nonce: Some(input.nonce.clone()),
@@ -218,11 +215,18 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
             trusted_internal_context: true,
         };
         let facts = self.verifier.verify(&self.policy, &request).await.unwrap();
-        let result = pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+        let mut result =
+            pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+        // HTTP projection carries tenant identity; the gRPC adapter validates it
+        // separately before constructing the internal FrozenPolicyIdentity.
         assert_eq!(
-            result["configuration_digest"],
-            json!(pp::policy_configuration_digest(&self.policy).unwrap())
+            result["policy_revision"]
+                .as_object_mut()
+                .unwrap()
+                .remove("organization_id"),
+            Some(json!(self.policy.organization_id))
         );
+
         Ok(serde_json::from_value(result).unwrap())
     }
 }
@@ -493,7 +497,9 @@ async fn public_submission_cannot_fall_back_to_missing_or_legacy_query_transport
         assert!(matches!(
             result,
             Err(crate::FlowVerificationSubmissionError::InvalidContext(
-                "public_verification_query_binding"
+                "presentation_request"
+                    | "presentation_request_query"
+                    | "public_presentation_request"
             ))
         ));
     }

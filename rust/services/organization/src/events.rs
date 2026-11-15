@@ -22,6 +22,7 @@ pub enum OrganizationEventKind {
     OrganizationUpdated,
     MemberInvited,
     MemberAdded,
+    MemberApproved,
     MemberRemoved,
     ApiKeyCreated,
     ApiKeyRevoked,
@@ -40,6 +41,7 @@ impl OrganizationEventKind {
             Self::OrganizationUpdated => "organization.updated.event",
             Self::MemberInvited => "member.invited.event",
             Self::MemberAdded => "member.added.event",
+            Self::MemberApproved => "member.approved.event",
             Self::MemberRemoved => "member.removed.event",
             Self::ApiKeyCreated => "api.key.created.event",
             Self::ApiKeyRevoked => "api.key.revoked.event",
@@ -57,6 +59,13 @@ impl OrganizationEventKind {
             Self::OrganizationUpdated => &["updated_fields"],
             Self::MemberInvited => &["member_id", "email", "invited_by"],
             Self::MemberAdded => &["member_id", "user_id", "roles"],
+            Self::MemberApproved => &[
+                "member_id",
+                "user_id",
+                "roles",
+                "approved_by",
+                "approved_by_type",
+            ],
             Self::MemberRemoved => &["member_id", "user_id"],
             Self::ApiKeyCreated => &["api_key_id", "name", "created_by"],
             Self::ApiKeyRevoked => &["api_key_id", "revoked_by"],
@@ -79,6 +88,8 @@ pub enum OrganizationEventError {
     InvalidTimestamp,
     #[error("ORGANIZATION.EVENT_INVALID: installer API-key actor is invalid")]
     InvalidInstallerActor,
+    #[error("ORGANIZATION.EVENT_INVALID: membership approval actor type is invalid")]
+    InvalidApprovalActor,
 }
 
 #[derive(Debug, Error)]
@@ -315,6 +326,26 @@ impl OrganizationEvent {
                 "info",
                 "Member added to organization".into(),
             ),
+            OrganizationEventKind::MemberApproved => {
+                let actor_type = match self.text("approved_by_type")? {
+                    "user" => "user",
+                    "api_key" => "api_key",
+                    _ => return Err(OrganizationEventError::InvalidApprovalActor),
+                };
+                let mut descriptor = AuditDescriptor::new(
+                    "team.member.approved",
+                    "team",
+                    "member",
+                    Some(self.text("member_id")?.into()),
+                    Some(self.text("user_id")?.into()),
+                    Some(self.text("approved_by")?.into()),
+                    actor_type,
+                    "info",
+                    "Pending membership approved".into(),
+                );
+                descriptor.changes = Some(json!({"status": {"from": "pending", "to": "active"}}));
+                descriptor
+            }
             OrganizationEventKind::MemberRemoved => AuditDescriptor::new(
                 "team.member.removed",
                 "team",

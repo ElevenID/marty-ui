@@ -8,7 +8,75 @@ use axum::{
 };
 use serde_json::json;
 
-use crate::transaction_reads::TransactionReadError;
+use crate::{
+    credential_management::CredentialManagementError, transaction_reads::TransactionReadError,
+};
+
+#[derive(Clone, Copy)]
+pub(crate) enum LifecycleSurface {
+    Transaction,
+    IssuedCredential,
+}
+
+pub(crate) fn lifecycle_error(
+    error: CredentialManagementError,
+    surface: LifecycleSurface,
+) -> Response {
+    let (status, detail) = match error {
+        CredentialManagementError::NotFound => (StatusCode::NOT_FOUND, "Credential not found"),
+        CredentialManagementError::ResourceNotFound => (
+            StatusCode::NOT_FOUND,
+            match surface {
+                LifecycleSurface::Transaction => "Resource not found",
+                LifecycleSurface::IssuedCredential => "Issued credential not found",
+            },
+        ),
+        CredentialManagementError::AlreadyRevoked => {
+            (StatusCode::BAD_REQUEST, "Credential already revoked")
+        }
+        CredentialManagementError::CannotSuspendRevoked => {
+            (StatusCode::BAD_REQUEST, "Cannot suspend revoked credential")
+        }
+        CredentialManagementError::CannotReinstateRevoked => (
+            StatusCode::BAD_REQUEST,
+            "Cannot reinstate revoked credential",
+        ),
+        CredentialManagementError::NotSuspended => (
+            StatusCode::BAD_REQUEST,
+            "Only suspended credentials can be reinstated",
+        ),
+        CredentialManagementError::ReasonTooLong => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential lifecycle reason exceeds 2000 characters",
+        ),
+        CredentialManagementError::CommentsTooLong => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Credential lifecycle comments exceed 4000 characters",
+        ),
+        CredentialManagementError::PublicationUnavailable(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Revocation service unavailable",
+        ),
+        CredentialManagementError::RepositoryUnavailable(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Credential repository is temporarily unavailable",
+        ),
+        CredentialManagementError::CanvasRetryUnavailable(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Canvas lifecycle retry could not be recorded",
+        ),
+        CredentialManagementError::CanvasTextEncoding => match surface {
+            LifecycleSurface::Transaction => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
+            }
+            LifecycleSurface::IssuedCredential => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Canvas lifecycle status text could not be encoded",
+            ),
+        },
+    };
+    (status, Json(json!({"detail": detail}))).into_response()
+}
 
 pub(crate) fn authentication_error(
     error: &TransactionReadError,
@@ -102,6 +170,84 @@ pub(crate) fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn lifecycle_surfaces_preserve_resource_hiding_and_encoding_envelopes() {
+        for (surface, error, status, content_type, body) in [
+            (
+                LifecycleSurface::Transaction,
+                CredentialManagementError::ResourceNotFound,
+                StatusCode::NOT_FOUND,
+                "application/json",
+                r#"{"detail":"Resource not found"}"#,
+            ),
+            (
+                LifecycleSurface::IssuedCredential,
+                CredentialManagementError::ResourceNotFound,
+                StatusCode::NOT_FOUND,
+                "application/json",
+                r#"{"detail":"Issued credential not found"}"#,
+            ),
+            (
+                LifecycleSurface::Transaction,
+                CredentialManagementError::CanvasTextEncoding,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "text/plain; charset=utf-8",
+                "Internal Server Error",
+            ),
+            (
+                LifecycleSurface::IssuedCredential,
+                CredentialManagementError::CanvasTextEncoding,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "application/json",
+                r#"{"detail":"Canvas lifecycle status text could not be encoded"}"#,
+            ),
+        ] {
+            let response = lifecycle_error(error, surface);
+            assert_eq!(response.status(), status);
+            assert_eq!(response.headers()["content-type"], content_type);
+            assert_eq!(
+                axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                body.as_bytes()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_failures_do_not_expose_repository_or_publication_diagnostics() {
+        for surface in [
+            LifecycleSurface::Transaction,
+            LifecycleSurface::IssuedCredential,
+        ] {
+            for (error, detail) in [
+                (
+                    CredentialManagementError::RepositoryUnavailable("private diagnostic".into()),
+                    "Credential repository is temporarily unavailable",
+                ),
+                (
+                    CredentialManagementError::PublicationUnavailable("private diagnostic".into()),
+                    "Revocation service unavailable",
+                ),
+                (
+                    CredentialManagementError::CanvasRetryUnavailable("private diagnostic".into()),
+                    "Canvas lifecycle retry could not be recorded",
+                ),
+            ] {
+                let response = lifecycle_error(error, surface);
+                assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+                let body = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                    json!({"detail": detail})
+                );
+            }
+        }
+    }
     #[test]
     fn shared_authentication_does_not_choose_tenant_or_resource_policy() {
         for (error, status, detail) in [

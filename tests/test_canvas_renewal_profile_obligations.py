@@ -243,7 +243,7 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     for profile, outer, child, entrypoint, gateway, _cases in EXPECTED:
         outer_body = _body(source, outer, test=True)
         assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in outer_body
-        assert "PublishedDatabase::start()" in outer_body
+        assert "PublishedDatabase::start_for_current_issuance()" in outer_body
         assert runner.count(f"'{outer}: test'") == 1
         if child:
             assert CONTAINER_CALLS[profile] in outer_body
@@ -410,7 +410,7 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
     assert '#[path = "didcomm_renewal_composed.rs"]\nmod renewal;' in composed
     outer = _body(source, expected["published-sql-private-ip-refusal"][0], test=True)
     assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in outer
-    assert "PublishedDatabase::start()" in outer
+    assert "PublishedDatabase::start_for_current_issuance()" in outer
     assert (
         "didcomm_composed_delivery::run_renewal_private_ip_refusal(&owned.url).await;"
         in outer

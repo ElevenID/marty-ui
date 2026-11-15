@@ -5,7 +5,7 @@
  * Follows the pattern: "Build" launches wizard, "New (Advanced)" opens raw form.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useId } from 'react';
 import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
@@ -37,6 +37,8 @@ function BuildButton({
   resourceName,
   buildPath,
   newPath,
+  buildDescription,
+  newDescription,
   onBuild,
   onNew,
   disabled = false,
@@ -46,6 +48,8 @@ function BuildButton({
   const navigate = useNavigate();
   const [anchorEl, setAnchorEl] = useState(null);
   const open = Boolean(anchorEl);
+  const menuId = useId();
+  const toggleId = useId();
 
   const handleMenuOpen = useCallback((event) => {
     setAnchorEl(event.currentTarget);
@@ -106,9 +110,11 @@ function BuildButton({
           {t('buildButton.build', { resourceName })}
         </Button>
         <Button
+          id={toggleId}
           size="small"
-          aria-controls={open ? 'build-menu' : undefined}
-          aria-expanded={open ? 'true' : undefined}
+          aria-label={t('buildButton.chooseCreationMethod', { resourceName })}
+          aria-controls={open ? menuId : undefined}
+          aria-expanded={open}
           aria-haspopup="menu"
           onClick={handleMenuOpen}
         >
@@ -116,7 +122,8 @@ function BuildButton({
         </Button>
       </ButtonGroup>
       <Menu
-        id="build-menu"
+        id={menuId}
+        slotProps={{ list: { 'aria-labelledby': toggleId } }}
         anchorEl={anchorEl}
         open={open}
         onClose={handleMenuClose}
@@ -135,7 +142,7 @@ function BuildButton({
           </ListItemIcon>
           <ListItemText 
             primary={t('buildButton.build', { resourceName })}
-            secondary={t('buildButton.guidedWizard')}
+            secondary={buildDescription || t('buildButton.guidedWizard')}
           />
         </MenuItem>
         <Divider />
@@ -145,7 +152,7 @@ function BuildButton({
           </ListItemIcon>
           <ListItemText 
             primary={t('buildButton.newAdvanced')}
-            secondary={t('buildButton.rawFormEditor')}
+            secondary={newDescription || t('buildButton.rawFormEditor')}
           />
         </MenuItem>
       </Menu>

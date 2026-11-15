@@ -30,11 +30,12 @@ import {
   Stack,
   Alert,
   Card,
-  CardContent,
   Collapse,
   Chip,
   CircularProgress,
   Radio,
+  RadioGroup,
+  FormControlLabel,
   Typography,
   useMediaQuery,
   useTheme,
@@ -58,7 +59,7 @@ import useWalletOpenLink from '../../../hooks/useWalletOpenLink';
 import {
   ANY_OID4VCI_WALLET_ID,
   buildClaimWalletOptions,
-  getWalletOfferDialogError,
+  getWalletOfferDialogFailure,
   resolveClaimWalletSelection,
   selectedClaimWalletIds,
   walletSupportsBrowserLaunch,
@@ -79,7 +80,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const resolvedOrganizationId = organizationId || offerData?.organization_id || null;
   const scopeKey = JSON.stringify([applicationId || null, resolvedOrganizationId, user?.user_id || null]);
   const [registry, setRegistry] = useState(null);
-  const registryWallets = registry?.scopeKey === scopeKey ? registry.items : EMPTY_ITEMS;
+  const [registryAttempt, setRegistryAttempt] = useState(0);
+  const currentRegistry = registry?.scopeKey === scopeKey ? registry : null;
+  const registryWallets = currentRegistry?.items || EMPTY_ITEMS;
+  const registryLoading = currentRegistry?.status === 'loading';
+  const registryFailed = currentRegistry?.failed === true;
   const [walletSelection, setWalletSelection] = useState(null);
 
   const [preloadedOffer, setPreloadedOffer] = useState(offerData);
@@ -125,17 +130,33 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       return;
     }
     let active = true;
+    // Retrying the catalogue must not reset a prepared offer or restart its
+    // status observer. Keep the completed first load and current scoped items.
+    setRegistry((current) => ({
+      scopeKey,
+      items: current?.scopeKey === scopeKey ? current.items : EMPTY_ITEMS,
+      settled: current?.scopeKey === scopeKey && current.settled,
+      failed: current?.scopeKey === scopeKey && current.failed,
+      status: 'loading',
+    }));
     listWallets(true, resolvedOrganizationId)
       .then((items) => {
-        if (active) setRegistry({ scopeKey, items: Array.isArray(items) ? items : [] });
+        if (!Array.isArray(items)) throw new Error('Invalid wallet catalogue response');
+        if (active) setRegistry({ scopeKey, items, settled: true, failed: false, status: 'ready' });
       })
       .catch(() => {
-        if (active) setRegistry({ scopeKey, items: [] });
+        if (active) setRegistry((current) => ({
+          scopeKey,
+          items: current?.scopeKey === scopeKey ? current.items : EMPTY_ITEMS,
+          settled: true,
+          failed: true,
+          status: 'error',
+        }));
       });
     return () => { active = false; };
-  }, [open, resolvedOrganizationId, scopeKey]);
+  }, [open, resolvedOrganizationId, scopeKey, registryAttempt]);
 
-  const canGenerateWalletOffer = registry?.scopeKey === scopeKey;
+  const canGenerateWalletOffer = currentRegistry?.settled === true;
   const offerKey = JSON.stringify([scopeKey, offerAttempt]);
   const currentOffer = offerRequest?.key === offerKey ? offerRequest : null;
   const liveOffer = applicationId ? (canGenerateWalletOffer ? currentOffer?.data || null : null) : preloadedOffer;
@@ -152,10 +173,14 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       setOfferRequest(null);
       return;
     }
-    if (!applicationId || !canGenerateWalletOffer) return;
-    let active = true;
-    setOfferRequest({ key: offerKey, status: 'loading' });
+    if (!applicationId || currentOffer?.status === 'ready' || currentOffer?.status === 'error') return;
     let request = pendingOffers.current.get(scopeKey);
+    // A reopened dialog must subscribe to its existing request even while
+    // the wallet catalogue reloads. Otherwise a fast response can be missed
+    // and another claim sent when discovery finishes.
+    if (!canGenerateWalletOffer && !request) return;
+    let active = true;
+    if (currentOffer?.status !== 'loading') setOfferRequest({ key: offerKey, status: 'loading' });
     if (!request) {
       request = generateOffer(applicationId).finally(() => {
         if (pendingOffers.current.get(scopeKey) === request) pendingOffers.current.delete(scopeKey);
@@ -165,10 +190,11 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     request.then((data) => {
       if (active) setOfferRequest({ key: offerKey, status: 'ready', data });
     }).catch((err) => {
-      if (active) setOfferRequest({ key: offerKey, status: 'error', error: getWalletOfferDialogError(err) });
+      const failure = getWalletOfferDialogFailure(err);
+      if (active) setOfferRequest({ key: offerKey, status: 'error', error: failure.message, requiresIssuerHelp: failure.requiresIssuerHelp });
     });
     return () => { active = false; };
-  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer]);
+  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer, currentOffer?.status]);
 
   // A wallet can finish on another device without closing this dialog. Observe
   // the authenticated application projection; browser return and polling never
@@ -334,7 +360,31 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       </DialogTitle>
 
       <DialogContent dividers>
-        <Stack spacing={1.25} sx={{ mb: 2 }} data-testid="wallet-selector" role="radiogroup" aria-label="Choose wallet">
+        {registryFailed && (
+          <Alert
+            severity="warning"
+            sx={{ mb: 2 }}
+            action={
+              <Button
+                color="inherit"
+                size="small"
+                onClick={() => setRegistryAttempt((attempt) => attempt + 1)}
+                disabled={registryLoading}
+              >
+                {registryLoading ? 'Retrying wallet list…' : 'Retry wallet list'}
+              </Button>
+            }
+          >
+            Wallet options could not be loaded. You can still use Any OID4VCI Wallet or retry the list.
+          </Alert>
+        )}
+        <RadioGroup
+          value={selectedWalletId}
+          onChange={(_event, walletId) => handleSelectWallet(walletId)}
+          sx={{ gap: 1.25, mb: 2 }}
+          data-testid="wallet-selector"
+          aria-label="Choose wallet"
+        >
           {walletOptions.map((option) => {
             const selected = option.id === selectedWalletId;
             const isCompatibleWallet = option.id === ANY_OID4VCI_WALLET_ID;
@@ -346,29 +396,22 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
               <Card
                 key={option.id}
                 variant="outlined"
-                role="radio"
-                tabIndex={0}
-                aria-checked={selected}
-                data-testid={`wallet-option-${option.id}`}
-                onClick={() => handleSelectWallet(option.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    handleSelectWallet(option.id);
-                  }
-                }}
                 sx={{
                   cursor: 'pointer',
                   borderColor: selected ? 'primary.main' : 'divider',
                   bgcolor: selected ? 'action.selected' : 'background.paper',
                 }}
               >
-                <CardContent sx={{ py: 1.25, '&:last-child': { pb: 1.25 } }}>
-                  <Stack direction="row" spacing={1.25} alignItems="flex-start">
-                    <Radio checked={selected} size="small" sx={{ p: 0.25, mt: 0.1 }} />
+                <FormControlLabel
+                  value={option.id}
+                  data-testid={`wallet-option-${option.id}`}
+                  control={<Radio size="small" sx={{ p: 0.25, mt: 0.1, mr: 1.25 }} />}
+                  disableTypography
+                  sx={{ m: 0, px: 2, py: 1.25, width: '100%', boxSizing: 'border-box', alignItems: 'flex-start' }}
+                  label={<Stack direction="row" spacing={1.25} sx={{ minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
                     <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-                        <Typography variant="body2" fontWeight={700}>{option.name}</Typography>
+                      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }} useFlexGap>
+                        <Typography variant="body2" sx={{ fontWeight: 700 }}>{option.name}</Typography>
                         <Chip
                           size="small"
                           icon={browserLaunch ? <OpenInNewIcon /> : <PhoneAndroidIcon />}
@@ -386,33 +429,35 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                       </Typography>
                     </Box>
                     {selected && <CheckCircleIcon color="primary" fontSize="small" />}
-                  </Stack>
-                </CardContent>
+                  </Stack>}
+                />
               </Card>
             );
           })}
-        </Stack>
+        </RadioGroup>
 
         {loadingInitialOffer && (
-          <Stack spacing={2} alignItems="center" sx={{ py: 4 }}>
+          <Stack spacing={2} sx={{ alignItems: 'center', py: 4 }}>
             <CircularProgress />
-            <Typography variant="body2" color="text.secondary" textAlign="center">
-              Preparing your wallet invite...
+            <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center' }}>
+              {canGenerateWalletOffer ? 'Preparing your wallet invite...' : 'Loading wallet options...'}
             </Typography>
           </Stack>
         )}
-        {/* ── Error state with retry ── */}
+        {/* Issuer-side preparation failures need investigation before a new attempt. */}
         {canGenerateWalletOffer && error && (
-          <Stack spacing={2} alignItems="center" sx={{ py: 2 }}>
+          <Stack spacing={2} sx={{ alignItems: 'center', py: 2 }}>
             <Alert severity="error" sx={{ width: '100%' }}>{error}</Alert>
-            <Button
-              variant="contained"
-              startIcon={<RefreshIcon />}
-              onClick={handleRegenerate}
-              disabled={refreshing}
-            >
-              {refreshing ? 'Retrying…' : 'Retry'}
-            </Button>
+            {!currentOffer?.requiresIssuerHelp && (
+              <Button
+                variant="contained"
+                startIcon={<RefreshIcon />}
+                onClick={handleRegenerate}
+                disabled={refreshing}
+              >
+                {refreshing ? 'Retrying…' : 'Retry'}
+              </Button>
+            )}
           </Stack>
         )}
 
@@ -461,7 +506,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 >
                   {selectedWalletId === ANY_OID4VCI_WALLET_ID ? 'Open Wallet' : `Open ${selectedWalletName}`}
                 </Button>
-                <Typography variant="caption" color="text.secondary" textAlign="center">
+                <Typography variant="caption" color="text.secondary" sx={{ textAlign: 'center' }}>
                   {selectedWalletId === ANY_OID4VCI_WALLET_ID
                     ? 'Your browser will hand this invite to a compatible wallet.'
                     : `${selectedWalletName} will open to receive this credential.`}
@@ -510,7 +555,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
                 </Button>
                 <Collapse in={emailTab}>
                   <Box sx={{ pt: 1, pb: 0.5 }}>
-                    <Stack direction="row" spacing={1} alignItems="center">
+                    <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                       <Typography
                         variant="body2"
                         sx={{
@@ -552,13 +597,13 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
 
             {/* ── Trust signals ── */}
             <Box sx={{ mt: 2, pt: 1.5, borderTop: 1, borderColor: 'divider' }}>
-              <Stack direction="row" spacing={0.5} alignItems="center" justifyContent="center" sx={{ mb: 0.5 }}>
+              <Stack direction="row" spacing={0.5} sx={{ alignItems: 'center', justifyContent: 'center', mb: 0.5 }}>
                 <LockIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 <Typography variant="caption" color="text.secondary">
                   Secure issuance via OpenID4VCI
                 </Typography>
               </Stack>
-              <Typography variant="caption" color="text.secondary" display="block" textAlign="center">
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', textAlign: 'center' }}>
                 The issuer signs the credential before it is delivered to your wallet.
               </Typography>
             </Box>

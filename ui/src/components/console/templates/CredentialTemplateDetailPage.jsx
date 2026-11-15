@@ -166,8 +166,8 @@ function DestinationCard({
   return (
     <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }}>
       <Stack spacing={1.5}>
-        <Stack direction="row" spacing={1.5} alignItems="flex-start" justifyContent="space-between">
-          <Stack direction="row" spacing={1.25} alignItems="center">
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: 'flex-start', justifyContent: 'space-between' }}>
+          <Stack direction="row" spacing={1.25} sx={{ alignItems: 'center' }}>
             {destinationIcon(destination)}
             <Box>
               <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
@@ -295,7 +295,7 @@ function DestinationCard({
               </> : <Typography variant="body2">Delivery observations are unavailable.</Typography>}
             </Stack>
             <Box>
-              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>
                 {!orgCanvasDestination && canCreateDestination ? (
                   <Button
                     size="small"
@@ -472,7 +472,7 @@ function CredentialTemplateDetail({ templateId, organizationId, canViewDestinati
       {!template ? null : activeTab === 'wallet' ? <TemplateWalletCompatibility template={template} organizationId={organizationId} /> : activeTab === 'overview' ? (
         <Paper variant="outlined" sx={{ p: 3, borderRadius: 1 }}>
           <Stack spacing={2}>
-            <Stack direction="row" spacing={1.5} alignItems="center">
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: 'center' }}>
               <BadgeIcon color="primary" />
               <Typography variant="h6" sx={{ fontWeight: 800 }}>
                 Template overview

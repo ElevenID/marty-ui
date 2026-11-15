@@ -36,9 +36,9 @@ import { getApplicantStats } from '../../../services/applicantApi';
 function ApplicantDashboard() {
   const { t } = useTranslation('applicant');
   const { user } = useAuth();
-  const { data: stats = { activeCredentials: 0, pendingApplications: 0, expiringSoon: 0 }, loading } = useAsyncData(
+  const { data: stats, loading, error, reload } = useAsyncData(
     getApplicantStats,
-    []
+    [user?.user_id]
   );
 
   if (loading) {
@@ -57,18 +57,32 @@ function ApplicantDashboard() {
       <Typography variant="h4" gutterBottom>
         {user?.name ? t('dashboard.titleWithName', { name: user.name }) : t('dashboard.title')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" paragraph>
+      <Typography variant="body1" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('dashboard.description')}
       </Typography>
 
+      {(error || !stats) && (
+        <Alert
+          severity="error"
+          sx={{ mb: 3 }}
+          action={(
+            <Button color="inherit" onClick={reload}>
+              {t('actions.retry', { ns: 'common' })}
+            </Button>
+          )}
+        >
+          {t('dashboard.loadError', 'Your credential summary could not be loaded. Please try again.')}
+        </Alert>
+      )}
+
       {/* Pending Applications Alert */}
-      {stats.pendingApplications > 0 && (
+      {!error && stats?.pendingApplications > 0 && (
         <Alert severity="info" sx={{ mb: 3 }}>
           <AlertTitle>{t('dashboard.pendingAlert.title')}</AlertTitle>
           {t('dashboard.pendingAlert.message', { count: stats.pendingApplications })}
           <Button
             component={Link}
-            to="/console/applicant/applications"
+            to="/console/applicant/identity"
             size="small"
             sx={{ ml: 2 }}
           >
@@ -78,75 +92,77 @@ function ApplicantDashboard() {
       )}
 
       {/* Stats Cards */}
-      <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} sm={4}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <BadgeIcon color="primary" />
-                <Typography variant="h4">{stats.activeCredentials}</Typography>
-              </Box>
-              <Typography color="text.secondary">{t('dashboard.stats.activeCredentials')}</Typography>
-            </CardContent>
-            <CardActions>
-              <Button
-                component={Link}
-                to="/console/applicant/credentials"
-                size="small"
-                endIcon={<ArrowForwardIcon />}
-              >
-                {t('dashboard.stats.viewAll')}
-              </Button>
-            </CardActions>
-          </Card>
-        </Grid>
+      {!error && stats && (
+        <Grid container spacing={3} sx={{ mb: 4 }}>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <BadgeIcon color="primary" />
+                  <Typography variant="h4">{stats.activeCredentials}</Typography>
+                </Box>
+                <Typography color="text.secondary">{t('dashboard.stats.activeCredentials')}</Typography>
+              </CardContent>
+              <CardActions>
+                <Button
+                  component={Link}
+                  to="/console/applicant/identity"
+                  size="small"
+                  endIcon={<ArrowForwardIcon />}
+                >
+                  {t('dashboard.stats.viewAll')}
+                </Button>
+              </CardActions>
+            </Card>
+          </Grid>
 
-        <Grid item xs={12} sm={4}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <PendingIcon color="warning" />
-                <Typography variant="h4">{stats.pendingApplications}</Typography>
-              </Box>
-              <Typography color="text.secondary">{t('dashboard.stats.pendingApplications')}</Typography>
-            </CardContent>
-            <CardActions>
-              <Button
-                component={Link}
-                to="/console/applicant/applications"
-                size="small"
-                endIcon={<ArrowForwardIcon />}
-              >
-                {t('dashboard.stats.viewAll')}
-              </Button>
-            </CardActions>
-          </Card>
-        </Grid>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <PendingIcon color="warning" />
+                  <Typography variant="h4">{stats.pendingApplications}</Typography>
+                </Box>
+                <Typography color="text.secondary">{t('dashboard.stats.pendingApplications')}</Typography>
+              </CardContent>
+              <CardActions>
+                <Button
+                  component={Link}
+                  to="/console/applicant/identity"
+                  size="small"
+                  endIcon={<ArrowForwardIcon />}
+                >
+                  {t('dashboard.stats.viewAll')}
+                </Button>
+              </CardActions>
+            </Card>
+          </Grid>
 
-        <Grid item xs={12} sm={4}>
-          <Card>
-            <CardContent>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <CheckCircleIcon color="success" />
-                <Typography variant="h4">{stats.expiringSoon}</Typography>
-              </Box>
-              <Typography color="text.secondary">{t('dashboard.stats.expiringSoon')}</Typography>
-            </CardContent>
-          </Card>
+          <Grid size={{ xs: 12, sm: 4 }}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <CheckCircleIcon color="success" />
+                  <Typography variant="h4">{stats.expiringSoon}</Typography>
+                </Box>
+                <Typography color="text.secondary">{t('dashboard.stats.expiringSoon')}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
         </Grid>
-      </Grid>
+      )}
 
       {/* Quick Actions */}
       <Typography variant="h6" gutterBottom>
         {t('dashboard.quickActions.title')}
       </Typography>
       <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
+        <Grid size={{ xs: 12, md: 6 }}>
           <Paper sx={{ p: 2 }}>
             <List>
               <ListItem
                 component={Link}
-                to="/console/applicant/credentials"
+                to="/console/applicant/catalog"
                 sx={{ color: 'inherit', textDecoration: 'none' }}
               >
                 <ListItemIcon>
@@ -159,7 +175,7 @@ function ApplicantDashboard() {
               </ListItem>
               <ListItem
                 component={Link}
-                to="/console/applicant/credentials"
+                to="/console/applicant/identity"
                 sx={{ color: 'inherit', textDecoration: 'none' }}
               >
                 <ListItemIcon>

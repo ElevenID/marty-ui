@@ -70,62 +70,24 @@ impl Config {
         }
     }
     pub fn slug(&self) -> String {
-        let configured = self.get("MARTY_ORG_SLUG").trim().to_lowercase();
-        let source = if configured.is_empty() {
-            "marty"
-        } else {
-            &configured
-        };
-        let safe: String = source
-            .chars()
-            .filter(|ch| ch.is_alphanumeric() || "._-".contains(*ch))
-            .collect();
-        if safe.is_empty() {
-            "marty".into()
-        } else {
-            safe
-        }
+        marty_service_runtime::config::canonical_slug(self.get("MARTY_ORG_SLUG"), "marty")
     }
     pub fn domain(&self) -> String {
-        let configured = self.get("PUBLIC_DOMAIN").trim();
-        if !configured.is_empty() {
-            return configured
-                .split_once("://")
-                .map(|(_, tail)| tail.split('/').next().unwrap_or(tail))
-                .unwrap_or(configured)
-                .trim_matches('/')
-                .into();
-        }
-        for name in ["MARTY_ISSUER_BASE_URL", "ISSUER_BASE_URL", "PUBLIC_API_URL"] {
-            let candidate = self.get(name).trim();
-            if candidate.is_empty() {
-                continue;
-            }
-            let with_scheme = if candidate.contains("://") {
-                candidate.to_string()
-            } else {
-                format!("https://{candidate}")
-            };
-            if let Ok(url) = reqwest::Url::parse(&with_scheme) {
-                if let Some(host) = url.host_str() {
-                    return url
-                        .port()
-                        .map(|port| format!("{host}:{port}"))
-                        .unwrap_or_else(|| host.into());
-                }
-            }
-        }
-        "beta.elevenidllc.com".into()
+        marty_service_runtime::config::configured_authority(
+            Some(self.get("PUBLIC_DOMAIN")),
+            &[
+                self.get("MARTY_ISSUER_BASE_URL"),
+                self.get("ISSUER_BASE_URL"),
+                self.get("PUBLIC_API_URL"),
+            ],
+            "beta.elevenidllc.com",
+        )
     }
     pub fn did(&self) -> String {
-        let configured = self.get("MARTY_ISSUER_DID").trim();
-        if !configured.is_empty() {
-            return configured.into();
-        }
-        format!(
-            "did:web:{}:orgs:{}",
-            self.domain().replace(':', "%3A").replace('/', ":"),
-            self.slug()
+        marty_service_runtime::config::configured_did_web(
+            Some(self.get("MARTY_ISSUER_DID")),
+            &self.domain(),
+            &["orgs", &self.slug()],
         )
     }
     pub fn url(&self) -> String {

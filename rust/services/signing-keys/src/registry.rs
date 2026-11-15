@@ -1859,6 +1859,20 @@ pub fn resolve(request: ResolveRequest) -> Result<ResolveResponse, RegistryError
             request.algorithm.as_deref(),
         )
     });
+    let service = service.filter(|service| {
+        request.credential_format.as_deref().is_none_or(|format| {
+            crate::domain::explicit_format_allowed(service.get("credential_formats"), format)
+                && request.algorithm.as_deref().is_none_or(|algorithm| {
+                    crate::domain::explicit_algorithm_allowed(format, algorithm)
+                })
+                && (crate::profiles::protocol_wire_format(format).as_deref()
+                    != Some("application/vc+jwt")
+                    || request
+                        .key_purpose
+                        .as_deref()
+                        .is_none_or(|purpose| purpose == "vc_jwt_issuer"))
+        })
+    });
     let key_reference = service.as_ref().and_then(|service| {
         resolve_key_reference(
             &request.registry,
@@ -2453,6 +2467,10 @@ fn formats_for_purposes(purposes: &[String]) -> Vec<String> {
     for purpose in purposes {
         if let Some(definition) = definitions.iter().find(|value| value.id == purpose) {
             for format in definition.credential_formats {
+                // Historical services do not acquire a new capability by default.
+                if *format == "application/vc+jwt" {
+                    continue;
+                }
                 if !formats.iter().any(|existing| existing == format) {
                     formats.push((*format).to_string());
                 }
@@ -3481,5 +3499,80 @@ mod tests {
             24
         );
         let _: () = connection.del(&key).await.unwrap();
+    }
+    #[test]
+    fn explicit_jwt_vc_capability_is_never_inferred_and_public_resolution_requires_it() {
+        let baseline = json!({"id":"external-profile", "service_type":"custom-transit-compatible", "endpoint":"https://kms.example", "auth_mode":"token", "auth_reference":"synthetic-public-test-token", "key_reference":"issuer-key", "key_purposes":["vc_jwt_issuer"], "algorithms":["ES256"]});
+        let inferred = normalize_service(NormalizeServiceRequest {
+            service: baseline.clone(),
+        })
+        .unwrap()
+        .service
+        .unwrap();
+        assert!(!inferred["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("application/vc+jwt")));
+        assert!(inferred["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("jwt_vc_json")));
+        let managed = managed_openbao_service("org-a", "http://openbao:8200", &[], true);
+        assert!(!managed["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("application/vc+jwt")));
+        for formats in [
+            None,
+            Some(json!([])),
+            Some(json!(["jwt_vc_json"])),
+            Some(json!(["application/vc+jwt"])),
+        ] {
+            let allowed = formats
+                .as_ref()
+                .is_some_and(|v| v == &json!(["application/vc+jwt"]));
+            let mut service = baseline.clone();
+            if let Some(formats) = formats {
+                service["credential_formats"] = formats;
+            }
+            if allowed {
+                service = normalize_service(NormalizeServiceRequest { service })
+                    .unwrap()
+                    .service
+                    .unwrap();
+                assert_eq!(service["credential_formats"], json!(["application/vc+jwt"]));
+            }
+            for (explicit_service, requested_format) in
+                [false, true].into_iter().flat_map(|explicit| {
+                    [
+                        "application/vc+jwt",
+                        "VC_JWT_DIRECT_V1",
+                        " vc-jwt-direct-v1 ",
+                    ]
+                    .map(|format| (explicit, format))
+                })
+            {
+                let resolved = resolve(ResolveRequest {
+                    registry: json!({"services":[service],"default_service_id":"external-profile","key_reference_purposes":{"external-profile":{"issuer-key":["vc_jwt_issuer"]}}}),
+                    service: explicit_service.then(|| service.clone()), keys: vec![],
+                    credential_format: Some(requested_format.into()), key_purpose: Some("vc_jwt_issuer".into()), algorithm: Some("ES256".into()),
+                }).unwrap();
+                assert_eq!(resolved.service.is_some(), allowed);
+                if allowed {
+                    // The provider's broader capability cannot make an
+                    // unsupported direct-profile algorithm usable.
+                    let mut unsupported = service.clone();
+                    unsupported["algorithms"] = json!(["ES512"]);
+                    let resolved = resolve(ResolveRequest {
+                        registry: json!({"services":[unsupported],"default_service_id":"external-profile"}),
+                        service: explicit_service.then(|| unsupported.clone()), keys: vec![],
+                        credential_format: Some(requested_format.into()),
+                        key_purpose: Some("vc_jwt_issuer".into()), algorithm: Some("ES512".into()),
+                    }).unwrap();
+                    assert!(resolved.service.is_none());
+                    assert!(resolved.key_reference.is_none());
+                }
+            }
+        }
     }
 }

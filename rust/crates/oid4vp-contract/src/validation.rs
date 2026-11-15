@@ -75,6 +75,11 @@ impl Oid4vpEvaluationTransportV1 {
     /// Check transport integrity and work bounds only. This does not verify a
     /// VP, credential, descriptor, issuer, holder, or replay decision.
     pub fn validate_transport(&self) -> Result<(), Oid4vpContractError> {
+        if let Some(authority) = &self.credential_authority {
+            authority
+                .validate()
+                .map_err(|_| Oid4vpContractError::InvalidField("credential_authority"))?;
+        }
         validate_serialized_size(
             &self.query_document,
             MAX_QUERY_DOCUMENT_BYTES,
@@ -124,6 +129,21 @@ impl Oid4vpEvaluationTransportV1 {
             return Err(Oid4vpContractError::SizeLimit("verifier_binding"));
         }
         Ok(())
+    }
+}
+
+impl FrozenPolicyIdentity {
+    /// Validate the bounded reference shape only. The caller must still bind
+    /// the reference to its tenant and obtain it from the policy authority.
+    pub fn validate(&self) -> Result<(), Oid4vpContractError> {
+        require_identifier(&self.id, "policy.id")?;
+        if self.id.chars().any(char::is_control) {
+            return Err(Oid4vpContractError::InvalidField("policy.id"));
+        }
+        if self.version == 0 {
+            return Err(Oid4vpContractError::InvalidField("policy.version"));
+        }
+        validate_digest(&self.content_digest, "policy.content_digest")
     }
 }
 
@@ -1175,6 +1195,26 @@ fn validate_profile(profile: &crate::EvidenceProfileReference) -> Result<(), Oid
 fn validate_requirement(
     requirement: &FrozenCredentialRequirement,
 ) -> Result<(), Oid4vpContractError> {
+    if let Some(profile) = requirement.expected_securing_profile {
+        if requirement.accepted_formats != [profile.credential_format()]
+            || !requirement.required
+            || requirement.min_credentials != 1
+            || requirement.max_credentials != 1
+            || !requirement.required_claims.is_empty()
+            || !requirement.allowed_claims.is_empty()
+            || !requirement.retained_claims.is_empty()
+            || !requirement.dcql_claim_paths.is_empty()
+            || !requirement.format_options.is_empty()
+        {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+    } else if requirement
+        .accepted_formats
+        .iter()
+        .any(|format| format == "application/vc+jwt")
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
     require_identifier(&requirement.id, "query.requirements.id")?;
     validate_string_list(
         &requirement.accepted_formats,
@@ -1288,6 +1328,23 @@ fn validate_dcql_document(
     document: &Value,
     requirements: &[FrozenCredentialRequirement],
 ) -> Result<BTreeSet<String>, Oid4vpContractError> {
+    if let Some(query) = crate::jwt_vc_profile::profiled_jwt_vc_query(document)? {
+        let requirement = requirement_by_id(requirements, &query.id)?;
+        if requirements.len() != 1
+            || requirement.expected_securing_profile != Some(query.binding.securing_profile())
+            || requirement.accepted_formats != [query.binding.credential_format()]
+            || requirement.accepted_type_sets != query.type_sets
+        {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+        return Ok(BTreeSet::from([query.id]));
+    }
+    if requirements
+        .iter()
+        .any(|requirement| requirement.expected_securing_profile.is_some())
+    {
+        return Err(Oid4vpContractError::InvalidQueryDocument);
+    }
     let object = exact_object(document, &["credentials"], &[])?;
     let entries = object["credentials"]
         .as_array()
@@ -1339,10 +1396,9 @@ fn validate_pe_document(
     document: &Value,
     requirements: &[FrozenCredentialRequirement],
 ) -> Result<BTreeSet<String>, Oid4vpContractError> {
-    if requirements
-        .iter()
-        .any(|requirement| !requirement.dcql_claim_paths.is_empty())
-    {
+    if requirements.iter().any(|requirement| {
+        !requirement.dcql_claim_paths.is_empty() || requirement.expected_securing_profile.is_some()
+    }) {
         return Err(Oid4vpContractError::InvalidQueryDocument);
     }
     let object = exact_object(document, &["format", "id", "input_descriptors"], &[])?;
@@ -2445,6 +2501,49 @@ fn contains_sensitive_string(value: &Value, sensitive_patterns: &[String]) -> bo
         }),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
+}
+
+/// Shared bounded privacy policy for the additive managed projection. This is
+/// correspondence validation, not evidence authentication. V1 callers retain
+/// their existing projection-specific fragment scan unchanged.
+pub(crate) fn validate_managed_projection_privacy(
+    value: &Value,
+    raw_tokens: &[&str],
+) -> Result<(), Oid4vpContractError> {
+    // The issuer JWS, each disclosure and the key-binding JWS remain original
+    // wallet material even when separated from the complete SD-JWT. Do not
+    // decode their payloads into scalar patterns: selected claim values are an
+    // intentional part of this internal projection. V1 policy is unchanged.
+    let mut original_parts = BTreeSet::new();
+    let mut original_bytes = 0usize;
+    for token in raw_tokens {
+        original_bytes = original_bytes
+            .checked_add(token.len())
+            .filter(|bytes| *bytes <= MAX_TRANSPORT_RAW_TOKEN_BYTES * 2)
+            .ok_or(Oid4vpContractError::PrivacyViolation)?;
+        original_parts.insert(*token);
+        for part in token.split('~').filter(|part| !part.is_empty()) {
+            original_parts.insert(part);
+            if original_parts.len() > MAX_PRIVACY_FRAGMENT_PARTS {
+                return Err(Oid4vpContractError::PrivacyViolation);
+            }
+        }
+    }
+    let original_parts = original_parts.into_iter().collect::<Vec<_>>();
+    let patterns = sensitive_token_patterns(&original_parts);
+    if contains_sensitive_string(value, &patterns) {
+        return Err(Oid4vpContractError::PrivacyViolation);
+    }
+    let mut values = String::new();
+    let mut keys = String::new();
+    let mut parts = 0usize;
+    if !collect_claim_fragments(value, &mut values, &mut keys, &mut parts)
+        || normalized_value_is_forbidden(&values, &patterns, false, MAX_PRIVACY_FRAGMENT_BYTES)
+        || normalized_value_is_forbidden(&keys, &patterns, true, MAX_PRIVACY_FRAGMENT_BYTES)
+    {
+        return Err(Oid4vpContractError::PrivacyViolation);
+    }
+    Ok(())
 }
 
 fn fragmented_claim_material_is_forbidden(

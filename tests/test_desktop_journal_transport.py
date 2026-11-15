@@ -30,6 +30,74 @@ def readonly_files():
 
 
 class DesktopTransportTests(unittest.TestCase):
+    def test_bootstrap_intents_are_run_scoped_and_legacy_same_run_refuses(self):
+        other = "22222222-2222-4222-8222-222222222222"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / "desktop-journal-bootstrap-intent.private.json"
+            legacy.write_text(json.dumps({"volumeName": "marty-d02-journal-" + RUN,
+                "runId": RUN, "scope": "NEW_METADATA_VOLUME_ONLY",
+                "windowsParentDurabilityClaimed": False}), encoding="utf-8")
+
+            def fake_store(run):
+                store = object.__new__(transport.DesktopPrivateJournalTransport)
+                store.private, store.run_id = root, run
+                store.spec = {"volumeName": "marty-d02-journal-" + run, "volumeProof": None}
+                store._engine = mock.Mock()
+                def command(args):
+                    if args[:2] == ["volume", "ls"]:
+                        return SimpleNamespace(stdout=b"")
+                    if args[:2] == ["volume", "create"]:
+                        return SimpleNamespace(stdout=(store.spec["volumeName"] + "\n").encode())
+                    raise AssertionError("unexpected Docker verb")
+                store._command = mock.Mock(side_effect=command)
+                store._volume = mock.Mock(return_value={"Name": store.spec["volumeName"]})
+                store._helper = mock.Mock(return_value=SimpleNamespace(returncode=0,
+                    stdout=json.dumps({"uid": 1000, "mode": 448, "synced": True}).encode()))
+                return store
+
+            distinct = fake_store(other)
+            distinct.prepare_volume()
+            self.assertTrue((root / ("desktop-journal-bootstrap-intent-" + other + ".private.json")).is_file())
+            self.assertEqual(distinct._helper.call_count, 1)
+            same = fake_store(RUN)
+            with self.assertRaisesRegex(ValueError, "DESKTOP_JOURNAL_LEGACY_RUN_ALREADY_CONSUMED"):
+                same.prepare_volume()
+            same._command.assert_not_called()
+            with self.assertRaisesRegex(ValueError, "DESKTOP_JOURNAL_RUN_INTENT_ALREADY_CONSUMED"):
+                fake_store(other).prepare_volume()
+            legacy.write_text('{"runId":"malformed"}', encoding="utf-8")
+            malformed = fake_store("33333333-3333-4333-8333-333333333333")
+            with self.assertRaisesRegex(ValueError, "DESKTOP_JOURNAL_LEGACY_INTENT_CHANGED"):
+                malformed.prepare_volume()
+            malformed._command.assert_not_called()
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def fresh_store(run):
+                store = object.__new__(transport.DesktopPrivateJournalTransport)
+                store.private, store.run_id = root, run
+                store.spec = {"volumeName": "marty-d02-journal-" + run, "volumeProof": None}
+                store._engine = mock.Mock()
+                store._command = mock.Mock(side_effect=lambda args: SimpleNamespace(stdout=(
+                    b"" if args[:2] == ["volume", "ls"] else
+                    (store.spec["volumeName"] + "\n").encode() if args[:2] == ["volume", "create"] else
+                    (_ for _ in ()).throw(AssertionError("unexpected Docker verb")))))
+                store._volume = mock.Mock(return_value={"Name": store.spec["volumeName"]})
+                store._helper = mock.Mock(return_value=SimpleNamespace(returncode=0,
+                    stdout=json.dumps({"uid": 1000, "mode": 448, "synced": True}).encode()))
+                return store
+            first_run = RUN
+            second_run = "22222222-2222-4222-8222-222222222222"
+            fresh_store(first_run).prepare_volume()
+            first_path = root / ("desktop-journal-bootstrap-intent-" + first_run + ".private.json")
+            first_bytes = first_path.read_bytes()
+            fresh_store(second_run).prepare_volume()
+            self.assertEqual(first_path.read_bytes(), first_bytes)
+            self.assertTrue((root / ("desktop-journal-bootstrap-intent-" + second_run + ".private.json")).is_file())
+            with self.assertRaisesRegex(ValueError, "DESKTOP_JOURNAL_RUN_INTENT_ALREADY_CONSUMED"):
+                fresh_store(first_run).prepare_volume()
+
     def test_exact_readonly_host_source_accepts_daemon_and_proxy_spelling(self):
         source = "C:/Users/maree/.codex/private/owned/worker.py"
         transport.exact_readonly_host_source(source, source)

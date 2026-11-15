@@ -190,7 +190,9 @@ fn lifecycle_is_lossless_and_invalid_transitions_fail_closed() {
 
 #[test]
 fn configuration_digest_binds_rule_values_and_all_policy_authorities() {
-    let original = marty_presentation_policy::built_in_presentation_policies().remove(1);
+    let original =
+        marty_presentation_policy::built_in_presentation_policies(uuid::Uuid::from_u128(1))
+            .remove(1);
     let digest = marty_presentation_policy::policy_configuration_digest(&original).unwrap();
     assert_eq!(digest.len(), 71);
     for variant in 0..7 {

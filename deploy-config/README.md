@@ -2,10 +2,29 @@
 
 This directory separates deployment concerns by target environment to reduce accidental cross-domain or cross-stack configuration drift.
 
+## Choose an installation entry point
+
+| Target | Entry point | Configuration inputs |
+| --- | --- | --- |
+| Signed Linux installer candidate | [Linux tester quickstart](../docs/linux-installer-tester.md) | Private hosting JSON and typed application-settings JSON; managed OpenBao is the default |
+| Existing AWS/K3s development node | [Kubernetes development milestone](../docs/kubernetes-first-milestone.md) and [installation configuration](../docs/kubernetes-installation-configuration.md) | Authenticated release values, generated registry-reference values, and one nonsecret installation values file |
+| Existing manual Compose deployment | [Self-host production configuration](compose/selfhost-production/README.md) | `.env.selfhost.production.example` copied outside version control, plus external secret files |
+| Existing legacy Kubernetes manifests | `scripts/deploy-kubernetes.sh` | The selected reviewed manifest tree; its historical default is `k8s/oracle` |
+
+The AWS/K3s path uses the Helm chart in `deploy/helm/marty`. It does not use the
+legacy manifest script. The sample production hostnames below describe the
+maintained ElevenID environments; customer installations select their own origin.
+
+See the [complete installation-path map](../docs/installation-paths.md) for
+hosting variants, Windows recovery, development tooling and verification limits.
+The legacy script's `--help` is available without cluster access. Its explicit
+flags override the selected environment file; `status` requires only kubectl
+access. The reviewed legacy manifests must already match the namespace and
+image-pull Secret selected by those flags. Failed required image updates and
+rollouts return nonzero and must be investigated before retrying.
+
 ## Structure
 
-- env/selfhost-production
-- env/tunnel-beta
 - compose/selfhost-production
 - compose/tunnel-beta
 - catalog/services.json
@@ -39,7 +58,8 @@ This directory separates deployment concerns by target environment to reduce acc
 - Selfhost production make targets: selfhost-prod-up, selfhost-prod-check, selfhost-prod-logs
 - Selfhost production compose: docker-compose.selfhost.prod.yml
 - Tunnel overlay compose: docker-compose.profile.tunnel.yml
-- Kubernetes deployment script: scripts/deploy-kubernetes.sh
+- Current Kubernetes development chart: deploy/helm/marty
+- Legacy Kubernetes manifest script: scripts/deploy-kubernetes.sh
 - Registry image build/push script: scripts/build-push-registry.sh
 
 ## Deployment catalog

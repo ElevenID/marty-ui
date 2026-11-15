@@ -3,7 +3,7 @@ use marty_revocation_profile::{
     CredentialFormat, InMemoryStatusRepository, NewProfile, PgProfileRepository,
     PgRevocationOperationRepository, ProfileRepository, RedisStatusRepository, RevocationBatch,
     RevocationOperationRepository, RevocationProfile, RevocationProfileService, ServiceError,
-    StatusListFormat, StatusRepository, TriggerEntityType,
+    StatusListFormat, StatusRepository, TriggerEntityType, DEFAULT_ORGANIZATION_ID,
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -18,9 +18,15 @@ async fn postgres_allocation_formats_keep_their_released_names() {
         .await
         .unwrap();
     let organization_id = format!("org-format-{}", Uuid::new_v4());
-    migrate_and_seed(&pool, &organization_id, "https://status.example.test")
-        .await
-        .unwrap();
+    // The shared installation has one bootstrap owner; this test's profile
+    // retains its independent tenant and allocation scope below.
+    migrate_and_seed(
+        &pool,
+        DEFAULT_ORGANIZATION_ID,
+        "https://status.example.test",
+    )
+    .await
+    .unwrap();
     let repository = PgProfileRepository::from_pool(pool.clone());
     let profile = RevocationProfile::new(organization_id.clone(), "formats".into(), None);
     repository.save(profile.clone()).await.unwrap();
@@ -179,9 +185,13 @@ async fn postgres_status_allocations_are_idempotent_race_safe_and_restart_safe()
     let database_url = std::env::var("MARTY_TEST_POSTGRES_URL").expect("test PostgreSQL URL");
     let pool = PgPool::connect(&database_url).await.unwrap();
     let organization_id = format!("org-allocation-{}", Uuid::new_v4());
-    migrate_and_seed(&pool, &organization_id, "https://status.example.test")
-        .await
-        .unwrap();
+    migrate_and_seed(
+        &pool,
+        DEFAULT_ORGANIZATION_ID,
+        "https://status.example.test",
+    )
+    .await
+    .unwrap();
     let repository = PgProfileRepository::from_pool(pool.clone());
     let profile = RevocationProfile::new(
         organization_id.clone(),

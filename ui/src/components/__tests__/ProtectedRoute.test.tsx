@@ -46,8 +46,19 @@ describe('ProtectedRoute', () => {
         </MemoryRouter>
       )
 
+      const loadingState = screen.getByRole('progressbar').parentElement
       expect(screen.getByText('Checking authentication...')).toBeInTheDocument()
       expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()
+      expect(loadingState).toHaveStyle({
+        display: 'flex',
+        'flex-direction': 'column',
+        'align-items': 'center',
+        'justify-content': 'center',
+        'min-height': `${window.innerHeight / 2}px`,
+      })
+      for (const attribute of ['display', 'flexDirection', 'alignItems', 'justifyContent', 'minHeight']) {
+        expect(loadingState).not.toHaveAttribute(attribute)
+      }
     })
   })
 

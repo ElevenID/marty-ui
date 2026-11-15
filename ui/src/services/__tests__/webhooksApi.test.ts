@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
@@ -14,6 +14,30 @@ import {
 } from '../webhooksApi'
 
 describe('webhooksApi', () => {
+  it('authorizes the event catalog against the selected organization rather than the session default', async () => {
+    const organizations: Array<string | null> = []
+    server.use(http.get('http://localhost:8000/v1/webhooks/event-types', ({ request }) => {
+      const organizationId = new URL(request.url).searchParams.get('organization_id')
+      organizations.push(organizationId)
+      return organizationId === 'org-owner'
+        ? HttpResponse.json({ event_types: ['application.approved'] })
+        : HttpResponse.json({ error: 'forbidden', error_description: 'Missing required permission: webhook:view' }, { status: 403 })
+    }))
+
+    expect((await getAvailableEventTypes(' org-owner ')).categories).toEqual([
+      { name: 'Application', events: [{ type: 'application.approved', description: 'application approved' }] },
+    ])
+    await expect(getAvailableEventTypes('org-applicant')).rejects.toMatchObject({ status: 403 })
+    expect(organizations).toEqual(['org-owner', 'org-applicant'])
+  })
+
+  it.each([undefined, '', ' null '])('requires an organization before loading the event catalog (%j)', async organizationId => {
+    const request = vi.fn(() => HttpResponse.json({ event_types: [] }))
+    server.use(http.get('http://localhost:8000/v1/webhooks/event-types', request))
+    await expect(getAvailableEventTypes(organizationId)).rejects.toMatchObject({ code: 'ORG_REQUIRED' })
+    expect(request).not.toHaveBeenCalled()
+  })
+
   it('creates webhooks with org context and an idempotency key', async () => {
     let requestBody: Record<string, unknown> | undefined
     let idempotencyKey: string | null = null
@@ -85,7 +109,7 @@ describe('webhooksApi', () => {
       correlation_id: '11111111-1111-4111-8111-111111111111',
     }])
     expect((await regenerateWebhookSecret('org-123', 'webhook-1')).secret).toBe('rotated')
-    expect((await getAvailableEventTypes()).categories).toEqual([
+    expect((await getAvailableEventTypes('org-123')).categories).toEqual([
       { name: 'Application', events: [{ type: 'application.approved', description: 'application approved' }] },
       { name: 'Credential', events: [{ type: 'credential.issued', description: 'credential issued' }] },
     ])

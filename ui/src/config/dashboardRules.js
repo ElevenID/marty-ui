@@ -350,6 +350,15 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
   };
 }
 
+// The native policy contract accepts either inline claims, structured
+// credential/alternative requirements, or a required holder proof. A policy
+// can be valid without duplicating structured claims in required_claims.
+function hasPresentationPolicyRequirements(policy) {
+  return ['required_claims', 'credential_requirements', 'alternative_requirements']
+    .some((field) => Array.isArray(policy?.[field]) && policy[field].length > 0)
+    || policy?.holder_binding?.required === true;
+}
+
 /**
  * Compute Presentation Policy readiness
  */
@@ -366,43 +375,7 @@ function evaluatePolicyReadiness(policies, templates, trustProfiles, trustDepend
     };
   }
 
-  const loadError = firstResourceError(trustDependencies.resourceErrors, ['policies']);
-  if (loadError) {
-    return buildLoadErrorReadiness('Presentation policies', loadError.error);
-  }
-
-  if (policies.length === 0) {
-    return {
-      state: ReadinessState.MISSING,
-      message: 'No Presentation Policies configured',
-      action: 'Create',
-      path: '/console/org/policies/presentation/new',
-      blockReason: null,
-    };
-  }
-
-  const blocked = policies.filter((p) =>
-    !p.required_claims ||
-    p.required_claims.length === 0
-  );
-
-  if (blocked.length > 0) {
-    return {
-      state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
-      action: 'Fix',
-      path: '/console/org/policies/presentation',
-      blockReason: 'Presentation Policy exists but has no required claims',
-    };
-  }
-
-  return {
-    state: ReadinessState.READY,
-    message: `${policies.length} policy(ies) configured`,
-    action: null,
-    path: null,
-    blockReason: null,
-  };
+  return evaluatePolicyContents(policies, trustDependencies);
 }
 
 function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDependencies = {}) {
@@ -420,6 +393,11 @@ function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDepen
     };
   }
 
+  return evaluatePolicyContents(policies, trustDependencies);
+}
+
+// Shared policy checks run only after each journey has admitted its own prerequisites.
+function evaluatePolicyContents(policies, trustDependencies) {
   const loadError = firstResourceError(trustDependencies.resourceErrors, ['policies']);
   if (loadError) {
     return buildLoadErrorReadiness('Presentation policies', loadError.error);
@@ -435,18 +413,15 @@ function evaluateVerificationPolicyReadiness(policies, trustProfiles, trustDepen
     };
   }
 
-  const blocked = policies.filter((p) =>
-    !p.required_claims ||
-    p.required_claims.length === 0
-  );
+  const blocked = policies.filter((policy) => !hasPresentationPolicyRequirements(policy));
 
   if (blocked.length > 0) {
     return {
       state: ReadinessState.BLOCKED,
-      message: `${blocked.length} of ${policies.length} policy(ies) missing required claims`,
+      message: `${blocked.length} of ${policies.length} policy(ies) missing verification requirements`,
       action: 'Fix',
       path: '/console/org/policies/presentation',
-      blockReason: 'Presentation Policy exists but has no required claims',
+      blockReason: 'Presentation Policy has no credential, claim, alternative, or holder proof requirements',
     };
   }
 
@@ -649,7 +624,9 @@ function evaluateIntentFlowReadiness(flows, dependencyReadiness, trustDependenci
   if (dependencyReadiness.state !== ReadinessState.READY) {
     return {
       state: ReadinessState.MISSING,
-      message: `Blocked: ${dependencyReadiness.message}`,
+      message: dependencyReadiness.message.startsWith('Blocked:')
+        ? dependencyReadiness.message
+        : `Blocked: ${dependencyReadiness.message}`,
       action: null,
       path: null,
       blockReason: null,

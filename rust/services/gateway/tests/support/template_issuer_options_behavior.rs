@@ -27,6 +27,10 @@ impl UpstreamClient for TemplateOptionsUpstream {
             let mut profile = json!({"id":"profile-1", "organization_id":"org-1", "credential_format":"SD_JWT_VC",
                 "issuance_protocol":"OID4VCI_PRE_AUTH", "status":"ACTIVE", "discoverable":true});
             match self.mode {
+                "explicit_profile" | "explicit_wrong_binding" => {
+                    profile["credential_format"] = json!("VC_JWT_DIRECT_V1");
+                }
+                "explicit_legacy_compliance" => profile["credential_format"] = json!("VC_JWT"),
                 "inactive" => profile["status"] = json!("SUSPENDED"),
                 "other_profile_tenant" => profile["organization_id"] = json!("other"),
                 "certificate" => {
@@ -77,14 +81,21 @@ impl UpstreamClient for TemplateOptionsUpstream {
                 if self.mode == "private_jwk" {
                     result["public_jwk"]["d"] = json!("must-not-leak");
                 }
+                if self.mode == "explicit_wrong_binding" {
+                    result["issuer_profile"]["credential_format"] = json!("VC_JWT");
+                }
                 result
             }
         } else if request.path == "/v1/credential-templates" && request.method == HttpMethod::Post {
             let input: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
             self.writes.lock().unwrap().push(input.clone());
-            json!({"id":"template-1", "organization_id":"org-1", "name":input["name"], "issuer_did":input["issuer_did"],
+            let mut output = json!({"id":"template-1", "organization_id":"org-1", "name":input["name"], "issuer_did":input["issuer_did"],
                 "credential_type":input["credential_type"], "credential_payload_format":input["credential_payload_format"],
-                "issuance_protocol":input["issuance_protocol"], "claims":input["claims"], "status":"draft"})
+                "issuance_protocol":input["issuance_protocol"], "claims":input["claims"], "status":"draft"});
+            if let Some(policy) = input.get("jwt_vc_profile") {
+                output["jwt_vc_profile"] = policy.clone();
+            }
+            output
         } else {
             panic!("unexpected template dependency {}", request.path);
         };
@@ -297,4 +308,46 @@ async fn empty_create_formats_are_rejected_before_issuer_resolution_or_owner_wri
     assert_eq!(body["detail"], "At least one supported format is required.");
     assert!(upstream.resolutions.lock().unwrap().is_empty());
     assert!(upstream.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn explicit_profile_public_create_preserves_policy_and_requires_exact_compliance_and_issuer()
+{
+    let policy = json!({"contract":"marty.jwt-vc-template-profile/v1", "securing_profile":"w3c_vc2_jose_2026_v1", "signature_lifetime_seconds":3600});
+    let input = json!({
+        "organization_id":"org-1", "name":"Synthetic direct credential",
+        "credential_type":"EmployeeCredential", "compliance_profile_id":"profile-1",
+        "issuer_did":"did:example:allowed", "credential_payload_format":"VC_JWT_DIRECT_V1",
+        "supported_formats":["VC_JWT_DIRECT_V1"], "privacy_posture":"standard",
+        "claims":[{"name":"employee_id", "type":"STRING", "required":true}],
+        "revocation_profile_id":"status-profile",
+        "validity_rules":{"default_validity_days":2, "not_before_offset_seconds":-30, "renewable":false},
+        "issuance_protocol":"OID4VCI_PRE_AUTH", "jwt_vc_profile":policy
+    });
+    for mode in [
+        "explicit_profile",
+        "explicit_legacy_compliance",
+        "explicit_wrong_binding",
+    ] {
+        let (status, body, upstream) =
+            template_options_request(mode, "/v1/credential-templates", input.clone()).await;
+        if mode == "explicit_profile" {
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["jwt_vc_profile"], policy);
+            assert_eq!(body["credential_payload_format"], "VC_JWT_DIRECT_V1");
+            let writes = upstream.writes.lock().unwrap();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(writes[0]["jwt_vc_profile"], policy);
+            assert_eq!(
+                upstream.resolutions.lock().unwrap()[0]["credential_format"],
+                "application/vc+jwt"
+            );
+        } else {
+            assert!(
+                status.is_client_error() || status.is_server_error(),
+                "{mode}: {body}"
+            );
+            assert!(upstream.writes.lock().unwrap().is_empty());
+        }
+    }
 }

@@ -1,0 +1,23 @@
+{{- $selection := include "marty.authSelection" . -}}
+{{- $existing := lookup "v1" "ConfigMap" .Release.Namespace "marty-auth-selection" -}}
+{{- if $existing -}}
+{{- if or (ne (get ($existing.metadata.labels | default dict) "app.kubernetes.io/instance") .Release.Name) (ne (get ($existing.metadata.annotations | default dict) "meta.helm.sh/release-name") .Release.Name) (ne (get ($existing.metadata.annotations | default dict) "meta.helm.sh/release-namespace") .Release.Namespace) (ne $existing.immutable true) (ne (get ($existing.data | default dict) "selection.json") $selection) -}}
+{{- fail "the retained authentication selection differs; changing login provider or external identity inputs requires a fresh installation, not an in-place migration" -}}
+{{- end -}}
+{{- else if .Release.IsUpgrade -}}
+{{- $previousAuth := lookup "apps/v1" "Deployment" .Release.Namespace "auth" -}}
+{{- $annotations := dig "spec" "template" "metadata" "annotations" dict $previousAuth -}}
+{{- if or (hasKey $annotations "marty.elevenid.com/auth-provider") (hasKey $annotations "marty.elevenid.com/auth-selection-sha256") (eq (include "marty.authProvider" .) "external") -}}
+{{- fail "authentication selection is missing; external OIDC requires a fresh installation or its matching retained marty-auth-selection ConfigMap, and an existing typed selection cannot be replaced" -}}
+{{- end -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: marty-auth-selection
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marty.labels" . | nindent 4 }}
+immutable: true
+data:
+  selection.json: {{ $selection | quote }}

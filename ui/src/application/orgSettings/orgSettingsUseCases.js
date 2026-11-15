@@ -1,28 +1,18 @@
-/**
- * Use cases for organization settings.
- */
-
-import { get, put, getErrorMessage } from '../../services/api';
+/** Use cases for the selected organization's public profile and settings. */
+import { getErrorMessage } from '../../services/api';
+import { getOrganization, updateOrganization } from '../../services/organizationsApi';
+import { requireOrganizationId } from '../../services/queryUtils';
 import { buildOrgSettingsSaveBody, parseOrgSettingsResponse } from './orgSettingsFlow';
 
-const ORG_SETTINGS_URL = '/api/onboarding/org-settings';
-
-async function defaultFetchOrgSettings() {
-  return get(ORG_SETTINGS_URL);
-}
-
-async function defaultSaveOrgSettings(body) {
-  return put(ORG_SETTINGS_URL, body);
-}
-
 export async function loadOrgSettings({
-  organizationName,
-  fetchSettings = defaultFetchOrgSettings,
+  organizationId,
+  fetchSettings = getOrganization,
 } = {}) {
   try {
-    const data = await fetchSettings();
+    const orgId = requireOrganizationId(organizationId, 'loading organization settings');
+    const data = await fetchSettings(orgId);
     return {
-      org: parseOrgSettingsResponse(data, { organizationName }),
+      org: parseOrgSettingsResponse(data, { organizationId: orgId }),
       error: null,
     };
   } catch (error) {
@@ -34,14 +24,18 @@ export async function loadOrgSettings({
 }
 
 export async function saveOrgSettings({
+  organizationId,
   org,
-  save = defaultSaveOrgSettings,
+  originalOrg,
+  save = updateOrganization,
 } = {}) {
   try {
-    const body = buildOrgSettingsSaveBody(org);
-    await save(body);
-    return { error: null };
+    const orgId = requireOrganizationId(organizationId, 'saving organization settings');
+    const body = buildOrgSettingsSaveBody(org, { originalOrg });
+    if (Object.keys(body).length === 0) return { org: originalOrg, error: null };
+    const data = await save(orgId, body);
+    return { org: parseOrgSettingsResponse(data, { organizationId: orgId }), error: null };
   } catch (error) {
-    return { error: getErrorMessage(error) || 'Failed to save organization settings' };
+    return { org: null, error: getErrorMessage(error) || 'Failed to save organization settings' };
   }
 }

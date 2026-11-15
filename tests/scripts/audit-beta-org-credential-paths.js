@@ -2,7 +2,7 @@
 /* eslint-disable no-console */
 
 const fs = require('fs');
-const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
+const { acquireWalletSession, openIsolatedWallet, presentWalletRequest } = require('./demo-wallet-session');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 const {
@@ -106,13 +106,7 @@ async function receiveInTestWallet(walletPage, offerUri, expectedVct, expectedCo
 async function presentWithTestWallet(walletPage, oid4vpUri) {
   await showStep(walletPage, 'Present credential for verification', 'The signed presentation request is hidden in this recording.');
   await maskProtocolField(walletPage, 'Presentation request URI');
-  await walletPage.getByLabel('Presentation request URI').fill(oid4vpUri);
-  const responsePromise = walletPage.waitForResponse((response) => (
-    response.url() === `${TEST_WALLET_ORIGIN}/api/present`
-    && response.request().method() === 'POST'
-  ), { timeout: 60_000 });
-  await walletPage.getByRole('button', { name: /^present$/i }).click();
-  const response = await responsePromise;
+  const { response } = await presentWalletRequest(walletPage, oid4vpUri, { origin: TEST_WALLET_ORIGIN });
   const body = await response.json().catch(() => null);
   await walletPage.getByRole('status').filter({ hasText: 'Presentation accepted' }).waitFor({ timeout: 60_000 }).catch(() => {});
   await showStep(walletPage, 'Presentation accepted', 'The browser wallet completed the verifier handoff.');

@@ -878,6 +878,7 @@ mod tests {
         }
     }
     #[test]
+    #[cfg(target_os = "linux")]
     fn python_candidate_v2_fixture_binds_hosting_trust_and_exact_context() {
         let cases: Vec<Value> = serde_json::from_str(include_str!(
             "../tests/fixtures/installer-candidate-hosting-v2.json"

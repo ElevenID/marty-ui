@@ -25,6 +25,26 @@ def fixture():
     return prepared, receipt
 
 
+def test_current_three_role_build_cannot_be_old_all29_or_stale_core():
+    profile = successor.D12_PASSPORT_CURRENT
+    roles = dict(profile.roles)
+    prepared = {"buildProfile": profile.name, "uiRevision": profile.ui_revision,
+                "coreRevision": profile.core_revision, "roleBinaries": roles, "runId": "owned"}
+    receipt = {**prepared, "state": "BUILD_SUCCEEDED", "exitCode": 0,
+               "oomKilled": False, "preparationSha256": "a" * 64,
+               "binaries": {binary: {} for binary in roles.values()},
+               "releaseQualified": False, "recordingQualified": False}
+    assert successor.terminal_current_build(receipt, prepared, "a" * 64) == roles
+    for change in ({"state": "PASSED", "canonicalAllServices": True},
+                   {"coreRevision": successor.CORE},
+                   {"uiRevision": successor.SOURCE},
+                   {"exitCode": False},
+                   {"binaries": {"marty-flow": {}}},
+                   {"releaseQualified": True}):
+        with pytest.raises(ValueError):
+            successor.terminal_current_build({**receipt, **change}, prepared, "a" * 64)
+
+
 def test_terminal_all29_contract_cannot_be_replaced_by_three_successes():
     prepared, receipt = fixture()
     successor.terminal_build(receipt, prepared, successor.PREPARED_SHA256)

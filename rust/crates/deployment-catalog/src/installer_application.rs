@@ -80,6 +80,7 @@ pub(crate) fn bootstrap_inputs(
     nonce: &str,
 ) -> Result<ComposeInputs> {
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let binding = state
         .journal()
@@ -224,6 +225,9 @@ pub(crate) fn bootstrap_inputs(
                 .join("evidence")
                 .join(crate::installer_foundation::RECORD),
         )?);
+    }
+    if let Some(selection) = external_oidc {
+        selection.bind_inputs(&mut inputs)?;
     }
     hosting.bind_inputs(&mut inputs)?;
     if let Some(settings) = state.with_inspection(crate::installer_settings::load)? {
@@ -385,6 +389,7 @@ fn start_inner(
 ) -> Result<()> {
     state.require_live_phase(Phase::Provisioning)?;
     let foundation = state.with_inspection(crate::installer_foundation::load)?;
+    let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
     let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
     let public_acme =
         hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme;
@@ -462,22 +467,26 @@ fn start_inner(
         state
             .with_inspection(crate::installer_settings::load)?
             .as_ref(),
+        external_oidc
+            .as_ref()
+            .map(|selection| &selection.configuration.external_oidc),
     )?;
     if public_acme {
         state.with_inspection(|view| require_acme_preparation(view, installation))?;
     } else {
         state.prepare_application_storage()?;
         state.persist_application_storage_creation_receipt(installation)?;
-        if foundation.is_none() {
+        if foundation.is_none() && external_oidc.is_none() {
             state.stage_operator_password()?;
         }
     }
     if state.validate_applicant_storage()? != group.host_gid() {
         return Err("applicant state group changed".into());
     }
-    let nginx = crate::installer_ingress_config::render(
+    let nginx = crate::installer_ingress_config::render_selected(
         &bundle_text(bundle, "docker/nginx-selfhost.prod.conf.template", 131072)?,
         &origin,
+        foundation.is_none() && external_oidc.is_none(),
     )?;
     state.write_evidence("installer-nginx.conf", nginx.as_bytes())?;
     state.write_evidence("application-intent.json",&serde_json::to_vec(&json!({"schema":"elevenid.installer-application-intent/v2",
@@ -589,6 +598,11 @@ fn start_inner(
             .files
             .push(bundle_bound(bundle, crate::installer_foundation::LAYER)?);
     }
+    if external_oidc.is_some() {
+        inputs
+            .files
+            .push(bundle_bound(bundle, crate::installer_oidc::LAYER)?);
+    }
     crate::installer_hosting_addon::bind_inputs(&mut inputs)?;
     #[cfg(feature = "installer-development")]
     if let Some(image) = state.with_inspection(crate::installer_development_image::load)? {
@@ -645,6 +659,13 @@ fn start_inner(
                 .files
                 .push(bundle_bound(bundle, &format!("{LAYERS}/{file}"))?);
         }
+    }
+    if external_oidc.is_some() {
+        // The runtime layer restores managed provider readiness dependencies.
+        // Apply the selected external provider only after that native merge.
+        maintenance_inputs
+            .files
+            .push(bundle_bound(bundle, crate::installer_oidc::LAYER)?);
     }
     crate::installer_hosting_addon::bind_inputs(&mut maintenance_inputs)?;
     #[cfg(feature = "installer-development")]

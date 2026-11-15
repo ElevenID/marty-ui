@@ -2,7 +2,7 @@
  * Console Header Bar
  * 
  * Top header bar for authenticated console pages.
- * Contains org switcher and user menu.
+ * Contains org switcher, notifications, and user menu.
  */
 
 import { useState } from 'react';
@@ -40,10 +40,12 @@ import CheckIcon from '@mui/icons-material/Check';
 import SearchIcon from '@mui/icons-material/Search';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
+import NotificationBell from '../common/NotificationBell';
 
 const DEFAULT_MOBILE_LOGO_SRC = '/apple-touch-icon.png';
 
@@ -162,9 +164,12 @@ export function getAccountAvatarInitial(user) {
  * Console Header Bar Component
  */
 export function ConsoleHeaderBar({ onMobileMenuToggle }) {
+  const beginAction = useAsyncActionScope();
   const navigate = useNavigate();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const isNarrow = useMediaQuery(theme.breakpoints.down('sm'));
+  const isSmallPhone = useMediaQuery(theme.breakpoints.down(380));
   const { branding } = useBranding();
   const {
     user,
@@ -201,8 +206,12 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   const activeOrgName = activeOrg?.display_name || activeOrg?.name || organizationName || null;
   const compactOrgLabel = getCompactLabel(activeOrgName, 'Org');
 
-  // Determine user role for display
-  const userRole = isAdministrator ? 'Administrator' : isVendor ? 'Vendor' : isApplicant ? 'Person' : 'User';
+  // Display explicit roles or the active console context.
+  const userRole = isAdministrator
+    ? 'Administrator'
+    : mode === 'applicant' && isApplicant
+      ? 'Applicant'
+      : getMembershipRoleSummary(activeOrg) || (isVendor ? 'Organization Console' : isApplicant ? 'Applicant' : 'User');
   const profilePath = isApplicant ? '/console/applicant/profile' : '/console/org/profile';
   const settingsPath = mode === 'org' ? '/console/org/settings' : '/console/applicant/settings';
   const accountDisplayName = getAccountMenuDisplayName(user);
@@ -222,13 +231,26 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
   };
 
   const handleSelectOrganization = async (organization) => {
+    const action = beginAction();
     setOrgMenuAnchor(null);
     setOrgSearch('');
 
     try {
-      await setActiveOrgId(organization.id);
+      await action.run(setActiveOrgId, organization.id);
     } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
       console.error('[ConsoleHeaderBar] Failed to switch organization:', error);
+    }
+  };
+
+  const handleModeChange = async (_, newMode) => {
+    if (!newMode) return;
+    const action = beginAction();
+    try {
+      await action.run(setMode, newMode);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[ConsoleHeaderBar] Failed to switch console:', error);
     }
   };
 
@@ -241,14 +263,13 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
         zIndex: theme.zIndex.drawer + 1,
       }}
     >
-      <Toolbar sx={{ justifyContent: 'space-between', gap: 1, px: { xs: 1, sm: 2 } }}>
+      <Toolbar sx={{ justifyContent: 'space-between', gap: isMobile ? 0.5 : 1, px: { xs: 1, sm: 2 } }}>
         {/* Left side: Mobile menu + Logo */}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.75 : 1, minWidth: 0 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.75 : 1, minWidth: 0, flexShrink: isMobile ? 0 : 1 }}>
           {isMobile && (
             <IconButton
               color="inherit"
               aria-label="open drawer"
-              edge="start"
               onClick={onMobileMenuToggle}
               sx={{
                 color: 'text.primary',
@@ -264,7 +285,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
               <MenuIcon />
             </IconButton>
           )}
-          {isMobile ? (
+          {isMobile && !isSmallPhone && (
             <Box
               component={RouterLink}
               to="/"
@@ -289,7 +310,8 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
                 }}
               />
             </Box>
-          ) : (
+          )}
+          {!isMobile && (
             <Typography
               variant="h6"
               component={RouterLink}
@@ -305,12 +327,12 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           )}
         </Box>
 
-        {/* Center: Console switcher (mobile only) */}
-        {isMobile && showConsoleSwitcher && (
+        {/* Narrow screens use the console switcher in the navigation drawer. */}
+        {isMobile && !isNarrow && showConsoleSwitcher && (
           <ToggleButtonGroup
             value={mode}
             exclusive
-            onChange={(_, newMode) => { if (newMode) setMode(newMode); }}
+            onChange={handleModeChange}
             size="small"
             sx={{
               bgcolor: 'rgba(255,255,255,0.15)',
@@ -318,7 +340,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
               '& .MuiToggleButton-root': {
                 color: 'rgba(255,255,255,0.7)',
                 border: 'none',
-                px: 1.5,
+                px: 1,
                 py: 0.5,
                 textTransform: 'none',
                 fontSize: '0.75rem',
@@ -344,7 +366,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           </ToggleButtonGroup>
         )}
 
-        {/* Right side: User Menu */}
+        {/* Right side: Language, organization, notifications, and account */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: isMobile ? 0.5 : 1, minWidth: 0, flexShrink: 0 }}>
           <LanguageSwitcher
             variant="standard"
@@ -382,7 +404,7 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             }}
             size="small"
             endIcon={<ArrowDropDownIcon />}
-            startIcon={<BusinessIcon fontSize="small" />}
+            startIcon={isMobile ? undefined : <BusinessIcon fontSize="small" />}
             disabled={selectableOrganizations.length === 0}
             title={activeOrgName || 'Select Organization'}
             sx={{
@@ -393,9 +415,9 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
               border: '1px solid',
               borderColor: 'grey.300',
               borderRadius: '20px',
-              minWidth: isMobile ? 76 : 'auto',
-              maxWidth: isMobile ? 88 : 260,
-              px: isMobile ? 1.25 : 2,
+              minWidth: isMobile ? 60 : 'auto',
+              maxWidth: isMobile ? 76 : 260,
+              px: isMobile ? 1 : 2,
               py: 0.5,
               textTransform: 'none',
               '& .MuiButton-startIcon': {
@@ -419,14 +441,16 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             onClose={() => { setOrgMenuAnchor(null); setOrgSearch(''); }}
             transformOrigin={{ horizontal: 'right', vertical: 'top' }}
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-            PaperProps={{
-              elevation: 0,
-              sx: {
-                overflow: 'hidden',
-                filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
-                mt: 1,
-                minWidth: 280,
-                maxWidth: 'calc(100vw - 24px)',
+            slotProps={{
+              paper: {
+                elevation: 0,
+                sx: {
+                  overflow: 'hidden',
+                  filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
+                  mt: 1,
+                  minWidth: 280,
+                  maxWidth: 'calc(100vw - 24px)',
+                },
               },
             }}
           >
@@ -490,6 +514,8 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             </MenuItem>
           </Menu>
 
+          {mode === 'org' && <NotificationBell />}
+
           {!isMobile && (
             <Button
               onClick={handleLogout}
@@ -550,13 +576,15 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
           onClick={handleUserMenuClose}
           transformOrigin={{ horizontal: 'right', vertical: 'top' }}
           anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-          PaperProps={{
-            elevation: 0,
-            sx: {
-              overflow: 'visible',
-              filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
-              mt: 1.5,
-              minWidth: 200,
+          slotProps={{
+            paper: {
+              elevation: 0,
+              sx: {
+                overflow: 'visible',
+                filter: 'drop-shadow(0px 2px 8px rgba(0,0,0,0.1))',
+                mt: 1.5,
+                minWidth: 200,
+              },
             },
           }}
         >

@@ -96,6 +96,24 @@
   "invalid_requests": [
     {
       "kind": "create_definition",
+      "payload": {"organization_id": "org-1", "name": "Premature digital handoff", "flow_type": "passport_digital_handoff", "credential_template_id": "credential-1", "application_template_id": "application-1", "delivery_destination_profile_id": "destination-1"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "flow_type"
+    },
+    {
+      "kind": "patch_definition",
+      "payload": {"organization_id": "org-1", "flow_type": "passport_digital_handoff"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "flow_type"
+    },
+    {
+      "kind": "create_definition",
+      "payload": {"organization_id": "org-1", "name": "Premature extension", "flow_type": "custom", "extension": {"extension_uri": "urn:marty:flow:premature", "extension_version": "1", "extends_flow_type": "passport_digital_handoff", "entry_step_id": "start", "steps": [{"step_id": "start", "action": "proofing.start"}]}},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "extension.extends_flow_type"
+    },
+    {
+      "kind": "create_definition",
       "payload": {"organization_id": "org-1", "name": "OID4VP", "flow_type": "oid4vp_presentation"},
       "code": "FLOW.INVALID_REQUEST",
       "field": "presentation_policy_id"

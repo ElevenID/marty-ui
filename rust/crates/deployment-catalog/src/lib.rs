@@ -72,12 +72,17 @@ pub mod installer_kms;
 pub mod installer_lifecycle;
 pub mod installer_logs;
 pub mod installer_managed_renewal;
+pub(crate) mod installer_oidc;
+pub mod installer_oidc_command;
+pub(crate) mod installer_oidc_rotation;
 pub mod installer_openbao;
 pub(crate) mod installer_openbao_control;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_openbao_owner_transition;
 pub(crate) mod installer_openbao_recovery;
 pub(crate) mod installer_openbao_seal;
+#[cfg(target_os = "linux")]
+pub mod installer_operator_upgrade;
 pub mod installer_prepare;
 pub mod installer_public_ingress;
 pub(crate) mod installer_purge_host;
@@ -106,6 +111,13 @@ pub mod installer_trust;
 pub mod installer_uninstall;
 pub mod installer_validation;
 pub mod installer_verify;
+pub mod kubernetes_application;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_legacy_recovery;
+pub mod kubernetes_renewal;
+pub mod kubernetes_renewal_activation;
+#[cfg(target_os = "linux")]
+pub mod kubernetes_renewal_adoption;
 pub mod kubernetes_secrets;
 pub mod passport_model;
 
@@ -772,6 +784,8 @@ mod tests {
 }
 
 pub mod activation_preflight;
+pub mod application_authority;
+pub mod application_tokens;
 pub mod approle;
 pub mod ca_issuer;
 pub mod generation;
@@ -782,4 +796,6 @@ pub mod operator;
 pub mod operator_certificates;
 mod operator_files;
 mod operator_http;
+#[cfg(target_os = "linux")]
+mod operator_process;
 pub mod snapshot;

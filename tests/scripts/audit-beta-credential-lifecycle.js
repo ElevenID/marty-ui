@@ -4,7 +4,7 @@
 const {requireLifecyclePolicySelection,readLifecyclePolicyAuthority}=require('./lifecycle-policy-authority');
 const {cleanupLifecycleFlows}=require('./lifecycle-flow-cleanup');
 const fs = require('fs');
-const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
+const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, presentWalletRequest } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
@@ -860,11 +860,7 @@ async function getCredentialStatus(page, credentialId) {
 
 async function present(walletPage, requestUri) {
   await maskProtocolField(walletPage, 'Presentation request URI', RECORD_VIDEO);
-  await walletPage.getByLabel('Presentation request URI').fill(requestUri);
-  const response = await responseForAction(walletPage, (response) => (
-    response.url() === `${TEST_WALLET_ORIGIN}/api/present`
-    && response.request().method() === 'POST'
-  ), () => walletPage.getByRole('button', { name: /^present$/i }).click(), 60_000);
+  const { response } = await presentWalletRequest(walletPage, requestUri, { origin: TEST_WALLET_ORIGIN });
   const body = await response.json().catch(() => null);
   const ok=response.ok()&&body?.ok===true;
   const submission=body?.submission&&typeof body.submission==='object'&&!Array.isArray(body.submission)

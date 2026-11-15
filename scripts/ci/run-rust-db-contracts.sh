@@ -29,8 +29,10 @@ resolve_contract_executable() {
 export MARTY_TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/0
 signing_disposable_redis_url=redis://127.0.0.1:6379/14
-export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
-export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME=marty_db_contracts_test
+# Migration contracts replace schemas and retain a customer-owned default profile.
+# Keep that disposable installation separate from the ordinary storage/runtime fixtures.
+export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_revocation_migration_test
+export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME=marty_revocation_migration_test
 export CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export PRESENTATION_POLICY_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export ISSUANCE_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test

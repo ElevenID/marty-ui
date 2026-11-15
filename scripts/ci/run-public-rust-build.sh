@@ -1,6 +1,15 @@
 #!/bin/sh
 set -eu
 
+# The source reader is mounted only in an earlier fetch instruction. Native
+# compilation uses those dependencies offline and never exports compiler data.
+if [ "${PRIVATE_FORKS_ENABLED:-false}" = true ]; then
+  export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true
+  unset RUSTC_WRAPPER
+  export SCCACHE_GHA_ENABLED=false
+  exec "$@"
+fi
+
 # Local Docker builds work without GitHub cache credentials. CI supplies all
 # three as ephemeral BuildKit secrets, never as ARG/ENV or image layers.
 token=/run/secrets/sccache_token

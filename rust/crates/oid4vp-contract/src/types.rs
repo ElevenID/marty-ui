@@ -161,6 +161,12 @@ pub struct FrozenQuery {
 #[serde(deny_unknown_fields)]
 pub struct FrozenCredentialRequirement {
     pub id: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::jwt_vc_profile::deserialize_optional_profile"
+    )]
+    pub expected_securing_profile: Option<crate::jwt_vc_profile::JwtVcSecuringProfile>,
     pub accepted_formats: Vec<String>,
     /// Exact canonical Presentation Exchange format option objects by format.
     /// DCQL requirements leave this map empty.
@@ -212,6 +218,10 @@ pub enum QueryKind {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vpEvaluationTransportV1 {
+    /// Authority frozen by a policy that explicitly selects the managed profile.
+    /// This is server transport, never a caller assertion of authenticated trust.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority: Option<crate::trust_authority::CredentialAuthoritySnapshotV1>,
     pub query_kind: QueryKind,
     pub query_document: Value,
     pub query_digest: String,

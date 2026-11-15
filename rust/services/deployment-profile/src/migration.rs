@@ -1,5 +1,6 @@
 use sqlx::PgPool;
 use thiserror::Error;
+use uuid::Uuid;
 
 const ADVISORY_LOCK: i64 = 801_020_260_821;
 const VERSION: &str = "deployment-profile-rust-v2-api-auth-canonicalization";
@@ -42,7 +43,10 @@ pub enum DeploymentMigrationError {
     Database(#[from] sqlx::Error),
 }
 
-pub async fn run_migrations(pool: &PgPool) -> Result<(), DeploymentMigrationError> {
+pub async fn run_migrations(
+    pool: &PgPool,
+    organization_id: Uuid,
+) -> Result<(), DeploymentMigrationError> {
     let mut tx = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(ADVISORY_LOCK)
@@ -77,7 +81,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), DeploymentMigrationErro
     )
     .execute(&mut *tx)
     .await?;
-    seed_marty_login(&mut tx).await?;
+    seed_marty_login(&mut tx, organization_id).await?;
     sqlx::query("INSERT INTO deployment_profile_service.native_migrations(version) VALUES($1) ON CONFLICT(version) DO NOTHING")
         .bind(VERSION).execute(&mut *tx).await?;
     tx.commit().await?;
@@ -86,14 +90,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), DeploymentMigrationErro
 
 async fn seed_marty_login(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    organization_id: Uuid,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT INTO deployment_profile_service.deployment_profiles
          (id,organization_id,name,description,status,environment,site_id,trust_profile_id,presentation_policy_ids,
           credential_template_ids,default_policy_id,network_mode,key_access_mode,environment_config,enabled_flow_ids,
           update_channel,update_policy,offline_cache_ttl_hours,operator_biometric_authentication_required,audit_all_events,
           api_key,api_key_prefix,callbacks,api_auth,rate_limits,feature_flags,branding,created_at,updated_at)
-         VALUES('70000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001',
+         VALUES('70000000-0000-0000-0000-000000000001',$1,
           'Marty Credential Login Deployment','Default deployment profile used for Marty credential-based login preview flows.',
           'active','production','marty-login','60000000-0000-0000-0000-000000000001',
           '[\"50000000-0000-0000-0000-000000000004\"]','[\"50000000-0000-0000-0000-000000000040\"]',
@@ -105,8 +110,14 @@ async fn seed_marty_login(
           '{}','{}',now(),now())
          ON CONFLICT(id) DO UPDATE SET presentation_policy_ids=EXCLUDED.presentation_policy_ids,
           credential_template_ids=EXCLUDED.credential_template_ids,default_policy_id=EXCLUDED.default_policy_id,
-          trust_profile_id=EXCLUDED.trust_profile_id,updated_at=now()"
-    ).execute(&mut **tx).await?;
+          trust_profile_id=EXCLUDED.trust_profile_id,updated_at=now()
+         WHERE deployment_profile_service.deployment_profiles.organization_id=EXCLUDED.organization_id"
+    ).bind(organization_id.to_string()).execute(&mut **tx).await?;
+    if result.rows_affected() != 1 {
+        return Err(sqlx::Error::Protocol(
+            "default login deployment belongs to a different organization".into(),
+        ));
+    }
     Ok(())
 }
 

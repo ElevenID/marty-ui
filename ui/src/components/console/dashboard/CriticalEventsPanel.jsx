@@ -32,7 +32,6 @@ import WebhookIcon from '@mui/icons-material/Webhook';
 import LockIcon from '@mui/icons-material/Lock';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DashboardErrorAlert from './DashboardErrorAlert';
 
 /**
@@ -119,9 +118,10 @@ function CriticalEventItem({ event }) {
         <Icon color={config.color} />
       </ListItemIcon>
       <ListItemText
+        disableTypography
         primary={
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="body2" fontWeight={500}>
+            <Typography variant="body2" sx={{ fontWeight: 500 }}>
               {event.title || event.message}
             </Typography>
             <Chip
@@ -219,7 +219,7 @@ export function CriticalEventsPanel({ events, loading = false, error = null, onR
           fallback="Critical event data could not be loaded from the audit service."
         />
       ) : criticalEvents.length === 0 ? (
-        <Alert severity="success" icon={<CheckCircleIcon />}>
+        <Alert severity="info">
           <Typography variant="body2">
             {t('dashboard.criticalEvents.noCriticalEvents')}
           </Typography>

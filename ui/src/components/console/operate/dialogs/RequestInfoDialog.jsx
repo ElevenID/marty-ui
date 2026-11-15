@@ -77,7 +77,7 @@ export default function RequestInfoDialog({ open, application, checks, loading, 
         <Typography variant="subtitle2" sx={{ mt: 2, mb: 1 }}>
           Missing items (select all that apply)
         </Typography>
-        <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
+        <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1, mb: 2 }}>
           {allItems.map(item => (
             <Chip
               key={item}

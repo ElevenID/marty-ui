@@ -2,6 +2,14 @@
 # CI-only multi-target image build. All service binaries retain release settings.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
 
+ARG PRIVATE_FORKS_ENABLED=false
+# The reader is never a build argument or image environment variable.
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends mold \
     && rm -rf /var/lib/apt/lists/*
@@ -55,6 +63,14 @@ COPY --from=planner /build/rust/recipe.json recipe.json
 # Excluded vendored path dependencies are not reconstructed by the chef recipe.
 COPY rust/vendor /build/rust/vendor
 COPY proto /build/proto
+# Materialize manifests without compiling or running package build scripts.
+# This is the only instruction with access to the private source-reader mount.
+RUN --mount=type=secret,id=private_forks_read_token \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      cargo chef cook --no-build --recipe-path recipe.json \
+      && CARGO_HOME=/opt/private-cargo python3 /usr/local/lib/marty-private-forks.py \
+        fetch --container --token-file /run/secrets/private_forks_read_token; \
+    fi
 RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=secret,id=sccache_token \
@@ -66,9 +82,14 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
         ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
         SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
     fi; \
-    export RUSTC_WRAPPER=sccache; \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true SCCACHE_GHA_ENABLED=false; \
+      unset RUSTC_WRAPPER; \
+    else \
+      export RUSTC_WRAPPER=sccache; \
+    fi; \
     cargo chef cook --locked --release --workspace --recipe-path recipe.json \
-    && sccache --stop-server
+    && if [ "$PRIVATE_FORKS_ENABLED" != true ]; then sccache --stop-server; fi
 
 COPY contracts /build/contracts
 COPY rust /build/rust
@@ -84,7 +105,12 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
         ACTIONS_RESULTS_URL="$(cat /run/secrets/sccache_url)" \
         SCCACHE_GHA_RW_MODE="$(cat /run/secrets/sccache_mode)"; \
     fi; \
-    export RUSTC_WRAPPER=sccache; \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true SCCACHE_GHA_ENABLED=false; \
+      unset RUSTC_WRAPPER; \
+    else \
+      export RUSTC_WRAPPER=sccache; \
+    fi; \
     cargo build --locked --release \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-gateway --bin marty-gateway \
@@ -103,7 +129,7 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-canvas-sandbox --bin marty-canvas-sandbox \
     -p marty-deployment-profile --bin marty-deployment-profile \
     -p marty-compliance-profile --bin marty-compliance-profile \
-    && sccache --stop-server
+    && if [ "$PRIVATE_FORKS_ENABLED" != true ]; then sccache --stop-server; fi
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 

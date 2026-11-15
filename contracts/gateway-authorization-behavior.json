@@ -71,6 +71,8 @@
     {"method":"PATCH","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/roles/r1","permission":"role:edit","resource":"role"},
     {"method":"GET","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/permissions","permission":"role:view","resource":"role"},
     {"method":"POST","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/members","permission":"team:invite","resource":"team"},
+    {"method":"POST","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/members/22222222-2222-2222-2222-222222222222/approve","permission":"team:manage","resource":"team"},
+    {"method":"GET","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/members/22222222-2222-2222-2222-222222222222/approve","permission":null,"resource":null},
     {"method":"DELETE","path":"/v1/organizations/11111111-1111-1111-1111-111111111111/api-keys/k1","permission":"api-key:revoke","resource":"api-key"},
     {"method":"GET","path":"/v1/api-keys","permission":"api-key:view","resource":"api-key"},
     {"method":"POST","path":"/v1/api-keys","permission":"api-key:create","resource":"api-key"},

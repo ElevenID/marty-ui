@@ -765,6 +765,28 @@ pub(crate) fn reconcile_pending_locked(
 ) -> Result<()> {
     tx::reconcile_pending(installation, docker, state).map(|_| ())
 }
+
+/// Explicit confidential-client rotation uses the existing complete renewal
+/// and runtime activation transaction, including its interruption recovery.
+pub(crate) fn rotate_oidc_secret_locked(
+    installation: &Path,
+    docker: &Path,
+    state: &mut LockedMaintenance,
+    parent: &GenerationBinding,
+) -> Result<GenerationBinding> {
+    require(crate::installer_oidc_rotation::for_parent(installation, parent)?.is_some())?;
+    if let Some(selected) = tx::reconcile_pending(installation, docker, state)? {
+        require(selected.sequence() == parent.sequence().checked_add(1).ok_or(REFUSED)?)?;
+        return Ok(selected);
+    }
+    if parent.managed_ingress() {
+        tx::begin_managed_and_reconcile(installation, docker, state, parent)
+    } else {
+        require(parent.public_ingress())?;
+        let candidate = candidate_for_binding(state.inspection(), installation, parent)?;
+        tx::begin_and_reconcile(installation, docker, state, parent, &candidate)
+    }
+}
 pub(crate) fn has_pending_generation(view: &LockedInspection, installation: &Path) -> Result<bool> {
     view.require_path_binding(installation)?;
     let current = generation::load_verified(

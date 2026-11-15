@@ -124,3 +124,24 @@ fn callback_policy_allows_only_explicit_development_loopback_exception() {
     .unwrap();
     assert!(private_ip.validate_for_environment(true).is_err());
 }
+
+#[test]
+fn generic_flow_inputs_cannot_supply_the_owner_receipt_field() {
+    for receipt in [Value::Null, serde_json::json!({"receipt_digest": "caller"})] {
+        let start = serde_json::json!({
+            "organization_id": "org-1",
+            "flow_definition_id": "flow-1",
+            "initial_context": {"verification_receipt": receipt.clone()}
+        });
+        let error = parse_request::<StartFlowRequest>(start).unwrap_err();
+        assert_eq!(error.code, "FLOW.INVALID_REQUEST");
+        assert_eq!(error.field, "initial_context");
+
+        let advance = serde_json::json!({
+            "data": {"verification_receipt": receipt, "step_results": null}
+        });
+        let error = parse_request::<AdvanceFlowRequest>(advance).unwrap_err();
+        assert_eq!(error.code, "FLOW.INVALID_REQUEST");
+        assert_eq!(error.field, "data");
+    }
+}

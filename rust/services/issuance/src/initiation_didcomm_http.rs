@@ -162,6 +162,7 @@ fn delivery_error_class(error: &NativeInitiationDidcommDeliveryError) -> &'stati
         NativeInitiationDidcommDeliveryError::DidcommUnavailable => "didcomm_unavailable",
         NativeInitiationDidcommDeliveryError::Prerequisite(_) => "prerequisite_unavailable",
         NativeInitiationDidcommDeliveryError::CredentialUnavailable => "credential_unavailable",
+        NativeInitiationDidcommDeliveryError::RetiredOpenBadge => "open_badges_2_retired",
         NativeInitiationDidcommDeliveryError::ConcurrentDelivery => "concurrent_delivery",
         NativeInitiationDidcommDeliveryError::DeliveryOutcomeUnknown => "delivery_outcome_unknown",
         NativeInitiationDidcommDeliveryError::TransportFailed => "transport_failed",
@@ -229,6 +230,10 @@ impl InitiationDidcommHttpError {
             Self::Delivery(NativeInitiationDidcommDeliveryError::InvalidRequest) => (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "Invalid DIDComm delivery request",
+            ),
+            Self::Delivery(NativeInitiationDidcommDeliveryError::RetiredOpenBadge) => (
+                StatusCode::BAD_REQUEST,
+                "Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential",
             ),
             Self::Delivery(NativeInitiationDidcommDeliveryError::TransactionNotFound) => {
                 (StatusCode::NOT_FOUND, "Issuance transaction not found")
@@ -401,6 +406,10 @@ mod tests {
             (
                 NativeInitiationDidcommDeliveryError::TransactionNotFound,
                 StatusCode::NOT_FOUND,
+            ),
+            (
+                NativeInitiationDidcommDeliveryError::RetiredOpenBadge,
+                StatusCode::BAD_REQUEST,
             ),
             (
                 NativeInitiationDidcommDeliveryError::ConcurrentDelivery,

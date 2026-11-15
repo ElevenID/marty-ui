@@ -73,12 +73,20 @@ class CheckpointTests(unittest.TestCase):
                     "components": [{"name": "marty-ui", "repository": checkpoint.REPOSITORY,
                                     "version": "1.2.3", "commit": SOURCE, "artifacts": artifacts}]}
         manifest_bytes = encoded(manifest)
-        gate = {"schema": "marty.official-release-gate/v1", "source_sha": SOURCE, "harness_sha": "c" * 40,
+        gate = {"schema": "marty.official-release-gate/v2", "source_sha": SOURCE, "harness_sha": "c" * 40,
                 "manifest_sha256": digest(manifest_bytes), "run_id": RUN,
                 "qualification_context": "PRE_PUBLICATION_CANDIDATE",
                 "lanes": [{"lane": lane, "summary_sha256": "sha256:" + "d" * 64}
-                          for lane in ("oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc", "haip", "w3c-v2", "eudi")]}
+                          for lane in ("oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc", "haip", "w3c-v2", "eudi")],
+                "automated_qualification": {
+                    "schema": "marty.automated-official-qualification/v1",
+                    "policy": "marty.official-verifier-outcome/v1", "evidence_run_attempt": 1,
+                    "request_sha256": "sha256:" + "f" * 64, "automated_cases": 2,
+                    "original_official_results_unchanged": True,
+                }}
         if reviewed:
+            gate["schema"] = "marty.official-release-gate/v1"
+            gate.pop("automated_qualification")
             gate["review_disposition"] = {"schema": "marty.accepted-official-review/v1", "protected_main_commit": REVIEW_MAIN,
                 "record_sha256": "sha256:" + "e" * 64, "request_sha256": "sha256:" + "f" * 64,
                 "evidence_run_attempt": 1, "reviewer": {"kind": "human", "github_login": "fixture-reviewer"},
@@ -171,15 +179,30 @@ class CheckpointTests(unittest.TestCase):
             self.assertEqual(stat.S_IMODE((self.output / "assets" / name).stat().st_mode), 0o600)
         self.assertEqual(value["not_after"], "2026-11-04T01:17:03Z")
         self.assertFalse(value["authority"]["review_required"])
+        self.assertEqual(value["schema"], "elevenid.stable-publication-checkpoint/v2")
+        self.assertEqual(value["tag_handoff_contract"], "marty.create-only-annotated-tag/v1")
 
-    def test_review_gate_retains_original_source_and_run_not_later_main(self) -> None:
+    def test_prior_atomic_checkpoint_cannot_be_reinterpreted_as_reservation_authority(self) -> None:
+        original = self.prepare()
+        for mutation in ("prior-schema", "missing-contract", "foreign-contract"):
+            changed = copy.deepcopy(original)
+            if mutation == "prior-schema":
+                changed["schema"] = "elevenid.stable-publication-checkpoint/v1"
+            elif mutation == "missing-contract":
+                changed.pop("tag_handoff_contract")
+            else:
+                changed["tag_handoff_contract"] = "marty.atomic-main-tag/v1"
+            with self.subTest(mutation=mutation):
+                with self.assertRaises(checkpoint.CheckpointError):
+                    checkpoint.validate_request_identity(changed)
+                self.save_request(changed)
+                self.rejected()
+
+    def test_historical_manual_review_cannot_authorize_a_new_checkpoint(self) -> None:
         self.make_fixture(reviewed=True)
-        value = self.prepare()
-        self.assertEqual(value["source_sha"], SOURCE)
-        self.assertEqual(value["protected_main_commit"], REVIEW_MAIN)
-        self.assertEqual(value["run_id"], RUN)
-        self.assertEqual(value["run_attempt"], 1)
-        self.assertTrue(value["authority"]["review_required"])
+        with self.assertRaises(checkpoint.CheckpointError):
+            self.prepare()
+        self.assertFalse(self.output.exists())
 
     def test_no_payload_or_network_execution(self) -> None:
         sentinel = self.base / "payload-was-executed"

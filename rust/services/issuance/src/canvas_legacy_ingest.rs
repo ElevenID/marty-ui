@@ -575,9 +575,13 @@ fn canvas_approval_plan_failure(
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect::<String>();
+    if normalized == "openbadgev2" {
+        return "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template"
+            .to_owned();
+    }
     if !matches!(
         normalized.as_str(),
-        "openbadge" | "openbadgev2" | "openbadgev3" | "openbadgecredential"
+        "openbadge" | "openbadgev3" | "openbadgecredential"
     ) {
         return "Canvas issuance requires an Open Badge credential template".to_owned();
     }
@@ -1882,6 +1886,15 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn retired_ob2_approval_reports_reissuance_instead_of_relabeling() {
+        let binding = json!({"credential_template_snapshot": {"credential_type": "OpenBadgeV2"}});
+        assert_eq!(
+            canvas_approval_plan_failure(&Map::new(), binding.as_object().unwrap(), None, true),
+            "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template"
+        );
+    }
 
     #[test]
     fn replay_requires_matching_payload_then_exact_success_status() {

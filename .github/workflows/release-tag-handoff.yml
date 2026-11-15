@@ -41,12 +41,12 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         if: inputs.mode == 'create-qualified-tag'
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
         if: inputs.mode == 'create-qualified-tag'
       - name: Prepare the existing installer-pinned publication verifier
         if: inputs.mode == 'create-qualified-tag'
@@ -83,7 +83,7 @@ jobs:
           python scripts/push_promoted_release_tag.py "${args[@]}"
       - name: Preserve the actual operator result
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-tag-handoff-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/tag-handoff-result.json
@@ -91,7 +91,7 @@ jobs:
           retention-days: 90
       - name: Preserve public API outcomes and verification observations
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-tag-operator-observations-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/operator-api-receipt.json

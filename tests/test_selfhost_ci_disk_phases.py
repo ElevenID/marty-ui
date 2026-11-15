@@ -54,6 +54,7 @@ def test_public_image_and_acceptance_gates_remain_required_and_unchanged():
         "MARTY_RELEASE_VERSION=ci",
         "MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}",
         "SERVICE_NAME=issuance_native",
+        "PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}",
     ]
     assert "cargo test --locked --offline -p marty-selfhost-acceptance" in named("Compile reusable Rust test executables")["run"]
     assert "cargo build --locked --manifest-path rust/Cargo.toml" in named("Prepare public selfhost image loader acceptance")["run"]

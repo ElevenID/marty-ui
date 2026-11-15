@@ -271,6 +271,74 @@ function loginInstanceBinding(details, instance, fixture, origin, policyProof) {
   return binding;
 }
 
+// Public request metadata binding only: decoding a JWT is not signature verification.
+function directPostRequestReference(details, origin) {
+  const reference = new URL(details.href).searchParams.getAll('request_uri');
+  assert.equal(reference.length, 1, 'Exact wallet request reference required');
+  const requestUrl = new URL(reference[0]);
+  const match = requestUrl.pathname.match(/^\/v1\/flows\/instances\/([0-9a-f-]{36})\/request$/i);
+  assert(requestUrl.origin === origin && match && !requestUrl.username && !requestUrl.password && !requestUrl.hash,
+    'Owned native request origin and instance required');
+  return { url: requestUrl.href, instanceId: match[1] };
+}
+
+function directPostLoginBinding(details, instance, organizationId, origin, window, compactRequest) {
+  const reference = directPostRequestReference(details, origin);
+  assert.equal(instance.id, reference.instanceId);
+  assert(typeof compactRequest === 'string' && compactRequest.length <= 512 * 1024, 'Bounded native request required');
+  const parts = compactRequest.split('.');
+  assert(parts.length === 3 && parts.every(Boolean), 'Native JWT request required');
+  const request = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  assert.equal(request.response_mode, 'direct_post');
+  const callback = new URL(request.response_uri);
+  assert.equal(callback.href, `${origin}/v1/flows/instances/${instance.id}/submit`);
+  for (const key of ['nonce', 'state']) requiredText(request[key], 'Native request ' + key);
+  assert.equal(request.nonce, instance.context_data?.nonce);
+  assert.equal(request.state, instance.context_data?.oid4vp_expected_state);
+  const login = { organizationId, presentationPolicyId: instance.context_data?.presentation_policy_id,
+    trustProfileId: instance.context_data?.trust_profile_id };
+  const owned = loginInstanceOwnership({ ...details, dcApiRequestUrl: reference.url }, instance, { login }, origin, window);
+  assert(['AWAITING_WALLET', 'IN_PROGRESS'].includes(String(instance.status).toUpperCase()), 'Active owned request required');
+  return { ...owned, instancePath: `/v1/flows/instances/${instance.id}`,
+    requestSha256: hash(compactRequest), flowNonceSha256: hash(request.nonce), stateSha256: hash(request.state),
+    responseMode: request.response_mode, requestMetadataSignatureVerified: false };
+}
+
+function holderDeclineEvidence(binding, instance, acknowledgement, noSession) {
+  assert.equal(instance.id, binding.instanceId);
+  assert.equal(instance.organization_id, binding.organizationId);
+  assert.equal(instance.context_data?.presentation_policy_id, binding.contextPolicyPresent ? binding.contextPolicyId : undefined);
+  assert.equal(instance.context_data?.trust_profile_id, binding.contextTrustProfilePresent ? binding.contextTrustProfileId : undefined);
+  assert.equal(hash(instance.context_data?.nonce), binding.flowNonceSha256);
+  assert.equal(hash(instance.context_data?.oid4vp_expected_state), binding.stateSha256);
+  assert.equal(String(instance.status).toUpperCase(), 'CANCELLED');
+  assert.equal(instance.error_code, 'access_denied');
+  const history = instance.state_history?.filter(row => row.event === 'wallet_access_denied'
+    && String(row.new_state).toUpperCase() === 'CANCELLED' && row.actor === 'wallet_submission');
+  assert.equal(history?.length, 1, 'One committed wallet decline transition required');
+  assert.equal(acknowledgement.status, 200);
+  assert.equal(acknowledgement.acknowledged, true);
+  assert.equal(acknowledgement.verifierHttpStatus, 200);
+  assert.equal(acknowledgement.holderDecision, 'Cancel');
+  assert.equal(acknowledgement.consentProtocol, 'EXPLICIT_TEST_WALLET_DIALOG_V1');
+  assert(noSession.authHttpStatus === 200 && noSession.authenticated === false && noSession.sessionCookiePresent === false
+    && noSession.finalizeSetCookie === false && [400, 302].includes(noSession.finalizeStatus), 'Decline created a login session');
+  return { kind: 'ACTUAL_TEST_WALLET_UI_HOLDER_DECLINE', holderClickCancel: true, flowInstanceId: binding.instanceId,
+    authNonceSha256: binding.nonceSha256, flowNonceSha256: binding.flowNonceSha256, stateSha256: binding.stateSha256,
+    requestSha256: binding.requestSha256, terminalStatus: 'CANCELLED', errorCode: 'access_denied',
+    historyEvent: 'wallet_access_denied', noSession, deliveryAcknowledgement: acknowledgement };
+}
+
+function freshDirectPostLogin(cancelled, retry) {
+  for (const key of ['instanceId', 'nonceSha256', 'flowNonceSha256', 'stateSha256', 'requestSha256']) {
+    assert.notEqual(retry[key], cancelled[key], 'Fresh login reused ' + key);
+  }
+  assert.equal(retry.organizationId, cancelled.organizationId);
+  assert.equal(retry.contextPolicyId, cancelled.contextPolicyId);
+  assert.equal(retry.contextTrustProfileId, cancelled.contextTrustProfileId);
+  return true;
+}
+
 function nativeLoginResult(result, binding, fixture, issuerDid, allowed) {
   assert.equal(result?.instance_id, binding.instanceId, 'Result belongs to a different Flow instance');
   assert.equal(String(result.status).toUpperCase(), allowed ? 'COMPLETED' : 'FAILED');
@@ -303,6 +371,6 @@ function assertions(lane, checks) {
   return result;
 }
 
-module.exports = { GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
+module.exports = { directPostRequestReference, directPostLoginBinding, holderDeclineEvidence, freshDirectPostLogin, GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
   credentialContract, expiryWindow, hash, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture,
   validateIssuerSetup, validateLoginSetup };

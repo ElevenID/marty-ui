@@ -225,6 +225,7 @@ pub struct IssuanceServiceConfig {
     pub grpc_addr: SocketAddr,
     pub grpc_enabled: bool,
     pub workload_server_tls: Option<IssuanceWorkloadServerTlsFiles>,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -1026,6 +1027,24 @@ impl IssuanceServiceConfig {
             settings.server.grpc_enabled,
             matches!(environment.as_str(), "production" | "prod" | "beta"),
         )?;
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|message| MmfError::new(ErrorCode::Configuration, message))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr
+                || (settings.server.grpc_enabled && https.address == grpc_addr)
+                || issuance_api_key
+                    .as_ref()
+                    .is_none_or(|key| key.trim().is_empty())
+            {
+                return Err(MmfError::new(
+                    ErrorCode::Configuration,
+                    "managed authority HTTPS requires a distinct listener and ISSUANCE_API_KEY",
+                ));
+            }
+        }
         let canvas_local_admin_token =
             if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
                 && !matches!(environment.as_str(), "production" | "prod")
@@ -1041,6 +1060,7 @@ impl IssuanceServiceConfig {
             grpc_addr,
             grpc_enabled: settings.server.grpc_enabled,
             workload_server_tls,
+            managed_authority_https,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,

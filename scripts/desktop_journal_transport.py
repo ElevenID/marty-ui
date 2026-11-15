@@ -191,9 +191,23 @@ class DesktopPrivateJournalTransport:
 
     def prepare_volume(self):
         self._engine()
+        legacy = self.private / "desktop-journal-bootstrap-intent.private.json"
+        if legacy.exists() or legacy.is_symlink():
+            require(legacy.is_file() and not legacy.is_symlink(), "DESKTOP_JOURNAL_LEGACY_INTENT_UNREADABLE")
+            value = json.loads(legacy.read_bytes())
+            require(isinstance(value, dict)
+                    and set(value) == {"volumeName", "runId", "scope", "windowsParentDurabilityClaimed"}
+                    and isinstance(value["runId"], str)
+                    and re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", value["runId"])
+                    and value["volumeName"] == "marty-d02-journal-" + value["runId"]
+                    and value["scope"] == "NEW_METADATA_VOLUME_ONLY"
+                    and value["windowsParentDurabilityClaimed"] is False,
+                    "DESKTOP_JOURNAL_LEGACY_INTENT_CHANGED")
+            require(value["runId"] != self.run_id, "DESKTOP_JOURNAL_LEGACY_RUN_ALREADY_CONSUMED")
         existing = self._command(["volume", "ls", "--format", "{{.Name}}"]).stdout.decode().split()
         require(self.spec["volumeName"] not in existing, "DESKTOP_JOURNAL_VOLUME_EXISTS_NO_RETRY")
-        intent = self.private / "desktop-journal-bootstrap-intent.private.json"
+        intent = self.private / ("desktop-journal-bootstrap-intent-" + self.run_id + ".private.json")
+        require(not intent.exists() and not intent.is_symlink(), "DESKTOP_JOURNAL_RUN_INTENT_ALREADY_CONSUMED")
         with intent.open("xb") as stream:
             stream.write((json.dumps({"volumeName": self.spec["volumeName"], "runId": self.run_id, "scope": "NEW_METADATA_VOLUME_ONLY", "windowsParentDurabilityClaimed": False}) + "\n").encode());stream.flush();os.fsync(stream.fileno())
         require(self._command(["volume", "create", "--driver", "local", "--label", "elevenid.owner=" + OWNER, "--label", "elevenid.run=" + self.run_id, self.spec["volumeName"]]).stdout.decode().strip() == self.spec["volumeName"], "DESKTOP_JOURNAL_VOLUME_CREATE_UNKNOWN")

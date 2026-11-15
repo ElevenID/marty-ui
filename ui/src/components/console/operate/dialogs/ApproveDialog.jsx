@@ -57,7 +57,7 @@ export default function ApproveDialog({ open, application, checks, initialNote, 
 
         {/* Credential summary */}
         <Box sx={{ bgcolor: 'success.50', border: '1px solid', borderColor: 'success.light', borderRadius: 1, p: 2, my: 2 }}>
-          <Typography variant="subtitle2" fontWeight="bold">{credentialDisplay}</Typography>
+          <Typography variant="subtitle2" sx={{ fontWeight: "bold" }}>{credentialDisplay}</Typography>
           <Typography variant="body2" color="text.secondary">Applicant: {applicantName}</Typography>
           {application.requested_validity_years && (
             <Chip label={`Valid for ${application.requested_validity_years} year(s)`} size="small" sx={{ mt: 0.5 }} />
@@ -67,14 +67,14 @@ export default function ApproveDialog({ open, application, checks, initialNote, 
         {/* Warn about outstanding issues */}
         {failedChecks.length > 0 && (
           <Box sx={{ bgcolor: 'error.50', border: '1px solid', borderColor: 'error.light', borderRadius: 1, p: 1.5, mb: 2 }}>
-            <Typography variant="caption" color="error.main" fontWeight="medium">
+            <Typography variant="caption" color="error.main" sx={{ fontWeight: "medium" }}>
               ⚠ {failedChecks.length} check(s) failed. Approving overrides these failures.
             </Typography>
           </Box>
         )}
         {pendingChecks.length > 0 && (
           <Box sx={{ bgcolor: 'warning.50', border: '1px solid', borderColor: 'warning.light', borderRadius: 1, p: 1.5, mb: 2 }}>
-            <Typography variant="caption" color="warning.dark" fontWeight="medium">
+            <Typography variant="caption" color="warning.dark" sx={{ fontWeight: "medium" }}>
               {pendingChecks.length} check(s) still pending. Approving will proceed without them.
             </Typography>
           </Box>

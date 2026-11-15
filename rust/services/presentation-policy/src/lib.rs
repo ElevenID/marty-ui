@@ -3,14 +3,23 @@ pub mod catalog;
 pub mod config;
 pub mod control_plane;
 pub mod domain;
+mod evaluation_validity;
 pub mod grpc_security;
 pub mod grpc_service;
 pub mod http_service;
 pub mod native_kernel;
+mod owner_channel;
 pub mod persistence;
+mod policy_contract;
+pub mod policy_revision;
 pub mod postgres;
+mod prerequisite_authority;
+mod profiled_jwt_vc;
+#[cfg(test)]
+mod profiled_jwt_vc_tests;
+mod response_association;
 pub mod runtime;
-mod sd_jwt_query_binding;
+mod sd_jwt_query;
 pub mod verification;
 
 pub use application::{
@@ -26,26 +35,35 @@ pub use domain::{
     evaluate_verified_facts_json, normalize_credential_format, policy_configuration_digest,
     AlternativeRequirement, ClaimConstraint, ConstraintType, CredentialRequirement,
     DisplayMetadata, FreshnessPolicy, HolderBinding, IssuerConstraints, PolicyDomainError,
-    PolicyStatus, PresentationPolicy, RequestPurpose, RequestedClaim,
+    PolicyStatus, PrerequisiteEvidenceProfile, PresentationPolicy, RequestPurpose, RequestedClaim,
 };
 pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
-    evaluate_verified_facts_for_policy, presentation_policy_router, EvaluatePresentationRequest,
-    PresentationPolicyHttpState, PresentationVerificationError,
-    PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
+    evaluate_verified_facts_for_policy, evaluate_verified_material_for_policy,
+    presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
+    PresentationVerificationError, PresentationVerificationOrchestrator, VerifiedPolicyMaterial,
 };
 pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
+pub use owner_channel::{AuthenticatedOwnerResponse, ManagedOwnerChannelConfig};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
+pub use policy_revision::policy_revision;
 pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,
 };
+pub use prerequisite_authority::VerifiedManagedCredentialAuthority;
+pub use profiled_jwt_vc::{AuthenticatedProfiledJwtVcEvidence, ProfiledJwtVcRequest};
 pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
+pub use sd_jwt_query::{
+    AuthenticatedSdJwtPresentationEvidence, AuthenticatedSdJwtQueryEvidence, SdJwtDcqlRequest,
+};
 pub use verification::{
-    CredentialStatusEvidence, CredentialStatusResolver, CredentialVerificationContext,
-    CredentialVerificationEvidence, CredentialVerificationKernel, IssuerTrustEvidence,
-    PresentationTrustResolver, ResolvedTrustProfile, VerifiedFactsOrchestrator,
+    AuthenticatedIssuerEvidence, CredentialStatusEvidence, CredentialStatusResolver,
+    CredentialVerificationContext, CredentialVerificationEvidence, CredentialVerificationKernel,
+    IssuerKeyMechanism, IssuerKeyProvenance, IssuerTrustEvidence, PresentationTrustResolver,
+    ResolvedCredentialTemplate, ResolvedIssuerKey, ResolvedTrustProfile,
+    ResolvedVerificationPolicy, VerifiedFactsOrchestrator,
 };
 
 pub mod presentation_policy_proto {
@@ -81,3 +99,6 @@ pub const GRPC_METHODS: [&str; 10] = [
     "EvaluatePresentation",
     "HealthCheck",
 ];
+
+#[cfg(test)]
+mod verification_tests;

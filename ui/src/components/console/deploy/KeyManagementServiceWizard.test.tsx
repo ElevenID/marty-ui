@@ -35,6 +35,15 @@ vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => mockUseConsole(),
 }))
 
+vi.mock('../../../hooks/useAuth', () => ({
+  useAuth: () => ({ isAuthenticated: true, user: { id: 'principal-1' } }),
+}))
+
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: (resource: string, action: string) =>
+    resource === 'signing-key' && ['view', 'create'].includes(action) }),
+}))
+
 describe('KeyManagementServiceWizard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -295,6 +304,145 @@ describe('KeyManagementServiceWizard', () => {
     expect(JSON.parse(service.auth_reference)).toEqual({
       access_key_id: 'AKIAEXAMPLE', secret_access_key: 'aws-secret',
     })
+  })
+
+  it('preserves the complete connection and key draft when reselecting the current signing service type', async () => {
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'AWS KMS key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByRole('textbox', { name: /Service name/i }), 'Reviewed AWS signer')
+    await user.type(screen.getByRole('textbox', { name: /Region \/ location/i }), 'us-west-2')
+    await user.click(screen.getByRole('combobox', { name: 'Authentication mode' }))
+    await user.click(screen.getByRole('option', { name: 'Access key' }))
+    await user.type(screen.getByRole('textbox', { name: 'Access key ID' }), 'AKIAEXAMPLE')
+    await user.type(screen.getByLabelText(/Secret access key/), 'fixture-secret')
+    await user.type(screen.getByLabelText('Session token'), 'fixture-session')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    const keyReference = 'arn:aws:kms:us-west-2:123456789012:key/reviewed'
+    await user.type(screen.getByRole('textbox', { name: /Key ARN/i }), keyReference)
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Validate connection' }))
+    await screen.findByText('Connected to signer endpoint.')
+
+    for (let step = 0; step < 3; step += 1) await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'AWS KMS key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByRole('textbox', { name: /Service name/i })).toHaveValue('Reviewed AWS signer')
+    expect(screen.getByRole('textbox', { name: /Region \/ location/i })).toHaveValue('us-west-2')
+    expect(screen.getByRole('combobox', { name: 'Authentication mode' })).toHaveTextContent('Access key')
+    expect(screen.getByRole('textbox', { name: 'Access key ID' })).toHaveValue('AKIAEXAMPLE')
+    expect(screen.getByLabelText(/Secret access key/)).toHaveValue('fixture-secret')
+    expect(screen.getByLabelText('Session token')).toHaveValue('fixture-session')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByRole('textbox', { name: /Key ARN/i })).toHaveValue(keyReference)
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('Connected to signer endpoint.')).toBeInTheDocument()
+    expect(screen.queryByText('fixture-secret')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    const service = mockUpdateKeyManagementConfig.mock.calls[0][0].services[1]
+    expect(service).toMatchObject({ name: 'Reviewed AWS signer', service_type: 'aws-kms', region: 'us-west-2',
+      key_reference: keyReference, auth_mode: 'access_key' })
+    expect(JSON.parse(service.auth_reference)).toEqual({
+      access_key_id: 'AKIAEXAMPLE', secret_access_key: 'fixture-secret', session_token: 'fixture-session',
+    })
+    expect(mockValidateKeyManagementService).toHaveBeenCalledTimes(2)
+  })
+
+  it('clears provider-specific authentication when selecting a different signing service type', async () => {
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'AWS KMS key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByRole('textbox', { name: /Service name/i }), 'Reviewed signer')
+    await user.type(screen.getByRole('textbox', { name: /Region \/ location/i }), 'us-west-2')
+    await user.click(screen.getByRole('combobox', { name: 'Authentication mode' }))
+    await user.click(screen.getByRole('option', { name: 'Access key' }))
+    await user.type(screen.getByRole('textbox', { name: 'Access key ID' }), 'AKIAEXAMPLE')
+    await user.type(screen.getByLabelText(/Secret access key/), 'fixture-secret')
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'Custom Transit-Compatible Service key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByRole('combobox', { name: 'Authentication mode' })).toHaveTextContent('Token')
+    expect(screen.getByLabelText(/Transit token/i)).toHaveValue('')
+    expect(screen.queryByRole('textbox', { name: 'Access key ID' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /Region \/ location/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /Service URL/i })).toHaveValue('')
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    await user.click(screen.getByRole('button', { name: 'AWS KMS key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByRole('combobox', { name: 'Authentication mode' })).toHaveTextContent('IAM role')
+    expect(screen.getByRole('textbox', { name: /Region \/ location/i })).toHaveValue('')
+    await user.click(screen.getByRole('combobox', { name: 'Authentication mode' }))
+    await user.click(screen.getByRole('option', { name: 'Access key' }))
+    expect(screen.getByRole('textbox', { name: 'Access key ID' })).toHaveValue('')
+    expect(screen.getByLabelText(/Secret access key/)).toHaveValue('')
+    expect(mockValidateKeyManagementService).not.toHaveBeenCalled()
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['endpoint', 'Service URL', 'https://updated-kms.example.test', { endpoint: 'https://updated-kms.example.test' }, true],
+    ['authentication', 'Transit token', 'updated-fixture-token', { auth_reference: 'updated-fixture-token' }, true],
+    ['key reference', 'Key reference', 'replacement-key', { key_reference: 'replacement-key' }, true],
+    ['CA certificate path', 'TLS CA certificate file', '/run/secrets/replacement-ca.pem', { ca_cert_file: '/run/secrets/replacement-ca.pem' }, true],
+    ['key purpose', 'VC JWT / SD-JWT issuer', 'vc_jwt_issuer', { key_purposes: ['vc_jwt_issuer'] }, true],
+    ['service name', 'Service name', 'Renamed transit signer', { name: 'Renamed transit signer' }, false],
+  ] as const)('updates preflight feedback when editing %s after a successful probe', async (field, label, value, expectedProbe, invalidates) => {
+    mockGetKeyManagementConfig.mockResolvedValue({ services: [], default_service_id: null, service_type_catalog: [] })
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'Custom Transit-Compatible Service key management service' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByLabelText(/Service name/i), 'Reviewed transit signer')
+    await user.type(screen.getByLabelText(/Service URL/i), 'https://kms.example.test')
+    await user.type(screen.getByLabelText(/Transit token/i), 'fixture-token')
+    await user.type(screen.getByLabelText(/TLS CA certificate file/i), '/run/secrets/original-ca.pem')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByLabelText(/Key reference/i), 'reviewed-key')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Validate connection' }))
+    await screen.findByText('Connected to signer endpoint.')
+    expect(screen.getByText('Pass', { exact: true })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+    const editsKeyAccess = field === 'key reference' || field === 'key purpose'
+    if (!editsKeyAccess) await user.click(screen.getByRole('button', { name: 'Back' }))
+    if (field === 'key purpose') {
+      await user.click(screen.getByRole('checkbox', { name: new RegExp(label, 'i') }))
+    } else {
+      const input = screen.getByLabelText(new RegExp(label, 'i'))
+      await user.clear(input)
+      await user.type(input, value)
+    }
+    if (!editsKeyAccess) await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    if (invalidates) {
+      expect(screen.queryByText('Connected to signer endpoint.')).not.toBeInTheDocument()
+      expect(screen.queryByText('Pass', { exact: true })).not.toBeInTheDocument()
+      expect(screen.getByText('No preflight checks run yet.')).toBeInTheDocument()
+    } else {
+      expect(screen.getByText('Connected to signer endpoint.')).toBeInTheDocument()
+      expect(screen.getByText('Pass', { exact: true })).toBeInTheDocument()
+    }
+    expect(screen.queryByText('fixture-token')).not.toBeInTheDocument()
+    expect(screen.queryByText('updated-fixture-token')).not.toBeInTheDocument()
+    expect(mockValidateKeyManagementService).toHaveBeenCalledTimes(1)
+    expect(mockUpdateKeyManagementConfig).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    expect(mockValidateKeyManagementService).toHaveBeenCalledTimes(2)
+    expect(mockValidateKeyManagementService.mock.calls[1][0]).toMatchObject({
+      ...expectedProbe, live_probe: true,
+    })
+    expect(mockUpdateKeyManagementConfig.mock.calls[0][0].services.at(-1)).toMatchObject(expectedProbe)
   })
 
   it('runs backend validation checks in the review step', async () => {

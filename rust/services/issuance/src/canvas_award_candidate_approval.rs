@@ -636,6 +636,10 @@ fn plan_canvas_management_transaction(
     {
         return None;
     }
+    if credential_payload_format.eq_ignore_ascii_case(marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT)
+    {
+        return None;
+    }
     remote_credential_format(&credential_payload_format).ok()?;
     let mut claims = application
         .get("form_data")
@@ -829,6 +833,9 @@ fn build_canvas_approval_transaction(
         return None;
     }
     Some(CredentialTransaction {
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
+
         id: seed.transaction_id.clone(),
         organization_id,
         credential_template_id,

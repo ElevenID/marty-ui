@@ -67,11 +67,12 @@ impl PublicVerificationCatalog {
         .await?;
         // Digest and requirements must come from one owner GetPolicy response.
         // Separate reads cannot establish which rules produced this preview.
-        if !crate::defined_verification::valid_policy_digest(&resolved.policy.configuration_digest)
-        {
+        if !crate::defined_verification::valid_policy_digest(
+            &resolved.policy.policy_revision.content_digest,
+        ) {
             return Err(PublicVerificationPreviewError::Unsupported);
         }
-        if resolved.policy.configuration_digest != choice.policy_configuration_digest {
+        if resolved.policy.policy_revision.content_digest != choice.policy_configuration_digest {
             return Err(crate::PublicVerificationCatalogError::ConfigurationChanged.into());
         }
         let artifacts = crate::presentation_request::build_resolved_flow_presentation_request(

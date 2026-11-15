@@ -94,6 +94,30 @@ describe('readiness gateway smoke', () => {
     await expect(getOrganizationEnvironment('org_fresh')).resolves.toBeNull()
   })
 
+  it.each(['', false, {}, 'unknown'])('rejects an invalid environment value %j instead of treating it as unset', async (environment) => {
+    server.use(http.get('*/v1/organizations/:orgId/environment', ({ params }) =>
+      HttpResponse.json({ organization_id: params.orgId, environment })))
+
+    await expect(getOrganizationEnvironment('org_live')).rejects.toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INVALID', status: 502,
+    })
+  })
+
+  it('preserves a denied environment read as an error instead of an unset environment', async () => {
+    server.use(http.get('*/v1/organizations/:orgId/environment', () =>
+      HttpResponse.json({ error: 'forbidden', error_description: 'Organization membership required' }, { status: 403 })))
+
+    await expect(getOrganizationEnvironment('org_unavailable')).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('rejects an incomplete environment update response', async () => {
+    server.use(http.patch('*/v1/organizations/:orgId/environment', () => HttpResponse.json({})))
+
+    await expect(updateOrganizationEnvironment('org_live', 'staging')).rejects.toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INCOMPLETE',
+    })
+  })
+
   it('updates organization environment through the gateway v1 route', async () => {
     const requestedPaths: string[] = []
 

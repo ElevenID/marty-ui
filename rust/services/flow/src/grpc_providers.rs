@@ -32,6 +32,114 @@ use crate::{
     PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
 };
 
+fn decode_template_reference(
+    template_id: &str,
+    response: crate::credential_template_proto::TemplateResponse,
+) -> Result<CredentialTemplateReference, FlowProviderError> {
+    if response.id != template_id || response.organization_id.trim().is_empty() {
+        return Err(invalid_response(
+            "credential_template",
+            "template identity mismatch",
+        ));
+    }
+    Ok(CredentialTemplateReference {
+        id: response.id,
+        organization_id: response.organization_id,
+        status: response.status,
+        credential_type: response.credential_type,
+        vct: response.vct,
+        doctype: response.doctype,
+        supported_formats: response.supported_formats,
+        claims: response
+            .claims
+            .into_iter()
+            .map(|claim| CredentialClaimReference {
+                name: claim.name,
+                display_name: claim.display_name,
+                description: claim.description,
+                required: claim.required,
+                mdoc_namespace: claim.mdoc_namespace,
+                mdoc_element_identifier: claim.mdoc_element_identifier,
+            })
+            .collect(),
+        issuer_did: response.issuer_did,
+        credential_format: response.credential_payload_format,
+        jwt_vc_profile: marty_jwt_vc_issuance::parse_optional_policy_json(
+            &response.jwt_vc_profile_json,
+        )
+        .map_err(|_| invalid_response("credential_template", "invalid explicit JWT-VC policy"))?,
+        issuance_protocol: response.issuance_protocol,
+        wallet_configurations: bounded_json(&response.wallet_configs_json, "credential_template")?,
+        issuer_algorithm: nonempty(response.issuer_algorithm),
+    })
+}
+
+fn decode_policy_reference(
+    policy_id: &str,
+    response: crate::presentation_policy_proto::PolicyResponse,
+) -> Result<PresentationPolicyReference, FlowProviderError> {
+    if response.id != policy_id || response.organization_id.trim().is_empty() {
+        return Err(invalid_response(
+            "presentation_policy",
+            "policy identity mismatch",
+        ));
+    }
+    let policy_revision = decode_policy_revision(
+        response.policy_revision.as_ref(),
+        &response.organization_id,
+        policy_id,
+    )?;
+    if u32::try_from(response.version).ok() != Some(policy_revision.version) {
+        return Err(invalid_response(
+            "presentation_policy",
+            "policy version mismatch",
+        ));
+    }
+    let prerequisite_evidence_profile = match response.prerequisite_evidence_profile.as_str() {
+        "" => None,
+        "managed_sd_jwt_dcql_v1" => Some(response.prerequisite_evidence_profile.clone()),
+        _ => {
+            return Err(invalid_response(
+                "presentation_policy",
+                "unknown prerequisite evidence profile",
+            ))
+        }
+    };
+    let credential_authority: Option<
+        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+    > = if response.credential_authority_snapshot_json.is_empty() {
+        None
+    } else {
+        Some(bounded_json(
+            &response.credential_authority_snapshot_json,
+            "presentation_policy",
+        )?)
+    };
+    if prerequisite_evidence_profile.is_some() != credential_authority.is_some()
+        || credential_authority.as_ref().is_some_and(|authority| {
+            authority.validate().is_err() || authority.organization_id != response.organization_id
+        })
+    {
+        return Err(invalid_response(
+            "presentation_policy",
+            "credential authority snapshot mismatch",
+        ));
+    }
+    Ok(PresentationPolicyReference {
+        id: response.id,
+        organization_id: response.organization_id,
+        status: response.status,
+        policy_revision,
+        holder_binding_required: response.holder_binding_required,
+        prerequisite_evidence_profile,
+        credential_authority,
+        credential_requirements: bounded_json(
+            &response.credential_requirements_json,
+            "presentation_policy",
+        )?,
+    })
+}
+
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const USER_ID_HEADER: &str = "x-user-id";
@@ -148,16 +256,16 @@ impl FlowGrpcChannelFactories {
             self.presentation_policy.connect(),
             self.issuance.connect(),
         )?;
-        Ok(FlowGrpcClients::new(
+        let mut clients = FlowGrpcClients::new(
             organization,
             credential_template,
             presentation_policy,
             issuance,
-        ))
-    }
-
-    pub(crate) fn presentation_policy_workload_transport(&self) -> bool {
-        self.presentation_policy.is_keyless()
+        );
+        // Keep the inspected capability with the exact client constructed from
+        // this connected channel. A raw or replaceable client cannot inherit it.
+        clients.presentation_policy_mtls = self.presentation_policy.is_keyless();
+        Ok(clients)
     }
 }
 
@@ -214,7 +322,8 @@ fn workload_factory(
 pub struct FlowGrpcClients {
     pub organization: OrganizationServiceClient<Channel>,
     pub credential_template: CredentialTemplateServiceClient<Channel>,
-    pub presentation_policy: PresentationPolicyServiceClient<Channel>,
+    presentation_policy: PresentationPolicyServiceClient<Channel>,
+    presentation_policy_mtls: bool,
     pub issuance: IssuanceServiceClient<Channel>,
 }
 
@@ -230,6 +339,7 @@ impl FlowGrpcClients {
             organization: OrganizationServiceClient::new(organization),
             credential_template: CredentialTemplateServiceClient::new(credential_template),
             presentation_policy: PresentationPolicyServiceClient::new(presentation_policy),
+            presentation_policy_mtls: false,
             issuance: IssuanceServiceClient::new(issuance),
         }
     }
@@ -238,18 +348,9 @@ impl FlowGrpcClients {
         self,
         service_token: Option<&str>,
     ) -> Result<FlowGrpcProviders, FlowProviderError> {
-        // Preserve the public direct-client API's previous forwarding behavior.
-        self.providers_with_channel_security(service_token, true)
-    }
-
-    pub(crate) fn providers_with_channel_security(
-        self,
-        service_token: Option<&str>,
-        presentation_policy_mtls: bool,
-    ) -> Result<FlowGrpcProviders, FlowProviderError> {
         let mut presentation_policy =
             GrpcPresentationPolicyProvider::new(self.presentation_policy, service_token)?;
-        presentation_policy.workload_mtls = presentation_policy_mtls;
+        presentation_policy.workload_mtls = self.presentation_policy_mtls;
         Ok(FlowGrpcProviders {
             tenant_membership: GrpcTenantMembershipProvider::new(self.organization, service_token)?,
             credential_template: GrpcCredentialTemplateProvider::new(
@@ -403,41 +504,7 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             .await
             .map_err(|status| provider_status("credential_template", template_id, status))?
             .into_inner();
-        if response.id != template_id || response.organization_id.trim().is_empty() {
-            return Err(invalid_response(
-                "credential_template",
-                "template identity mismatch",
-            ));
-        }
-        Ok(CredentialTemplateReference {
-            id: response.id,
-            organization_id: response.organization_id,
-            status: response.status,
-            credential_type: response.credential_type,
-            vct: response.vct,
-            doctype: response.doctype,
-            supported_formats: response.supported_formats,
-            claims: response
-                .claims
-                .into_iter()
-                .map(|claim| CredentialClaimReference {
-                    name: claim.name,
-                    display_name: claim.display_name,
-                    description: claim.description,
-                    required: claim.required,
-                    mdoc_namespace: claim.mdoc_namespace,
-                    mdoc_element_identifier: claim.mdoc_element_identifier,
-                })
-                .collect(),
-            issuer_did: response.issuer_did,
-            credential_format: response.credential_payload_format,
-            issuance_protocol: response.issuance_protocol,
-            wallet_configurations: bounded_json(
-                &response.wallet_configs_json,
-                "credential_template",
-            )?,
-            issuer_algorithm: nonempty(response.issuer_algorithm),
-        })
+        decode_template_reference(template_id, response)
     }
 
     async fn wallet_formats(
@@ -485,6 +552,116 @@ pub struct GrpcPresentationPolicyProvider {
     workload_mtls: bool,
 }
 
+/// A Policy observation acquired by the exact inspected workload-mTLS client.
+/// The serialized candidate alone has no authority. A cloned acquisition cannot
+/// be attached to a changed request or evaluation.
+///
+/// ```compile_fail
+/// let _: marty_flow::AcquiredManagedPolicyEvidence =
+///     serde_json::from_str("{}").unwrap();
+/// ```
+#[derive(Clone, PartialEq)]
+pub struct AcquiredManagedPolicyEvidence {
+    candidate: marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2,
+    acquisition_digest: String,
+}
+
+impl std::fmt::Debug for AcquiredManagedPolicyEvidence {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AcquiredManagedPolicyEvidence")
+            .finish_non_exhaustive()
+    }
+}
+
+impl AcquiredManagedPolicyEvidence {
+    fn acquire(
+        wire: &str,
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+        counts: [i32; 4],
+    ) -> Result<Self, FlowProviderError> {
+        let invalid = || {
+            invalid_response(
+                "presentation_policy",
+                "invalid managed evidence acquisition",
+            )
+        };
+        if wire.len() > marty_oid4vp_contract::MAX_EVIDENCE_PROJECTION_BYTES {
+            return Err(invalid());
+        }
+        let candidate = marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2::from_json(wire)
+            .map_err(|_| invalid())?;
+        let transport = request.oid4vp_transport.as_ref().ok_or_else(invalid)?;
+        let context = serde_json::to_value(&request.context).map_err(|_| invalid())?;
+        let mut result = serde_json::to_value(evaluation).map_err(|_| invalid())?;
+        for (field, value) in [
+            "total_requirements",
+            "satisfied_requirements",
+            "required_satisfied",
+            "required_total",
+        ]
+        .into_iter()
+        .zip(counts)
+        {
+            result[field] = serde_json::json!(value);
+        }
+        candidate
+            .validate_for_request(
+                &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                    organization_id: &request.organization_id,
+                    policy: &request.expected_policy_revision,
+                    nonce: &request.nonce,
+                    audience: &request.audience,
+                    vp_token: &request.presentation,
+                    trust_profile_id: request
+                        .context
+                        .get("trust_profile_id")
+                        .and_then(serde_json::Value::as_str),
+                    context: &context,
+                    oid4vp_transport: transport,
+                },
+                &result,
+            )
+            .map_err(|_| invalid())?;
+        candidate
+            .validate_original_tokens(&[
+                request.presentation.as_str(),
+                transport.vp_token_raw.as_str(),
+            ])
+            .map_err(|_| invalid())?;
+        Ok(Self {
+            candidate,
+            acquisition_digest: Self::binding_digest(request, evaluation)?,
+        })
+    }
+
+    fn binding_digest(
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+    ) -> Result<String, FlowProviderError> {
+        marty_oid4vp_contract::digest_domain_json(
+            "marty.flow/managed-policy-acquisition/v2",
+            &serde_json::json!({"request": request, "evaluation": evaluation}),
+        )
+        .map_err(|_| invalid_response("presentation_policy", "invalid managed acquisition binding"))
+    }
+
+    pub(crate) fn candidate_for(
+        &self,
+        request: &PresentationEvaluationRequest,
+        evaluation: &PresentationEvaluationResult,
+    ) -> Result<&marty_oid4vp_contract::ManagedPolicyEvidenceProjectionV2, FlowProviderError> {
+        if Self::binding_digest(request, evaluation)? != self.acquisition_digest {
+            return Err(invalid_response(
+                "presentation_policy",
+                "managed acquisition changed",
+            ));
+        }
+        Ok(&self.candidate)
+    }
+}
+
 impl GrpcPresentationPolicyProvider {
     pub fn new(
         client: PresentationPolicyServiceClient<Channel>,
@@ -493,18 +670,18 @@ impl GrpcPresentationPolicyProvider {
         Ok(Self {
             client,
             auth: GrpcAuthentication::new(token)?,
-            // Preserve direct-constructor behavior; configured Flow providers
-            // receive the inspected channel capability from their factory.
-            workload_mtls: true,
+            // Raw clients carry no inspected workload-identity provenance.
+            workload_mtls: false,
         })
     }
 }
 
-impl GrpcPresentationPolicyProvider {
-    async fn fetch_policy(
+#[async_trait]
+impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
+    async fn get_policy(
         &self,
         policy_id: &str,
-    ) -> Result<crate::presentation_policy_proto::PolicyResponse, FlowProviderError> {
+    ) -> Result<PresentationPolicyReference, FlowProviderError> {
         let mut client = self.client.clone();
         let response = client
             .get_policy(self.auth.request(GetPolicyRequest {
@@ -513,76 +690,24 @@ impl GrpcPresentationPolicyProvider {
             .await
             .map_err(|status| provider_status("presentation_policy", policy_id, status))?
             .into_inner();
-        if response.id != policy_id || response.organization_id.trim().is_empty() {
-            return Err(invalid_response(
-                "presentation_policy",
-                "policy identity mismatch",
-            ));
-        }
-        Ok(response)
-    }
-}
-
-#[async_trait]
-impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
-    async fn configuration_digest(&self, policy_id: &str) -> Result<String, FlowProviderError> {
-        let digest = self.fetch_policy(policy_id).await?.configuration_digest;
-        if !crate::defined_verification::valid_policy_digest(&digest) {
-            return Err(invalid_response(
-                "presentation_policy",
-                "complete policy configuration binding unavailable",
-            ));
-        }
-        Ok(digest)
-    }
-
-    async fn get_policy(
-        &self,
-        policy_id: &str,
-    ) -> Result<PresentationPolicyReference, FlowProviderError> {
-        let response = self.fetch_policy(policy_id).await?;
-        Ok(PresentationPolicyReference {
-            configuration_digest: response.configuration_digest,
-            id: response.id,
-            organization_id: response.organization_id,
-            status: response.status,
-            credential_requirements: bounded_json(
-                &response.credential_requirements_json,
-                "presentation_policy",
-            )?,
-        })
+        decode_policy_reference(policy_id, response)
     }
 
     async fn evaluate(
         &self,
         request: &PresentationEvaluationRequest,
     ) -> Result<PresentationEvaluationResult, FlowProviderError> {
-        let expected = match request
-            .context
-            .get(crate::defined_verification::EXPECTED_POLICY_DIGEST)
-        {
-            None => String::new(),
-            Some(serde_json::Value::String(value))
-                if crate::defined_verification::valid_policy_digest(value) =>
-            {
-                value.clone()
-            }
-            Some(_) => {
-                return Err(invalid_response(
-                    "presentation_policy",
-                    "invalid policy configuration precondition",
-                ))
-            }
-        };
-        let mut context = request.context.clone();
-        context.remove(crate::defined_verification::EXPECTED_POLICY_DIGEST);
         let mut client = self.client.clone();
         let response = client
             .evaluate_presentation(
                 self.auth.request_for_principal(
                     EvaluatePresentationRequest {
-                        expected_configuration_digest: expected.clone(),
                         policy_id: request.policy_id.clone(),
+                        expected_policy_revision: Some(encode_policy_revision(
+                            &request.expected_policy_revision,
+                            &request.organization_id,
+                            &request.policy_id,
+                        )?),
                         vp_token: request.presentation.clone(),
                         nonce: request.nonce.clone(),
                         audience: request.audience.clone(),
@@ -592,7 +717,7 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default()
                             .into(),
-                        context_json: serde_json::to_string(&context).map_err(|_| {
+                        context_json: serde_json::to_string(&request.context).map_err(|_| {
                             invalid_response(
                                 "presentation_policy",
                                 "evaluation context is not serializable",
@@ -623,13 +748,40 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 "evaluation identity mismatch",
             ));
         }
-        if !expected.is_empty() && response.configuration_digest != expected {
-            return Err(invalid_response(
-                "presentation_policy",
-                "evaluation policy configuration binding mismatch",
-            ));
-        }
-        Ok(PresentationEvaluationResult {
+        let evaluation_validity = if response.evaluation_validity_json.is_empty() {
+            None
+        } else {
+            if !self.workload_mtls {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "uninspected validity channel",
+                ));
+            }
+            Some(
+                marty_oid4vp_contract::PolicyEvaluationValidityV1::from_json(
+                    &response.evaluation_validity_json,
+                )
+                .map_err(|_| {
+                    invalid_response("presentation_policy", "invalid evaluation validity")
+                })?,
+            )
+        };
+        let managed_evidence_json = response.managed_policy_evidence_json;
+        let counts = [
+            response.total_requirements,
+            response.satisfied_requirements,
+            response.required_satisfied,
+            response.required_total,
+        ];
+        let mut evaluation = PresentationEvaluationResult {
+            managed_evidence: None,
+            evaluation_validity,
+            evaluation_timestamp: nonempty(response.evaluation_timestamp),
+            policy_revision: decode_policy_revision(
+                response.policy_revision.as_ref(),
+                &request.organization_id,
+                &request.policy_id,
+            )?,
             result: response.result,
             decision: response.decision,
             decision_reason: nonempty(response.decision_reason),
@@ -653,7 +805,23 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 })?,
             error_codes: Vec::new(),
             warnings: Vec::new(),
-        })
+        };
+        evaluation.validate_validity_for(request)?;
+        if !managed_evidence_json.is_empty() {
+            if !self.workload_mtls {
+                return Err(invalid_response(
+                    "presentation_policy",
+                    "uninspected managed evidence channel",
+                ));
+            }
+            evaluation.managed_evidence = Some(AcquiredManagedPolicyEvidence::acquire(
+                &managed_evidence_json,
+                request,
+                &evaluation,
+                counts,
+            )?);
+        }
+        Ok(evaluation)
     }
 }
 
@@ -752,6 +920,18 @@ fn bounded_json<T: DeserializeOwned>(
 }
 
 fn provider_status(provider: &'static str, resource: &str, status: Status) -> FlowProviderError {
+    if provider == "presentation_policy"
+        && status.code() == Code::FailedPrecondition
+        && status.message() == "PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED"
+    {
+        return FlowProviderError::CredentialAuthorityChanged;
+    }
+    if provider == "presentation_policy"
+        && status.code() == Code::FailedPrecondition
+        && status.message() == "PRESENTATION_POLICY.POLICY_REVISION_MISMATCH"
+    {
+        return FlowProviderError::PolicyRevisionMismatch;
+    }
     match status.code() {
         Code::NotFound => FlowProviderError::NotFound {
             provider,
@@ -779,6 +959,51 @@ fn invalid_response(provider: &'static str, message: &str) -> FlowProviderError 
     }
 }
 
+fn encode_policy_revision(
+    revision: &marty_oid4vp_contract::FrozenPolicyIdentity,
+    organization_id: &str,
+    policy_id: &str,
+) -> Result<crate::presentation_policy_proto::PolicyRevision, FlowProviderError> {
+    if organization_id.trim().is_empty() || revision.id != policy_id || revision.validate().is_err()
+    {
+        return Err(invalid_response(
+            "presentation_policy",
+            "invalid expected policy revision",
+        ));
+    }
+    Ok(crate::presentation_policy_proto::PolicyRevision {
+        organization_id: organization_id.into(),
+        id: revision.id.clone(),
+        version: revision.version,
+        content_digest: revision.content_digest.clone(),
+    })
+}
+
+fn decode_policy_revision(
+    wire: Option<&crate::presentation_policy_proto::PolicyRevision>,
+    organization_id: &str,
+    policy_id: &str,
+) -> Result<marty_oid4vp_contract::FrozenPolicyIdentity, FlowProviderError> {
+    let wire =
+        wire.ok_or_else(|| invalid_response("presentation_policy", "policy revision is missing"))?;
+    let revision = marty_oid4vp_contract::FrozenPolicyIdentity {
+        id: wire.id.clone(),
+        version: wire.version,
+        content_digest: wire.content_digest.clone(),
+    };
+    if wire.organization_id != organization_id
+        || organization_id.trim().is_empty()
+        || revision.id != policy_id
+        || revision.validate().is_err()
+    {
+        return Err(invalid_response(
+            "presentation_policy",
+            "policy revision binding mismatch",
+        ));
+    }
+    Ok(revision)
+}
+
 fn encode_oid4vp_transport(
     transport: &marty_oid4vp_contract::Oid4vpEvaluationTransportV1,
 ) -> Result<crate::presentation_policy_proto::Oid4vpEvaluationTransport, FlowProviderError> {
@@ -790,6 +1015,18 @@ fn encode_oid4vp_transport(
     })?;
     Ok(
         crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            credential_authority_snapshot_json: transport
+                .credential_authority
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| {
+                    invalid_response(
+                        "presentation_policy",
+                        "credential authority is not serializable",
+                    )
+                })?
+                .unwrap_or_default(),
             query_kind: match transport.query_kind {
                 marty_oid4vp_contract::QueryKind::Dcql => "dcql",
                 marty_oid4vp_contract::QueryKind::PresentationExchange => "presentation_exchange",
@@ -819,11 +1056,18 @@ fn encode_oid4vp_transport_for_channel(
     workload_mtls: bool,
 ) -> Result<Option<crate::presentation_policy_proto::Oid4vpEvaluationTransport>, FlowProviderError>
 {
-    // Keep validation unchanged, but do not offer workload-only metadata over
-    // the pre-existing principal-authenticated plaintext route. The policy
-    // service still authorizes the actual peer independently of this flag.
+    // Frozen Flow requests require their exact query to reach the workload-
+    // authenticated evaluator. Dropping metadata would silently change the
+    // evaluation contract. Standalone callers with no Flow transport remain
+    // separate and still bind their explicit policy revision.
     let encoded = transport.map(encode_oid4vp_transport).transpose()?;
-    Ok(if workload_mtls { encoded } else { None })
+    if encoded.is_some() && !workload_mtls {
+        return Err(FlowProviderError::Rejected {
+            provider: "presentation_policy",
+            message: "frozen Flow presentation evaluation requires workload mutual TLS".into(),
+        });
+    }
+    Ok(encoded)
 }
 
 fn nonempty(value: String) -> Option<String> {
@@ -833,6 +1077,90 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_jwt_vc_owner_responses_survive_protobuf_without_legacy_capability_widening() {
+        use prost::Message;
+        use serde_json::json;
+        let revision = marty_oid4vp_contract::FrozenPolicyIdentity {
+            id: "policy-1".into(),
+            version: 1,
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+        };
+        let mut response=crate::presentation_policy_proto::PolicyResponse {
+            id:"policy-1".into(),organization_id:"org-1".into(),status:"active".into(),version:1,
+            policy_revision:Some(encode_policy_revision(&revision,"org-1","policy-1").unwrap()),
+            credential_requirements_json:json!([{"id":"member","credential_template_id":"template-1","required":true,"expected_securing_profile":"w3c_vc2_jose_2026_v1","credential_payload_format":"VC_JWT_DIRECT_V1","requested_claims":[]}]).to_string(),
+            holder_binding_required:true,..Default::default()
+        };
+        let decoded = crate::presentation_policy_proto::PolicyResponse::decode(
+            response.encode_to_vec().as_slice(),
+        )
+        .unwrap();
+        let selected = decode_policy_reference("policy-1", decoded).unwrap();
+        assert!(selected.holder_binding_required);
+        assert_eq!(
+            selected.credential_requirements[0]["expected_securing_profile"],
+            "w3c_vc2_jose_2026_v1"
+        );
+        response.holder_binding_required = false; // Older responses omit the new proto3 field.
+        let old = decode_policy_reference(
+            "policy-1",
+            crate::presentation_policy_proto::PolicyResponse::decode(
+                response.encode_to_vec().as_slice(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!old.holder_binding_required);
+        assert!(serde_json::to_value(&old)
+            .unwrap()
+            .get("holder_binding_required")
+            .is_none());
+
+        let mut template = crate::credential_template_proto::TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            status: "active".into(),
+            credential_type: "MemberCredential".into(),
+            credential_payload_format: "vc_jwt_direct_v1".into(),
+            supported_formats: vec!["VC_JWT_DIRECT_V1".into()],
+            jwt_vc_profile_json: serde_json::to_string(
+                &marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(300).unwrap(),
+            )
+            .unwrap(),
+            wallet_configs_json: "[]".into(),
+            ..Default::default()
+        };
+        let direct = decode_template_reference(
+            "template-1",
+            crate::credential_template_proto::TemplateResponse::decode(
+                template.encode_to_vec().as_slice(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(direct.credential_format, "vc_jwt_direct_v1");
+        assert_eq!(direct.supported_formats, ["VC_JWT_DIRECT_V1"]);
+        assert!(direct.jwt_vc_profile.is_some());
+        for malformed in [
+            "null",
+            "{}",
+            r#"{"contract":"marty.jwt-vc-template-profile/v1","securing_profile":"unknown","signature_lifetime_seconds":300}"#,
+        ] {
+            template.jwt_vc_profile_json = malformed.into();
+            assert!(decode_template_reference("template-1", template.clone()).is_err());
+        }
+        template.jwt_vc_profile_json.clear();
+        template.credential_payload_format = "jwt_vc".into();
+        template.supported_formats = vec!["VC_JWT".into()];
+        let legacy = decode_template_reference("template-1", template).unwrap();
+        assert!(legacy.jwt_vc_profile.is_none());
+        assert!(serde_json::to_value(legacy)
+            .unwrap()
+            .get("jwt_vc_profile")
+            .is_none());
+    }
 
     fn flow_issuance_fixture(name: &str) -> String {
         std::env::var(format!("MARTY_TEST_FLOW_ISSUANCE_{name}"))
@@ -947,6 +1275,7 @@ mod tests {
         let query = serde_json::json!({"credentials": [{"id": "member"}]});
         let submission = serde_json::json!({"id": "legacy", "descriptor_map": [], "extra": true});
         let metadata = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+            credential_authority: None,
             query_kind: marty_oid4vp_contract::QueryKind::Dcql,
             query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
             query_document: query.clone(),
@@ -976,13 +1305,79 @@ mod tests {
             encode_oid4vp_transport_for_channel(Some(&metadata), true).unwrap(),
             Some(wire)
         );
-        assert!(encode_oid4vp_transport_for_channel(Some(&metadata), false)
+        assert!(encode_oid4vp_transport_for_channel(Some(&metadata), false).is_err());
+        assert!(encode_oid4vp_transport_for_channel(None, false)
             .unwrap()
             .is_none());
         let mut invalid = metadata;
         invalid.query_digest = "0".repeat(64);
         assert!(encode_oid4vp_transport(&invalid).is_err());
         assert!(encode_oid4vp_transport_for_channel(Some(&invalid), false).is_err());
+    }
+
+    #[test]
+    fn policy_revision_wire_requires_exact_tenant_identity_and_valid_material() {
+        let revision = marty_oid4vp_contract::FrozenPolicyIdentity {
+            id: "policy-1".into(),
+            version: 7,
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+        };
+        let wire = encode_policy_revision(&revision, "org-1", "policy-1").unwrap();
+        assert_eq!(
+            decode_policy_revision(Some(&wire), "org-1", "policy-1").unwrap(),
+            revision
+        );
+        assert!(decode_policy_revision(None, "org-1", "policy-1").is_err());
+        assert!(decode_policy_revision(Some(&wire), "other-org", "policy-1").is_err());
+        assert!(decode_policy_revision(Some(&wire), "org-1", "other-policy").is_err());
+        assert!(encode_policy_revision(&revision, "", "policy-1").is_err());
+        assert!(encode_policy_revision(&revision, "org-1", "other-policy").is_err());
+        for mutation in 0..3 {
+            let mut invalid = wire.clone();
+            match mutation {
+                0 => invalid.version = 0,
+                1 => invalid.content_digest = format!("sha256:{}", "A".repeat(64)),
+                _ => invalid.content_digest.clear(),
+            }
+            assert!(decode_policy_revision(Some(&invalid), "org-1", "policy-1").is_err());
+        }
+    }
+
+    #[test]
+    fn producer_revision_rejection_is_not_erased_as_provider_unavailability() {
+        assert_eq!(
+            provider_status(
+                "presentation_policy",
+                "policy-1",
+                Status::failed_precondition("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")
+            ),
+            FlowProviderError::CredentialAuthorityChanged
+        );
+        assert_eq!(
+            provider_status(
+                "presentation_policy",
+                "policy-1",
+                Status::failed_precondition("PRESENTATION_POLICY.POLICY_REVISION_MISMATCH")
+            ),
+            FlowProviderError::PolicyRevisionMismatch
+        );
+        for status in [
+            Status::unavailable("PRESENTATION_POLICY.POLICY_REVISION_MISMATCH"),
+            Status::failed_precondition("different rejection"),
+        ] {
+            assert_ne!(
+                provider_status("presentation_policy", "policy-1", status),
+                FlowProviderError::PolicyRevisionMismatch
+            );
+        }
+        assert_ne!(
+            provider_status(
+                "credential_template",
+                "template-1",
+                Status::failed_precondition("PRESENTATION_POLICY.POLICY_REVISION_MISMATCH")
+            ),
+            FlowProviderError::PolicyRevisionMismatch
+        );
     }
 
     #[tokio::test]
@@ -994,15 +1389,33 @@ mod tests {
             presentation_policy: factory().into(),
             issuance: factory().into(),
         };
-        assert!(!factories.presentation_policy_workload_transport());
         let clients = factories.connect_lazy().unwrap();
-        let providers = clients
-            .providers_with_channel_security(
+        let providers = clients.providers(None).unwrap();
+        assert!(!providers.presentation_policy.workload_mtls);
+    }
+
+    #[tokio::test]
+    async fn raw_clients_never_claim_inspected_workload_identity() {
+        for target in ["http://127.0.0.1:9009", "https://policy.example:9009"] {
+            let channel = tonic::transport::Endpoint::from_shared(target.to_owned())
+                .unwrap()
+                .connect_lazy();
+            let direct = GrpcPresentationPolicyProvider::new(
+                PresentationPolicyServiceClient::new(channel.clone()),
                 None,
-                factories.presentation_policy_workload_transport(),
             )
             .unwrap();
-        assert!(!providers.presentation_policy.workload_mtls);
+            assert!(!direct.workload_mtls);
+            let clients =
+                FlowGrpcClients::new(channel.clone(), channel.clone(), channel.clone(), channel);
+            assert!(
+                !clients
+                    .providers(None)
+                    .unwrap()
+                    .presentation_policy
+                    .workload_mtls
+            );
+        }
     }
 
     #[test]

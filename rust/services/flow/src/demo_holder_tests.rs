@@ -194,10 +194,17 @@ impl crate::PresentationPolicyProvider for Policy {
         id: &str,
     ) -> Result<crate::PresentationPolicyReference, FlowProviderError> {
         Ok(crate::PresentationPolicyReference {
-            configuration_digest: String::new(),
             id: id.into(),
             organization_id: ORG.into(),
             status: "active".into(),
+            policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
+                id: id.into(),
+                version: 1,
+                content_digest: self.configuration_digest(id).await?,
+            },
+            holder_binding_required: true,
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             credential_requirements: vec![
                 json!({"id":"age", "credential_template_id":"demo-age", "requested_claims":[{"claim_name":"age_over_18","required":true}]}),
             ],
@@ -229,6 +236,7 @@ impl crate::CredentialTemplateProvider for Templates {
             claims: Vec::new(),
             issuer_did: ISSUER.into(),
             credential_format: "dc+sd-jwt".into(),
+            jwt_vc_profile: None,
             issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),

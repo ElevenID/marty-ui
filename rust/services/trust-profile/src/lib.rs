@@ -2,6 +2,7 @@ pub mod application;
 pub mod catalog;
 pub mod config;
 pub mod control_plane;
+pub mod credential_authority;
 pub mod domain;
 pub mod http_service;
 pub mod issuer_keys;
@@ -38,8 +39,10 @@ pub use domain::{
     TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
 };
 pub use http_service::{
-    trust_profile_router, TrustProfileHttpState, TrustRegistrySyncError, TrustRegistrySynchronizer,
+    trust_credential_authority_router, trust_profile_router, TrustProfileHttpState,
+    TrustRegistrySyncError, TrustRegistrySynchronizer,
 };
+pub use issuer_keys::scoped_document::{HttpScopedIssuerKeyResolver, ScopedIssuerKeyResolver};
 pub use issuer_keys::{
     IssuerKeyResolution, IssuerKeyResolutionError, IssuerKeyResolver, NativeIssuerKeyResolver,
 };

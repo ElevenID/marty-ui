@@ -1,16 +1,18 @@
 import { isWebSectionEnabled } from '../../utils/runtimeConfig';
 import WebSectionUnavailable from '../../components/WebSectionUnavailable';
-import { Navigate, Route, Routes } from 'react-router';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
 import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
 import AuthCallback from '../../components/AuthCallback';
+import AuthUnavailable from '../../components/AuthUnavailable';
 import LoginPage from '../../components/LoginPage';
 import ProfilePage from '../../components/ProfilePage';
 import { ApplicationForm } from '../../components/applicant';
 import CredentialCatalog from '../../components/applicant/CredentialCatalog';
 import { AuthenticatedLayout } from '../../components/layouts';
+import ErrorState from '../../components/common/ErrorState';
 import MyOrganizationsPage from '../../components/pages/MyOrganizationsPage';
 import DiscoverOrganizationsPage from '../../components/pages/DiscoverOrganizationsPage';
 import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
@@ -33,6 +35,7 @@ import {
   TemplatesPage,
   CredentialTemplatesPage,
   CredentialTemplateDetailPage,
+  CredentialTemplateEditorPage,
   ApplicationTemplatesPage,
   ApplicationTemplateEditorPage,
   ApplicationTemplateDetailPage,
@@ -86,11 +89,13 @@ import { renderCommerceConsoleRoutes } from '../../extensions/commerce';
 function GuardLoadingState({ message }) {
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
     >
       <CircularProgress size={48} />
       <Typography variant="body1" color="text.secondary" sx={{ mt: 2 }}>
@@ -102,8 +107,9 @@ function GuardLoadingState({ message }) {
 
 // Gate the page before mounting its data loaders, including direct and legacy URLs.
 function OperatorRoute({ action = 'view', children }) {
-  const { can, isLoading } = usePermissions();
+  const { can, isLoading, error, refresh } = usePermissions();
   if (isLoading) return <GuardLoadingState message="Checking operator permissions..." />;
+  if (error) return <ErrorState error={error} onRetry={refresh} variant="compact" />;
   if (!can('signing-key', action)) {
     return <Alert severity="error">You do not have permission to {action === 'create' ? 'configure' : 'view'} key management for this organization.</Alert>;
   }
@@ -123,7 +129,8 @@ function resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrap
 }
 
 function ConsoleEntryRoute() {
-  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, authError, refreshUser } = useAuth();
+  const location = useLocation();
   const {
     mode,
     activeOrgId,
@@ -134,12 +141,16 @@ function ConsoleEntryRoute() {
     reloadConsoleState,
   } = useConsole();
 
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={authLoading} />;
+  }
+
   if (authLoading || consoleLoading) {
     return <GuardLoadingState message="Loading console..." />;
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/console/login" state={{ from: { pathname: '/console' } }} replace />;
+    return <Navigate to="/console/login" state={{ from: location }} replace />;
   }
 
   if (membershipLoadError && isOrgBootstrapRequired) {
@@ -186,6 +197,7 @@ function ConsoleRoutes() {
         <Route path="templates/credentials" element={<CredentialTemplatesPage />} />
         <Route path="templates/credentials/new" element={<CredentialTemplateWizard />} />
         <Route path="templates/credentials/:templateId" element={<CredentialTemplateDetailPage />} />
+        <Route path="templates/credentials/:templateId/edit" element={<CredentialTemplateEditorPage />} />
         <Route path="templates/applications" element={<ApplicationTemplatesPage />} />
         <Route path="templates/applications/new" element={<ApplicationTemplateEditorPage />} />
         <Route path="templates/applications/:templateId" element={<ApplicationTemplateDetailPage />} />

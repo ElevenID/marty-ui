@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -20,10 +21,10 @@ LANES = ["oid4vci-issuer", "oid4vp-final", "oid4vp-url-query", "oid4vp-mdoc", "h
 
 @pytest.fixture
 def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    # Transport-only controls: module/candidate/disposition validation is tested
+    # Transport-only controls: module/candidate/outcome validation is tested
     # with the real Rust implementation in release-evidence/tests/official.rs.
     args = argparse.Namespace(validator=Path("owned-validator"), manifest=tmp_path / "candidate.json",
-                              snapshot=tmp_path / "snapshot", authorization=tmp_path / "authorization",
+                              snapshot=tmp_path / "snapshot",
                               output=tmp_path / "gate.json", source="a" * 40, harness="b" * 40,
                               run_id=17, current_attempt=2)
     args.manifest.write_bytes(b"unit-fixture-candidate-only")
@@ -42,16 +43,22 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return b'{"unit_fixture_only":true}'
 
     monkeypatch.setattr(gate, "command", validator)
+
+    def source_authority(github, source, executable, **kwargs):
+        calls.append(("source_authority", source, executable))
+        return github.main()["commit"]["sha"]
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", source_authority)
     frozen = tmp_path / "frozen"
     frozen.mkdir()
     (frozen / "stack-manifest.json").write_bytes(args.manifest.read_bytes())
     (frozen / "origin-attempt.txt").write_bytes(b"1\n")
-    (frozen / "review-request.json").write_bytes(plan)
+    (frozen / "assessment.json").write_bytes(plan)
 
     class GitHub(gate.GitHub):
         def __init__(self):
             self.calls = []
-            self.artifacts = [{"name": "official-review-input-17", "expired": False}]
+            self.artifacts = [{"name": "official-evidence-input-17", "expired": False}]
             self.branch = {"name": "main", "protected": True, "commit": {"sha": "c" * 40}}
 
         def api(self, path, **kwargs):
@@ -64,7 +71,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
         def download(self, run_id, name, directory):
             self.calls.append(("download", run_id, name))
-            if name == "official-review-input-17":
+            if name == "official-evidence-input-17":
                 shutil.copytree(frozen, directory)
             else:
                 directory.mkdir(parents=True)
@@ -77,7 +84,7 @@ def test_snapshot_can_read_historical_origin_but_bounded_qualification_rejects_r
     args, github, calls, _ = fixture
     assert gate.snapshot(args, github) is False
     downloads = [call for call in github.calls if call[0] == "download"]
-    assert downloads == [("download", 17, "official-review-input-17")]
+    assert downloads == [("download", 17, "official-evidence-input-17")]
     assert calls[-1][-2:] == ["1", str(args.snapshot / "official-summaries")]
     with pytest.raises(ValueError, match="original protected-main dispatch attempt"):
         gate.qualify(args, github)
@@ -114,7 +121,7 @@ def test_a_newer_partial_collection_cannot_be_hidden_by_an_older_complete_set(fi
 
 
 @pytest.mark.parametrize("artifact_change", ["expired", "duplicate", "newer-lane"])
-def test_expired_ambiguous_or_newer_evidence_cannot_fall_back_to_an_old_approval(fixture, artifact_change) -> None:
+def test_expired_ambiguous_or_newer_evidence_cannot_fall_back_to_an_old_snapshot(fixture, artifact_change) -> None:
     args, github, _, _ = fixture
     if artifact_change == "expired":
         github.artifacts[0]["expired"] = True
@@ -134,7 +141,7 @@ def test_mutated_frozen_inputs_are_rejected_before_loading_authorization(fixture
     if changed == "manifest":
         (frozen / "stack-manifest.json").write_bytes(b"other-candidate")
     elif changed == "request":
-        (frozen / "review-request.json").write_bytes(b"other-request")
+        (frozen / "assessment.json").write_bytes(b"other-request")
     else:
         (frozen / "origin-attempt.txt").write_bytes(b"3\n")
     with pytest.raises(ValueError):
@@ -154,7 +161,7 @@ def test_foreign_contexts_fail_before_network_or_filesystem_mutation(fixture, mo
 
 
 @pytest.mark.parametrize("protected", [False, None, "true"])
-def test_only_real_protected_main_can_supply_review_records(fixture, monkeypatch, protected) -> None:
+def test_only_real_protected_main_can_qualify_the_candidate(fixture, monkeypatch, protected) -> None:
     args, github, _, _ = fixture
     gate.snapshot(args, github)
     args.current_attempt = 1
@@ -175,13 +182,80 @@ def test_local_forged_record_is_never_used_as_authorization(fixture, monkeypatch
     for key, value in {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_NAME": "workflow_dispatch",
                        "GITHUB_SHA": args.source, "GITHUB_REPOSITORY_ID": gate.REPOSITORY_ID}.items():
         monkeypatch.setenv(key, value)
-    args.authorization.mkdir()
-    record = args.authorization / "record.json"
+    legacy = args.manifest.parent / "official-review-authorization"
+    legacy.mkdir()
+    record = legacy / "record.json"
     record.write_bytes(b'{"verdict":"accepted"}')
-    with pytest.raises(FileExistsError):
+    github.branch["commit"]["sha"] = args.source
+    with pytest.raises(ValueError, match="automated v2"):
         gate.qualify(args, github)
     assert record.read_bytes() == b'{"verdict":"accepted"}'
     assert not args.output.exists()
+
+
+def _original_dispatch(fixture, monkeypatch: pytest.MonkeyPatch):
+    args, github, calls, _ = fixture
+    gate.snapshot(args, github)
+    args.current_attempt = 1
+    for key, value in {"GITHUB_RUN_ATTEMPT": "1", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                       "GITHUB_SHA": args.source, "GITHUB_REPOSITORY_ID": gate.REPOSITORY_ID}.items():
+        monkeypatch.setenv(key, value)
+    return args, github, calls
+
+
+def test_policy_compatible_descendant_is_checked_before_automated_evidence(fixture, monkeypatch) -> None:
+    args, github, calls = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+    with pytest.raises(ValueError, match="automated v2"):
+        gate.qualify(args, github)
+    assert ("source_authority", args.source, args.source) in calls
+    assert not args.output.exists()
+
+
+def test_source_authority_rejection_stops_before_automated_evidence(fixture, monkeypatch) -> None:
+    args, github, calls = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+
+    def reject(*_args, **_kwargs):
+        raise gate.source_authority.SourceAuthorityError("release program changed")
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", reject)
+    with pytest.raises(ValueError, match="release program changed"):
+        gate.qualify(args, github)
+    assert not any(isinstance(call, list) and "--automated" in call for call in calls)
+    assert not args.output.exists()
+
+
+@pytest.mark.parametrize("reject_second", [False, True])
+def test_compatible_main_is_rechecked_before_exclusive_gate_output(fixture, monkeypatch, reject_second) -> None:
+    args, github, _ = _original_dispatch(fixture, monkeypatch)
+    github.branch["commit"]["sha"] = "d" * 40
+    request = (args.snapshot / "assessment.json").read_bytes()
+    result = json.dumps({"schema": "marty.official-release-gate/v2",
+                         "automated_qualification": {"request_sha256": "sha256:" + hashlib.sha256(request).hexdigest(),
+                                                     "automated_cases": 1}}).encode()
+    monkeypatch.setattr(gate, "validator", lambda _args, _attempt, mode: request if mode == ["--prepare-review"] else result)
+    monkeypatch.setattr(gate, "gate_authority", lambda *_args, **_kwargs: {
+        "protected_main_commit": args.source, "review_required": False, "harness_sha": args.harness,
+        "manifest_sha256": "sha256:" + hashlib.sha256(args.manifest.read_bytes()).hexdigest()})
+    reads = []
+
+    def source_authority(github, source, executable, **kwargs):
+        reads.append((source, executable, kwargs["verified"]))
+        if reject_second and len(reads) == 2:
+            raise gate.source_authority.SourceAuthorityError("protected main policy changed")
+        return github.main()["commit"]["sha"]
+
+    monkeypatch.setattr(gate.source_authority, "authenticated_current", source_authority)
+    if reject_second:
+        with pytest.raises(ValueError, match="protected main policy changed"):
+            gate.qualify(args, github)
+        assert not args.output.exists()
+    else:
+        gate.qualify(args, github)
+        assert args.output.read_bytes() == result
+    assert len(reads) == 2 and all(row[:2] == (args.source, args.source) for row in reads)
+    assert reads[0][2] is reads[1][2]
 
 
 def test_github_host_cannot_be_redirected_by_local_defaults(monkeypatch) -> None:
@@ -190,7 +264,7 @@ def test_github_host_cannot_be_redirected_by_local_defaults(monkeypatch) -> None
     monkeypatch.setattr(gate, "command", lambda arguments: calls.append(arguments) or b"[]")
     github = gate.GitHub()
     github.api("branches/main")
-    github.download(17, "official-review-input-17", Path("owned-output"))
+    github.download(17, "official-evidence-input-17", Path("owned-output"))
     assert calls[0][:4] == ["gh", "api", "--hostname", "github.com"]
     assert calls[0][4] == "repos/ElevenID/marty-ui/branches/main"
     assert calls[1][calls[1].index("--repo") + 1] == "https://github.com/ElevenID/marty-ui"

@@ -200,6 +200,7 @@ fn string_value(
 fn typed_value(key: &str, value: &Value) -> Result<String> {
     match key {
         "KEYCLOAK_USER_REGISTRATION_ENABLED"
+        | "KEYCLOAK_PASSKEYS_ENABLED"
         | "KEYCLOAK_VERIFY_EMAIL"
         | "KEYCLOAK_RESET_PASSWORD_ENABLED"
         | "KEYCLOAK_SOCIAL_LOGIN_ENABLED"
@@ -260,7 +261,9 @@ fn typed_value(key: &str, value: &Value) -> Result<String> {
         }
         "ALLOWED_REDIRECT_URIS" => list(value, key, |s| https(s, false)),
         "DID_WEB_ALLOWED_HOSTS" => list(value, key, hostname),
-        "KEYCLOAK_SMTP_HOST" => string_value(value, key, 253, |s| s.is_empty() || hostname(s)),
+        "KEYCLOAK_SMTP_HOST" | "KEYCLOAK_PASSKEY_RP_ID" => {
+            string_value(value, key, 253, |s| s.is_empty() || hostname(s))
+        }
         "KEYCLOAK_SMTP_FROM" => string_value(value, key, 254, |s| {
             s.is_empty()
                 || s.split_once('@').is_some_and(|(local, host)| {
@@ -554,6 +557,11 @@ impl Configuration {
         let text = |key: &str| result.get(key).map_or("", String::as_str);
         let on = |key: &str| text(key) == "true";
         let supplied = |key: &str| self.secret_files.contains_key(key);
+        if on("KEYCLOAK_PASSKEYS_ENABLED") {
+            require(!text("KEYCLOAK_PASSKEY_RP_ID").is_empty()).map_err(|_| {
+                "Passkey login requires an explicit stable public KEYCLOAK_PASSKEY_RP_ID".to_owned()
+            })?;
+        }
         let smtp = !text("KEYCLOAK_SMTP_HOST").is_empty();
         if on("KEYCLOAK_VERIFY_EMAIL") || on("KEYCLOAK_RESET_PASSWORD_ENABLED") {
             require(smtp).map_err(|_| {
@@ -750,7 +758,7 @@ pub(crate) fn select(prepared: Prepared, state: &mut InstallerState) -> Result<(
     require(
         prepared.managed_keycloak
             == state
-                .with_inspection(crate::installer_foundation::load)?
+                .with_inspection(crate::installer_oidc::external)?
                 .is_none(),
     )?;
     let selection = Selection {
@@ -817,7 +825,7 @@ pub(crate) fn load(view: &LockedInspection) -> Result<Option<Selection>> {
         &source.ok_or(REFUSED)?,
         view.journal(),
     )?;
-    require(selected.managed_keycloak == crate::installer_foundation::load(view)?.is_none())?;
+    require(selected.managed_keycloak == crate::installer_oidc::external(view)?.is_none())?;
     Ok(Some(selected))
 }
 
@@ -859,7 +867,7 @@ pub(crate) fn for_inputs(inputs: &ComposeInputs) -> Result<Option<Selection>> {
     if let Some(selection) = &selection {
         require(
             selection.managed_keycloak
-                == crate::installer_foundation::for_inputs(inputs)?.is_none(),
+                == crate::installer_oidc::external_for_inputs(inputs)?.is_none(),
         )?;
     }
     Ok(selection)

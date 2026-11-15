@@ -39,9 +39,9 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import LoginIcon from '@mui/icons-material/Login';
 import BadgeIcon from '@mui/icons-material/Badge';
 import DirectionsCarIcon from '@mui/icons-material/DirectionsCar';
-import PersonIcon from '@mui/icons-material/Person';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import useWalletPreferences from '../../hooks/useWalletPreferences';
 import { usePreview } from '../../contexts/PreviewContext';
 import { get } from '../../services/api';
@@ -215,6 +215,27 @@ function formatEvidenceRequirement(requirement) {
 }
 
 export default function ApplicationForm({ previewContext = null } = {}) {
+  const { credentialType } = useParams();
+  const location = useLocation();
+  const { user, organizationId } = useAuth();
+  const { isPreview } = usePreview?.() || { isPreview: false };
+  // Router parameter/query changes reuse the same route component. Every
+  // application entry needs its own draft, launch context and async lifetime.
+  const scope = JSON.stringify([
+    user?.user_id || user?.sub || user?.id || null,
+    organizationId,
+    credentialType,
+    location.key,
+    location.pathname,
+    location.search,
+    Boolean(isPreview),
+    previewContext?.applicationTemplate?.id,
+    previewContext?.credential?.id,
+  ]);
+  return <ApplicationFormSession key={scope} previewContext={previewContext} />;
+}
+
+function ApplicationFormSession({ previewContext }) {
   const { t } = useTranslation('applicant');
   const { credentialType: credentialConfigId } = useParams();
   const navigate = useNavigate();
@@ -224,6 +245,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const hasRegisteredWallet = preferredWallets.length > 0;
   const { isPreview } = usePreview?.() || { isPreview: false };
   const fileInputRefs = useRef({});
+  const beginConfigLoad = useAsyncActionScope();
+  const beginSubmission = useAsyncActionScope();
+  const beginCanvasSync = useAsyncActionScope();
+  const submissionPending = useRef(false);
+  const canvasSyncPending = useRef(false);
   const [initialApplyState] = useState(() => (
     isPreview && previewContext ? previewContext : location.state || readStoredApplyLocationState()
   ));
@@ -318,10 +344,10 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const getCredentialTemplate = async (templateId) => get(`/v1/credential-templates/${templateId}`);
   const getApplicationTemplate = async (templateId) => get(`/v1/application-templates/${templateId}`);
 
-  const resolveApplicantId = async () => resolveApplicantIdForApplication({
+  const resolveApplicantId = async (action) => resolveApplicantIdForApplication({
     user,
-    getApplicant: () => getMyApplicantProfile(),
-    getApplicantByUser: () => getMyApplicantProfile(),
+    getApplicant: () => action.run(getMyApplicantProfile),
+    getApplicantByUser: () => action.run(getMyApplicantProfile),
   });
 
   const readFileAsBase64 = (file) =>
@@ -341,6 +367,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
     });
 
   useEffect(() => {
+    const action = beginConfigLoad();
     const fetchCredentialConfig = async () => {
       if (isCanvasLtiApplication) {
         const canvasCredentialTemplateId = credentialConfigId
@@ -368,14 +395,14 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       }
       setConfigLoading(true);
       try {
-        const result = await loadCredentialApplicationConfig({
+        const result = await action.run(loadCredentialApplicationConfig, {
           credentialConfigId,
           credentialConfig,
           organizationId: applicationOrganizationId,
-          getCredentialTemplate,
+          getCredentialTemplate: (id) => action.run(getCredentialTemplate, id),
           applicationTemplateId: canvasApplicationTemplateId || null,
-          getApplicationTemplate,
-          listApplicationTemplates,
+          getApplicationTemplate: (id) => action.run(getApplicationTemplate, id),
+          listApplicationTemplates: (id) => action.run(listApplicationTemplates, id),
         });
         setCredentialConfig(result.credentialConfig);
         if (result.applicationTemplate) {
@@ -383,14 +410,16 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         }
         setError(result.error);
       } catch (err) {
+        if (!action.isCurrent()) return;
         setError(err.message);
       } finally {
-        setConfigLoading(false);
+        if (action.isCurrent()) setConfigLoading(false);
       }
     };
 
     fetchCredentialConfig();
   }, [
+    beginConfigLoad,
     credentialConfigId,
     credentialConfig,
     applicationOrganizationId,
@@ -616,8 +645,9 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   // ===========================================================================
   // MemberCredential / mDL: derived flags & one-click auto-apply handler
   // ===========================================================================
-  const { isMemberCredential, isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isAccessBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
+  const { isMdlCredential, isMdocMemberCredential, isOpenBadgeCredential, isOneClickCredential } = getCredentialKindFlags(credentialConfig);
   const canAutoApply = isOneClickCredential && canAutoApplyApplicationTemplate({ applicationTemplate, user });
+  const isOneClickApplication = canAutoApply && !isCanvasLtiApplication;
   const applicationDisplayName = credentialConfig?.display_name || applicationTemplate?.name || t('applicationForm.title.default');
   const applicationDescription = isCanvasLtiApplication
     ? 'Review the course details from Canvas and request the credential. ElevenID will check the issuer requirements after you submit.'
@@ -625,34 +655,50 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   const shouldShowStepper = !(isCanvasLtiApplication && steps.length === 1);
 
   const handleAutoApply = async () => {
+    if (submissionPending.current) return;
     if (isPreview) { setSubmitted(true); return; }
+    const action = beginSubmission();
+    submissionPending.current = true;
     setAutoApplying(true);
     setError(null);
     try {
-      const result = await autoApplyForCredential({
+      const result = await action.run(autoApplyForCredential, {
         organizationId: applicationOrganizationId,
         user,
         credentialConfig,
         applicationTemplate,
         credentialConfigId,
         hasRegisteredWallet,
-        resolveApplicantId,
-        createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
-        createApplication: createApplicationApi,
-        submitApplication: submitApplicationApi,
-        generateIssuanceOffer,
-        listApplications: listApplicationsApi,
+        resolveApplicantId: () => resolveApplicantId(action),
+        createApplicant: (data) => action.run(upsertMyApplicantProfile, data),
+        updateApplicantProfile: (_applicantId, data) => action.run(upsertMyApplicantProfile, data),
+        createApplication: (data) => action.run(createApplicationApi, data),
+        submitApplication: (id) => action.run(submitApplicationApi, id),
+        generateIssuanceOffer: async (id) => {
+          try {
+            return await action.run(generateIssuanceOffer, id);
+          } catch (offerError) {
+            // The application already exists. Keep its identity so an offer
+            // failure cannot send the applicant through creation again.
+            if (action.isCurrent()) setApplicationId(id);
+            throw offerError;
+          }
+        },
+        listApplications: (params) => action.run(listApplicationsApi, params),
       });
       setApplicationId(result.applicationId);
       setApplicationReference(result.applicationReference || null);
       setAutoOfferData(result.offerData);
       setClaimDialogOpen(true);
     } catch (err) {
+      if (!action.isCurrent()) return;
       console.error('Auto-apply error:', err);
       setError(getWalletOfferDialogError(err));
     } finally {
-      setAutoApplying(false);
+      if (action.isCurrent()) {
+        submissionPending.current = false;
+        setAutoApplying(false);
+      }
     }
   };
 
@@ -689,12 +735,15 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   };
 
   const submitApplicationForm = async (duplicateApplicationAction = null) => {
+    if (submissionPending.current) return;
     if (isPreview) { setSubmitted(true); return; }
+    const action = beginSubmission();
+    submissionPending.current = true;
     setSubmitting(true);
     setError(null);
 
     try {
-      const result = await submitCredentialApplication({
+      const result = await action.run(submitCredentialApplication, {
         organizationId: applicationOrganizationId,
         user,
         formData,
@@ -702,18 +751,18 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         credentialConfigId,
         canvasLtiContext: canvasLtiApplicationContext,
         allFields,
-        resolveApplicantId,
-        createApplicant: upsertMyApplicantProfile,
-        updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
-        getApplicantByUser: () => getMyApplicantProfile(),
-        createApplication: createApplicationApi,
-        submitApplicationEvidence: submitApplicationEvidenceApi,
-        submitApplication: submitApplicationApi,
-        listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.items),
-        supersedeApplication: withdrawApplication,
+        resolveApplicantId: () => resolveApplicantId(action),
+        createApplicant: (data) => action.run(upsertMyApplicantProfile, data),
+        updateApplicantProfile: (_applicantId, data) => action.run(upsertMyApplicantProfile, data),
+        getApplicantByUser: () => action.run(getMyApplicantProfile),
+        createApplication: (data) => action.run(createApplicationApi, data),
+        submitApplicationEvidence: (id, data) => action.run(submitApplicationEvidenceApi, id, data),
+        submitApplication: (id) => action.run(submitApplicationApi, id),
+        listApplicantApplications: () => action.run(listApplicationsApi, { limit: 100 }).then((page) => page.items),
+        supersedeApplication: (id, data) => action.run(withdrawApplication, id, data),
         duplicateApplicationAction,
-        enrollBiometric: (_applicantId, data) => enrollMyBiometric(data),
-        readFileAsBase64,
+        enrollBiometric: (_applicantId, data) => action.run(enrollMyBiometric, data),
+        readFileAsBase64: (file) => action.run(readFileAsBase64, file),
       });
 
       if (result.duplicateApplicationConflict) {
@@ -726,10 +775,14 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       setSubmitted(result.submitted);
       setDuplicateConflict(null);
     } catch (err) {
+      if (!action.isCurrent()) return;
       console.error('Error submitting application:', err);
       setError(err.message);
     } finally {
-      setSubmitting(false);
+      if (action.isCurrent()) {
+        submissionPending.current = false;
+        setSubmitting(false);
+      }
     }
   };
 
@@ -739,16 +792,23 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   };
 
   const handleCanvasEvidenceRefresh = async () => {
+    if (canvasSyncPending.current) return;
+    const action = beginCanvasSync();
+    canvasSyncPending.current = true;
     setCanvasSyncLoading(true);
     setCanvasSyncError(null);
     try {
-      const status = await enqueueCurrentCanvasLtiEvidenceSync();
+      const status = await action.run(enqueueCurrentCanvasLtiEvidenceSync);
       setCanvasEvidenceStatus(status);
       setCanvasSyncPollVersion((version) => version + 1);
     } catch (err) {
+      if (!action.isCurrent()) return;
       setCanvasSyncError(err?.message || 'Canvas evidence synchronization could not be queued.');
     } finally {
-      setCanvasSyncLoading(false);
+      if (action.isCurrent()) {
+        canvasSyncPending.current = false;
+        setCanvasSyncLoading(false);
+      }
     }
   };
 
@@ -809,7 +869,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-          <Typography variant={compact ? 'subtitle1' : 'h6'} fontWeight={700}>
+          <Typography variant={compact ? 'subtitle1' : 'h6'} sx={{ fontWeight: 700 }}>
             Course completion requirement
           </Typography>
           <Chip size="small" color="success" variant="outlined" label="Launch verified" />
@@ -932,11 +992,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         {canvasSummaryItems.length > 0 && (
           <Grid container spacing={2} sx={{ mb: evidenceItems.length > 0 ? 2 : 0 }}>
             {canvasSummaryItems.map((item) => (
-              <Grid item xs={12} sm={6} key={item.label}>
+              <Grid size={{ xs: 12, sm: 6 }} key={item.label}>
                 <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
                   {item.label}
                 </Typography>
-                <Typography variant="body2" fontWeight={600}>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
                   {item.value}
                 </Typography>
               </Grid>
@@ -961,7 +1021,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                     bgcolor: 'background.paper',
                   }}
                 >
-                  <Typography variant="body2" fontWeight={600}>{item.label}</Typography>
+                  <Typography variant="body2" sx={{ fontWeight: 600 }}>{item.label}</Typography>
                   <Typography variant="caption" color="text.secondary">{item.details}</Typography>
                 </Box>
               ))}
@@ -1011,7 +1071,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       {renderCanvasSummaryPanel({ compact: true })}
 
       <Grid container spacing={3}>
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           {steps.slice(0, -1).map((step, idx) => (
             <Card key={idx} variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
@@ -1024,7 +1084,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                     const value = formData[fieldName];
                     
                     // Skip empty optional fields
-                    if (!value && !field.required) return null;
+                    if ((value === undefined || value === null || value === '') && !field.required) return null;
                     
                     // Format value for display
                     let displayValue = value;
@@ -1037,11 +1097,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
                     }
                     
                     return (
-                      <Grid item xs={12} sm={6} key={fieldName}>
+                      <Grid size={{ xs: 12, sm: 6 }} key={fieldName}>
                         <Typography variant="body2" color="text.secondary">
                           {field.label || fieldName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                         </Typography>
-                        <Typography>{displayValue || '-'}</Typography>
+                        <Typography>{displayValue === '' ? '-' : (displayValue ?? '-')}</Typography>
                       </Grid>
                     );
                   })}
@@ -1051,7 +1111,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
           ))}
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={{ xs: 12 }}>
           <FormControlLabel
             control={
               <Checkbox
@@ -1063,7 +1123,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
             label={t('applicationForm.review.terms')}
           />
           {validationErrors.acceptTerms && (
-            <Typography color="error" variant="caption" display="block">
+            <Typography color="error" variant="caption" sx={{ display: 'block' }}>
               {validationErrors.acceptTerms}
             </Typography>
           )}
@@ -1082,19 +1142,25 @@ export default function ApplicationForm({ previewContext = null } = {}) {
         {isPreview ? (
           <>
             <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto', mb: 3, textAlign: 'left' }}>
-              <Typography variant="body2" paragraph>
-                <strong>{t('applicationForm.success.previewMode')}:</strong> {t('applicationForm.success.previewMessage')}
+              <Typography variant="body2" component="p" sx={{ marginBottom: '16px' }}>
+                <strong>{t('applicationForm.success.previewMode')}:</strong> {t(isOneClickApplication
+                  ? 'applicationForm.oneClick.previewMessage'
+                  : 'applicationForm.success.previewMessage')}
               </Typography>
               <Typography variant="body2">
                 {t('applicationForm.success.previewNote')}
               </Typography>
             </Alert>
-            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
-              {t('applicationForm.success.dataCollected')}
-            </Typography>
-            <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
-              {JSON.stringify(formData, null, 2)}
-            </Box>
+            {!isOneClickApplication && (
+              <>
+                <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                  {t('applicationForm.success.dataCollected')}
+                </Typography>
+                <Box component="pre" sx={{ textAlign: 'left', bgcolor: 'grey.100', p: 2, borderRadius: 1, fontSize: '0.85rem', overflow: 'auto', maxHeight: 300, maxWidth: 600, mx: 'auto' }}>
+                  {JSON.stringify(formData, null, 2)}
+                </Box>
+              </>
+            )}
           </>
         ) : (
           <>
@@ -1122,7 +1188,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
 
             <Button
               variant="contained"
-              onClick={() => navigate(`/console/applicant/applications${applicationId ? `?id=${applicationId}` : ''}`)}
+              onClick={() => navigate(`/console/applicant/identity${applicationId ? `?id=${encodeURIComponent(applicationId)}` : ''}`)}
             >
               {t('applicationForm.success.viewApplications')}
             </Button>
@@ -1234,7 +1300,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
   // ===========================================================================
   // One-click issuance UI (MemberCredential & mDL)
   // ===========================================================================
-  if (canAutoApply && !isCanvasLtiApplication) {
+  if (isOneClickApplication) {
     const isMdocCredential = isMdlCredential || isMdocMemberCredential;
     const HeroIcon = isMdlCredential ? DirectionsCarIcon : (isOpenBadgeCredential ? BadgeIcon : LoginIcon);
     const fallbackTitle = isMdocCredential
@@ -1242,10 +1308,11 @@ export default function ApplicationForm({ previewContext = null } = {}) {
       : (isOpenBadgeCredential ? 'Verified Member Badge' : 'Login Credential');
     const heroTitle = credentialConfig?.display_name || credentialConfig?.name || fallbackTitle;
     const heroDescription = credentialConfig?.description || 'Add this credential to a compatible wallet.';
-    const ctaLabel = isMdocCredential ? 'Get Membership ID' : 'Add to Wallet';
-    const ctaSubtext = [credentialConfig?.format, credentialConfig?.issuanceProtocol]
-      .filter(Boolean)
-      .join(' - ');
+    const ctaLabel = isPreview
+      ? t('applicationForm.oneClick.previewAction')
+      : (applicationId ? t('applicationForm.oneClick.viewSavedApplication') : (isMdocCredential ? 'Get Membership ID' : 'Add to Wallet'));
+    const plannedFormat = credentialConfig?.format || credentialConfig?.credential_payload_format;
+    const ctaSubtext = credentialConfig?.issuanceProtocol || credentialConfig?.issuance_protocol || '';
 
     const summaryFields = getOneClickSummaryFields({ credentialConfig, user, organizationId: applicationOrganizationId });
 
@@ -1269,7 +1336,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
             {/* Icon + title */}
             <Box sx={{ mb: 3 }}>
               <HeroIcon sx={{ fontSize: 64, color: 'primary.main', mb: 1 }} />
-              <Typography variant="h5" fontWeight={700} gutterBottom>
+              <Typography variant="h5" sx={{ fontWeight: 700 }} gutterBottom>
                 {heroTitle}
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -1277,15 +1344,16 @@ export default function ApplicationForm({ previewContext = null } = {}) {
               </Typography>
             </Box>
 
-            {/* Issuer info */}
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" color="text.secondary">
-                Issued by
-              </Typography>
-              <Typography variant="body2" fontWeight={600}>
-                ElevenID LLC
-              </Typography>
-            </Box>
+            {credentialConfig?.vendorName && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="caption" color="text.secondary">
+                  {t('applicationForm.oneClick.issuerLabel')}
+                </Typography>
+                <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                  {credentialConfig.vendorName}
+                </Typography>
+              </Box>
+            )}
 
             {/* Credential details */}
             <Paper
@@ -1293,23 +1361,34 @@ export default function ApplicationForm({ previewContext = null } = {}) {
               sx={{ p: 2.5, mb: 2, textAlign: 'left', borderRadius: 2, bgcolor: 'background.default' }}
             >
               <Typography variant="overline" color="text.secondary" sx={{ mb: 1, display: 'block' }}>
-                Credential Details
+                {t('applicationForm.oneClick.credentialPreview')}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                {t('applicationForm.oneClick.previewStatus')}
               </Typography>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                 {summaryFields.map(({ label, value }) => (
                   <Box key={label} sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
                     <Typography variant="body2" color="text.secondary">{label}</Typography>
-                    <Typography variant="body2" fontWeight={500}>{value}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 500 }}>{value}</Typography>
                   </Box>
                 ))}
               </Box>
             </Paper>
 
-            {/* Trust signals */}
+            {/* Planned properties do not establish issuance or verification. */}
             <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'center' }}>
-              <Typography variant="caption" color="text.secondary">🔒 Cryptographically signed</Typography>
-              <Typography variant="caption" color="text.secondary">🪪 Verifiable credential (W3C / ISO)</Typography>
-              <Typography variant="caption" color="text.secondary">🔁 Reusable across services</Typography>
+              {plannedFormat && (
+                <Typography variant="caption" color="text.secondary">
+                  {t('applicationForm.oneClick.plannedFormat', { format: plannedFormat })}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary">
+                {t('applicationForm.oneClick.signingAfterIssue')}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {t('applicationForm.oneClick.acceptanceAfterIssue')}
+              </Typography>
             </Box>
 
             {/* Error */}
@@ -1325,17 +1404,19 @@ export default function ApplicationForm({ previewContext = null } = {}) {
               variant="contained"
               size="large"
               fullWidth
-              onClick={handleAutoApply}
+              onClick={applicationId
+                ? () => navigate(`/console/applicant/identity?id=${encodeURIComponent(applicationId)}`)
+                : handleAutoApply}
               disabled={autoApplying}
               startIcon={autoApplying ? <CircularProgress size={20} color="inherit" /> : (isMdlCredential ? <DirectionsCarIcon /> : <BadgeIcon />)}
               sx={{ py: 1.5, fontSize: '1rem', borderRadius: 2 }}
             >
-              {autoApplying ? 'Issuing credential…' : ctaLabel}
+              {autoApplying ? t('applicationForm.oneClick.requesting') : ctaLabel}
             </Button>
 
             {/* Helper text */}
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-              You'll be prompted to open your wallet to receive this credential.
+              {t(isPreview ? 'applicationForm.oneClick.previewHelper' : 'applicationForm.oneClick.requestHelper')}
             </Typography>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
@@ -1344,7 +1425,7 @@ export default function ApplicationForm({ previewContext = null } = {}) {
           </Paper>
         </Fade>
 
-        {/* Wallet claim dialog — opens after successful issuance */}
+        {/* The wallet invite is not evidence of completed credential issuance. */}
         <ClaimCredentialDialog
           open={claimDialogOpen}
           onClose={() => {

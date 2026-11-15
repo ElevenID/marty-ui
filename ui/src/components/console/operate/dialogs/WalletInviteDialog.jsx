@@ -147,7 +147,7 @@ export default function WalletInviteDialog({
                 title="Scan to add credential to wallet"
                 instructions="Have the applicant scan this QR code with their wallet app."
               />
-              <Stack direction="row" spacing={1} sx={{ mt: 2 }} justifyContent="center">
+              <Stack direction="row" spacing={1} sx={{ justifyContent: "center", mt: 2 }}>
                 <Button
                   variant="outlined"
                   size="small"
@@ -228,15 +228,15 @@ export default function WalletInviteDialog({
 
             {/* ── Email Tab ── */}
             <TabPanel value={tab} index={wallets.length > 0 ? 2 : 1}>
-              <Typography variant="body2" color="text.secondary" paragraph>
+              <Typography variant="body2" color="text.secondary" component="p" sx={{ mb: "16px" }}>
                 Send the credential offer to the applicant via email.
               </Typography>
               {emailPayload && (
                 <Box sx={{ p: 2, bgcolor: 'action.hover', borderRadius: 1, mb: 2 }}>
-                  <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+                  <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
                     <strong>Subject:</strong> {emailPayload.subject}
                   </Typography>
-                  <Typography variant="caption" color="text.secondary" display="block" sx={{ whiteSpace: 'pre-line' }}>
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", whiteSpace: 'pre-line' }}>
                     <strong>Body:</strong><br />
                     {emailPayload.body}
                   </Typography>

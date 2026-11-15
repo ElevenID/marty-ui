@@ -25,7 +25,15 @@ Complete host preparation in your ordinary login session before running Marty:
    `/etc/subuid` and `/etc/subgid`. Run the rootless setup helper as that user
    after the administrator has prepared those prerequisites.
 3. Install the [Compose plugin](https://docs.docker.com/compose/install/linux/)
-   using Docker's instructions. The signed operator separately checks the
+   using Docker's instructions and the exact version required by this release.
+   The signed operator uses `COMPOSE_VERSION` from the
+   [deployment catalog](../rust/crates/deployment-catalog/src/installer_compose.rs)
+   as its version authority. A package manager's latest plugin can be newer than
+   the qualified version and will be refused. The signed compatibility check
+   below reports the required version before creating an installation. If it
+   differs, select that exact package or upstream plugin release using Docker's
+   instructions and verify the download. Keep the selected version pinned until
+   a new Marty release qualifies a change. The operator separately checks the
    selected plugin before using it in an isolated Docker configuration. The
    standard `$HOME/.docker/cli-plugins/docker-compose` location is supported;
    arbitrary plugin paths supplied through `DOCKER_CONFIG` are not.
@@ -52,7 +60,7 @@ Choose one exact published nightly from the
 release notes (generated from `SELFHOST-PREVIEW-README.md`). Replace the tag below
 with that release's tag. Keep the
 bootstrap and candidate tag together; older nightlies may predate these
-commands. If that release's bootstrap does not recognize `--check-host`, use its
+commands. If that release's bootstrap does not recognize `--check-compatibility`, use its
 own installation guide or a newer published nightly containing this interface.
 
 In your regular user's shell:
@@ -72,23 +80,42 @@ authenticates the signed inventory and deployment operator before executing
 that operator. The operator verifies remaining payloads before provisioning.
 See the complete [bootstrap trust boundary](installer-bootstrap.md).
 
-Select only your own rootless socket in this shell. Check your trusted installed
-Compose plugin, then run the bootstrap host check:
+Select only your own rootless socket in this shell, then run the bootstrap host
+check:
 
 ```sh
 unset DOCKER_CONTEXT
 export DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
-/usr/bin/setpriv --no-new-privs -- docker compose version &&
-  /usr/bin/setpriv --no-new-privs -- sh "$marty_bootstrap_dir/install.sh" --check-host
+/usr/bin/setpriv --no-new-privs -- sh "$marty_bootstrap_dir/install.sh" --check-host
 ```
 
 The bootstrap check runs without downloading verification tools or
 release payloads and without creating an installation. It does not establish
 Compose compatibility, sufficient resources, successful startup, or readiness.
 It creates and removes a private temporary Docker configuration.
-The separate Compose version check uses your normal trusted host configuration;
-the signed operator still performs its own plugin admission. Resolve either
-command's failure before proceeding; keep the same rootless account and socket.
+Resolve its failure before proceeding; keep the same rootless account and socket.
+
+Next, run the exact release's signed compatibility check:
+
+```sh
+/usr/bin/setpriv --no-new-privs -- sh "$marty_bootstrap_dir/install.sh" \
+  --candidate-test "$marty_tag" --check-compatibility
+```
+
+This downloads and authenticates the inventory and operator, rechecks the
+rootless engine and memory-control prerequisites, and admits the Compose plugin
+through the same isolated configuration and exact version policy used by
+installation. It performs no Docker mutations, reserves no service port, and
+creates no installation directory. Success prints an observation with
+`scope: installation-host-compatibility`, `required_compose_version`, and
+`compatibility_checks_passed: true`. An unsupported plugin fails with the exact
+required version and a reminder to rerun this check after host preparation.
+The signed check still does not verify host capacity, remaining payloads, images,
+or application readiness. It cannot be combined with `--check-host`, `--yes`, or
+installation input paths. For an admitted release, keep its `--version` or
+`--channel` selector in place of `--candidate-test`; signed admission is still
+required. A successful `docker compose version` alone does not establish
+compatibility.
 
 ## 3. Run the exact candidate
 

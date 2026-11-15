@@ -144,6 +144,126 @@ impl Fixture {
 }
 
 #[test]
+fn infrastructure_only_start_retains_bound_ingress_and_complete_resource_census() {
+    let fixture = Fixture::new();
+    let installation = fixture.root.path().join("hosting-installation");
+    let mut state = InstallerState::create(
+        &installation,
+        crate::installer_state::Identity {
+            source_sha: "a".repeat(40),
+            release_tag: "v0.0.0".into(),
+            inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+        },
+    )
+    .unwrap();
+    state.create_private_directory("evidence").unwrap();
+    state
+        .advance(crate::installer_state::Phase::Verified)
+        .unwrap();
+    let hosting = crate::installer_hosting::select(
+        crate::installer_hosting::prepare(None, None).unwrap(),
+        &mut state,
+    )
+    .unwrap();
+    let listener = crate::installer_hosting::Listener {
+        bind_address: "127.0.0.1".parse().unwrap(),
+        port: 18443,
+    };
+    let mut inputs = fixture.inputs.clone();
+    inputs.installation = installation;
+    inputs.project = state.journal().compose_project();
+    inputs.profiles = vec!["setup".into(), "installer-init".into()];
+    inputs.services = vec!["openbao".into(), "openbao-unseal".into()];
+    inputs.ingress_listener = Some(listener);
+    inputs.bound_inputs.clear();
+    hosting.bind_inputs(&mut inputs).unwrap();
+    let prior = inputs.prior.as_mut().unwrap();
+    prior.project = inputs.project.clone();
+    let resources = prior.resources.as_mut().unwrap();
+    let mut model = fixture.model.clone();
+    model["name"] = json!(inputs.project);
+    resources.containers.remove("installer-acme-http01");
+    for role in ["installer-acme-http01", "installer-generation"] {
+        model["services"].as_object_mut().unwrap().remove(role);
+    }
+    let added_roles: Vec<_> = ["installer-ingress".to_owned(), "ui".to_owned()]
+        .into_iter()
+        .chain((0..34).map(|index| format!("application-{index:02}")))
+        .collect();
+    for (index, role) in added_roles.iter().enumerate() {
+        let mut identity = resources.containers["application"].clone();
+        identity.service = role.clone();
+        identity.id = format!("{:02x}", index + 16).repeat(32);
+        resources.containers.insert(role.clone(), identity);
+        model["services"][role] = model["services"]["application"].clone();
+    }
+    model["services"]["bootstrap"]["profiles"] = json!(["installer-init"]);
+    // This regression concerns model/selection admission. Source-custody
+    // permutations remain covered below, with their own retained file fixture.
+    for service in model["services"].as_object_mut().unwrap().values_mut() {
+        service["volumes"] = json!([]);
+    }
+    model["services"]["installer-ingress"]["ports"] =
+        json!([{"host_ip":"127.0.0.1","published":"18443","target":8443,"protocol":"tcp"}]);
+    model["services"]["installer-ingress"]["environment"] =
+        json!({"OIDF_EDGE_PUBLIC_ORIGIN":"https://localhost:18443"});
+    model["services"]["ui"]["environment"] =
+        json!({"UI_ENABLED_SECTIONS":hosting.enabled_web_sections()});
+    drop(state);
+    let original = model.clone();
+    let original_inputs = serde_json::to_value(&inputs).unwrap();
+    let selected = ModelAdmission::RetainedRuntime
+        .admit(&model, &inputs)
+        .unwrap();
+    assert_eq!(selected, Some(inputs.services.iter().cloned().collect()));
+    assert_eq!(model["services"].as_object().unwrap().len(), 40);
+    assert_eq!(
+        inputs
+            .prior
+            .as_ref()
+            .unwrap()
+            .resources
+            .as_ref()
+            .unwrap()
+            .containers
+            .len(),
+        40
+    );
+    assert_eq!(bound_ingress_listener(&model, &inputs).unwrap(), listener);
+    assert_eq!(
+        model, original,
+        "the complete native model is not rewritten"
+    );
+    assert_eq!(serde_json::to_value(&inputs).unwrap(), original_inputs);
+
+    let mut filtered = model.clone();
+    filtered["services"]
+        .as_object_mut()
+        .unwrap()
+        .retain(|role, _| inputs.services.contains(role));
+    assert!(
+        ModelAdmission::Selected.admit(&filtered, &inputs).is_err(),
+        "the old infrastructure-only config loses its bound ingress"
+    );
+    assert!(bound_ingress_listener(&filtered, &inputs).is_err());
+    for role in ["installer-ingress", "ui", "application", "bootstrap"] {
+        let mut missing = model.clone();
+        missing["services"].as_object_mut().unwrap().remove(role);
+        assert!(
+            ModelAdmission::RetainedRuntime
+                .admit(&missing, &inputs)
+                .is_err(),
+            "a partial start cannot hide retained {role}"
+        );
+    }
+    let mut changed_listener = model.clone();
+    changed_listener["services"]["installer-ingress"]["ports"][0]["host_ip"] = json!("0.0.0.0");
+    assert!(ModelAdmission::RetainedRuntime
+        .admit(&changed_listener, &inputs)
+        .is_err());
+}
+
+#[test]
 fn retained_recovery_defers_the_four_unretained_generation_sources_only() {
     let fixture = Fixture::new();
     let original = fixture.model.clone();

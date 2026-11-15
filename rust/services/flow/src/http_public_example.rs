@@ -13,7 +13,7 @@ use crate::{
 pub(super) struct ExampleRequest {}
 
 pub(super) async fn example(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(_request): Json<ExampleRequest>,
@@ -179,7 +179,9 @@ async fn execute(
     require_example_owner(&instance, owner, Utc::now()).map_err(session_error)?;
     let input =
         example_submission(&instance, presentation.into_compact()).map_err(session_error)?;
-    crate::http_verification::evaluate_submission(state, instance, input, false).await?;
+    let expected_instance = instance.clone();
+    crate::http_verification::evaluate_submission(state, instance, input, false, expected_instance)
+        .await?;
     Ok(())
 }
 

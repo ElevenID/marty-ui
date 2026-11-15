@@ -16,6 +16,133 @@ fn configuration(canonical: &str, aliases: &str) -> Vec<u8> {
     format!("window.__MARTY_RUNTIME_CONFIG__ = Object.assign({{}}, window.__MARTY_RUNTIME_CONFIG__, {{\n  googleAnalyticsMeasurementId: '',\n  hosting: {{\n    canonicalOrigin: '{canonical}',\n    publicEntryOrigins: {aliases}\n  }}\n}});\n").into_bytes()
 }
 
+fn emitted_configuration(
+    canonical: &str,
+    alias: Option<&str>,
+    sections: &str,
+    organization_creation: Option<&str>,
+) -> Vec<u8> {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let target = root.path().join("target");
+    std::fs::create_dir_all(source.join("console")).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    std::fs::write(source.join("index.html"), built_page()).unwrap();
+    std::fs::write(source.join("console/index.html"), built_page()).unwrap();
+    let mut script = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../scripts/ui-selfhost-start.sh"
+    ))
+    .to_owned();
+    // Exercise the actual emitter; only its unrelated secret loader and static
+    // directories change, following the existing Python startup-hook fixture.
+    for (from, to) in [
+        (
+            ". /scripts/load-secrets-env.sh",
+            ": # no secrets in this fixture",
+        ),
+        (
+            "SOURCE_DIR=\"/opt/marty-ui-static\"",
+            "SOURCE_DIR=\"$MARTY_TEST_SOURCE\"",
+        ),
+        (
+            "TARGET_DIR=\"/usr/share/nginx/html\"",
+            "TARGET_DIR=\"$MARTY_TEST_TARGET\"",
+        ),
+    ] {
+        assert_eq!(script.matches(from).count(), 1);
+        script = script.replacen(from, to, 1);
+    }
+    let mut command = std::process::Command::new("sh");
+    command
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap())
+        .env("MARTY_TEST_SOURCE", &source)
+        .env("MARTY_TEST_TARGET", &target)
+        .env("UI_CANONICAL_ORIGIN", canonical)
+        .env(
+            "UI_PUBLIC_ENTRY_ORIGINS",
+            serde_json::to_string(&alias.into_iter().collect::<Vec<_>>()).unwrap(),
+        )
+        .env("UI_ENABLED_SECTIONS", sections)
+        .args(["-c", &script]);
+    if let Some(choice) = organization_creation {
+        command.env("ORGANIZATION_CREATION_ENABLED", choice);
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    std::fs::read(target.join("runtime-config.js")).unwrap()
+}
+
+#[test]
+fn runtime_configuration_accepts_the_actual_startup_emitter() {
+    let canonical = "https://marty.example.com:8443";
+    for choice in [None, Some("false"), Some("true")] {
+        for (sections, alias) in [
+            ("public,console", None),
+            ("public", Some("https://203.0.113.10:8443")),
+            ("console", None),
+        ] {
+            let bytes = emitted_configuration(canonical, alias, sections, choice);
+            assert!(runtime_configuration(&bytes, canonical, alias, sections));
+            assert!(!runtime_configuration(
+                &bytes,
+                "https://foreign.example",
+                alias,
+                sections
+            ));
+            assert!(!runtime_configuration(&bytes, canonical, alias, "none"));
+            if alias.is_some() {
+                assert!(!runtime_configuration(&bytes, canonical, None, sections));
+            }
+        }
+    }
+}
+
+#[test]
+fn runtime_configuration_rejects_malformed_organization_fields_and_extra_code() {
+    let canonical = "https://marty.example.com:8443";
+    let emitted = String::from_utf8(emitted_configuration(
+        canonical,
+        None,
+        "public,console",
+        Some("false"),
+    ))
+    .unwrap();
+    let field = "organizationCreationEnabled: false,";
+    assert_eq!(emitted.matches(field).count(), 1);
+    for replacement in [
+        "organizationCreationEnabled: 'false',",
+        "organizationCreationEnabled: \"false\",",
+        "organizationCreationEnabled: 0,",
+        "organizationCreationEnabled: null,",
+        "organizationCreationEnabled: FALSE,",
+        "organizationCreationEnabled: [],",
+        "organizationCreationEnabled: false || true,",
+        "organizationCreationEnabled: (() => false)(),",
+        "organizationCreationEnabled: false, organizationCreationEnabled: true,",
+        "organizationCreationEnabled: false, unknownSetting: true,",
+        "unknownSetting: false,",
+    ] {
+        let changed = emitted.replace(field, replacement);
+        assert!(
+            !runtime_configuration(changed.as_bytes(), canonical, None, "public,console"),
+            "{replacement}"
+        );
+    }
+    for changed in [
+        format!("{emitted}fetch('https://foreign.example');"),
+        format!("window.unexpected = true;{emitted}"),
+    ] {
+        assert!(!runtime_configuration(
+            changed.as_bytes(),
+            canonical,
+            None,
+            "public,console"
+        ));
+    }
+}
+
 #[test]
 fn built_entry_requires_the_application_document_and_bounded_local_assets() {
     let page = built_page();

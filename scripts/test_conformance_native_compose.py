@@ -394,6 +394,10 @@ def run(command):
                         local_build=local,
                     )
                     OWNER["validate_isolation"](selected, PROJECT)
+                    if not local:
+                        envoy = selected["services"]["envoy"]
+                        assert envoy["pull_policy"] == "missing"
+                        assert re.fullmatch(r"envoyproxy/envoy@sha256:[0-9a-f]{64}", envoy["image"])
                     assert_native_delta(baseline, selected)
                     assert (
                         selected["services"]["flow"]["environment"][

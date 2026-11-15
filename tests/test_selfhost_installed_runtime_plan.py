@@ -180,6 +180,16 @@ def test_plan_rejects_missing_issuance_integration_secret_key() -> None:
         plan(changed, PREFLIGHT, SECRET_ROOT)
 
 
+def test_plan_rejects_applicant_without_issuance_management_credential() -> None:
+    changed = model()
+    changed["services"]["applicant"]["secrets"] = [
+        secret for secret in changed["services"]["applicant"]["secrets"]
+        if secret["source"] != "issuance_api_key"
+    ]
+    with pytest.raises(ValueError, match="applicant changed required secrets"):
+        plan(changed, PREFLIGHT, SECRET_ROOT)
+
+
 def test_source_compose_has_reviewed_full_dag() -> None:
     env = {**os.environ, "SELFHOST_STATE_DIR": str(ROOT / "_test_state"),
            "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets"),

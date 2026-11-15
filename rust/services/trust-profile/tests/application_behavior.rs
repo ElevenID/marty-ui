@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
@@ -7,8 +7,8 @@ use marty_trust_profile::{
     IssuerEntityComplianceStatus, IssuerEntityPatch, IssuerEntityType, IssuerKeyResolution,
     IssuerKeyResolutionError, IssuerKeyResolver, MemoryTrustProfileRepository,
     OrganizationProfilePatch, OrganizationTrustProfile, ProfilePatch, RegistryImportSource,
-    RegistryImportType, RegistryImportedIssuer, RevocationPolicy, TimePolicy,
-    TrustAuthorizationError, TrustFramework, TrustProfile, TrustProfileApplication,
+    RegistryImportType, RegistryImportedIssuer, RevocationPolicy, ScopedIssuerKeyResolver,
+    TimePolicy, TrustAuthorizationError, TrustFramework, TrustProfile, TrustProfileApplication,
     TrustProfileApplicationError, TrustProfileControlPlane, TrustProfileIssuer,
     TrustProfileRepository, TrustProfileStatus, TrustProfileType, TrustPurpose,
     TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat, ValidationRules,
@@ -58,6 +58,71 @@ impl IssuerKeyResolver for UnavailableIssuerKeyResolver {
     async fn resolve(&self, _did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
         Err(IssuerKeyResolutionError::Unavailable)
     }
+}
+
+struct RecordedScopedResolver {
+    calls: Mutex<Vec<(String, String)>>,
+    result: Result<Option<IssuerKeyResolution>, IssuerKeyResolutionError>,
+}
+
+#[async_trait]
+impl ScopedIssuerKeyResolver for RecordedScopedResolver {
+    async fn resolve(
+        &self,
+        organization_id: &str,
+        issuer_did: &str,
+    ) -> Result<Option<IssuerKeyResolution>, IssuerKeyResolutionError> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push((organization_id.into(), issuer_did.into()));
+        self.result.clone()
+    }
+}
+
+struct RecordedPublicResolver {
+    calls: Mutex<Vec<String>>,
+    result: Result<IssuerKeyResolution, IssuerKeyResolutionError>,
+}
+
+#[async_trait]
+impl IssuerKeyResolver for RecordedPublicResolver {
+    async fn resolve(&self, did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        self.calls.lock().unwrap().push(did.into());
+        self.result.clone()
+    }
+}
+
+const RETAINED_DID: &str = "did:web:203.0.113.42%3A8443:orgs:retained";
+
+fn scoped_resolution() -> IssuerKeyResolution {
+    IssuerKeyResolution {
+        verification_keys: vec![json!({
+            "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+            "kid": format!("{RETAINED_DID}#assertion")
+        })],
+        source: "organization_published_did_document".into(),
+        retrieved_at: "2026-08-21T00:00:00Z".into(),
+        content_sha256: "b".repeat(64),
+    }
+}
+
+fn scoped_resolver(
+    result: Result<Option<IssuerKeyResolution>, IssuerKeyResolutionError>,
+) -> Arc<RecordedScopedResolver> {
+    Arc::new(RecordedScopedResolver {
+        calls: Mutex::default(),
+        result,
+    })
+}
+
+fn public_resolver(
+    result: Result<IssuerKeyResolution, IssuerKeyResolutionError>,
+) -> Arc<RecordedPublicResolver> {
+    Arc::new(RecordedPublicResolver {
+        calls: Mutex::default(),
+        result,
+    })
 }
 
 fn now() -> chrono::DateTime<Utc> {
@@ -205,6 +270,170 @@ async fn internal_decision_reconciles_and_persists_existing_keyless_did_issuer()
         persisted.metadata["verification_key_resolution"]["source"],
         "configured_internal_resolver"
     );
+}
+
+#[tokio::test]
+async fn scoped_document_hydrates_the_stored_organization_and_retained_did_without_retargeting() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut existing = issuer(Some("org-a"), false);
+    existing.issuer_id = RETAINED_DID.into();
+    repository.save_issuer_entity(&existing).await.unwrap();
+    let scoped = scoped_resolver(Ok(Some(scoped_resolution())));
+    let public = public_resolver(Err(IssuerKeyResolutionError::Unavailable));
+    let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll))
+        .with_issuer_key_resolver(public.clone())
+        .with_scoped_issuer_key_resolver(scoped.clone());
+
+    application
+        .ensure_decision_issuer_verification_keys(&mut existing)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        scoped.calls.lock().unwrap().as_slice(),
+        &[("org-a".into(), RETAINED_DID.into())]
+    );
+    assert!(public.calls.lock().unwrap().is_empty());
+    let persisted = repository
+        .issuer_entity_by_id(existing.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(persisted.organization_id.as_deref(), Some("org-a"));
+    assert_eq!(persisted.issuer_id, RETAINED_DID);
+    assert_eq!(
+        persisted.metadata["verification_keys"][0]["kid"],
+        format!("{RETAINED_DID}#assertion")
+    );
+    assert_eq!(
+        persisted.metadata["verification_key_resolution"]["source"],
+        "organization_published_did_document"
+    );
+}
+
+#[tokio::test]
+async fn only_explicit_scoped_absence_uses_the_existing_configured_resolver() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut existing = issuer(Some("org-a"), false);
+    existing.issuer_id = RETAINED_DID.into();
+    let scoped = scoped_resolver(Ok(None));
+    let public = public_resolver(Ok(scoped_resolution()));
+    let application = TrustProfileApplication::new(repository, Arc::new(AllowAll))
+        .with_issuer_key_resolver(public.clone())
+        .with_scoped_issuer_key_resolver(scoped.clone());
+
+    application
+        .ensure_decision_issuer_verification_keys(&mut existing)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        scoped.calls.lock().unwrap().as_slice(),
+        &[("org-a".into(), RETAINED_DID.into())]
+    );
+    assert_eq!(public.calls.lock().unwrap().as_slice(), &[RETAINED_DID]);
+    assert_eq!(existing.issuer_id, RETAINED_DID);
+}
+
+#[tokio::test]
+async fn scoped_invalid_or_unavailable_never_falls_back_or_saves_trust_material() {
+    for error in [
+        IssuerKeyResolutionError::Invalid,
+        IssuerKeyResolutionError::Unavailable,
+    ] {
+        let repository = Arc::new(MemoryTrustProfileRepository::default());
+        let mut existing = issuer(Some("org-a"), false);
+        existing.issuer_id = RETAINED_DID.into();
+        repository.save_issuer_entity(&existing).await.unwrap();
+        let scoped = scoped_resolver(Err(error.clone()));
+        let public = public_resolver(Ok(scoped_resolution()));
+        let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll))
+            .with_issuer_key_resolver(public.clone())
+            .with_scoped_issuer_key_resolver(scoped.clone());
+
+        assert!(matches!(
+            application.ensure_decision_issuer_verification_keys(&mut existing).await,
+            Err(TrustProfileApplicationError::IssuerKeyResolution(actual)) if actual == error
+        ));
+        assert!(public.calls.lock().unwrap().is_empty());
+        assert_eq!(existing.metadata, json!({}));
+        assert_eq!(
+            repository
+                .issuer_entity_by_id(existing.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .metadata,
+            json!({})
+        );
+    }
+}
+
+#[tokio::test]
+async fn global_issuers_never_borrow_an_organization_scoped_document() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut existing = issuer(None, true);
+    existing.issuer_id = RETAINED_DID.into();
+    let scoped = scoped_resolver(Err(IssuerKeyResolutionError::Invalid));
+    let public = public_resolver(Ok(scoped_resolution()));
+    let application = TrustProfileApplication::new(repository, Arc::new(AllowAll))
+        .with_issuer_key_resolver(public.clone())
+        .with_scoped_issuer_key_resolver(scoped.clone());
+
+    application
+        .ensure_decision_issuer_verification_keys(&mut existing)
+        .await
+        .unwrap();
+
+    assert!(scoped.calls.lock().unwrap().is_empty());
+    assert_eq!(public.calls.lock().unwrap().as_slice(), &[RETAINED_DID]);
+    assert_eq!(existing.organization_id, None);
+}
+
+#[tokio::test]
+async fn scoped_resolution_preserves_existing_pins_and_never_precedes_authorization() {
+    struct Deny;
+    #[async_trait]
+    impl TrustProfileControlPlane for Deny {
+        async fn require_permission(
+            &self,
+            _: &str,
+            _: &str,
+            _: &'static str,
+            _: &'static str,
+        ) -> Result<(), TrustAuthorizationError> {
+            Err(TrustAuthorizationError::MembershipRequired)
+        }
+    }
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let scoped = scoped_resolver(Err(IssuerKeyResolutionError::Invalid));
+    let public = public_resolver(Err(IssuerKeyResolutionError::Unavailable));
+    let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll))
+        .with_issuer_key_resolver(public.clone())
+        .with_scoped_issuer_key_resolver(scoped.clone());
+    let mut existing = issuer(Some("org-a"), false);
+    existing.issuer_id = RETAINED_DID.into();
+    existing.metadata["verification_keys"] = json!(scoped_resolution().verification_keys);
+    let before = existing.metadata.clone();
+    let created = application
+        .create_issuer_entity("user-a", existing)
+        .await
+        .unwrap();
+    assert_eq!(created.metadata, before);
+
+    let denied = TrustProfileApplication::new(repository, Arc::new(Deny))
+        .with_issuer_key_resolver(public.clone())
+        .with_scoped_issuer_key_resolver(scoped.clone());
+    assert!(matches!(
+        denied
+            .create_issuer_entity("outsider", issuer(Some("other-org"), false))
+            .await,
+        Err(TrustProfileApplicationError::Authorization(
+            TrustAuthorizationError::MembershipRequired
+        ))
+    ));
+    assert!(scoped.calls.lock().unwrap().is_empty());
+    assert!(public.calls.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

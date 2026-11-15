@@ -54,6 +54,8 @@ struct Intent {
     created_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     recovery_baseline_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    oidc_secret_rotation_sha256: Option<String>,
 }
 impl Intent {
     fn scope(&self) -> Attempt {
@@ -442,6 +444,10 @@ fn load_intent(view: &LockedInspection, installation: &Path, scope: Attempt) -> 
     )?;
     let parent = intent.parent(installation)?;
     require(parent.sha256()? == intent.parent_binding_sha256)?;
+    require(
+        intent.oidc_secret_rotation_sha256
+            == crate::installer_oidc_rotation::for_parent(installation, &parent)?,
+    )?;
     let current = parent_session(view, installation)?;
     require(encode(&current)? == encode(&intent.parent_session)?)?;
     let plan = intent.plan(installation)?;
@@ -778,6 +784,10 @@ fn begin_with_plan(
         helper_model: session.model().clone(),
         created_at,
         recovery_baseline_sha256: baseline.map(|value| value.sha256().into()),
+        oidc_secret_rotation_sha256: crate::installer_oidc_rotation::for_parent(
+            installation,
+            parent,
+        )?,
     };
     store(state, &scope.record("intent"), &encode(&intent)?)?;
     load_intent(state.inspection(), installation, scope)
@@ -1739,6 +1749,7 @@ fn reconcile(
             &parent,
             intent.attempt,
             &helper.operation,
+            intent.oidc_secret_rotation_sha256.clone(),
         )?
     };
     let observed_at = now()?;

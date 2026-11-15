@@ -2,6 +2,14 @@
 # Public Marty service image. Build context: marty-ui repository root.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS rust-service-base
 
+ARG PRIVATE_FORKS_ENABLED=false
+# The reader is never a build argument or image environment variable.
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
+
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo install cargo-chef --locked --version 0.1.78
@@ -59,6 +67,14 @@ COPY --from=rust-service-planner /build/rust/recipe.json recipe.json
 # Excluded vendored path dependencies are not reconstructed by the chef recipe.
 COPY rust/vendor /build/rust/vendor
 COPY proto /build/proto
+# Materialize manifests without compiling or running package build scripts.
+# This is the only instruction with access to the private source-reader mount.
+RUN --mount=type=secret,id=private_forks_read_token \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      cargo chef cook --no-build --recipe-path recipe.json \
+      && CARGO_HOME=/opt/private-cargo python3 /usr/local/lib/marty-private-forks.py \
+        fetch --container --token-file /run/secrets/private_forks_read_token; \
+    fi
 RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=secret,id=sccache_token \

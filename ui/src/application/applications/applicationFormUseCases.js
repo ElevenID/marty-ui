@@ -251,48 +251,51 @@ export async function autoApplyForCredential({
   // If one already exists (credentialed / approved), return its offer
   // instead of creating a duplicate.
   const configId = credentialConfig?.id || credentialConfigId;
+  let existing = null;
   if (listApplications) {
     try {
       const { items } = await listApplications({ limit: 100 });
-      const existing = items.find((a) => {
+      existing = items.find((a) => {
         const status = a.status?.toLowerCase();
         return (
           a.credential_template_id === configId &&
           ['approved', 'offered', 'credentialed', 'issued'].includes(status)
         );
       });
-      if (existing) {
-        const status = existing.status?.toLowerCase();
-        if (hasRegisteredWallet && generateIssuanceOffer) {
-          const refreshedApplication = await generateIssuanceOffer(existing.id);
-          return {
-            applicationId: refreshedApplication.id || existing.id,
-            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
-            offerData: buildOfferData(refreshedApplication),
-            existingApplication: true,
-          };
-        }
-
-        if (hasRegisteredWallet && ['approved', 'offered'].includes(status) && autoIssueApplication) {
-          const refreshedApplication = await autoIssueApplication(existing.id);
-          return {
-            applicationId: refreshedApplication.id,
-            applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
-            offerData: buildOfferData(refreshedApplication),
-            existingApplication: true,
-          };
-        }
-        return {
-          applicationId: existing.id,
-          applicationReference: existing.reference_number || existing.referenceNumber || null,
-          offerData: buildOfferData(existing),
-          existingApplication: true,
-          requiresWalletSelection: !hasRegisteredWallet,
-        };
-      }
     } catch {
       // If listing fails, proceed with creation and let the backend guard catch duplicates
     }
+  }
+  // Offer preparation is outside the listing fallback. A failed claim for a
+  // known application must never fall through into another creation request.
+  if (existing) {
+    const status = existing.status?.toLowerCase();
+    if (hasRegisteredWallet && generateIssuanceOffer) {
+      const refreshedApplication = await generateIssuanceOffer(existing.id);
+      return {
+        applicationId: refreshedApplication.id || existing.id,
+        applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+        offerData: buildOfferData(refreshedApplication),
+        existingApplication: true,
+      };
+    }
+
+    if (hasRegisteredWallet && ['approved', 'offered'].includes(status) && autoIssueApplication) {
+      const refreshedApplication = await autoIssueApplication(existing.id);
+      return {
+        applicationId: refreshedApplication.id,
+        applicationReference: refreshedApplication.reference_number || refreshedApplication.referenceNumber || existing.reference_number || existing.referenceNumber || null,
+        offerData: buildOfferData(refreshedApplication),
+        existingApplication: true,
+      };
+    }
+    return {
+      applicationId: existing.id,
+      applicationReference: existing.reference_number || existing.referenceNumber || null,
+      offerData: buildOfferData(existing),
+      existingApplication: true,
+      requiresWalletSelection: !hasRegisteredWallet,
+    };
   }
 
   const formData = buildAutoApplyFormData({ applicationTemplate, user });
@@ -335,7 +338,7 @@ export async function submitCredentialApplication({
   credentialConfig,
   credentialConfigId,
   canvasLtiContext = null,
-  allFields,
+  allFields = [],
   resolveApplicantId,
   createApplicant,
   updateApplicantProfile,
@@ -348,7 +351,6 @@ export async function submitCredentialApplication({
   duplicateApplicationAction = null,
   enrollBiometric,
   readFileAsBase64,
-  createFallbackBiometricTemplate = () => btoa('test-biometric-template'),
 }) {
   if (!credentialConfig?.id && !credentialConfigId) {
     throw new Error('Please select a credential to apply for.');
@@ -365,6 +367,7 @@ export async function submitCredentialApplication({
   });
 
   const effectiveCredentialConfigId = credentialConfig?.id || credentialConfigId;
+  let applicationToReplace = null;
   if (listApplicantApplications) {
     const existingApplications = await listApplicantApplications(applicantId);
     const duplicate = findActiveApplicationForCredential(existingApplications, effectiveCredentialConfigId);
@@ -382,9 +385,7 @@ export async function submitCredentialApplication({
         if (!supersedeApplication) {
           throw new Error('Unable to replace the previous application.');
         }
-        await supersedeApplication(duplicate.id, {
-          reason: 'superseded_by_reapplication',
-        });
+        applicationToReplace = duplicate;
       } else {
         return {
           duplicateApplicationConflict: {
@@ -397,9 +398,64 @@ export async function submitCredentialApplication({
     }
   }
 
+  // Continuing an existing request needs no new uploads. For a new request or
+  // replacement, reject known input failures before retiring or creating one.
+  for (const field of allFields) {
+    const value = formData[field.name];
+    if (field.required && (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0))) {
+      throw new Error(`${field.label || field.name} is required.`);
+    }
+  }
   const evidenceUploads = applicationEvidenceUploads({ credentialConfig, formData });
   if (evidenceUploads.length > 0 && !submitApplicationEvidence) {
     throw new Error('Application evidence upload is unavailable.');
+  }
+
+  // Only an explicit portrait is facial enrollment input. Other file fields
+  // retain their evidence type, including documents, signatures and scans.
+  const portraitField = allFields.find((field) => field.name === 'portrait');
+  const portraitFile = portraitField && formData[portraitField.name];
+  if (portraitFile && !enrollBiometric) {
+    throw new Error('Portrait enrollment is unavailable.');
+  }
+  const fileContents = new Map();
+  const readUpload = async (file, label) => {
+    if (!fileContents.has(file)) {
+      let content;
+      try {
+        content = await readFileAsBase64(file);
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        throw new Error(`Unable to read ${label}.`, { cause: error });
+      }
+      if (typeof content !== 'string' || !content.trim()) {
+        throw new Error(`Unable to read ${label}.`);
+      }
+      fileContents.set(file, content);
+    }
+    return fileContents.get(file);
+  };
+  const portraitBase64 = portraitFile
+    ? await readUpload(portraitFile, portraitField.label || 'portrait')
+    : null;
+  const preparedEvidence = [];
+  for (const { requirement, file } of evidenceUploads) {
+    const contentBase64 = await readUpload(file, requirement.description || requirement.evidence_id);
+    preparedEvidence.push({ requirement, file, contentBase64 });
+  }
+
+  if (portraitBase64) {
+    await enrollBiometric(applicantId, {
+      biometric_type: 'FACIAL',
+      template_data_base64: portraitBase64,
+      image_data_base64: portraitBase64,
+      capture_device_id: 'web-form',
+    });
+  }
+  if (applicationToReplace) {
+    await supersedeApplication(applicationToReplace.id, {
+      reason: 'superseded_by_reapplication',
+    });
   }
 
   const createdApplication = await createApplication(
@@ -411,11 +467,7 @@ export async function submitCredentialApplication({
     })
   );
 
-  for (const { requirement, file } of evidenceUploads) {
-    const contentBase64 = await readFileAsBase64(file);
-    if (!contentBase64) {
-      throw new Error(`Unable to read ${requirement.description || requirement.evidence_id}.`);
-    }
+  for (const { requirement, file, contentBase64 } of preparedEvidence) {
     const acceptedMimeType = (requirement.accepted_formats || [])
       .find((value) => String(value).includes('/'));
     await submitApplicationEvidence(createdApplication.id, {
@@ -428,20 +480,6 @@ export async function submitCredentialApplication({
   }
 
   const submittedApplication = await submitApplication(createdApplication.id);
-
-  const portraitField = allFields.find((field) => field.name === 'portrait' || field.type === 'file');
-  if (portraitField && formData[portraitField.name]) {
-    const imageBase64 = await readFileAsBase64(formData[portraitField.name]);
-    const templateBase64 = imageBase64 || createFallbackBiometricTemplate();
-
-    await enrollBiometric(applicantId, {
-      biometric_type: 'FACIAL',
-      template_data_base64: templateBase64,
-      image_data_base64: imageBase64,
-      is_live_capture: true,
-      capture_device_id: 'web-form',
-    });
-  }
 
   return {
     applicationId: submittedApplication.id,

@@ -2,12 +2,17 @@ use marty_oid4vci::presentation_request::{
     build_presentation_request, MdocClaimInput, PresentationRequestArtifacts,
     PresentationRequestBuildInput, PresentationRequirementInput, RequestedClaimInput,
 };
+use marty_oid4vp_contract::jwt_vc_profile::{
+    policy_credential_format, profiled_jwt_vc_query, JwtVcProfileBinding, JwtVcSecuringProfile,
+};
+use marty_oid4vp_contract::{digest_query_document, FrozenPolicyIdentity};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    CredentialTemplateReference, FlowProviderError, FlowProviderRegistry,
+    CredentialTemplateReference, FlowInstanceRecord, FlowProviderError, FlowProviderRegistry,
     PresentationPolicyReference,
 };
 
@@ -29,6 +34,140 @@ pub enum FlowPresentationRequestError {
     TemplateInactive,
     #[error("FLOW.PRESENTATION_REQUEST_NATIVE: {0}")]
     Native(String),
+    #[error("FLOW.VERIFICATION_RESTART_REQUIRED: frozen presentation request is missing")]
+    FrozenRequestMissing,
+    #[error("FLOW.PRESENTATION_REQUEST_INVALID_SNAPSHOT")]
+    InvalidFrozenRequest,
+}
+
+pub(crate) const FROZEN_PRESENTATION_REQUEST_KEY: &str = "_marty_presentation_request_v1";
+
+/// Flow-owned policy and exact Core artifacts retained at session creation.
+/// This is stored behind the reserved private context boundary; it is not
+/// authenticated presentation evidence or an OpenID wire extension.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FrozenFlowPresentationRequest {
+    pub instance_id: String,
+    pub organization_id: String,
+    pub nonce: String,
+    pub policy_revision: FrozenPolicyIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority:
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
+    pub presentation_definition: Value,
+    pub presentation_definition_digest: String,
+    pub dcql_query: Value,
+    pub dcql_query_digest: String,
+}
+
+impl FrozenFlowPresentationRequest {
+    pub fn artifacts(&self) -> PresentationRequestArtifacts {
+        PresentationRequestArtifacts {
+            presentation_definition: self.presentation_definition.clone(),
+            dcql_query: self.dcql_query.clone(),
+        }
+    }
+
+    pub fn matches_query(&self, kind: marty_oid4vp_contract::QueryKind, query: &Value) -> bool {
+        match kind {
+            marty_oid4vp_contract::QueryKind::Dcql => query == &self.dcql_query,
+            marty_oid4vp_contract::QueryKind::PresentationExchange => {
+                matches!(profiled_jwt_vc_query(&self.dcql_query), Ok(None))
+                    && query == &self.presentation_definition
+            }
+        }
+    }
+}
+
+pub(crate) fn freeze_flow_presentation_request(
+    instance: &mut FlowInstanceRecord,
+    policy_revision: FrozenPolicyIdentity,
+    credential_authority: Option<
+        marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+    >,
+    artifacts: &PresentationRequestArtifacts,
+) -> Result<(), FlowPresentationRequestError> {
+    let snapshot = FrozenFlowPresentationRequest {
+        instance_id: instance.id.clone(),
+        organization_id: instance.organization_id.clone(),
+        nonce: instance.context["nonce"]
+            .as_str()
+            .ok_or(FlowPresentationRequestError::InvalidFrozenRequest)?
+            .into(),
+        policy_revision,
+        credential_authority,
+        presentation_definition: artifacts.presentation_definition.clone(),
+        presentation_definition_digest: digest_query_document(&artifacts.presentation_definition)
+            .map_err(|_| {
+            FlowPresentationRequestError::InvalidFrozenRequest
+        })?,
+        dcql_query: artifacts.dcql_query.clone(),
+        dcql_query_digest: digest_query_document(&artifacts.dcql_query)
+            .map_err(|_| FlowPresentationRequestError::InvalidFrozenRequest)?,
+    };
+    validate_frozen_request(&snapshot, instance)?;
+    instance.context[FROZEN_PRESENTATION_REQUEST_KEY] = serde_json::to_value(snapshot)
+        .map_err(|_| FlowPresentationRequestError::InvalidFrozenRequest)?;
+    Ok(())
+}
+
+pub(crate) fn load_frozen_flow_presentation_request(
+    instance: &FlowInstanceRecord,
+) -> Result<FrozenFlowPresentationRequest, FlowPresentationRequestError> {
+    let value = instance
+        .context
+        .get(FROZEN_PRESENTATION_REQUEST_KEY)
+        .ok_or(FlowPresentationRequestError::FrozenRequestMissing)?;
+    let snapshot = serde_json::from_value(value.clone())
+        .map_err(|_| FlowPresentationRequestError::InvalidFrozenRequest)?;
+    validate_frozen_request(&snapshot, instance)?;
+    Ok(snapshot)
+}
+
+fn validate_frozen_request(
+    snapshot: &FrozenFlowPresentationRequest,
+    instance: &FlowInstanceRecord,
+) -> Result<(), FlowPresentationRequestError> {
+    let profiled = profiled_jwt_vc_query(&snapshot.dcql_query)
+        .map_err(|_| FlowPresentationRequestError::InvalidFrozenRequest)?;
+    if profiled.is_some()
+        && (snapshot.presentation_definition != serde_json::json!({})
+            || snapshot.credential_authority.is_some()
+            || instance.context["flow_type"].as_str() == Some("siop_v2")
+            || instance.context["oid4vp_profile"].as_str() == Some("haip"))
+    {
+        return Err(FlowPresentationRequestError::InvalidFrozenRequest);
+    }
+    if snapshot.policy_revision.validate().is_err()
+        || snapshot
+            .credential_authority
+            .as_ref()
+            .is_some_and(|authority| {
+                authority.validate().is_err()
+                    || authority.organization_id != instance.organization_id
+                    || instance.context["trust_profile_id"]
+                        .as_str()
+                        .is_some_and(|profile_id| profile_id != authority.profile.id)
+            })
+        || snapshot.instance_id != instance.id
+        || snapshot.organization_id != instance.organization_id
+        || snapshot.nonce.is_empty()
+        || Some(snapshot.nonce.as_str()) != instance.context["nonce"].as_str()
+        || Some(snapshot.policy_revision.id.as_str())
+            != instance.context["presentation_policy_id"].as_str()
+        || !snapshot.presentation_definition.is_object()
+        || !snapshot.dcql_query.is_object()
+        || digest_query_document(&snapshot.presentation_definition)
+            .ok()
+            .as_deref()
+            != Some(snapshot.presentation_definition_digest.as_str())
+        || digest_query_document(&snapshot.dcql_query).ok().as_deref()
+            != Some(snapshot.dcql_query_digest.as_str())
+    {
+        return Err(FlowPresentationRequestError::InvalidFrozenRequest);
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +206,26 @@ pub async fn resolve_flow_presentation_policy(
     }
     if !policy.status.eq_ignore_ascii_case("active") {
         return Err(FlowPresentationRequestError::PolicyInactive);
+    }
+    if policy.policy_revision.id != policy.id || policy.policy_revision.validate().is_err() {
+        return Err(FlowPresentationRequestError::InvalidPolicy(
+            "policy revision is missing or invalid".into(),
+        ));
+    }
+    match (
+        &policy.prerequisite_evidence_profile,
+        &policy.credential_authority,
+    ) {
+        (None, None) => {}
+        (Some(profile), Some(authority))
+            if profile == "managed_sd_jwt_dcql_v1"
+                && authority.organization_id == organization_id
+                && authority.validate().is_ok() => {}
+        _ => {
+            return Err(FlowPresentationRequestError::InvalidPolicy(
+                "managed prerequisite authority is missing or invalid".into(),
+            ))
+        }
     }
     if policy.credential_requirements.is_empty() {
         return Err(FlowPresentationRequestError::InvalidPolicy(
@@ -120,6 +279,13 @@ pub(crate) async fn build_resolved_flow_presentation_request(
     providers: &FlowProviderRegistry,
     resolved: &ResolvedPresentationPolicy,
 ) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    if resolved.requirements.iter().any(|(requirement, template)| {
+        requirement.get("expected_securing_profile").is_some()
+            || template.jwt_vc_profile.is_some()
+            || template.credential_format == "vc_jwt_direct_v1"
+    }) {
+        return build_profiled_request(resolved);
+    }
     let template_provider =
         providers
             .credential_template
@@ -168,6 +334,87 @@ pub(crate) async fn build_resolved_flow_presentation_request(
         wallet_formats,
     })
     .map_err(|error| FlowPresentationRequestError::Native(error.to_string()))
+}
+
+fn build_profiled_request(
+    resolved: &ResolvedPresentationPolicy,
+) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    let invalid = || {
+        FlowPresentationRequestError::InvalidPolicy(
+            "explicit JWT-VC requires one type-only holder-bound DCQL requirement".into(),
+        )
+    };
+    if resolved.requirements.len() != 1
+        || !resolved.policy.holder_binding_required
+        || resolved.policy.prerequisite_evidence_profile.is_some()
+        || resolved.policy.credential_authority.is_some()
+    {
+        return Err(invalid());
+    }
+    let (requirement, template) = &resolved.requirements[0];
+    let profile: JwtVcSecuringProfile = serde_json::from_value(
+        requirement
+            .get("expected_securing_profile")
+            .cloned()
+            .ok_or_else(invalid)?,
+    )
+    .map_err(|_| invalid())?;
+    if requirement.get("required") != Some(&Value::Bool(true))
+        || requirement
+            .get("requested_claims")
+            .is_none_or(|claims| claims.as_array().is_none_or(|claims| !claims.is_empty()))
+        || requirement
+            .get("credential_payload_format")
+            .and_then(Value::as_str)
+            != Some(policy_credential_format(profile))
+    {
+        return Err(invalid());
+    }
+    let supported = match profile {
+        JwtVcSecuringProfile::W3cVc2Jose2026V1 => {
+            template.jwt_vc_profile.is_some()
+                && template.credential_format == "vc_jwt_direct_v1"
+                && template.supported_formats == ["VC_JWT_DIRECT_V1"]
+        }
+        JwtVcSecuringProfile::MartyNestedVc2JwtV1 => {
+            template.jwt_vc_profile.is_none()
+                && template.credential_format == "jwt_vc"
+                && template
+                    .supported_formats
+                    .iter()
+                    .any(|format| format == "VC_JWT")
+        }
+    };
+    if !supported {
+        return Err(invalid());
+    }
+    let credential_type = match template
+        .credential_type
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "open_badge" | "open_badge_v3" | "openbadgecredential" => "OpenBadgeCredential",
+        _ => template.credential_type.as_str(),
+    };
+    let query = marty_oid4vci::presentation_request::build_profiled_jwt_vc_query(
+        requirement
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?,
+        JwtVcProfileBinding::new(profile),
+        vec![vec!["VerifiableCredential".into(), credential_type.into()]],
+        true,
+    )
+    .map_err(|_| invalid())?;
+    let dcql_query = serde_json::json!({"credentials": [query]});
+    profiled_jwt_vc_query(&dcql_query)
+        .map_err(|_| invalid())?
+        .ok_or_else(invalid)?;
+    Ok(PresentationRequestArtifacts {
+        presentation_definition: serde_json::json!({}),
+        dcql_query,
+    })
 }
 
 fn validate_template(

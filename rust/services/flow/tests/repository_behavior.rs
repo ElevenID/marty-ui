@@ -75,9 +75,11 @@ fn terminal_result_nonce_and_callback_commit_once_under_concurrency() {
         ))
         .unwrap();
     let barrier = Arc::new(Barrier::new(3));
+    let expected = repository.instance("abcdefghijklmnop").unwrap().unwrap();
     let handles = ["allow", "deny"].map(|decision| {
         let repository = Arc::clone(&repository);
         let barrier = Arc::clone(&barrier);
+        let expected = expected.clone();
         std::thread::spawn(move || {
             let mut terminal = instance("abcdefghijklmnop", FlowInstanceStatus::Completed);
             terminal.context = json!({"decision": decision});
@@ -88,7 +90,7 @@ fn terminal_result_nonce_and_callback_commit_once_under_concurrency() {
                     terminal,
                     &"a".repeat(64),
                     10_000,
-                    FlowInstanceStatus::AwaitingWallet,
+                    &expected,
                     Some(callback("abcdefghijklmnop")),
                     2_000,
                 )
@@ -120,12 +122,13 @@ fn finalization_rejects_replay_expiry_and_mismatched_callback_identity() {
             FlowInstanceStatus::AwaitingWallet,
         ))
         .unwrap();
+    let expected = repository.instance("abcdefghijklmnop").unwrap().unwrap();
     assert!(repository
         .finalize_verification(
             instance("abcdefghijklmnop", FlowInstanceStatus::Completed),
             "invalid",
             10_000,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             None,
             2_000,
         )
@@ -137,7 +140,7 @@ fn finalization_rejects_replay_expiry_and_mismatched_callback_identity() {
             instance("abcdefghijklmnop", FlowInstanceStatus::Completed),
             &"b".repeat(64),
             10_000,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected,
             Some(wrong_callback),
             2_000,
         )
@@ -146,17 +149,61 @@ fn finalization_rejects_replay_expiry_and_mismatched_callback_identity() {
     let expired = InMemoryFlowRepository::default();
     let mut candidate = instance("abcdefghijklmnop", FlowInstanceStatus::AwaitingWallet);
     candidate.expires_at_ms = Some(1_999);
+    let expected_expired = candidate.clone();
     expired.save_instance(candidate).unwrap();
     assert!(!expired
         .finalize_verification(
             instance("abcdefghijklmnop", FlowInstanceStatus::Completed),
             &"c".repeat(64),
             10_000,
-            FlowInstanceStatus::AwaitingWallet,
+            &expected_expired,
             None,
             2_000,
         )
         .unwrap());
+}
+
+#[test]
+fn changed_live_snapshot_preserves_nonce_and_callback_for_a_fresh_evaluation() {
+    let repository = InMemoryFlowRepository::default();
+    let mut expected = instance("abcdefghijklmnop", FlowInstanceStatus::AwaitingWallet);
+    expected.context = json!({"nonce": "original", "policy_revision": "first"});
+    repository.save_instance(expected.clone()).unwrap();
+    let mut replacement = expected.clone();
+    replacement.context = json!({"nonce": "replacement", "policy_revision": "second"});
+    repository.save_instance(replacement.clone()).unwrap();
+    let mut stale_terminal = expected.clone();
+    stale_terminal.status = FlowInstanceStatus::Completed;
+    let digest = "d".repeat(64);
+    assert!(!repository
+        .finalize_verification(
+            stale_terminal,
+            &digest,
+            10_000,
+            &expected,
+            Some(callback("abcdefghijklmnop")),
+            2_000,
+        )
+        .unwrap());
+    assert_eq!(
+        repository.instance(&expected.id).unwrap(),
+        Some(replacement.clone())
+    );
+    assert!(repository.callback(&expected.id).unwrap().is_none());
+
+    let mut fresh_terminal = replacement.clone();
+    fresh_terminal.status = FlowInstanceStatus::Completed;
+    assert!(repository
+        .finalize_verification(
+            fresh_terminal,
+            &digest,
+            10_000,
+            &replacement,
+            Some(callback("abcdefghijklmnop")),
+            2_000,
+        )
+        .unwrap());
+    assert!(repository.callback(&expected.id).unwrap().is_some());
 }
 
 fn planned_instance(id: &str, semantics: &str) -> PlannedApplicationFlow {

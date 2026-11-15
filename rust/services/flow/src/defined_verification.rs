@@ -21,7 +21,6 @@ use crate::{
 
 const SNAPSHOT: &str = "_marty_verification_definition";
 pub(crate) const REQUEST_DIGEST: &str = "_marty_verification_request_digest";
-pub(crate) const EXPECTED_POLICY_DIGEST: &str = "_marty_expected_policy_configuration_digest";
 const STEPS: [&str; 4] = [
     "create_request",
     "wallet_selection",
@@ -300,6 +299,12 @@ pub(crate) async fn prepare_admitted_defined_verification_start(
         instance_id,
     )
     .await?;
+    let frozen =
+        crate::presentation_request::load_frozen_flow_presentation_request(&prepared.instance)
+            .map_err(FlowVerificationStartError::Presentation)?;
+    if frozen.policy_revision.content_digest != policy_configuration_digest {
+        return Err(DefinedVerificationError::ConfigurationChanged);
+    }
     prepared
         .instance
         .flow_definition_id

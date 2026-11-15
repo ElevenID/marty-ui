@@ -146,6 +146,7 @@ fn runtime_configuration(
     let pattern = regex::Regex::new(concat!(
         r"\A\s*window\.__MARTY_RUNTIME_CONFIG__ = Object\.assign\(\{\}, window\.__MARTY_RUNTIME_CONFIG__, \{\s*",
         r"googleAnalyticsMeasurementId: '[A-Za-z0-9_-]*',\s*",
+        r"(?:organizationCreationEnabled: (?:true|false),\s*)?",
         r"(?:web: \{\s*enabled_sections: (?P<sections>\[[^\r\n]*\])\s*\},\s*)?hosting: \{\s*",
         r"canonicalOrigin: '(?P<canonical>[^'\r\n]*)',\s*publicEntryOrigins: (?P<aliases>\[[^\r\n]*\])\s*\}\s*\}\);\s*\z"
     )).expect("fixed runtime configuration pattern");

@@ -183,6 +183,25 @@ fn external_oidc_starts_without_keycloak_admin_or_realm_and_retains_claim_only_p
 }
 
 #[test]
+fn passkey_enrollment_is_opt_in_and_owned_only_by_managed_keycloak() {
+    let mut values = baseline("beta");
+    assert!(
+        !AuthServiceConfig::from_values(values.clone())
+            .unwrap()
+            .passkeys_enabled
+    );
+    values.insert("KEYCLOAK_PASSKEYS_ENABLED".into(), "true".into());
+    assert!(
+        AuthServiceConfig::from_values(values)
+            .unwrap()
+            .passkeys_enabled
+    );
+    let mut external = external_values();
+    external.insert("KEYCLOAK_PASSKEYS_ENABLED".into(), "true".into());
+    assert!(AuthServiceConfig::from_values(external).is_err());
+}
+
+#[test]
 fn external_oidc_rejects_missing_explicit_identity_and_keycloak_only_settings() {
     for name in ["OIDC_ISSUER_URL", "OIDC_CLIENT_ID"] {
         let mut values = external_values();

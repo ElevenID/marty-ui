@@ -14,6 +14,11 @@ describe('VerificationResultSummary', () => {
           certificate_trust_failures: ['CERTIFICATE_CHAIN_REJECTED'], issuer_certificate_sha256: 'd'.repeat(64) },
         claims: { name: 'UNTRUSTED_PERSON' }, issuer_did: 'UNTRUSTED_ISSUER' } };
     const attempt = extractPresentationRejection(session);
+    for (const code of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+      const changed = { ...session, last_presentation_attempt: { ...session.last_presentation_attempt,
+        authentication: { ...session.last_presentation_attempt.authentication, document_type: `org.iso.${String.fromCharCode(code)}mDL` } } };
+      expect(extractPresentationRejection(changed)).toBeNull();
+    }
     expect(extractPresentationRejection(session, { id: session.id })).toBeNull();
     render(<PresentationAttemptFeedback attempt={attempt} />);
     expect(screen.getByTestId('presentation-attempt-rejected')).toHaveTextContent('issuer certificate was not accepted');

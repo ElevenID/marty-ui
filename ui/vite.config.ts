@@ -12,6 +12,7 @@ import { selfhostBuildContractPlugin } from './scripts/selfhost-build-contract.m
 import { productionBuildContract, productionBuildContractPlugin } from './scripts/production-build-contract.mjs'
 import { websiteBuildRevision, webSurfaceBuildContractPlugin } from './scripts/web-surface-build-contract.mjs'
 import { websiteAssetBase, websiteAssetsPlugin } from './scripts/website-assets.mjs'
+import { devServerOrigin } from './scripts/dev-server-origin.mjs'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/(?:_website\/[^/]+\/)?assets\/)/gi
@@ -330,7 +331,9 @@ export default defineConfig(async ({ mode }) => {
         eslint: {
           lintCommand: 'eslint src --ext .js,.jsx',
         },
-        overlay: {
+        // Shared source demos keep diagnostics in the terminal without a badge
+        // over the product UI. Local development retains the existing overlay.
+        overlay: env.MARTY_DEV_CHECKER_OVERLAY === '0' ? false : {
           initialIsOpen: false,
           position: 'br',
         },
@@ -482,8 +485,7 @@ export default defineConfig(async ({ mode }) => {
       port: port,
       host: '0.0.0.0', // Listen on all network interfaces
       strictPort: false,
-      cors: true,
-      allowedHosts: env.PUBLIC_DOMAIN ? [env.PUBLIC_DOMAIN, 'localhost'] : 'all',
+      ...devServerOrigin(env),
       fs: {
         // Allow serving sibling source packages linked via file: dependencies.
         allow: ['..'],
@@ -491,16 +493,6 @@ export default defineConfig(async ({ mode }) => {
       headers: {
         'Cache-Control': 'no-store',
       },
-      // When accessed via a public tunnel domain, the browser must connect
-      // the HMR WebSocket to the public host via wss:// on port 443.
-      // Without this, Vite tries ws://localhost:3000 which fails cross-origin.
-      ...(env.PUBLIC_DOMAIN ? {
-        hmr: {
-          protocol: 'wss',
-          host: env.PUBLIC_DOMAIN,
-          clientPort: 443,
-        },
-      } : {}),
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {

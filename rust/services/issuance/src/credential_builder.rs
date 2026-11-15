@@ -5,13 +5,18 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
 use marty_key_material_policy::private_jwk_members;
 use marty_oid4vci::{
-    formats::{jwt_vc::assemble_jwt_vc, mdoc::assemble_mdoc, sd_jwt::assemble_sd_jwt},
+    formats::{
+        jwt_vc::{assemble_jwt_vc, validate_open_badge_v3_criteria},
+        mdoc::assemble_mdoc,
+        sd_jwt::assemble_sd_jwt,
+    },
     jose::normalize_ecdsa_signature,
     remote_credential::{
         prepare_remote_jwt_vc, prepare_remote_mdoc, prepare_remote_sd_jwt, RemoteJwtVcRequest,
         RemoteMdocRequest, RemoteSdJwtRequest,
     },
     types::SignedCredential,
+    Oid4vciError,
 };
 use marty_signing_grant::{minter::GrantMinting, GrantBinding, SigningOrigin, HEADER_NAME};
 use reqwest::{Client, Url};
@@ -173,7 +178,10 @@ impl HttpCredentialBuilder {
         claims: HashMap<String, Value>,
     ) -> Result<BuiltCredential, CredentialIssuanceError> {
         let open_badge = is_open_badge_type(&request.credential_type);
-        let prepared = prepare_remote_jwt_vc(RemoteJwtVcRequest {
+        if open_badge {
+            validate_open_badge_request_criteria(request, &claims)?;
+        }
+        let remote_request = RemoteJwtVcRequest {
             issuer_id: request.issuer.issuer_did.clone(),
             verification_method_id: verification_method(request)?.to_owned(),
             algorithm: request.issuer.algorithm.clone(),
@@ -181,7 +189,10 @@ impl HttpCredentialBuilder {
             subject_id: request.subject_did.clone(),
             credential_type: request.credential_type.clone(),
             claims,
-            expiration_seconds: Some(request.validity_seconds),
+            expiration_seconds: request
+                .jwt_vc_signing_timing
+                .is_none()
+                .then_some(request.validity_seconds),
             credential_id: Some(request.credential_id.clone()),
             credential_subject: request.credential_subject.clone(),
             credential_profile: open_badge.then(|| "open_badge_v3".to_owned()),
@@ -190,8 +201,36 @@ impl HttpCredentialBuilder {
             } else {
                 None
             },
-        })
-        .map_err(native_error)?;
+        };
+        if let Some(timing) = request.jwt_vc_signing_timing {
+            if request.remote_credential_format != marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT
+                || request.response_format != marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT
+                || request.credential_document.is_some()
+            {
+                return Err(signing_error("explicit JWT-VC signing binding is invalid"));
+            }
+            let prepared = marty_oid4vci::remote_credential::prepare_remote_jwt_vc_with_profile(
+                remote_request,
+                marty_oid4vci::JwtVcPreparationProfile::DirectVc2Jose(timing),
+            )
+            .map_err(native_error)?;
+            let signature = self
+                .sign(
+                    request,
+                    prepared.signing_input().as_bytes(),
+                    &request.issuer.algorithm,
+                )
+                .await?;
+            let signed = prepared.complete(&signature).map_err(native_error)?;
+            return Ok(BuiltCredential {
+                credential_id: signed.credential_id().into(),
+                credential: signed.credential().into(),
+            });
+        }
+        if request.remote_credential_format == marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT {
+            return Err(signing_error("explicit JWT-VC signing timing is missing"));
+        }
+        let prepared = prepare_remote_jwt_vc(remote_request).map_err(native_error)?;
         let signature = self
             .sign(
                 request,
@@ -959,6 +998,43 @@ fn is_open_badge_type(value: &str) -> bool {
     )
 }
 
+/// Classify only the shared, request-owned Criteria constraint as a caller error.
+/// Other native preparation errors also cover issuer and template configuration,
+/// so they must keep their existing availability classification.
+fn validate_open_badge_request_criteria(
+    request: &CredentialBuildRequest,
+    claims: &HashMap<String, Value>,
+) -> Result<(), CredentialIssuanceError> {
+    if request
+        .credential_subject
+        .as_ref()
+        .is_some_and(|subject| !subject.is_object())
+    {
+        // Core owns malformed explicit subjects. Never fall back to flat claims.
+        return Ok(());
+    }
+    let field = |name: &str| match request.credential_subject.as_ref() {
+        Some(subject) => subject.get(name),
+        None => claims.get(name),
+    };
+    let achievement = field("achievement");
+    if achievement.is_some_and(|value| !value.is_object()) {
+        return Ok(());
+    }
+    let canonical = achievement.and_then(|value| value.get("criteria"));
+    let legacy = field("achievement_criteria");
+    if canonical.is_some() && legacy.is_some() {
+        // Core rejects duplicate aliases; neither value takes precedence.
+        return Ok(());
+    }
+    validate_open_badge_v3_criteria(canonical.or(legacy)).map_err(|error| match error {
+        Oid4vciError::InvalidRequest(reason) => {
+            CredentialIssuanceError::InvalidCredentialRequest(reason)
+        }
+        error => native_error(error),
+    })
+}
+
 fn date_time(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Micros, true)
 }
@@ -1205,6 +1281,8 @@ mod tests {
 
     fn request(kind: CredentialBuilderKind) -> CredentialBuildRequest {
         CredentialBuildRequest {
+            jwt_vc_signing_timing: None,
+
             organization_id: "org-a".to_owned(),
             kind,
             response_format: match kind {
@@ -1367,7 +1445,7 @@ mod tests {
     #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn jwt_vc_preserves_open_badge_profile_and_reserved_id() {
         let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
-        let builder = HttpCredentialBuilder::with_signer(signer);
+        let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::JwtVcJson);
         request.issuer.public_jwk = Some(public_jwk);
         request.credential_type = "open_badge".to_owned();
@@ -1378,6 +1456,10 @@ mod tests {
         request.claims.insert(
             "achievement_description".to_owned(),
             json!("Membership verified by Marty"),
+        );
+        request.claims.insert(
+            "achievement_criteria".to_owned(),
+            json!({"narrative":"Synthetic membership selected by the test issuer."}),
         );
 
         let built = builder.build(&request).await.expect("JWT-VC build");
@@ -1391,9 +1473,251 @@ mod tests {
         .expect("JWT payload");
         assert_eq!(payload["jti"], request.credential_id);
         assert_eq!(
+            payload["vc"]["credentialSubject"]["achievement"]["criteria"],
+            request.claims["achievement_criteria"]
+        );
+        assert_eq!(
             payload["vc"]["credentialSubject"]["achievement"]["id"],
             request.achievement_id.as_deref().expect("achievement")
         );
+        let now = Utc::now().timestamp();
+        let selection = marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+            marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+            "open_badge",
+            "public-synthetic-template",
+            1,
+            2 * 86400,
+            -30,
+        )
+        .unwrap();
+        let timing = selection.timing_at(now).unwrap();
+        request.response_format = "application/vc+jwt".into();
+        request.remote_credential_format = "application/vc+jwt".into();
+        request.jwt_vc_signing_timing = Some(timing);
+        let direct = builder
+            .build(&request)
+            .await
+            .expect("genuine direct-profile remote JWT-VC");
+        let proof_input = json!({
+            "token":direct.credential, "expected_issuer":request.issuer.issuer_did,
+            "expected_verification_method":request.issuer.verification_method_id,
+            "expected_algorithm":request.issuer.algorithm,
+            "issuer_public_jwk":request.issuer.public_jwk,
+            "expected_securing_profile":"w3c_vc2_jose_2026_v1", "evaluated_at":now,
+        });
+        let verify = |input: &Value| -> Value {
+            serde_json::from_str(
+                &marty_verification::vcdm::verify_open_badge_v3_jwt_with_profile_json(
+                    &input.to_string(),
+                ),
+            )
+            .unwrap()
+        };
+        let authenticated = verify(&proof_input);
+        assert_eq!(authenticated["valid"], true, "{authenticated}");
+        assert_eq!(authenticated["issuer_trust"], "not_checked");
+        assert_eq!(authenticated["credential_status"], "not_checked");
+        assert_eq!(authenticated["holder_binding"], "not_checked");
+        assert_eq!(authenticated["claims"]["iat"], now);
+        assert_eq!(authenticated["claims"]["exp"], now + 3600);
+        assert!(authenticated["claims"].get("nbf").is_none());
+        assert!(authenticated["claims"].get("vc").is_none());
+        assert_eq!(authenticated["credential"]["id"], request.credential_id);
+        assert_eq!(
+            authenticated["credential"]["type"],
+            json!(["VerifiableCredential", "OpenBadgeCredential"])
+        );
+        assert_eq!(
+            authenticated["credential_valid_from"],
+            serde_json::to_value(timing.credential_valid_from()).unwrap()
+        );
+        assert_eq!(
+            authenticated["credential_valid_until"],
+            serde_json::to_value(timing.credential_valid_until()).unwrap()
+        );
+        let requests = signer.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].2,
+            direct.credential.rsplit_once('.').unwrap().0.as_bytes()
+        );
+        drop(requests);
+        for failure in ["signature", "profile", "signature_expiry"] {
+            let mut invalid = proof_input.clone();
+            match failure {
+                "signature" => {
+                    let mut parts: Vec<String> =
+                        direct.credential.split('.').map(str::to_owned).collect();
+                    parts[2] = URL_SAFE_NO_PAD.encode([0_u8; 64]);
+                    invalid["token"] = json!(parts.join("."));
+                }
+                "profile" => {
+                    invalid["expected_securing_profile"] = json!("marty_nested_vc2_jwt_v1")
+                }
+                _ => invalid["evaluated_at"] = json!(now + 3600),
+            }
+            assert_eq!(verify(&invalid)["valid"], false, "{failure}");
+        }
+    }
+
+    fn open_badge_request() -> CredentialBuildRequest {
+        let mut request = request(CredentialBuilderKind::JwtVcJson);
+        request.issuer.public_jwk = Some(json!({
+            "kty":"EC", "crv":"P-256", "alg":"ES256",
+            "x":"UadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0",
+            "y":"ARBSJxKwtafP8IFoVIaYSpTmgx7axG5zYPqdg0p6gaE",
+            "kid":"did:web:issuer.example#key-1",
+        }));
+        request.credential_type = "OpenBadgeCredential".to_owned();
+        request.achievement_id = Some("https://issuer.example/achievements/course".to_owned());
+        request.claims.clear();
+        request.credential_subject = Some(json!({
+            "id":"did:key:holder", "type":["AchievementSubject"],
+            "achievement": {
+                "id":"https://issuer.example/achievements/course", "type":["Achievement"],
+                "name":"Completed course", "description":"Completed the required assessment",
+                "criteria":{}
+            }
+        }));
+        request
+    }
+
+    #[tokio::test]
+    async fn invalid_open_badge_criteria_is_a_caller_error_before_any_signing() {
+        for criteria in [
+            None,
+            Some(Value::Null),
+            Some(json!("read the course")),
+            Some(json!(42)),
+            Some(json!(false)),
+            Some(json!([])),
+        ] {
+            for shape in ["explicit", "flat", "legacy"] {
+                let signer = RecordingSigner::fixed();
+                let builder = HttpCredentialBuilder::with_signer(signer.clone());
+                let mut request = open_badge_request();
+                let subject = request.credential_subject.as_mut().unwrap();
+                subject["achievement"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("criteria");
+                if let Some(criteria) = criteria.as_ref() {
+                    if shape == "legacy" {
+                        subject["achievement_criteria"] = criteria.clone();
+                    } else {
+                        subject["achievement"]["criteria"] = criteria.clone();
+                    }
+                }
+                if shape != "explicit" {
+                    request.claims = request
+                        .credential_subject
+                        .take()
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .clone();
+                }
+
+                let error = builder.build(&request).await.expect_err("invalid criteria");
+
+                assert!(
+                    matches!(error, CredentialIssuanceError::InvalidCredentialRequest(ref reason)
+                    if reason == "Open Badges achievement criteria is required and must be an object"),
+                    "{shape}: {error}"
+                );
+                assert!(signer.requests.lock().unwrap().is_empty(), "{shape}");
+            }
+        }
+    }
+
+    #[test]
+    fn shared_criteria_preflight_accepts_empty_extended_and_legacy_objects() {
+        for criteria in [
+            json!({}),
+            json!({"narrative":"Pass the assessment", "client:extension":true}),
+        ] {
+            for shape in ["explicit", "flat", "legacy"] {
+                let mut request = open_badge_request();
+                let subject = request.credential_subject.as_mut().unwrap();
+                if shape == "legacy" {
+                    subject["achievement"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("criteria");
+                    subject["achievement_criteria"] = criteria.clone();
+                } else {
+                    subject["achievement"]["criteria"] = criteria.clone();
+                }
+                if shape != "explicit" {
+                    request.claims = request
+                        .credential_subject
+                        .take()
+                        .unwrap()
+                        .as_object()
+                        .unwrap()
+                        .clone();
+                }
+                let claims = claims_for_credential_format(&request).into_iter().collect();
+                validate_open_badge_request_criteria(&request, &claims).expect(shape);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn other_jwt_preparation_failures_keep_their_existing_availability_mapping() {
+        type Mutation = fn(&mut CredentialBuildRequest);
+        let cases: &[(&str, Mutation)] = &[
+            ("issuer", |request| {
+                request.issuer.issuer_did = "https://issuer.example".into()
+            }),
+            ("verification method", |request| {
+                request.issuer.verification_method_id = Some("did:web:another.example#key-1".into())
+            }),
+            ("algorithm", |request| {
+                request.issuer.algorithm = "unknown".into()
+            }),
+            ("empty reserved ID", |request| request.credential_id.clear()),
+            ("relative reserved ID", |request| {
+                request.credential_id = "relative-id".into()
+            }),
+            ("missing achievement ID", |request| {
+                request.achievement_id = None
+            }),
+            ("relative achievement ID", |request| {
+                request.achievement_id = Some("relative-achievement".into())
+            }),
+            ("duplicate criteria", |request| {
+                request.credential_subject.as_mut().unwrap()["achievement_criteria"] = json!({})
+            }),
+            ("duplicate null criteria", |request| {
+                request.credential_subject.as_mut().unwrap()["achievement_criteria"] = Value::Null
+            }),
+            ("malformed achievement", |request| {
+                request.credential_subject.as_mut().unwrap()["achievement"] = json!([])
+            }),
+            ("malformed explicit subject", |request| {
+                request.claims = request
+                    .credential_subject
+                    .take()
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .clone();
+                request.credential_subject = Some(Value::Null);
+            }),
+        ];
+        for (label, mutate) in cases {
+            let signer = RecordingSigner::fixed();
+            let builder = HttpCredentialBuilder::with_signer(signer.clone());
+            let mut request = open_badge_request();
+            mutate(&mut request);
+            let error = builder.build(&request).await.expect_err(label);
+            assert!(
+                matches!(error, CredentialIssuanceError::SigningUnavailable(_)),
+                "{label}: {error}"
+            );
+            assert!(signer.requests.lock().unwrap().is_empty(), "{label}");
+        }
     }
 
     #[tokio::test]

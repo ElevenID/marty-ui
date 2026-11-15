@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import { Alert, Box, Button, CircularProgress, Container, Paper, Typography } from '@mui/material';
 
@@ -85,9 +85,19 @@ function CreateOrganizationPage() {
   } = useConsole();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const active = useRef(false);
+  const requestGeneration = useRef(0);
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      requestGeneration.current += 1;
+    };
+  }, []);
   const returnTo = searchParams.get('returnTo');
 
   const handleCreateOrganization = async (payload) => {
+    if (!active.current) return;
     if (!organizationCreationEnabled) {
       setError('Organization creation is disabled for this deployment.');
       return;
@@ -95,24 +105,31 @@ function CreateOrganizationPage() {
 
     setSubmitting(true);
     setError(null);
+    const generation = ++requestGeneration.current;
+    const applies = () => active.current && requestGeneration.current === generation;
 
     try {
       const organizationResponse = await createOrganization(payload);
+      if (!applies()) return;
       const organization = normalizeCreatedOrganization(organizationResponse);
 
       const refreshedMemberships = await refreshMemberships?.();
+      if (!applies()) return;
       const membershipsForSelection = includeCreatedOrganization(refreshedMemberships, organization);
 
       if (organization?.id) {
-        await setActiveOrgId?.(organization.id, membershipsForSelection);
+        // This action owns returnTo; avoid a competing central navigation that
+        // would unmount the form before its guarded final handoff.
+        await setActiveOrgId?.(organization.id, membershipsForSelection, { navigate: false });
       }
 
-      navigate(returnTo || '/console/org');
+      if (applies()) navigate(returnTo || '/console/org');
     } catch (err) {
+      if (!applies() || err?.name === 'AbortError') return;
       logCreateOrgError('[CreateOrganizationPage] Failed to create organization:', err);
       setError(formatCreateOrganizationError(err));
     } finally {
-      setSubmitting(false);
+      if (applies()) setSubmitting(false);
     }
   };
 

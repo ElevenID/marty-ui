@@ -52,6 +52,9 @@ def test_missing_real_signing_inputs_stop_before_browser_or_setup(monkeypatch, c
     monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--record-video"])
     monkeypatch.setenv("TEST_VENDOR_EMAIL", "operator@unit.invalid")
     monkeypatch.setenv("TEST_VENDOR_PASSWORD", "synthetic-browser-password")
+    monkeypatch.setenv("D10_FOREIGN_OWNER_EMAIL", "independent-owner@example.test")
+    monkeypatch.setenv("D10_FOREIGN_OWNER_PASSWORD", "synthetic-foreign-password")
+    monkeypatch.setenv("D10_FOREIGN_ORG_ID", "35bd31cf-790f-43dc-9ee6-68f547b4f8e2")
     for name in ["DEMO_D10_KMS_URL", "DEMO_D10_KMS_MOUNT", "DEMO_D10_KMS_KEY_REFERENCE",
                  "DEMO_D10_KMS_TOKEN_FILE", "DEMO_SIGNING_CAPABILITY_BIN"]:
         monkeypatch.delenv(name, raising=False)

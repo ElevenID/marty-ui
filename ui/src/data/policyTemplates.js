@@ -33,11 +33,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'device_key',
       freshness_requirements: {
         max_credential_age_seconds: 31536000, // 1 year
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: true,
-      single_presentation: false,
     },
   },
   {
@@ -79,11 +77,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'device_key',
       freshness_requirements: {
         max_credential_age_seconds: 31536000, // 1 year
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
     },
   },
   {
@@ -119,11 +115,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'device_key',
       freshness_requirements: {
         max_credential_age_seconds: 86400, // 24 hours
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
     },
   },
   {
@@ -165,11 +159,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'device_key',
       freshness_requirements: {
         max_credential_age_seconds: 31536000, // 1 year
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
     },
   },
   {
@@ -211,11 +203,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'session_binding',
       freshness_requirements: {
         max_credential_age_seconds: 315360000, // 10 years
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
     },
   },
   {
@@ -251,11 +241,9 @@ export const POLICY_TEMPLATES = [
       holder_binding: 'credential_key',
       freshness_requirements: {
         max_credential_age_seconds: 2592000, // 30 days
-        max_proof_age_seconds: 300, // 5 minutes
         require_revocation_check: true,
       },
       prefer_predicates: false,
-      single_presentation: true,
     },
   },
 ];

@@ -215,3 +215,7 @@ returns404 and the retention worker still removes previously admitted payloads.
 Do not roll back to an older binary without a separately qualified custodian
 for outstanding deletion deadlines. Preserve operator files/keys and recovery
 evidence; disabling admission does not authorize deleting them.
+
+## Typed policy revision reconciliation
+
+`policy_configuration_digest` must equal the current policy owner's typed `PolicyRevision.content_digest`. Do not reuse the historical configuration-domain digest. Rebuild operator-owned catalog selections from the governed owner revision and obtain fresh consent; no feature flag, profile, key or deployed configuration is changed by source reconciliation. Qualification narratives above are historical until repeated on the reconciled exact source.

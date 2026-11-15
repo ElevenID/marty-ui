@@ -3,13 +3,12 @@ import { render, screen, waitFor } from '@test/utils';
 
 import AuthCallback from '../AuthCallback';
 
-const { mockNavigate, mockSearchParams, mockRefreshUser, mockConsoleContext, mockGetDefaultLandingPath, mockGet } = vi.hoisted(() => ({
+const { mockNavigate, mockSearchParams, mockCompleteLoginCallback, mockConsoleContext, mockGetDefaultLandingPath } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockSearchParams: vi.fn(),
-  mockRefreshUser: vi.fn(),
+  mockCompleteLoginCallback: vi.fn(),
   mockConsoleContext: vi.fn(),
   mockGetDefaultLandingPath: vi.fn(),
-  mockGet: vi.fn(),
 }));
 
 vi.mock('../../application/routing/appHandoff', () => ({
@@ -28,7 +27,10 @@ vi.mock('react-router', async () => {
 
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({
-    refreshUser: mockRefreshUser,
+    completeLoginCallback: mockCompleteLoginCallback,
+    user: { user_id: 'user-1' },
+    isAuthenticated: true,
+    isLoading: false,
   }),
 }));
 
@@ -37,17 +39,30 @@ vi.mock('../../contexts/ConsoleContext', () => ({
   getDefaultLandingPath: (...args: unknown[]) => mockGetDefaultLandingPath(...args),
 }));
 
-vi.mock('../../services/api', () => ({
-  get: (...args: unknown[]) => mockGet(...args),
-}));
-
 describe('AuthCallback', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRefreshUser.mockResolvedValue(undefined);
+    mockCompleteLoginCallback.mockResolvedValue({ principalId: 'user-1' });
     mockConsoleContext.mockReturnValue({ isLoading: false, mode: 'applicant' });
     mockGetDefaultLandingPath.mockReturnValue('/console/applicant/catalog');
-    mockGet.mockResolvedValue({ ok: true });
+  });
+
+  it.each(['loading', 'error'])('centers the %s view without leaking layout props to the DOM', async state => {
+    mockSearchParams.mockReturnValue(new URLSearchParams(state === 'error'
+      ? 'error=access_denied&error_description=Denied' : 'code=abc'));
+    mockCompleteLoginCallback.mockReturnValue(new Promise(() => {}));
+
+    render(<AuthCallback />);
+
+    const content = await screen.findByRole(state === 'error' ? 'alert' : 'progressbar');
+    const layout = content.parentElement!;
+    const layoutProps = ['display', 'flexdirection', 'alignitems', 'justifycontent', 'minheight'];
+    expect(layout.getAttributeNames().filter(name => layoutProps.includes(name))).toEqual([]);
+    expect(layout).toHaveStyle({
+      display: 'flex', 'flex-direction': 'column', 'align-items': 'center',
+      'justify-content': 'center', 'min-height': `${window.innerHeight / 2}px`,
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it('renders callback errors from the query string', async () => {
@@ -67,8 +82,9 @@ describe('AuthCallback', () => {
     render(<AuthCallback />);
 
     await waitFor(() => {
-      expect(mockGet).toHaveBeenCalledWith('/v1/auth/callback?code=abc&state=' + encodeURIComponent(btoa(JSON.stringify({ returnTo: '/console/org' }))));
-      expect(mockRefreshUser).toHaveBeenCalled();
+      expect(mockCompleteLoginCallback).toHaveBeenCalledWith(expect.objectContaining({
+        code: 'abc', state: btoa(JSON.stringify({ returnTo: '/console/org' })),
+      }));
       expect(mockNavigate).toHaveBeenCalledWith('/console/org', { replace: true });
     });
   });
@@ -88,7 +104,7 @@ describe('AuthCallback', () => {
 
   it('renders exchange failures as authentication errors', async () => {
     mockSearchParams.mockReturnValue(new URLSearchParams('code=abc'));
-    mockGet.mockRejectedValue(new Error('Authentication failed'));
+    mockCompleteLoginCallback.mockRejectedValue(new Error('Authentication failed'));
 
     render(<AuthCallback />);
 
@@ -109,8 +125,7 @@ describe('AuthCallback', () => {
     const view = render(<AuthCallback />);
 
     await waitFor(() => {
-      expect(mockGet).toHaveBeenCalledTimes(1);
-      expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+      expect(mockCompleteLoginCallback).toHaveBeenCalledTimes(1);
     });
 
     consoleStateIndex = 1;
@@ -120,7 +135,6 @@ describe('AuthCallback', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/console/org', { replace: true });
     });
 
-    expect(mockGet).toHaveBeenCalledTimes(1);
-    expect(mockRefreshUser).toHaveBeenCalledTimes(1);
+    expect(mockCompleteLoginCallback).toHaveBeenCalledTimes(1);
   });
 });

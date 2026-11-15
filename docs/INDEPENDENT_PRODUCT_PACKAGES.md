@@ -131,9 +131,13 @@ it does not test credential contents, external OpenBao availability, container
 readiness or any business operation. The deployment owner still prepares those
 inputs and the qualification runner must exercise the exact candidate images.
 
-The server bundle includes an explicit allowlist of 27 existing container runtime
+The server bundle includes an explicit allowlist of 36 container runtime
 files under `runtime/`: edge configuration, database initialization, container
-entrypoints and Keycloak realm/theme assets. The packaged realm omits all seeded
+entrypoints and Keycloak realm/theme assets, including the complete ElevenID
+native account theme. Error pages are inherited from the installed Keycloak
+parent. The verifier retains support for the earlier 27-file v1 payload and
+continues to verify the frozen plan, every payload hash and the closed file set.
+The packaged realm omits all seeded
 development users and literal client secrets; the deployment owner provisions
 real identities and credentials. The shared source realm remains unchanged.
 Both input and emitted file hashes are bound into the frozen build plan; emitted

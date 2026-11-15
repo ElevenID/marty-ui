@@ -173,7 +173,10 @@ def verify(archive: Path, checksum: Path, product: str, run_id: str,
                 "image differs from plan or has invalid digest")
     runtime = plan.get("runtime_files")
     require(isinstance(runtime, list)
-            and (len(runtime) == 27 if product == "marty-server" else not runtime),
+            # Preserve the original v1 payload while accepting its native
+            # account-theme successor. Both retain the full frozen-plan/hash
+            # and closed archive-path checks below.
+            and (len(runtime) in (27, 36) if product == "marty-server" else not runtime),
             "runtime file count differs")
     runtime_paths = set()
     for item in runtime:

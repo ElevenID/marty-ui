@@ -5,6 +5,7 @@ import { http, HttpResponse } from 'msw';
 
 import { render } from '@test/utils';
 import { server } from '@test/mocks/server';
+import { mockDeploymentProfiles, mockTemplates } from '@test/mocks/fixtures';
 import FlowDefinitionWizard, { buildFlowPayload } from '../FlowDefinitionWizard';
 
 const mockNavigate = vi.fn();
@@ -19,7 +20,19 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 }));
 
 describe('FlowDefinitionWizard', () => {
-  beforeEach(() => { vi.clearAllMocks(); route.search = ''; });
+  beforeEach(() => {
+    vi.clearAllMocks(); route.search = '';
+    server.use(
+      http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})),
+      http.get('*/v1/deployment-profiles', () => HttpResponse.json([
+        { ...mockDeploymentProfiles.valid, organization_id: 'org-1' },
+      ])),
+      http.get('*/v1/credential-templates', () => HttpResponse.json([
+        { ...mockTemplates.valid, organization_id: 'org-1', trust_profile_id: 'trust-1',
+          issuance_protocol: 'OID4VCI_PRE_AUTH', credential_payload_format: 'SD_JWT_VC' },
+      ])),
+    );
+  });
 
   it('carries a validated template link into standard-flow dependencies', async () => {
     route.search = 'templateId=linked-template';
@@ -124,6 +137,102 @@ describe('FlowDefinitionWizard', () => {
     expect(submittedPayload).not.toHaveProperty('preconditions');
     expect(submittedPayload).not.toHaveProperty('enabled');
     expect(submittedPayload).not.toHaveProperty('deployment_profile_id');
+    expect(submittedPayload).not.toHaveProperty('_organization_default_bindings');
+  });
+
+  it.each([
+    ['reselects the current type', 'application_approval_issuance', false],
+    ['selects a different type', 'oid4vci_pre_authorized', true],
+  ])('preserves or resets the authored draft intentionally when returning to flow type and the user %s', async (_label, nextType, resets) => {
+    const writes: Array<Record<string, unknown>> = [];
+    const sequence = ['accept_application', 'validate_evidence', 'approval_decision', 'issue_credential', 'deliver_credential'];
+    server.use(
+      http.get('*/v1/flows/capabilities', () => HttpResponse.json({
+        sequences: {
+          application_approval_issuance: sequence,
+          oid4vci_pre_authorized: ['create_offer', 'token_exchange', 'credential_request', 'issue_credential'],
+        },
+        extensible_steps: { application_approval_issuance: ['approval_decision', 'deliver_credential'] },
+      })),
+      http.get('*/v1/application-templates', () => HttpResponse.json([
+        { id: 'application-first', name: 'First application', organization_id: 'org-1', status: 'ACTIVE' },
+        { id: 'application-chosen', name: 'Chosen application', organization_id: 'org-1', status: 'ACTIVE' },
+      ])),
+      http.get('*/v1/deployment-profiles', () => HttpResponse.json([
+        { id: 'deployment-first', name: 'First deployment', organization_id: 'org-1', status: 'ACTIVE', trust_profile_id: 'trust-1' },
+        { id: 'deployment-chosen', name: 'Chosen deployment', organization_id: 'org-1', status: 'ACTIVE', trust_profile_id: 'trust-1' },
+      ])),
+      http.get('*/v1/credential-templates', () => HttpResponse.json([
+        { ...mockTemplates.valid, id: 'credential-new', organization_id: 'org-1', trust_profile_id: 'trust-1',
+          issuance_protocol: 'OID4VCI_PRE_AUTH', credential_payload_format: 'SD_JWT_VC' },
+      ])),
+      http.post('*/v1/flows/definitions', async ({ request }) => {
+        const payload = await request.json() as Record<string, unknown>;
+        writes.push(payload);
+        return HttpResponse.json({ ...payload, id: 'flow-created', status: 'DRAFT', resolved_steps: sequence }, { status: 201 });
+      }),
+    );
+
+    const { user } = render(<FlowDefinitionWizard />);
+    await user.click(await screen.findByTestId('flow-type-application_approval_issuance'));
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    await user.type(await screen.findByLabelText(/Flow name/i), 'Reviewed application flow');
+    await user.type(screen.getByLabelText('Description'), 'Retain the authored settings');
+    await user.click(screen.getByRole('combobox', { name: 'Approval' }));
+    await user.click(screen.getByRole('option', { name: 'Manual' }));
+    await user.click(screen.getByRole('combobox', { name: 'Trigger' }));
+    await user.click(screen.getByRole('option', { name: 'Application submitted' }));
+    await user.type(screen.getByLabelText('After Approval Decision'), 'https://hooks.example.test/approval');
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    await user.click(await screen.findByRole('combobox', { name: /Application template/i }));
+    await user.click(screen.getByRole('option', { name: 'Chosen application' }));
+    await user.click(screen.getByRole('combobox', { name: 'Deployment profile' }));
+    await user.click(screen.getByRole('option', { name: 'Chosen deployment' }));
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    expect(await screen.findByRole('heading', { name: 'Review draft' })).toBeInTheDocument();
+
+    for (let step = 0; step < 3; step += 1) await user.click(screen.getByTestId('wizard.flow.back'));
+    await user.click(screen.getByTestId(`flow-type-${nextType}`));
+    await user.click(screen.getByTestId('wizard.flow.next'));
+
+    expect(screen.getByLabelText(/Flow name/i)).toHaveValue(resets ? '' : 'Reviewed application flow');
+    expect(screen.getByLabelText('Description')).toHaveValue(resets ? '' : 'Retain the authored settings');
+    expect(screen.getByRole('combobox', { name: 'Approval' })).toHaveTextContent(resets ? 'Automatic' : 'Manual');
+    expect(screen.getByRole('combobox', { name: 'Trigger' })).toHaveTextContent(resets ? 'API call' : 'Application submitted');
+    if (resets) {
+      expect(screen.queryByLabelText('After Approval Decision')).not.toBeInTheDocument();
+      await user.type(screen.getByLabelText(/Flow name/i), 'New wallet flow');
+    } else {
+      expect(screen.getByLabelText('After Approval Decision')).toHaveValue('https://hooks.example.test/approval');
+    }
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    const deployment = await screen.findByRole('combobox', { name: 'Deployment profile' });
+    if (resets) {
+      expect(screen.queryByRole('combobox', { name: /Application template/i })).not.toBeInTheDocument();
+      expect(deployment).not.toHaveTextContent('Chosen deployment');
+    } else {
+      expect(screen.getByRole('combobox', { name: /Application template/i })).toHaveTextContent('Chosen application');
+      expect(deployment).toHaveTextContent('Chosen deployment');
+    }
+    await waitFor(() => expect(screen.getByTestId('wizard.flow.next')).toBeEnabled());
+    await user.click(screen.getByTestId('wizard.flow.next'));
+    await user.click(await screen.findByTestId('wizard.flow.submit'));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(writes[0]).toEqual({
+      organization_id: 'org-1',
+      name: resets ? 'New wallet flow' : 'Reviewed application flow',
+      description: resets ? null : 'Retain the authored settings',
+      flow_type: nextType,
+      approval_strategy: resets ? 'AUTO' : 'MANUAL',
+      hooks: resets ? {} : { post_approval_decision: [{ hook_type: 'WEBHOOK', url: 'https://hooks.example.test/approval', config: {} }] },
+      trigger: { trigger_type: resets ? 'API_CALL' : 'APPLICATION_SUBMITTED', config: {} },
+      trust_profile_id: resets ? null : 'trust-1',
+      credential_template_id: resets ? 'credential-new' : null,
+      application_template_id: resets ? null : 'application-chosen',
+      presentation_policy_id: null,
+      delivery_destination_profile_id: null,
+      deployment_profile_ids: resets ? [] : ['deployment-chosen'],
+    });
   });
 
   it('buildFlowPayload binds both references for physical issuance', () => {

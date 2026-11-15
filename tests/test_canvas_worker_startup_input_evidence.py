@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.ci.canvas_oracle_current_inputs import normalized_sha256
+from scripts.ci.canvas_oracle_current_inputs import (
+    assert_current_input_pins,
+    normalized_sha256,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "contracts/canvas-worker-startup-current-inputs.json"
@@ -18,11 +21,14 @@ INPUTS = {
 
 
 def _assert_current_inputs(evidence: dict, root: Path) -> None:
-    assert evidence["schema"] == "marty.canvas-worker-startup-current-inputs/v2"
-    assert "native startup replay" in evidence["purpose"]
-    assert set(evidence["sha256"]) == INPUTS
-    for name, pinned in evidence["sha256"].items():
-        assert normalized_sha256(root / name) == pinned, f"Startup input drift: {name}"
+    assert_current_input_pins(
+        evidence,
+        root,
+        schema="marty.canvas-worker-startup-current-inputs/v2",
+        label="Startup",
+        disclaimer="native startup replay",
+        expected_inputs=INPUTS,
+    )
 
 
 def test_current_startup_capture_inputs_match_explicit_hashes() -> None:
@@ -55,6 +61,24 @@ def test_each_startup_input_change_invalidates_evidence(
 def test_extra_input_pin_requires_review() -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
     evidence["sha256"]["scripts/unreviewed.py"] = "0" * 64
+    with pytest.raises(AssertionError):
+        _assert_current_inputs(evidence, ROOT)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing-normalization", "wrong-normalization", "extra-metadata", "short-pin", "nonhex-pin"],
+)
+def test_malformed_startup_input_metadata_is_rejected(mutation: str) -> None:
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    if mutation == "missing-normalization":
+        del evidence["normalization"]
+    elif mutation == "wrong-normalization":
+        evidence["normalization"] = "unreviewed binary hashing"
+    elif mutation == "extra-metadata":
+        evidence["unreviewed"] = True
+    else:
+        evidence["sha256"][sorted(INPUTS)[0]] = "a" if mutation == "short-pin" else "z" * 64
     with pytest.raises(AssertionError):
         _assert_current_inputs(evidence, ROOT)
 

@@ -26,6 +26,10 @@ vi.mock('../../../hooks/useAuth', () => ({
   useAuth: () => ({ organizationName: 'Test Org' }),
 }));
 
+vi.mock('../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({ isLoading: false, can: () => true }),
+}));
+
 vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({
     activeOrgId: scope.activeOrgId,
@@ -59,15 +63,16 @@ describe('IssuerIdentityWizard', () => {
     scope.activeOrgId = 'org-test-1';
     getIssuerIdentityCapabilities.mockReset();
     getIssuerIdentityCapabilities.mockImplementation(async ({ organization_id }) => capabilities(organization_id));
-    createIssuerIdentity.mockResolvedValue({
+    createIssuerIdentity.mockImplementation(async body => ({
       created: true,
       identity: {
-        issuer_did: 'did:web:localhost:orgs:test-org',
-        key_purpose: 'vc_jwt_issuer',
-        algorithm: 'ES256',
+        issuer_did: body.issuer_did,
+        key_purpose: body.key_purpose,
+        credential_format: body.credential_format,
+        algorithm: body.algorithm,
         status: 'active',
       },
-    });
+    }));
   });
 
   it('D10 adapter selectors match the rendered production DID-first issuer submission', async () => {
@@ -83,7 +88,7 @@ describe('IssuerIdentityWizard', () => {
     await waitFor(() => expect(createIssuerIdentity).toHaveBeenCalledWith({
       organization_id: 'org-test-1', issuer_did: issuerDid,
       key_purpose: 'vc_jwt_issuer', credential_format: 'SD_JWT_VC', algorithm: 'ES256',
-    }))
+    }, expect.objectContaining({ isCurrent: expect.any(Function) })))
   })
 
   it('exposes only provider-neutral issuer identity inputs', async () => {
@@ -118,7 +123,7 @@ describe('IssuerIdentityWizard', () => {
         key_purpose: 'vc_jwt_issuer',
         credential_format: 'SD_JWT_VC',
         algorithm: 'ES256',
-      });
+      }, expect.objectContaining({ isCurrent: expect.any(Function) }));
     });
     expect(showNotification).toHaveBeenCalledWith('Issuer identity created.', 'success');
   });
@@ -140,7 +145,7 @@ describe('IssuerIdentityWizard', () => {
         key_purpose: 'csca',
         credential_format: 'MDOC',
         algorithm: 'ES512',
-      });
+      }, expect.objectContaining({ isCurrent: expect.any(Function) }));
     });
   });
 
@@ -161,7 +166,7 @@ describe('IssuerIdentityWizard', () => {
         key_purpose: 'csca',
         credential_format: 'ICAO_EMRTD',
         algorithm: 'ES256',
-      });
+      }, expect.objectContaining({ isCurrent: expect.any(Function) }));
     });
   });
 
@@ -199,7 +204,7 @@ describe('IssuerIdentityWizard', () => {
     await waitFor(() => expect(createIssuerIdentity).toHaveBeenCalledWith({
       organization_id: 'org-test-1', issuer_did: 'did:web:issuer.example:orgs:test-org',
       key_purpose: 'new_signing_purpose', credential_format: 'NEW_FORMAT', algorithm: 'NEW_ALGORITHM',
-    }));
+    }, expect.objectContaining({ isCurrent: expect.any(Function) })));
   });
 
   it('fails closed on discovery failure and supports explicit retry', async () => {
@@ -228,7 +233,7 @@ describe('IssuerIdentityWizard', () => {
     const view = renderWithRouter(<IssuerIdentityWizard />);
     scope.activeOrgId = 'org-other';
     view.rerender(<IssuerIdentityWizard />);
-    await waitFor(() => expect(getIssuerIdentityCapabilities).toHaveBeenCalledWith({ organization_id: 'org-other' }));
+    await waitFor(() => expect(getIssuerIdentityCapabilities).toHaveBeenCalledWith({ organization_id: 'org-other' }, expect.objectContaining({ isCurrent: expect.any(Function), singleAttemptReads: true })));
     await readyDid();
     completeOld({ ...capabilities(), managed_issuer_did_prefix: 'did:web:stale.example:orgs:' });
     await waitFor(() => expect(screen.getByLabelText(/Issuer DID/)).toHaveValue('did:web:issuer.example:orgs:test-org'));
@@ -243,7 +248,7 @@ describe('IssuerIdentityWizard', () => {
     await view.user.click(screen.getByRole('button', { name: 'Create managed identity' }));
     scope.activeOrgId = 'org-other';
     view.rerender(<IssuerIdentityWizard />);
-    await waitFor(() => expect(getIssuerIdentityCapabilities).toHaveBeenCalledWith({ organization_id: 'org-other' }));
+    await waitFor(() => expect(getIssuerIdentityCapabilities).toHaveBeenCalledWith({ organization_id: 'org-other' }, expect.objectContaining({ isCurrent: expect.any(Function), singleAttemptReads: true })));
     completeCheck(capabilities());
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create managed identity' })).toBeEnabled());
     expect(createIssuerIdentity).not.toHaveBeenCalled();

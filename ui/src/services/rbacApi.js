@@ -18,13 +18,44 @@ export async function getMyPermissions(organizationId) {
 }
 
 /**
- * List the permission catalog (grouped by resource)
+ * Load the permission catalog as a flat list for permission pickers.
+ * Native responses are arrays of resource groups; retain legacy flat/wrapped reads.
  * @param {string} organizationId - Organization ID
- * @returns {Promise<Object>} Permission catalog grouped by resource
+ * @returns {Promise<Array<{id: string, resource: string, action: string, description?: string}>>}
  */
 export async function listPermissions(organizationId) {
   const orgId = requireOrganizationId(organizationId, 'loading permission catalog');
-  return get(`/v1/organizations/${encodeURIComponent(orgId)}/permissions`);
+  const data = await get(`/v1/organizations/${encodeURIComponent(orgId)}/permissions`);
+  const entries = Array.isArray(data) ? data : data?.resources;
+  const permissions = [];
+  const ids = new Set();
+  const keys = new Set();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const nonempty = (value) => typeof value === 'string' && value.trim().length > 0;
+  const invalid = () => new Error('Permission catalog returned an invalid response.');
+  const addPermission = (permission, resource) => {
+    if (!permission || typeof permission.id !== 'string' || !uuid.test(permission.id) || !nonempty(permission.action)
+      || !nonempty(resource) || (permission.resource != null && permission.resource !== resource)
+      || (permission.description != null && typeof permission.description !== 'string')
+      || ids.has(permission.id.toLowerCase()) || keys.has(`${resource}:${permission.action}`)) {
+      throw invalid();
+    }
+    ids.add(permission.id.toLowerCase());
+    keys.add(`${resource}:${permission.action}`);
+    permissions.push({ ...permission, resource });
+  };
+
+  if (!Array.isArray(entries)) throw invalid();
+  for (const entry of entries) {
+    if (!entry || !nonempty(entry.resource)) throw invalid();
+    if ('permissions' in entry) {
+      if (!Array.isArray(entry.permissions)) throw invalid();
+      for (const permission of entry.permissions) addPermission(permission, entry.resource);
+    } else {
+      addPermission(entry, entry.resource);
+    }
+  }
+  return permissions;
 }
 
 /**

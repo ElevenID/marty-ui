@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -615,6 +616,70 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         )
 
 
+def _rust_vector_test_source(source_path: Path) -> str:
+    """Follow an explicitly registered sibling test module without changing its owner."""
+    source = _without_rust_comments(source_path.read_text(encoding="utf-8"))
+    code = _without_rust_comments(source, mask_strings=True)
+    modules = list(re.finditer(r"(?m)^mod[ \t]+tests[ \t]*;[ \t]*$", code))
+    if not modules:
+        return source
+    if len(modules) != 1:
+        raise AssertionError("Rust vector test module has ambiguous registration")
+    module = modules[0]
+    attributes: list[str] = []
+    attribute_start = module.start()
+    # Outer attributes still apply across blank lines and comments. Collect the
+    # complete sequence, including multiline payloads, before accepting it.
+    while True:
+        end = len(code[:attribute_start].rstrip())
+        if not end or code[end - 1] != "]":
+            break
+        opening, depth = end - 1, 1
+        while opening and depth:
+            opening -= 1
+            if code[opening] == "]":
+                depth += 1
+            elif code[opening] == "[":
+                depth -= 1
+        if depth or not opening or code[opening - 1] != "#":
+            raise AssertionError("Rust vector test module has malformed outer attributes")
+        attribute_start = opening - 1
+        attributes.append(source[attribute_start:end])
+    path_attributes = [
+        match
+        for attribute in attributes
+        if (match := re.fullmatch(r'#\[path = "([A-Za-z0-9_]+\.rs)"\]', attribute))
+    ]
+    if (
+        len(attributes) != 2
+        or "#[cfg(test)]" not in attributes
+        or len(path_attributes) != 1
+    ):
+        raise AssertionError(
+            "Rust vector external test module requires only cfg(test) and a sibling path"
+        )
+    test_path = source_path.with_name(path_attributes[0].group(1))
+    if not test_path.is_file() or test_path.is_symlink() or test_path == source_path:
+        raise AssertionError("Rust vector external test module is not a sibling source")
+    test_source = _without_rust_comments(test_path.read_text(encoding="utf-8"))
+    if re.search(
+        r"#\s*!\s*\[\s*(?:r#)?cfg(?:_attr)?\b",
+        _without_rust_comments(test_source, mask_strings=True),
+    ):
+        raise AssertionError("Rust vector external test module is conditionally compiled")
+
+    # Keep the owning library module (and therefore its libtest name) unchanged.
+    # Reuse the existing annotation, ignore, helper and fixture checks on the
+    # registered module body; do not search unregistered files for matching tests.
+    return (
+        source[:attribute_start]
+        + "#[cfg(test)]\nmod tests {\n"
+        + textwrap.indent(test_source, "    ")
+        + "\n}\n"
+        + source[module.end() :]
+    )
+
+
 def _assert_rust_behavior_vector_test_owners() -> None:
     """Check static owner/reference prerequisites for the workspace test lane.
 
@@ -677,7 +742,7 @@ def _assert_rust_behavior_vector_test_owners() -> None:
                 f"public vector test module is conditionally registered: {vector_name}"
             )
 
-        source = _without_rust_comments(source_path.read_text(encoding="utf-8"))
+        source = _rust_vector_test_source(source_path)
         code = _without_rust_comments(source, mask_strings=True)
         test_section = _test_section(source, owner.test)
         if owner.loader is None:

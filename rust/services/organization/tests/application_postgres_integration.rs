@@ -17,6 +17,9 @@ use mmf_data::MemoryCache;
 use mmf_security::{CedarConfig, CedarPolicyValidator};
 use sqlx::postgres::PgPoolOptions;
 
+#[path = "support/membership_approval.rs"]
+mod membership_approval;
+
 #[tokio::test]
 async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured() {
     let Ok(database_url) = std::env::var("ORGANIZATION_POSTGRES_TEST_URL") else {

@@ -60,6 +60,53 @@ def _required_steps():
             "body_excerpt": "Administration denied",
         },
     ]
+    resource_ids = {
+        "signing_service": "service-fixture", "issuer_identity": "did:web:issuer.unit.invalid:fixture",
+        "verifier_issuer_identity": "did:web:issuer.unit.invalid:fixture",
+        "compliance_profile": "compliance-fixture", "trust_profile": "trust-fixture",
+        "revocation_profile": "revocation-fixture", "credential_template": "credential-fixture",
+        "application_template": "application-fixture", "presentation_policy": "policy-fixture",
+        "deployment_profile": "deployment-fixture", "issuance_flow": "issuance-fixture",
+        "verification_flow": "verification-fixture", "api_key": "api-key-fixture",
+    }
+    next(step for step in steps if step["label"] == "resource-inventory-verified").update({
+        "organization_id": "a60371ca-7250-4a51-9598-f8e972044f31",
+        "inventory": [
+            {"resource_type": kind, "id": value,
+             "status": "configured" if kind == "signing_service" else "active"}
+            for kind, value in resource_ids.items()
+        ],
+        "linked_resource_ids": {
+            "credential.compliance_profile_id": "compliance-fixture",
+            "credential.issuer_did": "did:web:issuer.unit.invalid:fixture",
+            "credential.trust_profile_id": "trust-fixture",
+            "credential.revocation_profile_id": "revocation-fixture",
+            "application.credential_template_id": "credential-fixture",
+            "policy.trust_profile_id": "trust-fixture",
+            "deployment.trust_profile_id": "trust-fixture",
+            "deployment.default_policy_id": "policy-fixture",
+            "issuance_flow.trust_profile_id": "trust-fixture",
+            "issuance_flow.credential_template_id": "credential-fixture",
+            "verification_flow.trust_profile_id": "trust-fixture",
+            "verification_flow.presentation_policy_id": "policy-fixture",
+            "deployment.presentation_policy_ids": ["policy-fixture"],
+            "issuance_flow.deployment_profile_ids": ["deployment-fixture"],
+            "verification_flow.deployment_profile_ids": ["deployment-fixture"],
+            "policy.credential_template": ["credential-fixture"],
+        },
+    })
+    next(step for step in steps if step["label"] == "unauthorized-administration-denied").update({
+        "organization_id": "35bd31cf-790f-43dc-9ee6-68f547b4f8e2",
+        "foreign_owner_binding": {
+            "owner_org_id": "35bd31cf-790f-43dc-9ee6-68f547b4f8e2",
+            "owner_org_status": "active", "owner_membership_is_owner": True,
+            "tested_org_absent": True, "owner_user_sha256": "a" * 64,
+            "tested_user_sha256": "b" * 64, "owner_session_retired": True,
+        },
+        "statuses": {path: 403 for path in (
+            "/v1/credential-templates", "/v1/deployment-profiles",
+            "/v1/presentation-policies", "/v1/trust-profiles")},
+    })
     for index, (purpose, identity_label, proof_label) in enumerate([
         ("vc_jwt_issuer", "issuer-identity-active", "issuer-signing-capability-verified"),
         ("oid4vp_request_signing", "verifier-issuer-identity-active", "verifier-signing-capability-verified"),
@@ -169,6 +216,10 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
         "create_api_key", "verify_issuer_signing_capabilities", "verify_resource_inventory", "verify_unauthorized_administration_denied",
     ]:
         monkeypatch.setattr(audit, name, lambda *_args, step=name: events.append(step))
+    def foreign_fixture(*_args):
+        events.append("verify_foreign_owner_fixture")
+        return "35bd31cf-790f-43dc-9ee6-68f547b4f8e2", {"owner_org_id": "35bd31cf-790f-43dc-9ee6-68f547b4f8e2"}
+    monkeypatch.setattr(audit, "verify_foreign_owner_fixture", foreign_fixture)
     if setup_failure:
         def failed_registration(*_args):
             events.append("create_key_service_if_possible")
@@ -177,6 +228,9 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--record-video"])
     monkeypatch.setenv("TEST_VENDOR_EMAIL", "operator@example.test")
     monkeypatch.setenv("TEST_VENDOR_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("D10_FOREIGN_OWNER_EMAIL", "independent-owner@example.test")
+    monkeypatch.setenv("D10_FOREIGN_OWNER_PASSWORD", "synthetic-foreign-password")
+    monkeypatch.setenv("D10_FOREIGN_ORG_ID", "35bd31cf-790f-43dc-9ee6-68f547b4f8e2")
     monkeypatch.setenv("DEMO_ARTIFACT_DIR", str(artifact_dir))
     if record_video_env is None:
         monkeypatch.delenv("RECORD_VIDEO", raising=False)
@@ -204,6 +258,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     assert report["releaseReady"] is True
     assert contexts[0]["ignore_https_errors"] is False
     assert all(report["behaviorAssertions"].values())
+    assert events.index("verify_foreign_owner_fixture") < events.index("create_org")
     assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
     assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
     assert report["trace_coverage"]["omitted"] == ["authentication", "organization-creation", "kms-service-registration", "api-key-creation"]
@@ -380,7 +435,7 @@ def test_release_checks_accept_only_exact_cross_org_admin_denials() -> None:
     denied = [
         {
             "status": 403,
-            "url": f"https://beta.elevenidllc.com{path}?organization_id={audit.CROSS_ORG_SENTINEL}",
+            "url": f"https://beta.elevenidllc.com{path}?organization_id=35bd31cf-790f-43dc-9ee6-68f547b4f8e2",
             "message_id": f"denied-{index}",
         }
         for index, path in enumerate(sorted(audit.CROSS_ORG_ADMIN_PATHS))
@@ -426,6 +481,88 @@ def test_organization_management_behavior_assertions_require_exact_steps() -> No
     ] is False
 
 
+def test_foreign_owner_binding_requires_distinct_active_owner_and_no_tested_membership() -> None:
+    audit = _load_audit_module()
+    foreign = "35bd31cf-790f-43dc-9ee6-68f547b4f8e2"
+    owner = {"/v1/auth/me": {"status": 200, "body": {"authenticated": True,
+             "user": {"user_id": "owner-id"}}},
+             "/v1/organizations/mine": {"status": 200, "body": [{"id": foreign,
+             "status": "active", "membership": {"is_owner": True}}]}}
+    tested = {"/v1/auth/me": {"status": 200, "body": {"authenticated": True,
+              "user": {"user_id": "tested-id"}}},
+              "/v1/organizations/mine": {"status": 200, "body": []}}
+    binding = audit.bind_foreign_owner(owner, tested, foreign)
+    assert binding["owner_org_id"] == foreign and binding["tested_org_absent"] is True
+    tested["/v1/organizations/mine"]["body"].append({"id": foreign})
+    with pytest.raises(ValueError, match="FOREIGN_ORGANIZATION_NOT_INDEPENDENT"):
+        audit.bind_foreign_owner(owner, tested, foreign)
+    tested["/v1/organizations/mine"]["body"].clear()
+    owner["/v1/organizations/mine"]["body"][0]["status"] = "suspended"
+    with pytest.raises(ValueError, match="FOREIGN_ORGANIZATION_NOT_INDEPENDENT"):
+        audit.bind_foreign_owner(owner, tested, foreign)
+
+
+def test_foreign_owner_discovery_requires_one_unshared_active_owned_org() -> None:
+    audit = _load_audit_module()
+    foreign = "35bd31cf-790f-43dc-9ee6-68f547b4f8e2"
+    second = "b1dd4408-60d1-4664-abf7-b5b2d28a80dc"
+    owner = {"/v1/auth/me": {"status": 200, "body": {"authenticated": True,
+             "user": {"user_id": "owner-id"}}},
+             "/v1/organizations/mine": {"status": 200, "body": [{"id": foreign,
+             "status": "active", "membership": {"is_owner": True}}]}}
+    tested = {"/v1/auth/me": {"status": 200, "body": {"authenticated": True,
+              "user": {"user_id": "tested-id"}}},
+              "/v1/organizations/mine": {"status": 200, "body": []}}
+    assert audit.discover_foreign_owner_id(owner, tested) == foreign
+    owner["/v1/organizations/mine"]["body"].append({"id": second, "status": "active",
+                                                     "membership": {"is_owner": True}})
+    with pytest.raises(ValueError, match="NOT_UNIQUE_ACTIVE_OWNER"):
+        audit.discover_foreign_owner_id(owner, tested)
+    tested["/v1/organizations/mine"]["body"].append({"id": foreign})
+    assert audit.discover_foreign_owner_id(owner, tested) == second
+
+
+def test_foreign_fixture_session_retirement_requires_logged_out_readback() -> None:
+    audit = _load_audit_module()
+    request = SimpleNamespace(
+        post=lambda *_args, **_kwargs: SimpleNamespace(status=302),
+        get=lambda *_args, **_kwargs: SimpleNamespace(status=200, json=lambda: {"authenticated": False}))
+    audit.retire_fixture_session(SimpleNamespace(request=request), "https://beta.elevenidllc.com")
+    request.get = lambda *_args, **_kwargs: SimpleNamespace(status=200, json=lambda: {"authenticated": True})
+    with pytest.raises(ValueError, match="SESSION_NOT_RETIRED"):
+        audit.retire_fixture_session(SimpleNamespace(request=request), "https://beta.elevenidllc.com")
+
+
+def test_d10_report_assertions_refuse_labels_without_active_links_or_four_denials() -> None:
+    audit = _load_audit_module()
+    report = {"steps": _required_steps()}
+    inventory = next(step for step in report["steps"] if step["label"] == "resource-inventory-verified")
+    inventory.pop("linked_resource_ids")
+    assert not audit.organization_management_behavior_assertions(report)["configure_trust_and_mip_primitives"]
+    report = {"steps": _required_steps()}
+    inventory = next(step for step in report["steps"] if step["label"] == "resource-inventory-verified")
+    inventory["linked_resource_ids"]["credential.trust_profile_id"] = "foreign-trust"
+    assert not audit.organization_management_behavior_assertions(report)["configure_organization"]
+    report = {"steps": _required_steps()}
+    inventory = next(step for step in report["steps"] if step["label"] == "resource-inventory-verified")
+    inventory["inventory"][4]["status"] = "draft"
+    assert not audit.organization_management_behavior_assertions(report)["configure_trust_and_mip_primitives"]
+    report = {"steps": _required_steps()}
+    denial = next(step for step in report["steps"] if step["label"] == "unauthorized-administration-denied")
+    denial["statuses"]["/v1/trust-profiles"] = 200
+    assert not audit.organization_management_behavior_assertions(report)["unauthorized_administration_denied"]
+    denial["statuses"]["/v1/trust-profiles"] = 403
+    denial["organization_id"] = "a60371ca-7250-4a51-9598-f8e972044f31"
+    assert not audit.organization_management_behavior_assertions(report)["unauthorized_administration_denied"]
+    report = {"steps": _required_steps()}
+    denial = next(step for step in report["steps"] if step["label"] == "unauthorized-administration-denied")
+    denial["organization_id"] = audit.CROSS_ORG_SENTINEL
+    assert not audit.organization_management_behavior_assertions(report)["unauthorized_administration_denied"]
+    denial["organization_id"] = "35bd31cf-790f-43dc-9ee6-68f547b4f8e2"
+    denial["foreign_owner_binding"]["tested_org_absent"] = False
+    assert not audit.organization_management_behavior_assertions(report)["unauthorized_administration_denied"]
+
+
 def test_external_recorder_artifact_dir_is_supported(monkeypatch, tmp_path: Path) -> None:
     audit = _load_audit_module()
     artifact_dir = tmp_path / "fresh-recording"
@@ -449,6 +586,7 @@ def test_external_recorder_artifact_dir_is_supported(monkeypatch, tmp_path: Path
 )
 def test_cross_org_admin_probe_fails_closed(
     monkeypatch,
+    tmp_path: Path,
     override_status: int | None,
     expected_label: str,
 ) -> None:
@@ -456,6 +594,8 @@ def test_cross_org_admin_probe_fails_closed(
 
     class FakeAudit:
         page = object()
+        base_url = "https://beta.elevenidllc.com"
+        artifact_dir = tmp_path
 
         def __init__(self) -> None:
             self.snapshots = []
@@ -466,14 +606,19 @@ def test_cross_org_admin_probe_fails_closed(
     first_path = sorted(audit.CROSS_ORG_ADMIN_PATHS)[0]
 
     def fetch_probe(_page, path, organization_id):
-        assert organization_id == audit.CROSS_ORG_SENTINEL
+        assert organization_id == "35bd31cf-790f-43dc-9ee6-68f547b4f8e2"
         status = override_status if path == first_path and override_status is not None else 403
         return {"status": status}
 
     monkeypatch.setattr(audit, "fetch_org_collection", fetch_probe)
+    binding = {
+        "owner_org_id": "35bd31cf-790f-43dc-9ee6-68f547b4f8e2", "owner_org_status": "active",
+        "owner_membership_is_owner": True, "tested_org_absent": True,
+        "owner_user_sha256": "a" * 64, "tested_user_sha256": "b" * 64}
     fake_audit = FakeAudit()
 
-    audit.verify_unauthorized_administration_denied(fake_audit)
+    audit.verify_unauthorized_administration_denied(fake_audit,
+        "35bd31cf-790f-43dc-9ee6-68f547b4f8e2", binding)
 
     assert [snapshot["label"] for snapshot in fake_audit.snapshots] == [expected_label]
     assert set(fake_audit.snapshots[0]["extra"]["statuses"]) == audit.CROSS_ORG_ADMIN_PATHS

@@ -19,6 +19,21 @@ beforeEach(() => {
   vi.mocked(activateCredentialTemplate).mockResolvedValue({ ...draft, status: 'active' });
 });
 describe('template creation recovery', () => {
+  it('includes a native structured activation rejection without losing the created draft', async () => {
+    vi.mocked(activateCredentialTemplate).mockRejectedValueOnce({ detail: 'Trust profile is temporarily unavailable', status: 503 });
+    const operation = createTemplateCreationOperation('org-a');
+    await expect(operation.submit(data)).rejects.toThrow('Trust profile is temporarily unavailable');
+    expect(operation.resource).toEqual(draft);
+    expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
+  });
+  it('retains the recovery journal when activation does not confirm an active status', async () => {
+    vi.mocked(activateCredentialTemplate).mockResolvedValueOnce(draft);
+    const operation = createTemplateCreationOperation('org-a');
+    await expect(operation.submit(data)).rejects.toThrow('did not confirm an active resource');
+    expect(JSON.parse(sessionStorage.getItem('marty:template-create:v1:org-a')!).resourceId).toBe(draft.id);
+    await expect(operation.submit(data)).resolves.toMatchObject({ status: 'active' });
+    expect(createCredentialTemplate).toHaveBeenCalledTimes(1);
+  });
   it('does not replay an unresolved key for a different principal in the same organization', async () => {
     vi.mocked(createCredentialTemplate).mockRejectedValueOnce(Object.assign(new Error('lost response'), { operationStatusUnknown: true }));
     await expect(createTemplateCreationOperation('org-a').submit(data)).rejects.toThrow();

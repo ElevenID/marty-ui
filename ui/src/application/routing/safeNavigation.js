@@ -1,9 +1,11 @@
 import { getPublicEntryCanonicalOrigin } from './publicEntry';
+import { hasAsciiControlCharacters } from '../../utils/hasAsciiControlCharacters.js';
 
 /** Bound application redirects to this origin or its configured entry alias. */
 export function safeNavigationDestination(destination, location = typeof window === 'undefined' ? null : window.location) {
   if (typeof destination !== 'string' || !destination || destination !== destination.trim()
-    || destination.startsWith('//') || /[\u0000-\u001f\u007f\\]/u.test(destination)) return null;
+    || destination.startsWith('//') || destination.includes('\\')
+    || hasAsciiControlCharacters(destination)) return null;
   try {
     const current = new URL(location?.href || 'https://marty.invalid/');
     const resolved = new URL(destination, current);

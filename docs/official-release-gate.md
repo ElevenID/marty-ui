@@ -69,61 +69,54 @@ evidence fail closed. OIDF permits only explicitly declared optional skips;
 every selected module must finish. Local/native runtime overlays cannot qualify
 the release image even when their functional checks pass.
 
-The reusable product call explicitly collects raw evidence; its successful job
-means collection completed, not that every official result was `PASSED`.
-Standalone and scheduled suite calls still enforce their original raw exits.
-The independent candidate gate rejects genuine protocol/process failures and
-incomplete plans. Complete `REVIEW` cases can instead produce an immutable
-`official-review-input-<run-id>` artifact before the qualification step waits
-for at most 60 minutes for the exact protected-main disposition. It contains
-only the exact candidate manifest,
-sanitized summaries, origin attempt and canonical `review-request.json`.
-Raw exports, API readbacks and screenshot pixels must remain private.
-The shared harness encrypts the actual images and unchanged exports to the
-public `OFFICIAL_REVIEW_RECIPIENT` repository variable before upload. Only the
-ciphertext and public-safe delivery receipt are stored as
-`official-review-private-<lane>-<run-id>-<origin-attempt>`. The decryption identity
-stays with the operator's secure local credentials; product signing keys remain
-in remote KMS custody. Follow the integration harness's `conformance/README.md`
-to open the exact packet against its frozen public summary. The viewer verifies
-all bytes and image bindings before writing images/HTML; it does not write raw
-plaintext exports or approve cases. Every actual image still needs review; a
-hash alone is not an accepted disposition.
+## Automated qualification of upstream review cases
 
-After reviewing every pending case, submit a normal reviewed change at
-`release/official-reviews/<run-id>-<origin-attempt>.json`. That record uses
-`marty.official-review-disposition/v1`, the exact SHA-256 of `review-request.json`
-(with the `sha256:` prefix), the same numeric run ID/origin attempt, a reviewer
-with kind `human` or `delegated_codex` and `github_login`, an overall `verdict`,
-and a `cases` array. Every case copies its exact `lane` and `module` object from
-`pending`, adding its own `verdict`. All verdicts must be `accepted`; omitted,
-duplicated, rejected, changed-image or foreign cases fail. A pending template,
-an arbitrary local file, or an artifact-supplied approval is not authorization.
-Do not identify delegated Codex review as human review.
+The reusable product call collects raw evidence; its successful job means
+collection completed. The independent Rust gate makes the release decision.
+It rejects genuine protocol/process failures, warnings hidden beneath an
+upstream `REVIEW`, incomplete plans and unsupported review obligations.
 
-The workflow resolves protected `main` through the authenticated GitHub API and
-reads the record only at that immutable commit. It does not trust a candidate
-branch, alternate host/ref or a self-reported approval flag. The resulting gate
-receipt binds the accepted main commit, record/request digests and reviewed
-case count. Original stock `REVIEW` results and exports stay unchanged. This is
-review disposition for the selected interoperability evidence, not paid OIDF
-certification or demo editorial/publication approval.
+For the pinned OIDF release-v5.3.3 verifier, a successful HTTP response proves
+receipt of a presentation, but not completed verification. Its known positive
+modules therefore request evidence of a successful verifier page. Marty checks
+that requirement automatically: the exact correlated flow must report
+`completed` / `passed` / `allow`, the real console must load the same flow's
+successful API response, and its result summary must display the matching
+instance, allow decision and visible verified outcome without an error.
 
-The release stays on its original run and attempt 1 while the record passes
-normal protected-branch review and merge. Only an authenticated absence at an
-immutable protected-main commit is a waiting state. Authentication, transport,
-malformed evidence, rejection, unrelated source drift and the fixed 60-minute
-deadline fail closed. The validator builds once and the seven-lane packet is
-frozen once; waiting does not recollect protocols or rewrite evidence.
+The policy is limited to the explicitly enumerated positive modules and lane
+variants in the accepted harness. Every upstream review event must have the
+known successful-verification reason. Unknown or negative-review reasons,
+warnings, failures, duplicate/missing cases, reused flow identities and stale
+API/UI/image bindings fail. Extending the policy requires a code change with
+new assertions and negative tests; there is no per-run approval override.
 
-The candidate source and review commit are separate identities. Every commit
-between them may change only `release/official-reviews/<run-id>-1.json`. The
-record must be absent at the candidate source and an ordinary non-executable
-file at the accepted main commit. Unrelated changes later reverted, another
-review file, a symlink, incomplete history or a non-descendant are refused.
-The exact accepted main commit is checked again before every public promotion
-and release write. A subsequent main commit stops this candidate; it never
-silently refreshes the accepted authorization.
+The gate freezes the exact candidate manifest, sanitized summaries, origin
+attempt and canonical `assessment.json` in
+`official-evidence-input-<run-id>`. It validates the entire seven-lane packet
+once and emits `marty.official-release-gate/v2` with an explicit
+`marty.automated-official-qualification/v1` result. The receipt binds source,
+harness, manifest, run, original attempt, all summary hashes, assessment hash
+and the count of machine-assessed cases. A legacy v1 manual disposition cannot
+qualify a new production release.
+
+Original OIDF results and exports remain unchanged: a machine-qualified Marty
+release may still contain an upstream `REVIEW`. It is not reported as an
+upstream `PASSED`, OIDF certification, visual design approval or demo editorial
+approval. Standalone official-suite jobs continue to report raw upstream exits.
+
+CI uploads bounded public facts and hashes. Raw protocol exports, API readbacks
+and screenshot pixels remain transient private diagnostics on the disposable
+runner. The candidate path does not require `age`, a recipient variable, a
+decryption identity, a review PR or a timed human response. The existing local
+viewer and explicit standalone encrypted diagnostic delivery remain available
+for development and certification preparation.
+
+The workflow resolves protected `main` through the authenticated GitHub API
+before and after automatic qualification. It must still equal the candidate
+source; the pipeline never advances main to record a per-run approval. The
+same source is checked before publication operations. An observed unrelated
+main advance stops the candidate instead of silently rebinding it.
 
 A failed or expired run must not be retried to manufacture another producer
 attempt. The workflow rejects later attempts and the historical `resume_run_id`
@@ -131,9 +124,19 @@ and `resume_artifact` inputs before building. Retain the original evidence and
 claimed coordinates. Any recovery needs a separately reviewed source and a fresh
 unused claim; do not reuse the failed version or relabel existing signatures.
 
-The digest of the allowlisted receipt becomes required
+Before released conformance starts its runtime, the launcher reuses the exact
+pinned Envoy digest from the local image cache or acquires that same digest with
+at most three pulls. The cache inspection has a 30-second timeout; each pull has
+a 120-second timeout, with one- and two-second pauses between attempts. Envoy's
+released Compose profile then reuses that digest from the cache without forcing
+another registry read; direct Compose consumers can still populate a cold cache.
+Exhaustion stops before runtime startup; this does not retry a producer, KMS
+bootstrap, Compose startup, or provisioning. Both local execution modes retain
+their existing acquisition behavior.
+
+The digest of the automated receipt becomes required
 `official_interoperability` transaction evidence. The frozen public summaries
-and authenticated disposition inputs are retained alongside that receipt.
+and complete machine assessment are retained alongside that receipt.
 
 Publication copies the exact tested manifest bytes and checks their independent
 producer digest. It does not regenerate a potentially different manifest.
@@ -161,131 +164,167 @@ After all qualification gates pass, the publisher promotes the five exact image
 digests in their existing order and signs the original release files. It verifies
 and seals all 32 public assets, including all 13 Cosign bundles and all five
 complete publication-provenance sidecars, into
-`stack-release-publication-inputs-<run-id>-1`. The separate request and unchanged
+`stack-release-publication-inputs-<run-id>-1`. The v2 checkpoint and unchanged
 official gate receipt bind the candidate, claim, original run, accepted main,
-exact asset sizes and hashes, and a fixed 15-minute tag-handoff deadline. This
-checkpoint is evidence, not a published release or installer admission.
+exact asset sizes and hashes, the explicit tag-handoff contract, and a fixed
+15-minute deadline. This checkpoint is evidence, not a published release or
+installer admission.
 
-The operator dispatches `.github/workflows/release-tag-handoff.yml` on protected
-`main`. Its default inspect mode is read-only. The qualified-tag mode validates
+### Create-only reservation contract
+
+The publisher automatically dispatches `.github/workflows/release-tag-handoff.yml`
+once from its existing tag-wait step, using its ephemeral job token with
+`actions: write`. It persists the dispatch intent before the request and
+authenticates the exact run ID returned by GitHub's versioned API. A missing or
+ambiguous response stops the attempt without a second dispatch or adoption of
+another run. The original 15-minute checkpoint deadline is unchanged.
+
+The separate workflow runs on protected `main`. Its default inspect mode is
+read-only. The qualified-tag mode validates
 the live original publisher's waiting step, successful prerequisite jobs,
-authenticated artifacts, all original cryptographic proofs and unchanged review
-authority. It uses its own scoped ephemeral job token for GitHub metadata and
-ref operations; it does not build, sign, publish a release or handle private
-review images.
+authenticated artifacts, all original cryptographic proofs and unchanged source
+authority. It uses its existing scoped ephemeral job token for metadata and
+ref operations. It does not build, sign, publish a release, handle private review
+images, or update main.
 
-The tag object targets the original candidate source. One native Git
-`receive-pack` transaction explicitly sends both the expected-current-to-same
-main command and the absent-to-annotated-object tag command. Discovery must
-advertise `atomic`, `report-status`, `side-band-64k` and the exact admitted main;
-the target tag must be absent. The request includes Git's required empty pack
-because REST has already created and verified the annotated object. Ordinary
-Git push cannot supply this compare: its sender omits an unchanged-main command,
-even when requested with a matching lease. The earlier GraphQL `updateRefs`
-route rejected the annotated object type and is not a fallback. Never use an
-unconditional tag creation, lightweight intermediate tag or protection bypass.
-The wire and atomic contracts are documented in
-[Git's pack protocol](https://git-scm.com/docs/gitprotocol-pack.html) and
-[protocol capabilities](https://git-scm.com/docs/gitprotocol-capabilities).
+The contract is `marty.create-only-annotated-tag/v1`. First the operator acquires
+`v-release-intent-<major>.<minor>.<patch>`, an annotated ownership tag binding the
+production version, original CD, claim, checkpoint, source, admitted main and
+one original operator. It requires a confirmed HTTP 201 and exact readback.
+Any existing owner blocks another invocation, even if the production tag remains
+absent or the apparent owner matches.
 
-The transport uses the same workflow token and permissions over canonical
-GitHub HTTPS. A short-lived isolated worker receives the credential through
-bounded private stdin; the parent enforces the remaining absolute deadline.
-It does not follow redirects or retry an unknown write. Each consumed intent
-is preserved in an exclusive private audit file before dispatch. The
-`marty.release-tag-operator-observations/v2` record keeps REST mutations and
-native Git transactions distinct, retaining the bounded packet bytes, safe
-HTTP metadata, command hashes, status reports and diagnostics. Its artifact
-member retains the existing `operator-api-receipt.json` name. The generic
-successful handoff result keeps its closed v1 candidate bindings; it is emitted
-only after the native transaction and unchanged-main/rules/tag readbacks pass.
+Only then may it create the production annotated object targeting the original
+source and binding that ownership. It makes one REST create-reference request
+for the absent production tag, requiring HTTP 201 and the exact ref/object
+identity. There is no update, force, lightweight intermediate tag, overwrite
+fallback, or automatic retry. Each intent is durably recorded before its request
+and consumed even when the response is lost. If ownership acquisition was never
+confirmed and its ref remains absent, a new acquisition cannot replay an earlier
+production write: the earlier invocation could not have reached that operation.
+Confirmed ownership remains the durable barrier to any later production attempt.
 
-The publisher waits for both the exact annotated tag and the actual successful
-operator workflow, authenticating its bound result artifact. Matching tag text
-alone is insufficient. A failed/cancelled operator, conflicting tag, changed
-main, invalid receipt or elapsed deadline stops publication. An uncertain write
-outcome permits readback only; never blindly replay a mutation or delete/rewrite
-an immutable tag. Atomicity covers the two refs, not registry state, workflow
-cancellation or later release publication; those remain independently checked.
+This is an explicit revision of the earlier atomic main/tag requirement:
+`ref_creation_scope=absent_tag_only` and
+`main_check_scope=before_after_observation`. All existing main, automatic gate
+authority, visible rules, original run, candidate, cryptographic and deadline
+checks remain. They are observations around separate operations; they do not
+prove main's value at the tag-write instant or detect a main/policy change that
+is restored between reads. The supported Marty consumers treat the tag as a
+reservation until the operator and publisher authenticate the complete evidence.
+Third-party tag watchers can still see it before a release exists. The receipt states
+`tag_alone_authorizes_publication=false`.
 
-Immediately before creating the release, the publisher revalidates the original
-checkpoint and compares all 32 workspace files to its sealed bytes, then checks
-the accepted protected-main authority again. The original deadline is rechecked
-after those API/registry reads, so late admission cannot start release creation.
-An existing release is a collision
-on this first-attempt-only path. After creation, all 32 downloaded release files
-must match the sealed checkpoint and pass their original proof checks.
+A concurrent main advance or a lost response can leave an immutable, unused tag
+and consume the version. Any observed authority change stops admission. Preserve
+that state and its original failure evidence; never delete or retarget the tag,
+adopt an unknown write, retry the original mutation, or reuse the coordinate.
+The exact guarantee change, observed GitHub failure and approval requirements
+are described in [the reservation contract](release-tag-reservation-contract.md).
+Normal branch protection, merge-queue requirements and workflow permissions
+remain in force. Activate this revision only after explicit owner approval and
+normal protected integration.
 
-Before consuming another claim, qualify this exact operator workflow and token
-against the real repository protections. Its capability mode uses a unique,
-non-semver `v-release-capability-<operator-run-id>-1` audit tag and a genuine
-ancestor with identical workflow files. The stale-main negative transaction
-asserts the ancestor as both old and new main, modelling a formerly admitted
-no-op after main advanced. Its separate `observed_main_oid` binds discovery to
-current main; the request never proposes an ancestor-to-current
-branch update. Before writing, the operator requires an active repository-owned
-merge-queue ruleset applying exactly to main, with no additional conditions,
-excluded refs, and GitHub's explicit `current_user_can_bypass: "never"` for the
-workflow credential making the request. This proves the credential's own
-authority; it does not assert that no other actor has bypass rights. GitHub
-[defines that field for the requesting actor](https://github.blog/changelog/2023-06-27-repository-rules-public-beta-updates/)
-and [withholds `bypass_actors` without ruleset write access](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset).
-An omitted inventory stays absent in the raw snapshot and is recorded as
-`not_disclosed`, never converted to an empty list. An explicit empty list is
-recorded as `observed_empty`. Explicit null, malformed or nonempty inventories
-remain non-qualifying, as do missing or non-`never` current-credential capability.
-No additional credential, permission or ruleset change is introduced.
+### Evidence and publisher admission
 
-The negative transaction must
-return either the exact main/current/expected stale-lock diagnostic with both
-refs atomically refused, or GitHub's exact main-policy GH013 diagnostic for
-the merge queue and pull request, with main refused for rule violations and
-the run-bound tag refused by the atomic transaction. The latter is recorded as
-`confirmed_main_policy_refusal`; it is not proof of Git's stale-lock layer.
-Both refs must remain unchanged on independent readback, and the complete
-operator context and visible ruleset snapshot, including the requesting
-credential's capability and inventory visibility, must still match before the
-positive transaction. This is not an assertion that an undisclosed global
-inventory remained unchanged. Concurrent changes to main remain subject to the
-original native atomic comparison and independent readbacks. A generic atomic
-failure, other GH013 diagnostic, or policy
-refusal on a positive or production transaction is insufficient.
+The exclusive private audit journal retains REST mutation intent, outcome and
+safe response metadata before successful admission. The
+`marty.release-tag-operator-observations/v3` record keeps the retained native
+negative probe distinct from the new create-only ref operation. The artifact
+member keeps the name `operator-api-receipt.json`. The successful
+`marty.release-tag-handoff-result/v2` is emitted only after exact annotated-tag
+readback and all unchanged-main/context/rules checks pass.
 
-The paired current-main transaction must report both refs successful and
-create the exact annotated audit tag without moving main. The v4 capability
-result retains the distinct negative evidence and protecting ruleset IDs, and
-explicitly scopes its protection observations to `current_workflow_credential`.
-Each observation records the exact `never` capability and `not_disclosed` or
-`observed_empty` inventory visibility. The unchanged raw API snapshot and all
-bounded wire evidence remain available. Recheck the same visible rules afterward.
-The parser counts and ignores only the observed standalone progress
-NUL packet; raw packets remain intact. NULs within text or status and unsupported
-control bytes are refused.
-Decoded refusals are preserved before admission. No negative result alone is
-successful qualification, and historical failed runs remain failed. In run
-41894878943 the corrected stale no-op was rejected by GitHub policy before
-the stale-lock layer; the positive transaction was never sent. A fresh paired
-qualification is required after this correction. Run 41925744279 stopped before
-any recorded REST mutation or Git transaction, with only a `HandoffError` in its
-old refusal receipt. The v3 preflight incorrectly required a globally visible
-empty inventory: actual workflow-token inspection 41791774863 omitted that field
-while explicitly reporting `never`. Its unchanged public packet is retained as
-`tests/fixtures/release-tag-inspection-41791774863.json` (artifact 13303856131;
-original ZIP SHA-256 `09a5d46952b0ab6fcda60279765cd58bc0f5e1389510cbec3705af321915067e`).
-That packet reproduces the preflight refusal locally; it is read-only inspection
-evidence, not live capability success. New refusals report fixed internal
-`refusal_stage` and `refusal_reason` codes without exception messages, credentials,
-API payloads or redirected URLs. Original failure evidence remains unchanged.
+The original publisher waits for the exact annotated ownership and production
+tags and the actual
+successful operator workflow, authenticating its original bound result artifact.
+Matching tag text alone is insufficient. It emits
+`marty.release-tag-admission/v2` with the same explicit reservation contract.
+A failed or cancelled operator, collision, changed main, invalid receipt or
+elapsed deadline stops admission. An uncertain write permits investigation and
+readback only; a matching readback cannot convert it to successful mutation
+evidence.
 
-Local bare-Git tests establish protocol behavior, and do
-not replace this actual GitHub qualification under the existing protections. Permission,
-type, transport or generic errors are not successful capability proof. Keep
-the immutable audit receipt and tag; do not weaken protections or obtain a
-broader credential to force success.
+Immediately before release creation or candidate sealing, the original publisher
+revalidates its checkpoint and compares all 32 workspace files to the sealed
+bytes, then checks accepted protected-main authority again. The original
+deadline is rechecked after API/registry reads. Old checkpoint/result/admission
+schemas cannot be reinterpreted as this contract.
 
-Arrange access to the existing private review identity and enough time for normal
-review/merge before claiming a version. The 60-minute review and 15-minute tag
-bounds do not extend because a queue is slow. Final publication reads back all
-32 exact files and their proofs. Private full-production UI packaging follows
-authenticated stable publication separately; production pages do not establish
-completed billing-runtime behavior.
+The separate v2 publisher authenticates original CD success and the new policy
+digest, both exact annotated tags, operator result, review authority, image identities
+and original asset bytes. Publication policy v3 binds this tag contract; the
+external `publication_contract=v2`, candidate schema v2, fixed 24-hour candidate
+lifetime and at-most-15-minute publisher authorization remain unchanged.
+An unqualified reservation is not an admitted candidate, an owned release, a
+published installer, or permission to resume a failed original CD attempt.
+After release creation, all 32 downloaded files must match the original sealed
+bytes and pass their original proof checks. Separate registry, workflow, Git
+and publication operations are not one global atomic transaction.
+
+### Fresh scoped capability qualification
+
+Before consuming a stable claim, qualify the revised operator against the actual
+repository with a new original `qualify-capability` run on protected main.
+The experiment uses a unique non-semver
+`v-release-capability-<operator-run-id>-1` audit tag and a real distinct ancestor
+whose workflow files are identical. Do not manufacture an ancestor or change the
+tag target to satisfy this prerequisite.
+
+The negative probe retains its native two-ref request: ancestor-to-same-ancestor
+main plus absent-to-audit-tag, while discovery binds actual current main.
+Require either the exact stale-ref refusal or the exact recorded GitHub GH013
+main-policy refusal, both refs refused, unchanged main and absent tag on
+independent readback. This proves only the reported refusal under the observed
+protection; it does not establish the former atomic positive capability.
+
+Before writing, require the same active repository-owned merge-queue ruleset
+applying exactly to main, with no excluded refs or additional conditions, and
+`current_user_can_bypass: "never"` for the actual workflow credential.
+An omitted `bypass_actors` inventory remains absent and is recorded
+`not_disclosed`; an explicit empty list is `observed_empty`. Null, malformed,
+nonempty or non-`never` values remain non-qualifying. This describes the current
+credential and visible policy, not an undisclosed global bypass inventory.
+GitHub [defines the current actor field](https://github.blog/changelog/2023-06-27-repository-rules-public-beta-updates/)
+and [documents the bypass inventory's access requirement](https://docs.github.com/en/rest/repos/rules#get-a-repository-ruleset).
+
+After rechecking the full context, main and visible rules, the positive phase
+creates the absent annotated `v-release-capability-intent-<run>-1` ownership ref,
+then its bound audit ref, through the revised REST operation. Require confirmed
+ownership before the audit mutation, exact responses and object/message/ref readbacks, unchanged observed
+main and rules, and the original deadline. The v5 capability result states the
+reservation contract and observation scopes. It cannot be relabeled as v4 atomic
+capability. Keep both the ownership and audit tags and their original receipts. Local collision
+and failure-injection tests do not justify an extra live mutation or retry.
+
+### Historical atomic evidence stays historical
+
+In run 41894878943 the corrected stale no-op was rejected by GitHub policy before
+the stale-lock layer; no positive transaction was sent. Run 41925744279 stopped
+before recorded REST or Git mutation because v3 incorrectly demanded a globally
+visible empty bypass inventory. The actual read-only workflow-token inspection
+41791774863 omitted that inventory and explicitly reported `never`; its
+unchanged packet remains in
+`tests/fixtures/release-tag-inspection-41791774863.json`.
+
+After the separately reviewed v4 visibility correction, original run
+[41943309794/1](https://github.com/ElevenID/marty-ui/actions/runs/41943309794)
+reached the positive current-main no-op transaction. GitHub rejected that command
+with GH013 merge-queue and pull-request requirements and refused the tag
+atomically. Independent replay confirmed correct request construction and
+parsing. Main remained unchanged and the audit ref was absent. The original
+result remains refused, and the native parser continues to reject this positive
+response. The [reservation contract](release-tag-reservation-contract.md)
+records original artifact identities and hashes.
+
+The previous ordinary-Git route omitted the no-op main command; GraphQL rejected
+the annotated target. Neither is an admitted fallback. The actual native failure
+does not justify accepting `ng` as success, expanding credentials, weakening
+protections, or changing historical evidence.
+
+Release qualification and tag dispatch require no private review identity or
+per-run review/merge. The fixed 15-minute tag bound does not extend because a
+queue is slow. Private full-production UI packaging follows authenticated stable
+publication separately; production pages do not establish completed billing-runtime
+behavior. See [automated release requirements](automated-release-requirements.md)
+for the unattended pipeline boundary and local development workflow.

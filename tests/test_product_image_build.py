@@ -58,6 +58,25 @@ def test_all_nightly_roles_preserve_customer_recipe_and_read_only_cache():
         assert recipe["secret-envs"].endswith("sccache_mode=SCCACHE_GHA_RW_MODE")
 
 
+@pytest.mark.parametrize("producer", ["product", "nightly"])
+def test_private_native_recipes_fetch_with_a_secret_and_export_no_cache(producer):
+    version, nightly_rows = nightly()
+    rows = MODULE.product_plan(ROOT, "marty-server", SHA)["images"] if producer == "product" else nightly_rows
+    kwargs = {"product": "marty-server"} if producer == "product" else {"version": version}
+    for row in rows:
+        if row["role"] not in {"services", "migrations"}:
+            with pytest.raises(ValueError, match="only needed by native"):
+                MODULE.recipe(ROOT, producer=producer, source_sha=SHA, row=row, private_forks=True, **kwargs)
+            continue
+        original = MODULE.recipe(ROOT, producer=producer, source_sha=SHA, row=row, **kwargs)
+        private = MODULE.recipe(ROOT, producer=producer, source_sha=SHA, row=row, private_forks=True, **kwargs)
+        assert private["cache-from"] == private["cache-to"] == ""
+        assert private["secret-envs"] == "private_forks_read_token=PRIVATE_FORKS_READ_TOKEN"
+        assert private["build-args"] == original["build-args"] + "\nPRIVATE_FORKS_ENABLED=true"
+        for field in ("context", "dockerfile", "target", "platform", "image", "labels"):
+            assert private[field] == original[field]
+
+
 @pytest.mark.parametrize("field,value", [("role", "foreign"), ("image", "ghcr.io/foreign/image"),
     ("target", "production"), ("build_args", "MARTY_UI_SHA=" + "b" * 40), ("context", ".")])
 def test_nightly_matrix_cannot_override_source(field, value):
@@ -129,11 +148,14 @@ def test_nightly_reuses_verified_recipe_without_changing_signer_or_cache_authori
     shared = [step for step in steps if step.get("uses") == "./.github/actions/build-product-image"]
     assert len(shared) == 1 and shared[0]["id"] == "build"
     assert shared[0]["with"] == {
+        "private-forks-enabled": "${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && 'true' || 'false' }}",
+        "private-forks-read-token": "${{ vars.PRIVATE_FORKS_ENABLED == 'true' && (matrix.role == 'services' || matrix.role == 'migrations') && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}",
         "producer": "nightly", "source-sha": "${{ github.sha }}",
         "version": "${{ needs.admit.outputs.version }}", "image-plan": "${{ toJSON(matrix) }}",
     }
     assert not any(step.get("uses", "").startswith("docker/build-push-action@") for step in steps)
     cache = next(step for step in steps if step.get("name") == "Expose existing read-only compiler cache")
+    assert cache["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' || (matrix.role != 'services' && matrix.role != 'migrations')"
     assert "core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY')" in cache["with"]["script"]
     attestation = next(step for step in steps if step.get("uses", "").startswith("actions/attest-build-provenance@"))
     assert attestation["with"]["subject-digest"] == "${{ steps.build.outputs.digest }}"

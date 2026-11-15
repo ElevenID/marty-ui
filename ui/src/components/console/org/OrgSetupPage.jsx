@@ -7,6 +7,7 @@
  */
 
 import { useAsyncData } from '../../../hooks/useAsyncData';
+import { useAsyncActionScope } from '../../../hooks/useAsyncActionScope';
 import {
   Box,
   Container,
@@ -30,6 +31,7 @@ import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
 import { useNavigate, Navigate, useSearchParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 
 import { getMyOrganizations } from '../../../services/organizationsApi';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -50,6 +52,8 @@ function logOrgSetupError(message, error) {
  * Organization Setup Page Component
  */
 export function OrgSetupPage() {
+  const beginAction = useAsyncActionScope();
+  const { t } = useTranslation('console');
   const organizationCreationEnabled = isOrganizationCreationEnabled(ENABLE_ORGANIZATION_CREATION);
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -95,10 +99,13 @@ export function OrgSetupPage() {
    * Handle switching to an organization
    */
   const handleSelectOrganization = async (org) => {
+    const action = beginAction();
     try {
-      await setActiveOrgId(org.id);
+      await action.run(setActiveOrgId, org.id, null, { navigate: false });
+      if (!action.isCurrent()) return;
       navigate(returnTo || '/console/org');
     } catch (err) {
+      if (!action.isCurrent() || err?.name === 'AbortError') return;
       logOrgSetupError('[OrgSetupPage] Failed to switch organization:', err);
     }
   };
@@ -149,6 +156,7 @@ export function OrgSetupPage() {
         label={primaryRole?.display_name || primaryRole?.name || 'No roles'}
         color={roleColors[primaryRole?.name] || 'default'}
         size="small"
+        sx={{ maxWidth: '100%' }}
       />
     );
   };
@@ -167,11 +175,17 @@ export function OrgSetupPage() {
     <Container maxWidth="lg" sx={{ py: 4 }}>
       {/* Header */}
       <Box sx={{ mb: 4 }}>
-        <Typography variant="h4" gutterBottom fontWeight={600}>
-          Join an Organization
+        <Typography variant="h4" gutterBottom sx={{ fontWeight: 600 }}>
+          {resolvedOrganizations.length > 0
+            ? t('org.setup.chooseTitle', 'Choose an Organization')
+            : t('org.setup.accessTitle', 'Organization Console Access')}
         </Typography>
         <Typography variant="body1" color="text.secondary">
-          You need to join an organization to access credentials and start applying.
+          {resolvedOrganizations.length > 0
+            ? t('org.setup.chooseDescription', 'Select an organization to open its organization console.')
+            : organizationCreationEnabled
+              ? t('org.setup.accessDescriptionWithCreate', 'Join or create an organization with console access to continue.')
+              : t('org.setup.accessDescription', 'Join an organization with console access to continue.')}
         </Typography>
       </Box>
 
@@ -188,14 +202,14 @@ export function OrgSetupPage() {
           <CardContent>
             <BusinessIcon sx={{ fontSize: 64, color: 'text.secondary', mb: 2 }} />
             <Typography variant="h6" gutterBottom>
-              No Organizations Yet
+              {t('org.setup.noMembershipsTitle', 'No Console Memberships Yet')}
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               {organizationCreationEnabled
                 ? 'Create an organization, discover a public organization, or join with a code to get started.'
                 : 'Discover a public organization or join with a code to get started.'}
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center">
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: "center" }}>
               {organizationCreationEnabled && (
                 <Button
                   variant="contained"
@@ -232,7 +246,7 @@ export function OrgSetupPage() {
           </Typography>
           <Grid container spacing={3} sx={{ mb: 4 }}>
             {resolvedOrganizations.map((org) => (
-              <Grid item xs={12} sm={6} md={4} key={org.id}>
+              <Grid size={{ xs: 12, sm: 6, md: 4 }} key={org.id}>
                 {(() => {
                   const isSelected = org.id === activeOrgId;
 
@@ -255,12 +269,12 @@ export function OrgSetupPage() {
                     {/* Organization Name */}
                     <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 2 }}>
                       <BusinessIcon color="action" sx={{ mt: 0.5 }} />
-                      <Box sx={{ flexGrow: 1 }}>
-                        <Typography variant="h6" gutterBottom>
+                      <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+                        <Typography variant="h6" gutterBottom sx={{ overflowWrap: 'anywhere' }}>
                           {org.display_name || org.name}
                         </Typography>
                         {org.description && (
-                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                          <Typography variant="body2" color="text.secondary" sx={{ mb: 1, overflowWrap: 'anywhere' }}>
                             {org.description}
                           </Typography>
                         )}
@@ -270,32 +284,45 @@ export function OrgSetupPage() {
                     <Divider sx={{ my: 2 }} />
 
                     {/* Membership Details */}
-                    <Stack spacing={1.5}>
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Role:
-                        </Typography>
+                    <Box
+                      component="dl"
+                      sx={{
+                        m: 0,
+                        display: 'grid',
+                        gridTemplateColumns: 'max-content minmax(0, 1fr)',
+                        columnGap: 1,
+                        rowGap: 1.5,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Typography component="dt" variant="caption" color="text.secondary">
+                        Role:
+                      </Typography>
+                      <Box component="dd" sx={{ m: 0 }}>
                         {getRoleBadge(
                           org.membership?.roles,
                           org.membership?.has_org_console_access
                         )}
                       </Box>
 
-                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Typography variant="caption" color="text.secondary">
-                          Status:
-                        </Typography>
+                      <Typography component="dt" variant="caption" color="text.secondary">
+                        Status:
+                      </Typography>
+                      <Box component="dd" sx={{ m: 0 }}>
                         {getStatusBadge(org.membership?.status)}
                       </Box>
 
                       {org.membership?.joined_at && (
-                        <Box>
-                          <Typography variant="caption" color="text.secondary">
-                            Joined: {new Date(org.membership.joined_at).toLocaleDateString()}
+                        <>
+                          <Typography component="dt" variant="caption" color="text.secondary">
+                            Joined:
                           </Typography>
-                        </Box>
+                          <Typography component="dd" variant="caption" color="text.secondary" sx={{ m: 0 }}>
+                            {new Date(org.membership.joined_at).toLocaleDateString()}
+                          </Typography>
+                        </>
                       )}
-                    </Stack>
+                    </Box>
 
                     {/* Organization Type */}
                     {org.org_type && (
@@ -333,7 +360,7 @@ export function OrgSetupPage() {
             <Typography variant="h6" gutterBottom>
               Manage Organizations
             </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} justifyContent="center" sx={{ mt: 2 }}>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: "center", mt: 2 }}>
               {organizationCreationEnabled && (
                 <Button
                   variant="outlined"

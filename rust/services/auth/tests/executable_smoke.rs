@@ -1,6 +1,26 @@
 use std::process::Stdio;
 
 #[test]
+fn oidc_preflight_validates_provider_configuration_before_full_service_startup() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-auth"))
+        .arg("oidc-preflight")
+        .env_clear()
+        .env("OIDC_PROVIDER_MODE", "external")
+        .env("OIDC_CLIENT_ID", "synthetic-client")
+        .env("OIDC_TOKEN_ENDPOINT_AUTH_METHOD", "none")
+        .env("OIDC_ISSUER_URL", "http://identity.example")
+        .env("OIDC_CLIENT_SECRET", "synthetic-not-to-be-printed")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("HTTPS"));
+    assert!(!stderr.contains("DATABASE_URL"));
+    assert!(!stderr.contains("synthetic-not-to-be-printed"));
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
 fn executable_fails_closed_before_startup_when_required_configuration_is_missing() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_marty-auth"))
         .env("ENVIRONMENT", "beta")

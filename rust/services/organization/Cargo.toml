@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 marty-service-runtime = { path = "../../crates/service-runtime" }
+marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
 async-trait.workspace = true
 axum.workspace = true

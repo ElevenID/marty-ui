@@ -8,8 +8,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    build_flow_presentation_request, build_profiled_request_object, build_unsigned_url_query,
-    request_object::resolve_oid4vp_client_identity, FlowApiError, FlowInstanceRecord,
+    build_profiled_request_object, build_unsigned_url_query,
+    presentation_request::{
+        build_resolved_flow_presentation_request, freeze_flow_presentation_request,
+    },
+    request_object::resolve_oid4vp_client_identity,
+    resolve_flow_presentation_policy, FlowApiError, FlowInstanceRecord,
     FlowPresentationRequestError, FlowProviderError, FlowProviderRegistry, FlowRequestObjectError,
     Oid4vpProfile, RequestObjectOptions, RequestTransport, RequestUriMethod,
     StartVerificationFlowRequest, VerificationRequestResponse, VerificationResponseType,
@@ -164,6 +168,13 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
         return Err(FlowVerificationStartError::PrincipalRequired);
     }
     request.validate_for_environment(allow_http_loopback)?;
+    // A SIOP-only start has no presentation-policy evaluation. Reject a
+    // supplied policy instead of silently discarding its credential profile.
+    if request.response_type == VerificationResponseType::IdToken
+        && request.presentation_policy_id.is_some()
+    {
+        return Err(FlowVerificationStartError::InvalidPolicyReference);
+    }
     if request.oid4vp_profile == Oid4vpProfile::Haip && !options.haip_enabled {
         return Err(FlowVerificationStartError::HaipDisabled);
     }
@@ -204,14 +215,33 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
             .presentation_policy_id
             .as_deref()
             .ok_or(FlowVerificationStartError::InvalidPolicy)?;
-        // Resolve the same policy, template and wallet-format graph that the
-        // wallet request endpoint will use. A request_uri must never advertise
-        // a Flow whose referenced credential template cannot be resolved.
-        Some(
-            build_flow_presentation_request(providers, policy_id, &request.organization_id)
+        // Resolve this graph once. Every retrieval uses this exact policy
+        // revision and these Core artifacts, including generated query IDs.
+        let resolved =
+            resolve_flow_presentation_policy(providers, policy_id, &request.organization_id)
                 .await
-                .map_err(start_presentation_error)?,
-        )
+                .map_err(start_presentation_error)?;
+        let artifacts = build_resolved_flow_presentation_request(providers, &resolved)
+            .await
+            .map_err(start_presentation_error)?;
+        if let Some(authority) = resolved.policy.credential_authority.as_ref() {
+            if request
+                .trust_profile_id
+                .as_deref()
+                .is_some_and(|id| id != authority.profile.id)
+                || options.request_object.compatibility
+                    != crate::RequestObjectCompatibility::Standard
+                || options.request_object.transport
+                    == crate::RequestObjectTransport::DigitalCredentialsApi
+            {
+                return Err(FlowVerificationStartError::InvalidPolicyReference);
+            }
+        }
+        Some((
+            resolved.policy.policy_revision,
+            resolved.policy.credential_authority,
+            artifacts,
+        ))
     };
 
     let nonce = URL_SAFE_NO_PAD.encode(random::<[u8; 32]>());
@@ -258,7 +288,7 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
         serde_json::to_value(&identity).map_err(|_| FlowVerificationStartError::Serialization)?,
     );
     context.insert("request_uri".into(), json!(request_uri));
-    if let Some(presentation) = presentation.as_ref() {
+    if let Some((_, _, presentation)) = presentation.as_ref() {
         context.insert(
             crate::defined_verification::REQUEST_DIGEST.into(),
             json!(
@@ -322,6 +352,19 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
         created_at: now,
         updated_at: now,
     };
+    if let Some((policy_revision, authority, artifacts)) = presentation.as_ref() {
+        crate::request_object::validate_profiled_query_transport(
+            &instance,
+            artifacts,
+            &options.request_object,
+        )?;
+        freeze_flow_presentation_request(
+            &mut instance,
+            policy_revision.clone(),
+            authority.clone(),
+            artifacts,
+        )?;
+    }
 
     let auth_request = if is_siop {
         let client_id = options
@@ -357,7 +400,7 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
                 let built = build_profiled_request_object(
                     providers,
                     instance,
-                    presentation.as_ref(),
+                    presentation.as_ref().map(|(_, _, artifacts)| artifacts),
                     base,
                     &options.request_object,
                     now,
@@ -383,6 +426,7 @@ pub(crate) async fn prepare_profiled_verification_start_with_id(
                     instance,
                     presentation
                         .as_ref()
+                        .map(|(_, _, artifacts)| artifacts)
                         .expect("non-SIOP presentation was resolved"),
                     base,
                     &options.request_object,

@@ -2,6 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use marty_oid4vp_contract::trust_authority::{
+    credential_authority_basis_digest, CredentialAuthoritySnapshotV1,
+};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -83,6 +86,12 @@ pub trait TrustProfileRepository: Send + Sync {
         &self,
         profile_id: Uuid,
     ) -> Result<Option<TrustProfile>, TrustProfileRepositoryError>;
+    /// Allocate/reuse the owner revision from one coherent persisted graph.
+    async fn credential_authority_snapshot(
+        &self,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<Option<CredentialAuthoritySnapshotV1>, TrustProfileRepositoryError>;
     async fn profiles_by_organization(
         &self,
         organization_id: &str,
@@ -176,6 +185,7 @@ struct MemoryState {
     organization_profiles: HashMap<Uuid, OrganizationTrustProfile>,
     registry_entries: HashMap<Uuid, TrustRegistryEntry>,
     profiles: HashMap<Uuid, TrustProfile>,
+    credential_authority_revisions: HashMap<Uuid, (u32, String)>,
     issuers: HashMap<Uuid, IssuerEntity>,
     profile_issuers: HashMap<Uuid, TrustProfileIssuer>,
     registry_import_sources: HashMap<Uuid, RegistryImportSource>,
@@ -390,6 +400,56 @@ impl TrustProfileRepository for MemoryTrustProfileRepository {
         Ok(self.state.read().await.profiles.get(&profile_id).cloned())
     }
 
+    async fn credential_authority_snapshot(
+        &self,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<Option<CredentialAuthoritySnapshotV1>, TrustProfileRepositoryError> {
+        // One write lock covers graph observation and revision publication.
+        let mut state = self.state.write().await;
+        let Some(profile) = state
+            .profiles
+            .get(&profile_id)
+            .filter(|profile| profile.organization_id == organization_id)
+        else {
+            return Ok(None);
+        };
+        let relationships = state
+            .profile_issuers
+            .values()
+            .filter(|relationship| relationship.trust_profile_id == profile_id)
+            .map(|relationship| {
+                state
+                    .issuers
+                    .get(&relationship.issuer_id)
+                    .cloned()
+                    .map(|issuer| (relationship.clone(), issuer))
+                    .ok_or(TrustProfileRepositoryError::InvalidData(
+                        "credential_authority.issuer",
+                    ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let basis = crate::credential_authority::authority_basis(profile, relationships)?;
+        let digest = credential_authority_basis_digest(&basis)
+            .map_err(|_| TrustProfileRepositoryError::InvalidData("credential_authority.digest"))?;
+        let version = match state.credential_authority_revisions.get(&profile_id) {
+            Some((version, previous)) if previous == &digest => *version,
+            Some((version, _)) => {
+                version
+                    .checked_add(1)
+                    .ok_or(TrustProfileRepositoryError::InvalidData(
+                        "credential_authority.version",
+                    ))?
+            }
+            None => 1,
+        };
+        let snapshot = crate::credential_authority::authority_snapshot(basis, version)?;
+        state
+            .credential_authority_revisions
+            .insert(profile_id, (version, digest));
+        Ok(Some(snapshot))
+    }
+
     async fn profiles_by_organization(
         &self,
         organization_id: &str,
@@ -421,6 +481,7 @@ impl TrustProfileRepository for MemoryTrustProfileRepository {
     async fn delete_profile(&self, profile_id: Uuid) -> Result<bool, TrustProfileRepositoryError> {
         let mut state = self.state.write().await;
         let deleted = state.profiles.remove(&profile_id).is_some();
+        state.credential_authority_revisions.remove(&profile_id);
         state
             .profile_issuers
             .retain(|_, link| link.trust_profile_id != profile_id);

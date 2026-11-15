@@ -14,6 +14,7 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-service-contracts = { path = "../../crates/service-contracts" }
 marty-service-runtime = { path = "../../crates/service-runtime" }
 mmf-runtime.workspace = true
@@ -31,6 +32,7 @@ marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-deployment-profile = { path = "../deployment-profile" }
 marty-credential-template = { path = "../credential-template" }
+marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
 mmf-platform.workspace = true
 mmf-security.workspace = true
 percent-encoding.workspace = true
@@ -52,11 +54,13 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 hex.workspace = true
 hmac.workspace = true
 redis.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true
 
 [build-dependencies]

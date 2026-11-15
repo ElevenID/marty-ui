@@ -19,23 +19,28 @@ import {
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SecurityIcon from '@mui/icons-material/Security';
 import TimerIcon from '@mui/icons-material/Timer';
-import VerifiedIcon from '@mui/icons-material/Verified';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewActivationCard, ReviewField } from '../../../common';
+import { isValidPolicyCredentialAge } from '../policyFreshnessValidation';
 
 const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
-  const { t } = useTranslation('console');
-  const { policyConfig, trustProfile, selectedTemplate, activateImmediately } = data;
+  const { t, i18n } = useTranslation('console');
+  const { policyConfig, selectedTrustProfile: trustProfile, selectedTemplate, activateImmediately } = data;
 
-  // Helper to format seconds to human-readable
+  // Keep every second visible, including sub-day values and zero.
   const formatDuration = (seconds) => {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-
-    if (days > 0) return `${days} day${days > 1 ? 's' : ''}`;
-    if (hours > 0) return `${hours} hour${hours > 1 ? 's' : ''}`;
-    return `${minutes} minute${minutes > 1 ? 's' : ''}`;
+    if (!isValidPolicyCredentialAge(seconds)) return t('wizards.presentationPolicy.reviewStep.values.notSet');
+    const locale = i18n.resolvedLanguage || i18n.language;
+    let remaining = Number(seconds);
+    const parts = [];
+    for (const [unit, divisor] of [['day', 86400], ['hour', 3600], ['minute', 60], ['second', 1]]) {
+      const count = Math.floor(remaining / divisor);
+      remaining %= divisor;
+      if (count > 0 || (unit === 'second' && parts.length === 0)) {
+        parts.push(new Intl.NumberFormat(locale, { style: 'unit', unit, unitDisplay: 'long' }).format(count));
+      }
+    }
+    return new Intl.ListFormat(locale, { style: 'long', type: 'unit' }).format(parts);
   };
 
   const holderBindingLabels = {
@@ -51,7 +56,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         {t('wizards.presentationPolicy.reviewStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {t('wizards.presentationPolicy.reviewStep.description')}
       </Typography>
 
@@ -70,7 +75,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.policyName')}
                 value={policyConfig.name}
@@ -79,7 +84,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.description')}
                 value={policyConfig.description}
@@ -88,7 +93,7 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
+            <Grid size={{ xs: 12 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.purposeStatement')}
                 value={policyConfig.purpose}
@@ -111,12 +116,12 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               <Typography variant="body1" gutterBottom>
                 {trustProfile.name}
               </Typography>
-              <Chip
+              {trustProfile.trust_framework_type && <Chip
                 label={trustProfile.trust_framework_type?.toUpperCase()}
                 size="small"
                 color="primary"
                 sx={{ mr: 1 }}
-              />
+              />}
               {trustProfile.is_default && (
                 <Chip label={t('wizards.presentationPolicy.trustProfileStep.defaultChip')} size="small" variant="outlined" />
               )}
@@ -173,25 +178,40 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             {t('wizards.presentationPolicy.reviewStep.fields.requiredClaims', { count: policyConfig.required_claims.length })}
           </Typography>
           <List dense>
-            {policyConfig.required_claims.map((claim, index) => (
-              <ListItem key={index}>
-                <ListItemText
-                  primary={
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Typography variant="body2" component="span">
-                        {claim.claim_name}
-                      </Typography>
-                      {claim.accept_predicate && (
-                        <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
-                      )}
-                    </Box>
-                  }
-                  secondary={t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
-                    type: claim.credential_type,
-                  })}
-                />
-              </ListItem>
-            ))}
+            {policyConfig.required_claims.map((claim, index) => {
+              // Match the value selected by native normalization and template projection.
+              const requiredValue = claim.value_constraint ?? claim.required_value;
+              const hasRequiredValue = requiredValue !== '' && requiredValue != null;
+              return (
+                <ListItem key={index}>
+                  <ListItemText
+                    primary={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <Typography variant="body2" component="span">
+                          {claim.claim_name}
+                        </Typography>
+                        {claim.accept_predicate && (
+                          <Chip label={t('wizards.presentationPolicy.reviewStep.values.predicateOk')} size="small" color="success" variant="outlined" />
+                        )}
+                      </Box>
+                    }
+                    secondary={
+                      <>
+                        {t('wizards.presentationPolicy.reviewStep.values.fromCredentialType', {
+                          type: claim.credential_type,
+                        })}
+                        {hasRequiredValue && (
+                          <Box component="span" sx={{ display: 'block', overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
+                            {t('wizards.presentationPolicy.reviewStep.fields.requiredValue')}{': '}
+                            {JSON.stringify(requiredValue)}
+                          </Box>
+                        )}
+                      </>
+                    }
+                  />
+                </ListItem>
+              );
+            })}
           </List>
 
           {policyConfig.required_claims.length === 0 && (
@@ -206,9 +226,6 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
             {policyConfig.prefer_predicates && (
               <Chip label={t('wizards.presentationPolicy.reviewStep.values.preferPredicates')} size="small" color="info" variant="outlined" />
             )}
-            {policyConfig.single_presentation && (
-              <Chip label={t('wizards.presentationPolicy.reviewStep.values.singlePresentation')} size="small" variant="outlined" />
-            )}
           </Box>
       </ReviewSectionCard>
 
@@ -221,18 +238,18 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
         editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.holderBinding')}
                 value={holderBindingLabels[policyConfig.holder_binding] || policyConfig.holder_binding}
               />
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <Typography variant="subtitle2" color="text.secondary">
                 {t('wizards.presentationPolicy.reviewStep.fields.revocationCheck')}
               </Typography>
-              <Typography variant="body1">
+              <Typography variant="body1" component="div">
                 {policyConfig.freshness_requirements.require_revocation_check ? (
                   <Chip label={t('wizards.presentationPolicy.reviewStep.values.required')} size="small" color="success" />
                 ) : (
@@ -241,36 +258,14 @@ const ReviewStep = ({ data, onEdit, onToggleActivation }) => {
               </Typography>
             </Grid>
 
-            <Grid item xs={12} sm={6}>
+            <Grid size={{ xs: 12, sm: 6 }}>
               <ReviewField
                 label={t('wizards.presentationPolicy.reviewStep.fields.maxCredentialAge')}
                 value={formatDuration(policyConfig.freshness_requirements.max_credential_age_seconds)}
               />
             </Grid>
-
-            <Grid item xs={12} sm={6}>
-              <ReviewField
-                label={t('wizards.presentationPolicy.reviewStep.fields.maxProofAge')}
-                value={formatDuration(policyConfig.freshness_requirements.max_proof_age_seconds)}
-              />
-            </Grid>
           </Grid>
       </ReviewSectionCard>
-
-      {/* Standard Reference */}
-      {policyConfig.metadata?.standard_reference && (
-        <ReviewSectionCard
-          sx={{ mb: 2 }}
-          title={t('wizards.presentationPolicy.reviewStep.sections.complianceStandard')}
-          icon={<VerifiedIcon color="primary" />}
-          onEdit={() => onEdit(3)}
-          editLabel={t('wizards.presentationPolicy.reviewStep.actions.edit')}
-        >
-            <Typography variant="body1">
-              {policyConfig.metadata.standard_reference}
-            </Typography>
-        </ReviewSectionCard>
-      )}
 
       {/* Activation Toggle */}
       <ReviewActivationCard

@@ -227,6 +227,12 @@ impl InternalApplicationApprovalDependencies for NativeInitiationControlPlane {
                 .filter(Value::is_object)
                 .collect()
         };
+        // This alternate writer intentionally has no explicit-profile route.
+        if !template.jwt_vc_profile_json.is_empty()
+            || template.credential_payload_format == "vc_jwt_direct_v1"
+        {
+            return Err(InternalApplicationApprovalError::CredentialTemplateUnavailable);
+        }
         let validity = template.validity_rules.unwrap_or_default();
         Ok(Some(InternalApplicationCredentialTemplate {
             organization_id: template.organization_id,
@@ -599,16 +605,54 @@ fn template_from_grpc(
             InitiationDependencyError::Invalid("invalid template wallet configuration".into())
         })?
     };
-    let validity = template.validity_rules.unwrap_or_default();
+    let jwt_vc_profile = marty_jwt_vc_issuance::parse_optional_policy_json(
+        &template.jwt_vc_profile_json,
+    )
+    .map_err(|_| InitiationDependencyError::Invalid("invalid template JWT-VC profile".into()))?;
+    let direct = template.credential_payload_format == "vc_jwt_direct_v1";
+    if direct != jwt_vc_profile.is_some()
+        || (direct
+            && (template.issuance_protocol != "OID4VCI_PRE_AUTH" || !wallet_configs.is_empty()))
+    {
+        return Err(InitiationDependencyError::Invalid(
+            "unsupported explicit JWT-VC template route".into(),
+        ));
+    }
+    let validity = if direct {
+        template.validity_rules.ok_or_else(|| {
+            InitiationDependencyError::Invalid("explicit JWT-VC validity rules are required".into())
+        })?
+    } else {
+        template.validity_rules.unwrap_or_default()
+    };
+    if let Some(policy) = &jwt_vc_profile {
+        // Validate the supplied values before legacy defaults can be applied.
+        marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+            policy.clone(),
+            &template.credential_type,
+            &template.id,
+            template.version,
+            i64::from(validity.default_validity_days) * 86_400,
+            i64::from(validity.not_before_offset_seconds),
+        )
+        .map_err(|_| {
+            InitiationDependencyError::Invalid("invalid explicit JWT-VC validity rules".into())
+        })?;
+    }
     Ok(InitiationTemplate {
         credential_type: non_empty_or(template.credential_type, "org.iso.18013.5.1.mDL"),
         vct: non_empty(template.vct),
         zk_predicate_claims: template.zk_predicate_claims,
         selective_disclosure_claims: template.selective_disclosure_fields,
-        credential_payload_format: non_empty_or(
-            template.credential_payload_format,
-            "w3c_vcdm_v2_sd_jwt",
-        ),
+        credential_payload_format: if direct {
+            marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT.into()
+        } else {
+            non_empty_or(template.credential_payload_format, "w3c_vcdm_v2_sd_jwt")
+        },
+        jwt_vc_profile,
+        template_version: template.version,
+        not_before_offset_seconds: i64::from(validity.not_before_offset_seconds),
+        issuance_protocol: template.issuance_protocol,
         revocation_profile_id: non_empty(template.revocation_profile_id),
         issuer_did: non_empty(template.issuer_did),
         issuer_algorithm: non_empty(template.issuer_algorithm),
@@ -669,6 +713,57 @@ fn positive_or(value: i64, fallback: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_profile_grpc_adapter_requires_actual_bounded_validity() {
+        let template = || TemplateResponse {
+            id: "template-direct".into(),
+            status: "ACTIVE".into(),
+            credential_type: "EmployeeCredential".into(),
+            credential_payload_format: "vc_jwt_direct_v1".into(),
+            issuance_protocol: "OID4VCI_PRE_AUTH".into(),
+            version: 2,
+            jwt_vc_profile_json: serde_json::to_string(
+                &marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+            )
+            .unwrap(),
+            validity_rules: Some(crate::credential_template_proto::ValidityRules {
+                default_validity_days: 2,
+                not_before_offset_seconds: -30,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let valid = template_from_grpc("template-direct", template()).unwrap();
+        assert_eq!(valid.validity_days, 2);
+        assert_eq!(valid.not_before_offset_seconds, -30);
+        for days in [None, Some(0), Some(-1), Some(1096)] {
+            let mut malformed = template();
+            if let Some(days) = days {
+                malformed
+                    .validity_rules
+                    .as_mut()
+                    .unwrap()
+                    .default_validity_days = days;
+            } else {
+                malformed.validity_rules = None;
+            }
+            assert!(template_from_grpc("template-direct", malformed).is_err());
+        }
+        let mut missing_type = template();
+        missing_type.credential_type.clear();
+        assert!(template_from_grpc("template-direct", missing_type).is_err());
+        let mut legacy = template();
+        legacy.credential_payload_format = "jwt_vc_json".into();
+        legacy.jwt_vc_profile_json.clear();
+        legacy.validity_rules = None;
+        assert_eq!(
+            template_from_grpc("template-direct", legacy)
+                .unwrap()
+                .validity_days,
+            DEFAULT_VALIDITY_DAYS
+        );
+    }
 
     #[test]
     fn initiation_template_requires_active_status_and_exact_identity() {

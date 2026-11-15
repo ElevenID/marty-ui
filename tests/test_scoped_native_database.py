@@ -81,15 +81,87 @@ def test_run_refuses_before_any_operation_when_host_not_armed():
         value.run()
 
 
-def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch):
+def test_current_database_target_settings_are_explicit_and_historical_default_stays_pinned():
+    phase = database.NativeDatabasePhase.__new__(database.NativeDatabasePhase)
+    phase.epoch = None
+    old = phase.target_settings()
+    assert old["marty.passport_beta_expected_system_identifier"] == "7698090346923700258"
+    assert old["marty.passport_beta_expected_database_oid"] == "16387"
+    phase.current_database_target = {"systemIdentifier": "7702258360779493410", "databaseOid": "16387"}
+    current = phase.target_settings()
+    assert current["marty.passport_beta_expected_system_identifier"] == "7702258360779493410"
+    assert current["marty.passport_beta_expected_database_oid"] == "16387"
+
+
+def test_current_baseline_requires_reviewed_refs_and_typed_shared_target():
+    refs = {name: {"path": name, "sha256": name[0] * 64}
+            for name in ("catalog", "proof", "job")}
+    inputs = {"databaseBaseline": refs}
+    authority = {"approvedBaselineCatalogSha256": refs["catalog"]["sha256"],
+                 "approvedBaselineProofSha256": refs["proof"]["sha256"],
+                 "approvedBaselineJobSha256": refs["job"]["sha256"]}
+    assert database.reviewed_database_baseline_refs(inputs, authority) == refs
+    with pytest.raises(ValueError, match="D12_REVIEWED_DATABASE_BASELINE_REQUIRED"):
+        database.reviewed_database_baseline_refs(inputs,
+            {**authority, "approvedBaselineJobSha256": "0" * 64})
+    with pytest.raises(ValueError, match="D12_CURRENT_DATABASE_BASELINE_REFS_REQUIRED"):
+        database.reviewed_database_baseline_refs({"databaseBaseline": {"proof": refs["proof"]}}, authority)
+    target = {"database": "marty", "systemIdentifier": "7702258360779493410", "databaseOid": "16387"}
+    assert database.consume_current_database_target(target) == {"systemIdentifier": target["systemIdentifier"],
+                                                             "databaseOid": target["databaseOid"]}
+    with pytest.raises(ValueError, match="D12_BASELINE_DATABASE_TARGET_INVALID"):
+        database.consume_current_database_target({**target, "systemIdentifier": 7702258360779493410})
+
+
+def test_current_d12_authority_rejects_old_build_before_database_phase(tmp_path, monkeypatch):
+    from scoped_native_profiles import D12_PASSPORT_CURRENT
+    authority = tmp_path / "authority.json"
+    authority.write_text(json.dumps({"schema": "marty.d12-current-native-authority/v1",
+        "sourceRevision": D12_PASSPORT_CURRENT.ui_revision,
+        "coreRevision": D12_PASSPORT_CURRENT.core_revision,
+        "scope": "FUNCTIONAL_ONLY", "releaseQualified": False,
+        "recordingQualified": False, "runId": "owned",
+        "approvedDatabaseBeforeSha256": "a" * 64,
+        "approvedSelectionSha256": "b" * 64,
+        "approvedRuntimeBeforeSha256": "c" * 64,
+        "dispatchAuthorized": True}))
+    monkeypatch.setattr(database, "read_ref", lambda *args: authority)
+    inputs = {"runId": "owned", "d12Authority": {"path": str(authority)},
+        "databaseBefore": {"sha256": "a" * 64}, "selection": {"sha256": "b" * 64},
+        "executorSource": {"sha256": "d" * 64}, "metadataModule": {"sha256": "e" * 64},
+        "runtimeBefore": {"sha256": "c" * 64}}
+    context = {"operation_lock_held": lambda: True, "recording_lock_held": lambda: True,
+               "authorization_verified": lambda ref: True}
+    with pytest.raises(ValueError, match="EXACT_D12_CURRENT_AUTHORITY_REQUIRED"):
+        database.D12CurrentDatabasePhase(context, inputs, object())
+    authority_row = json.loads(authority.read_text())
+    authority_row["sourceRevision"] = "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"
+    authority.write_text(json.dumps(authority_row))
+    with pytest.raises(ValueError, match="EXACT_D12_CURRENT_AUTHORITY_REQUIRED"):
+        database.D12CurrentDatabasePhase(context, inputs, object())
+    authority_row["sourceRevision"] = D12_PASSPORT_CURRENT.ui_revision
+    authority_row.update(approvedDatabaseExecutorSha256="d" * 64,
+                         approvedBuildReceiptSha256="e" * 64,
+                         schemaHelperImageId="sha256:" + "f" * 64,
+                         engineId="11111111-1111-4111-8111-111111111111")
+    authority.write_text(json.dumps(authority_row))
+    with pytest.raises(ValueError, match="EXACT_D12_CURRENT_AUTHORITY_REQUIRED"):
+        database.D12CurrentDatabasePhase({**context, "recording_lock_held": lambda: False},
+                                         inputs, object())
+    with pytest.raises(ValueError, match="EXACT_D12_CURRENT_AUTHORITY_REQUIRED"):
+        database.D12CurrentDatabasePhase(context, inputs, object())
+
+
+@pytest.mark.parametrize("current_ten", [False, True])
+def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch, current_ten):
     value, _ = operator()
     value.i = {"runId": "fixture", "selection": {"sha256": "a" * 64}, "executorSource": {"sha256": "b" * 64},
         "migrationSources": {}, "migrationSetSha256": "c" * 64, "databaseBefore": {}, "sqlSources": {}}
     admin = tmp_path / "admin.url"
     admin.write_text("postgres://postgres:SYNTHETIC@postgres/marty")
     value.selection = {"preparedSource": {}, "canonicalBuildReceipt": {}}
-    monkeypatch.setattr(database, "select_canonical_binaries", lambda *a: value.selection)
-    monkeypatch.setattr(database, "validate_compatibility", lambda *a: None)
+    value.select_binaries = lambda *a: value.selection
+    value.check_compatibility = lambda *a: None
     monkeypatch.setattr(database, "read_ref", lambda *a: admin)
     value.i.update(compatibility={"plan": {}, "result": {}}, databaseAdminUrl={})
     value.g.update(dispatch_enabled=True, verify_all22_quiescent=lambda ref: None, build_journal=None)
@@ -105,15 +177,20 @@ def test_runner_order_matches_shared_source_contract(tmp_path, monkeypatch):
         seen.append(step_id)
         return {"path": step_id, "sha256": "d" * 64}, operation()
     value.step = step
+    if current_ten:
+        value.tenant_id = "11111111-1111-4111-8111-111111111111"
     value.run()
     import subprocess
     module = Path(__file__).resolve().parents[1] / "tests/scripts/native-maintenance-metadata.js"
-    expected = json.loads(subprocess.check_output(["node", "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).DATABASE_ORDER.map(x=>x[0])))", str(module)]))
+    expected = json.loads(subprocess.check_output(["node", "-e", "process.stdout.write(JSON.stringify(require(process.argv[1]).currentDatabaseOrder({profile:process.argv[2]}).map(x=>x[0])))", str(module), "d05-membership-current-functional" if current_ten else "historical"]))
     assert seen == expected
     assert seen.index("ACL_FINALIZE") < seen.index("FLOW_VERIFY") < seen.index("ISSUER_VERIFY")
+    if current_ten:
+        assert seen.index("CREDENTIAL_TEMPLATE_MIGRATE") < seen.index("ISSUER_MIGRATE") < seen.index("ACL_FINALIZE")
+        assert seen.index("ACL_FINALIZE") < seen.index("CREDENTIAL_TEMPLATE_VERIFY") < seen.index("ISSUER_VERIFY")
 
 
-@pytest.mark.parametrize("step_id", ["ENABLE_APP_LOGIN", "ISSUER_MIGRATE", "ACL_FINALIZE", "DATABASE_BACKUP"])
+@pytest.mark.parametrize("step_id", ["ENABLE_APP_LOGIN", "ISSUER_MIGRATE", "CREDENTIAL_TEMPLATE_MIGRATE", "CREDENTIAL_TEMPLATE_VERIFY", "ACL_FINALIZE", "DATABASE_BACKUP"])
 def test_late_phase_rechecks_quiescence_before_effect(step_id):
     value, saved = operator()
     def restarted(_ref):

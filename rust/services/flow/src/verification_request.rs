@@ -4,9 +4,9 @@ use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::{
-    build_flow_presentation_request, build_profiled_request_object, FlowInstanceRecord,
-    FlowPresentationRequestError, FlowProviderError, FlowProviderRegistry, FlowRecordError,
-    FlowRequestObjectError, RequestObjectCompatibility, RequestObjectOptions,
+    build_profiled_request_object, presentation_request::load_frozen_flow_presentation_request,
+    FlowInstanceRecord, FlowPresentationRequestError, FlowProviderError, FlowProviderRegistry,
+    FlowRecordError, FlowRequestObjectError, RequestObjectCompatibility, RequestObjectOptions,
     RequestObjectTransport, SignedRequestObject,
 };
 
@@ -73,6 +73,8 @@ pub enum FlowVerificationRequestError {
     WalletNonceRequired,
     #[error("FLOW.VERIFICATION_REQUEST_INVALID_CONTEXT")]
     InvalidContext,
+    #[error("FLOW.VERIFICATION_RESTART_REQUIRED: start a new verification request")]
+    RestartRequired,
 }
 
 pub async fn prepare_verification_request(
@@ -123,18 +125,30 @@ pub async fn prepare_verification_request(
         return Err(FlowVerificationRequestError::WalletNonceRequired);
     }
     let is_siop = context.get("flow_type").and_then(Value::as_str) == Some("siop_v2");
+    if is_siop && context.contains_key(crate::presentation_request::FROZEN_PRESENTATION_REQUEST_KEY)
+    {
+        return Err(FlowVerificationRequestError::InvalidContext);
+    }
     let artifacts = if is_siop {
         None
     } else {
-        let policy_id = context
-            .get("presentation_policy_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or(FlowVerificationRequestError::InvalidContext)?;
-        Some(
-            build_flow_presentation_request(providers, policy_id, &instance.organization_id)
-                .await?,
-        )
+        let frozen =
+            load_frozen_flow_presentation_request(&instance).map_err(|error| match error {
+                FlowPresentationRequestError::FrozenRequestMissing => {
+                    FlowVerificationRequestError::RestartRequired
+                }
+                _ => FlowVerificationRequestError::InvalidContext,
+            })?;
+        if frozen.credential_authority.is_some()
+            && (options.compatibility != RequestObjectCompatibility::Standard
+                || options.transport == VerificationRequestTransport::DigitalCredentialsApi)
+        {
+            return Err(crate::FlowRequestObjectError::UnsupportedProfile(
+                "managed SD-JWT prerequisites require DCQL and a normal client ID",
+            )
+            .into());
+        }
+        Some(frozen.artifacts())
     };
     if let Some(artifacts) = artifacts.as_ref() {
         crate::defined_verification::validate_defined_request(&instance, artifacts)?;

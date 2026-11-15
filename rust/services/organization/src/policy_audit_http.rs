@@ -19,6 +19,7 @@ use crate::{
 };
 
 pub const POLICY_HTTP_ROUTES: &[&str] = &[
+    "GET /internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}",
     "GET /v1/organizations/{organization_id}/policy-sets",
     "POST /v1/organizations/{organization_id}/policy-sets",
     "GET /v1/organizations/{organization_id}/policy-sets/templates",
@@ -38,6 +39,10 @@ pub const AUDIT_HTTP_ROUTES: &[&str] = &[
 
 pub(crate) fn organization_policy_router() -> Router<OrganizationHttpState> {
     Router::new()
+        .route(
+            "/internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}",
+            get(get_internal_policy_set),
+        )
         .route(
             "/v1/organizations/{organization_id}/policy-sets",
             get(list_policy_sets).post(create_policy_set),
@@ -192,6 +197,30 @@ async fn get_policy_set(
     headers: HeaderMap,
 ) -> Result<Response, OrganizationHttpError> {
     authorize_membership(&state, &headers, organization_id).await?;
+    let policy_set = state
+        .application
+        .get_policy_set(organization_id, policy_set_id)
+        .await
+        .map_err(application_error)?;
+    match policy_set {
+        Some(policy_set) => Ok(Json(policy_set_response(&policy_set)).into_response()),
+        None => Ok(policy_not_found()),
+    }
+}
+
+/// The policy owner remains the only reader of its persistence model. Verifier
+/// services receive tenant-bound policy source through authenticated transport.
+async fn get_internal_policy_set(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, policy_set_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Response, OrganizationHttpError> {
+    if !state.service_authenticator.is_configured() {
+        return Err(application_error(
+            OrganizationApplicationError::AuthenticationRequired,
+        ));
+    }
+    crate::http_service::authenticate_service(&state, &headers)?;
     let policy_set = state
         .application
         .get_policy_set(organization_id, policy_set_id)

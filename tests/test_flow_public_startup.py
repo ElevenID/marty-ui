@@ -12,7 +12,7 @@ def test_public_flow_main_gate_is_registered_and_required():
     ).read_text()
     assert f"async fn {NAME}()" in target
     body = target.split(f"async fn {NAME}()", 1)[1].split("\n}", 1)[0]
-    assert "PublishedDatabase::start()" in body
+    assert "PublishedDatabase::start_for_current_issuance()" in body
     assert "OwnedRedis::start()" in body
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()

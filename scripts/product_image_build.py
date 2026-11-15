@@ -28,7 +28,7 @@ def require(condition: bool, message: str) -> None:
 
 
 def recipe(root: Path, *, producer: str, source_sha: str, row: object,
-           product: str = "", version: str = "") -> dict[str, str]:
+           product: str = "", version: str = "", private_forks: bool = False) -> dict[str, str]:
     require(producer in WORKFLOWS, "unknown image producer")
     require(isinstance(source_sha, str) and re.fullmatch(r"[0-9a-f]{40}", source_sha) is not None,
             "invalid image source")
@@ -63,6 +63,12 @@ def recipe(root: Path, *, producer: str, source_sha: str, row: object,
     else:
         cache_from, cache_to, labels = "type=gha,scope=marty-ui-public-services", "", ""
         secrets = "sccache_token=SCCACHE_GHA_RUNTIME_TOKEN\nsccache_url=SCCACHE_GHA_CACHE_URL\nsccache_mode=SCCACHE_GHA_RW_MODE"
+    if private_forks:
+        require(row["role"] in {"services", "migrations"},
+                "Private fork access is only needed by native image roles")
+        cache_from = cache_to = ""
+        secrets = "private_forks_read_token=PRIVATE_FORKS_READ_TOKEN"
+        build_args += "\nPRIVATE_FORKS_ENABLED=true"
     return {"context": row.get("context", "."), "dockerfile": row["dockerfile"],
             "target": row["target"], "platform": row.get("platform", "linux/amd64"),
             "image": row["image"], "build-args": build_args, "labels": labels,
@@ -81,7 +87,7 @@ def trusted_checkout(root: Path, producer: str, source_sha: str, env: dict[str, 
             "image checkout differs from admitted source")
     require(subprocess.run(["git", "diff", "--quiet", "HEAD", "--"], cwd=root, check=False).returncode == 0,
             "image source contains tracked modifications")
-    if producer == "nightly":
+    if producer == "nightly" and env.get("PRIVATE_FORKS_ENABLED") != "true":
         require(env.get("SCCACHE_GHA_RW_MODE") == "READ_ONLY", "nightly compiler cache must be read-only")
 
 
@@ -96,7 +102,8 @@ def main() -> None:
         trusted_checkout(ROOT, args.producer, args.source_sha, dict(os.environ))
         result = recipe(ROOT, producer=args.producer, source_sha=args.source_sha,
                         product=args.product, version=args.version,
-                        row=decode(os.environ["IMAGE_PLAN"].encode()))
+                        row=decode(os.environ["IMAGE_PLAN"].encode()),
+                        private_forks=os.environ.get("PRIVATE_FORKS_ENABLED") == "true")
         # All output values are regenerated from source. Bound the multiline
         # protocol as well, even if a source-owned input later changes.
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:

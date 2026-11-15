@@ -1,5 +1,7 @@
 # Public website verification sessions
 
+Current-main reconciliation keeps this catalog default-off. Historical qualification below does not qualify the reconciled source; repeat the declared service, browser and external-wallet gates before enablement.
+
 This surface runs a server-selected, active OID4VP verification definition. Visitors can select approved scenarios and requirements without organization membership. The visitor page, canonical examples, retention boundary and remote signing have isolated qualification described below. Governed deployment, external wallets and release operations remain enablement gates. No sample verification is simulated by these endpoints.
 
 ## Configuration and admission
@@ -21,7 +23,7 @@ The file has these fields:
 | `catalog.notice` | Consent notice for this catalog revision. |
 | `catalog.scenarios` | At most eight scenarios, each with at most eight finite choices. |
 
-Each scenario has `id`, `label`, and `choices`. Each choice has `id`, `label`, `definition` (`organization_id`, `definition_id`, `version`), `presentation_policy_id`, and `policy_configuration_digest`. The digest is the policy owner's full canonical `sha256:` configuration digest, including rules and referenced authorities. It is not a hash of the wallet query alone. Identifiers and labels are bounded, unknown fields and duplicate public choice IDs within a scenario are rejected, and every definition must belong to the catalog organization.
+Each scenario has `id`, `label`, and `choices`. Each choice has `id`, `label`, `definition` (`organization_id`, `definition_id`, `version`), `presentation_policy_id`, and `policy_configuration_digest`. The digest is the policy owner's typed `PolicyRevision.content_digest`, including the complete saved policy, rules, referenced authorities and lifecycle timestamps. Older catalog digests must be regenerated from that owner revision; there is no legacy digest fallback. It is not a hash of the wallet query alone. Identifiers and labels are bounded, unknown fields and duplicate public choice IDs within a scenario are rejected, and every definition must belong to the catalog organization.
 
 The public catalog includes only labels, public IDs, the notice and a content-derived revision. Any operator edit changes the revision and invalidates prior consent. The selected flow must be the built-in, automatic OID4VP verification graph. Authorization and active policy/template/trust/deployment/signing references are checked through their existing owners. Custom hooks, issuance and approval work cannot be skipped by the public adapter.
 
@@ -136,7 +138,7 @@ The opt-in public_retention_postgres_erases_payloads_preserves_quota_and_replay_
 
 ## SD-JWT wallet request binding
 
-For a workload-supplied DCQL request, the current single-credential SD-JWT lane now checks the authenticated issuer payload vct and authenticated JWT header typ against the emitted request. It also requires the exact response query ID, exactly one token, the token actually passed to the native kernel, matching verifier audience/nonce and a valid bounded query digest. The current kernel cannot establish multi-credential coverage; extra query IDs or tokens are rejected. A different credential format cannot satisfy an SD-JWT request. Neither browser metadata nor the selected policy template establishes authenticated credential type.
+For a workload-supplied DCQL request, the native producer authenticates the exact SD-JWT query and presentation and returns opaque evidence. Flow freezes the owner-produced typed policy revision and exact query at admission; Policy evaluates against that revision, and Flow rejects a different returned revision before preparing nonce consumption or a durable receipt. Public consent admission additionally rejects a revision change between its owner read and canonical start. The obsolete caller-side SD-JWT binder and its raw payload/header projections are retired; browser metadata cannot reconstruct authenticated evidence. Current main's full-record finalization compare-and-swap and durable receipt transaction remain authoritative.
 
 A failed request binding clears authenticated presentation/claim evidence and remains a nonterminal input rejection, allowing a different wallet response to retry. Canonical policy rules still decide eligibility for matching inputs. Public sessions require standard DCQL request retrieval and the stored canonical DCQL transport; they cannot request a legacy compatibility profile or silently use the metadata-free/Presentation Exchange fallback. Authenticated presentation, holder, challenge and audience checks are required for this SD-JWT lane even if a policy relaxes its freshness settings. Legacy standalone verification without canonical transport and other protocol/format paths are not qualified by this change. The full versioned authenticated-evidence producer adapter remains separate work; this bounded check does not promote transport JSON into that authenticated contract.
 

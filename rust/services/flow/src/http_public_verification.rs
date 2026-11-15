@@ -1,7 +1,7 @@
 use std::fmt;
 
 use axum::{
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Path},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{IntoResponse, Response},
@@ -24,6 +24,27 @@ use crate::{
 mod example_http;
 
 pub const PUBLIC_VERIFICATION_SESSION_HEADER: &str = "x-verification-session";
+
+/// Browser anonymity ends at Gateway. Only its authenticated workload may use
+/// the configured public operator authority at Flow's internal HTTP boundary.
+pub(super) struct PublicRequestState(FlowHttpState);
+impl FromRequestParts<FlowHttpState> for PublicRequestState {
+    type Rejection = FlowHttpError;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &FlowHttpState,
+    ) -> Result<Self, Self::Rejection> {
+        if parts.headers.get_all("x-service-token").iter().count() != 1 {
+            return Err(FlowHttpError::new(
+                StatusCode::UNAUTHORIZED,
+                "service_authentication_required",
+                "Gateway service authentication required",
+            ));
+        }
+        crate::http_read::authenticate_gateway_service(state, &parts.headers)?;
+        Ok(Self(state.clone()))
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(try_from = "RawLimits")]
@@ -285,7 +306,7 @@ async fn current_view(
 }
 
 async fn catalog(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
 ) -> Result<Response, FlowHttpError> {
     let options = configured(&state)?;
@@ -294,7 +315,7 @@ async fn catalog(
 }
 
 async fn preview(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
     Json(selection): Json<crate::PublicVerificationPreviewSelection>,
 ) -> Result<Response, FlowHttpError> {
@@ -320,7 +341,7 @@ async fn preview(
 }
 
 async fn launch(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
     Json(payload): Json<Value>,
 ) -> Result<Response, FlowHttpError> {
@@ -436,7 +457,7 @@ async fn launch(
 }
 
 async fn session(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Response, FlowHttpError> {
@@ -453,7 +474,7 @@ async fn session(
 }
 
 async fn cancel(
-    State(state): State<FlowHttpState>,
+    PublicRequestState(state): PublicRequestState,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> Result<Response, FlowHttpError> {

@@ -152,6 +152,8 @@ fn payload() -> CredentialVerifiedPayload {
         verified_claims: serde_json::from_value(json!({"email": "alice@example.com"})).unwrap(),
         presentation_policy_id: "policy-1".into(),
         completed_at: "2026-08-20T12:00:00Z".into(),
+        policy_revision: None,
+        verification_receipt: None,
         evidence_digest: "a".repeat(64),
         decision_digest: String::new(),
     };

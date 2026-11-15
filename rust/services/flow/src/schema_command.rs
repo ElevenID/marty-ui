@@ -34,6 +34,8 @@ pub async fn run(command: SchemaCommand) -> Result<(), Box<dyn Error>> {
 async fn execute(command: SchemaCommand) -> Result<(), Box<dyn Error>> {
     // Same private DATABASE_URL transport as the existing issuer schema CLI.
     // No full Flow configuration or other dependency credentials are loaded.
+    let organization_id =
+        marty_flow::flow_seed_organization_id(std::env::var("MARTY_ORG_ID").ok().as_deref())?;
     let options = std::env::var("DATABASE_URL")?
         .parse::<sqlx::postgres::PgConnectOptions>()?
         .disable_statement_logging();
@@ -43,8 +45,12 @@ async fn execute(command: SchemaCommand) -> Result<(), Box<dyn Error>> {
         .connect_with(options)
         .await?;
     let result = match command {
-        SchemaCommand::Migrate => marty_flow::migrate_flow_schema(&pool).await,
-        SchemaCommand::Verify => marty_flow::validate_flow_schema(&pool).await,
+        SchemaCommand::Migrate => {
+            marty_flow::migrate_flow_schema_for_organization(&pool, organization_id).await
+        }
+        SchemaCommand::Verify => {
+            marty_flow::validate_flow_schema_for_organization(&pool, organization_id).await
+        }
     };
     pool.close().await;
     result?;

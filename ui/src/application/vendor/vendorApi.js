@@ -312,11 +312,11 @@ export async function exportAuditEvents({ organizationId, format, timeRange, cat
 // ── Preview ───────────────────────────────────────────────────────
 
 export async function fetchPreviewFlow({ flowId }) {
-  return get(`${API_URL}/api/v1/identity/flows/${flowId}?preview=true`);
+  return get(`/v1/flows/definitions/${encodeURIComponent(flowId)}`);
 }
 
 export async function fetchPreviewCredentialTemplate({ templateId }) {
-  return get(`${API_URL}/api/credential-templates/${templateId}?preview=true`);
+  return get(`/v1/credential-templates/${encodeURIComponent(templateId)}`);
 }
 
 // ── Wallet Pairing ────────────────────────────────────────────────

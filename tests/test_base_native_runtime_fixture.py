@@ -271,7 +271,7 @@ def runtime_registration(script, source, name):
         for required in (
             "std::env::consts::OS,",
             '"linux"',
-            "PublishedDatabase::start()",
+            "PublishedDatabase::start_for_current_issuance()",
             "assert_constructor_timeout_cleanup(&owned)",
             "start_in_published_namespace(&owned)",
             "base_runtime_container::source_assets()",

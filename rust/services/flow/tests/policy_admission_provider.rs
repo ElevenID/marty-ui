@@ -10,11 +10,12 @@ use marty_flow::{
         },
         CreatePolicyRequest, DeletePolicyResponse, EvaluatePresentationRequest, GetPolicyRequest,
         HealthCheckRequest, HealthCheckResponse, ListPoliciesRequest, ListPoliciesResponse,
-        PolicyEvaluationResponse, PolicyIdRequest, PolicyResponse, UpdatePolicyRequest,
+        PolicyEvaluationResponse, PolicyIdRequest, PolicyResponse, PolicyRevision,
+        UpdatePolicyRequest,
     },
     GrpcPresentationPolicyProvider, PresentationEvaluationRequest, PresentationPolicyProvider,
 };
-use serde_json::json;
+use marty_oid4vp_contract::FrozenPolicyIdentity;
 use tokio::{net::TcpListener, sync::oneshot};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{transport::Server, Request, Response, Status};
@@ -27,6 +28,14 @@ struct State {
 }
 
 struct PolicyServer(Arc<Mutex<State>>);
+fn wire_revision(digest: &str) -> Option<PolicyRevision> {
+    (!digest.is_empty()).then(|| PolicyRevision {
+        organization_id: "org-1".into(),
+        id: "policy-1".into(),
+        version: 1,
+        content_digest: digest.into(),
+    })
+}
 
 #[tonic::async_trait]
 impl PresentationPolicyService for PolicyServer {
@@ -39,7 +48,9 @@ impl PresentationPolicyService for PolicyServer {
             organization_id: "org-1".into(),
             status: "active".into(),
             credential_requirements_json: "[]".into(),
-            configuration_digest: self.0.lock().unwrap().advertised.clone(),
+            version: 1,
+            policy_revision: wire_revision(&self.0.lock().unwrap().advertised),
+
             ..PolicyResponse::default()
         }))
     }
@@ -53,15 +64,18 @@ impl PresentationPolicyService for PolicyServer {
             .context_json
             .contains("_marty_expected_policy_configuration_digest"));
         let mut state = self.0.lock().unwrap();
-        state.received.push(input.expected_configuration_digest);
+        state
+            .received
+            .push(input.expected_policy_revision.unwrap().content_digest);
         Ok(Response::new(PolicyEvaluationResponse {
             policy_id: input.policy_id,
             nonce: input.nonce,
             result: "passed".into(),
             decision: "allow".into(),
+            policy_revision: wire_revision(&state.evaluated),
             verified_claims_json: "{}".into(),
             credential_results_json: "[]".into(),
-            configuration_digest: state.evaluated.clone(),
+
             ..PolicyEvaluationResponse::default()
         }))
     }
@@ -139,9 +153,11 @@ async fn admission_requires_an_owner_digest_and_exact_evaluation_echo_over_grpc(
             .unwrap();
     let admitted = format!("sha256:{}", "a".repeat(64));
     let different = format!("sha256:{}", "b".repeat(64));
-    // The old GetPolicy shape remains usable for standalone consumers, but
-    // cannot admit a version-bound website session.
-    assert!(provider.get_policy("policy-1").await.is_ok());
+    // Missing typed revision cannot admit any canonical verification.
+    assert!(provider.get_policy("policy-1").await.is_err());
+    assert!(provider.configuration_digest("policy-1").await.is_err());
+    state.lock().unwrap().advertised = "malformed".into();
+    assert!(provider.get_policy("policy-1").await.is_err());
     assert!(provider.configuration_digest("policy-1").await.is_err());
     state.lock().unwrap().advertised.clone_from(&admitted);
     assert_eq!(
@@ -153,50 +169,44 @@ async fn admission_requires_an_owner_digest_and_exact_evaluation_echo_over_grpc(
             .get_policy("policy-1")
             .await
             .unwrap()
-            .configuration_digest,
+            .policy_revision
+            .content_digest,
         admitted
     );
     let mut request = PresentationEvaluationRequest {
         policy_id: "policy-1".into(),
+        expected_policy_revision: FrozenPolicyIdentity {
+            id: "policy-1".into(),
+            version: 1,
+            content_digest: admitted.clone(),
+        },
         organization_id: "org-1".into(),
         principal_id: "operator-1".into(),
         presentation: "synthetic.token.signature".into(),
         nonce: "nonce-1".into(),
         audience: "did:web:verifier.example".into(),
         oid4vp_transport: None,
-        context: [(
-            "_marty_expected_policy_configuration_digest".into(),
-            json!(admitted),
-        )]
-        .into(),
+        context: Default::default(),
     };
     assert!(
         provider.evaluate(&request).await.is_err(),
         "missing echo from an older service must fail closed"
     );
     state.lock().unwrap().evaluated = different;
-    assert!(
-        provider.evaluate(&request).await.is_err(),
-        "a different evaluated configuration cannot produce an accepted result"
+    assert_ne!(
+        provider.evaluate(&request).await.unwrap().policy_revision,
+        request.expected_policy_revision,
+        "canonical finalization must reject this returned revision"
     );
     state.lock().unwrap().evaluated.clone_from(&admitted);
     assert_eq!(provider.evaluate(&request).await.unwrap().decision, "allow");
     assert_eq!(state.lock().unwrap().received, vec![admitted.clone(); 3]);
-    request.context.insert(
-        "_marty_expected_policy_configuration_digest".into(),
-        json!(42),
-    );
+    request.expected_policy_revision.content_digest = "malformed".into();
     assert!(provider.evaluate(&request).await.is_err());
     assert_eq!(
         state.lock().unwrap().received.len(),
         3,
-        "malformed precondition must not make an RPC"
-    );
-    request.context.clear();
-    state.lock().unwrap().evaluated.clear();
-    assert!(
-        provider.evaluate(&request).await.is_ok(),
-        "standalone legacy evaluation remains supported"
+        "invalid typed revision must not make an RPC"
     );
     stop.send(()).unwrap();
     task.await.unwrap();

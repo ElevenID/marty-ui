@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use marty_service_contracts::application_approval::NO_MATCHING_FLOW;
 use mmf_security::{
     canonical_event_payload, ApplicationEventAuthError, ApplicationEventAuthenticator,
     ApplicationEventEvidence, ApplicationEventReplayStore, ApplicationEventReplayStoreError,
@@ -82,6 +83,8 @@ pub struct ApplicationApprovalResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_flow_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
 
@@ -154,6 +157,7 @@ pub async fn execute_application_event_plan(
             instance_ids: Vec::new(),
             offers: Vec::new(),
             failed_flow_ids: Vec::new(),
+            reason_code: Some(NO_MATCHING_FLOW.into()),
             reason: Some(reason),
         });
     }
@@ -238,6 +242,7 @@ pub async fn execute_application_event_plan(
         instance_ids,
         offers,
         failed_flow_ids,
+        reason_code: None,
         reason: None,
     })
 }

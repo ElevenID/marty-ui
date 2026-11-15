@@ -14,6 +14,7 @@ from scripts import conformance_stack as stack
 
 PROJECT = "marty-conformance-native-test"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
+ENVOY_IMAGE = "envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd"
 ID = "b" * 64
 REVISION = "c" * 40
 PLAN = {"marty_ui_sha": REVISION, "release_version": "1.2.3"}
@@ -384,6 +385,8 @@ def model(*, local=False, authcrypt=False):
     }
     for name in ("signing-keys", "openbao", "openbao-init"):
         services[name] = custody["services"][name]
+    if not local:
+        services["envoy"] = {"image": ENVOY_IMAGE, "pull_policy": "missing"}
     return {
         "services": services,
         "volumes": custody["volumes"],
@@ -859,9 +862,17 @@ def test_render_gate_is_mandatory_and_cannot_be_disconnected(fault):
             assert_required_compose_gate(workflow)
 
 
-@pytest.mark.parametrize("phase", ["verify", "pull", "probe", "up", "success"])
+@pytest.mark.parametrize("phase", [
+    "verify", "pull", "probe", "envoy-policy", "envoy", "envoy-timeout",
+    "envoy-transient", "envoy-cached", "up", "success",
+])
 def test_released_up_preserves_preflight_order_and_up_exit(monkeypatch, phase):
     events = []
+    pauses = []
+    selected = model()
+    if phase == "envoy-policy":
+        selected["services"]["envoy"]["pull_policy"] = "always"
+    monkeypatch.delenv(stack.LOCAL_NATIVE_FUNCTIONAL_ENV, raising=False)
     monkeypatch.setattr(
         stack.sys,
         "argv",
@@ -882,10 +893,11 @@ def test_released_up_preserves_preflight_order_and_up_exit(monkeypatch, phase):
     )
     monkeypatch.setattr(stack, "configure_project_environment", lambda *_: None)
     monkeypatch.setattr(stack, "configure_oidf_internal_tls_port", lambda: None)
-    monkeypatch.setattr(stack, "rendered_config", lambda *_, **__: model())
+    monkeypatch.setattr(stack, "rendered_config", lambda *_, **__: selected)
     monkeypatch.setattr(stack, "validate_isolation", lambda *_: [])
     monkeypatch.setattr(stack, "assert_ports_available", lambda *_, **__: None)
     monkeypatch.setattr(stack, "wait_for_one_shots", lambda *_: events.append("wait"))
+    monkeypatch.setattr(stack.time, "sleep", pauses.append)
 
     def verify(*_):
         events.append("verify")
@@ -908,7 +920,22 @@ def test_released_up_preserves_preflight_order_and_up_exit(monkeypatch, phase):
         },
     )
 
-    def runner(command, **_):
+    def runner(command, **options):
+        if command[-1] == ENVOY_IMAGE:
+            assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
+            assert options["check"] is False
+            if command[1:3] == ["image", "inspect"]:
+                assert options["timeout"] == 30
+                events.append("envoy-inspect")
+                return SimpleNamespace(returncode=0 if phase == "envoy-cached" else 1)
+            assert command == ["docker", "pull", ENVOY_IMAGE]
+            assert options["timeout"] == 120
+            events.append("envoy-pull")
+            if phase == "envoy-timeout":
+                raise subprocess.TimeoutExpired(command, 120, stderr="synthetic-secret-token")
+            return SimpleNamespace(returncode=23 if phase == "envoy" or (
+                phase == "envoy-transient" and events.count("envoy-pull") == 1
+            ) else 0)
         event = "pull" if command[1] == "pull" else "up"
         events.append(event)
         if event == "up":
@@ -916,21 +943,66 @@ def test_released_up_preserves_preflight_order_and_up_exit(monkeypatch, phase):
         return SimpleNamespace(returncode=23 if phase == event else 0)
 
     monkeypatch.setattr(stack.subprocess, "run", runner)
-    if phase in {"verify", "probe"}:
-        with pytest.raises(ValueError):
+    if phase in {"verify", "probe", "envoy-policy", "envoy", "envoy-timeout"}:
+        with pytest.raises(ValueError) as failure:
             stack.main()
+        assert "synthetic-secret-token" not in str(failure.value)
     else:
-        assert stack.main() == (0 if phase == "success" else 23)
+        assert stack.main() == (23 if phase in {"pull", "up"} else 0)
     assert (
         events
         == {
             "verify": ["verify"],
             "pull": ["verify", "pull"],
             "probe": ["verify", "pull", "probe"],
-            "up": ["verify", "pull", "probe", "up"],
-            "success": ["verify", "pull", "probe", "up", "wait"],
+            "envoy-policy": ["verify", "pull", "probe"],
+            "envoy": ["verify", "pull", "probe", "envoy-inspect", *["envoy-pull"] * 3],
+            "envoy-timeout": ["verify", "pull", "probe", "envoy-inspect", *["envoy-pull"] * 3],
+            "envoy-transient": ["verify", "pull", "probe", "envoy-inspect", *["envoy-pull"] * 2, "up", "wait"],
+            "envoy-cached": ["verify", "pull", "probe", "envoy-inspect", "up", "wait"],
+            "up": ["verify", "pull", "probe", "envoy-inspect", "envoy-pull", "up"],
+            "success": ["verify", "pull", "probe", "envoy-inspect", "envoy-pull", "up", "wait"],
         }[phase]
     )
+    assert pauses == ([1, 2] if phase in {"envoy", "envoy-timeout"}
+                      else [1] if phase == "envoy-transient" else [])
+
+
+def test_local_native_up_remains_cached_only(monkeypatch):
+    events = []
+    monkeypatch.setenv(stack.LOCAL_NATIVE_FUNCTIONAL_ENV, "/synthetic/binding.json")
+    monkeypatch.setattr(stack.sys, "argv", ["conformance_stack.py", "--project", PROJECT, "up"])
+    monkeypatch.setattr(stack, "configure_project_environment", lambda *_: None)
+    monkeypatch.setattr(stack, "configure_oidf_internal_tls_port", lambda: None)
+    monkeypatch.setattr(stack, "compose_command", lambda *_, **__: ["docker", "compose"])
+    monkeypatch.setattr(stack, "rendered_config", lambda *_, **__: model())
+    monkeypatch.setattr(stack, "validate_isolation", lambda *_: [])
+    monkeypatch.setattr(stack, "assert_ports_available", lambda *_, **__: None)
+    monkeypatch.setattr(stack, "validate_local_functional_images_and_mounts",
+                        lambda *_: events.append("cached-validation"))
+    monkeypatch.setattr(stack, "wait_for_one_shots", lambda *_: events.append("wait"))
+    monkeypatch.setattr(stack, "require_pinned_envoy",
+                        lambda *_: pytest.fail("local native mode must not acquire Envoy"))
+
+    def probe(image, project, *, plan, cached_only):
+        assert image == IMAGE and project == PROJECT and plan is None and cached_only
+        events.append("probe")
+
+    monkeypatch.setattr(stack.runpy, "run_path", lambda *_: {
+        "validate_model": native.validate_model,
+        "validate_capabilities": lambda _: events.append("capability"),
+        "CAPABILITY_PATH": native.CAPABILITY_PATH,
+        "probe_image": probe,
+    })
+
+    def runner(command, **_):
+        assert command == ["docker", "compose", "up", "--detach", "--no-build", "--pull", "never"]
+        events.append("up")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(stack.subprocess, "run", runner)
+    assert stack.main() == 0
+    assert events == ["cached-validation", "capability", "probe", "up", "wait"]
 
 
 @pytest.mark.parametrize("phase", ["capability", "build", "probe", "up", "success"])
@@ -938,6 +1010,9 @@ def test_source_up_is_explicit_and_stops_after_failed_phase(
     monkeypatch, tmp_path, phase
 ):
     events = []
+    monkeypatch.delenv(stack.LOCAL_NATIVE_FUNCTIONAL_ENV, raising=False)
+    monkeypatch.setattr(stack, "require_pinned_envoy",
+                        lambda *_: pytest.fail("local build must not acquire released Envoy"))
     source = tmp_path / "contracts"
     source.mkdir()
     document = coverage()

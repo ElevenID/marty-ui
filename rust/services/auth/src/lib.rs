@@ -19,6 +19,7 @@ pub mod http_service;
 pub mod keycloak;
 pub mod migration;
 pub mod oidc;
+pub mod oidc_policy;
 pub mod postgres;
 pub mod provisioning;
 pub mod rate_limit;
@@ -39,7 +40,8 @@ pub use credential_page::*;
 pub use credential_state::*;
 pub use domain::{
     generate_pkce_pair, pkce_s256_challenge, AuthenticatedUser, ImpersonationContext, OidcUserInfo,
-    OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
+    OidcValidatedIdentity, PasskeyEnrollmentBinding, PkcePair, PkceState, Session, SessionSpec,
+    SessionStatus, UserType,
 };
 pub use event_transport::*;
 pub use grpc_service::*;
@@ -48,6 +50,7 @@ pub use http_service::*;
 pub use keycloak::*;
 pub use migration::*;
 pub use oidc::*;
+pub use oidc_policy::*;
 pub use postgres::*;
 pub use provisioning::*;
 pub use rate_limit::*;

@@ -6,6 +6,12 @@ testing and admitted nightly/stable installation. Managed OpenBao remains the
 default foundation. The selected release's admission and qualification rules
 still apply; accepting a settings file does not grant production readiness.
 
+Login-provider selection is separate. For external OIDC with managed OpenBao,
+add `--external-oidc-file ABSOLUTE_PATH` alongside the existing hosting and
+settings inputs; see [external OIDC installation](installer-external-oidc.md).
+That file owns the issuer, client, initial administrator email and optional
+client-secret reference. These values are not application settings.
+
 The installer retains a closed, typed application policy before provisioning.
 It does not import an arbitrary environment file. The canonical origin, generated
 identities, runtime paths, image digests, private ports and key custody remain
@@ -99,6 +105,7 @@ to an empty string. Their treatment is now explicit rather than accidental.
 | `KEYCLOAK_VERIFY_EMAIL=false`, `KEYCLOAK_RESET_PASSWORD_ENABLED=false` | Typed booleans, default `false`; enabling either requires complete Keycloak SMTP. |
 | `KEYCLOAK_SOCIAL_LOGIN_ENABLED=false` | Typed boolean, default `false`; enabling requires both Google credential files. |
 | `KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED=false` | Typed boolean, default `false`; requested enablement configures the Keycloak organization realm feature and browser-flow execution. This is separate from ElevenID organization creation. |
+| `KEYCLOAK_PASSKEYS_ENABLED`, `KEYCLOAK_PASSKEY_RP_ID` | Optional boolean and lowercase RP hostname. Omission preserves policy; enabling requires the explicit RP ID and qualified Keycloak 26.8.x. Password, Google and Open Badge remain available. See [passkey setup](keycloak-passkeys.md). |
 | `KEYCLOAK_SMTP_SSL=false`, `KEYCLOAK_SMTP_STARTTLS=false` | Explicit SMTP transport booleans; defaults are SSL `false`, STARTTLS `true`. Configured mail requires exactly one secure transport. |
 | `ORGANIZATION_CREATION_ENABLED=false` | Typed boolean, default `false`, shared by backend and UI. |
 | `CANVAS_PORTABLE_INTEGRATION_ENABLED=false` | Opt-in with explicit pilot organizations, tool-signing identity, public RS256 JWKS, credential issuer-profile inventory, real API provider and reviewed worker timeout. |
@@ -174,6 +181,11 @@ configuration acceptance is not proof of credentials or remote availability.
 | `COMPLIANCE_PROFILE_RUST_LOG`, `DEPLOYMENT_PROFILE_RUST_LOG`, `REVOCATION_PROFILE_RUST_LOG` | Existing Rust log-filter strings up to 1,024 bytes. |
 | `CANVAS_LEGACY_EVENT_INGEST_ENABLED`, `CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS`, `DIDCOMM_ALLOW_PRIVATE_ENDPOINTS`, `DIDCOMM_ALLOW_PRIVATE_IPS`, `PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED` | Accepted only as `false`; see the explicit unsupported combinations below. |
 
+For a fresh installation, `MARTY_ORG_NAME` reaches the managed identity
+configurator, Organization bootstrap and Auth through the same canonical Compose
+environment. It does not rename an existing organization or change the retained
+organization ID, issuer DID or slug.
+
 ## Credential files and lifecycle custody
 
 Only these names are accepted in `secret_files`. Secret contents never belong
@@ -220,10 +232,12 @@ key/certificate outputs.
 | Remote key custody | OpenBao/AWS key names and versions, TLS material, signing-grant authority, workload identities and private-key prohibitions. Existing foundation-file validation owns an external AWS foundation. |
 | Transport/security contract | `GRPC_INSECURE_ALLOWED=false`, `GATEWAY_OBSERVE_CLIENT_IP=false`, private DIDComm endpoints disabled, no production HTTP-localhost Canvas exception, no portable legacy-event-ingest exception. |
 
-An external OIDC foundation owns its own registration, email and social login.
+An external OIDC provider owns its own registration, email and social login.
 Managed `KEYCLOAK_*` settings, Google login credentials, SMTP credentials and
 the two Keycloak-admin-dependent credential-login choices are rejected for that
-foundation instead of being silently ignored. The existing AWS foundation has
+selection. This applies both to independent `--external-oidc-file` selection
+with managed OpenBao and to the existing external OIDC in an AWS foundation.
+The existing AWS foundation has
 explicit AWS signing-grant authority support, including Canvas and Passport;
 configuration support does not claim that provider's runtime qualification.
 

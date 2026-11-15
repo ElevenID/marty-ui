@@ -1070,6 +1070,10 @@ fn router_with_optional_services(
             .route(
                 "/v1/issuance/credentials/{credential_id}/status",
                 get(get_credential_status),
+            )
+            .route(
+                marty_oid4vp_contract::managed_status::MANAGED_STATUS_OBSERVATION_PATH,
+                post(observe_sd_jwt_status),
             );
     }
     if services.canvas_oauth.is_some() {
@@ -2495,21 +2499,21 @@ async fn apple_wallet_authorization_server_metadata(
 async fn organization_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::Default).await
 }
 
 async fn credential_manager_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::CredentialManager).await
 }
 
 async fn apple_wallet_issuer_metadata(
     State(state): State<IssuanceState>,
     Path(organization_id): Path<String>,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     tenant_issuer_metadata(state, organization_id, IssuerVariant::AppleWallet).await
 }
 
@@ -2517,12 +2521,12 @@ async fn tenant_issuer_metadata(
     state: IssuanceState,
     organization_id: String,
     variant: IssuerVariant,
-) -> Result<Json<CredentialIssuerMetadata>, TenantDiscoveryHttpError> {
+) -> Result<Json<Value>, TenantDiscoveryHttpError> {
     let tenant = state
         .tenant
         .ok_or(TenantDiscoveryError::RepositoryUnavailable)?;
     tenant
-        .metadata(&organization_id, variant)
+        .metadata_with_profiles(&organization_id, variant)
         .await
         .map(Json)
         .map_err(Into::into)
@@ -2811,6 +2815,50 @@ async fn get_credential_status(
         .await
         .map(CredentialStatusHttpResponse::from)
         .map(Json)
+}
+
+/// Direct HTTPS owner surface; ordinary issuance and management routes are absent.
+pub fn managed_status_owner_router(service: CredentialManagementHttpService) -> Router {
+    Router::new()
+        .route(
+            "/internal/issuance/sd-jwt-status/observe",
+            post(
+                |State(service): State<CredentialManagementHttpService>,
+                 headers: HeaderMap,
+                 Json(request): Json<
+                    marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+                >| async move {
+                    observe_sd_jwt_status_with_service(&service, &headers, &request).await
+                },
+            ),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        ))
+        .with_state(service)
+}
+
+async fn observe_sd_jwt_status(
+    State(state): State<IssuanceState>,
+    headers: HeaderMap,
+    Json(request): Json<marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1>,
+) -> Result<Response, CredentialManagementHttpError> {
+    observe_sd_jwt_status_with_service(credential_management(&state)?, &headers, &request).await
+}
+
+async fn observe_sd_jwt_status_with_service(
+    service: &CredentialManagementHttpService,
+    headers: &HeaderMap,
+    request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+) -> Result<Response, CredentialManagementHttpError> {
+    let observation = service
+        .observe_sd_jwt_status(
+            request,
+            header(headers, "X-API-Key"),
+            header(headers, "X-Organization-ID"),
+        )
+        .await?;
+    Ok(([("Cache-Control", "no-store")], Json(observation)).into_response())
 }
 
 fn credential_management(
@@ -3720,6 +3768,10 @@ impl IntoResponse for CredentialIssuanceHttpError {
                 StatusCode::BAD_REQUEST,
                 json!({"error": "invalid_proof", "error_description": description}),
             ),
+            Error::InvalidCredentialRequest(description) => (
+                StatusCode::BAD_REQUEST,
+                json!({"error": "invalid_credential_request", "error_description": description}),
+            ),
             Error::NonceRepositoryUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({
@@ -3744,6 +3796,10 @@ impl IntoResponse for CredentialIssuanceHttpError {
             Error::UnsupportedFormat(value) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"detail": format!("Unsupported credential signing format: {value}")}),
+            ),
+            Error::RetiredOpenBadge => (
+                StatusCode::BAD_REQUEST,
+                json!({"detail": Error::RetiredOpenBadge.to_string()}),
             ),
             Error::IssuerUnavailable(detail)
             | Error::SigningUnavailable(detail)
@@ -3787,6 +3843,23 @@ impl IntoResponse for CredentialManagementHttpError {
             }
         }
         let (status, detail) = match self {
+            Self::Observation(error) => match error {
+                crate::managed_status::ManagedStatusError::InvalidRequest => (
+                    StatusCode::BAD_REQUEST,
+                    "Invalid managed credential status request",
+                ),
+                crate::managed_status::ManagedStatusError::NotFound => {
+                    (StatusCode::NOT_FOUND, "Managed credential was not found")
+                }
+                crate::managed_status::ManagedStatusError::UnsupportedRecord => (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "Stored credential does not support this status observation",
+                ),
+                crate::managed_status::ManagedStatusError::Unavailable => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Managed credential status is temporarily unavailable",
+                ),
+            },
             Self::Security(error) => match error {
                 TransactionReadError::TrustedOrganizationRequired => (
                     StatusCode::FORBIDDEN,
@@ -3804,52 +3877,12 @@ impl IntoResponse for CredentialManagementHttpError {
                     "Credential lifecycle service is temporarily unavailable",
                 ),
             },
-            Self::Lifecycle(error) => match error {
-                CredentialManagementError::NotFound => {
-                    (StatusCode::NOT_FOUND, "Credential not found")
-                }
-                CredentialManagementError::ResourceNotFound => {
-                    (StatusCode::NOT_FOUND, "Resource not found")
-                }
-                CredentialManagementError::AlreadyRevoked => {
-                    (StatusCode::BAD_REQUEST, "Credential already revoked")
-                }
-                CredentialManagementError::CannotSuspendRevoked => {
-                    (StatusCode::BAD_REQUEST, "Cannot suspend revoked credential")
-                }
-                CredentialManagementError::CannotReinstateRevoked => (
-                    StatusCode::BAD_REQUEST,
-                    "Cannot reinstate revoked credential",
-                ),
-                CredentialManagementError::NotSuspended => (
-                    StatusCode::BAD_REQUEST,
-                    "Only suspended credentials can be reinstated",
-                ),
-                CredentialManagementError::ReasonTooLong => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "Credential lifecycle reason exceeds 2000 characters",
-                ),
-                CredentialManagementError::CommentsTooLong => (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "Credential lifecycle comments exceed 4000 characters",
-                ),
-                CredentialManagementError::RepositoryUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Credential repository is temporarily unavailable",
-                ),
-                CredentialManagementError::PublicationUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Revocation service unavailable",
-                ),
-                CredentialManagementError::CanvasRetryUnavailable(_) => (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Canvas lifecycle retry could not be recorded",
-                ),
-                CredentialManagementError::CanvasTextEncoding => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
-                        .into_response()
-                }
-            },
+            Self::Lifecycle(error) => {
+                return crate::management_http::lifecycle_error(
+                    error,
+                    crate::management_http::LifecycleSurface::Transaction,
+                )
+            }
         };
         (status, Json(json!({"detail": detail}))).into_response()
     }

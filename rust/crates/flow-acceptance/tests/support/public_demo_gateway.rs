@@ -28,7 +28,7 @@ use std::{
     },
 };
 
-const WORKLOAD: &str = "public-demo-gateway-workload-credential-0001";
+pub(super) const WORKLOAD: &str = "public-demo-gateway-workload-credential-0001";
 struct NoVisitorAuthority;
 #[async_trait]
 impl GatewayIdentityProvider for NoVisitorAuthority {

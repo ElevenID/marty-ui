@@ -6,6 +6,7 @@ x-runtime-env: &runtime-env
   ENVIRONMENT: production
   GRPC_INSECURE_ALLOWED: "false"
   MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+  MARTY_ORG_NAME: ${MARTY_ORG_NAME:-Marty}
   MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
   MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-marty.localhost}
   PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
@@ -120,7 +121,9 @@ services:
     # volume) before dropping privileges. The socket mode serves heterogeneous
     # workload UIDs; only the named consumers mount this volume. No Redis TCP
     # listener or TLS key file is needed.
-    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # Redis retains signing identities and replay markers as well as cache data.
+    # Refuse new writes at the memory ceiling instead of evicting retained keys.
+    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/redis
@@ -236,6 +239,8 @@ services:
       KEYCLOAK_REMOVE_DEMO_USERS: ${KEYCLOAK_REMOVE_DEMO_USERS:-true}
       KEYCLOAK_REPLACE_UI_ORIGINS: ${KEYCLOAK_REPLACE_UI_ORIGINS:-true}
       KEYCLOAK_USER_REGISTRATION_ENABLED: ${KEYCLOAK_USER_REGISTRATION_ENABLED:-true}
+      KEYCLOAK_PASSKEYS_ENABLED: ${KEYCLOAK_PASSKEYS_ENABLED:-}
+      KEYCLOAK_PASSKEY_RP_ID: ${KEYCLOAK_PASSKEY_RP_ID:-}
       KEYCLOAK_VERIFY_EMAIL: ${KEYCLOAK_VERIFY_EMAIL:-true}
       KEYCLOAK_RESET_PASSWORD_ENABLED: ${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}
       KEYCLOAK_SOCIAL_LOGIN_ENABLED: ${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-}
@@ -520,6 +525,7 @@ services:
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       OIDC_ISSUER_URL: http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:?OIDC_ISSUER_URL_EXTERNAL must be set}
+      KEYCLOAK_PASSKEYS_ENABLED: ${KEYCLOAK_PASSKEYS_ENABLED:-false}
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-marty-ui}
       OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:?OIDC_REDIRECT_URI must be set}
       OIDC_POST_LOGOUT_REDIRECT_URI: ${OIDC_POST_LOGOUT_REDIRECT_URI:?OIDC_POST_LOGOUT_REDIRECT_URI must be set}
@@ -936,6 +942,7 @@ services:
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
@@ -948,6 +955,7 @@ services:
       - notification_applicant_event_token
       - flow_application_event_hmac_key
       - workload_identity_ca_cert
+      - issuance_api_key
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant

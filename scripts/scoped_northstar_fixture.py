@@ -16,6 +16,8 @@ SOURCE = "27a273d8a9f82778a2b19f9981f56d073b2793f6"
 IMAGE = "sha256:366911734ad16cac52553148dd10c1f59bc2e90613ef7fc5c97485a701f0ff2e"
 TARGET = "/run/secrets/northstar_run"
 SERVER_TARGET = "/app/src/server.mjs"
+REPAIRED_MEMORY_BYTES = 256 * 1024 * 1024
+REPAIRED_SWAP_BYTES = 2 * REPAIRED_MEMORY_BYTES
 CODE_SOURCE = "ad286f6122abdc88e79b1d0f02669206dcafea14"
 SERVER_SHA256 = "50bf1bc507bd772f8711e95a21100c993722c33dab7d05bc29fd6363274ec754"
 
@@ -58,10 +60,49 @@ def asset_contract(config, core):
     return server
 
 
+def resource_recreation_successor_cohort(config, previous, baseline, core, transition):
+    """Only the maintained resource receipt validator can supply this typed map."""
+    require(set(transition) == {"kind", "replacements", "uiGlobalIds"}, "RESOURCE_SUCCESSOR_FIELDS_CHANGED")
+    before = {role: core.load(ref)["Id"] for role, ref in previous["retainedContainers"].items()}
+    after = {role: core.load(ref)["Id"] for role, ref in config["retainedContainers"].items()}
+    require(len(before) == len(after) == 22 and set(before) == set(after) and ROLE not in before,
+            "RESOURCE_SUCCESSOR_RETAINED_ROLES_CHANGED")
+    roles = (set(before) - {"ui-prod"}) | {"docs", "nginx-proxy", "openbao", "postgres", "redis", "keycloak", "ui-prod"}
+    rows = transition["replacements"]
+    require(isinstance(rows, list) and len(rows) == len(roles) == 28
+            and all(isinstance(row, dict) and set(row) == {"role", "oldCid", "newCid"} for row in rows)
+            and {row["role"] for row in rows} == roles, "RESOURCE_SUCCESSOR_ROLE_MAP_CHANGED")
+    mappings = {row["role"]: row for row in rows}
+    old = [row["oldCid"] for row in rows]
+    new = [row["newCid"] for row in rows]
+    require(len(set(old)) == len(set(new)) == 28
+            and all(isinstance(cid, str) and re.fullmatch(r"[a-f0-9]{64}", cid) for cid in (*old, *new))
+            and all(row["newCid"] == row["oldCid"] or row["newCid"] not in old for row in rows),
+            "RESOURCE_SUCCESSOR_ID_MAP_CHANGED")
+    require(all(mappings[role]["oldCid"] == before[role] and mappings[role]["newCid"] == after[role]
+                for role in before), "RESOURCE_SUCCESSOR_RETAINED_ROLE_CHANGED")
+    fixed = {"openbao", "postgres", "redis"}
+    require(all((row["oldCid"] == row["newCid"]) == (row["role"] in fixed) for row in rows),
+            "RESOURCE_SUCCESSOR_UNAUTHORIZED_RECREATION")
+    require(len(baseline) == len(set(baseline)) and set(old).issubset(baseline),
+            "RESOURCE_SUCCESSOR_NOT_PREIMAGE")
+    ui_ids = transition["uiGlobalIds"]
+    intermediate = (set(baseline) - set(old)) | {row["oldCid"] if row["role"] == "keycloak" else row["newCid"] for row in rows}
+    require(isinstance(ui_ids, list) and len(ui_ids) == len(set(ui_ids)) == len(baseline)
+            and set(ui_ids) == intermediate, "RESOURCE_SUCCESSOR_INTERMEDIATE_COHORT_CHANGED")
+    actual = core.load(config["globalCohortPreimage"])
+    require(isinstance(actual, list) and len(actual) == len(set(actual)) == len(baseline)
+            and set(actual) == (set(baseline) - set(old)) | set(new),
+            "RESOURCE_SUCCESSOR_COHORT_CHANGED")
+    return actual
+
+
 def retained_role_successor_cohort(config, previous, baseline, core, runtime_successor):
     """A reviewed caller delegates profile validation to the shared native validator."""
     require(callable(runtime_successor), "RECOVERED_OFF_COHORT_SUCCESSOR_REQUIRED")
     transition = runtime_successor(previous["runtimeAuthority"], config["runtimeAuthority"])
+    if transition.get("kind") == "resource-recreation":
+        return resource_recreation_successor_cohort(config, previous, baseline, core, transition)
     require(set(transition) == {"role", "oldCid", "newCid"}
             and transition["role"] == "issuance-native", "RECOVERED_OFF_SUCCESSOR_SCOPE_CHANGED")
     old, new = transition["oldCid"], transition["newCid"]
@@ -124,12 +165,219 @@ def recovered_off_authority(config, core, representations, depth, runtime_succes
                 "pid": 0, "actualExitCode": 0}, "RECOVERED_OFF_NOT_NEVER_STARTED")
     require(len(result["allIds"]) == len(set(result["allIds"]))
             and row["Id"] in result["allIds"], "RECOVERED_OFF_COHORT_CHANGED")
-    if core.load(config["globalCohortPreimage"]) != result["allIds"]:
+    if 'protectedCohort' in result:
+        require(config.get('protectedCohort') == previous.get('protectedCohort'), 'RECOVERED_SCOPE_CHANGED')
+        _validate_scoped_result(config, result, row['Id'], core)
+    elif core.load(config["globalCohortPreimage"]) != result["allIds"]:
         retained_role_successor_cohort(config, previous, result["allIds"], core, runtime_successor)
     return row
 
 
+def _reconciliation_job(core, request_ref, job_ref, source_ref, input_ref, *, success, mode=None):
+    request, job = core.load(request_ref), core.load(job_ref)
+    source, supplied = core.read_ref(source_ref), core.read_ref(input_ref)
+    command = request["command"]
+    require(request["schema"] == "marty.windows-job-request/v1" and job["schema"] == "marty.windows-job-result/v1",
+            "RECONCILIATION_JOB_SCHEMA_CHANGED")
+    arguments = (["--"+mode] if mode else []) + ["--input", str(supplied)]
+    require(len(command) == 3+len(arguments) and command[1] == "-B" and Path(command[2]) == source
+            and command[3:-1] == arguments[:-1] and Path(command[-1]) == supplied
+            and Path(request["receiptFile"]) == core.read_ref(job_ref), "RECONCILIATION_JOB_COMMAND_CHANGED")
+    _terminal_job(request, job, success=success)
+
+
+def _terminal_job(request, job, *, success):
+    require(job["executableSha256"] == request["executableSha256"]
+            and job["jobClosed"] is True and job["terminalActiveProcesses"] == 0
+            and job["processCreatedSuspended"] is True and job["assignedBeforeResume"] is True
+            and job["forcedTermination"] is False and job["hostMarginBreached"] is False
+            and type(request["memoryBytes"]) is int and 16*1024**2 <= request["memoryBytes"] <= 1024**3
+            and job["jobMemoryBytes"] == request["memoryBytes"]
+            and request["hostMarginBytes"] >= 1024**3 and request["processLimit"] == 32
+            and (job["state"] == "COMPLETE" and job["exitCode"] == 0 if success
+                 else job["state"] == "FAILED" and type(job["exitCode"]) is int and job["exitCode"] != 0),
+            "RECONCILIATION_JOB_NOT_TERMINAL")
+
+
+def _reconciliation_stdout(core, terminal_ref):
+    terminal = core.load(terminal_ref)
+    require(terminal["exit"] == 0, "RECONCILIATION_COMMAND_NOT_TERMINAL")
+    core.read_ref(terminal["stderr"])
+    return core.read_ref(terminal["stdout"]).read_text()
+
+
+def recovery_journal(evidence, core, representations, depth=0, runtime_successor=None):
+    """Validate a known post-create failure without changing its FAILED history."""
+    previous, invocation, failure, state = (core.load(evidence[key]) for key in
+        ("rollbackInput", "invocation", "failure", "failureState"))
+    source = evidence["dispatcher"]
+    core.read_ref(source)
+    require(invocation["mode"] == "rollback" and invocation["input"]["sha256"] == evidence["rollbackInput"]["sha256"]
+            and core.load(invocation["input"]) == previous
+            and previous["sourceSha256"] == invocation["sourceSha256"] == source["sha256"]
+            == failure["sourceSha256"] == state["sourceSha256"], "RECONCILIATION_SOURCE_CHANGED")
+    require(previous["rollbackAuthorized"] is True and previous["executeAuthorized"] is False
+            and set(previous["oldCids"]) == {ROLE} and state["oldCids"] == previous["oldCids"]
+            and state["runId"] == previous["runId"]
+            and failure["state"] == "FAILED" and failure["code"] == "RECOVERY_UNRELATED_ID_CHANGED"
+            and state["pending"] is None
+            and state["operations"] == ["rollback-stop-"+ROLE, "rollback-create-"+ROLE],
+            "RECONCILIATION_RECOVERY_NOT_KNOWN")
+    _reconciliation_job(core, evidence["jobRequest"], evidence["job"], source, evidence["rollbackInput"], success=False, mode="rollback")
+    require(set(previous["sourceFiles"]) >= {"scoped_northstar_fixture.py", "repair_beta_release_metadata.py", "scoped_mdoc_config.py"},
+            "RECONCILIATION_HISTORICAL_SOURCE_REQUIRED")
+    for source_ref in previous["sourceFiles"].values():
+        core.read_ref(source_ref)
+    original = stopped_authority(previous, core, representations, depth+1, runtime_successor)
+    forward = core.load(previous["recoveryState"])
+    require(state["recoveryOriginal"] == previous["recoveryState"]
+            and forward["runId"] == previous["runId"] and forward["sourceSha256"] == previous["sourceSha256"]
+            and forward["oldCids"] == previous["oldCids"] and forward["pending"] is None
+            and set(forward["newCids"]) == {ROLE}
+            and "apply-create-"+ROLE in forward["operations"] and "apply-start-"+ROLE in forward["operations"],
+            "RECONCILIATION_FORWARD_CHANGED")
+    created = core.load(evidence["created"])
+    cid, old, removed = created["Id"], previous["oldCids"][ROLE], forward["newCids"][ROLE]
+    require(len({cid,old,removed}) == 3 and all(re.fullmatch(r"[a-f0-9]{64}", value) for value in (cid,old,removed))
+            and state["newCids"] == {ROLE:cid}, "RECONCILIATION_CREATED_ID_CHANGED")
+    plan = core.load(previous["transportInput"])
+    prefix = [plan["executables"]["docker"]["path"], "--context", "desktop-linux"]
+    model = core.read_ref(previous["oldModels"][ROLE])
+    require(core.load(evidence["createIntent"])["argv"] == prefix + ["compose", "-f", str(model),
+            "up", "--no-start", "--no-deps", "--no-build", "--pull", "never", "--force-recreate", ROLE]
+            and state["terminals"]["rollback-create-"+ROLE]["sha256"] == evidence["createTerminal"]["sha256"],
+            "RECONCILIATION_CREATE_CHANGED")
+    _reconciliation_stdout(core, evidence["createTerminal"])
+    _reconciliation_stdout(core, state["terminals"]["rollback-stop-"+ROLE])
+    require(core.load(evidence["stopIntent"])["argv"] == prefix+["stop","--signal","SIGTERM","--timeout","-1",removed]
+            and core.load(evidence["discoveryIntent"])["argv"] == prefix+["ps","-aq","--no-trunc","--filter",
+                "label=com.docker.compose.project=elevenid-beta","--filter","label=com.docker.compose.service="+ROLE]
+            and _reconciliation_stdout(core,evidence["discoveryTerminal"]).split() == [cid],
+            "RECONCILIATION_DISCOVERY_CHANGED")
+    baseline = core.load(previous["preflightResult"])
+    require(baseline["state"] == "D11_REBIND_PREFLIGHT_PASSED" and baseline["sourceSha256"] == previous["sourceSha256"],
+            "RECONCILIATION_PREFLIGHT_CHANGED")
+    expected = (set(baseline["allIds"])-{old})|{cid}
+    before = _reconciliation_stdout(core,evidence["beforeTerminal"]).split()
+    historical = _reconciliation_stdout(core,evidence["afterTerminal"]).split()
+    require(len(baseline["allIds"]) == len(set(baseline["allIds"])) and old in baseline["allIds"]
+            and len(before) == len(set(before)) == len(expected) and set(before) == (expected-{cid})|{removed}
+            and len(historical) == len(set(historical)) and set(historical) != expected,
+            "RECONCILIATION_HISTORICAL_COHORT_CHANGED")
+    return dict(previous=previous, original=original, forward=forward, created=created,
+                expected=expected, historical=historical)
+
+
+def _guard_reconciled(context, row, core, representations):
+    previous, created = context["previous"], context["created"]
+    require(all(row[key] == created[key] for key in ("Id", "Created", "Name", "Image")),
+            "RECONCILIATION_CREATED_IDENTITY_CHANGED")
+    fixture = Path(core.load(previous["oldModels"][ROLE])["secrets"]["northstar_run"]["file"])
+    require(fixture.read_bytes() == core.read_ref(previous["oldFixture"]).read_bytes(), "RECONCILIATION_FIXTURE_CHANGED")
+    candidate_guard(context["original"], row, fixture=fixture, provenance=previous["provenance"]["rollback"],
+                    running=False, host_mounts=representations.host_mounts, daemon_source=representations.daemon_source,
+                    replaced_cid=context["forward"]["newCids"][ROLE])
+    state = row["State"]
+    require(state["Status"] == "created" and state["ExitCode"] == 0 and state["StartedAt"].startswith("0001-"),
+            "RECONCILIATION_NOT_NEVER_STARTED_OFF")
+
+
+def _canonical_python_source(value):
+    """Compare checkout text to Git without changing the raw reference hash."""
+    return value.replace(b"\r\n", b"\n")
+
+
+def reconciliation_source(config, source_ref, core):
+    """Only the maintained Git-bound caller and this exact adapter can produce it."""
+    repo, revision = config["sourceRepository"], config["currentSourceAuthority"]["ui"]
+    core.read_ref(config["sourceFiles"]["runtime-successor.cjs"])
+    def matches(ref, name):
+        return _canonical_python_source(core.read_ref(ref).read_bytes()) == _canonical_python_source(
+            core.git_blob(repo, revision, "scripts/"+name))
+    adapter_ref = config["sourceFiles"]["scoped_northstar_fixture.py"]
+    require(all(matches(config["sourceFiles"][name], name)
+                for name in ("repair_beta_release_metadata.py", "scoped_mdoc_config.py"))
+            and matches(source_ref, "reconcile_northstar_off.py")
+            and core.read_ref(adapter_ref).read_bytes() == Path(__file__).read_bytes()
+            and matches(adapter_ref, "scoped_northstar_fixture.py"),
+            "RECONCILIATION_PRODUCER_NOT_MAINTAINED")
+
+
+def reconciled_off_authority(config, core, representations, depth=0, runtime_successor=None):
+    """Consume a terminal maintained read-only Job, never a private-script PASS."""
+    proof = config["reconciledOffAuthority"]
+    require(set(proof) == {"input", "source", "request", "job", "result"}
+            and "recoveredOffAuthority" not in config and representations is not None and depth < 8,
+            "RECONCILED_OFF_REFS_CHANGED")
+    supplied, result = core.load(proof["input"]), core.load(proof["result"])
+    require(supplied["readOnlyVerificationAuthorized"] is True, "RECONCILIATION_NOT_AUTHORIZED")
+    producer = core.load(supplied["operation"])
+    require(producer["sourceSha256"] == config["sourceSha256"]
+            and producer["sourceFiles"]["runtime-successor.cjs"] == config["sourceFiles"]["runtime-successor.cjs"]
+            and producer["sourceRepository"] == config["sourceRepository"]
+            and producer["currentSourceAuthority"]["ui"] == config["currentSourceAuthority"]["ui"],
+            "RECONCILIATION_VALIDATOR_REVISION_CHANGED")
+    reconciliation_source(producer, proof["source"], core)
+    _reconciliation_job(core, proof["request"], proof["job"], proof["source"], proof["input"], success=True)
+    scoped = 'protectedCohort' in producer
+    require((not scoped or config.get('protectedCohort') == producer['protectedCohort'])
+            and Path(proof["result"]["path"]) == Path(supplied["outputDir"])/"result.json"
+            and result["state"] == ('D11_SCOPED_JOURNAL_RECOVERY_OFF_OBSERVED' if scoped else 'D11_JOURNAL_RECOVERY_OFF_OBSERVED')
+            and result["producerInput"] == proof["input"] and result["producerSource"] == proof["source"]
+            and result["operation"] == supplied["operation"] and result["history"] == supplied["history"]
+            and Path(result["currentContainer"]["path"]).parent == Path(supplied["outputDir"])
+            and result["historicalRecoveryState"] == "FAILED" and result["retained22Verified"] is True
+            and result["runtimeWrites"] is False and result["releaseQualified"] is False
+            and result["recordingQualified"] is False, "RECONCILIATION_RESULT_NOT_BOUND_TO_JOB")
+    context = recovery_journal(core.load(supplied["history"]), core, representations, depth, runtime_successor)
+    previous, cid = context["previous"], context["created"]["Id"]
+    observed, row = core.load(result["currentContainer"]), core.load(config["originalContainer"])
+    require(config["oldCids"] == {ROLE:cid} and config["oldFixture"] == previous["oldFixture"]
+            and core.load(config["oldModels"][ROLE]) == core.load(previous["oldModels"][ROLE])
+            and set(result['historicalOwnedIds' if scoped else 'ownedIds']) == context["expected"]
+            and len(result['historicalOwnedIds' if scoped else 'ownedIds']) == len(context["expected"]),
+            "RECONCILIATION_ORIGINAL_MODEL_CHANGED")
+    _guard_reconciled(context, observed, core, representations)
+    _guard_reconciled(context, row, core, representations)
+    current_ids = core.load(config["globalCohortPreimage"])
+    require(len(current_ids) == len(set(current_ids)) and (scoped or context["expected"].issubset(current_ids))
+            and previous["oldCids"][ROLE] not in current_ids and context["forward"]["newCids"][ROLE] not in current_ids,
+            "RECONCILIATION_CURRENT_COHORT_CHANGED")
+    if scoped:
+        _validate_scoped_result(config, result, cid, core)
+    return row
+
+
+def _validate_scoped_result(config, result, target, core):
+    from northstar_protected_cohort import ProtectedCohort
+    identities={role:{'containerId':core.load(ref)['Id']} for role,ref in config['retainedContainers'].items()}
+    require(len(identities)==22,'SCOPE_EXACT22_REQUIRED')
+    scope=ProtectedCohort(config,core,identities)
+    scope.validate_proof(result['protectedCohort'],target)
+    final=result['protectedCohort']['observations'][-1]
+    require(result['allIds']==final['allIds']
+            and scope.fixed|{target} <= set(core.load(config['globalCohortPreimage'])), 'SCOPE_CURRENT_REQUIRED_ID_MISSING')
+
+
+def validate_scoped_registration_result(config, result, core):
+    """Pure consumer admission for an actual journal-bound one-role startup."""
+    from northstar_protected_cohort import ProtectedCohort
+    require(set(result['newCids'])=={ROLE},'SCOPE_RESULT_ROLE_CHANGED')
+    before,after=config['oldCids'][ROLE],result['newCids'][ROLE]
+    identities={role:{'containerId':core.load(ref)['Id']} for role,ref in config['retainedContainers'].items()}
+    require(len(identities)==22,'SCOPE_EXACT22_REQUIRED')
+    scope=ProtectedCohort(config,core,identities)
+    scope.validate_proof(result['protectedCohort'],after)
+    first,last=result['protectedCohort']['observations'][0],result['protectedCohort']['observations'][-1]
+    require(set(first['protectedIds'])==scope.fixed|{before}
+            and result['allIds']==last['allIds'] and before!=after
+            and before not in last['allIds'] and after not in first['allIds']
+            and scope.fixed|{before} <= set(core.load(config['globalCohortPreimage'])), 'SCOPE_RESULT_TRANSITION_CHANGED')
+
+
 def stopped_authority(config, core, representations=None, depth=0, runtime_successor=None):
+    if "reconciledOffAuthority" in config:
+        return reconciled_off_authority(config, core, representations, depth, runtime_successor)
     if "recoveredOffAuthority" in config:
         return recovered_off_authority(config, core, representations, depth, runtime_successor)
     proof = config["shutdown"]
@@ -212,6 +460,7 @@ def model_delta(before, after, fixture, server):
     expected["services"][ROLE]["init"] = True
     expected["services"][ROLE]["volumes"] = [{"type": "bind", "source": str(server),
         "target": SERVER_TARGET, "read_only": True, "bind": {"create_host_path": False}}]
+    expected["services"][ROLE]["deploy"] = {"resources": {"limits": {"memory": str(REPAIRED_MEMORY_BYTES)}}}
     require(after == expected, "DELTA_OUTSIDE_REPAIRED_ASSET_AND_FIXTURE")
 
 
@@ -246,12 +495,31 @@ def execution_type(core):
             self.models = {ROLE: core.load(config["oldModels"][ROLE])}
             self.changed = {ROLE: core.load(config["newModels"][ROLE])}
             self.server = asset_contract(config, core)
-            self.original = stopped_authority(config, core, representations, runtime_successor=runtime_successor)
+            # A current scoped reconciliation derives its stopped candidate from
+            # the immutable failed journal, not from an invented COMPLETE result.
+            self.reconciliation_context = None
+            if 'protectedCohort' in config and 'reconciliationHistory' in config:
+                require(config.get('reconciliationAuthorized') is True
+                        and all(config.get(k) is False for k in ('preflightAuthorized','executeAuthorized','rollbackAuthorized')),
+                        'JOURNAL_BOOTSTRAP_READONLY_REQUIRED')
+                self.reconciliation_context = recovery_journal(core.load(config['reconciliationHistory']), core,
+                    representations, runtime_successor=runtime_successor)
+                self.original = core.load(config['originalContainer'])
+                context = self.reconciliation_context
+                require(config['oldCids'] == {ROLE:context['created']['Id']}
+                        and config['oldFixture'] == context['previous']['oldFixture']
+                        and core.load(config['oldModels'][ROLE]) == core.load(context['previous']['oldModels'][ROLE]),
+                        'JOURNAL_BOOTSTRAP_MODEL_CHANGED')
+                _guard_reconciled(context, self.original, core, representations)
+            else:
+                self.original = stopped_authority(config, core, representations, runtime_successor=runtime_successor)
             require(type(config.get("functionalStartupAuthorized", False)) is bool,
                     "EXPLICIT_STARTUP_FLAG_REQUIRED")
             require(set(config["retainedContainers"]) == set(identities), "EXACT_RETAINED22_SNAPSHOTS_REQUIRED")
             model_delta(self.models[ROLE], self.changed[ROLE], core.read_ref(config["newFixture"]), self.server)
             self.identities = identities
+            self.reconciliation_representations = representations
+            self.reconciliation_runtime_successor = runtime_successor
             # A never-started recovered OFF row has no assigned NetworkID. Bind
             # assignment to the same model network observed on retained22;
             # retained_twenty separately verifies their exact live generations.
@@ -304,6 +572,31 @@ def execution_type(core):
                               sourceSha256=config["sourceSha256"],oldCids=config["oldCids"],
                               newCids={},operations=[],terminals={},pending=None,
                               releaseQualified=False,recordingQualified=False)
+            self.protected_cohort = None
+            if 'protectedCohort' in config:
+                from northstar_protected_cohort import ProtectedCohort
+                self.protected_cohort = ProtectedCohort(config, core, identities)
+
+        def registration_snapshot(self, stem):
+            if self.protected_cohort is None:
+                return super().registration_snapshot(stem)
+            known = set(self.c['oldCids'].values()) | set(self.state['newCids'].values())
+            # Required target membership is determined from the actual journal
+            # phase. Removed predecessors remain forbidden by cohort comparison.
+            target = set(self.state['newCids'].values()) or set(self.c['oldCids'].values())
+            if stem == 'recovery-all-before':
+                failed = core.load(self.c['recoveryState'])
+                known |= set(failed['newCids'].values())
+                target = set(failed['newCids'].values()) or target
+            return self.protected_cohort.snapshot(self.g, stem, target)
+
+        def assert_registration_cohort(self, actual, expected, error_code, *, phase):
+            if self.protected_cohort is None:
+                return super().assert_registration_cohort(actual, expected, error_code, phase=phase)
+            known = set(self.c['oldCids'].values()) | set(self.state['newCids'].values())
+            if 'recoveryState' in self.c:
+                known |= set(core.load(self.c['recoveryState'])['newCids'].values())
+            self.protected_cohort.assert_cohort(actual, expected, error_code, phase=phase, known_ids=known)
 
         def preimage_running(self, role, prefix):
             require(role == ROLE, "ONE_ROLE_REQUIRED")
@@ -367,7 +660,7 @@ def execution_type(core):
         def baseline(self):
             self.g.engine()
             self.retained_twenty()  # Existing shared method validates all22; none is this external role.
-            ids = set(self.g.observe_lines(["ps", "-aq", "--no-trunc"], "all-before"))
+            ids = self.registration_snapshot('all-before')
             image = self.g.observe(["image", "inspect", IMAGE], "northstar-image")[0]
             require(self.cached_image_matches(IMAGE, image), "NORTHSTAR_IMAGE_SOURCE_CHANGED")
             self.g.IMAGE_IDS[IMAGE], self.g.IMAGE_CONFIG[IMAGE] = IMAGE, image["Config"]
@@ -396,12 +689,19 @@ def execution_type(core):
             exit_code = before[ROLE]["State"]["ExitCode"]
             proof = {"state": "ORIGINAL_CONFIGURATION_OFF137" if exit_code == 137 else "ORIGINAL_CONFIGURATION_OFF",
                      "cid": before[ROLE]["Id"], "actualExitCode": exit_code}
-            return dict(state="D11_REBIND_PREFLIGHT_PASSED",allIds=sorted(ids),
-                        before={ROLE:self.save("northstar-before.json", before[ROLE])},oldExternal=proof)
+            result = dict(state="D11_REBIND_PREFLIGHT_PASSED",allIds=sorted(ids),
+                          before={ROLE:self.save("northstar-before.json", before[ROLE])},oldExternal=proof)
+            if self.protected_cohort is not None:
+                result['protectedCohort'] = self.protected_cohort.proof()
+            return result
 
         def execute(self, preflight):
             require(self.c.get("executeAuthorized") is True, "EXECUTION_NOT_ARMED")
+            if self.protected_cohort is not None:
+                self.protected_cohort.bind_previous(preflight['protectedCohort'])
             result = super().execute(preflight)
+            if self.protected_cohort is not None:
+                result['protectedCohort'] = self.protected_cohort.proof()
             result["state"] = ("D11_REPAIRED_ASSET_RUNNING_NOT_FEATURE_QUALIFIED"
                 if self.c.get("functionalStartupAuthorized") is True else "D11_REPAIRED_ASSET_CREATED_OFF")
             return result
@@ -411,6 +711,59 @@ def execution_type(core):
             row = self.guarded(ROLE, cid, self.models[ROLE], False)
             return {"state": "ORIGINAL_CONFIGURATION_OFF", "cid": cid,
                     "pid": row["State"]["Pid"], "actualExitCode": row["State"]["ExitCode"]}
+
+        def verify_reconciliation_source(self, source):
+            return reconciliation_source(self.c, source, core)
+
+        def observe_recovered_off(self, evidence):
+            """Read-only observation; the eventual consumer also requires its closed Job."""
+            require(self.c.get("reconciliationAuthorized") is True
+                    and all(self.c.get(key) is False for key in
+                            ("preflightAuthorized", "executeAuthorized", "rollbackAuthorized")),
+                    "READONLY_RECONCILIATION_SCOPE_REQUIRED")
+            representations = self.reconciliation_representations
+            context = recovery_journal(evidence, core, representations,
+                                       runtime_successor=self.reconciliation_runtime_successor)
+            command = self.g.command
+            def readonly(arguments, *args, **kwargs):
+                require(arguments[0] in ("info", "ps", "inspect")
+                        or arguments[:2] in (["network", "inspect"], ["image", "inspect"]),
+                        "RECONCILIATION_DOCKER_MUTATION_FORBIDDEN")
+                return command(arguments, *args, **kwargs)
+            self.g.command = readonly
+            try:
+                self.g.engine()
+                self.retained_twenty()
+                ids = self.registration_snapshot('reconciliation-before')
+                cid = context["created"]["Id"]
+                row = self.g.inspect(cid)
+                _guard_reconciled(context, row, core, representations)
+                self.retained_twenty()
+                after = self.registration_snapshot('reconciliation-after')
+                if self.protected_cohort is not None:
+                    require(self.reconciliation_context == context, 'RECONCILIATION_HISTORY_CHANGED')
+                    for observed in (ids, after):
+                        require(context['previous']['oldCids'][ROLE] not in observed
+                                and context['forward']['newCids'][ROLE] not in observed, 'RECONCILIATION_PREDECESSOR_PRESENT')
+                    return dict(state='D11_SCOPED_JOURNAL_RECOVERY_OFF_OBSERVED', historicalRecoveryState='FAILED',
+                        historicalOwnedIds=sorted(context['expected']), allIds=sorted(after),
+                        protectedCohort=self.protected_cohort.proof(),
+                        currentContainer=self.save('reconciled-container.private.json',row),
+                        retained22Verified=True,runtimeWrites=False,releaseQualified=False,recordingQualified=False)
+                for observed in (ids, after):
+                    require(len(observed) == len(set(observed)) and context["expected"].issubset(observed)
+                            and context["previous"]["oldCids"][ROLE] not in observed
+                            and context["forward"]["newCids"][ROLE] not in observed,
+                            "RECONCILIATION_OWNED_COHORT_CHANGED")
+                return dict(state="D11_JOURNAL_RECOVERY_OFF_OBSERVED", historicalRecoveryState="FAILED",
+                            ownedIds=sorted(context["expected"]), allIds=sorted(after),
+                            historicalMissingIds=sorted(context["expected"]-set(context["historical"])),
+                            historicalAdditionalIds=sorted(set(context["historical"])-context["expected"]),
+                            additionalIds=sorted(set(after)-context["expected"]),
+                            currentContainer=self.save("reconciled-container.private.json", row),
+                            retained22Verified=True, runtimeWrites=False, releaseQualified=False, recordingQualified=False)
+            finally:
+                self.g.command = command
 
         def recover(self, failed):
             require(self.c.get("rollbackAuthorized") is True, "ROLLBACK_NOT_ARMED")
@@ -426,10 +779,15 @@ def execution_type(core):
             self.recovery_started_cids = ({failed["newCids"][ROLE]}
                 if ROLE in failed["newCids"] and (start in failed["operations"] or failed.get("pending") == start)
                 else set())
+            if self.protected_cohort is not None:
+                preflight=core.load(self.c['preflightResult'])
+                self.protected_cohort.bind_previous(preflight['protectedCohort'])
             self.retained_twenty()
             result = super().recover(failed)
             self.retained_twenty()
             result["state"] = "D11_NORTHSTAR_ORIGINAL_CONFIGURATION_RESTORED_OFF"
+            if self.protected_cohort is not None:
+                result['protectedCohort'] = self.protected_cohort.proof()
             return result
 
     return NorthstarFixture
@@ -482,6 +840,13 @@ def candidate_guard(original, actual, *, fixture, provenance, running, host_moun
         b["Env"] = a["Env"]
     require(a == b, "CONFIG_CHANGED")
     ah, bh = deepcopy(original["HostConfig"]), deepcopy(actual["HostConfig"])
+    if server is not None:
+        require(ah.get("Memory") in (0, None) and ah.get("MemorySwap") in (0, None)
+                and bh.get("Memory") == REPAIRED_MEMORY_BYTES
+                and bh.get("MemorySwap") == REPAIRED_SWAP_BYTES,
+                "REPAIRED_MEMORY_BOUND_CHANGED")
+        bh["Memory"] = ah.get("Memory")
+        bh["MemorySwap"] = ah.get("MemorySwap")
     for field in ("Binds", "Mounts"):
         ah.pop(field, None);bh.pop(field, None)
     if server is not None:

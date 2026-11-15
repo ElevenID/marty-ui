@@ -166,6 +166,7 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -175,6 +176,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = std::env::args().skip(1);
     match (arguments.next().as_deref(), arguments.next()) {
         (Some("migrate"), None) => {
+            let organization_id =
+                migration::seed_organization_id(std::env::var("MARTY_ORG_ID").ok().as_deref())?;
             let database_url = std::env::var("DATABASE_URL")?;
             let options = database_url
                 .parse::<sqlx::postgres::PgConnectOptions>()?
@@ -183,7 +186,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .max_connections(1)
                 .connect_with(options)
                 .await?;
-            migration::migrate_owned_schema(&pool).await?;
+            migration::migrate_owned_schema(&pool, organization_id).await?;
             pool.close().await;
             return Ok(());
         }
@@ -230,8 +233,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let passport_http = PassportHttpService::from_config(&config, pool.clone())?;
     let schema_mode = SchemaStartupMode::from_env()?;
     let schema_result = match schema_mode {
-        SchemaStartupMode::Migrate => migration::migrate(&pool).await,
-        SchemaStartupMode::Validate => migration::validate(&pool).await,
+        SchemaStartupMode::Migrate => {
+            async {
+                migration::migrate(&pool).await?;
+                migration::migrate_jwt_vc_profile(&pool).await
+            }
+            .await
+        }
+        SchemaStartupMode::Validate => {
+            async {
+                migration::validate(&pool).await?;
+                migration::validate_jwt_vc_profile(&pool).await
+            }
+            .await
+        }
     };
     schema_result.map_err(|error| {
         if error
@@ -843,6 +858,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         grpc_platform,
         config.internal_service_token.as_deref(),
     );
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_issuance_service::http::managed_status_owner_router(
+                    credential_management_http.clone(),
+                ),
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_http_listener_healthy()?;
     let grpc_enabled = config.grpc_enabled;
@@ -918,6 +945,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let grpc_server = IssuanceServiceServer::new(grpc_service);
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
     let mut http_shutdown = listener_shutdown_rx.clone();
+    let authority = marty_service_runtime::https::serve_optional(
+        authority_server,
+        listener_shutdown_rx.clone(),
+    );
     let mut grpc_shutdown = listener_shutdown_rx;
     let http = axum::serve(
         http_listener,
@@ -990,6 +1021,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let servers = async {
         tokio::try_join!(
+            async {
+                authority
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
             async {
                 http.await
                     .map_err(|error| Box::new(error) as Box<dyn Error>)

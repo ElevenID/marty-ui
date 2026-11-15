@@ -60,4 +60,12 @@ describe('validated login return destinations', () => {
       expect(getLoginEntryRedirect(null, destination)).toBe('/');
     }
   });
+  it('rejects every literal ASCII control before URL parsing can normalize it', () => {
+    for (const code of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+      const destination = `/console/${String.fromCharCode(code)}org`;
+      expect(getLoginEntryRedirect({ from: { pathname: destination } }, '/console')).toBe('/console');
+      expect(getLoginEntryRedirect(null, '/console', '?next=' + encodeURIComponent(destination))).toBe('/console');
+    }
+    expect(getLoginEntryRedirect({ from: { pathname: '/console/org', search: '?name=José' } })).toBe('/console/org?name=Jos%C3%A9');
+  });
 });

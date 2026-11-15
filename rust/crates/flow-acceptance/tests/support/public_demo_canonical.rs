@@ -151,7 +151,10 @@ impl PresentationPolicyProvider for Owner {
             id: id.into(),
             organization_id: self.policy.organization_id.to_string(),
             status: "active".into(),
-            configuration_digest: self.configuration_digest(id).await?,
+            policy_revision: pp::policy_revision(&self.policy).unwrap(),
+            holder_binding_required: self.policy.holder_binding.required,
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
             credential_requirements: serde_json::from_value(
                 serde_json::to_value(&self.policy.credential_requirements).unwrap(),
             )
@@ -162,18 +165,16 @@ impl PresentationPolicyProvider for Owner {
         &self,
         input: &PresentationEvaluationRequest,
     ) -> Result<PresentationEvaluationResult, FlowProviderError> {
-        let mut context = input
+        let context = input
             .context
             .clone()
             .into_iter()
             .collect::<serde_json::Map<_, _>>();
-        let expected = context
-            .remove("_marty_expected_policy_configuration_digest")
-            .and_then(|v| v.as_str().map(str::to_owned));
-        // Use the same owner digest that admission preview pinned, not a verdict fixture.
-        let digest = pp::policy_configuration_digest(&self.policy).unwrap();
+        assert_eq!(
+            input.expected_policy_revision,
+            pp::policy_revision(&self.policy).unwrap()
+        );
         let request = pp::EvaluatePresentationRequest {
-            expected_configuration_digest: Some(digest.clone()),
             vp_token: json!(input.presentation),
             trust_profile_id: None,
             nonce: Some(input.nonce.clone()),
@@ -182,9 +183,19 @@ impl PresentationPolicyProvider for Owner {
             oid4vp_transport: input.oid4vp_transport.clone(),
             trusted_internal_context: true,
         };
-        assert_eq!(expected.as_deref(), Some(digest.as_str()));
         let facts = self.verifier.verify(&self.policy, &request).await.unwrap();
-        let result = pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+        let mut result =
+            pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+        // HTTP projection carries tenant identity; the gRPC adapter validates it
+        // separately before constructing the internal FrozenPolicyIdentity.
+        assert_eq!(
+            result["policy_revision"]
+                .as_object_mut()
+                .unwrap()
+                .remove("organization_id"),
+            Some(json!(self.policy.organization_id))
+        );
+
         Ok(serde_json::from_value(result).unwrap())
     }
 }
@@ -208,6 +219,7 @@ impl CredentialTemplateProvider for Templates {
             claims: vec![],
             issuer_did: ISSUER.into(),
             credential_format: "dc+sd-jwt".into(),
+            jwt_vc_profile: None,
             issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             wallet_configurations: vec![],
             issuer_algorithm: Some("ES256".into()),
@@ -497,7 +509,13 @@ pub async fn run(
             "examples":[{"id":"fictional-adult","scenario_id":"age","label":"Fictional adult","description":"Signed fictional age20.",
                 "profile":{"credential_template_id":"demo-age","issuer_did":ISSUER,"vct":VCT},"credential":specimen}]}}).to_string(),index==3).unwrap();
         let app = flow_read_router(FlowHttpState {
-            service_authenticator: None,
+            service_authenticator: Some(Arc::new(
+                mmf_security::ServiceTokenAuthenticator::new(
+                    Some(super::public_gateway::WORKLOAD.into()),
+                    true,
+                )
+                .unwrap(),
+            )),
             repository: repository.clone(),
             providers: Arc::new(FlowProviderRegistry {
                 reference_catalog: Some(Arc::new(NoExternalReferences)),
@@ -1002,6 +1020,7 @@ fn build_policy(org: &str, id: &str, claim: &str) -> pp::PresentationPolicy {
         name: format!("Synthetic demo requires {claim}"),
         description: Some("Fixed fictional age-20 specimen".into()),
         status: pp::PolicyStatus::Active,
+        prerequisite_evidence_profile: None,
         display_metadata: pp::DisplayMetadata {
             title: "Marty age demonstration".into(),
             description: "Synthetic data only".into(),
@@ -1019,6 +1038,7 @@ fn build_policy(org: &str, id: &str, claim: &str) -> pp::PresentationPolicy {
         credential_requirements: vec![pp::CredentialRequirement {
             id: Uuid::from_u128(19),
             credential_template_id: "demo-age".into(),
+            expected_securing_profile: None,
             display_name: "Synthetic age".into(),
             description: None,
             required: true,
