@@ -64,6 +64,11 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
     // Offline event ingestion is an explicitly granted reporting capability;
     // broad legacy keys and audit readers do not gain a new write boundary.
+    // External evidence admission is a separate, purpose-specific grant.
+    // Neither broad legacy scopes nor admin:full may substitute for it.
+    if required_permission == "evidence:submit" {
+        return scopes.contains("evidence:submit");
+    }
     if required_permission == "audit:ingest" {
         return scopes.contains("audit:write");
     }
@@ -295,5 +300,39 @@ mod gateway_actor_tests {
             "revocation-profile:view",
             &["credentials:issue".into()]
         ));
+    }
+}
+
+
+#[cfg(test)]
+mod external_evidence_scope_tests {
+    use super::api_key_allowed;
+
+    #[test]
+    fn external_evidence_submission_requires_the_exact_dedicated_scope() {
+        assert!(api_key_allowed("evidence:submit", &["evidence:submit".into()]));
+        for scope in [
+            "integrations:write",
+            "applications:approve",
+            "credentials:issue",
+            "admin:full",
+            "*",
+            "evidence:*",
+        ] {
+            assert!(
+                !api_key_allowed("evidence:submit", &[scope.into()]),
+                "{scope} must not imply evidence submission"
+            );
+        }
+        assert!(!api_key_allowed("evidence:submit", &[]));
+    }
+
+    #[test]
+    fn dedicated_evidence_scope_does_not_grant_other_capabilities() {
+        let scopes = ["evidence:submit".into()];
+        assert!(!api_key_allowed("integration-connector:edit", &scopes));
+        assert!(!api_key_allowed("application:approve", &scopes));
+        assert!(!api_key_allowed("issuance:initiate", &scopes));
+        assert!(!api_key_allowed("issued-credential:revoke", &scopes));
     }
 }
