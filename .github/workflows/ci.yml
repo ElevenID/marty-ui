@@ -2969,6 +2969,7 @@ jobs:
       needs.changes.outputs.release == 'true' ||
       needs.changes.outputs.verification == 'true' ||
       needs.changes.outputs.rust == 'true'
+    # Exact CPython 3.12.10 has a published Ubuntu 24.04 runtime, not 26.04.
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
