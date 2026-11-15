@@ -671,7 +671,7 @@ def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> Non
     dockerfile = (ROOT / "ui" / "Dockerfile.prod").read_text(encoding="utf-8")
     dockerignore = (ROOT / "ui" / ".dockerignore").read_text(encoding="utf-8")
 
-    assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
+    assert "oven/bun:1.4.4-alpine@sha256:" in dockerfile
     assert "nginx:1.29.1-alpine@sha256:" in dockerfile
     assert dockerfile.index(
         "COPY scripts/patch-prerenderer-ts-deepmerge.cjs"
