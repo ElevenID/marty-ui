@@ -17,12 +17,14 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE = "rust/services/issuance/src/external_observation_postgres.rs"
+AUTHORITY = "rust/services/issuance/src/external_observation_authority_postgres.rs"
+AUTHORITY_TEST = "tests/rust/external-observation-journal/authority_tests.rs"
 TEST = "tests/rust/external-observation-journal/tests.rs"
 WIRE = "rust/services/issuance/src/external_observation_wire.rs"
 WIRE_TEST = "rust/services/issuance/src/external_observation_wire_tests.rs"
 INGRESS = "rust/services/issuance/src/external_observation_ingress.rs"
 INGRESS_TEST = "tests/rust/external-observation-journal/ingress_tests.rs"
-FORMAT_FILES = (STORE, TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+FORMAT_FILES = (STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -77,10 +79,12 @@ def compile_contract(artifacts):
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
+            f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
         modules = [
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
+            ("external_observation_authority_postgres", ROOT / AUTHORITY),
             ("external_observation_wire", ROOT / WIRE),
             ("external_observation_ingress", ROOT / INGRESS),
             ("postgres_contract", fixture),
