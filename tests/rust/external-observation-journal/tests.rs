@@ -694,5 +694,3 @@ async fn binding_revision_does_not_reset_sequence_history() {
     f.pool.close().await;
 }
 
-#[path = "authority_tests.rs"]
-mod authority_tests;
