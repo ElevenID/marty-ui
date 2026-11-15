@@ -3,7 +3,6 @@ use super::Fixture;
 use crate::external_observation_admission::{plan_admission, Admission, Denial, ReplaySnapshot};
 use crate::external_observation_authority_postgres::PostgresObservationAuthority;
 use crate::external_observation_postgres::{ObservationAuthority, ProducerIdentity};
-use sqlx::Row;
 use std::time::Duration;
 use uuid::Uuid;
 
