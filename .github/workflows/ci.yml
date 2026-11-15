@@ -1756,6 +1756,41 @@ jobs:
       - name: Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao
         if: matrix.lane == 'contracts'
         run: python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier
+      - name: Check capacity and Docker context before public browser qualification
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker context show
+          docker info --format '{{json .SecurityOptions}}'
+          available_kib="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 4194304 ]]
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        if: matrix.lane == 'contracts'
+        with:
+          node-version-file: .node-version
+      - name: Install locked public browser dependencies
+        if: matrix.lane == 'contracts'
+        working-directory: ui
+        shell: bash
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+        run: |
+          set -euo pipefail
+          # Keep npm's checked-in dependency resolutions and integrity checks.
+          # The isolated Rust worker deliberately inherits only HOME/PATH, so
+          # install and use Puppeteer's default HOME cache without overrides.
+          unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH
+          npm ci
+          npx --no-install puppeteer browsers install chrome
+          node scripts/public-verification-browser.mjs --check
+      - name: Qualify production-built public UI against isolated Gateway and managed KMS
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH
+          python3 scripts/probe_signing_keys_openbao_policy.py --public-demo-browser
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite
