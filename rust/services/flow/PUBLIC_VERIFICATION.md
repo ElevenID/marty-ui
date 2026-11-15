@@ -110,7 +110,7 @@ Local UI/transport tests and intercepted visual fixtures do not demonstrate live
 
 ## Canonical request preview
 
-The browser posts only catalog_revision, scenario_id and choice_id to the no-store preview route, with the exact configured Origin and no session capability. It resolves one immutable policy reference including the configuration digest returned on the same GetPolicy response. The digest must match the operator-pinned full policy digest. Older owners lacking that field fail closed for previews, while ordinary standalone references retain compatibility.
+The browser posts only catalog_revision, scenario_id and choice_id to the no-store preview route, with the exact configured Origin and no session capability. It resolves one immutable typed policy revision and requirements from the same GetPolicy response. Its content_digest must match the operator-pinned policy digest. Canonical references with missing or malformed typed revisions fail closed, including standalone verification.
 
 Preview returns those public selection IDs, a request_digest and at most16 bounded claim entries: name/display_name, required flag, purpose/description, explicit intent_to_retain when present, and at most four supported canonical constraints per claim. Rule values are bounded scalars or small scalar arrays. Unknown rules, predicates, duplicate claims, nested values and oversized metadata fail closed rather than being omitted or approximated. Private policy/template/issuer IDs and credential values are excluded. An absent retention field is shown as unspecified; it is not a promise of no backend retention or deletion. Retention qualification remains an enablement gate.
 
