@@ -139,6 +139,7 @@ impl ObservationAuthority for FixtureAuthority {
                 organization_id: organization,
                 subject_id: subject,
                 revision: row.get::<i64, _>("application_revision") as u64,
+                expires_at_ms: crate::external_observation_admission::MAX_SAFE_INTEGER,
                 accepts_observations: row.get("application_open"),
             },
         })
