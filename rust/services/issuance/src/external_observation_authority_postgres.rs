@@ -322,8 +322,12 @@ impl ObservationAuthority for PostgresObservationAuthority {
                 resource_scope,
                 claims,
                 max_age_ms: positive_i64(max_age_ms)?,
-                max_clock_skew_ms: u64::try_from(max_clock_skew_ms)
-                    .map_err(|_| JournalError::InvalidStoredState)?,
+                max_clock_skew_ms: {
+                    let value = u64::try_from(max_clock_skew_ms)
+                        .map_err(|_| JournalError::InvalidStoredState)?;
+                    if value > 30_000 { return Err(JournalError::InvalidStoredState); }
+                    value
+                },
             },
             application: ApplicationSnapshot {
                 id: application_id,
