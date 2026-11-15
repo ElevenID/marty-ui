@@ -5,54 +5,15 @@
     "contracts/gateway-routes.json",
     "rust/services/gateway/src/authorization.rs"
   ],
-  "route_count": 72,
+  "route_count": 68,
   "notes": [
     "This is an extraction baseline, not a claim that every operation is approved for the external connector.",
     "Routes with current_tenant_authorization_skipped are Canvas-facing protocol callbacks and must move to the connector edge; they are not connector-to-core authentication exemptions.",
     "Rows with null current_permission or current_api_key_scope require manual route review before connector use.",
-    "Gateway action permissions and API-key scopes must be revalidated against runtime behavior and marty-api-key-policy tests before implementation."
+    "Gateway action permissions and API-key scopes must be revalidated against runtime behavior and marty-api-key-policy tests before implementation.",
+    "The matrix excludes public OB3 credential display routes whose path happens to contain a Canvas badge name; those remain core credential presentation routes."
   ],
   "routes": [
-    {
-      "method": "GET",
-      "path": "/.well-known/vct/credentials/canvas-interoperability-foundations-badge",
-      "current_permission": null,
-      "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": null
-    },
-    {
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge",
-      "current_permission": null,
-      "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": null
-    },
-    {
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge/criteria",
-      "current_permission": null,
-      "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": null
-    },
-    {
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge/image.svg",
-      "current_permission": null,
-      "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
-      "rule_pattern": null
-    },
     {
       "method": "POST",
       "path": "/v1/integrations/canvas/ags/score-events",
@@ -238,9 +199,9 @@
       "path": "/v1/integrations/canvas/lti/experience-sessions/current",
       "current_permission": "integration-connector:view",
       "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": true,
+      "current_tenant_authorization_skipped": false,
       "target_owner": "canvas-integration public protocol edge",
-      "target_auth": "Canvas LTI/OIDC protocol validation at connector; any core request uses API key",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -248,9 +209,9 @@
       "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
       "current_permission": "integration-connector:create",
       "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": true,
+      "current_tenant_authorization_skipped": false,
       "target_owner": "canvas-integration public protocol edge",
-      "target_auth": "Canvas LTI/OIDC protocol validation at connector; any core request uses API key",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -258,9 +219,9 @@
       "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
       "current_permission": "integration-connector:create",
       "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": true,
+      "current_tenant_authorization_skipped": false,
       "target_owner": "canvas-integration public protocol edge",
-      "target_auth": "Canvas LTI/OIDC protocol validation at connector; any core request uses API key",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -278,9 +239,9 @@
       "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
       "current_permission": "integration-connector:create",
       "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": true,
+      "current_tenant_authorization_skipped": false,
       "target_owner": "canvas-integration public protocol edge",
-      "target_auth": "Canvas LTI/OIDC protocol validation at connector; any core request uses API key",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -288,9 +249,9 @@
       "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
       "current_permission": "integration-connector:create",
       "current_api_key_scope": null,
-      "current_tenant_authorization_skipped": true,
+      "current_tenant_authorization_skipped": false,
       "target_owner": "canvas-integration public protocol edge",
-      "target_auth": "Canvas LTI/OIDC protocol validation at connector; any core request uses API key",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -299,8 +260,8 @@
       "current_permission": "integration-connector:view",
       "current_api_key_scope": "integrations:read",
       "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
+      "target_owner": "canvas-integration public protocol edge",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -309,8 +270,8 @@
       "current_permission": "integration-connector:create",
       "current_api_key_scope": "integrations:write",
       "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
+      "target_owner": "canvas-integration public protocol edge",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -319,8 +280,8 @@
       "current_permission": "integration-connector:create",
       "current_api_key_scope": "integrations:write",
       "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
+      "target_owner": "canvas-integration public protocol edge",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
@@ -329,8 +290,8 @@
       "current_permission": "integration-connector:create",
       "current_api_key_scope": "integrations:write",
       "current_tenant_authorization_skipped": false,
-      "target_owner": "Marty Common Gateway",
-      "target_auth": "organization-scoped X-API-Key via Common Gateway",
+      "target_owner": "canvas-integration public protocol edge",
+      "target_auth": "Canvas LTI state/nonce/replay validation at connector; any core request uses API key",
       "rule_pattern": null
     },
     {
