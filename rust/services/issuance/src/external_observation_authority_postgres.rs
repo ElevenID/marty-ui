@@ -111,15 +111,6 @@ fn parse_claim_rules(value: serde_json::Value) -> Result<BTreeMap<String, ClaimR
     Ok(rules)
 }
 
-async fn database_clock_ms(connection: &mut PgConnection) -> Result<u64, JournalError> {
-    let value = sqlx::query_scalar::<_, i64>(
-        "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint",
-    )
-    .fetch_one(connection)
-    .await
-    .map_err(database_error)?;
-    u64::try_from(value).map_err(|_| JournalError::InvalidStoredState)
-}
 
 #[derive(Default)]
 pub struct PostgresObservationAuthority;
@@ -166,13 +157,11 @@ impl ObservationAuthority for PostgresObservationAuthority {
             .try_get::<Option<Vec<String>>, _>("scopes")
             .map_err(database_error)?
             .unwrap_or_default();
-        let now_ms = database_clock_ms(connection).await?;
         let key_expiry_ms = expiry_ms(key_expires_at)?;
         let key_active = key_status == "active"
             && key_enabled
             && key_scope_type == "ORGANIZATION"
-            && deployment_profile_id.is_none()
-            && key_expiry_ms > now_ms;
+            && deployment_profile_id.is_none();
 
         // Lock 2: explicit administrator-approved delegation. A matching
         // organization alone is insufficient; the exact key/source/binding
