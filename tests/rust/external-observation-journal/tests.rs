@@ -172,7 +172,21 @@ impl Fixture {
             .await
             .unwrap();
         assert_eq!(database, "external_observation_contract_test");
-        sqlx::raw_sql("DROP SCHEMA IF EXISTS issuance_service CASCADE; DROP SCHEMA IF EXISTS observation_test CASCADE;")
+        sqlx::raw_sql("DROP SCHEMA IF EXISTS issuance_service CASCADE; DROP SCHEMA IF EXISTS organization_service CASCADE; DROP SCHEMA IF EXISTS observation_test CASCADE;")
+            .execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE SCHEMA organization_service;
+            CREATE TABLE organization_service.organizations (id uuid PRIMARY KEY);
+            CREATE TABLE organization_service.api_keys (
+                id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organization_service.organizations(id),
+                scopes text[] NOT NULL DEFAULT ARRAY[]::text[], scope_type text NOT NULL DEFAULT 'ORGANIZATION',
+                deployment_profile_id uuid, status text NOT NULL DEFAULT 'active', enabled boolean NOT NULL DEFAULT true,
+                expires_at timestamptz, updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+            );
+            CREATE SCHEMA issuance_service;
+            CREATE TABLE issuance_service.applications (
+                id varchar PRIMARY KEY, organization_id varchar NOT NULL, applicant_identifier varchar NOT NULL,
+                status varchar NOT NULL, updated_at timestamptz NOT NULL, expires_at timestamptz NOT NULL
+            );")
             .execute(&pool).await.unwrap();
         sqlx::raw_sql(CANDIDATE_SCHEMA)
             .execute(&pool)
