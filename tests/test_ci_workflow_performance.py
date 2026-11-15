@@ -223,7 +223,12 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
     job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
         "test-release-contracts"
     ]
-    assert job["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == "ubuntu-24.04"
+    setup_python = next(
+        step for step in job["steps"]
+        if step.get("uses", "").startswith("actions/setup-python@")
+    )
+    assert setup_python["with"]["python-version"] == "3.12.10"
     steps = {step.get("name"): step for step in job["steps"]}
     installation = steps["Install released test dependencies"]["run"]
     command = next(
@@ -5271,6 +5276,7 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
 
     python_warmer = warm["jobs"]["python"]
     assert python_warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert python_warmer["runs-on"] == "ubuntu-24.04"
     python_versions = python_warmer["strategy"]["matrix"]["python-version"]
     assert python_versions == ["3.12", "3.12.10"]
     for job_name in python_jobs:
