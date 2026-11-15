@@ -106,6 +106,7 @@ pub mod dependency_probe;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod external_observation_admission;
+pub mod external_observation_postgres;
 mod grpc_client_channel;
 pub mod http;
 pub mod initiation;

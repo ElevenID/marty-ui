@@ -2,14 +2,26 @@ name: External observation admission
 on:
   pull_request:
     paths:
-      - 'rust/services/issuance/src/external_observation_admission*.rs'
+      - 'rust/services/issuance/src/external_observation*.rs'
+      - 'rust/services/issuance/schema/external_observation_journal.sql'
       - 'contracts/external-observation-v1.schema.json'
+      - 'tests/rust/external-observation-journal/**'
+      - 'scripts/run_external_observation_journal_contract.py'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
+      - 'rust/services/issuance/Cargo.toml'
       - '.github/workflows/external-observation-admission.yml'
   push:
     branches: [main]
     paths:
-      - 'rust/services/issuance/src/external_observation_admission*.rs'
+      - 'rust/services/issuance/src/external_observation*.rs'
+      - 'rust/services/issuance/schema/external_observation_journal.sql'
       - 'contracts/external-observation-v1.schema.json'
+      - 'tests/rust/external-observation-journal/**'
+      - 'scripts/run_external_observation_journal_contract.py'
+      - 'rust/Cargo.toml'
+      - 'rust/Cargo.lock'
+      - 'rust/services/issuance/Cargo.toml'
       - '.github/workflows/external-observation-admission.yml'
   workflow_dispatch:
 permissions:
@@ -39,3 +51,36 @@ jobs:
         run: python3 -m json.tool contracts/external-observation-v1.schema.json > /dev/null
       - name: Require checked-in formatting
         run: rustfmt --edition 2021 --check rust/services/issuance/src/external_observation_admission.rs
+  journal:
+    name: Core observation PostgreSQL journal
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: observation-fixture-only
+          POSTGRES_DB: external_observation_contract_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d external_observation_contract_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      EXTERNAL_OBSERVATION_CONTRACT_TEST: synthetic-local-only
+      EXTERNAL_OBSERVATION_TEST_PORT: '5432'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Compile exact journal and run real PostgreSQL contract tests
+        run: python3 scripts/run_external_observation_journal_contract.py --artifacts "$RUNNER_TEMP/journal-evidence"
+      - name: Retain contract test evidence and formatting diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: external-observation-journal-evidence
+          path: ${{ runner.temp }}/journal-evidence/
+          retention-days: 3
+          if-no-files-found: warn
