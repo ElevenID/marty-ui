@@ -53,7 +53,7 @@ Canvas is a provider adapter. It submits evidence through public gateway operati
 
 ## Public Gateway contract
 
-Use existing public endpoints wherever possible. The current gateway route contract contains 53 Canvas-prefixed operations under `/v1/integrations/canvas` plus Canvas Credentials mirror operations. These are not all automatically suitable as a customer connector API: classify each as:
+Use existing public endpoints wherever possible. The extracted route matrix in `contracts/canvas-integration-gateway-boundary.json` records 63 unique Canvas-related method/path pairs: 58 under `/v1/integrations/canvas` and five Canvas Credentials mirror/health operations elsewhere. Seventeen are Canvas-facing protocol callbacks currently hosted by Marty and must move to the connector edge. These are not all automatically suitable as a customer connector API: classify each as:
 - connector-to-core public operation (must require organization API-key authorization);
 - Canvas-to-connector protocol callback (moves to connector; must not remain a core bypass);
 - administrator/browser experience endpoint (must be redesigned as connector UI calling the connector backend, which then calls gateway);
