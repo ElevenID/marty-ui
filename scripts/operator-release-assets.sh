@@ -143,6 +143,18 @@ operator_release_require_remote_allowlist() {
   fi
 }
 
+# Publishers select the full closure before GitHub makes it immutable. Consumer
+# compatibility with historical partial optional uploads does not apply here.
+operator_release_require_publication_assets() {
+  local response="$1" selected="$2" expected
+  [[ "${#OPERATOR_RELEASE_ASSETS[@]}" = 32 ]] || return 1
+  case "$selected" in true|false) ;; *) return 1 ;; esac
+  expected="$(printf '%s\n' "${OPERATOR_RELEASE_ASSETS[@]}")"
+  if [[ "$selected" = true ]]; then expected+=$'\n'"$(hosting_addon_release_assets)"; fi
+  jq -e '.draft == false and .prerelease == false and .immutable == true' "$response" >/dev/null || return 1
+  release_require_core_or_hosting_assets "$response" "$expected" false
+}
+
 operator_release_verify_published_assets() (
   local directory="$1" source_sha="$2" repo="$3" verifier="$4" tag="$5" pinned_gh="$6" file
   cd "$directory" || return 1
