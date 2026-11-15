@@ -223,7 +223,7 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
     job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
         "test-release-contracts"
     ]
-    assert job["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == "ubuntu-24.04"
     steps = {step.get("name"): step for step in job["steps"]}
     installation = steps["Install released test dependencies"]["run"]
     command = next(
