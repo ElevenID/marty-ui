@@ -105,6 +105,7 @@ pub mod credential_renewal;
 pub mod dependency_probe;
 pub mod dpop;
 pub mod ephemeral_postgres;
+pub mod external_observation_admission;
 mod grpc_client_channel;
 pub mod http;
 pub mod initiation;
