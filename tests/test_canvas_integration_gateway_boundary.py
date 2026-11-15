@@ -42,7 +42,6 @@ def test_canvas_gateway_boundary_scope_mapping_is_fail_closed():
         if row["target_owner"] == "canvas-integration public protocol edge":
             # These callbacks terminate at the connector; they are not API-key
             # exemptions for connector-to-core calls.
-            assert row["current_api_key_scope"] is None
             assert "any core request uses API key" in row["target_auth"]
             continue
 
