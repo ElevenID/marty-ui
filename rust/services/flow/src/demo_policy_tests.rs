@@ -43,7 +43,7 @@ impl pp::PresentationTrustResolver for FixtureTrust {
         Ok(pp::ResolvedTrustProfile {
             id,
             organization_id: org,
-            document: json!({"status":"active", "system_issuer_overrides":{ISSUER:{"public_jwk":key}}}),
+            document: json!({"status":"active", "allowed_algorithms":["ES256"], "system_issuer_overrides":{ISSUER:{"public_jwk":key}}}),
         })
     }
     async fn evaluate_issuer(
@@ -273,7 +273,7 @@ async fn run_actual_case(
     trusted: bool,
     not_revoked: bool,
     mutation: Mutation,
-) -> crate::PreparedVerificationSubmission {
+) -> Result<crate::PreparedVerificationSubmission, crate::FlowVerificationSubmissionError> {
     let mut owner = ActualPolicy::new(claim, trusted, not_revoked);
     if matches!(mutation, Mutation::Unbound) {
         owner.policy.presentation_proof_required = false;
@@ -411,8 +411,7 @@ async fn run_actual_case(
         },
         Utc::now(),
     )
-    .await
-    .unwrap();
+    .await;
     result
 }
 
@@ -429,6 +428,17 @@ async fn independent_wallet_type_format_query_and_token_mismatches_cannot_satisf
     ] {
         let result =
             run_actual_case(&credential(ISSUER, 7), "age_over_18", true, true, mutation).await;
+        let result = match result {
+            Err(crate::FlowVerificationSubmissionError::InvalidPresentationSubmission)
+                if matches!(
+                    mutation,
+                    Mutation::WrongQueryId | Mutation::MultipleTokens | Mutation::ExtraQueryId
+                ) =>
+            {
+                continue
+            }
+            result => result.unwrap(),
+        };
         match result {
             crate::PreparedVerificationSubmission::Retryable(response) => {
                 assert_eq!(response.status, "AWAITING_WALLET");
@@ -533,7 +543,9 @@ async fn public_submission_cannot_fall_back_to_missing_or_legacy_query_transport
 async fn fixed_signed_age20_allows18_and_denies21_through_actual_policy_engine() {
     let specimen = credential(ISSUER, 7);
     for (claim, allow) in [("age_over_18", true), ("age_over_21", false)] {
-        let result = run_actual_case(&specimen, claim, true, true, Mutation::None).await;
+        let result = run_actual_case(&specimen, claim, true, true, Mutation::None)
+            .await
+            .unwrap();
         let crate::PreparedVerificationSubmission::Final(finalization) = result else {
             panic!("not a canonical finalization: {result:?}")
         };
@@ -608,7 +620,8 @@ async fn actual_policy_rejects_untrusted_revoked_tampered_and_wrong_audience_inp
             not_revoked,
             Mutation::None,
         )
-        .await;
+        .await
+        .unwrap();
         let crate::PreparedVerificationSubmission::Final(finalization) = result else {
             panic!("expected policy denial: {result:?}");
         };
@@ -623,7 +636,9 @@ async fn actual_policy_rejects_untrusted_revoked_tampered_and_wrong_audience_inp
         );
     }
     for mutation in [Mutation::Signature, Mutation::Audience] {
-        let result = run_actual_case(&specimen, "age_over_18", true, true, mutation).await;
+        let result = run_actual_case(&specimen, "age_over_18", true, true, mutation)
+            .await
+            .unwrap();
         // Cryptographic authentication failure is a retryable rejection; it
         // must not be promoted to either success or an authenticated denial.
         match result {

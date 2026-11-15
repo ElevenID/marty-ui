@@ -93,7 +93,7 @@ impl pp::PresentationTrustResolver for Trust {
         Ok(pp::ResolvedTrustProfile {
             id,
             organization_id: org,
-            document: json!({"status":"active","system_issuer_overrides":{ISSUER:{"public_jwk":self.key}}}),
+            document: json!({"status":"active","allowed_algorithms":["ES256"],"system_issuer_overrides":{ISSUER:{"public_jwk":self.key}}}),
         })
     }
     async fn evaluate_issuer(
