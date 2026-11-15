@@ -37,7 +37,10 @@ fn negative_and_null_claims_decode_without_granting_trust() {
     let observation = decode_submission(&headers(), &bytes(&valid())).unwrap();
     assert_eq!(observation.binding_id, "binding-one");
     assert_eq!(observation.sequence, 1);
-    assert!(matches!(observation.claims["completed"], Scalar::Boolean(false)));
+    assert!(matches!(
+        observation.claims["completed"],
+        Scalar::Boolean(false)
+    ));
     assert!(matches!(observation.claims["score"], Scalar::Null));
 }
 
@@ -65,7 +68,12 @@ fn every_top_level_field_rejects_duplicates_in_original_bytes() {
     let value = valid();
     let original = serde_json::to_string(&value).unwrap();
     for (field, content) in value.as_object().unwrap() {
-        let duplicate = format!("{{{}:{},{}", serde_json::to_string(field).unwrap(), content, &original[1..]);
+        let duplicate = format!(
+            "{{{}:{},{}",
+            serde_json::to_string(field).unwrap(),
+            content,
+            &original[1..]
+        );
         rejected(duplicate.as_bytes(), WireError::InvalidEnvelope);
     }
 }
@@ -101,9 +109,25 @@ fn conflicting_identical_and_null_duplicate_claims_are_all_invalid() {
 
 #[test]
 fn caller_selected_authority_and_other_unknown_envelope_fields_fail() {
-    for field in ["organization_id", "subject_id", "source_id", "api_key_id", "scopes",
-        "provider", "application_id", "fact_type", "resource_scope", "verification", "policy_allowed",
-        "approved", "issuer_key", "signing_key", "__proto__", "schema_version", "other"] {
+    for field in [
+        "organization_id",
+        "subject_id",
+        "source_id",
+        "api_key_id",
+        "scopes",
+        "provider",
+        "application_id",
+        "fact_type",
+        "resource_scope",
+        "verification",
+        "policy_allowed",
+        "approved",
+        "issuer_key",
+        "signing_key",
+        "__proto__",
+        "schema_version",
+        "other",
+    ] {
         let mut value = valid();
         value[field] = json!("synthetic-untrusted");
         rejected(&bytes(&value), WireError::InvalidEnvelope);
@@ -113,7 +137,16 @@ fn caller_selected_authority_and_other_unknown_envelope_fields_fail() {
 #[test]
 fn ids_are_exact_bounded_ascii_and_not_paths() {
     for field in ["binding_id", "observation_id"] {
-        for id in ["", "..", "../foreign", "foreign/path", "%2f", "with space", "é", "line\nbreak"] {
+        for id in [
+            "",
+            "..",
+            "../foreign",
+            "foreign/path",
+            "%2f",
+            "with space",
+            "é",
+            "line\nbreak",
+        ] {
             let mut value = valid();
             value[field] = json!(id);
             rejected(&bytes(&value), WireError::InvalidEnvelope);
@@ -131,11 +164,28 @@ fn ids_are_exact_bounded_ascii_and_not_paths() {
 
 #[test]
 fn identity_revision_sequence_and_times_require_safe_positive_integer_tokens() {
-    for field in ["binding_revision", "sequence", "observed_at_ms", "effective_at_ms"] {
-        for token in ["0", "-1", "1.0", "1e0", "true", "null", "\"1\"", "9007199254740992", "18446744073709551616"] {
+    for field in [
+        "binding_revision",
+        "sequence",
+        "observed_at_ms",
+        "effective_at_ms",
+    ] {
+        for token in [
+            "0",
+            "-1",
+            "1.0",
+            "1e0",
+            "true",
+            "null",
+            "\"1\"",
+            "9007199254740992",
+            "18446744073709551616",
+        ] {
             let mut value = valid();
             value[field] = json!("REPLACE-TOKEN");
-            let body = serde_json::to_string(&value).unwrap().replace("\"REPLACE-TOKEN\"", token);
+            let body = serde_json::to_string(&value)
+                .unwrap()
+                .replace("\"REPLACE-TOKEN\"", token);
             rejected(body.as_bytes(), WireError::InvalidEnvelope);
         }
     }
@@ -157,7 +207,14 @@ fn effective_time_cannot_exceed_observation_time() {
 
 #[test]
 fn claims_are_a_nonempty_bounded_object_with_valid_names() {
-    for claims in [json!({}), Value::Null, json!([]), json!([false]), json!("false"), json!(true)] {
+    for claims in [
+        json!({}),
+        Value::Null,
+        json!([]),
+        json!([false]),
+        json!("false"),
+        json!(true),
+    ] {
         let mut value = valid();
         value["claims"] = claims;
         rejected(&bytes(&value), WireError::InvalidEnvelope);
@@ -170,7 +227,11 @@ fn claims_are_a_nonempty_bounded_object_with_valid_names() {
     let mut value = valid();
     value["claims"] = json!({"x".repeat(129): false});
     rejected(&bytes(&value), WireError::InvalidEnvelope);
-    value["claims"] = Value::Object((0..32).map(|i| (format!("claim_{i}"), json!(false))).collect());
+    value["claims"] = Value::Object(
+        (0..32)
+            .map(|i| (format!("claim_{i}"), json!(false)))
+            .collect(),
+    );
     assert!(decode_submission(&headers(), &bytes(&value)).is_ok());
     value["claims"]["one_too_many"] = json!(false);
     rejected(&bytes(&value), WireError::InvalidEnvelope);
@@ -178,34 +239,69 @@ fn claims_are_a_nonempty_bounded_object_with_valid_names() {
 
 #[test]
 fn nested_claims_and_recursive_payloads_fail_without_becoming_observations() {
-    for claim in [json!({"verified": true}), json!([1]), json!([]), json!({}),
-        json!({"$serde_json::private::Number": "95"}), json!({"$serde_json::private::RawValue": "95"})] {
+    for claim in [
+        json!({"verified": true}),
+        json!([1]),
+        json!([]),
+        json!({}),
+        json!({"$serde_json::private::Number": "95"}),
+        json!({"$serde_json::private::RawValue": "95"}),
+    ] {
         let mut value = valid();
         value["claims"]["score"] = claim;
         rejected(&bytes(&value), WireError::InvalidEnvelope);
     }
-    let body = serde_json::to_string(&valid()).unwrap().replace("\"score\":null",
-        &format!("\"score\":{}0{}", "[".repeat(500), "]".repeat(500)));
+    let body = serde_json::to_string(&valid()).unwrap().replace(
+        "\"score\":null",
+        &format!("\"score\":{}0{}", "[".repeat(500), "]".repeat(500)),
+    );
     rejected(body.as_bytes(), WireError::InvalidEnvelope);
 }
 
 #[test]
 fn claim_numbers_are_finite_and_bounded_before_conversion() {
-    for token in ["9007199254740992", "9007199254740993", "-9007199254740993",
-        "1e309", "1e100", "1e-999", "NaN", "Infinity", "-Infinity"] {
-        let body = serde_json::to_string(&valid()).unwrap().replace("\"score\":null", &format!("\"score\":{token}"));
+    for token in [
+        "9007199254740992",
+        "9007199254740993",
+        "-9007199254740993",
+        "1e309",
+        "1e100",
+        "1e-999",
+        "NaN",
+        "Infinity",
+        "-Infinity",
+    ] {
+        let body = serde_json::to_string(&valid())
+            .unwrap()
+            .replace("\"score\":null", &format!("\"score\":{token}"));
         rejected(body.as_bytes(), WireError::InvalidEnvelope);
     }
-    for token in ["9007199254740991", "-9007199254740991", "0", "-0.0", "1.25e2", "0.0e-999"] {
-        let body = serde_json::to_string(&valid()).unwrap().replace("\"score\":null", &format!("\"score\":{token}"));
+    for token in [
+        "9007199254740991",
+        "-9007199254740991",
+        "0",
+        "-0.0",
+        "1.25e2",
+        "0.0e-999",
+    ] {
+        let body = serde_json::to_string(&valid())
+            .unwrap()
+            .replace("\"score\":null", &format!("\"score\":{token}"));
         assert!(decode_submission(&headers(), body.as_bytes()).is_ok());
     }
 }
 
 #[test]
 fn text_limits_count_utf8_bytes_and_reject_controls() {
-    for text in [String::new(), "x".repeat(513), "é".repeat(257), "private\ntext".into(),
-        "private\u{007f}text".into(), "private\u{0085}text".into(), "private\0text".into()] {
+    for text in [
+        String::new(),
+        "x".repeat(513),
+        "é".repeat(257),
+        "private\ntext".into(),
+        "private\u{007f}text".into(),
+        "private\u{0085}text".into(),
+        "private\0text".into(),
+    ] {
         let mut value = valid();
         value["claims"]["name"] = json!(text);
         rejected(&bytes(&value), WireError::InvalidEnvelope);
@@ -220,9 +316,19 @@ fn text_limits_count_utf8_bytes_and_reject_controls() {
 #[test]
 fn invalid_utf8_unpaired_surrogates_and_trailing_json_fail() {
     let original = serde_json::to_string(&valid()).unwrap();
-    for body in [format!("{original}{{}}"), format!("{original} true"), format!("{original}\0"),
-        format!("\u{feff}{original}"), "[]".into(), "null".into(), "true".into(), String::new(),
-        " ".into(), original.replace("binding-one", r#"\uD800"#), original[..original.len() - 1].into()] {
+    for body in [
+        format!("{original}{{}}"),
+        format!("{original} true"),
+        format!("{original}\0"),
+        format!("\u{feff}{original}"),
+        "[]".into(),
+        "null".into(),
+        "true".into(),
+        String::new(),
+        " ".into(),
+        original.replace("binding-one", r#"\uD800"#),
+        original[..original.len() - 1].into(),
+    ] {
         rejected(body.as_bytes(), WireError::InvalidEnvelope);
     }
     let mut body = bytes(&valid());
@@ -243,44 +349,83 @@ fn body_limit_is_enforced_on_original_bytes_including_whitespace() {
 #[test]
 fn idempotency_key_is_required_unique_and_exact() {
     let body = bytes(&valid());
-    for key in ["", "other", " observation-one", "observation-one ", "observation-one,observation-one"] {
+    for key in [
+        "",
+        "other",
+        " observation-one",
+        "observation-one ",
+        "observation-one,observation-one",
+    ] {
         let mut h = headers();
         h.insert("idempotency-key", HeaderValue::from_str(key).unwrap());
-        assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidIdempotencyKey));
+        assert_eq!(
+            decode_submission(&h, &body).err(),
+            Some(WireError::InvalidIdempotencyKey)
+        );
     }
     let mut h = headers();
     h.remove("idempotency-key");
-    assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidIdempotencyKey));
+    assert_eq!(
+        decode_submission(&h, &body).err(),
+        Some(WireError::InvalidIdempotencyKey)
+    );
     h.insert("idempotency-key", HeaderValue::from_static(ID));
     h.append("idempotency-key", HeaderValue::from_static(ID));
-    assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidHeaders));
+    assert_eq!(
+        decode_submission(&h, &body).err(),
+        Some(WireError::InvalidHeaders)
+    );
 }
 
 #[test]
 fn only_json_and_unambiguous_utf8_content_types_are_supported() {
     let body = bytes(&valid());
-    for accepted in ["application/json", "Application/JSON", "application/json; charset=utf-8",
-        "application/json; Charset=\"UTF-8\""] {
+    for accepted in [
+        "application/json",
+        "Application/JSON",
+        "application/json; charset=utf-8",
+        "application/json; Charset=\"UTF-8\"",
+    ] {
         let mut h = headers();
         h.insert("content-type", HeaderValue::from_str(accepted).unwrap());
         assert!(decode_submission(&h, &body).is_ok());
     }
-    for rejected in ["", "text/json", "text/plain", "application/problem+json", "application/json,application/json",
-        "application/json; charset=latin1", "application/json;", "application/json; charset=utf-8; charset=utf-8",
-        "application/json; boundary=synthetic", "application/json; charset=\"utf-8"] {
+    for rejected in [
+        "",
+        "text/json",
+        "text/plain",
+        "application/problem+json",
+        "application/json,application/json",
+        "application/json; charset=latin1",
+        "application/json;",
+        "application/json; charset=utf-8; charset=utf-8",
+        "application/json; boundary=synthetic",
+        "application/json; charset=\"utf-8",
+    ] {
         let mut h = headers();
         h.insert("content-type", HeaderValue::from_str(rejected).unwrap());
-        assert_eq!(decode_submission(&h, &body).err(), Some(WireError::UnsupportedMediaType));
+        assert_eq!(
+            decode_submission(&h, &body).err(),
+            Some(WireError::UnsupportedMediaType)
+        );
     }
     let mut h = headers();
     h.remove("content-type");
-    assert_eq!(decode_submission(&h, &body).err(), Some(WireError::UnsupportedMediaType));
+    assert_eq!(
+        decode_submission(&h, &body).err(),
+        Some(WireError::UnsupportedMediaType)
+    );
 }
 
 #[test]
 fn duplicate_framing_and_encoding_headers_are_not_coalesced() {
     let body = bytes(&valid());
-    for name in ["content-type", "content-length", "content-encoding", "transfer-encoding"] {
+    for name in [
+        "content-type",
+        "content-length",
+        "content-encoding",
+        "transfer-encoding",
+    ] {
         let mut h = headers();
         h.remove(name);
         let value = match name {
@@ -291,7 +436,10 @@ fn duplicate_framing_and_encoding_headers_are_not_coalesced() {
         };
         h.append(name, HeaderValue::from_str(&value).unwrap());
         h.append(name, HeaderValue::from_str(&value).unwrap());
-        assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidHeaders));
+        assert_eq!(
+            decode_submission(&h, &body).err(),
+            Some(WireError::InvalidHeaders)
+        );
     }
 }
 
@@ -301,23 +449,45 @@ fn encoded_bodies_and_ambiguous_message_framing_fail_closed() {
     for encoding in ["gzip", "br", "identity,identity", ""] {
         let mut h = headers();
         h.insert("content-encoding", HeaderValue::from_str(encoding).unwrap());
-        assert_eq!(decode_submission(&h, &body).err(), Some(WireError::UnsupportedEncoding));
+        assert_eq!(
+            decode_submission(&h, &body).err(),
+            Some(WireError::UnsupportedEncoding)
+        );
     }
-    for length in ["0".to_string(), (body.len() + 1).to_string(), "+1".into(), "1,1".into(),
-        "-1".into(), "184467440737095516160".into(), " 1".into()] {
+    for length in [
+        "0".to_string(),
+        (body.len() + 1).to_string(),
+        "+1".into(),
+        "1,1".into(),
+        "-1".into(),
+        "184467440737095516160".into(),
+        " 1".into(),
+    ] {
         let mut h = headers();
         h.insert("content-length", HeaderValue::from_str(&length).unwrap());
-        assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidHeaders));
+        assert_eq!(
+            decode_submission(&h, &body).err(),
+            Some(WireError::InvalidHeaders)
+        );
     }
     let mut h = headers();
-    h.insert("content-length", HeaderValue::from_str(&body.len().to_string()).unwrap());
+    h.insert(
+        "content-length",
+        HeaderValue::from_str(&body.len().to_string()).unwrap(),
+    );
     assert!(decode_submission(&h, &body).is_ok());
     h.insert("transfer-encoding", HeaderValue::from_static("chunked"));
-    assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidHeaders));
+    assert_eq!(
+        decode_submission(&h, &body).err(),
+        Some(WireError::InvalidHeaders)
+    );
     h.remove("content-length");
     assert!(decode_submission(&h, &body).is_ok());
     h.insert("trailer", HeaderValue::from_static("Idempotency-Key"));
-    assert_eq!(decode_submission(&h, &body).err(), Some(WireError::InvalidHeaders));
+    assert_eq!(
+        decode_submission(&h, &body).err(),
+        Some(WireError::InvalidHeaders)
+    );
 }
 
 #[test]

@@ -71,8 +71,8 @@ fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>,
 }
 
 fn check_headers(headers: &HeaderMap, size: usize) -> Result<&str, WireError> {
-    let content_type = one_header(headers, "content-type")?
-        .ok_or(WireError::UnsupportedMediaType)?;
+    let content_type =
+        one_header(headers, "content-type")?.ok_or(WireError::UnsupportedMediaType)?;
     if content_type.len() > 128 {
         return Err(WireError::UnsupportedMediaType);
     }
@@ -88,7 +88,10 @@ fn check_headers(headers: &HeaderMap, size: usize) -> Result<&str, WireError> {
             .split_once('=')
             .ok_or(WireError::UnsupportedMediaType)?;
         if !name.trim().eq_ignore_ascii_case("charset")
-            || !matches!(value.trim().to_ascii_lowercase().as_str(), "utf-8" | "\"utf-8\"")
+            || !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "utf-8" | "\"utf-8\""
+            )
             || parts.next().is_some()
         {
             return Err(WireError::UnsupportedMediaType);
@@ -116,8 +119,7 @@ fn check_headers(headers: &HeaderMap, size: usize) -> Result<&str, WireError> {
             return Err(WireError::InvalidHeaders);
         }
     }
-    let key = one_header(headers, "idempotency-key")?
-        .ok_or(WireError::InvalidIdempotencyKey)?;
+    let key = one_header(headers, "idempotency-key")?.ok_or(WireError::InvalidIdempotencyKey)?;
     if !identifier(key) {
         return Err(WireError::InvalidIdempotencyKey);
     }
@@ -180,23 +182,39 @@ impl<'de> Deserialize<'de> for Envelope {
                 // duplicates. Unknown fields are refused without descending.
                 while let Some(field) = map.next_key::<String>()? {
                     match field.as_str() {
-                        "binding_id" if binding_id.is_none() => binding_id = Some(map.next_value::<String>()?),
-                        "binding_revision" if binding_revision.is_none() => binding_revision = Some(map.next_value::<u64>()?),
-                        "observation_id" if observation_id.is_none() => observation_id = Some(map.next_value::<String>()?),
-                        "sequence" if sequence.is_none() => sequence = Some(map.next_value::<u64>()?),
-                        "observed_at_ms" if observed_at_ms.is_none() => observed_at_ms = Some(map.next_value::<u64>()?),
-                        "effective_at_ms" if effective_at_ms.is_none() => effective_at_ms = Some(map.next_value::<u64>()?),
+                        "binding_id" if binding_id.is_none() => {
+                            binding_id = Some(map.next_value::<String>()?)
+                        }
+                        "binding_revision" if binding_revision.is_none() => {
+                            binding_revision = Some(map.next_value::<u64>()?)
+                        }
+                        "observation_id" if observation_id.is_none() => {
+                            observation_id = Some(map.next_value::<String>()?)
+                        }
+                        "sequence" if sequence.is_none() => {
+                            sequence = Some(map.next_value::<u64>()?)
+                        }
+                        "observed_at_ms" if observed_at_ms.is_none() => {
+                            observed_at_ms = Some(map.next_value::<u64>()?)
+                        }
+                        "effective_at_ms" if effective_at_ms.is_none() => {
+                            effective_at_ms = Some(map.next_value::<u64>()?)
+                        }
                         "claims" if claims.is_none() => claims = Some(map.next_value::<Claims>()?),
                         _ => return Err(de::Error::custom("duplicate or unknown field")),
                     }
                 }
                 Ok(Envelope(Observation {
                     binding_id: binding_id.ok_or_else(|| de::Error::custom("missing field"))?,
-                    binding_revision: binding_revision.ok_or_else(|| de::Error::custom("missing field"))?,
-                    observation_id: observation_id.ok_or_else(|| de::Error::custom("missing field"))?,
+                    binding_revision: binding_revision
+                        .ok_or_else(|| de::Error::custom("missing field"))?,
+                    observation_id: observation_id
+                        .ok_or_else(|| de::Error::custom("missing field"))?,
                     sequence: sequence.ok_or_else(|| de::Error::custom("missing field"))?,
-                    observed_at_ms: observed_at_ms.ok_or_else(|| de::Error::custom("missing field"))?,
-                    effective_at_ms: effective_at_ms.ok_or_else(|| de::Error::custom("missing field"))?,
+                    observed_at_ms: observed_at_ms
+                        .ok_or_else(|| de::Error::custom("missing field"))?,
+                    effective_at_ms: effective_at_ms
+                        .ok_or_else(|| de::Error::custom("missing field"))?,
                     claims: claims.ok_or_else(|| de::Error::custom("missing field"))?.0,
                 }))
             }
@@ -219,7 +237,10 @@ impl<'de> Deserialize<'de> for Claims {
             fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Claims, M::Error> {
                 let mut claims = BTreeMap::new();
                 while let Some(name) = map.next_key::<String>()? {
-                    if claims.len() == MAX_CLAIMS || !claim_name(&name) || claims.contains_key(&name) {
+                    if claims.len() == MAX_CLAIMS
+                        || !claim_name(&name)
+                        || claims.contains_key(&name)
+                    {
                         return Err(de::Error::custom("invalid claim name or duplicate"));
                     }
                     claims.insert(name, map.next_value::<Primitive>()?.0);
@@ -257,23 +278,28 @@ impl<'de> Deserialize<'de> for Primitive {
                 }
                 Scalar::Text(value)
             }
-            _ if token.starts_with('-') || token.as_bytes().first().is_some_and(u8::is_ascii_digit) => {
+            _ if token.starts_with('-')
+                || token.as_bytes().first().is_some_and(u8::is_ascii_digit) =>
+            {
                 // Integer tokens are checked before any floating-point cast.
                 // Decimal claims use the kernel's finite IEEE-754 model.
                 if !token.contains(['.', 'e', 'E']) {
-                    let integer = token.parse::<i64>()
+                    let integer = token
+                        .parse::<i64>()
                         .map_err(|_| de::Error::custom("unsafe integer claim"))?;
                     if integer.unsigned_abs() > MAX_SAFE_INTEGER {
                         return Err(de::Error::custom("unsafe integer claim"));
                     }
                     Scalar::Number(integer as f64)
                 } else {
-                    let number = token.parse::<f64>()
+                    let number = token
+                        .parse::<f64>()
                         .map_err(|_| de::Error::custom("invalid numeric claim"))?;
                     let mantissa = token.split(['e', 'E']).next().unwrap_or_default();
                     if !number.is_finite()
                         || number.abs() > MAX_SAFE_INTEGER as f64
-                        || (number == 0.0 && mantissa.bytes().any(|byte| (b'1'..=b'9').contains(&byte)))
+                        || (number == 0.0
+                            && mantissa.bytes().any(|byte| (b'1'..=b'9').contains(&byte)))
                     {
                         return Err(de::Error::custom("invalid numeric claim"));
                     }
