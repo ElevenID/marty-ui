@@ -569,7 +569,7 @@ def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None
     job = document["jobs"]["test-release-contracts"]
 
     assert job["name"] == "Release Contract Tests"
-    assert job["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == "ubuntu-24.04"
     setup_python = next(
         step
         for step in job["steps"]
