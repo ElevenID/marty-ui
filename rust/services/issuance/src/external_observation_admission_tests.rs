@@ -77,6 +77,7 @@ impl Fixture {
                 organization_id: "org-one".into(),
                 subject_id: "urn:synthetic:learner-one".into(),
                 revision: 9,
+                expires_at_ms: NOW + 60_000,
                 accepts_observations: true,
             },
             input: Observation {
