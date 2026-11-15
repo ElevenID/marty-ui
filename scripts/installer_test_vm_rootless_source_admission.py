@@ -1,8 +1,12 @@
-"""Check a root-owned controller source snapshot against an exact Git tree.
+"""Check a root-owned flat Python controller namespace against an exact Git tree.
 
 This is a pre-import check. It does not fetch, stage, or authenticate the
 reviewer's selected commit. A root-private bootstrap must call it under
 ``python -I -S -B`` before adding the checked directory to ``sys.path``.
+Only the complete tracked top-level scripts/*.py namespace is admitted. Nested
+packages and runtime asset subtrees require separate authenticated staging and
+are refused as extra entries in this flat directory. This check does not
+authenticate the bootstrap/verifier itself or grant live execution authority.
 No VM, SSH, package, or Docker operation is performed here.
 """
 from __future__ import annotations
@@ -18,7 +22,7 @@ import subprocess
 import time
 
 HEX = re.compile(r"[0-9a-f]{40}\Z")
-NAME = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*\.py\Z")
+NAME = re.compile(r"[a-zA-Z_][a-zA-Z_0-9-]*\.py\Z")
 MAX_MODULES = 512
 MAX_MODULE_BYTES = 1024 * 1024
 MAX_TREE_BYTES = 128 * 1024
@@ -121,6 +125,39 @@ def _bytes(path: Path) -> bytes:
         os.close(fd)
 
 
+def _flat_controller_blobs(raw: bytes) -> dict[str, str]:
+    """Parse the complete direct Git directory, never a recursive tree listing.
+
+    Every admitted module must exist as exactly one regular file in source_dir.
+    A nested package cannot be silently copied into or imported from that flat
+    namespace. This does not admit main's separate rootless asset subtree.
+    """
+    _require(type(raw) is bytes and len(raw) <= MAX_TREE_BYTES)
+    tracked: dict[str, str] = {}
+    for row in raw.split(b"\0"):
+        if not row:
+            continue
+        left, sep, path = row.partition(b"\t")
+        _require(bool(sep) and b"/" not in path)
+        if not path.endswith(b".py"):
+            continue
+        fields = left.split(b" ")
+        _require(len(fields) == 3)
+        mode, kind, blob = fields
+        try:
+            name = path.decode("ascii")
+            object_id = blob.decode("ascii")
+        except UnicodeDecodeError:
+            raise ValueError("controller source admission refused") from None
+        _require(mode in (b"100644", b"100755") and kind == b"blob"
+                 and NAME.fullmatch(name) is not None and name not in tracked
+                 and HEX.fullmatch(object_id) is not None and object_id != "0" * 40)
+        tracked[name] = object_id
+        _require(len(tracked) <= MAX_MODULES)
+    _require(bool(tracked))
+    return tracked
+
+
 def admit(*, git_dir: Path, commit: str, source_dir: Path) -> dict[str, str]:
     """Return exact local Python blob digests only after whole closure matches.
 
@@ -135,25 +172,12 @@ def admit(*, git_dir: Path, commit: str, source_dir: Path) -> dict[str, str]:
     _require(stat.S_IMODE(source_dir.lstat().st_mode) == 0o700)
     _require(_git(git_dir, "rev-parse", "--verify", commit + "^{commit}",
                   limit=128).strip() == commit.encode("ascii"))
-    raw = _git(git_dir, "ls-tree", "-r", "-z", commit, "scripts",
+    # The admitted import namespace is flat: top-level scripts/*.py only.
+    # Nested packages and assets are not staged or importable from this closure.
+    # Their support requires a separately authenticated recursive layout.
+    raw = _git(git_dir, "ls-tree", "-z", commit + ":scripts",
                limit=MAX_TREE_BYTES)
-    tracked: dict[str, str] = {}
-    for row in raw.split(b"\0"):
-        if not row:
-            continue
-        left, sep, path = row.partition(b"\t")
-        _require(bool(sep) and path.startswith(b"scripts/"))
-        if not path.endswith(b".py"):
-            continue
-        _require(path.count(b"/") == 1)
-        mode, kind, blob = left.split(b" ")
-        name = path[8:].decode("ascii")
-        _require(mode == b"100644" and kind == b"blob"
-                 and NAME.fullmatch(name) is not None
-                 and name not in tracked and len(blob) == 40)
-        tracked[name] = blob.decode("ascii")
-        _require(len(tracked) <= MAX_MODULES)
-    _require(bool(tracked))
+    tracked = _flat_controller_blobs(raw)
     observed: set[str] = set()
     with os.scandir(source_dir) as entries:
         for entry in entries:

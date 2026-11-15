@@ -6,6 +6,8 @@ on:
     paths:
       - .github/workflows/installer-rootless-host-custody.yml
       - scripts/installer_rootless_host_custody_fixture.py
+      - scripts/installer_test_vm_rootless_source_admission.py
+      - tests/test_installer_test_vm_rootless_source_admission.py
       - scripts/installer_rootless_tool_admission.py
       - scripts/verify_installer_provenance.py
       - tests/test_installer_rootless_host_custody_fixture.py
@@ -28,6 +30,11 @@ jobs:
           test "$(id -u)" != 0
           python3 -m py_compile scripts/installer_rootless_host_custody_fixture.py scripts/installer_rootless_tool_admission.py
           python3 -m unittest discover -s tests -p test_installer_rootless_host_custody_fixture.py -v
+      - name: Flat controller source admission regressions without a guest
+        run: |
+          test "$(id -u)" != 0
+          python3 -m pip install --disable-pip-version-check pytest==9.1.1
+          python3 -m pytest -q tests/test_installer_test_vm_rootless_source_admission.py
       - name: Record ordinary-user user namespace capability without Docker
         run: |
           test "$(id -u)" != 0
