@@ -47,6 +47,7 @@ on:
       - 'tests/test_kubernetes_legacy_recovery_lineage.py'
       - 'tests/scripts/run-kubernetes-acceptance.cjs'
       - 'tests/scripts/run-kubernetes-acceptance.test.cjs'
+      - 'tests/scripts/run-external-oidc-login*.cjs'
       - 'contracts/gateway-routes.json'
       - 'contracts/gateway-public-openapi-schemas.json'
   merge_group:
@@ -89,7 +90,7 @@ jobs:
           printf '%s\n' "$chart_tools/linux-amd64" >> "$GITHUB_PATH"
           python -m pip install 'pytest==9.2.0' 'PyYAML==6.0.3'
       - name: Check Kubernetes acceptance against the public API contract
-        run: node --test tests/scripts/run-kubernetes-acceptance.test.cjs
+        run: node --test tests/scripts/run-kubernetes-acceptance.test.cjs tests/scripts/run-external-oidc-login.test.cjs
       - name: Render actual chart and test the existing trust boundary
         shell: bash
         run: |
