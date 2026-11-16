@@ -17,6 +17,9 @@ raw API-key secret, or use a remote/stale authorization cache.
 Every admission transaction loads and locks these canonical records in a
 stable order:
 
+0. **Organization** ? `organization_service.organizations` is held `FOR SHARE`;
+   only canonical `active` organizations are authorized. Suspension waits for
+   an admitted transaction, and later observations/administrative actions fail closed.
 1. **Organization API key** — `organization_service.api_keys`, selected by
    authenticated API-key ID and organization ID with `FOR UPDATE`. It checks
    active status, enabled state, organization scope type, absence of a
@@ -60,7 +63,7 @@ one atomic effect.
 
 The required lock order is:
 
-`api_key -> producer_grant -> grant_membership -> evidence_binding -> application`
+`organization -> api_key -> producer_grant -> grant_membership -> evidence_binding -> application`
 
 Administrative grant/binding handlers must preserve this order. Direct
 cross-database calls, stale replicas, cache-only authorization and unlocked
@@ -77,8 +80,11 @@ The candidate schema now defines:
 - the existing receipt, sequence-head and audit journal.
 
 Grant and binding records default inactive. A producer key cannot self-create
-or widen its own grant. API-key rotation requires an administrator to issue a
-new grant for the new key ID. The schema is still a candidate contract and is
+or widen its own grant. API-key rotation requires an explicit administrator operation against a current
+revision and canonical replacement key ID. Rotation deactivates the grant; fresh
+approval is required before the replacement key can submit. The old key loses
+its grant immediately, including receipt replay authorization. Binding membership,
+source and expiry are not silently widened. No key secret enters this interface. The schema is still a candidate contract and is
 not registered in startup migrations.
 
 ## Claim-rule encoding
@@ -103,12 +109,40 @@ are test fixtures only. Tests cover valid binding resolution, exact scope
 requirements, revoked keys, closed applications, wrong tenants, missing grant
 membership and the API-key row lock blocking a concurrent revocation.
 
+The public Gateway implements authenticated original-byte observation ingress and
+session-only administrator actions under:
+`/v1/organizations/{organization_id}/external-observation-producers/{grant_id}`:
+- `POST /revoke` with `expected_revision`;
+- `POST /approve` with `expected_revision`, for the current inactive grant/key;
+- `POST /rotate-api-key` with `expected_revision` and `new_api_key_id`.
+
+All administrator requests require an actual session, a single allowed Origin,
+and a canonical path tenant matching the active session. API-key identities,
+including admin scopes, cannot administer grants. Core reloads and locks active
+canonical membership and exact `external-observation:manage` permission through
+organization-scoped roles. Core authenticates the Gateway service transport;
+caller-supplied identity headers are replaced by Gateway trusted context.
+
+Administrator bodies are strict JSON, bounded to 4096 bytes and a 10-second read
+deadline. Proxy retries and generic response caching are disabled. A replacement
+key must be a current enabled organization key with exact `evidence:submit`
+scope and unexpired lifetime. Rotation locks both keys in stable UUID order
+before the grant. Approval/rotation audit writes and authority updates commit
+atomically; canonical clock expiry is rechecked after all staged writes. Conflicts
+are not blindly retried, and an uncertain commit requires reconciliation. The
+last approval metadata after rotation is historical only while inactive; fresh
+approval replaces it for the replacement key.
+
+Activation remains explicitly disabled by default. The optional startup router
+preflights canonical columns, row-lock and mutation/audit privileges and revision
+triggers before mounting. It never provisions schema or database roles.
+
 Not yet implemented or activated:
-- organization-admin HTTP operations to create/revoke grants and bindings;
-- API-key scope provisioning and Gateway route mapping in the main branch;
-- startup migration registration and production DB role grants;
-- authenticated HTTP/body-streaming integration tests;
-- connector worker submission and end-to-end Canvas-to-core qualification.
+- public grant creation/modification and evidence-binding/membership administration;
+- audit read and uncertain-outcome reconciliation operations;
+- reviewed migration registration and least-privilege database role grants;
+- complete exact-candidate CI and independent security review/protected integration;
+- connector worker submission and deployed Gateway/network-denial + OB3 qualification.
 
 Do not enable the candidate schema or route until those gates pass. A journal
 receipt remains an unsigned producer attestation, not a VERIFIED EvidenceFact,

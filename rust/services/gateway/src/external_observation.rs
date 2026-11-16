@@ -259,6 +259,10 @@ mod tests {
 /// Only this canonical path is eligible for the session administrator guard.
 pub const ADMIN_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/revoke";
+pub const APPROVE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/approve";
+pub const ROTATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/rotate-api-key";
 pub fn admin_organization(path: &str) -> Option<&str> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() != 7
@@ -266,7 +270,7 @@ pub fn admin_organization(path: &str) -> Option<&str> {
         || parts[1] != "v1"
         || parts[2] != "organizations"
         || parts[4] != "external-observation-producers"
-        || parts[6] != "revoke"
+        || !matches!(parts[6], "revoke" | "approve" | "rotate-api-key")
         || !canonical_id(Some(parts[3]))
         || !canonical_id(Some(parts[5]))
     {
@@ -413,7 +417,7 @@ mod admin_guard_tests {
         for path in [
             format!("{ROUTE}/"),
             ROUTE.replace(ORG, "org-1"),
-            ROUTE.replace("/revoke", "/approve"),
+            ROUTE.replace("/revoke", "/delete"),
             ROUTE.replace("/external-observation-producers/", "/api-keys/"),
         ] {
             assert_eq!(admin_organization(&path), None);

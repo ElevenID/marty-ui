@@ -176,7 +176,7 @@ impl Fixture {
         sqlx::raw_sql("DROP SCHEMA IF EXISTS issuance_service CASCADE; DROP SCHEMA IF EXISTS organization_service CASCADE; DROP SCHEMA IF EXISTS observation_test CASCADE;")
             .execute(&pool).await.unwrap();
         sqlx::raw_sql("CREATE SCHEMA organization_service;
-            CREATE TABLE organization_service.organizations (id uuid PRIMARY KEY);
+            CREATE TABLE organization_service.organizations (id uuid PRIMARY KEY,status varchar(50) NOT NULL DEFAULT 'active');
             CREATE TABLE organization_service.api_keys (
                 id uuid PRIMARY KEY, organization_id uuid NOT NULL REFERENCES organization_service.organizations(id),
                 scopes text[] NOT NULL DEFAULT ARRAY[]::text[], scope_type text NOT NULL DEFAULT 'ORGANIZATION',

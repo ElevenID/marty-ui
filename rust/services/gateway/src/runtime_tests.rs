@@ -7192,31 +7192,33 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
     assert_eq!(route.route.upstream_service, "issuance");
     assert_eq!(route.route.retries, 0);
     let router = gateway_router(state);
-    for _ in 0..2 {
-        let response = router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(path)
-                    .header("cookie", "sessionId=observation-session")
-                    .header("origin", "https://beta.elevenidllc.com")
-                    .header("content-type", "application/json")
-                    .header("x-user-id", "forged-user")
-                    .header("x-api-key-id", "forged-key")
-                    .header("x-organization-id", "forged-org")
-                    .body(Body::from(br#"{ "expected_revision":2 }"#.as_slice()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+    for action in ["revoke", "approve", "rotate-api-key"] {
+        for _ in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path.replace("/revoke", &format!("/{action}")))
+                        .header("cookie", "sessionId=observation-session")
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("content-type", "application/json")
+                        .header("x-user-id", "forged-user")
+                        .header("x-api-key-id", "forged-key")
+                        .header("x-organization-id", "forged-org")
+                        .body(Body::from(br#"{ "expected_revision":2 }"#.as_slice()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
     {
         let requests = recorder.0.lock().unwrap();
         assert_eq!(
             requests.len(),
-            2,
+            6,
             "each administration attempt must reach canonical authorization"
         );
         for (service, request) in requests.iter() {
@@ -7270,5 +7272,5 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
             .unwrap();
         assert_eq!(response.status(), status);
     }
-    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+    assert_eq!(recorder.0.lock().unwrap().len(), 6);
 }

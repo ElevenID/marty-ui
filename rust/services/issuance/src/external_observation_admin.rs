@@ -17,7 +17,7 @@ pub struct GrantRevocation {
     pub audit_id: Uuid,
 }
 
-fn database_error(error: sqlx::Error) -> AdminError {
+pub(crate) fn database_error(error: sqlx::Error) -> AdminError {
     match error
         .as_database_error()
         .and_then(|error| error.code())
@@ -45,7 +45,7 @@ pub(crate) async fn lock_admin(
       JOIN organization_service.roles r ON r.id=mr.role_id AND r.organization_id=o.id
       JOIN organization_service.role_permissions rp ON rp.role_id=r.id
       JOIN organization_service.permissions p ON p.id=rp.permission_id
-      WHERE o.id=$1 AND m.user_id=$2 AND m.status='active'
+      WHERE o.id=$1 AND o.status='active' AND m.user_id=$2 AND m.status='active'
         AND p.resource='external-observation' AND p.action='manage'
       ORDER BY m.id,r.id,p.id FOR SHARE OF o,m,mr,r,rp,p",
     )

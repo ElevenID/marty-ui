@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{
     external_observation_admin::{revoke_grant, AdminError},
+    external_observation_grant_lifecycle::{approve_grant, rotate_grant_api_key},
     external_observation_http::{gateway_service_authenticated, one_header},
 };
 use axum::{
@@ -19,6 +20,16 @@ use uuid::Uuid;
 
 pub const REVOKE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/revoke";
+pub const APPROVE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/approve";
+pub const ROTATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/rotate-api-key";
+#[derive(Clone, Copy)]
+enum Action {
+    Revoke,
+    Approve,
+    Rotate,
+}
 struct AdminState {
     pool: PgPool,
     gateway_service_key: Vec<u8>,
@@ -30,7 +41,9 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         return Err("Invalid observation Gateway service credential");
     }
     Ok(Router::new()
-        .route(REVOKE_PATH, post(revoke))
+        .route(REVOKE_PATH, post(mutate))
+        .route(APPROVE_PATH, post(mutate))
+        .route(ROTATE_PATH, post(mutate))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -41,6 +54,12 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
 struct RevokeRequest {
     expected_revision: i64,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RotateRequest {
+    expected_revision: i64,
+    new_api_key_id: Uuid,
+}
 fn failure(status: StatusCode, code: &'static str) -> Response {
     (
         status,
@@ -49,11 +68,16 @@ fn failure(status: StatusCode, code: &'static str) -> Response {
     )
         .into_response()
 }
-async fn revoke(
+async fn mutate(
     State(state): State<Arc<AdminState>>,
     Path((org, grant)): Path<(Uuid, Uuid)>,
     request: Request,
 ) -> Response {
+    let action = match request.uri().path().rsplit('/').next() {
+        Some("approve") => Action::Approve,
+        Some("rotate-api-key") => Action::Rotate,
+        _ => Action::Revoke,
+    };
     let headers = request.headers();
     // The proxy strips caller headers before inserting trusted user context.
     // API-key identities may submit observations but cannot administer grants.
@@ -131,18 +155,44 @@ async fn revoke(
     if expected_length.is_some_and(|length| length != bytes.len()) {
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
-    let input: RevokeRequest = match serde_json::from_slice(&bytes) {
-        Ok(value) => value,
-        Err(_) => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+    let (expected_revision, new_key) = if matches!(action, Action::Rotate) {
+        match serde_json::from_slice::<RotateRequest>(&bytes) {
+            Ok(value) => (value.expected_revision, Some(value.new_api_key_id)),
+            Err(_) => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+        }
+    } else {
+        match serde_json::from_slice::<RevokeRequest>(&bytes) {
+            Ok(value) => (value.expected_revision, None),
+            Err(_) => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+        }
     };
-    if !(1..=9007199254740991).contains(&input.expected_revision) {
+    if !(1..=9007199254740991).contains(&expected_revision) || new_key.is_some_and(|id| id.is_nil())
+    {
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
-    match revoke_grant(&state.pool, org, &actor, grant, input.expected_revision).await {
-        Ok(result) => (
+    let result = match action {
+        Action::Revoke => revoke_grant(&state.pool, org, &actor, grant, expected_revision)
+            .await
+            .map(|r| (r.revision, r.audit_id)),
+        Action::Approve => approve_grant(&state.pool, org, &actor, grant, expected_revision)
+            .await
+            .map(|r| (r.revision, r.audit_id)),
+        Action::Rotate => rotate_grant_api_key(
+            &state.pool,
+            org,
+            &actor,
+            grant,
+            expected_revision,
+            new_key.expect("rotation input decoded above"),
+        )
+        .await
+        .map(|r| (r.revision, r.audit_id)),
+    };
+    match result {
+        Ok((revision, audit_id)) => (
             StatusCode::OK,
             [("cache-control", "no-store")],
-            Json(json!({"revision":result.revision,"audit_id":result.audit_id.to_string()})),
+            Json(json!({"revision":revision,"audit_id":audit_id.to_string()})),
         )
             .into_response(),
         Err(error) => {

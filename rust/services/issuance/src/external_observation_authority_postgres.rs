@@ -2,7 +2,7 @@
 //! Production-shaped authority adapter for the external observation journal.
 //!
 //! All authority records are in the same PostgreSQL database and transaction.
-//! The adapter locks the canonical API key, producer grant, binding and
+//! The adapter locks the organization, canonical API key, producer grant, binding and
 //! application in that order. Key revocation and authority changes therefore
 //! serialize with observation admission; no stale cache or remote allow check.
 
@@ -135,6 +135,21 @@ impl ObservationAuthority for PostgresObservationAuthority {
         let organization_id = Uuid::parse_str(&identity.organization_id).map_err(|_| {
             JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized)
         })?;
+
+        // Organization suspension serializes with all observation decisions.
+        // Use the same organization-first order as canonical administration.
+        let organization_status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM organization_service.organizations WHERE id=$1 FOR SHARE",
+        )
+        .bind(organization_id)
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(database_error)?;
+        if organization_status.as_deref() != Some("active") {
+            return Err(JournalError::Denied(
+                crate::external_observation_admission::Denial::NotAuthorized,
+            ));
+        }
 
         // Lock 1: canonical API key. Organization service revocation uses the
         // same row lock in this database, so revoke and admission are ordered.

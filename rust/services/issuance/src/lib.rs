@@ -109,6 +109,7 @@ pub mod external_observation_admin;
 pub mod external_observation_admin_http;
 pub mod external_observation_admission;
 pub mod external_observation_authority_postgres;
+pub mod external_observation_grant_lifecycle;
 pub mod external_observation_http;
 pub mod external_observation_ingress;
 pub mod external_observation_postgres;
