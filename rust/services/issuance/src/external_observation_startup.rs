@@ -57,6 +57,10 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
     }
     let writes: bool=sqlx::query_scalar("SELECT
       has_table_privilege(current_user,'issuance_service.external_observation_bindings','INSERT') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','resource_scope','UPDATE') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','claim_rules','UPDATE') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','max_age_ms','UPDATE') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','max_clock_skew_ms','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_bindings','active','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_bindings','updated_by','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_bindings','revision','UPDATE') AND

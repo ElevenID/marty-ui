@@ -274,6 +274,7 @@ pub const BINDING_ACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/activate";
 pub const BINDING_DEACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
+pub const BINDING_REPLACE_PATH: &str = "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition";
 /// Reserved administrator namespaces must enter the guard even when a path
 /// identifier is malformed. Canonical parsing is authorization, not routing.
 pub fn is_admin_namespace(path: &str) -> bool {
@@ -319,7 +320,10 @@ pub fn admin_organization(path: &str) -> Option<&str> {
                 && parts[5]
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && matches!(parts[6], "create" | "activate" | "deactivate")
+                && matches!(
+                    parts[6],
+                    "create" | "activate" | "deactivate" | "replace-definition"
+                )
         }
         _ => false,
     };
@@ -535,6 +539,10 @@ pub fn binding_admin_operation(action: &str) -> serde_json::Value {
             "create_external_observation_binding",
             "Create an inactive canonical external observation binding",
         ),
+        "replace-definition" => (
+            "replace_external_observation_binding_definition",
+            "Replace binding constraints and invalidate linked producer approvals",
+        ),
         "activate" => (
             "activate_external_observation_binding",
             "Activate a canonical binding and invalidate linked grant approvals",
@@ -546,7 +554,7 @@ pub fn binding_admin_operation(action: &str) -> serde_json::Value {
     };
     let mut properties = json!({"expected_revision":revision});
     let mut required = vec!["expected_revision"];
-    if action == "create" {
+    if matches!(action, "create" | "replace-definition") {
         let common = json!({"required":{"type":"boolean"},"nullable":{"type":"boolean"}});
         let rule = |kind: &str, extras: serde_json::Value, names: Vec<&str>| {
             let mut props = common.clone();
@@ -580,6 +588,21 @@ pub fn binding_admin_operation(action: &str) -> serde_json::Value {
             "max_age_ms",
             "max_clock_skew_ms",
         ];
+        if action == "replace-definition" {
+            let props = properties.as_object_mut().expect("static object");
+            for name in ["source_id", "application_id", "provider", "fact_type"] {
+                props.remove(name);
+            }
+            props.insert("expected_revision".into(), revision.clone());
+            required = vec![
+                "expected_revision",
+                "expected_application_revision",
+                "resource_scope",
+                "claim_rules",
+                "max_age_ms",
+                "max_clock_skew_ms",
+            ];
+        }
     } else if action == "activate" {
         properties
             .as_object_mut()
@@ -588,7 +611,7 @@ pub fn binding_admin_operation(action: &str) -> serde_json::Value {
         required.push("expected_application_revision");
     }
     json!({"operationId":operation,"tags":["evidence"],"summary":summary,
-      "description":"Session-only current canonical administrator, exact active tenant and allowed Origin required. No connector API-key administration. Create derives subject from locked current eligible application at expected_application_revision and starts inactive. Activation revalidates definition, application revision, subject, lifecycle and expiry. Activation/deactivation invalidate every linked producer grant approval and deactivate those grants. Deactivation remains available for closed/expired applications. Original JSON is limited to4096bytes; duplicate fields at every map level, unknown fields and reserved authority/secret claim names are rejected. Mutation and audit commit atomically with revision fences; no automatic uncertain-commit retries. No verification, application approval, signing or issuance.",
+      "description":"Session-only current canonical administrator, exact active tenant and allowed Origin required. No connector API-key administration. Create derives subject from locked current eligible application at expected_application_revision and starts inactive. Activation revalidates definition, application revision, subject, lifecycle and expiry. Definition replacement changes only resource/claim/freshness constraints and leaves the binding inactive; identity and provenance are immutable through this route. Replacement/activation/deactivation invalidate every linked producer grant approval and deactivate those grants. Deactivation remains available for closed/expired applications. Original JSON is limited to4096bytes; duplicate fields at every map level, unknown fields and reserved authority/secret claim names are rejected. Mutation and audit commit atomically with revision fences; no automatic uncertain-commit retries. No verification, application approval, signing or issuance.",
       "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
       "parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
         {"name":"binding_id","in":"path","required":true,"schema":identifier},{"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
@@ -601,7 +624,7 @@ mod binding_admin_guard_tests {
     #[tokio::test]
     async fn binding_paths_require_session_tenant_origin_and_canonical_identifiers() {
         let org = "20000000-0000-4000-8000-000000000001";
-        for action in ["create", "activate", "deactivate"] {
+        for action in ["create", "activate", "deactivate", "replace-definition"] {
             let path = format!(
                 "/v1/organizations/{org}/external-observation-bindings/binding-one/{action}"
             );

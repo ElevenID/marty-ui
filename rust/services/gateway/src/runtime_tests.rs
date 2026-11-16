@@ -7294,7 +7294,7 @@ async fn binding_admin_gateway_forwards_only_trusted_session_context_and_origina
     let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
     let router = gateway_router(state);
     let bytes = br#"{ "expected_revision":1 }"#;
-    for action in ["create", "activate", "deactivate"] {
+    for action in ["create", "activate", "deactivate", "replace-definition"] {
         let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
         let request = |session: bool| {
             let mut builder = Request::builder()
@@ -7332,7 +7332,7 @@ async fn binding_admin_gateway_forwards_only_trusted_session_context_and_origina
         );
     }
     let requests = recorder.0.lock().unwrap();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     for (service, request) in requests.iter() {
         assert_eq!(service, "issuance");
         assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));

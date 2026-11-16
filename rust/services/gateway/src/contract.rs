@@ -212,6 +212,7 @@ impl GatewayContract {
             crate::external_observation::BINDING_CREATE_PATH,
             crate::external_observation::BINDING_ACTIVATE_PATH,
             crate::external_observation::BINDING_DEACTIVATE_PATH,
+            crate::external_observation::BINDING_REPLACE_PATH,
         ] {
             table.add(RouteConfig {
                 name: format!("external-observation:manage:{path}"),
@@ -594,6 +595,10 @@ impl GatewayContract {
             (
                 crate::external_observation::BINDING_DEACTIVATE_PATH,
                 "deactivate",
+            ),
+            (
+                crate::external_observation::BINDING_REPLACE_PATH,
+                "replace-definition",
             ),
         ] {
             paths.insert(
@@ -1260,7 +1265,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 10
+                + 11
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1340,7 +1345,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 10
+                + 11
         );
         for operation in [
             "submit_external_observation",
@@ -1353,6 +1358,7 @@ mod tests {
             "create_external_observation_binding",
             "activate_external_observation_binding",
             "deactivate_external_observation_binding",
+            "replace_external_observation_binding_definition",
         ] {
             assert!(
                 identifiers.contains(operation),
@@ -1557,7 +1563,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 10
+                + 11
         );
         assert_eq!(
             contract
@@ -1570,7 +1576,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 10
+                + 11
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1581,7 +1587,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 10
+                + 11
                 + 16
         );
         assert_eq!(
@@ -1996,7 +2002,7 @@ mod binding_admin_route_contract_tests {
     fn binding_administration_uses_issuance_service_auth_without_retries() {
         let contract = GatewayContract::load().unwrap();
         let table = contract.route_table().unwrap();
-        for action in ["create", "activate", "deactivate"] {
+        for action in ["create", "activate", "deactivate", "replace-definition"] {
             let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
             let route = route_for(&table, HttpMethod::Post, &path).unwrap();
             assert_eq!(route.route.upstream_service, "issuance");

@@ -40,7 +40,8 @@ MEMBERSHIP = "rust/services/issuance/src/external_observation_membership_admin.r
 MEMBERSHIP_TEST = "tests/rust/external-observation-journal/membership_admin_tests.rs"
 BINDING_ADMIN = "rust/services/issuance/src/external_observation_binding_admin.rs"
 BINDING_ADMIN_TEST = "tests/rust/external-observation-journal/binding_admin_tests.rs"
-FORMAT_FILES = (BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+BINDING_EDIT_TEST = "tests/rust/external-observation-journal/binding_edit_tests.rs"
+FORMAT_FILES = (BINDING_EDIT_TEST,BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -94,6 +95,7 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / BINDING_EDIT_TEST))}]\nmod binding_edit_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / BINDING_ADMIN_TEST))}]\nmod binding_admin_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / MEMBERSHIP_TEST))}]\nmod membership_admin_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / GRANT_EDIT_TEST))}]\nmod grant_edit_tests;\n"

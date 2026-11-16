@@ -10,7 +10,7 @@ const GRANT: &str = "30000000-0000-4000-8000-000000000001";
 fn id(value: &str) -> Uuid {
     Uuid::parse_str(value).unwrap()
 }
-async fn app_revision(pool: &sqlx::PgPool) -> i64 {
+pub(super) async fn app_revision(pool: &sqlx::PgPool) -> i64 {
     sqlx::query_scalar("SELECT (extract(epoch FROM updated_at)*1000000)::bigint FROM issuance_service.applications WHERE id='application-one'").fetch_one(pool).await.unwrap()
 }
 async fn definition(pool: &sqlx::PgPool) -> BindingDefinition {

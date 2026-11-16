@@ -2,7 +2,8 @@
 use crate::{
     external_observation_admin::{revoke_grant, AdminError},
     external_observation_binding_admin::{
-        create_binding, set_binding_active, valid_definition, BindingDefinition,
+        create_binding, replace_binding_definition, set_binding_active, valid_definition,
+        valid_replacement, BindingDefinition, BindingReplacement,
     },
     external_observation_grant_edit::{change_grant_expiry, create_grant},
     external_observation_grant_lifecycle::{approve_grant, rotate_grant_api_key},
@@ -42,6 +43,7 @@ pub const BINDING_ACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/activate";
 pub const BINDING_DEACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
+pub const BINDING_REPLACE_PATH:&str="/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition";
 #[derive(Clone, Copy)]
 enum Action {
     Bindings,
@@ -71,6 +73,7 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         .route(BINDING_CREATE_PATH, post(mutate_binding))
         .route(BINDING_ACTIVATE_PATH, post(mutate_binding))
         .route(BINDING_DEACTIVATE_PATH, post(mutate_binding))
+        .route(BINDING_REPLACE_PATH, post(mutate_binding))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -301,6 +304,13 @@ async fn mutate_binding(
                 _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
             };
             create_binding(&state.pool, org, &actor, &binding, &value).await
+        }
+        "replace-definition" => {
+            let value = match serde_json::from_slice::<BindingReplacement>(&bytes) {
+                Ok(v) if valid_replacement(&v) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            replace_binding_definition(&state.pool, org, &actor, &binding, &value).await
         }
         "activate" => {
             let value = match serde_json::from_slice::<ActivateBindingRequest>(&bytes) {

@@ -62,25 +62,54 @@ pub struct BindingDefinition {
     pub max_age_ms: i64,
     pub max_clock_skew_ms: i64,
 }
-pub fn valid_definition(value: &BindingDefinition) -> bool {
-    let rules = serde_json::to_value(&value.claim_rules)
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BindingReplacement {
+    pub expected_revision: i64,
+    pub expected_application_revision: i64,
+    pub resource_scope: UniqueMap<String>,
+    pub claim_rules: UniqueMap<BindingClaimRule>,
+    pub max_age_ms: i64,
+    pub max_clock_skew_ms: i64,
+}
+fn valid_constraints(
+    scope: &UniqueMap<String>,
+    claims: &UniqueMap<BindingClaimRule>,
+    age: i64,
+    skew: i64,
+) -> bool {
+    let rules = serde_json::to_value(claims)
         .ok()
         .and_then(|v| parse_claim_rules(v).ok());
+    (1..=900000).contains(&age)
+        && (0..=30000).contains(&skew)
+        && !scope.0.is_empty()
+        && scope.0.len() <= 16
+        && scope.0.iter().all(|(k, v)| label(k) && text(v, 512))
+        && rules.is_some_and(|v| valid_rules(&v))
+}
+pub fn valid_definition(value: &BindingDefinition) -> bool {
     id(&value.source_id)
         && id(&value.application_id)
         && label(&value.provider)
         && label(&value.fact_type)
         && (1..=9007199254740991).contains(&value.expected_application_revision)
-        && (1..=900000).contains(&value.max_age_ms)
-        && (0..=30000).contains(&value.max_clock_skew_ms)
-        && !value.resource_scope.0.is_empty()
-        && value.resource_scope.0.len() <= 16
-        && value
-            .resource_scope
-            .0
-            .iter()
-            .all(|(k, v)| label(k) && text(v, 512))
-        && rules.is_some_and(|v| valid_rules(&v))
+        && valid_constraints(
+            &value.resource_scope,
+            &value.claim_rules,
+            value.max_age_ms,
+            value.max_clock_skew_ms,
+        )
+}
+pub fn valid_replacement(value: &BindingReplacement) -> bool {
+    (1..=9007199254740991).contains(&value.expected_revision)
+        && (1..=9007199254740991).contains(&value.expected_application_revision)
+        && valid_constraints(
+            &value.resource_scope,
+            &value.claim_rules,
+            value.max_age_ms,
+            value.max_clock_skew_ms,
+        )
 }
 async fn application(
     connection: &mut PgConnection,
@@ -208,13 +237,56 @@ pub async fn set_binding_active(
     expected_revision: i64,
     application_revision: Option<i64>,
 ) -> Result<GrantMutation, AdminError> {
+    change_binding(
+        pool,
+        organization,
+        actor,
+        binding,
+        expected_revision,
+        application_revision,
+        None,
+    )
+    .await
+}
+/// Replaces only resource/claim/freshness definitions. Identity and provenance
+/// columns remain fixed; the binding and all linked grants become inactive.
+pub async fn replace_binding_definition(
+    pool: &PgPool,
+    organization: Uuid,
+    actor: &str,
+    binding: &str,
+    value: &BindingReplacement,
+) -> Result<GrantMutation, AdminError> {
+    if !valid_replacement(value) {
+        return Err(AdminError::Conflict);
+    }
+    change_binding(
+        pool,
+        organization,
+        actor,
+        binding,
+        value.expected_revision,
+        Some(value.expected_application_revision),
+        Some(value),
+    )
+    .await
+}
+async fn change_binding(
+    pool: &PgPool,
+    organization: Uuid,
+    actor: &str,
+    binding: &str,
+    expected_revision: i64,
+    application_revision: Option<i64>,
+    replacement: Option<&BindingReplacement>,
+) -> Result<GrantMutation, AdminError> {
     if !id(binding)
         || !(1..=9007199254740991).contains(&expected_revision)
         || application_revision.is_some_and(|r| !(1..=9007199254740991).contains(&r))
     {
         return Err(AdminError::Conflict);
     }
-    let active = application_revision.is_some();
+    let active = application_revision.is_some() && replacement.is_none();
     let mut tx = pool.begin().await.map_err(database_error)?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
@@ -277,23 +349,45 @@ pub async fn set_binding_active(
     }
     let app: String = row.try_get("application_id").map_err(database_error)?;
     let subject: String = row.try_get("subject_id").map_err(database_error)?;
+    let source: String = row.try_get("source_id").map_err(database_error)?;
+    let provider: String = row.try_get("provider").map_err(database_error)?;
+    let fact: String = row.try_get("fact_type").map_err(database_error)?;
+    let replacement_values = match replacement {
+        Some(value) => Some((
+            serde_json::to_value(&value.resource_scope).map_err(|_| AdminError::Conflict)?,
+            serde_json::to_value(&value.claim_rules).map_err(|_| AdminError::Conflict)?,
+            value.max_age_ms,
+            value.max_clock_skew_ms,
+        )),
+        None => None,
+    };
     if let Some(app_revision) = application_revision {
+        let (resource_scope, claim_rules, max_age_ms, max_clock_skew_ms) = match replacement {
+            Some(value) => (
+                value.resource_scope.clone(),
+                value.claim_rules.clone(),
+                value.max_age_ms,
+                value.max_clock_skew_ms,
+            ),
+            None => (
+                serde_json::from_value(row.try_get("resource_scope").map_err(database_error)?)
+                    .map_err(|_| AdminError::Conflict)?,
+                serde_json::from_value(row.try_get("claim_rules").map_err(database_error)?)
+                    .map_err(|_| AdminError::Conflict)?,
+                row.try_get("max_age_ms").map_err(database_error)?,
+                row.try_get("max_clock_skew_ms").map_err(database_error)?,
+            ),
+        };
         let definition = BindingDefinition {
-            source_id: row.try_get("source_id").map_err(database_error)?,
+            source_id: source.clone(),
             application_id: app.clone(),
             expected_application_revision: app_revision,
-            provider: row.try_get("provider").map_err(database_error)?,
-            fact_type: row.try_get("fact_type").map_err(database_error)?,
-            resource_scope: serde_json::from_value(
-                row.try_get("resource_scope").map_err(database_error)?,
-            )
-            .map_err(|_| AdminError::Conflict)?,
-            claim_rules: serde_json::from_value(
-                row.try_get("claim_rules").map_err(database_error)?,
-            )
-            .map_err(|_| AdminError::Conflict)?,
-            max_age_ms: row.try_get("max_age_ms").map_err(database_error)?,
-            max_clock_skew_ms: row.try_get("max_clock_skew_ms").map_err(database_error)?,
+            provider: provider.clone(),
+            fact_type: fact.clone(),
+            resource_scope,
+            claim_rules,
+            max_age_ms,
+            max_clock_skew_ms,
         };
         if !valid_definition(&definition)
             || application(&mut tx, organization, &app, app_revision).await? != subject
@@ -310,10 +404,20 @@ pub async fn set_binding_active(
             row.try_get::<i64, _>("revision").map_err(database_error)?,
         );
     }
-    let revision:i64=sqlx::query_scalar("UPDATE issuance_service.external_observation_bindings SET active=$3,updated_by=$4 WHERE id=$1 AND organization_id=$2 RETURNING revision")
-      .bind(binding).bind(organization).bind(active).bind(actor).fetch_one(&mut *tx).await.map_err(database_error)?;
+    let revision: i64 = if let Some((scope, rules, age, skew)) = &replacement_values {
+        sqlx::query_scalar("UPDATE issuance_service.external_observation_bindings SET resource_scope=$3,claim_rules=$4,max_age_ms=$5,max_clock_skew_ms=$6,active=false,updated_by=$7 WHERE id=$1 AND organization_id=$2 RETURNING revision")
+          .bind(binding).bind(organization).bind(scope).bind(rules).bind(age).bind(skew).bind(actor).fetch_one(&mut *tx).await.map_err(database_error)?
+    } else {
+        sqlx::query_scalar("UPDATE issuance_service.external_observation_bindings SET active=$3,updated_by=$4 WHERE id=$1 AND organization_id=$2 RETURNING revision")
+          .bind(binding).bind(organization).bind(active).bind(actor).fetch_one(&mut *tx).await.map_err(database_error)?
+    };
     let audit_id = Uuid::new_v4();
-    let (event, action) = if active {
+    let (event, action) = if replacement.is_some() {
+        (
+            "external_observation_binding_definition_replaced",
+            "replace-definition",
+        )
+    } else if active {
         ("external_observation_binding_activated", "activate")
     } else {
         ("external_observation_binding_deactivated", "deactivate")
@@ -363,10 +467,17 @@ pub async fn set_binding_active(
             return Err(AdminError::Conflict);
         }
     }
-    let unchanged:bool=sqlx::query_scalar("SELECT count(*)=1 FROM issuance_service.external_observation_bindings WHERE id=$1 AND organization_id=$2 AND revision=$3 AND active=$4 AND application_id=$5 AND subject_id=$6")
-      .bind(binding).bind(organization).bind(revision).bind(active).bind(&app).bind(&subject).fetch_one(&mut *tx).await.map_err(database_error)?;
+    let unchanged:bool=sqlx::query_scalar("SELECT count(*)=1 FROM issuance_service.external_observation_bindings WHERE id=$1 AND organization_id=$2 AND revision=$3 AND active=$4 AND application_id=$5 AND subject_id=$6 AND source_id=$7 AND provider=$8 AND fact_type=$9")
+      .bind(binding).bind(organization).bind(revision).bind(active).bind(&app).bind(&subject).bind(&source).bind(&provider).bind(&fact).fetch_one(&mut *tx).await.map_err(database_error)?;
     if !unchanged {
         return Err(AdminError::Conflict);
+    }
+    if let Some((scope, rules, age, skew)) = &replacement_values {
+        let exact:bool=sqlx::query_scalar("SELECT resource_scope=$3 AND claim_rules=$4 AND max_age_ms=$5 AND max_clock_skew_ms=$6 FROM issuance_service.external_observation_bindings WHERE id=$1 AND organization_id=$2")
+          .bind(binding).bind(organization).bind(scope).bind(rules).bind(age).bind(skew).fetch_one(&mut *tx).await.map_err(database_error)?;
+        if !exact {
+            return Err(AdminError::Conflict);
+        }
     }
     if let Some(app_revision) = application_revision {
         if application(&mut tx, organization, &app, app_revision).await? != subject {

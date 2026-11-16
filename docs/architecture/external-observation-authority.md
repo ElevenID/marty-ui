@@ -342,8 +342,7 @@ the inactive grant revision, without observation, provider credentials or claims
 
 Preflight additionally requires membership INSERT/DELETE privileges. Production
 least-privilege role and upgrade migration qualification remain unfinished.
-Binding creation/editing/activation and administrator audit/read reconciliation
-remain separate missing interfaces; membership selection does not manufacture
+Administrator audit/read reconciliation remains a separate missing interface; membership selection does not manufacture
 those authorities. The connector continues to own only provider configuration
 and credentials, with Common Gateway as its sole Marty integration.
 
@@ -389,6 +388,35 @@ resource values, claim content or credentials. No application state, evidence
 verification, signing or issuance changes. Preflight now requires binding INSERT
 and active/updated_by/revision UPDATE privileges in addition to existing checks.
 Registered migrations, production least-privilege roles and actual Gateway
-runtime qualification remain required. Binding definition replacement and
-administrator reads/reconciliation remain unfinished; this is not a deployment
+runtime qualification remain required. Administrator reads/reconciliation remain unfinished; this is not a deployment
 or production readiness claim.
+
+
+## Binding constraint replacement
+
+`POST /v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition`
+accepts exact binding/application revisions plus complete resource scope, claim
+rules and freshness limits. It rejects organization, source, application,
+subject, provider, fact type and active-state fields. Those identity/provenance
+columns remain unchanged; changing identity requires a distinct canonical
+binding. The same strict nested duplicate/unknown-field decoder, validators,
+4096-byte bound, session tenant/Origin and current administrator permission apply.
+
+Replacement uses the shared binding mutation transaction and canonical
+key/grant/membership/binding/application lock order. It validates the new
+constraints against the current application/subject and writes the binding
+inactive. Every linked producer grant becomes inactive with approval cleared.
+Explicit binding activation and a fresh producer approval are both required
+before new observations can be admitted. The final fence checks immutable
+identity, exact replacement constraints, revisions, linked grants/membership,
+current application and expiry after audit insertion. A concurrent membership
+insertion absent from discovery conflicts under SERIALIZABLE. Audit failure,
+post-write revision/constraint changes or elapsed application expiry roll all
+staged writes back. There is no automatic uncertain-commit retry.
+
+The administrator audit records binding revision/inactive state and affected
+grant count; it does not copy subject, resource values, claim content or secrets.
+Storage preflight additionally requires UPDATE privileges on resource_scope,
+claim_rules, max_age_ms and max_clock_skew_ms. Production role and registered
+migration qualification, administrator reads/reconciliation, actual Gateway and
+Canvas-to-wallet qualification, and cross-repository retirement remain open.
