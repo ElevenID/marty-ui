@@ -18,8 +18,8 @@ use crate::external_observation_admission::{
     InsertPlan, Observation, ProducerGrant, ReplaySnapshot, Scalar, StoredReceipt,
 };
 
-/// Candidate schema, deliberately NOT registered in startup migrations.
-pub const CANDIDATE_SCHEMA: &str = include_str!("../schema/external_observation_journal.sql");
+/// Single SQL source registered by the protected issuance schema-owner command.
+pub const OBSERVATION_SCHEMA: &str = crate::external_observation_schema::MIGRATION_SQL;
 
 /// Identity from successful Common Gateway authentication, not body/header claims.
 /// No raw API key is stored here or in the journal.

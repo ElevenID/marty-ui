@@ -3,7 +3,11 @@ on:
   pull_request:
     paths:
       - 'rust/services/issuance/src/external_observation*.rs'
-      - 'rust/services/issuance/schema/external_observation_journal.sql'
+      - 'rust/services/issuance/migrations/0014_external_observation_authority.sql'
+      - 'rust/services/issuance/schema/external_observation_catalog*'
+      - 'rust/services/issuance/src/migration.rs'
+      - 'rust/services/issuance/src/lib.rs'
+      - 'rust/services/issuance/tests/customer_bootstrap_postgres.rs'
       - 'contracts/external-observation-v1.schema.json'
       - 'tests/rust/external-observation-journal/**'
       - 'scripts/run_external_observation_journal_contract.py'
@@ -16,7 +20,11 @@ on:
     branches: [main]
     paths:
       - 'rust/services/issuance/src/external_observation*.rs'
-      - 'rust/services/issuance/schema/external_observation_journal.sql'
+      - 'rust/services/issuance/migrations/0014_external_observation_authority.sql'
+      - 'rust/services/issuance/schema/external_observation_catalog*'
+      - 'rust/services/issuance/src/migration.rs'
+      - 'rust/services/issuance/src/lib.rs'
+      - 'rust/services/issuance/tests/customer_bootstrap_postgres.rs'
       - 'contracts/external-observation-v1.schema.json'
       - 'tests/rust/external-observation-journal/**'
       - 'scripts/run_external_observation_journal_contract.py'

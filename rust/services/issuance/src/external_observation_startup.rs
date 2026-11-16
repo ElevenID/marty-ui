@@ -40,6 +40,9 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
         .execute(&mut *tx)
         .await
         .map_err(|_| FAILURE)?;
+    crate::external_observation_schema::validate(&mut tx)
+        .await
+        .map_err(|_| FAILURE)?;
     // LIMIT 0 checks column availability and row-lock privileges without reading
     // records or modifying any authority. Keep this aligned with the adapter.
     for statement in [

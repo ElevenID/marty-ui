@@ -1,5 +1,7 @@
 //! Execute the actual fresh migration with a non-default customer tenant.
-use marty_issuance_service::migration::{migrate_owned_schema, seed_organization_id};
+use marty_issuance_service::migration::{
+    migrate_owned_schema, seed_organization_id, verify_owned_schema,
+};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, Row};
 
@@ -66,6 +68,19 @@ async fn fresh_customer_migration_seeds_only_its_active_catalog_when_configured(
     }
     migrate_owned_schema(&pool, organization_id).await.unwrap();
     migrate_owned_schema(&pool, organization_id).await.unwrap();
+    verify_owned_schema(&pool).await.unwrap();
+    let observation_version_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.rust_schema_migrations WHERE version=$1",
+    )
+    .bind(marty_issuance_service::external_observation_schema::VERSION)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(observation_version_count, 1);
+    let observation_tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='issuance_service' AND table_name LIKE 'external_observation_%'",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(observation_tables, 6);
     let rows = sqlx::query(
         "SELECT id,organization_id,credential_template_id,claim_collection_rules
          FROM issuance_service.application_templates",
