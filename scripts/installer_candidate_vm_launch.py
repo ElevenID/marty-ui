@@ -25,7 +25,10 @@ import installer_candidate_qemu_observe as observer
 from installer_candidate_vm_create import _bytes, _disk_digest, _read_record, _write
 from installer_candidate_vm_runtime import _named_disk, _same_path
 from installer_candidate_vm_seed import verify_seed
-from installer_candidate_vm_policy import ROOTLESS_PROFILES, memory_mib, seed_profile
+from installer_candidate_vm_policy import (
+    ROOTLESS_PROFILES, RESOURCE_PROFILES, ROOTLESS_FIXTURE_RESOURCE_PROFILE,
+    memory_mib, seed_profile, launch_schema,
+)
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-launch/v1"
@@ -34,6 +37,7 @@ PID_SCHEMA = "elevenid.installer-vm-pid/v2"
 QEMU = Path("/usr/bin/qemu-system-x86_64")
 SETPRIV = Path("/usr/bin/setpriv")
 MEMORY_MIB = 4096
+ROOTLESS_FIXTURE_MEMORY_MIB = memory_mib(ROOTLESS_FIXTURE_RESOURCE_PROFILE)
 CPUS = 2
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
 
@@ -405,7 +409,7 @@ def _launch_held(
                 "VM receipt chain changed before launch",
             )
             intent = {
-                "schema": ROOTLESS_SCHEMA if resource_profile else SCHEMA,
+                "schema": launch_schema(resource_profile),
                 "phase": "intent",
                 "vm_id": vm_id,
                 "seed_receipt_sha256": release.digest(seed_raw),
@@ -641,7 +645,7 @@ def observe_existing(registry: Path, runtime_parent: Path, *, vm_id: str) -> dic
         control_dir = registry / (vm_id + ".control")
         _safe_runtime_path(runtime_dir)
         release.require(
-            intent["schema"] == (ROOTLESS_SCHEMA if resource_profile else SCHEMA)
+            intent["schema"] == (launch_schema(resource_profile))
             and (resource_profile is None or
                  (intent["resource_profile"] == resource_profile and not legacy_pid))
             and spawned["schema"] in (SCHEMA, PID_SCHEMA)
@@ -806,7 +810,7 @@ def main() -> int:
     for name in ("source", "registry", "vm-parent", "runtime-parent"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
-    parser.add_argument("--resource-profile", choices=sorted(ROOTLESS_PROFILES))
+    parser.add_argument("--resource-profile", choices=sorted(RESOURCE_PROFILES))
     parser.add_argument("--observe-existing", action="store_true")
     args = parser.parse_args()
     try:

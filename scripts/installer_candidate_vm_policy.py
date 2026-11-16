@@ -43,6 +43,47 @@ ROOTLESS_ASSETS_SHA256 = {
 ROOTLESS_SEED_FIELDS = {"resource_profile", "guest_uid", "docker_host", "rootless_assets_sha256"}
 
 
+# Distinct, dormant installer-only qualification bootstrap. Its initial Engine
+# belongs only to fixture-admin; installer has neither sudo nor Docker access.
+# This resource selection never grants product/rootless-daemon qualification.
+ROOTLESS_FIXTURE_RESOURCE_PROFILE = "installer-only-rootless-fixture-2gib"
+ROOTLESS_FIXTURE_PROFILE = "installer_only_rootless_fixture"
+ROOTLESS_FIXTURE_PACKAGES = dict(PACKAGES)
+RESOURCE_PROFILES = ROOTLESS_PROFILES | {ROOTLESS_FIXTURE_RESOURCE_PROFILE}
+FIXTURE_SEED_FIELDS = {"resource_profile", "guest_uid", "fixture_profile", "bootstrap_engine"}
+
+
+def profile_seed_fields(resource_profile: str | None) -> dict:
+    if resource_profile is None:
+        return {}
+    if resource_profile == ROOTLESS_FIXTURE_RESOURCE_PROFILE:
+        return dict(resource_profile=resource_profile, guest_uid=ROOTLESS_UID,
+                    fixture_profile=ROOTLESS_FIXTURE_PROFILE,
+                    bootstrap_engine="fixture-admin-rootful-setup-only")
+    return rootless_seed_fields(resource_profile)
+
+
+def seed_extra_fields(resource_profile: str | None) -> set[str]:
+    return set(profile_seed_fields(resource_profile))
+
+
+def seed_schema(resource_profile: str | None) -> str:
+    profile_seed_fields(resource_profile)
+    version = 3 if resource_profile == ROOTLESS_FIXTURE_RESOURCE_PROFILE else (2 if resource_profile else 1)
+    return f"elevenid.installer-vm-seed/v{version}"
+
+
+def launch_schema(resource_profile: str | None) -> str:
+    profile_seed_fields(resource_profile)
+    version = 3 if resource_profile == ROOTLESS_FIXTURE_RESOURCE_PROFILE else (2 if resource_profile else 1)
+    return f"elevenid.installer-vm-launch/v{version}"
+
+
+def seed_packages(resource_profile: str | None) -> dict[str, str]:
+    profile_seed_fields(resource_profile)
+    return ROOTLESS_PACKAGES if resource_profile in ROOTLESS_PROFILES else PACKAGES
+
+
 def require_rootless_profile(value: str) -> str:
     release.require(type(value) is str and value in ROOTLESS_PROFILES,
                     "VM rootless resource profile unsupported")
@@ -52,8 +93,8 @@ def require_rootless_profile(value: str) -> str:
 def memory_mib(resource_profile: str | None) -> int:
     if resource_profile is None:
         return 4096
-    require_rootless_profile(resource_profile)
-    return 8192
+    profile_seed_fields(resource_profile)
+    return 2048 if resource_profile == ROOTLESS_FIXTURE_RESOURCE_PROFILE else 8192
 
 
 def rootless_seed_fields(resource_profile: str) -> dict:
@@ -65,9 +106,20 @@ def rootless_seed_fields(resource_profile: str) -> dict:
 def seed_profile(record: dict) -> str | None:
     """Validate the closed, explicit seed policy without changing v1 meaning."""
     if record.get("schema") == "elevenid.installer-vm-seed/v1":
-        release.require(not (set(record) & ROOTLESS_SEED_FIELDS),
+        release.require(not (set(record) & (ROOTLESS_SEED_FIELDS | FIXTURE_SEED_FIELDS)),
                         "legacy VM seed contains rootless selection")
         return None
+    if record.get("schema") == "elevenid.installer-vm-seed/v3":
+        expected = profile_seed_fields(ROOTLESS_FIXTURE_RESOURCE_PROFILE)
+        release.require(record.get("guest_user") == GUEST_USER
+                        and record.get("packages") == ROOTLESS_FIXTURE_PACKAGES
+                        and not (set(record) & {"docker_host", "rootless_assets_sha256"})
+                        and all(type(record.get(key)) is type(value) and record[key] == value
+                                for key, value in expected.items()),
+                        "VM fixture seed policy differs")
+        return ROOTLESS_FIXTURE_RESOURCE_PROFILE
+    release.require(not (set(record) & {"fixture_profile", "bootstrap_engine"}),
+                    "product VM seed contains fixture selection")
     release.require(record.get("schema") == "elevenid.installer-vm-seed/v2",
                     "VM seed version unsupported")
     profile = require_rootless_profile(record.get("resource_profile"))

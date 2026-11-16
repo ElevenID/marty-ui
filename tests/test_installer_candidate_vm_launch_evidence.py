@@ -159,6 +159,27 @@ def refresh_links(entries):
     e["launch_receipt"]["intent_sha256"] = e["launch_pid"]["intent_sha256"]
 
 
+def test_rootless_fixture_chain_requires_closed_seed_and_2gib_launch():
+    import installer_candidate_vm_policy as policy
+    entries, boot = chain()
+    profile = policy.ROOTLESS_FIXTURE_RESOURCE_PROFILE
+    for name in ("seed_intent", "seed_receipt"):
+        entries[name].update(policy.profile_seed_fields(profile))
+        entries[name]["schema"] = policy.seed_schema(profile)
+        entries[name]["packages"] = policy.ROOTLESS_FIXTURE_PACKAGES
+    for name in ("launch_intent", "launch_receipt"):
+        entries[name].update(schema=policy.launch_schema(profile), resource_profile=profile,
+                             memory_mib=policy.memory_mib(profile))
+    refresh_links(entries)
+    assert bind_chain(entries, boot)["seed_receipt_sha256"] == release.digest(
+        release.encode(entries["seed_receipt"]))
+    entries["launch_intent"]["memory_mib"] = 4096
+    entries["launch_receipt"]["memory_mib"] = 4096
+    refresh_links(entries)
+    with pytest.raises(ValueError):
+        bind_chain(entries, boot)
+
+
 def test_provisioning_chain_binds_pristine_receipts_without_rehashing_booted_disk():
     entries, boot = chain()
     bound = bind_chain(entries, boot)

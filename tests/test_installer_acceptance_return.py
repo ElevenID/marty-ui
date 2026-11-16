@@ -151,7 +151,7 @@ def test_production_transport_allows_only_exact_read_only_run_endpoint(monkeypat
     client=t.Client('synthetic-token');calls=[]
     monkeypatch.setattr(client,'_read',lambda url,**kwargs:(calls.append((url,kwargs)) or b'{"id":99}'))
     assert client.request('GET',t.REPO+'/actions/runs/99')==dict(id=99)
-    assert calls==[('https://api.github.com'+t.REPO+'/actions/runs/99',dict(method='GET',body=None))]
+    assert calls==[('https://api.github.com'+t.REPO+'/actions/runs/99',dict(method='GET',body=None,maximum=t.MAX_BYTES))]
     for method,path,body in [('POST',t.REPO+'/actions/runs/99',None),('GET',t.REPO+'/actions/runs/99',{}),
         ('GET',t.REPO+'/actions/runs/0',None),('GET',t.REPO+'/actions/runs/099',None),
         ('GET',t.REPO+'/actions/runs/99/jobs',None),('GET',t.REPO+'/actions/runs/99?token=x',None),
