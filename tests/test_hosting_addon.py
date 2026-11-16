@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import shutil
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -103,8 +105,7 @@ def test_signing_rejects_foreign_attempt_and_linked_signature(packaged, monkeypa
     assert not calls
 
 
-@pytest.mark.parametrize("fault", [None, "different-core-attempt", "different-existing-addon"])
-def test_publication_authenticates_same_core_attempt_and_never_replaces_assets(packaged, monkeypatch, tmp_path, fault):
+def publication_fixture(packaged, tmp_path):
     _, output, value, _ = packaged
     for name in addon.ASSETS:
         for suffix in (".sigstore.json", ".provenance.jsonl"):
@@ -116,13 +117,67 @@ def test_publication_authenticates_same_core_attempt_and_never_replaces_assets(p
             ("install.sh", "marty-deploy-linux-amd64", "prepared-selfhost-bundle.zip", "prepared-selfhost-images.json")],
         "images": {"gateway": "ghcr.io/elevenid/app@sha256:" + "f" * 64,
                    "openbao_didcomm_image": "ghcr.io/elevenid/plugin@sha256:" + "e" * 64}}
+    names = publish_hosting_addon.core_assets(value["release_tag"])
+    core = tmp_path / "core"
+    core.mkdir(mode=0o700)
+    for name in names:
+        (core / name).write_bytes(b"core fixture")
+    (core / "installer-inventory.json").write_text(json.dumps(inventory))
+    return output, value, inventory, core
+
+
+@pytest.mark.parametrize("fault", [None, "source_sha", "release_tag", "build_run_id", "build_run_attempt",
+                                  "missing-proof", "extra", "linked", "bad-provenance"])
+def test_prepared_addon_authenticates_complete_same_core_before_publication(packaged, monkeypatch, tmp_path, fault):
+    output, value, inventory, core = publication_fixture(packaged, tmp_path)
+    if fault in {"source_sha", "release_tag", "build_run_id", "build_run_attempt"}:
+        inventory[fault] = {"source_sha": "f" * 40, "release_tag": "v9.9.9",
+                            "build_run_id": 99, "build_run_attempt": 99}[fault]
+        (core / "installer-inventory.json").write_text(json.dumps(inventory))
+    elif fault == "missing-proof":
+        (output / (addon.ARCHIVE + ".provenance.jsonl")).unlink()
+    elif fault == "extra":
+        (output / "unselected.txt").write_text("foreign")
+    elif fault == "linked":
+        path = output / (addon.ARCHIVE + ".provenance.jsonl")
+        path.unlink()
+        path.symlink_to(core / "install.sh")
+    calls, verified = [], []
+    monkeypatch.setattr(publish_hosting_addon, "verify_signatures", lambda _: value)
+    monkeypatch.setattr(publish_hosting_addon, "command", lambda *args: calls.append(args))
+    def verify(*args, **kwargs):
+        verified.append((args, kwargs))
+        if fault == "bad-provenance":
+            raise ValueError("wrong original producer invocation")
+    monkeypatch.setattr(publish_hosting_addon, "verify_subject", verify)
+    if fault:
+        with pytest.raises(ValueError):
+            publish_hosting_addon.verify_prepared(output, core, tmp_path / "gh")
+    else:
+        assert publish_hosting_addon.verify_prepared(output, core, tmp_path / "gh") == value
+        assert len(verified) == 4
+        assert all(kwargs == dict(gh=tmp_path / "gh", workflow=value["signer_workflow"],
+                   source_sha=value["source_sha"], run_id=value["build_run_id"],
+                   run_attempt=value["build_run_attempt"]) for _, kwargs in verified)
+    assert all(args[0] == "cosign" for args in calls)
+
+
+@pytest.mark.parametrize("fault", [None, "different-core-attempt", "different-existing-addon",
+                                  "missing-addon", "extra", "unfinished", "mutable", "draft"])
+def test_published_verification_is_read_only_and_never_repairs_immutable_assets(packaged, monkeypatch, tmp_path, fault):
+    output, value, inventory, core = publication_fixture(packaged, tmp_path)
     if fault == "different-core-attempt":
         inventory["build_run_attempt"] += 1
     names = publish_hosting_addon.core_assets(value["release_tag"])
     remote = {name: b"core fixture" for name in names}
     remote["installer-inventory.json"] = json.dumps(inventory).encode()
+    remote.update({name: (output / name).read_bytes() for name in publish_hosting_addon.publication_files()})
     if fault == "different-existing-addon":
         remote[addon.MANIFEST] = b"different immutable manifest"
+    elif fault == "missing-addon":
+        del remote[addon.MANIFEST]
+    elif fault == "extra":
+        remote["foreign-addon.zip"] = b"foreign"
     calls, verified = [], []
 
     def command(*args):
@@ -131,8 +186,11 @@ def test_publication_authenticates_same_core_attempt_and_never_replaces_assets(p
             return "\n".join(sorted(names))
         if args[:2] == ("gh", "api"):
             if "/releases/tags/" in args[2]:
-                return json.dumps({"tag_name": value["release_tag"], "prerelease": "-nightly." in value["release_tag"], "draft": False,
-                    "assets": [{"name": name, "size": len(data), "state": "uploaded"} for name, data in remote.items()]})
+                return json.dumps({"tag_name": value["release_tag"], "prerelease": "-nightly." in value["release_tag"],
+                    "draft": fault == "draft", "immutable": fault != "mutable",
+                    "assets": [{"name": name, "size": len(data),
+                                "state": "starter" if fault == "unfinished" and name == addon.MANIFEST else "uploaded"}
+                               for name, data in remote.items()]})
             if "/git/ref/" in args[2]:
                 return json.dumps({"object": {"type": "tag", "sha": "c" * 40}})
             if "/git/tags/" in args[2]:
@@ -141,26 +199,141 @@ def test_publication_authenticates_same_core_attempt_and_never_replaces_assets(p
             name = args[args.index("--pattern") + 1]
             (Path(args[args.index("--dir") + 1]) / name).write_bytes(remote[name])
         elif args[:3] == ("gh", "release", "upload"):
-            for name in args[6:]:
-                path = Path(name)
-                assert path.name not in remote
-                remote[path.name] = path.read_bytes()
+            pytest.fail("GitHub rejects uploads after immutable publication")
         return ""
 
     monkeypatch.setattr(publish_hosting_addon, "command", command)
     monkeypatch.setattr(publish_hosting_addon, "verify_signatures", lambda _: value)
+    monkeypatch.setattr(publish_hosting_addon, "validate", lambda _: value)
     monkeypatch.setattr(publish_hosting_addon, "verify_subject", lambda *args, **kwargs: verified.append((args, kwargs)))
     if fault:
-        with pytest.raises(ValueError, match="attempt differ|refusing overwrite"):
-            publish_hosting_addon.publish(output, tmp_path / "gh")
-        assert not any(call[:3] == ("gh", "release", "upload") for call in calls)
+        with pytest.raises(ValueError):
+            publish_hosting_addon.verify_published(output, tmp_path / "gh")
     else:
-        publish_hosting_addon.publish(output, tmp_path / "gh")
+        publish_hosting_addon.verify_published(output, tmp_path / "gh")
         assert all(remote[name] == (output / name).read_bytes() for name in publish_hosting_addon.publication_files())
         assert len(verified) == 4
         assert all(kwargs["run_attempt"] == value["build_run_attempt"] for _, kwargs in verified)
         assert all(kwargs["workflow"] == addon.build_workflow(value["release_tag"]) for _, kwargs in verified)
         assert all("--clobber" not in call for call in calls)
+    assert not any(call[:3] in (("gh", "release", "upload"), ("gh", "release", "delete"),
+                              ("gh", "release", "edit"), ("gh", "release", "create")) for call in calls)
+
+
+@pytest.mark.parametrize("packaged", [TAG], indirect=True)
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("fault", [None, "existing", "existing-partial", "changed", "missing",
+                                  "extra", "duplicate", "unfinished", "mutable", "draft"])
+def test_nightly_creates_entire_selected_closure_before_immutability(packaged, monkeypatch, tmp_path, selected, fault):
+    """Model GitHub's draft/upload/publish flow; published uploads are forbidden."""
+    output, value, _, core = publication_fixture(packaged, tmp_path)
+    for key, setting in {"GITHUB_REF": "refs/heads/main", "GITHUB_SHA": value["source_sha"],
+                         "GITHUB_RUN_ID": str(value["build_run_id"]),
+                         "GITHUB_RUN_ATTEMPT": str(value["build_run_attempt"])}.items():
+        monkeypatch.setenv(key, setting)
+    candidate = {"source_sha": value["source_sha"], "claim_run_id": "123"}
+    expected_paths = list(core.iterdir()) + (list(output.iterdir()) if selected else [])
+    expected = {p.name: p.read_bytes() for p in expected_paths}
+    assert len(expected) == (51 if selected else 42)
+    existing = fault in {"existing", "existing-partial"}
+    remote = dict(expected) if existing else {}
+    missing_name = addon.MANIFEST if selected else "install.sh"
+    if fault == "existing-partial":
+        del remote[missing_name]
+    calls, verified = [], []
+    monkeypatch.setattr(publish_nightly_release, "verify_signed", lambda *args, **kwargs: candidate)
+    monkeypatch.setattr(publish_hosting_addon, "verify_subject", lambda *args, **kwargs: verified.append((args, kwargs)))
+    monkeypatch.setattr(publish_hosting_addon, "verify_signatures", lambda _: value)
+    monkeypatch.setattr(publish_nightly_release.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(returncode=0 if existing else 1, stdout="" if existing else "HTTP/2 404 Not Found"))
+    message = f"Installation-test nightly\nSource-SHA: {value['source_sha']}\nClaim: 123\nRun: {value['build_run_id']}\n"
+
+    def command(*args, **kwargs):
+        calls.append(args)
+        if args[0] == "git":
+            if "merge-base" in args:
+                return value["source_sha"]
+            if "ls-remote" in args:
+                return "existing annotated source ref"
+            return ""
+        if args[:2] == ("gh", "api"):
+            if "/git/ref/" in args[2]:
+                return json.dumps({"object": {"type": "tag", "sha": "c" * 40}})
+            if "/git/tags/" in args[2]:
+                return json.dumps({"tag": value["release_tag"], "message": message,
+                                   "object": {"type": "commit", "sha": value["source_sha"]}})
+            if "/releases/tags/" in args[2]:
+                entries = [{"name": name, "size": len(data),
+                            "state": "starter" if fault == "unfinished" and name == missing_name else "uploaded"}
+                           for name, data in remote.items()]
+                if fault == "duplicate":
+                    entries.append(dict(entries[0]))
+                return json.dumps({"tag_name": value["release_tag"], "prerelease": True,
+                                   "draft": fault == "draft", "immutable": fault != "mutable",
+                                   "assets": entries, "html_url": "https://github.com/ElevenID/marty-ui/releases/tag/fixture"})
+        if args[:3] == ("gh", "release", "create"):
+            assert not existing and not remote
+            assert len(verified) == (4 if selected else 0), "selected proofs must precede publication"
+            paths = [Path(name) for name in args[args.index("--notes-file") + 2:]]
+            assert len(paths) == len(expected) and {p.name for p in paths} == set(expected)
+            # The CLI uploads the complete set while draft, then publishes once.
+            remote.update({p.name: p.read_bytes() for p in paths})
+            if fault == "missing":
+                del remote[missing_name]
+            elif fault == "extra":
+                remote["foreign-addon.zip"] = b"unexpected"
+            elif fault == "changed":
+                remote[missing_name] = b"changed after selection"
+        if args[:3] == ("gh", "release", "download"):
+            directory = Path(args[args.index("--dir") + 1])
+            names = [args[i + 1] for i, arg in enumerate(args) if arg == "--pattern"]
+            assert set(names) == set(expected)
+            for name in names:
+                (directory / name).write_bytes(remote[name])
+        if args[:3] in (("gh", "release", "upload"), ("gh", "release", "edit"), ("gh", "release", "delete")):
+            pytest.fail("immutable release must never be repaired or replaced")
+        return ""
+
+    monkeypatch.setattr(publish_nightly_release, "command", command)
+    monkeypatch.setattr(publish_hosting_addon, "command", command)
+    def publish():
+        publish_nightly_release.publish(core, ROOT, value["release_tag"], str(value["build_run_id"]), tmp_path / "gh",
+                                        cloudflare_addon_assets=output if selected else None)
+    if fault not in {None, "existing"}:
+        with pytest.raises(ValueError):
+            publish()
+    else:
+        publish()
+        assert remote == expected
+    assert sum(call[:3] == ("gh", "release", "create") for call in calls) == (0 if existing else 1)
+    assert all("--clobber" not in call for call in calls)
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("fault", [None, "missing", "extra", "duplicate", "unfinished", "empty", "mutable", "draft"])
+def test_stable_publisher_requires_exact_immutable_selected_closure(tmp_path, selected, fault):
+    names = publish_hosting_addon.core_assets("v1.2.3")
+    optional = publish_hosting_addon.publication_files()
+    expected = names | (optional if selected else set())
+    document = {"prerelease": False, "draft": fault == "draft", "immutable": fault != "mutable",
+                "assets": [{"name": name, "state": "uploaded", "size": 1} for name in sorted(expected)]}
+    chosen = next(a for a in document["assets"] if a["name"] == (addon.MANIFEST if selected else "install.sh"))
+    if fault == "missing":
+        document["assets"].remove(chosen)
+    elif fault == "extra":
+        document["assets"].append({"name": "foreign.zip" if selected else addon.MANIFEST, "state": "uploaded", "size": 1})
+    elif fault == "duplicate":
+        document["assets"].append(dict(chosen))
+    elif fault == "unfinished":
+        chosen["state"] = "starter"
+    elif fault == "empty":
+        chosen["size"] = 0
+    response = tmp_path / "release.json"
+    response.write_text(json.dumps(document))
+    result = subprocess.run(["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c",
+        'source "$1"; operator_release_require_publication_assets "$2" "$3"', "--",
+        str(ROOT / "scripts/operator-release-assets.sh"), str(response), str(selected).lower()], capture_output=True, text=True)
+    assert (result.returncode == 0) is (fault is None)
 
 
 @pytest.mark.parametrize("mutation", [
@@ -220,29 +393,72 @@ def test_packaging_refuses_source_drift_and_existing_output(packaged, tmp_path):
         addon.package(source, tmp_path / "changed", **args)
 
 
-@pytest.mark.parametrize("filename, needs, condition", [
-    ("nightly-release.yml", ["admit", "publish"],
+@pytest.mark.parametrize("filename, needs, publisher, condition", [
+    ("nightly-release.yml", ["admit"], "publish",
      "${{ inputs.publish_cloudflare_addon }}"),
-    ("cd.yml", ["resolve-transaction", "publish-manifest"],
+    ("cd.yml", ["resolve-transaction"], "publish-manifest",
      "${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}"),
 ])
-def test_optional_producer_runs_only_after_core_publication(filename, needs, condition):
+def test_optional_producer_prepares_same_attempt_before_selected_publication(filename, needs, publisher, condition):
     workflow = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())
     inputs = workflow.get("on", workflow.get(True))["workflow_dispatch"]["inputs"]
     assert inputs["publish_cloudflare_addon"] == {
-        "description": "Publish the optional signed Cloudflare connector after the core release",
+        "description": "Include the optional signed Cloudflare connector in the immutable release",
         "required": False, "type": "boolean", "default": False,
     }
     jobs = workflow["jobs"]
     optional = jobs["publish-cloudflare-addon"]
     assert optional["needs"] == needs
     assert optional["if"] == condition
-    assert all("publish-cloudflare-addon" not in job.get("needs", []) for name, job in jobs.items()
-               if name != "publish-cloudflare-addon")
+    assert "publish-cloudflare-addon" in jobs[publisher]["needs"]
+    assert publisher not in optional["needs"]
+    assert optional["permissions"]["contents"] == "read"
     build = next(s for s in optional["steps"] if s.get("id") == "image")
     assert build["with"]["provenance"] == "mode=max"
     assert build["with"]["sbom"] is True
     assert "push-by-digest=true" in build["with"]["outputs"]
+    artifact = "cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}"
+    upload = next(s for s in optional["steps"] if s.get("uses", "").startswith("actions/upload-artifact@"))
+    assert upload["with"]["name"] == artifact
+    download = next(s for s in jobs[publisher]["steps"] if s.get("with", {}).get("name") == artifact)
+    assert download["if"] == "inputs.publish_cloudflare_addon"
+    assert not any("--phase publish" in s.get("run", "") for s in optional["steps"])
+    assert not any("gh release" in s.get("run", "") for s in optional["steps"])
+
+    expression = jobs[publisher]["if"].removeprefix("${{").removesuffix("}}").strip()
+    assert "!cancelled()" in expression  # Override Actions' implicit success() on skipped needs.
+    def permitted(selected, results, cancelled=False):
+        evaluated = expression.replace("!cancelled()", repr(not cancelled))
+        evaluated = evaluated.replace("inputs.publish_cloudflare_addon", repr(selected))
+        evaluated = re.sub(r"needs\.([\w-]+)\.result", lambda m: repr(results[m[1]]), evaluated)
+        evaluated = evaluated.replace("&&", " and ").replace("||", " or ").replace("!", " not ")
+        return eval(" ".join(evaluated.split()), {"__builtins__": {}}, {})
+    results = {name: "success" for name in jobs[publisher]["needs"]}
+    assert permitted(True, results)
+    assert not permitted(False, results)
+    assert not permitted(True, results, cancelled=True)
+    for outcome in ("failure", "cancelled", "skipped"):
+        changed = {**results, "publish-cloudflare-addon": outcome}
+        assert not permitted(True, changed)
+        assert permitted(False, changed) is (outcome == "skipped")
+    for dependency in set(results) - {"publish-cloudflare-addon"}:
+        for outcome in ("failure", "cancelled", "skipped"):
+            assert not permitted(False, {**results, "publish-cloudflare-addon": "skipped", dependency: outcome})
+            assert not permitted(True, {**results, dependency: outcome})
+
+
+@pytest.mark.parametrize("filename,publisher", [("nightly-release.yml", "publish"), ("cd.yml", "publish-manifest")])
+@pytest.mark.parametrize("unexpected", [False, True])
+def test_unselected_publisher_refuses_an_accidental_addon_directory(tmp_path, filename, publisher, unexpected):
+    jobs = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())["jobs"]
+    script = next(s["run"] for s in jobs[publisher]["steps"] if "optional_assets=()" in s.get("run", ""))
+    selection = script[script.index("optional_assets=()"):script.index("esac", script.index("optional_assets=()")) + 4]
+    if unexpected:
+        (tmp_path / "cloudflare-addon").mkdir()
+    result = subprocess.run(["bash", "--noprofile", "--norc", "-euo", "pipefail", "-c", selection],
+                            env={"PATH": "/usr/bin:/bin", "RUNNER_TEMP": str(tmp_path), "CLOUDFLARE_ADDON_SELECTED": "false"},
+                            capture_output=True, text=True)
+    assert (result.returncode == 0) is (not unexpected)
 
 
 @pytest.mark.parametrize("tag, script, check", [
@@ -284,7 +500,7 @@ def test_selected_addon_still_requires_the_complete_proof_closure(packaged, monk
     monkeypatch.setattr(publish_hosting_addon, "verify_signatures", lambda _: value)
     monkeypatch.setattr(publish_hosting_addon, "command", lambda *args: calls.append(args))
     with pytest.raises(ValueError, match="asset closure"):
-        publish_hosting_addon.publish(output, tmp_path / "gh")
+        publish_hosting_addon.verify_prepared(output, tmp_path, tmp_path / "gh")
     assert not calls
 
 

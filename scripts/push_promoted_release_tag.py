@@ -269,6 +269,8 @@ def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
     handoff.require(MANDATORY_JOBS <= set(names), "CD transitive prerequisite jobs are missing")
     handoff.require(names.count(REUSABLE_PREFLIGHT_JOB) == 1,
                     "Exactly one release environment preflight is required")
+    handoff.require(names.count("publish-cloudflare-addon") == 1,
+                    "Exactly one optional Cloudflare preparation job is required")
     official = {name.removeprefix("Collect seven official candidate lanes / ") for name in names
                 if isinstance(name, str) and name.startswith("Collect seven official candidate lanes / ")}
     handoff.require(official == LANES, "The complete seven official collection jobs are required")
@@ -281,12 +283,11 @@ def validate_waiting_jobs(jobs: list[dict], run_id: int, source: str) -> None:
         if job is publisher:
             continue
         if job.get("name") == "publish-cloudflare-addon":
-            # This one optional downstream job depends on publication. Requiring
-            # it to finish first would deadlock the genuine source workflow.
-            handoff.require((job.get("status") == "completed" and job.get("conclusion") == "skipped")
-                            or (job.get("status") in {"queued", "waiting", "pending"}
-                                and job.get("conclusion") is None),
-                            "Unexpected downstream Cloudflare execution before publication")
+            # The compatible source workflow prepares selected assets before
+            # publishing. Its publisher permits skip only for an unselected job.
+            handoff.require(job.get("status") == "completed"
+                            and job.get("conclusion") in {"success", "skipped"},
+                            "Optional Cloudflare preparation has not completed")
             continue
         if job.get("name") == REUSABLE_PREFLIGHT_JOB and job.get("status") == "in_progress":
             validate_finished_reusable_preflight(job, publisher)
