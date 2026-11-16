@@ -358,10 +358,43 @@ caught misplaced PostgreSQL bounds/labels before allocation; fixed source and
 actual qualification pass. Reviewers executed no tests. Synthetic issuer/PDP
 responses remain distinct from real holder custody and database execution.
 
-Native receipt migration remains required: consume these explicit grants before
+At this historical checkpoint native receipt migration remained required: consume these explicit grants before
 token exchange/proof signing, freeze selected metadata/endpoints/configuration,
 issuer identities, scope and revision, recheck before submission, and obtain fresh
 authority after the credential response before returning anything for storage.
 The new field is not yet consumed by published native268e; strict decoding rejects
-that newer projection. The producer and retained wallet PRs remain draft pending
+that newer projection. The producer and retained wallet PRs remained draft pending
 this migration and combined/deployed/artifact/installed acceptance.
+
+## Current joined native qualification
+
+The compatible consumer is now Authenticator PR57 at
+`1b6ae35f7e2c62ff60313911982aa99e3f0e1984`. It consumes v2 service grants before
+token exchange/proof preparation, freezes selection/scope/revision, checks fresh
+authority before the credential request and requires fresh authority after the
+response before returning a verified receipt for storage.
+
+The holder driver accepts `--native-wallet-test-binary` alongside its UI artifact.
+Both exact compiled cases are discovered before fixture allocation. The joined
+case executes actual PostgreSQL Trust Profile state through the production
+keyless HTTPS owner, typed Device client, confirmed issuer-only pairing and
+Device HTTPS into the separately compiled native consumer. Holder and controlled
+issuer signatures use non-exportable Transit keys. The consumer verifies one
+receipt, then rejects finalization after a committed service-grant change
+following the second credential response. Replays fail. Both cases explicitly
+passed with zero ignored. Private child output stays in the owned temporary
+directory; only closed milestones/error categories leave the child.
+
+Protected prerequisite PR1976 merged as
+`5a478506d024b9cdc2a93630711d0c874a0ce2b1`; PR1978 was reconciled normally and
+retargeted to main. Independent source review verified its paired-feature source
+unchanged by reconciliation. Build and target Clippy passed. The first joined
+attempt after reconciliation failed its initial issuer-snapshot status before
+the native child; its failure log is retained separately. A fresh explicit run
+passed UI1/native1 with zero ignored and no product retry or verification fallback.
+
+These tests use controlled issuer transport/metadata and PDP decisions. They
+qualify the producer/native boundary. Deployed Issuance/gateway, regenerated
+public WASM, browser storage/migration, installed Android/iOS and independent
+interoperability remain separate wallet acceptance. No production activation or
+migration of an existing installation is implied.
