@@ -7350,14 +7350,18 @@ async fn binding_admin_gateway_forwards_only_trusted_session_context_and_origina
 async fn malformed_observation_admin_paths_cannot_bypass_origin_or_reach_upstream() {
     let recorder = Arc::new(ActorRecordingUpstream::default());
     let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
-    let router = gateway_router(state);
+    let router = gateway_router(state.clone());
     for path in [
         "/v1/organizations/%32%30%30%30%30%30%30%30-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke",
         "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/00000000-0000-0000-0000-000000000000/revoke",
         "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/bad.name/activate",
     ] {
+        // Authentication resolves the route first. Unrouted malformed paths
+        // must be404; matching paths must reach the guard and be403.
+        let expected=if state.routes.find(&GatewayRequest::new(HttpMethod::Post,path,0)).is_ok(){StatusCode::FORBIDDEN}else{StatusCode::NOT_FOUND};
         let response=router.clone().oneshot(Request::builder().method("POST").uri(path).header("cookie","sessionId=observation-session").header("content-type","application/json").body(Body::from("{}")).unwrap()).await.unwrap();
-        assert_eq!(response.status(),StatusCode::FORBIDDEN);
+        assert_eq!(response.status(),expected,"malformed path: {path}");
+        assert!(recorder.0.lock().unwrap().is_empty(),"malformed path reached upstream: {path}");
     }
     assert!(recorder.0.lock().unwrap().is_empty());
 }
