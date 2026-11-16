@@ -1356,6 +1356,8 @@ fn validate_relationship(
     reject_private_custody_metadata(&relationship.metadata)?;
     marty_oid4vp_contract::trust_authority::credential_authorizations(&relationship.metadata)
         .map_err(|_| TrustProfileApplicationError::Invalid("credential_authorizations"))?;
+    crate::wallet_issuer_authority::authorizations(&relationship.metadata)
+        .map_err(|_| TrustProfileApplicationError::Invalid("wallet_issuance_authorizations"))?;
     Ok(())
 }
 

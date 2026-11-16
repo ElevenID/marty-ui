@@ -188,7 +188,7 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                         "generated_at": now.isoformat(), "expires_at": (now + timedelta(seconds=30)).isoformat(),
                         "require_not_before": True, "issuer_keys": [{"issuer": "did:web:issuer.example", "key_id": "issuer-key",
                             "algorithm": "ES256", "public_jwk": public_key,
-                            "credential_authorizations": [{"format": "SD_JWT_VC", "vct": "https://credentials.example/identity"}]}]}
+                            "credential_authorizations": [{"format": "SD_JWT_VC", "vct": "https://credentials.example/identity"}], "issuance_authorizations": []}]}
                     if issuer_case == "wrong-scope":
                         snapshot["organization_id"] = "other-org"
                     elif issuer_case == "expired":

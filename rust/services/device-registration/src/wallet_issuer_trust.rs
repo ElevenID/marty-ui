@@ -2,6 +2,7 @@
 use crate::DeviceError;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use marty_key_material_policy::contains_private_key;
+use marty_oid4vp_contract::wallet_issuance::IssuanceAuthorization;
 use marty_oid4vp_contract::{
     trust_authority::{
         issuer_public_key_algorithm, issuer_public_key_thumbprint, CredentialTypeAuthorizationV1,
@@ -150,6 +151,7 @@ struct IssuerKey {
     algorithm: String,
     public_jwk: Value,
     credential_authorizations: Vec<CredentialTypeAuthorizationV1>,
+    issuance_authorizations: Vec<IssuanceAuthorization>,
 }
 fn validate_snapshot(
     value: &Value,
@@ -211,6 +213,16 @@ fn validate_snapshot(
                 return Err(invalid());
             }
         }
+        if key.issuance_authorizations.len() > 128 {
+            return Err(invalid());
+        }
+        let mut services = BTreeSet::new();
+        for service in key.issuance_authorizations {
+            service.validate().map_err(|_| invalid())?;
+            if !grants.iter().any(|grant| grant.vct == service.vct) || !services.insert(service) {
+                return Err(invalid());
+            }
+        }
     }
     Ok(())
 }
@@ -225,7 +237,7 @@ mod tests {
             "generated_at":now,"expires_at":now+ChronoDuration::seconds(30),"require_not_before":true,
             "issuer_keys":[{"issuer":"did:web:issuer.example","key_id":"issuer-key","algorithm":"EdDSA",
                 "public_jwk":{"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","use":"sig","kid":"issuer-key"},
-                "credential_authorizations":[{"format":"SD_JWT_VC","vct":"https://credential.example/identity"}]}]})
+                "credential_authorizations":[{"format":"SD_JWT_VC","vct":"https://credential.example/identity"}],"issuance_authorizations":[]}]})
     }
     #[test]
     fn unsafe_owner_configuration_is_rejected_before_fetch() {
@@ -251,6 +263,15 @@ mod tests {
         let now = Utc::now();
         let original = snapshot(now);
         assert!(validate_snapshot(&original, PROFILE, "org-a", now).is_ok());
+        let mut service = original.clone();
+        service["issuer_keys"][0]["issuance_authorizations"] = json!([{
+            "credential_issuer":"https://service.example/tenant","credential_configuration_id":"identity",
+            "format":"dc+sd-jwt","vct":"https://credential.example/identity",
+            "authorization_server":null,"token_endpoint":null}]);
+        assert!(validate_snapshot(&service, PROFILE, "org-a", now).is_ok());
+        service["issuer_keys"][0]["issuance_authorizations"][0]["vct"] =
+            json!("urn:ungranted:credential");
+        assert!(validate_snapshot(&service, PROFILE, "org-a", now).is_err());
         for (pointer, value) in [
             ("/contract", json!("legacy")),
             ("/organization_id", json!("other")),

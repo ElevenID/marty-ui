@@ -1517,7 +1517,7 @@ async fn wallet_issuer_authority(
     }
     let observed = state
         .repository
-        .credential_authority_snapshot(&query.organization_id, profile.id)
+        .wallet_issuer_authority_snapshot(&query.organization_id, profile.id)
         .await
         .map_err(repository_error)?
         .ok_or_else(|| not_found("Trust Profile not found"))?;
@@ -1529,14 +1529,14 @@ async fn wallet_issuer_authority(
     }
     let fresh = state
         .repository
-        .credential_authority_snapshot(&query.organization_id, current.id)
+        .wallet_issuer_authority_snapshot(&query.organization_id, current.id)
         .await
         .map_err(repository_error)?
         .ok_or_else(|| not_found("Trust Profile not found"))?;
     if observed != fresh {
         return Err(conflict("Wallet issuer authority changed during lookup"));
     }
-    let projection = crate::credential_authority::wallet_issuer_authority(&fresh, Utc::now())
+    let projection = crate::wallet_issuer_authority::project(&fresh, Utc::now())
         .map_err(credential_authority_error)?;
     Ok((
         [(axum::http::header::CACHE_CONTROL, "no-store")],

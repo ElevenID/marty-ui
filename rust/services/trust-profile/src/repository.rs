@@ -92,6 +92,19 @@ pub trait TrustProfileRepository: Send + Sync {
         organization_id: &str,
         profile_id: Uuid,
     ) -> Result<Option<CredentialAuthoritySnapshotV1>, TrustProfileRepositoryError>;
+    async fn wallet_issuer_authority_snapshot(
+        &self,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<
+        Option<crate::wallet_issuer_authority::WalletIssuerAuthoritySnapshot>,
+        TrustProfileRepositoryError,
+    > {
+        let _ = (organization_id, profile_id);
+        Err(TrustProfileRepositoryError::InvalidData(
+            "wallet_issuer_authority.unsupported_repository",
+        ))
+    }
     async fn profiles_by_organization(
         &self,
         organization_id: &str,
@@ -186,6 +199,7 @@ struct MemoryState {
     registry_entries: HashMap<Uuid, TrustRegistryEntry>,
     profiles: HashMap<Uuid, TrustProfile>,
     credential_authority_revisions: HashMap<Uuid, (u32, String)>,
+    wallet_issuer_authority_revisions: HashMap<Uuid, (u32, String)>,
     issuers: HashMap<Uuid, IssuerEntity>,
     profile_issuers: HashMap<Uuid, TrustProfileIssuer>,
     registry_import_sources: HashMap<Uuid, RegistryImportSource>,
@@ -446,6 +460,58 @@ impl TrustProfileRepository for MemoryTrustProfileRepository {
         let snapshot = crate::credential_authority::authority_snapshot(basis, version)?;
         state
             .credential_authority_revisions
+            .insert(profile_id, (version, digest));
+        Ok(Some(snapshot))
+    }
+
+    async fn wallet_issuer_authority_snapshot(
+        &self,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<
+        Option<crate::wallet_issuer_authority::WalletIssuerAuthoritySnapshot>,
+        TrustProfileRepositoryError,
+    > {
+        // One write lock covers graph observation and revision publication.
+        let mut state = self.state.write().await;
+        let Some(profile) = state
+            .profiles
+            .get(&profile_id)
+            .filter(|profile| profile.organization_id == organization_id)
+        else {
+            return Ok(None);
+        };
+        let relationships = state
+            .profile_issuers
+            .values()
+            .filter(|relationship| relationship.trust_profile_id == profile_id)
+            .map(|relationship| {
+                state
+                    .issuers
+                    .get(&relationship.issuer_id)
+                    .cloned()
+                    .map(|issuer| (relationship.clone(), issuer))
+                    .ok_or(TrustProfileRepositoryError::InvalidData(
+                        "wallet_issuer_authority.issuer",
+                    ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let (basis, bindings) = crate::wallet_issuer_authority::basis(profile, relationships)?;
+        let digest = crate::wallet_issuer_authority::digest(&basis, &bindings)?;
+        let version = match state.wallet_issuer_authority_revisions.get(&profile_id) {
+            Some((version, previous)) if previous == &digest => *version,
+            Some((version, _)) => {
+                version
+                    .checked_add(1)
+                    .ok_or(TrustProfileRepositoryError::InvalidData(
+                        "wallet_issuer_authority.version",
+                    ))?
+            }
+            None => 1,
+        };
+        let snapshot = crate::wallet_issuer_authority::snapshot(basis, bindings, version)?;
+        state
+            .wallet_issuer_authority_revisions
             .insert(profile_id, (version, digest));
         Ok(Some(snapshot))
     }

@@ -1098,14 +1098,93 @@ async fn wallet_issuer_v2_uses_canonical_grants_revision_and_policy_controls() {
     );
     assert_eq!(first["expires_at"], json!(issuer.valid_until.unwrap()));
     let snapshot = repository
-        .credential_authority_snapshot("org-1", selected.id)
+        .wallet_issuer_authority_snapshot("org-1", selected.id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
         first["revision"],
-        serde_json::to_value(&snapshot.profile).unwrap()
+        serde_json::to_value(&snapshot.revision).unwrap()
     );
+    let canonical_before = repository
+        .credential_authority_snapshot("org-1", selected.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let service_grant = json!({"credential_issuer":"https://issuance-service.example/tenant",
+        "credential_configuration_id":"identity-configuration","format":"dc+sd-jwt","vct":"https://credentials.example/identity",
+        "authorization_server":null,"token_endpoint":null});
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"] =
+        json!([service_grant.clone()]);
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let bound = body(app.clone().oneshot(get()).await.unwrap()).await;
+    assert_ne!(bound["revision"], first["revision"]);
+    assert_eq!(bound["issuer_keys"][0]["issuer"], "did:web:issuer.example");
+    assert_eq!(
+        bound["issuer_keys"][0]["issuance_authorizations"],
+        json!([service_grant])
+    );
+    assert_eq!(
+        repository
+            .credential_authority_snapshot("org-1", selected.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        canonical_before
+    );
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]["vct"] =
+        json!("urn:ungranted:credential");
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let ungranted = body(app.clone().oneshot(get()).await.unwrap()).await;
+    assert_ne!(ungranted["revision"], bound["revision"]);
+    assert_eq!(
+        ungranted["issuer_keys"][0]["issuance_authorizations"],
+        json!([])
+    );
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]["vct"] =
+        json!("https://credentials.example/identity");
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let mut invalid_metadata = relationship.metadata.clone();
+    invalid_metadata["marty_wallet_issuance_authorizations_v1"][0]["credential_issuer"] =
+        json!("https://issuer.example/*");
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::patch(format!(
+                "/v1/trust-profiles/{}/issuers/{}",
+                selected.id, relationship.id
+            ))
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"metadata":invalid_metadata}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 422);
+    assert_eq!(
+        repository.profile_issuers(selected.id).await.unwrap()[0].metadata,
+        relationship.metadata
+    );
+    let accepted = app
+        .clone()
+        .oneshot(
+            Request::patch(format!(
+                "/v1/trust-profiles/{}/issuers/{}",
+                selected.id, relationship.id
+            ))
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"metadata":relationship.metadata}).to_string(),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
     // No implicit grant follows from a trusted issuer or known public key.
     relationship.metadata = json!({});
     repository.save_profile_issuer(&relationship).await.unwrap();

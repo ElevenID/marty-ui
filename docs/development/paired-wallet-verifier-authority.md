@@ -303,3 +303,65 @@ The native consumer still needs the v2 envelope, exact VCT/not-before enforcemen
 and frozen issuer revision/scope binding. The issuance service/configuration must
 also be explicitly bound to permitted credential issuers; a VCT/key projection
 alone does not establish that relationship. These remain draft acceptance gates.
+
+## Issuance service/configuration grants and wallet revisions
+
+An issuer relationship can now own the bounded, versioned metadata list
+`marty_wallet_issuance_authorizations_v1`. Each entry explicitly binds an exact
+HTTPS `credential_issuer` service identifier, `credential_configuration_id`, wire
+format and VCT to that relationship's permitted signed credential issuer. The
+service URL is not a credential DID. Wildcards, credentials, ambiguous/duplicate
+entries and malformed formats/types are rejected on relationship writes and
+persisted reads. Delegated authorization requires both an explicit authorization
+server and its exact token endpoint. Missing grants authorize no issuance service.
+
+Wallet authority observes the canonical credential-trust basis and these grants
+in one coherent graph. A separate `wallet_issuer_authority_revisions` ledger binds
+both under the wallet v2 digest. Its PostgreSQL reader locks that revision row
+before the single graph query; concurrent first observers reuse one revision.
+Wallet observation does not rewrite the generic credential-authority v1 ledger
+or change its wire contract. Ordinary graph changes still affect that existing
+authority according to its existing inputs. The new additive migration is source
+only outside disposable qualification; no existing installation was migrated.
+
+The owner projects service grants only through keys with an accepted canonical
+format/VCT grant. A service grant for an ungranted VCT is filtered; Device rejects
+injected unmatched grants. Valid relationship writes, invalid wildcard writes,
+wallet revision changes and independent v1 observation are executed through HTTP
+and repository tests. The language-neutral route/table catalog and native surface
+now account for both managed wallet owner routes and the new revision table.
+
+The Trust Profile migration case is explicitly ignored in ordinary execution
+instead of silently succeeding without PostgreSQL. Its driver admits a fresh
+loopback database only after a nonce sentinel and absent service schema check.
+Actual guarded qualification reports three passes/zero ignores: Device SQL,
+Redis atomic tickets and Trust Profile migration/revision behavior. The latter
+executes concurrent first observation, service-only revision invalidation,
+blocked-reader observation after a committed grant change, independent v1
+revisions and cascade cleanup. Actual TLS/Device HTTP qualification also passes
+its two cases/29 controlled pause scenarios. Ordinary checks report89 Trust
+Profile passes/two guarded ignores and54 contract tests including doctests;
+Device16unit/eight behavior passes are separate from its database execution.
+The full Device default run reports three additional legacy environment-gated
+no-op cases; those are not counted as SQL qualification. Formatting, all-target
+Clippy with warnings denied and Python lint pass. CI source/compile-scope/context
+checks report266 passes/12platform skips. Ownership/discovery and existing shared
+fixture regressions report29 passes plus four subtests.
+
+The holder KMS acceptance caller was reconciled with the HTTPS issuer client and
+new device envelope. Its guarded case explicitly passed using owned bounded
+PostgreSQL, Redis and real TLS/non-exportable OpenBao holder keys, with a controlled
+HTTPS issuer response adapter. A discovered compiler artifact is required before
+fixture allocation. The focused runner verifies exact container IDs/names/labels
+and removes all owned backends even if another cleanup fails. Independent review
+caught misplaced PostgreSQL bounds/labels before allocation; fixed source and
+actual qualification pass. Reviewers executed no tests. Synthetic issuer/PDP
+responses remain distinct from real holder custody and database execution.
+
+Native receipt migration remains required: consume these explicit grants before
+token exchange/proof signing, freeze selected metadata/endpoints/configuration,
+issuer identities, scope and revision, recheck before submission, and obtain fresh
+authority after the credential response before returning anything for storage.
+The new field is not yet consumed by published native268e; strict decoding rejects
+that newer projection. The producer and retained wallet PRs remain draft pending
+this migration and combined/deployed/artifact/installed acceptance.

@@ -19,6 +19,7 @@ pub mod trust_authority;
 mod types;
 mod validation;
 mod validity;
+pub mod wallet_issuance;
 
 pub use callback::build_verification_callback_payload;
 pub use digest::*;

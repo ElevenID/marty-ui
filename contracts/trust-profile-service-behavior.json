@@ -32,6 +32,8 @@
     ["POST", "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot"],
     ["POST", "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys"],
+    ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-authority"],
+    ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-managed-verifier-authority"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-profile-admission"],
     ["GET", "/internal/v1/resource-owners/trust-profiles/{profile_id}"],
@@ -79,7 +81,8 @@
     "trust_registry_sources",
     "trust_registry_issuers",
     "trust_profile_issuers",
-    "credential_authority_revisions"
+    "credential_authority_revisions",
+    "wallet_issuer_authority_revisions"
   ],
   "migration_chain": [
     ["33f047612e9b", null],

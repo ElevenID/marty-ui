@@ -144,35 +144,34 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         credentials.clone(),
         confirmations.clone(),
     ));
-    let trust_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    let trust_origin =
+        std::env::var("MARTY_TEST_HOLDER_TRUST_ORIGIN").expect("owned issuer TLS origin");
+    let trust_url = reqwest::Url::parse(&trust_origin).unwrap();
+    assert_eq!(trust_url.scheme(), "https");
+    assert_eq!(trust_url.host_str(), Some("127.0.0.1"));
+    let trust_ca = std::fs::read(std::env::var("MARTY_TEST_HOLDER_TRUST_CA").unwrap()).unwrap();
+    let control = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(5))
+        .add_root_certificate(reqwest::Certificate::from_pem(&trust_ca).unwrap())
+        .build()
+        .unwrap();
+    let bound_fixture = control
+        .get(format!("{trust_origin}fixture-bind/{nonce}"))
+        .header("x-service-token", &nonce)
+        .query(&[("organization_id", &organization_id), ("user_id", &user_id)])
+        .send()
         .await
-        .expect("disposable Trust Profile listener");
-    let trust_origin = format!("http://{}", trust_listener.local_addr().unwrap());
-    let trust_organization_id = organization_id.clone();
-    let trust_app = axum::Router::new().route(
-        "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
-        axum::routing::get(move |axum::extract::Path(profile_id): axum::extract::Path<String>| {
-            let organization_id = trust_organization_id.clone();
-            async move {
-                let now = chrono::Utc::now();
-                axum::Json(json!({
-                    "organization_id": organization_id,
-                    "trust_profile_id": profile_id,
-                    "generated_at": now,
-                    "expires_at": now + chrono::Duration::seconds(30),
-                    "issuer_keys": [{"issuer":"did:example:issuer","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"Ed25519","x":"public"}}]
-                }))
-            }
-        }),
+        .unwrap();
+    assert_eq!(bound_fixture.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        bound_fixture.json::<serde_json::Value>().await.unwrap()["nonce"],
+        nonce
     );
-    let trust_server = tokio::spawn(async move { axum::serve(trust_listener, trust_app).await });
-    let trust_client = Arc::new(
-        WalletIssuerTrustClient::new(
-            &trust_origin,
-            "disposable-service-token-32-bytes-or-longer".into(),
-        )
-        .unwrap(),
-    );
+    let trust_client =
+        Arc::new(WalletIssuerTrustClient::new(&trust_origin, &nonce, Some(&trust_ca)).unwrap());
     let gateway_key = "disposable-gateway-device-registration-key-32-chars";
     let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -327,8 +326,8 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(snapshot.status().is_success());
     assert_eq!(snapshot.headers()["cache-control"], "no-store");
     let snapshot: serde_json::Value = snapshot.json().await.unwrap();
-    assert_eq!(snapshot["organization_id"], organization_id);
-    assert_eq!(snapshot["trust_profile_id"], bound_profile_id);
+    assert_eq!(snapshot["issuer"]["organization_id"], organization_id);
+    assert_eq!(snapshot["issuer"]["trust_profile_id"], bound_profile_id);
     assert!(signer
         .sign(
             "invalid",
@@ -610,10 +609,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .send()
         .await
         .expect("cross-organization profile denial");
-    assert_eq!(
-        wrong_organization.status(),
-        reqwest::StatusCode::SERVICE_UNAVAILABLE
-    );
+    assert_eq!(wrong_organization.status(), reqwest::StatusCode::FORBIDDEN);
     let orphan_ticket = http
         .post(format!("{device_origin}/v1/devices/pairing-tickets"))
         .header("x-service-token", gateway_key)
@@ -661,7 +657,6 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         cleanup.run_once().await.expect("orphan key cleanup"),
         (2, 0)
     );
-    trust_server.abort();
     device_server.abort();
     server.abort();
 }

@@ -320,11 +320,42 @@ def remove_owned_demo_grant_backend(name, container_id):
     ensure(not require_docker("ps", "-aq", "--filter", f"id={container_id}"), "demo fixture removal")
 
 
+def remove_owned_holder_backend(name, cid):
+    ensure(isinstance(cid, str) and re.fullmatch(r"[a-f0-9]{64}", cid), "owned holder container identity required")
+    if not require_docker("ps", "-aq", "--filter", f"id={cid}"):
+        return
+    actual = json.loads(require_docker("inspect", cid))[0]
+    labels = actual["Config"].get("Labels") or {}
+    ensure(actual["Id"] == cid and actual["Name"] == f"/{name}"
+        and labels.get("marty.disposable") == "kms-signing-policy"
+        and labels.get("codex.purpose") == "holder-lifecycle-fixture", "refuse unowned holder fixture cleanup")
+    require_docker("rm", "-f", "-v", cid)
+    ensure(not require_docker("ps", "-aq", "--filter", f"id={cid}"), "holder fixture cleanup not verified")
+
+
+@contextmanager
+def holder_issuer_tls(nonce):
+    if __package__:
+        from .holder_issuer_tls_fixture import serve
+    else:
+        from holder_issuer_tls_fixture import serve
+    with serve(nonce) as environment:
+        yield environment
+
+
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             managed_mdoc: bool = False, mdoc_runner=subprocess.run,
             public_demo_grant: bool = False, grant_runner=subprocess.run,
-            public_demo_browser: bool = False) -> dict | None:
-    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser)) <= 1, "select one Rust adapter mode")
+            public_demo_browser: bool = False, holder_test_binary: Path | None = None) -> dict | None:
+    holder_lifecycle = holder_test_binary is not None
+    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser, holder_lifecycle)) <= 1, "select one Rust adapter mode")
+    if holder_lifecycle:
+        if __package__:
+            from .qualify_wallet_verifier_pairing import discover
+        else:
+            from qualify_wallet_verifier_pairing import discover
+        holder_test_binary = discover(holder_test_binary, "holder_remote_live_kms", "registration_provision_sign_and_deactivate_delete_remote_key")
+    rust_adapter = rust_adapter or holder_lifecycle
     public_demo_grant = public_demo_grant or public_demo_browser
     if public_demo_browser:
         browser_check=grant_runner(["node",str(ROOT / "ui/scripts/public-verification-browser.mjs"),"--check"],
@@ -358,7 +389,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
     ca_file = Path(ca_directory.name) / "openbao-public-ca.pem"
     init_script = ROOT / "docker/openbao-init.sh"
     started = False
-    primary_id = None
+    primary_id = redis_id = postgres_id = None
     redis_started = False
     postgres_started = False
     public_demo_result = None
@@ -373,6 +404,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                "--memory", "512m", "--memory-swap", "512m"] if managed_mdoc else []),
             "--label",
             "marty.disposable=kms-signing-policy",
+            *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "256m", "--memory-swap", "256m"] if holder_lifecycle else []),
             *(["--label", "codex.purpose=public-demo-grant-fixture", "--memory", "512m", "--memory-swap", "512m"] if public_demo_grant else []),
             "--tmpfs",
             "/tmp/bao-tls:rw,mode=1777",
@@ -804,7 +836,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     detail = detail.replace(token, "[mint]")
                 raise RuntimeError(f"Rust live managed passport chain failed:\n{detail[-2000:]}")
         if rust_adapter:
-            require_docker(
+            redis_id = require_docker(
                 "run",
                 "--rm",
                 "-d",
@@ -812,6 +844,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 redis_name,
                 "--label",
                 "marty.disposable=kms-signing-policy",
+                *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "64m", "--memory-swap", "64m"] if holder_lifecycle else []),
                 "-p",
                 "127.0.0.1::6379",
                 REDIS_IMAGE,
@@ -840,9 +873,10 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 "marty:tests:disposable-guard",
                 redis_nonce,
             )
-            require_docker(
+            postgres_id = require_docker(
                 "run", "--rm", "-d", "--name", postgres_name,
                 "--label", "marty.disposable=kms-signing-policy",
+                *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "256m", "--memory-swap", "256m"] if holder_lifecycle else []),
                 "-e", f"POSTGRES_PASSWORD={postgres_password}",
                 "-e", "POSTGRES_DB=marty_holder_test",
                 "-p", "127.0.0.1::5432", POSTGRES_IMAGE,
@@ -891,6 +925,20 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     ),
                 }
             )
+            if holder_lifecycle:
+                with holder_issuer_tls(nonce) as trust_environment:
+                    holder = subprocess.run([str(holder_test_binary),
+                        "registration_provision_sign_and_deactivate_delete_remote_key", "--ignored", "--exact", "--nocapture"],
+                        cwd=ROOT / "rust", env=dict(environment, **trust_environment),
+                        capture_output=True, text=True, timeout=120, check=False)
+                detail = holder.stdout + holder.stderr
+                for secret in (root_token, managed, postgres_password, nonce):
+                    detail = detail.replace(secret, "[fixture-private]")
+                if not rust_test_succeeded(holder) or "1 passed; 0 failed; 0 ignored;" not in holder.stdout:
+                    raise RuntimeError("Owned holder lifecycle failed:\n" + detail[-6000:])
+                print(detail, end="")
+                return {"holderLifecyclePassed": 1, "ignored": 0, "issuerOwner": "controlled TLS adapter",
+                    "scope": "actual holder provision/sign/rotate/revoke with owned PostgreSQL/Redis/TLS OpenBao; not installed wallet or live PDP"}
             migration_transport = subprocess.run(
                 ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
                  "--lib", "--locked", "--offline", "-j2",
@@ -1078,16 +1126,17 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
-            result = subprocess.run(
-                [
-                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
-                    "--test", "holder_remote_live_kms", "--locked", "--offline",
-                    "-j2", "registration_provision_sign_and_deactivate_delete_remote_key",
-                    "--", "--ignored", "--exact", "--nocapture",
-                ],
-                cwd=ROOT / "rust", env=environment,
-                capture_output=True, text=True, timeout=600, check=False,
-            )
+            with holder_issuer_tls(nonce) as trust_environment:
+                result = subprocess.run(
+                    [
+                        "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                        "--test", "holder_remote_live_kms", "--locked", "--offline",
+                        "-j2", "registration_provision_sign_and_deactivate_delete_remote_key",
+                        "--", "--ignored", "--exact", "--nocapture",
+                    ],
+                    cwd=ROOT / "rust", env=dict(environment, **trust_environment),
+                    capture_output=True, text=True, timeout=600, check=False,
+                )
             if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
@@ -1398,20 +1447,33 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
         if grant_verifier:
             print("Rust grant verifier, Signing Keys public CSR route, and managed passport CSCA/DSC/SOD chain passed with scoped grants and disposable Redis")
     finally:
-        if postgres_started:
-            docker("rm", "-f", postgres_name, timeout=30)
-        if redis_started:
-            docker("rm", "-f", redis_name, timeout=30)
-        if started:
-            if public_demo_grant:
-                remove_owned_demo_grant_backend(name, primary_id)
-                if public_demo_result is not None:
-                    public_demo_result["openbaoRemoved"] = True
-            elif managed_mdoc:
-                remove_owned_mdoc_backend(name, primary_id)
-            else:
-                docker("rm", "-f", name, timeout=30)
-        ca_directory.cleanup()
+        if holder_lifecycle:
+            cleanup_errors = []
+            for active, backend_name, cid in ((postgres_started, postgres_name, postgres_id),
+                    (redis_started, redis_name, redis_id), (started, name, primary_id)):
+                if active:
+                    try:
+                        remove_owned_holder_backend(backend_name, cid)
+                    except Exception as error:
+                        cleanup_errors.append(type(error).__name__)
+            ca_directory.cleanup()
+            if cleanup_errors:
+                raise RuntimeError("Owned holder cleanup incomplete: " + ",".join(cleanup_errors))
+        else:
+            if postgres_started:
+                docker("rm", "-f", postgres_name, timeout=30)
+            if redis_started:
+                docker("rm", "-f", redis_name, timeout=30)
+            if started:
+                if public_demo_grant:
+                    remove_owned_demo_grant_backend(name, primary_id)
+                    if public_demo_result is not None:
+                        public_demo_result["openbaoRemoved"] = True
+                elif managed_mdoc:
+                    remove_owned_mdoc_backend(name, primary_id)
+                else:
+                    docker("rm", "-f", name, timeout=30)
+            ca_directory.cleanup()
 
 
 if __name__ == "__main__":
@@ -1421,7 +1483,8 @@ if __name__ == "__main__":
     parser.add_argument("--public-demo-grant", action="store_true", help="Only isolated demo-holder MAC, policy and native one-use grant qualification; no deployment")
     parser.add_argument("--public-demo-browser", action="store_true", help="Owned loopback application/Chromium plus canonical remote example fixture; no deployment")
     parser.add_argument("--managed-mdoc", action="store_true", help="Run only the isolated real managed MDOC certificate-chain case; no CRL/wallet qualification")
+    parser.add_argument("--holder-test-binary", type=Path, help="Execute only the discovered holder lifecycle on bounded owned fixtures")
     args = parser.parse_args()
-    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser)
+    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser, holder_test_binary=args.holder_test_binary)
     if result is not None:
         print(json.dumps(result, sort_keys=True))

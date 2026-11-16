@@ -3,19 +3,30 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
+#[ignore = "requires a newly owned marked disposable PostgreSQL database"]
 async fn native_migration_is_additive_idempotent_and_scrubs_private_custody_metadata() {
-    let Some(database_url) = std::env::var("TEST_POSTGRES_URL").ok() else {
-        return;
-    };
+    let database_url = std::env::var("TEST_POSTGRES_URL").expect("owned PostgreSQL URL");
+    let nonce =
+        std::env::var("MARTY_TEST_POSTGRES_DISPOSABLE_NONCE").expect("owned PostgreSQL marker");
+    let url = url::Url::parse(&database_url).unwrap();
+    assert_eq!(url.host_str(), Some("127.0.0.1"));
+    assert!(url.port().is_some() && nonce.len() >= 32);
     let pool = PgPoolOptions::new()
         .max_connections(4)
         .connect(&database_url)
         .await
         .unwrap();
-    sqlx::raw_sql("DROP SCHEMA IF EXISTS trust_profile_service CASCADE")
-        .execute(&pool)
+    let guard: String = sqlx::query_scalar("SELECT nonce FROM public.marty_disposable_guard")
+        .fetch_one(&pool)
         .await
         .unwrap();
+    assert_eq!(guard, nonce);
+    let exists: bool =
+        sqlx::query_scalar("SELECT to_regnamespace('trust_profile_service') IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!exists, "refuse an existing service installation");
 
     let first = run_migrations(&pool).await.unwrap();
     assert_eq!(first.metadata_rows_sanitized, 0);
@@ -180,6 +191,90 @@ async fn credential_authority_revision_contract(pool: &sqlx::PgPool) {
         .await
         .unwrap()
         .is_none());
+    let (wallet_first, wallet_simultaneous) = tokio::join!(
+        repository.wallet_issuer_authority_snapshot("authority-org", profile.id),
+        repository.wallet_issuer_authority_snapshot("authority-org", profile.id)
+    );
+    let wallet_first = wallet_first.unwrap().unwrap();
+    assert_eq!(wallet_first.revision.version, 1);
+    assert_eq!(wallet_first, wallet_simultaneous.unwrap().unwrap());
+    assert!(repository
+        .wallet_issuer_authority_snapshot("other-org", profile.id)
+        .await
+        .unwrap()
+        .is_none());
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"] = json!([{
+        "credential_issuer":"https://service.example.test/tenant","credential_configuration_id":"employee",
+        "format":"dc+sd-jwt","vct":"https://type.example.test/Employee",
+        "authorization_server":null,"token_endpoint":null}]);
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let mapped = repository
+        .wallet_issuer_authority_snapshot("authority-org", profile.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(mapped.revision.version, 2);
+    assert_ne!(
+        mapped.revision.content_digest,
+        wallet_first.revision.content_digest
+    );
+    assert_eq!(
+        repository
+            .credential_authority_snapshot("authority-org", profile.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        first
+    );
+    let projection =
+        marty_trust_profile::wallet_issuer_authority::project(&mapped, Utc::now()).unwrap();
+    assert_eq!(projection["issuer_keys"][0]["issuer"], issuer.issuer_id);
+    assert_eq!(
+        projection["issuer_keys"][0]["issuance_authorizations"][0]["credential_issuer"],
+        "https://service.example.test/tenant"
+    );
+    // A reader waiting on the wallet publication row must observe the service
+    // grant committed while it waited, not a graph read before that lock.
+    let mut wallet_writer = pool.begin().await.unwrap();
+    sqlx::query("SELECT version FROM trust_profile_service.wallet_issuer_authority_revisions WHERE profile_id=$1 FOR UPDATE")
+        .bind(profile.id.to_string()).fetch_one(&mut *wallet_writer).await.unwrap();
+    let wallet_reader = repository.clone();
+    let wallet_id = profile.id;
+    let wallet_pending = tokio::spawn(async move {
+        wallet_reader
+            .wallet_issuer_authority_snapshot("authority-org", wallet_id)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5),async {
+        loop {
+            let waiting:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%wallet_issuer_authority_revisions%' AND query LIKE '%FOR UPDATE%')").fetch_one(pool).await.unwrap();
+            if waiting {break;}
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("wallet owner reader must wait on its revision row");
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]
+        ["credential_configuration_id"] = json!("changed-configuration");
+    sqlx::query("UPDATE trust_profile_service.trust_profile_issuers SET metadata=$2 WHERE id=$1")
+        .bind(relationship.id.to_string())
+        .bind(&relationship.metadata)
+        .execute(&mut *wallet_writer)
+        .await
+        .unwrap();
+    wallet_writer.commit().await.unwrap();
+    let after_wait = wallet_pending.await.unwrap().unwrap().unwrap();
+    assert_eq!(after_wait.revision.version, 3);
+    assert_eq!(
+        after_wait.issuance_authorizations[&issuer.issuer_id][0].credential_configuration_id,
+        "changed-configuration"
+    );
+    assert_eq!(
+        repository
+            .credential_authority_snapshot("authority-org", profile.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        first
+    );
     issuer.metadata["verification_keys"][0]["x"] =
         json!("PUAXw-hDiVqStwqnTRt-vJyYLM8uxJaMwM1V8Sr0Zgw");
     repository.save_issuer_entity(&issuer).await.unwrap();
@@ -273,6 +368,9 @@ async fn credential_authority_revision_contract(pool: &sqlx::PgPool) {
     let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM trust_profile_service.credential_authority_revisions WHERE profile_id=$1")
         .bind(profile.id.to_string()).fetch_one(pool).await.unwrap();
     assert_eq!(remaining, 0);
+    let wallet_remaining:i64=sqlx::query_scalar("SELECT count(*) FROM trust_profile_service.wallet_issuer_authority_revisions WHERE profile_id=$1")
+        .bind(profile.id.to_string()).fetch_one(pool).await.unwrap();
+    assert_eq!(wallet_remaining, 0);
 }
 
 async fn trust_purpose_column_count(pool: &sqlx::PgPool) -> i64 {
