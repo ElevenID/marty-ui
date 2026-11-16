@@ -275,7 +275,7 @@ async fn receipt_snapshot(
         || audit_time != Some(received)
         || !(1..=MAX_SAFE).contains(&received)
         || !head.is_some_and(|v| v >= sequence && v <= MAX_SAFE)
-        || !head_receipt.is_some_and(|v| !v.is_nil())
+        || head_receipt.is_none_or(|v| v.is_nil())
     {
         return Err(AdminError::Unavailable);
     }
