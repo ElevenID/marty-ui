@@ -36,6 +36,8 @@ struct Field {
     number: i32,
     #[prost(int32, tag = "5")]
     kind: i32,
+    #[prost(string, tag = "6")]
+    type_name: String,
     #[prost(bool, tag = "17")]
     proto3_optional: bool,
 }
@@ -84,7 +86,8 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
     // PolicyResponse holder_binding_required bool field 16, and
     // PolicyEvaluationResponse evaluation_validity_json string field 16,
     // managed_policy_evidence_json string field 17, and
-    // FlowResultResponse canonical_evidence_digest string field 8.
+    // FlowResultResponse canonical_evidence_digest string field 8; typed
+    // PolicyRevision message fields 13/8/15 and its content_digest string.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
         "87cbb781472d86bfbcdf7df242b275ad21bd44fff8ab8b9a7b988da284c7c43a"
@@ -217,6 +220,56 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
                 }
             );
         }
+    }
+}
+
+#[test]
+fn saved_policy_revisions_keep_typed_identity_on_all_three_transport_boundaries() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.name == "presentation_policy_service.proto")
+        .unwrap();
+    for (message, name, number) in [
+        ("PolicyResponse", "policy_revision", 13),
+        ("EvaluatePresentationRequest", "expected_policy_revision", 8),
+        ("PolicyEvaluationResponse", "policy_revision", 15),
+    ] {
+        let message = file
+            .messages
+            .iter()
+            .find(|value| value.name == message)
+            .unwrap();
+        let field = message
+            .fields
+            .iter()
+            .find(|value| value.name == name)
+            .unwrap();
+        assert_eq!(field.number, number);
+        assert_eq!(field.kind, 11); // TYPE_MESSAGE, never JSON/string reinterpretation.
+        assert_eq!(
+            field.type_name,
+            ".marty.ui.presentation_policy.v1.PolicyRevision"
+        );
+    }
+    let revision = file
+        .messages
+        .iter()
+        .find(|value| value.name == "PolicyRevision")
+        .unwrap();
+    assert_eq!(revision.fields.len(), 4);
+    for (field, (name, number, kind)) in revision.fields.iter().zip([
+        ("organization_id", 1, 9),
+        ("id", 2, 9),
+        ("version", 3, 13),
+        ("content_digest", 4, 9),
+    ]) {
+        assert_eq!(
+            (&*field.name, field.number, field.kind),
+            (name, number, kind)
+        );
+        assert!(!field.proto3_optional);
     }
 }
 
