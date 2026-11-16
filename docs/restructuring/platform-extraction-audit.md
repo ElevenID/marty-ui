@@ -1,6 +1,12 @@
 # Platform / installer extraction audit
 
-Source inspected: `ElevenID/marty-ui`, default branch `main`, tree SHA `9e098423b5d98bc1bb50147f6cf1412973256144` (inspection snapshot).
+Source inspected: `ElevenID/marty-ui`, default branch `main`, commit `9e098423b5d98bc1bb50147f6cf1412973256144` (inspection snapshot).
+
+## Execution checkpoint
+
+On November 15, 2026 (America/Denver), the public [`ElevenID/platform`](https://github.com/ElevenID/platform) destination existed with a README-only `main` branch. Its repository ID is `1459541945`; active default-branch ruleset `27350361` and Actions restrictions are recorded in the [restructuring checkpoint](README.md#destination-repository-checkpoint). No required status check is configured yet.
+
+Repository creation and initial branch/Actions policy are complete. Installer source ownership classification, destination CI and release/provenance migration remain pending. Bootstrap CI in a small platform-specific PR, verify its actual check names and results, then add the required status gates. Keep each subsequent installer extraction batch separate from website and Canvas work, and commit/push its validated checkpoint before starting the next batch.
 
 ## Architectural responsibility
 

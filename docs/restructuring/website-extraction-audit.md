@@ -1,6 +1,16 @@
 # Website extraction audit
 
-Source inspected: `ElevenID/marty-ui`, default branch `main`, tree SHA `9e098423b5d98bc1bb50147f6cf1412973256144` (inspection snapshot).
+Source inspected: `ElevenID/marty-ui`, default branch `main`, commit `9e098423b5d98bc1bb50147f6cf1412973256144` (inspection snapshot).
+
+## Execution checkpoint
+
+On November 15, 2026 (America/Denver), the public [`ElevenID/website`](https://github.com/ElevenID/website) destination completed its first route-contract, validation and CI foundation batch. Repository ID `1459542519`, active default-branch ruleset `27350292`, the required `Website contracts` check and Actions restrictions are recorded in the [restructuring checkpoint](README.md#destination-repository-checkpoint).
+
+A subsequent static import audit inspected 79 files at `marty-ui` source commit `df6ec6c4bfee803d89c54e9333297f29f378cee3`. This is a source-import observation only. It does not close the asset, locale, test, package, prerender, Docker, workflow or provenance dependency audits, and it is not a qualified export manifest.
+
+[Website PR #1](https://github.com/ElevenID/website/pull/1) merged through the normal protected merge path. Published head: `08823069f4a11b2ddc43dcabc2948189a4ed26fd`; merge commit: `9136480448f380aa585ded15b075ce955fc684af`; tree: `318e7fd535b9f6243717f826c68bbcb2cd009cbd`.
+
+[Hosted run `43812040235`, job `133115635465`](https://github.com/ElevenID/website/actions/runs/43812040235/job/133115635465) passed all six tests on Node `24.22.1`. CI checked synthetic merge `694bdc1727de0e3433b7467f764285005c98d32f`, whose tree matched the published and merged tree above. This qualifies the contract foundation only; website application source, independent builds and production routing remain pending.
 
 ## Existing separation already present
 
@@ -102,4 +112,4 @@ Keep the existing combined release path until the replacement application releas
 9. Existing deployment promotion, rollback and product-adoption tests pass.
 10. Actual host qualification occurs before production routing changes.
 
-No website source has been moved in this audit PR.
+No website application source has been moved in this audit PR. Keep the route-contract foundation, source migration, independent build and release/provenance changes in separately reviewable batches, recording and pushing each completed checkpoint before the next substantial batch.
