@@ -149,6 +149,17 @@ async fn administrator_reconciles_original_receipt_after_producer_revocation_wit
 async fn inconsistent_receipt_audit_and_missing_storage_are_errors_never_absence() {
     let f = super::admin_tests::setup().await;
     submit(&f).await;
+    // Only this disposable fixture is corrupted; FK triggers are restored
+    // before inspection so a dangling nonnil head must fail closed.
+    sqlx::raw_sql("ALTER TABLE issuance_service.external_observation_heads DISABLE TRIGGER ALL; UPDATE issuance_service.external_observation_heads SET receipt_id='90000000-0000-4000-8000-000000000001'; ALTER TABLE issuance_service.external_observation_heads ENABLE TRIGGER ALL;").execute(&f.pool).await.unwrap();
+    assert_eq!(
+        inspect(&f.pool, id(ORG), "admin-one", receipt("source-one"))
+            .await
+            .unwrap_err(),
+        AdminError::Unavailable
+    );
+    sqlx::query("UPDATE issuance_service.external_observation_heads SET receipt_id=(SELECT receipt_id FROM issuance_service.external_observation_receipts LIMIT 1)").execute(&f.pool).await.unwrap();
+
     sqlx::query(
         "UPDATE issuance_service.external_observation_audit SET received_at_ms=received_at_ms+1",
     )

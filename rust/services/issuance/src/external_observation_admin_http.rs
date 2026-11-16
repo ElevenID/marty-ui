@@ -148,7 +148,7 @@ async fn mutate(
     };
     let (actor, bytes) = match admin_body(&state, org, request).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err((status, code)) => return failure(status, code),
     };
     if matches!(action, Action::Bindings) {
         let value = match serde_json::from_slice::<BindingsRequest>(&bytes) {
@@ -308,7 +308,7 @@ async fn mutate_binding(
         .to_owned();
     let (actor, bytes) = match admin_body(&state, org, request).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err((status, code)) => return failure(status, code),
     };
     if !crate::external_observation_admission::id(&binding) {
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
@@ -372,7 +372,7 @@ async fn admin_body(
     state: &AdminState,
     org: Uuid,
     request: Request,
-) -> Result<(String, Bytes), Response> {
+) -> Result<(String, Bytes), (StatusCode, &'static str)> {
     let headers = request.headers();
     // The proxy strips caller headers before inserting trusted user context.
     // API-key identities may submit observations but cannot administer grants.
@@ -380,7 +380,7 @@ async fn admin_body(
         || headers.contains_key("x-api-key-id")
         || one_header(headers, "x-organization-id") != Some(org.to_string().as_str())
     {
-        return Err(failure(
+        return Err((
             StatusCode::UNAUTHORIZED,
             "administrator_authentication_required",
         ));
@@ -391,20 +391,20 @@ async fn admin_body(
         })
         .map(str::to_owned)
     else {
-        return Err(failure(
+        return Err((
             StatusCode::UNAUTHORIZED,
             "administrator_authentication_required",
         ));
     };
     if request.uri().query().is_some() {
-        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+        return Err((StatusCode::BAD_REQUEST, "invalid_admin_request"));
     }
     if !one_header(headers, "content-type")
         .is_some_and(|value| value.eq_ignore_ascii_case("application/json"))
         || one_header(headers, "content-encoding")
             .is_some_and(|value| !value.eq_ignore_ascii_case("identity"))
     {
-        return Err(failure(
+        return Err((
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             "unsupported_admin_format",
         ));
@@ -412,18 +412,18 @@ async fn admin_body(
     // Preserve strict framing before original-byte JSON decoding.
     for name in ["content-length", "transfer-encoding", "content-encoding"] {
         if headers.get_all(name).iter().count() > 1 {
-            return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+            return Err((StatusCode::BAD_REQUEST, "invalid_admin_request"));
         }
     }
     if headers.contains_key("trailer")
         || (headers.contains_key("content-length") && headers.contains_key("transfer-encoding"))
     {
-        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+        return Err((StatusCode::BAD_REQUEST, "invalid_admin_request"));
     }
     if one_header(headers, "transfer-encoding")
         .is_some_and(|value| !value.eq_ignore_ascii_case("chunked"))
     {
-        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+        return Err((StatusCode::BAD_REQUEST, "invalid_admin_request"));
     }
     let expected_length = if let Some(value) = one_header(headers, "content-length") {
         match value.parse::<usize>() {
@@ -434,7 +434,7 @@ async fn admin_body(
             {
                 Some(length)
             }
-            _ => return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request")),
+            _ => return Err((StatusCode::BAD_REQUEST, "invalid_admin_request")),
         }
     } else {
         None
@@ -444,16 +444,11 @@ async fn admin_body(
             .await
         {
             Ok(Ok(bytes)) => bytes,
-            Ok(Err(_)) => {
-                return Err(failure(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "admin_request_too_large",
-                ))
-            }
-            Err(_) => return Err(failure(StatusCode::REQUEST_TIMEOUT, "admin_body_timeout")),
+            Ok(Err(_)) => return Err((StatusCode::PAYLOAD_TOO_LARGE, "admin_request_too_large")),
+            Err(_) => return Err((StatusCode::REQUEST_TIMEOUT, "admin_body_timeout")),
         };
     if expected_length.is_some_and(|length| length != bytes.len()) {
-        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+        return Err((StatusCode::BAD_REQUEST, "invalid_admin_request"));
     }
     Ok((actor, bytes))
 }
@@ -480,7 +475,7 @@ async fn read_admin(
     let parts: Vec<_> = path.split('/').collect();
     let (actor, bytes) = match admin_body(&state, org, request).await {
         Ok(v) => v,
-        Err(r) => return r,
+        Err((status, code)) => return failure(status, code),
     };
     let query = match (parts.get(4).copied(), parts.last().copied()) {
         (Some("external-observation-producers"), Some("inspect")) => {

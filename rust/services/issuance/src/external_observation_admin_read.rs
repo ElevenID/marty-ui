@@ -36,7 +36,10 @@ impl AuditCursor {
     pub fn valid(&self) -> bool {
         !self.id.is_nil()
             && (1..=MAX_SAFE).contains(&self.created_at.timestamp_millis())
-            && self.created_at.timestamp_subsec_nanos() % 1000 == 0
+            && self
+                .created_at
+                .timestamp_subsec_nanos()
+                .is_multiple_of(1000)
     }
 }
 #[derive(Clone, Copy)]
@@ -222,10 +225,11 @@ async fn receipt_snapshot(
 ) -> Result<Value, AdminError> {
     let row=sqlx::query("SELECT r.receipt_id,r.api_key_id,r.binding_id,r.binding_revision,r.sequence,r.received_at_ms,
       CASE WHEN octet_length(r.envelope::text)<=65536 THEN r.envelope END AS envelope,
-      a.event_type,a.received_at_ms AS audit_received_at_ms,h.sequence AS head_sequence,h.receipt_id AS head_receipt_id
+      a.event_type,a.received_at_ms AS audit_received_at_ms,h.sequence AS head_sequence,h.receipt_id AS head_receipt_id,hr.receipt_id AS matched_head_receipt_id
       FROM issuance_service.external_observation_receipts r
       LEFT JOIN issuance_service.external_observation_audit a ON a.receipt_id=r.receipt_id
       LEFT JOIN issuance_service.external_observation_heads h ON h.organization_id=r.organization_id AND h.source_id=r.source_id AND h.binding_id=r.binding_id
+      LEFT JOIN issuance_service.external_observation_receipts hr ON hr.receipt_id=h.receipt_id AND hr.organization_id=h.organization_id AND hr.source_id=h.source_id AND hr.binding_id=h.binding_id AND hr.sequence=h.sequence
       WHERE r.organization_id=$1 AND r.source_id=$2 AND r.observation_id=$3")
       .bind(org.to_string()).bind(source).bind(observation).fetch_optional(connection).await.map_err(database_error)?;
     let Some(row) = row else {
@@ -257,7 +261,11 @@ async fn receipt_snapshot(
         .map_err(database_error)?;
     let head: Option<i64> = row.try_get("head_sequence").map_err(database_error)?;
     let head_receipt: Option<Uuid> = row.try_get("head_receipt_id").map_err(database_error)?;
-    if receipt.is_nil()
+    let matched_head: Option<Uuid> = row
+        .try_get("matched_head_receipt_id")
+        .map_err(database_error)?;
+    if head_receipt != matched_head
+        || receipt.is_nil()
         || !Uuid::parse_str(&key).is_ok_and(|v| !v.is_nil() && v.to_string() == key)
         || decoded.binding_id != binding
         || decoded.binding_revision
