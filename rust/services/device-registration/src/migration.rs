@@ -2,7 +2,7 @@ use sqlx::{PgPool, Row};
 
 use crate::DeviceError;
 
-pub const REVISION: &str = "20261009_0001";
+pub const REVISION: &str = "20261116_0002";
 
 pub async fn migrate(pool: &PgPool) -> Result<(), DeviceError> {
     let mut transaction = pool.begin().await.map_err(persistence)?;
@@ -14,6 +14,12 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DeviceError> {
         .execute(&mut *transaction)
         .await
         .map_err(persistence)?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_verifier_profile_binding.sql"
+    ))
+    .execute(&mut *transaction)
+    .await
+    .map_err(persistence)?;
     verify(&mut transaction).await?;
     transaction.commit().await.map_err(persistence)?;
     Ok(())
@@ -95,6 +101,14 @@ async fn verify(
     if profile_nullable.as_deref() != Some("NO") {
         return Err(DeviceError::Persistence(
             "fresh wallet pairing schema must bind a Trust Profile".into(),
+        ));
+    }
+    let verifier_column:Option<bool>=sqlx::query_scalar(
+        "SELECT is_nullable='YES' AND data_type='character varying' AND character_maximum_length=36 FROM information_schema.columns WHERE table_schema='device_registration_service' AND table_name='device_pairing_confirmations' AND column_name='verifier_trust_profile_id'"
+    ).fetch_optional(&mut **transaction).await.map_err(persistence)?;
+    if verifier_column != Some(true) {
+        return Err(DeviceError::Persistence(
+            "wallet pairing verifier profile schema is incompatible".into(),
         ));
     }
     let version: Option<String> = sqlx::query_scalar(

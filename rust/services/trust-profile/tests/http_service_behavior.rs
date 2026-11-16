@@ -95,6 +95,62 @@ async fn registered_verifier_projection_requires_configured_workload_auth_and_te
             }
         }
         if configured {
+            let admission_path=format!("/internal/v1/trust-profiles/{}/wallet-verifier-profile-admission?organization_id=org-1",selected.id);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&admission_path)
+                        .header("x-service-token", &token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 401);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&admission_path)
+                        .header("x-service-token", &token)
+                        .header("x-user-id", "user-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let admission = body(response).await;
+            assert_eq!(
+                admission["contract"],
+                "marty.wallet/verifier-profile-admission/v1"
+            );
+            assert_eq!(admission["trust_profile_id"], selected.id.to_string());
+            let rejecting =
+                marty_trust_profile::trust_credential_authority_router(TrustProfileHttpState {
+                    application: Arc::new(TrustProfileApplication::new(
+                        repository.clone(),
+                        Arc::new(RejectKeyMembership),
+                    )),
+                    ..state.clone()
+                });
+            for uri in [admission_path.clone(), path.clone()] {
+                let response = rejecting
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(uri)
+                            .header("x-service-token", &token)
+                            .header("x-user-id", "user-1")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status().as_u16(), 403);
+            }
             for suffix in [
                 "&client_id=registered-client",
                 "&request_uri=https://attacker.example",

@@ -25,6 +25,7 @@ pub struct BoundWalletTrustProfile {
     pub user_id: String,
     pub organization_id: String,
     pub trust_profile_id: String,
+    pub verifier_trust_profile_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -46,7 +47,7 @@ impl PostgresPairingConfirmations {
             return Err(DeviceError::Forbidden(INVALID.into()));
         }
         let digest: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
-        let row = sqlx::query("SELECT p.user_id,p.organization_id,p.trust_profile_id FROM device_registration_service.device_holder_credentials c JOIN device_registration_service.device_pairing_confirmations p ON p.registration_id=c.registration_id JOIN device_registration_service.device_registrations d ON d.id=c.registration_id WHERE c.token_sha256=$1 AND c.revoked_at IS NULL AND c.issued_at<=clock_timestamp() AND c.expires_at>clock_timestamp() AND p.confirmed_at IS NOT NULL AND p.expired_at IS NULL AND c.user_id=p.user_id AND c.organization_id=p.organization_id AND d.user_id=p.user_id AND d.organization_id=p.organization_id AND d.is_active=true")
+        let row = sqlx::query("SELECT p.user_id,p.organization_id,p.trust_profile_id,p.verifier_trust_profile_id FROM device_registration_service.device_holder_credentials c JOIN device_registration_service.device_pairing_confirmations p ON p.registration_id=c.registration_id JOIN device_registration_service.device_registrations d ON d.id=c.registration_id WHERE c.token_sha256=$1 AND c.revoked_at IS NULL AND c.issued_at<=clock_timestamp() AND c.expires_at>clock_timestamp() AND p.confirmed_at IS NOT NULL AND p.expired_at IS NULL AND c.user_id=p.user_id AND c.organization_id=p.organization_id AND d.user_id=p.user_id AND d.organization_id=p.organization_id AND d.is_active=true")
             .bind(digest.as_slice())
             .fetch_optional(&self.pool)
             .await
@@ -56,6 +57,9 @@ impl PostgresPairingConfirmations {
             user_id: row.try_get("user_id").map_err(persistence)?,
             organization_id: row.try_get("organization_id").map_err(persistence)?,
             trust_profile_id: row.try_get("trust_profile_id").map_err(persistence)?,
+            verifier_trust_profile_id: row
+                .try_get("verifier_trust_profile_id")
+                .map_err(persistence)?,
         })
     }
 
@@ -64,11 +68,12 @@ impl PostgresPairingConfirmations {
             .expires_at
             .checked_add_signed(CONFIRM_GRACE)
             .ok_or_else(|| DeviceError::Persistence("pairing status expiry is invalid".into()))?;
-        sqlx::query("INSERT INTO device_registration_service.device_pairing_confirmations (pairing_id,user_id,organization_id,trust_profile_id,issued_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6)")
+        sqlx::query("INSERT INTO device_registration_service.device_pairing_confirmations (pairing_id,user_id,organization_id,trust_profile_id,verifier_trust_profile_id,issued_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
             .bind(&scope.pairing_id)
             .bind(&scope.user_id)
             .bind(&scope.organization_id)
             .bind(&scope.trust_profile_id)
+            .bind(&scope.verifier_trust_profile_id)
             .bind(scope.issued_at)
             .bind(expires_at)
             .execute(&self.pool)
@@ -77,16 +82,38 @@ impl PostgresPairingConfirmations {
         Ok(())
     }
 
+    /// Redis ticket data must agree with the browser's durable record before
+    /// allocating a registration, credential or remote key.
+    pub async fn validate_issued_scope(&self, scope: &PairingScope) -> Result<(), DeviceError> {
+        let expires = scope
+            .expires_at
+            .checked_add_signed(CONFIRM_GRACE)
+            .ok_or_else(|| DeviceError::Forbidden(INVALID.into()))?;
+        let valid:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM device_registration_service.device_pairing_confirmations WHERE pairing_id=$1 AND user_id=$2 AND organization_id=$3 AND trust_profile_id=$4 AND verifier_trust_profile_id IS NOT DISTINCT FROM $5 AND issued_at=$6 AND expires_at=$7 AND issued_at<=clock_timestamp() AND $8::timestamptz>clock_timestamp() AND registration_id IS NULL AND confirmed_at IS NULL AND expired_at IS NULL)")
+            .bind(&scope.pairing_id).bind(&scope.user_id).bind(&scope.organization_id)
+            .bind(&scope.trust_profile_id).bind(&scope.verifier_trust_profile_id)
+            .bind(scope.issued_at).bind(expires).bind(scope.expires_at)
+            .fetch_one(&self.pool).await.map_err(persistence)?;
+        if !valid {
+            return Err(DeviceError::Forbidden(INVALID.into()));
+        }
+        Ok(())
+    }
+
     pub async fn record_redeemed(
         &self,
         scope: &PairingScope,
         registration_id: &str,
     ) -> Result<(), DeviceError> {
-        let updated = sqlx::query("UPDATE device_registration_service.device_pairing_confirmations SET registration_id=$2 WHERE pairing_id=$1 AND user_id=$3 AND organization_id=$4 AND registration_id IS NULL AND confirmed_at IS NULL AND expired_at IS NULL AND expires_at>clock_timestamp()")
+        let updated = sqlx::query("UPDATE device_registration_service.device_pairing_confirmations SET registration_id=$2 WHERE pairing_id=$1 AND user_id=$3 AND organization_id=$4 AND trust_profile_id=$5 AND verifier_trust_profile_id IS NOT DISTINCT FROM $6 AND issued_at=$7 AND expires_at=$8 AND $9::timestamptz>clock_timestamp() AND registration_id IS NULL AND confirmed_at IS NULL AND expired_at IS NULL AND expires_at>clock_timestamp()")
             .bind(&scope.pairing_id)
             .bind(registration_id)
             .bind(&scope.user_id)
             .bind(&scope.organization_id)
+            .bind(&scope.trust_profile_id).bind(&scope.verifier_trust_profile_id)
+            .bind(scope.issued_at)
+            .bind(scope.expires_at.checked_add_signed(CONFIRM_GRACE).ok_or_else(||DeviceError::Forbidden(INVALID.into()))?)
+            .bind(scope.expires_at)
             .execute(&self.pool)
             .await
             .map_err(persistence)?;

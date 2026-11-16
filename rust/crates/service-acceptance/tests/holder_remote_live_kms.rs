@@ -183,6 +183,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         memberships: memberships.clone(),
         pairing_tickets: tickets.clone(),
         wallet_issuer_trust: Some(trust_client),
+        wallet_verifier_trust: None,
         pairing_confirmations: Some(Arc::new(confirmations.clone())),
         pairing_enrollment: Some(enrollment),
         holder_signer: Some(signer.clone()),

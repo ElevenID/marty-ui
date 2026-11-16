@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 466;
+pub const EXPECTED_ROUTE_COUNT: usize = 467;
 const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
@@ -853,6 +853,7 @@ fn public_route(path: &str) -> bool {
         || path == "/v1/devices/holder-signatures"
         || path == "/v1/devices/holder-credential-rotations"
         || path == "/v1/devices/wallet-issuer-keys"
+        || path == "/v1/devices/wallet-verifier-authority"
         || path == "/v1/organizations/invitations/validate"
         || path == "/v1/organizations/join/code/validate"
         || path == "/v1/passport/webhooks/personalization"

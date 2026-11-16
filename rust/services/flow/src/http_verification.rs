@@ -123,17 +123,34 @@ async fn oid4vp_did_document(
             Some("ES256"),
         )
         .await?;
+    identity.validate_binding(
+        &options.default_organization_id,
+        &options.default_issuer_did,
+        "oid4vp_request_signing",
+        "oauth-authz-req+jwt",
+        Some("ES256"),
+    )?;
+    let public_jwk = json!(identity.public_jwk);
+    if marty_key_material_policy::contains_private_key(&public_jwk)
+        || marty_oid4vp_contract::trust_authority::issuer_public_key_algorithm(&public_jwk).ok()
+            != Some("ES256")
+    {
+        return Err(crate::FlowProviderError::InvalidResponse {
+            provider: "signing_identity",
+            message: "DID publication requires a valid public ES256 key".into(),
+        }
+        .into());
+    }
+    // Publish the DID JSON representation advertised below. JSON-LD contexts
+    // require a different representation and must not be silently ignored by
+    // wallets resolving this authentication method.
     let document = json!({
-        "@context": [
-            "https://www.w3.org/ns/did/v1",
-            "https://w3id.org/security/suites/jws-2020/v1"
-        ],
         "id": identity.issuer_did,
         "verificationMethod": [{
             "id": identity.verification_method_id,
             "type": "JsonWebKey2020",
             "controller": identity.issuer_did,
-            "publicKeyJwk": identity.public_jwk
+            "publicKeyJwk": public_jwk
         }],
         "authentication": [identity.verification_method_id],
         "assertionMethod": [identity.verification_method_id]
