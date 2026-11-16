@@ -270,3 +270,42 @@ read/reconciliation operations remain required. No permission is auto-granted.
 The current method can revoke an expired or inactive key's producer grant, since
 revocation reduces authority and must remain available for cleanup. It does not
 approve evidence, alter application policy or issue credentials.
+
+
+## Producer grant creation and expiry changes
+
+The public Common Gateway also exposes two session administrator POST operations:
+
+- `/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create`
+  accepts only `api_key_id`, `source_id`, and `expires_at_ms`.
+- `/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry`
+  accepts only `expected_revision` and `expires_at_ms`.
+
+These use the same exact active-session tenant, allowed Origin, bounded original
+JSON and current canonical `external-observation:manage` permission checks as
+approval/revocation/rotation. API-key authentication cannot administer grants.
+The create path UUID is selected by the administrator client before the request,
+so an uncertain result has a stable reconciliation identifier. Existing UUID or
+organization/source/key uniqueness conflicts never perform an upsert or silently
+approve a grant. There is no automatic write retry. Receipt/audit read interfaces
+and operator reconciliation are still required before production activation.
+
+Creation writes an inactive grant with null approval metadata and no binding
+membership. Expiry modification preserves key, source and membership, clears
+approval and deactivates the grant, including when changing an already expired
+grant. Both require a current eligible organization-scoped canonical key with the
+exact `evidence:submit` scope. Approval remains a separate explicit operation;
+active without approval metadata is rejected by the candidate schema. Future
+expiry and key eligibility are checked after staged audit insertion, so crossing
+expiry while waiting on a trigger/audit write rolls the entire transaction back.
+Neither action changes an application, verifies evidence, signs or issues a
+credential. Fixed structured audit changes contain revision, expiry and inactive
+state, without API-key secret or observation content.
+
+The candidate schema now allows approval metadata to be null as a pair and
+requires it for active grants. Router preflight requires both approval columns
+nullable, grant INSERT and expiry UPDATE privileges in addition to the previous
+checks. This remains a reviewed candidate schema: registered upgrade migration,
+least-privilege production role qualification, binding/membership administration
+and deployment are unfinished. No startup DDL or automatic privilege grants are
+introduced.

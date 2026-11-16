@@ -56,6 +56,8 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
         sqlx::query(statement).execute(&mut *tx).await.map_err(|_| FAILURE)?;
     }
     let writes: bool=sqlx::query_scalar("SELECT
+      has_table_privilege(current_user,'issuance_service.external_observation_producer_grants','INSERT') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_producer_grants','expires_at','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_producer_grants','api_key_id','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_producer_grants','approved_by','UPDATE') AND
       has_column_privilege(current_user,'issuance_service.external_observation_producer_grants','approved_at','UPDATE') AND
@@ -69,6 +71,17 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
       has_column_privilege(current_user,'issuance_service.external_observation_heads','receipt_id','UPDATE')")
       .fetch_one(&mut *tx).await.map_err(|_| FAILURE)?;
     if !writes {
+        return Err(FAILURE);
+    }
+    let approval_nullable: bool = sqlx::query_scalar(
+        "SELECT count(*)=2 FROM pg_catalog.pg_attribute
+      WHERE attrelid='issuance_service.external_observation_producer_grants'::regclass
+      AND attname IN ('approved_by','approved_at') AND NOT attisdropped AND NOT attnotnull",
+    )
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| FAILURE)?;
+    if !approval_nullable {
         return Err(FAILURE);
     }
     let audit_column: bool = sqlx::query_scalar(

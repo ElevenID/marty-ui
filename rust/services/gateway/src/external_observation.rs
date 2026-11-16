@@ -263,6 +263,10 @@ pub const APPROVE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/approve";
 pub const ROTATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/rotate-api-key";
+pub const CREATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create";
+pub const EXPIRY_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry";
 pub fn admin_organization(path: &str) -> Option<&str> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() != 7
@@ -270,7 +274,10 @@ pub fn admin_organization(path: &str) -> Option<&str> {
         || parts[1] != "v1"
         || parts[2] != "organizations"
         || parts[4] != "external-observation-producers"
-        || !matches!(parts[6], "revoke" | "approve" | "rotate-api-key")
+        || !matches!(
+            parts[6],
+            "revoke" | "approve" | "rotate-api-key" | "create" | "change-expiry"
+        )
         || !canonical_id(Some(parts[3]))
         || !canonical_id(Some(parts[5]))
     {
@@ -421,6 +428,57 @@ mod admin_guard_tests {
             ROUTE.replace("/external-observation-producers/", "/api-keys/"),
         ] {
             assert_eq!(admin_organization(&path), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod grant_edit_guard_tests {
+    use super::*;
+    #[tokio::test]
+    async fn creation_and_expiry_paths_use_the_session_tenant_and_origin_guard() {
+        let org = "20000000-0000-4000-8000-000000000001";
+        for action in ["create", "change-expiry"] {
+            let path=format!("/v1/organizations/{org}/external-observation-producers/30000000-0000-4000-8000-000000000001/{action}");
+            assert_eq!(admin_organization(&path), Some(org));
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap()
+            };
+            assert!(admit_admin(request(), true, Some(org), "admin-one", true)
+                .await
+                .is_ok());
+            assert_eq!(
+                admit_admin(request(), false, Some(org), "admin-one", true)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                admit_admin(request(), true, Some(org), "admin-one", false)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                admit_admin(
+                    request(),
+                    true,
+                    Some("20000000-0000-4000-8000-000000000002"),
+                    "admin-one",
+                    true
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::FORBIDDEN
+            );
         }
     }
 }

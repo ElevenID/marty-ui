@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{
     external_observation_admin::{revoke_grant, AdminError},
+    external_observation_grant_edit::{change_grant_expiry, create_grant},
     external_observation_grant_lifecycle::{approve_grant, rotate_grant_api_key},
     external_observation_http::{gateway_service_authenticated, one_header},
 };
@@ -24,8 +25,14 @@ pub const APPROVE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/approve";
 pub const ROTATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/rotate-api-key";
+pub const CREATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create";
+pub const EXPIRY_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry";
 #[derive(Clone, Copy)]
 enum Action {
+    Create,
+    Expiry,
     Revoke,
     Approve,
     Rotate,
@@ -44,6 +51,8 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         .route(REVOKE_PATH, post(mutate))
         .route(APPROVE_PATH, post(mutate))
         .route(ROTATE_PATH, post(mutate))
+        .route(CREATE_PATH, post(mutate))
+        .route(EXPIRY_PATH, post(mutate))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -60,6 +69,19 @@ struct RotateRequest {
     expected_revision: i64,
     new_api_key_id: Uuid,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateRequest {
+    api_key_id: Uuid,
+    source_id: String,
+    expires_at_ms: i64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExpiryRequest {
+    expected_revision: i64,
+    expires_at_ms: i64,
+}
 fn failure(status: StatusCode, code: &'static str) -> Response {
     (
         status,
@@ -74,6 +96,8 @@ async fn mutate(
     request: Request,
 ) -> Response {
     let action = match request.uri().path().rsplit('/').next() {
+        Some("create") => Action::Create,
+        Some("change-expiry") => Action::Expiry,
         Some("approve") => Action::Approve,
         Some("rotate-api-key") => Action::Rotate,
         _ => Action::Revoke,
@@ -155,6 +179,57 @@ async fn mutate(
     if expected_length.is_some_and(|length| length != bytes.len()) {
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
+    if matches!(action, Action::Create | Action::Expiry) {
+        let result = if matches!(action, Action::Create) {
+            let value = match serde_json::from_slice::<CreateRequest>(&bytes) {
+                Ok(value)
+                    if !value.api_key_id.is_nil()
+                        && !grant.is_nil()
+                        && !value.source_id.is_empty()
+                        && value.source_id.len() <= 128
+                        && value
+                            .source_id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                        && (1..=9007199254740991).contains(&value.expires_at_ms) =>
+                {
+                    value
+                }
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            create_grant(
+                &state.pool,
+                org,
+                &actor,
+                grant,
+                value.api_key_id,
+                &value.source_id,
+                value.expires_at_ms,
+            )
+            .await
+        } else {
+            let value = match serde_json::from_slice::<ExpiryRequest>(&bytes) {
+                Ok(value)
+                    if !grant.is_nil()
+                        && (1..=9007199254740991).contains(&value.expected_revision)
+                        && (1..=9007199254740991).contains(&value.expires_at_ms) =>
+                {
+                    value
+                }
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            change_grant_expiry(
+                &state.pool,
+                org,
+                &actor,
+                grant,
+                value.expected_revision,
+                value.expires_at_ms,
+            )
+            .await
+        };
+        return mutation_response(result.map(|r| (r.revision, r.audit_id)));
+    }
     let (expected_revision, new_key) = if matches!(action, Action::Rotate) {
         match serde_json::from_slice::<RotateRequest>(&bytes) {
             Ok(value) => (value.expected_revision, Some(value.new_api_key_id)),
@@ -171,6 +246,7 @@ async fn mutate(
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
     let result = match action {
+        Action::Create | Action::Expiry => unreachable!("handled above"),
         Action::Revoke => revoke_grant(&state.pool, org, &actor, grant, expected_revision)
             .await
             .map(|r| (r.revision, r.audit_id)),
@@ -188,6 +264,9 @@ async fn mutate(
         .await
         .map(|r| (r.revision, r.audit_id)),
     };
+    mutation_response(result)
+}
+fn mutation_response(result: Result<(i64, Uuid), AdminError>) -> Response {
     match result {
         Ok((revision, audit_id)) => (
             StatusCode::OK,
