@@ -45,6 +45,7 @@ pub const MIP_API_KEY_SCOPES: &[&str] = &[
     "deployment:write",
     "integrations:read",
     "integrations:write",
+    "evidence:submit",
     "admin:full",
 ];
 
@@ -375,6 +376,13 @@ pub fn validate_create_api_key(
             "admin:full is restricted to organization keys",
         ));
     }
+    if command.scope_type != ApiKeyScopeType::Organization
+        && scopes.iter().any(|scope| scope == "evidence:submit")
+    {
+        return Err(OrganizationApplicationError::InvalidApiKeyBinding(
+            "evidence:submit is restricted to organization-scoped keys",
+        ));
+    }
     Ok(())
 }
 
@@ -568,5 +576,45 @@ mod installer_actor_tests {
                 Err(crate::events::OrganizationEventError::InvalidInstallerActor)
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod external_evidence_scope_tests {
+    use super::*;
+
+    fn command(scope_type: ApiKeyScopeType) -> CreateApiKeyCommand {
+        let now = Utc::now();
+        CreateApiKeyCommand {
+            organization_id: Uuid::new_v4(),
+            name: "Canvas evidence producer".into(),
+            created_by: "organization-owner".into(),
+            scopes: Some(vec!["evidence:submit".into()]),
+            description: None,
+            is_test: false,
+            scope_type,
+            deployment_profile_id: (scope_type == ApiKeyScopeType::DeploymentProfile)
+                .then(Uuid::new_v4),
+            rate_limit: None,
+            expires_at: None,
+            now,
+        }
+    }
+
+    #[test]
+    fn evidence_submission_scope_is_valid_only_for_organization_keys() {
+        assert!(validate_create_api_key(&command(ApiKeyScopeType::Organization)).is_ok());
+        assert!(validate_create_api_key(&command(ApiKeyScopeType::DeploymentProfile)).is_err());
+    }
+
+    #[test]
+    fn ordinary_integration_writer_does_not_receive_evidence_submission_scope() {
+        let mut value = command(ApiKeyScopeType::Organization);
+        value.scopes = Some(vec!["integrations:write".into()]);
+        assert!(validate_create_api_key(&value).is_ok());
+        assert!(!value
+            .scopes
+            .unwrap()
+            .contains(&"evidence:submit".to_owned()));
     }
 }
