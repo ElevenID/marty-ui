@@ -51,13 +51,63 @@ impl mmf_security::TenantMembershipProvider for Operator {
                 mmf_security::TenantMembership {
                     principal_id: principal_id.into(),
                     tenant_id: tenant_id.into(),
-                    status: "ACTIVE".into(),
+                    status: "active".into(),
                     role_names: ["member".into()].into(),
                     permissions: ["flow-instance:start".into()].into(),
                     is_owner: false,
                 }
             }),
         )
+    }
+}
+
+#[tokio::test]
+async fn operator_fixture_uses_canonical_membership_status_and_scope() {
+    use mmf_security::{authorize_tenant_membership, TenantMembershipProvider};
+    let provider = Operator {
+        org: Uuid::new_v4().to_string(),
+    };
+    let mut membership = provider
+        .membership("demo-operator", &provider.org)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(authorize_tenant_membership(
+        "flow-instance:start",
+        "demo-operator",
+        &provider.org,
+        Some(&membership),
+        false
+    )
+    .is_ok());
+    assert!(provider
+        .membership("other-operator", &provider.org)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(provider
+        .membership("demo-operator", "other-organization")
+        .await
+        .unwrap()
+        .is_none());
+    assert!(authorize_tenant_membership(
+        "flow-instance:start",
+        "demo-operator",
+        "other-organization",
+        Some(&membership),
+        false
+    )
+    .is_err());
+    for status in ["ACTIVE", "inactive", "suspended"] {
+        membership.status = status.into();
+        assert!(authorize_tenant_membership(
+            "flow-instance:start",
+            "demo-operator",
+            &provider.org,
+            Some(&membership),
+            false
+        )
+        .is_err());
     }
 }
 
