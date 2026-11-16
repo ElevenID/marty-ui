@@ -72,10 +72,11 @@ const WalletSetup = () => {
   const [expiresIn, setExpiresIn] = useState(300);
   const [trustProfiles, setTrustProfiles] = useState([]);
   const [trustProfileId, setTrustProfileId] = useState('');
+  const [verifierTrustProfileId, setVerifierTrustProfileId] = useState('');
   const [profileOrganizationId, setProfileOrganizationId] = useState(null);
   const pairingRequestId = useRef(0);
-  const currentScope = useRef({ organizationId, trustProfileId });
-  currentScope.current = { organizationId, trustProfileId };
+  const currentScope = useRef({ organizationId, trustProfileId, verifierTrustProfileId });
+  currentScope.current = { organizationId, trustProfileId, verifierTrustProfileId };
 
   // Wallet connection state
   const [walletConnected, setWalletConnected] = useState(false);
@@ -97,12 +98,14 @@ const WalletSetup = () => {
     const requestId = ++pairingRequestId.current;
     const isCurrent = () => requestId === pairingRequestId.current &&
       currentScope.current.organizationId === organizationId &&
-      currentScope.current.trustProfileId === trustProfileId;
+      currentScope.current.trustProfileId === trustProfileId &&
+      currentScope.current.verifierTrustProfileId === verifierTrustProfileId;
     setLoading(true);
     setError(null);
     clearPairingPresentation();
     try {
-      const ticket = await issueRemotePairingTicket({ organizationId, trustProfileId });
+      const ticket = await issueRemotePairingTicket({ organizationId, trustProfileId,
+        ...(verifierTrustProfileId ? { verifierTrustProfileId } : {}) });
       const apiOrigin = new URL(import.meta.env.VITE_API_URL || window.location.origin, window.location.origin).origin;
       const nextPairingState = buildPairingState({
         pairingCode: ticket.pairing_code,
@@ -120,7 +123,7 @@ const WalletSetup = () => {
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [organizationId, trustProfileId, profileOrganizationId, clearPairingPresentation]);
+  }, [organizationId, trustProfileId, verifierTrustProfileId, profileOrganizationId, clearPairingPresentation]);
 
   useEffect(() => {
     let current = true;
@@ -128,6 +131,7 @@ const WalletSetup = () => {
     setLoading(false);
     setTrustProfiles([]);
     setTrustProfileId('');
+    setVerifierTrustProfileId('');
     setProfileOrganizationId(null);
     clearPairingPresentation();
     setActiveStep(0);
@@ -140,7 +144,9 @@ const WalletSetup = () => {
           const eligible = profiles.filter((profile) => profile.status === 'active');
           setTrustProfiles(eligible);
           setProfileOrganizationId(organizationId);
-          if (eligible.length === 1) setTrustProfileId(eligible[0].id);
+          const issuers = eligible.filter((profile) => !Array.isArray(profile.trust_purposes)
+            || profile.trust_purposes.includes('CREDENTIAL_ISSUER'));
+          if (issuers.length === 1) setTrustProfileId(issuers[0].id);
         })
         .catch(() => { if (current) setError('Could not load Trust Profiles for wallet pairing'); });
     }
@@ -150,10 +156,12 @@ const WalletSetup = () => {
   const checkWalletStatus = useCallback(async () => {
     if (!pairingId || activeStep !== 0) return;
     const requestId = pairingRequestId.current;
-    const { organizationId: requestOrganizationId, trustProfileId: requestTrustProfileId } = currentScope.current;
+    const { organizationId: requestOrganizationId, trustProfileId: requestTrustProfileId,
+      verifierTrustProfileId: requestVerifierProfileId } = currentScope.current;
     const isCurrent = () => requestId === pairingRequestId.current &&
       currentScope.current.organizationId === requestOrganizationId &&
-      currentScope.current.trustProfileId === requestTrustProfileId;
+      currentScope.current.trustProfileId === requestTrustProfileId &&
+      currentScope.current.verifierTrustProfileId === requestVerifierProfileId;
     try {
       const status = await loadRemotePairingStatus({ pairingId });
       if (!isCurrent()) return;
@@ -313,14 +321,42 @@ const WalletSetup = () => {
                     setLoading(false);
                     clearPairingPresentation();
                     setTrustProfileId(event.target.value);
+                    if (event.target.value === verifierTrustProfileId) setVerifierTrustProfileId('');
                   }}
                   data-testid="wallet-trust-profile-select"
                 >
-                  {trustProfiles.map((profile) => (
+                  {trustProfiles.filter((profile) => !Array.isArray(profile.trust_purposes)
+                    || profile.trust_purposes.includes('CREDENTIAL_ISSUER')).map((profile) => (
                     <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.id}</MenuItem>
                   ))}
                 </Select>
               </FormControl>
+
+              <FormControl fullWidth sx={{ mb: 1 }}>
+                <InputLabel id="wallet-verifier-profile-label">Verifier Trust Profile (optional)</InputLabel>
+                <Select
+                  labelId="wallet-verifier-profile-label"
+                  label="Verifier Trust Profile (optional)"
+                  value={verifierTrustProfileId}
+                  onChange={(event) => {
+                    pairingRequestId.current += 1;
+                    setLoading(false);
+                    clearPairingPresentation();
+                    setVerifierTrustProfileId(event.target.value);
+                  }}
+                  data-testid="wallet-verifier-profile-select"
+                >
+                  <MenuItem value="">No verifier profile selected</MenuItem>
+                  {trustProfiles.filter((profile) => profile.id !== trustProfileId
+                    && Array.isArray(profile.trust_purposes)
+                    && profile.trust_purposes.includes('PRESENTATION_VERIFIER')).map((profile) => (
+                    <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.id}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Choose the trust profile used to authenticate presentation requests to your wallet.
+              </Typography>
 
               <Card sx={{ maxWidth: 320, mx: 'auto', mb: 2 }}>
                 <CardContent sx={{ textAlign: 'center' }}>

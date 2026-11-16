@@ -166,4 +166,62 @@ describe('WalletSetup', () => {
     });
     expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
   });
+
+  it('keeps verifier selection explicit and discards a late ticket for a previous verifier', async () => {
+    const issuer = '11111111-2222-4333-8444-555555555555';
+    const verifierA = '22222222-2222-4333-8444-555555555555';
+    const verifierB = '33333333-2222-4333-8444-555555555555';
+    const pending = new Map<string, (ticket: unknown) => void>();
+    mockListTrustProfiles.mockResolvedValue([
+      { id: issuer, name: 'Issuer profile', status: 'active', trust_purposes: ['CREDENTIAL_ISSUER'] },
+      { id: verifierA, name: 'Verifier A', status: 'active', trust_purposes: ['PRESENTATION_VERIFIER'] },
+      { id: verifierB, name: 'Verifier B', status: 'active', trust_purposes: ['PRESENTATION_VERIFIER'] },
+    ]);
+    mockIssueRemotePairingTicket.mockImplementation(({ verifierTrustProfileId }: { verifierTrustProfileId?: string }) =>
+      new Promise((resolve) => { pending.set(verifierTrustProfileId || 'none', resolve); }));
+    render(<WalletSetup />);
+    await waitFor(() => expect(pending.has('none')).toBe(true));
+    expect(mockIssueRemotePairingTicket).toHaveBeenCalledWith({ organizationId: 'org-1', trustProfileId: issuer });
+    const selector = () => screen.getByRole('combobox', { name: 'Verifier Trust Profile (optional)' });
+    fireEvent.mouseDown(selector());
+    expect(screen.queryByRole('option', { name: 'Issuer profile' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('option', { name: 'Verifier A' }));
+    await waitFor(() => expect(pending.has(verifierA)).toBe(true));
+    fireEvent.mouseDown(selector());
+    fireEvent.click(await screen.findByRole('option', { name: 'Verifier B' }));
+    await waitFor(() => expect(pending.has(verifierB)).toBe(true));
+    const expires_at = new Date(Date.now() + 300000).toISOString();
+    await act(async () => {
+      pending.get(verifierB)?.({ pairing_code: 'B'.repeat(43), pairing_id: verifierB, expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
+    await act(async () => {
+      pending.get(verifierA)?.({ pairing_code: 'A'.repeat(43), pairing_id: verifierA, expires_at });
+      pending.get('none')?.({ pairing_code: 'C'.repeat(43), pairing_id: issuer, expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
+  });
+
+  it('discards a prior pairing status after the verifier selection changes', async () => {
+    let completePriorStatus: (status: unknown) => void = () => {};
+    const issuer = '11111111-2222-4333-8444-555555555555';
+    const verifier = '22222222-2222-4333-8444-555555555555';
+    mockListTrustProfiles.mockResolvedValue([
+      { id: issuer, name: 'Issuer profile', status: 'active', trust_purposes: ['CREDENTIAL_ISSUER'] },
+      { id: verifier, name: 'Verifier profile', status: 'active', trust_purposes: ['PRESENTATION_VERIFIER'] },
+    ]);
+    mockLoadRemotePairingStatus.mockImplementationOnce(() => new Promise((resolve) => { completePriorStatus = resolve; }));
+    render(<WalletSetup />);
+    await screen.findByTestId('pairing-qr-code');
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await waitFor(() => expect(mockLoadRemotePairingStatus).toHaveBeenCalledTimes(1));
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Verifier Trust Profile (optional)' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Verifier profile' }));
+    await waitFor(() => expect(mockIssueRemotePairingTicket).toHaveBeenLastCalledWith({
+      organizationId: 'org-1', trustProfileId: issuer, verifierTrustProfileId: verifier,
+    }));
+    await act(async () => { completePriorStatus({ state: 'paired', registration_id: 'previous-registration' }); });
+    expect(screen.queryByTestId('wallet-connected-alert')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('enable-notifications-button')).not.toBeInTheDocument();
+  });
 });

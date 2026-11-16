@@ -36,6 +36,8 @@ pub struct PairingScope {
     pub user_id: String,
     pub organization_id: String,
     pub trust_profile_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_trust_profile_id: Option<String>,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -54,6 +56,19 @@ pub trait PairingTicketRepository: Send + Sync {
         organization_id: &str,
         trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError>;
+    /// Verifier scope must be selected by the authorized browser, not the phone.
+    async fn issue_with_verifier_profile(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+        trust_profile_id: &str,
+        verifier_trust_profile_id: Option<&str>,
+    ) -> Result<IssuedPairingTicket, DeviceError> {
+        if verifier_trust_profile_id.is_some() {
+            return Err(DeviceError::AuthorizationUnavailable);
+        }
+        self.issue(user_id, organization_id, trust_profile_id).await
+    }
     /// A successful redemption consumes the ticket atomically, even on retry.
     async fn take(&self, token: &str) -> Result<Option<PairingScope>, DeviceError>;
 }
@@ -77,6 +92,7 @@ fn issue_scope(
     user_id: &str,
     organization_id: &str,
     trust_profile_id: &str,
+    verifier_trust_profile_id: Option<&str>,
     ttl_seconds: u64,
 ) -> Result<IssuedPairingTicket, DeviceError> {
     if user_id.trim().is_empty()
@@ -88,6 +104,18 @@ fn issue_scope(
             "pairing ticket scope is invalid".into(),
         ));
     }
+    let verifier_trust_profile_id = verifier_trust_profile_id
+        .map(|value| {
+            let id = Uuid::parse_str(value)
+                .map_err(|_| DeviceError::BadRequest("verifier Trust Profile is invalid".into()))?;
+            if id.is_nil() || Some(id) == Uuid::parse_str(trust_profile_id).ok() {
+                return Err(DeviceError::BadRequest(
+                    "a distinct verifier Trust Profile is required".into(),
+                ));
+            }
+            Ok(id.to_string())
+        })
+        .transpose()?;
     let issued_at = Utc::now();
     Ok(IssuedPairingTicket {
         token: random_token(TOKEN_BYTES),
@@ -96,6 +124,7 @@ fn issue_scope(
             user_id: user_id.into(),
             organization_id: organization_id.into(),
             trust_profile_id: trust_profile_id.into(),
+            verifier_trust_profile_id,
             issued_at,
             expires_at: issued_at + Duration::seconds(ttl_seconds as i64),
         },
@@ -125,8 +154,25 @@ impl PairingTicketRepository for MemoryPairingTickets {
         organization_id: &str,
         trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError> {
+        self.issue_with_verifier_profile(user_id, organization_id, trust_profile_id, None)
+            .await
+    }
+
+    async fn issue_with_verifier_profile(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+        trust_profile_id: &str,
+        verifier_trust_profile_id: Option<&str>,
+    ) -> Result<IssuedPairingTicket, DeviceError> {
         for _ in 0..4 {
-            let ticket = issue_scope(user_id, organization_id, trust_profile_id, self.ttl_seconds)?;
+            let ticket = issue_scope(
+                user_id,
+                organization_id,
+                trust_profile_id,
+                verifier_trust_profile_id,
+                self.ttl_seconds,
+            )?;
             let key = digest_key(&ticket.token).expect("issued ticket format");
             let mut scopes = self.scopes.lock().await;
             scopes.retain(|_, scope| scope.expires_at > Utc::now());
@@ -190,9 +236,26 @@ impl PairingTicketRepository for RedisPairingTickets {
         organization_id: &str,
         trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError> {
+        self.issue_with_verifier_profile(user_id, organization_id, trust_profile_id, None)
+            .await
+    }
+
+    async fn issue_with_verifier_profile(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+        trust_profile_id: &str,
+        verifier_trust_profile_id: Option<&str>,
+    ) -> Result<IssuedPairingTicket, DeviceError> {
         let mut connection = self.connection.clone();
         for _ in 0..4 {
-            let ticket = issue_scope(user_id, organization_id, trust_profile_id, self.ttl_seconds)?;
+            let ticket = issue_scope(
+                user_id,
+                organization_id,
+                trust_profile_id,
+                verifier_trust_profile_id,
+                self.ttl_seconds,
+            )?;
             let key = digest_key(&ticket.token).expect("issued ticket format");
             let value = serde_json::to_string(&ticket.scope)
                 .map_err(|_| DeviceError::PairingStore("pairing ticket encoding failed".into()))?;
@@ -237,6 +300,42 @@ impl PairingTicketRepository for RedisPairingTickets {
 mod tests {
     use super::*;
     const PROFILE_ID: &str = "11111111-2222-4333-8444-555555555555";
+
+    #[tokio::test]
+    async fn verifier_profile_is_explicit_distinct_and_preserved_through_ticket_consumption() {
+        let store = MemoryPairingTickets::new(300);
+        let verifier = "21111111-2222-4333-8444-555555555555";
+        let issued = store
+            .issue_with_verifier_profile("user-a", "org-a", PROFILE_ID, Some(verifier))
+            .await
+            .unwrap();
+        assert_eq!(
+            issued.scope.verifier_trust_profile_id.as_deref(),
+            Some(verifier)
+        );
+        let recovered = store.take(&issued.token).await.unwrap().unwrap();
+        assert_eq!(recovered, issued.scope);
+        assert!(store.take(&issued.token).await.unwrap().is_none());
+        for invalid in [
+            PROFILE_ID,
+            "not-a-profile",
+            "00000000-0000-0000-0000-000000000000",
+        ] {
+            assert!(store
+                .issue_with_verifier_profile("user-a", "org-a", PROFILE_ID, Some(invalid))
+                .await
+                .is_err());
+        }
+        let legacy = store.issue("user-a", "org-a", PROFILE_ID).await.unwrap();
+        assert!(legacy.scope.verifier_trust_profile_id.is_none());
+        let value = serde_json::to_value(&legacy.scope).unwrap();
+        assert!(value.get("verifier_trust_profile_id").is_none());
+        let decoded: PairingScope = serde_json::from_value(value).unwrap();
+        assert!(
+            decoded.verifier_trust_profile_id.is_none(),
+            "legacy scope must not acquire verifier authority"
+        );
+    }
 
     #[tokio::test]
     async fn ticket_is_secret_scoped_and_single_use() {

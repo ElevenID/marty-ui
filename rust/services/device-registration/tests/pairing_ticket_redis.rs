@@ -26,7 +26,12 @@ async fn pairing_token_is_not_stored_and_redeems_once_under_race() {
         .await
         .expect("pairing Redis store");
     let ticket = store
-        .issue("user-a", "org-a", "11111111-2222-4333-8444-555555555555")
+        .issue_with_verifier_profile(
+            "user-a",
+            "org-a",
+            "11111111-2222-4333-8444-555555555555",
+            Some("22222222-2222-4333-8444-555555555555"),
+        )
         .await
         .expect("pairing ticket");
     let keys: Vec<String> = redis::cmd("KEYS")
@@ -42,6 +47,15 @@ async fn pairing_token_is_not_stored_and_redeems_once_under_race() {
         .await
         .expect("scoped record");
     assert!(!stored.contains(&ticket.token));
+    let serialized_scope: serde_json::Value = serde_json::from_str(&stored).unwrap();
+    assert_eq!(
+        serialized_scope["trust_profile_id"],
+        "11111111-2222-4333-8444-555555555555"
+    );
+    assert_eq!(
+        serialized_scope["verifier_trust_profile_id"],
+        "22222222-2222-4333-8444-555555555555"
+    );
     let ttl: i64 = redis::cmd("TTL")
         .arg(&keys[0])
         .query_async(&mut connection)
@@ -60,4 +74,11 @@ async fn pairing_token_is_not_stored_and_redeems_once_under_race() {
         .await
         .expect("consumed ticket absent");
     assert_eq!(remaining, 0);
+    let legacy = store
+        .issue("user-a", "org-a", "11111111-2222-4333-8444-555555555555")
+        .await
+        .expect("issuer-only pairing remains supported");
+    let consumed = store.take(&legacy.token).await.unwrap().unwrap();
+    assert_eq!(consumed, legacy.scope);
+    assert_eq!(consumed.verifier_trust_profile_id, None);
 }

@@ -2251,6 +2251,39 @@ async fn wallet_issuer_keys_forwards_only_device_bearer() {
 }
 
 #[tokio::test]
+async fn wallet_verifier_authority_forwards_only_device_bearer() {
+    let (router, recorder) = actor_test_router();
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/v1/devices/wallet-verifier-authority")
+                .header("authorization", "Bearer opaque-device-credential")
+                .header("x-user-id", "forged-user")
+                .header("x-organization-id", "forged-org")
+                .header("x-service-token", "forged-service-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "device-registration");
+    assert_eq!(calls[0].1.path, "/v1/devices/wallet-verifier-authority");
+    assert_eq!(
+        calls[0].1.header("authorization"),
+        Some("Bearer opaque-device-credential")
+    );
+    assert_eq!(calls[0].1.header("x-user-id"), None);
+    assert_eq!(calls[0].1.header("x-organization-id"), None);
+    assert_eq!(
+        calls[0].1.header("x-service-token"),
+        Some("d".repeat(32).as_str())
+    );
+}
+
+#[tokio::test]
 async fn native_passport_gateway_forwards_all_eight_public_routes_with_tenant_key() {
     let recorder = Arc::new(ActorRecordingUpstream::default());
     let router = gateway_router(runtime_state_with_upstream_and_passport(
