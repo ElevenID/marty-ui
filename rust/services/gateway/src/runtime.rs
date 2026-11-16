@@ -653,7 +653,7 @@ async fn observation_middleware(
     next: Next,
 ) -> Response {
     let producer = request.uri().path() == crate::external_observation::PATH;
-    let admin = crate::external_observation::admin_organization(request.uri().path()).is_some();
+    let admin = crate::external_observation::is_admin_namespace(request.uri().path());
     if !producer && !admin {
         return next.run(request).await;
     }
@@ -790,7 +790,7 @@ async fn tenant_authorization_middleware(
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
-        || crate::external_observation::admin_organization(request.uri().path()).is_some()
+        || crate::external_observation::is_admin_namespace(request.uri().path())
     {
         return next.run(request).await;
     }
@@ -1034,7 +1034,7 @@ async fn idempotency_middleware(
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
-        || crate::external_observation::admin_organization(request.uri().path()).is_some()
+        || crate::external_observation::is_admin_namespace(request.uri().path())
     {
         return next.run(request).await;
     }
