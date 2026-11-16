@@ -1,5 +1,12 @@
 # Deep Link Support for OID4VCI Credential Offers
 
+> Historical integration guide. The Python backend paths and
+> `CredentialOfferDialog` described below have been retired. Current wallet
+> handoff uses [`OID4VCIInviteDisplay`](../ui/src/components/issuance/OID4VCIInviteDisplay.jsx)
+> and [`QRCodeDisplay`](../ui/src/components/issuance/QRCodeDisplay.jsx).
+> [`ConsoleRoutes`](../ui/src/apps/console/ConsoleRoutes.jsx) defines the active
+> application screens.
+
 ## Overview
 
 The Marty platform supports OID4VCI deep links for mobile wallet integration, allowing users to receive credentials without scanning QR codes. This is particularly useful when users are already on mobile devices.

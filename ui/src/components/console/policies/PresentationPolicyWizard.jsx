@@ -33,6 +33,10 @@ import { useConsole } from '../../../contexts/ConsoleContext';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useAuth } from '../../../hooks/useAuth';
+import { applyAutomaticTemplateConfig, automaticTemplateMatchesTrust, clearAutomaticTemplateConfig } from './policyTemplateDefaults';
+import { isClaimsConfigurationComplete } from './policyClaimsValidation';
+import { isValidPolicyCredentialAge } from './policyFreshnessValidation';
+import { clearPreviousTemplateBinding, projectTemplatePolicyClaims, TemplatePolicyClaimsError } from './projectTemplatePolicyClaims';
 import {
   TrustProfileStep,
   TemplateSelectionStep,
@@ -61,15 +65,15 @@ const INITIAL_DATA = {
     holder_binding: 'device_key',
     freshness_requirements: {
       max_credential_age_seconds: 31536000, // 1 year default
-      max_proof_age_seconds: 300, // 5 minutes default
       require_revocation_check: true,
     },
     prefer_predicates: true,
-    single_presentation: false,
     metadata: {},
   },
   activateImmediately: true,
 };
+
+const isActivePolicy = (policy) => String(policy?.status || '').trim().toLowerCase() === 'active';
 
 const PresentationPolicyWizard = () => {
   const navigate = useNavigate();
@@ -81,6 +85,21 @@ const PresentationPolicyWizard = () => {
   const creation = useMemo(() => createPolicyCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const submissionPending = useRef(false);
+
+  const projectClaims = useCallback((data) => {
+    try {
+      return projectTemplatePolicyClaims(data);
+    } catch (error) {
+      if (error instanceof TemplatePolicyClaimsError) {
+        throw new Error(t(`wizards.presentationPolicy.claimsConfigurationStep.validation.${error.code}`, {
+          ...error.values,
+          defaultValue: error.message,
+        }), { cause: error });
+      }
+      throw error;
+    }
+  }, [t]);
 
   // Validation function for each step
   const validateStep = useCallback((stepIndex, stepData) => {
@@ -90,15 +109,16 @@ const PresentationPolicyWizard = () => {
       case 1: // Template Selection
         return stepData.selectedTemplate !== null;
       case 2: // Claims Configuration
-        return (
-          stepData.policyConfig.name.trim() !== '' &&
-          stepData.policyConfig.purpose.trim() !== '' &&
-          stepData.policyConfig.required_claims.length > 0
-        );
+        if (!isClaimsConfigurationComplete(stepData.policyConfig)) return false;
+        try {
+          projectTemplatePolicyClaims(stepData);
+          return true;
+        } catch {
+          return false;
+        }
       case 3: // Freshness & Binding (optional)
-        return true;
       case 4: // Review
-        return true;
+        return isValidPolicyCredentialAge(stepData.policyConfig.freshness_requirements?.max_credential_age_seconds);
       default:
         return false;
     }
@@ -107,13 +127,14 @@ const PresentationPolicyWizard = () => {
   const handleSubmit = useCallback(async (data) => {
     const epoch = scopeEpoch.current;
     const isCurrent = () => epoch === scopeEpoch.current;
+    if (!isClaimsConfigurationComplete(data.policyConfig)) {
+      throw new Error(t('wizards.presentationPolicy.claimsConfigurationStep.validation.completeClaims'));
+    }
+    if (!isValidPolicyCredentialAge(data.policyConfig.freshness_requirements?.max_credential_age_seconds)) {
+      throw new Error(t('wizards.presentationPolicy.freshnessBindingStep.validation.maxCredentialAge'));
+    }
+    const credentialRequirements = projectClaims(data);
     await validatePolicyCreationDependencies(data, activeOrgId, isCurrent);
-    const credentialRequirements = Array.isArray(data.policyConfig.credential_requirements)
-      ? data.policyConfig.credential_requirements.map((requirement) => ({
-          ...requirement,
-          trust_profile_id: requirement.trust_profile_id || data.selectedTrustProfile?.id,
-        }))
-      : undefined;
     const payload = {
       ...data.policyConfig,
       ...(credentialRequirements ? { credential_requirements: credentialRequirements } : {}),
@@ -129,25 +150,56 @@ const PresentationPolicyWizard = () => {
       if (epoch === scopeEpoch.current && error.createdResource) setCreatedDraft(error.createdResource);
       throw error;
     }
-  }, [activeOrgId, creation]);
+  }, [activeOrgId, creation, projectClaims, t]);
+
+  const submitReviewedData = useCallback(async (data) => {
+    const epoch = scopeEpoch.current;
+    // Lock edits before the first await, including events before loading renders.
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      if (epoch === scopeEpoch.current) submissionPending.current = false;
+    }
+  }, [handleSubmit]);
 
   const wizard = useWizard({
     scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
     initialData: INITIAL_DATA,
     validateStep,
-    onSubmit: handleSubmit,
-    onComplete: () => {
-      navigate('/console/org/deploy/profiles');
+    onSubmit: submitReviewedData,
+    onComplete: (policy) => {
+      navigate(isActivePolicy(policy)
+        ? '/console/org/deploy/profiles'
+        : `/console/org/policies/presentation/${encodeURIComponent(policy.id)}`);
     },
     onCancel: () => {
       navigate('/console/org/policies');
     },
   });
 
+  const updateWizardData = wizard.updateData;
+  const claimProjectionError = useMemo(() => {
+    if (!isClaimsConfigurationComplete(wizard.data.policyConfig)) return null;
+    try {
+      projectClaims(wizard.data);
+      return null;
+    } catch (error) {
+      return error.message;
+    }
+  }, [wizard.data, projectClaims]);
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateWizardData(updates);
+  }, [updateWizardData]);
+  const goToWizardStep = wizard.goToStep;
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToWizardStep(step);
+  }, [goToWizardStep]);
   const resetWizard = wizard.reset;
   useLayoutEffect(() => {
     scopeEpoch.current += 1;
+    submissionPending.current = false;
     resetWizard();
     setCreatedDraft(null);
     setApiError(null);
@@ -156,24 +208,49 @@ const PresentationPolicyWizard = () => {
 
   // Handle template selection - pre-populate config
   const handleTemplateSelect = (template) => {
-    const updates = { selectedTemplate: template };
+    if (template && wizard.data.selectedTemplate?.id === template.id) {
+      // Adopt an explicit/current catalog selection without replaying its defaults.
+      updateFormData({ selectedTemplate: template });
+      return;
+    }
+    let baseConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    if (wizard.data.selectedTemplate?.id !== template?.id) {
+      baseConfig = clearPreviousTemplateBinding(baseConfig, wizard.data.selectedTemplate);
+    }
+    const updates = { selectedTemplate: template, policyConfig: baseConfig };
     
     if (template && template.config) {
-      updates.policyConfig = {
-        ...wizard.data.policyConfig,
+      const generatedConfig = {
         name: template.name,
         description: template.description,
         purpose: `Verify ${template.name}`,
         ...template.config,
         metadata: {
           ...(template.config.metadata || {}),
-          standard_reference: template.standardReference,
           template_id: template.id,
         },
       };
+      if (template._organizationDefault) {
+        updates.policyConfig = applyAutomaticTemplateConfig(baseConfig, generatedConfig, INITIAL_DATA.policyConfig);
+        updates.selectedTemplate = { ...template, _organizationDefault: {
+          ...template._organizationDefault, previousConfig: baseConfig, generatedConfig,
+        } };
+      } else {
+        updates.policyConfig = { ...baseConfig, ...generatedConfig };
+      }
     }
     
-    wizard.updateData(updates);
+    updateFormData(updates);
+  };
+
+  const handleTrustProfileSelect = (profile) => {
+    const updates = { selectedTrustProfile: profile };
+    if (wizard.data.selectedTemplate?._organizationDefault
+      && !automaticTemplateMatchesTrust(wizard.data.selectedTemplate, profile, activeOrgId)) {
+      updates.selectedTemplate = null;
+      updates.policyConfig = clearAutomaticTemplateConfig(wizard.data.policyConfig, wizard.data.selectedTemplate);
+    }
+    updateFormData(updates);
   };
 
   // Render current step content
@@ -183,7 +260,7 @@ const PresentationPolicyWizard = () => {
         return (
           <TrustProfileStep
             selectedTrustProfile={wizard.data.selectedTrustProfile}
-            onSelectTrustProfile={(profile) => wizard.updateData({ selectedTrustProfile: profile })}
+            onSelectTrustProfile={handleTrustProfileSelect}
           />
         );
       case 1:
@@ -198,22 +275,23 @@ const PresentationPolicyWizard = () => {
         return (
           <ClaimsConfigurationStep
             policyConfig={wizard.data.policyConfig}
-            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
+            validationError={claimProjectionError}
+            onConfigChange={(config) => updateFormData({ policyConfig: config })}
           />
         );
       case 3:
         return (
           <FreshnessBindingStep
             policyConfig={wizard.data.policyConfig}
-            onConfigChange={(config) => wizard.updateData({ policyConfig: config })}
+            onConfigChange={(config) => updateFormData({ policyConfig: config })}
           />
         );
       case 4:
         return (
           <ReviewStep
             data={wizard.data}
-            onEdit={(step) => wizard.goToStep(step)}
-            onToggleActivation={(value) => wizard.updateData({ activateImmediately: value })}
+            onEdit={editStep}
+            onToggleActivation={(value) => updateFormData({ activateImmediately: value })}
           />
         );
       default:
@@ -223,6 +301,7 @@ const PresentationPolicyWizard = () => {
 
   // Show success message
   if (wizard.success) {
+    const active = isActivePolicy(wizard.result);
     return (
       <Container maxWidth="md" sx={{ py: 4 }}>
         <Paper elevation={3} sx={{ p: 4, textAlign: 'center' }}>
@@ -230,13 +309,15 @@ const PresentationPolicyWizard = () => {
           <Typography variant="h5" gutterBottom>
             {t('wizards.presentationPolicy.success.title')}
           </Typography>
-          <Typography color="text.secondary" paragraph>
-            {wizard.data.activateImmediately 
+          <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
+            {active
               ? t('wizards.presentationPolicy.success.messageActive', { name: wizard.data.policyConfig.name })
               : t('wizards.presentationPolicy.success.messageDraft', { name: wizard.data.policyConfig.name })}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {t('wizards.presentationPolicy.success.redirecting')}
+            {active
+              ? t('wizards.presentationPolicy.success.redirecting')
+              : t('wizards.presentationPolicy.success.redirectingDraft', { defaultValue: 'Opening the saved policy draft...' })}
           </Typography>
         </Paper>
       </Container>
@@ -272,20 +353,26 @@ const PresentationPolicyWizard = () => {
           <Button onClick={() => navigate(`/console/org/policies/presentation/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>
         </Alert>}
         {(wizard.error || apiError) && (
-          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { setApiError(null); }}>
+          <Alert severity="error" sx={{ mb: 3 }} onClose={() => { wizard.clearError(); setApiError(null); }}>
             {wizard.error || apiError}
           </Alert>
         )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading} aria-label={getSteps(t)[wizard.activeStep].label}
+          sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 400, mb: 4 }}>
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.activeStep === 0 ? () => navigate('/console/org/policies/presentation') : wizard.goBack}
+            onClick={() => {
+              if (!submissionPending.current) {
+                if (wizard.activeStep === 0) navigate('/console/org/policies/presentation');
+                else wizard.goBack();
+              }
+            }}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.activeStep === 0 ? 'wizard.policy.cancel' : 'wizard.policy.back'}
@@ -297,8 +384,8 @@ const PresentationPolicyWizard = () => {
             {/* Skip button for optional steps */}
             {getSteps(t)[wizard.activeStep].optional && (
               <Button
-                onClick={wizard.goNext}
-                disabled={wizard.loading}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
+                disabled={wizard.loading || !wizard.isStepValid()}
                 data-testid="wizard.policy.skip"
               >
                 {t('wizards.presentationPolicy.buttons.skip')}
@@ -318,7 +405,7 @@ const PresentationPolicyWizard = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={wizard.loading || !wizard.isStepValid()}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.policy.next"

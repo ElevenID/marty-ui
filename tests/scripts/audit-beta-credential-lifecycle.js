@@ -4,7 +4,7 @@
 const {requireLifecyclePolicySelection,readLifecyclePolicyAuthority}=require('./lifecycle-policy-authority');
 const {cleanupLifecycleFlows}=require('./lifecycle-flow-cleanup');
 const fs = require('fs');
-const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
+const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, presentWalletRequest } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
@@ -12,7 +12,8 @@ const { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
-const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
+const { browserJson, cancelOwnedIssuanceTransaction, requireCurrentIssuerServiceReady,
+  selectOrganization } = require('./beta-demo-resource-helpers');
 const { requireVerificationDecision, responseForAction } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
@@ -465,7 +466,25 @@ async function issueCredential(page, templateId, ownedResources, holder = lifecy
   return result;
 }
 
-async function receiveCredential(walletPage, offerUri, expectedVct) {
+function walletReceiptMatchesExpectation(receipt, inventory, expectation) {
+  if (typeof expectation === 'string' && expectation) {
+    return typeof inventory === 'string' && inventory.includes(expectation);
+  }
+  if (expectation?.format === 'jwt_vc_json'
+    && typeof expectation.credentialConfigurationId === 'string'
+    && expectation.credentialConfigurationId) {
+    return receipt?.format === 'jwt_vc_json'
+      && receipt?.credential_configuration_id === expectation.credentialConfigurationId
+      && receipt?.achievement_id === expectation.achievementId
+      && Array.isArray(receipt?.credential_types)
+      && expectation.credentialTypes.every(type => receipt.credential_types.includes(type))
+      && typeof inventory === 'string'
+      && inventory.includes(expectation.credentialConfigurationId);
+  }
+  throw new TypeError('Expected wallet credential must identify a VCT or VC-JWT configuration');
+}
+
+async function receiveCredential(walletPage, offerUri, expectedCredential) {
   await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await resetIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
@@ -481,12 +500,13 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   }).catch(() => {});
   const inventory = await walletPage.locator('#credentials').innerText();
   return {
-    ok: response.ok() && inventory.includes(expectedVct),
+    ok: response.ok() && walletReceiptMatchesExpectation(body, inventory, expectedCredential),
     status: response.status(),
-    error: response.ok() ? null : body?.error || 'Wallet receipt failed',
+    error: response.ok() ? null : 'Wallet receive request failed',
     receipt: response.ok() ? {
       id: body?.id, vct: body?.vct, format: body?.format,
       credentialConfigurationId: body?.credential_configuration_id,
+      achievementId: body?.achievement_id, credentialTypes: body?.credential_types,
     } : null,
   };
 }
@@ -840,11 +860,7 @@ async function getCredentialStatus(page, credentialId) {
 
 async function present(walletPage, requestUri) {
   await maskProtocolField(walletPage, 'Presentation request URI', RECORD_VIDEO);
-  await walletPage.getByLabel('Presentation request URI').fill(requestUri);
-  const response = await responseForAction(walletPage, (response) => (
-    response.url() === `${TEST_WALLET_ORIGIN}/api/present`
-    && response.request().method() === 'POST'
-  ), () => walletPage.getByRole('button', { name: /^present$/i }).click(), 60_000);
+  const { response } = await presentWalletRequest(walletPage, requestUri, { origin: TEST_WALLET_ORIGIN });
   const body = await response.json().catch(() => null);
   const ok=response.ok()&&body?.ok===true;
   const submission=body?.submission&&typeof body.submission==='object'&&!Array.isArray(body.submission)
@@ -1092,6 +1108,9 @@ async function main() {
     }
     report.templateId = report.credentialTemplate.id;
 
+    await requireCurrentIssuerServiceReady(page, {
+      organizationId: ORG_ID, credentialTemplateId: report.templateId,
+    });
     const { offerUri, ...issuance } = await issueCredential(page, report.templateId, ownedResources, input.holder);
     report.issuance = issuance;
     const hasIssuanceTransaction = typeof issuance.transactionId === 'string' && issuance.transactionId.length > 0;
@@ -1139,6 +1158,9 @@ async function main() {
       throw new Error('Initial active credential did not receive an actual allowed verifier decision');
     }
 
+    await requireCurrentIssuerServiceReady(page, {
+      organizationId: ORG_ID, credentialTemplateId: report.templateId,
+    });
     const { offerUri: renewalOfferUri, ...renewalOffer } = await renewCredential(page, row, ownedResources, recording);
     report.renewalOffer = renewalOffer;
     const hasRenewalTransaction = typeof renewalOffer.transactionId === 'string' && renewalOffer.transactionId.length > 0;
@@ -1372,6 +1394,7 @@ module.exports = {
   performLifecycleAction,
   prepareLiveInputs,
   receiveCredential,
+  walletReceiptMatchesExpectation,
   renewCredential,
   resolveUiCandidateDist,
   resolveVerificationIssuerDid,

@@ -1,7 +1,6 @@
 use crate::{
     domain::{RevocationProfile, RevocationProfileStatus},
     repository::{ProfileRepository, RepositoryError, StatusIndexReservation},
-    status::StatusListFormat,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -126,7 +125,7 @@ impl ProfileRepository for PgProfileRepository {
         &self,
         reservation: StatusIndexReservation,
     ) -> Result<usize, RepositoryError> {
-        let format = persisted_status_format(reservation.format);
+        let format = reservation.format.as_str();
         let size = i64::try_from(reservation.size).map_err(repository_error)?;
         let legacy_floor = i64::try_from(reservation.legacy_floor).map_err(repository_error)?;
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
@@ -263,13 +262,6 @@ impl ProfileRepository for PgProfileRepository {
         .map_err(repository_error)?;
         transaction.commit().await.map_err(repository_error)?;
         usize::try_from(index).map_err(repository_error)
-    }
-}
-
-fn persisted_status_format(format: StatusListFormat) -> &'static str {
-    match format {
-        StatusListFormat::Bitstring => "bitstring",
-        StatusListFormat::TokenStatusList => "token_status_list",
     }
 }
 

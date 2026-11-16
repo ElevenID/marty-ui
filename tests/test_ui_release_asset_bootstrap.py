@@ -20,14 +20,20 @@ def test_every_ui_release_bootstrap_uses_the_verified_retry_helper() -> None:
         (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
     bootstrap_steps = [
-        step
-        for job in workflow["jobs"].values()
+        (owner, step)
+        for owner, job in workflow["jobs"].items()
         for step in job.get("steps", [])
         if step.get("name")
         in {"Bootstrap released UI dependencies", "Install UI dependencies"}
     ]
-    assert len(bootstrap_steps) == 4
-    for step in bootstrap_steps:
+    assert sorted(owner for owner, _ in bootstrap_steps) == [
+        "fast-feedback",
+        "test-credential-lifecycle-browser",
+        "test-ui",
+        "test-ui-crawler-artifacts",
+        "test-website",
+    ]
+    for _, step in bootstrap_steps:
         assert (
             'bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"'
             in step["run"]

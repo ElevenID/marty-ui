@@ -10,7 +10,7 @@ This stack is for running a production-like Marty deployment on the same machine
 - Local Keycloak admin port: `18180` by default, bound to `127.0.0.1`
 - Persistent host bind mounts under `SELFHOST_STATE_DIR` for Postgres, Redis, and applicant storage
 - Standalone OpenBao state and exports under `SELFHOST_OPENBAO_STATE_DIR` and `SELFHOST_OPENBAO_EXPORT_DIR`
-- Dedicated Cloudflare tunnel sidecar driven by its own env file
+- Optional Cloudflare tunnel integration selected independently from the core stack
 - Optional same-stack beta tunnel sidecars for the rare case where `beta.elevenidllc.com` should intentionally route to this same self-host edge and Keycloak
 
 ## Config boundary map
@@ -157,7 +157,7 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `deployment_profile_workload_client_cert` and `deployment_profile_tls_kms_token` (scoped signer)
 - `compliance_profile_workload_client_cert` and `compliance_profile_tls_kms_token` (scoped signer)
 - `openbao_service_token`
-- `cloudflare_tunnel_token`
+- `cloudflare_tunnel_token` only when explicitly selecting the Cloudflare connector
 - `cloudflare_beta_tunnel_token` when you enable the optional `beta-tunnel` compose profile
 
 The stack will refuse to start if any required secret file still contains a placeholder value such as `change-me-postgres`.
@@ -226,6 +226,8 @@ See [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md) for the compose file and recovery
 
 ## Cloudflare tunnel routing
 
+New signed installations use the separately authenticated [Cloudflare hosting add-on](docs/hosting-cloudflare-addon.md) and its private keyless HTTPS route. The remaining instructions in this section preserve the separately operated legacy HTTP edge deployment: add `docker-compose.selfhost.cloudflare-legacy.yml` explicitly, or use `make selfhost-prod-cloudflare-up`.
+
 Configure the production Cloudflare tunnel hostname to target `http://edge:80` inside this compose project. Keep the existing beta/dev hostname pointed at the beta/dev tunnel stack when beta has its own Keycloak.
 
 If `beta.elevenidllc.com` should point at the same self-host production edge, keep the primary tunnel on `http://edge:80` and start the optional beta tunnel profile. The beta Cloudflare tunnel should target `http://tunnel-nginx-proxy:80`; the proxy preserves the incoming `Host` header and forwards traffic to the self-host `edge` service.
@@ -240,7 +242,7 @@ Do **not** start the optional self-host beta tunnel profile when beta is a separ
 make selfhost-prod-beta-tunnel-up
 ```
 
-The default `selfhost-prod-up` target does not start the beta profile automatically, so customer deployments that only serve one hostname keep the simpler single-tunnel shape.
+The default `selfhost-prod-up` target starts the core stack without either Cloudflare connector. Select the primary or beta connector explicitly.
 
 The auth service intentionally trusts only configured UI origins when it builds the OIDC callback URL. If beta is omitted from both `UI_ADDITIONAL_BASE_URLS` and `CORS_ORIGINS`, `/v1/auth/login` will fall back to `UI_BASE_URL` and Google sign-in will return users to the primary production hostname.
 
@@ -261,7 +263,7 @@ make selfhost-prod-check
 make selfhost-prod-openbao-ps
 make selfhost-prod-openbao-export
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml ps
-docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml logs -f edge cloudflared gateway keycloak
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml logs -f edge gateway keycloak
 docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml down
 ```
 

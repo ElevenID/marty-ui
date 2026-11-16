@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
@@ -26,12 +27,14 @@ impl RuntimeEnvironment {
 pub struct TrustProfileServiceConfig {
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub organization_grpc_target: String,
     pub organization_grpc_ca_cert: Option<PathBuf>,
     pub service_token: Option<String>,
     pub internal_api_key: Option<String>,
+    pub signing_keys_service_url: String,
     pub dependency_timeout: Duration,
     pub registry_sync_poll_interval: Duration,
     pub registry_private_hosts: Vec<String>,
@@ -100,15 +103,34 @@ impl TrustProfileServiceConfig {
             MINIMUM_INTERNAL_API_KEY_BYTES,
             environment,
         )?;
+        let signing_keys_service_url = value(&values, "SIGNING_KEYS_SERVICE_URL")
+            .unwrap_or("http://signing-keys:8017")
+            .to_owned();
+        let signing_url = Url::parse(&signing_keys_service_url)
+            .map_err(|_| invalid("SIGNING_KEYS_SERVICE_URL"))?;
+        if !matches!(signing_url.scheme(), "http" | "https")
+            || signing_url.host_str().is_none()
+            || !signing_url.username().is_empty()
+            || signing_url.password().is_some()
+            || signing_url.path() != "/"
+            || signing_url.query().is_some()
+            || signing_url.fragment().is_some()
+        {
+            return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
+        }
         let marty_organization_id = value(&values, "MARTY_ORG_ID")
             .unwrap_or("00000000-0000-0000-0000-000000000001")
             .parse()
             .map_err(|_| invalid("MARTY_ORG_ID"))?;
-        let organization_slug = value(&values, "MARTY_ORG_SLUG").unwrap_or("marty");
-        let public_domain = value(&values, "PUBLIC_DOMAIN").unwrap_or("localhost");
-        let marty_issuer_did = value(&values, "MARTY_ISSUER_DID")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("did:web:{public_domain}:orgs:{organization_slug}"));
+        let organization_slug =
+            config::canonical_slug(value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"), "marty");
+        let public_domain =
+            config::configured_authority(value(&values, "PUBLIC_DOMAIN"), &[], "localhost");
+        let marty_issuer_did = config::configured_did_web(
+            value(&values, "MARTY_ISSUER_DID"),
+            &public_domain,
+            &["orgs", &organization_slug],
+        );
         if !marty_issuer_did.starts_with("did:") {
             return Err(invalid("MARTY_ISSUER_DID"));
         }
@@ -190,7 +212,18 @@ impl TrustProfileServiceConfig {
         } else {
             Vec::new()
         };
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr || service_token.is_none() {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+        }
         Ok(Self {
+            managed_authority_https,
             environment,
             http_addr,
             database_url,
@@ -199,6 +232,7 @@ impl TrustProfileServiceConfig {
             organization_grpc_ca_cert,
             service_token,
             internal_api_key,
+            signing_keys_service_url,
             dependency_timeout,
             registry_sync_poll_interval,
             registry_private_hosts,
@@ -307,7 +341,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name).map_or(Ok(default), |raw| raw.parse().map_err(|_| invalid(name)))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn csv(value: &str) -> Vec<String> {
@@ -320,11 +354,11 @@ fn csv(value: &str) -> Vec<String> {
 }
 
 fn boolean(value: &str, name: &'static str) -> Result<bool, TrustProfileConfigError> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => Err(invalid(name)),
-    }
+    config::boolean(
+        value.trim(),
+        config::BooleanVocabulary::AsciiInsensitiveWithOnOff,
+    )
+    .map_err(|_| invalid(name))
 }
 
 fn required(
@@ -337,11 +371,7 @@ fn required(
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn invalid(name: &'static str) -> TrustProfileConfigError {
@@ -367,12 +397,47 @@ mod tests {
     }
 
     #[test]
+    fn seed_issuer_normalizes_authority_and_preserves_explicit_identity_and_fallback() {
+        let mut input = values("development");
+        input.remove("PUBLIC_DOMAIN");
+        input.remove("MARTY_ISSUER_DID");
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:localhost:orgs:marty"
+        );
+        input.insert(
+            "PUBLIC_DOMAIN".into(),
+            "https://beta.example.test:29876/path".into(),
+        );
+        input.insert("MARTY_ORG_SLUG".into(), " Marty-Identity-Platform ".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:beta.example.test%3A29876:orgs:marty-identity-platform"
+        );
+        input.insert(
+            "MARTY_ISSUER_DID".into(),
+            "did:web:owned.example:orgs:reviewed".into(),
+        );
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input)
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:owned.example:orgs:reviewed"
+        );
+    }
+
+    #[test]
     fn normalizes_the_python_database_url_and_compose_target() {
         let config = TrustProfileServiceConfig::from_values(values("development")).unwrap();
         assert!(config.database_url.starts_with("postgresql://"));
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert_eq!(config.http_addr.port(), 8004);
         assert_eq!(config.marty_issuer_url, "https://issuer.example");
+        assert_eq!(config.signing_keys_service_url, "http://signing-keys:8017");
         assert_eq!(config.did_resolution_base_urls, ["http://gateway:8000"]);
         assert!(config.did_web_allowed_hosts.is_empty());
     }
@@ -494,5 +559,36 @@ mod tests {
                 name: "DID_RESOLUTION_BASE_URL"
             })
         );
+    }
+
+    #[test]
+    fn scoped_document_owner_uses_only_a_configured_credential_free_origin() {
+        let mut input = values("development");
+        input.insert(
+            "SIGNING_KEYS_SERVICE_URL".into(),
+            "https://signing.internal:8017".into(),
+        );
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(input)
+                .unwrap()
+                .signing_keys_service_url,
+            "https://signing.internal:8017"
+        );
+        for origin in [
+            "file:///tmp/did",
+            "http://user:secret@signing.internal",
+            "http://signing.internal/path",
+            "http://signing.internal?query",
+            "http://signing.internal#fragment",
+        ] {
+            let mut input = values("development");
+            input.insert("SIGNING_KEYS_SERVICE_URL".into(), origin.into());
+            assert_eq!(
+                TrustProfileServiceConfig::from_values(input),
+                Err(TrustProfileConfigError::Invalid {
+                    name: "SIGNING_KEYS_SERVICE_URL"
+                })
+            );
+        }
     }
 }

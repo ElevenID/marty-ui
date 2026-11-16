@@ -3,7 +3,7 @@
  * 
  * Provides system health status for:
  * - API Gateway
- * - Issuer Metadata Service
+ * - Issuance Service
  * - Verifier Service
  */
 
@@ -21,30 +21,25 @@ export const HealthStatus = {
  * Get system health status
  * @returns {Promise<Object>} Health status for all services
  */
-export async function getSystemHealth() {
+export async function getSystemHealth({ signal } = {}) {
   try {
-    const response = await fetch('/health', {
+    // The liveness endpoint only describes the gateway process. Readiness
+    // includes the individual services that the gateway actually checked.
+    const response = await fetch('/health/ready', {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
       },
+      cache: 'no-store',
+      signal,
     });
 
-    if (!response.ok) {
-      return {
-        gateway: HealthStatus.ERROR,
-        issuer: HealthStatus.UNKNOWN,
-        verifier: HealthStatus.UNKNOWN,
-      };
-    }
-
-    const data = await response.json();
-
-    // Map backend health response to UI health statuses
-    // Backend may return: { status: "healthy" | "degraded" | "unhealthy", services: {...} }
-    return parseHealthResponse(data);
-  } catch (error) {
-    console.error('Health check failed:', error);
+    // A native 503 still contains useful per-service observations. Preserve
+    // those without presenting the unavailable gateway as ready.
+    const data = await response.json().catch(() => null);
+    const health = parseHealthResponse(data);
+    return response.ok ? health : { ...health, gateway: HealthStatus.ERROR };
+  } catch {
     return {
       gateway: HealthStatus.ERROR,
       issuer: HealthStatus.UNKNOWN,
@@ -59,22 +54,17 @@ export async function getSystemHealth() {
  * @returns {Object} Parsed health statuses
  */
 function parseHealthResponse(data) {
-  // Default to healthy if no specific service data
-  const defaultStatus = data.status === 'healthy' 
-    ? HealthStatus.HEALTHY 
-    : data.status === 'degraded'
-    ? HealthStatus.WARNING
-    : data.status === 'unhealthy'
-    ? HealthStatus.ERROR
-    : HealthStatus.UNKNOWN;
+  const response = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+  const services = response.services && typeof response.services === 'object'
+    && !Array.isArray(response.services) ? response.services : {};
 
-  // If backend provides detailed service health
-  const services = data.services || {};
-
+  // Never infer an unreported service's health from the gateway's aggregate.
+  // `issuer` remains the dashboard's compatibility field for the issuance
+  // service, whose native registry name is `issuance-native` or `issuance`.
   return {
-    gateway: mapServiceHealth(services.gateway || services.api || defaultStatus),
-    issuer: mapServiceHealth(services.issuer || services.issuer_metadata || defaultStatus),
-    verifier: mapServiceHealth(services.verifier || services.verifier_service || defaultStatus),
+    gateway: mapServiceHealth(services.gateway ?? services.api ?? response.status),
+    issuer: mapServiceHealth(services['issuance-native'] ?? services.issuance),
+    verifier: mapServiceHealth(services.verification ?? services.verifier ?? services.verifier_service),
   };
 }
 
@@ -87,6 +77,7 @@ function mapServiceHealth(serviceHealth) {
   if (typeof serviceHealth === 'string') {
     switch (serviceHealth.toLowerCase()) {
       case 'healthy':
+      case 'ready':
       case 'up':
       case 'ok':
         return HealthStatus.HEALTHY;
@@ -94,6 +85,8 @@ function mapServiceHealth(serviceHealth) {
       case 'warning':
         return HealthStatus.WARNING;
       case 'unhealthy':
+      case 'not_ready':
+      case 'unreachable':
       case 'down':
       case 'error':
         return HealthStatus.ERROR;

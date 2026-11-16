@@ -87,7 +87,7 @@ function commandRows(rows,selection,before){
   assert(['postgres:','postgresql:'].includes(url.protocol)&&url.username==='postgres'&&url.hostname==='postgres'&&['','5432'].includes(url.port)&&url.pathname==='/marty'&&!url.hash,'EXACT_PRIVATE_SCHEMA_DATABASE_URL_REQUIRED');
   same([...url.searchParams.entries()],[['options[role]',role]],'EXACT_SQLX_DATABASE_ROLE_OPTIONS_REQUIRED');
 
-  assert.equal(row.imageId,before.find(x=>x.role===row.role).imageId);runtime.boundBytes(row.stdout);runtime.boundBytes(row.stderr);
+  assert.equal(row.imageId,before.find(x=>x.role===row.role).imageId);runtime.verifyCommandOutput(row.stdout);runtime.verifyCommandOutput(row.stderr);
   assert.equal(row.elfSha256,selection.binaries[row.role].sha256);assert(HASH.test(row.containerId));assert(!before.some(x=>x.containerId===row.containerId));
   assert.equal(row.state,'exited');assert.equal(row.exitCode,0);assert.equal(row.oomKilled,false);helpers.push(row.containerId);
  }

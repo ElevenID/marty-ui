@@ -1,5 +1,6 @@
 use serde_json::Value;
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
 const HISTORICAL_ALEMBIC_ERROR: &str =
@@ -50,6 +51,14 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0011_passport_administrative_cancellation",
         include_str!("../migrations/0011_passport_administrative_cancellation.sql"),
     ),
+    (
+        "0012_membership_achievement_criteria",
+        include_str!("../migrations/0012_membership_achievement_criteria.sql"),
+    ),
+    (
+        "0013_explicit_jwt_vc_profile",
+        include_str!("../migrations/0013_explicit_jwt_vc_profile.sql"),
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -83,10 +92,18 @@ const BASE_TABLES: &[&str] = &[
     "physical_document_jobs",
 ];
 
+/// The migration command needs only the tenant identity, not service credentials.
+pub fn seed_organization_id(value: Option<&str>) -> Result<Uuid, sqlx::Error> {
+    marty_service_runtime::config::trimmed_nonempty(value)
+        .unwrap_or("00000000-0000-0000-0000-000000000001")
+        .parse()
+        .map_err(|_| sqlx::Error::Protocol("MARTY_ORG_ID is invalid".into()))
+}
+
 /// Claim the Rust-owned issuance schema under one database lock. A fresh
 /// database receives the checked-in baseline; a Rust-owned database must have
 /// its baseline ledger. Historical Alembic schemas are not supported.
-pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+pub async fn migrate_owned_schema(pool: &PgPool, organization_id: Uuid) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_schema_owner_v1', 0))")
         .execute(&mut *transaction)
@@ -116,7 +133,8 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         ))
         .execute(&mut *transaction)
         .await?;
-        crate::migration_seed::seed_marty_application_templates(&mut transaction).await?;
+        crate::migration_seed::seed_marty_application_templates(&mut transaction, organization_id)
+            .await?;
     } else {
         let has_alembic: bool = sqlx::query_scalar(
             "SELECT to_regclass('issuance_service.alembic_version') IS NOT NULL",
@@ -189,6 +207,7 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             .await?;
     }
     validate_base_tables(&mut transaction).await?;
+    validate_jwt_vc_profile_connection(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
     validate_passport_connection(&mut transaction, PassportValidation::Migration).await?;
     transaction.commit().await
@@ -227,6 +246,7 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         )));
     }
     validate_base_tables(&mut transaction).await?;
+    validate_jwt_vc_profile_connection(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
     validate_passport_connection(&mut transaction, PassportValidation::Application).await?;
     transaction.commit().await
@@ -852,7 +872,7 @@ async fn validate_passport_connection(
          JOIN pg_namespace AS namespace ON namespace.oid=p.pronamespace
          WHERE t.tgrelid=to_regclass('issuance_service.physical_document_jobs')
            AND t.tgname='trg_physical_document_submission_intent'
-           AND NOT t.tgisinternal
+           AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgattr::text='' AND t.tgnargs=0
            AND namespace.nspname='issuance_service'
            AND p.proname='guard_physical_document_submission_intent'",
     )
@@ -989,4 +1009,135 @@ pub(crate) fn normalize_catalog_expression(value: &str) -> String {
         }
     }
     output
+}
+
+/// Add only the explicit profile boundary during ordinary schema startup.
+/// Protected schema-owner migration also installs this same source migration.
+pub async fn migrate_jwt_vc_profile(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_schema_owner_v1', 0))")
+        .execute(&mut *transaction)
+        .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0013_explicit_jwt_vc_profile.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
+    validate_jwt_vc_profile_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+pub async fn validate_jwt_vc_profile(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    validate_jwt_vc_profile_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+async fn validate_jwt_vc_profile_connection(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("SET LOCAL search_path = pg_catalog")
+        .execute(&mut *connection)
+        .await?;
+
+    let columns: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns
+        WHERE table_schema='issuance_service' AND table_name='issuance_transactions'
+        AND column_name IN ('jwt_vc_profile','jwt_vc_signing_timing') AND udt_name='jsonb'
+        AND is_nullable='YES' AND column_default IS NULL",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    let check: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_constraint
+        WHERE conrelid=to_regclass('issuance_service.issuance_transactions')
+        AND conname='ck_issuance_explicit_jwt_vc_profile' AND contype='c' AND convalidated)",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if columns != 2 || !check {
+        return Err(sqlx::Error::Protocol(
+            "explicit JWT-VC storage boundary is missing".into(),
+        ));
+    }
+    let source = include_str!("../migrations/0013_explicit_jwt_vc_profile.sql");
+    let expected_body = source
+        .split_once("AS $profile_check$")
+        .and_then(|(_, rest)| rest.split_once("$profile_check$;"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| {
+            sqlx::Error::Protocol("explicit JWT-VC predicate source is invalid".into())
+        })?;
+    let function_valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_language l ON l.oid=p.prolang
+        WHERE p.oid=to_regprocedure('issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text)')
+        AND p.proargnames=ARRAY['jwt_vc_profile','jwt_vc_signing_timing','credential_payload_format','credential_type','credential_template_id','application_id','renewal_of_credential_id','delivery_mode','wallet_configs','renewable','status']::text[] AND p.proargmodes IS NULL AND p.pronargdefaults=0 AND p.provariadic=0
+        AND p.prosrc=$1 AND p.prorettype='boolean'::regtype AND p.provolatile='i' AND NOT p.proisstrict
+        AND NOT p.prosecdef AND p.proconfig IS NULL AND p.prokind='f' AND l.lanname='plpgsql')")
+        .bind(expected_body).fetch_one(&mut *connection).await?;
+    let dependency_valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_constraint c JOIN pg_depend d
+        ON d.classid='pg_constraint'::regclass AND d.objid=c.oid
+        WHERE c.conrelid=to_regclass('issuance_service.issuance_transactions') AND c.conname='ck_issuance_explicit_jwt_vc_profile'
+        AND d.refclassid='pg_proc'::regclass AND d.refobjid=to_regprocedure('issuance_service.issuance_explicit_jwt_vc_profile_valid(jsonb,jsonb,text,text,text,text,text,text,jsonb,boolean,text)'))")
+        .fetch_one(&mut *connection).await?;
+    let actual_call: String = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint
+        WHERE conrelid=to_regclass('issuance_service.issuance_transactions') AND conname='ck_issuance_explicit_jwt_vc_profile'")
+        .fetch_one(&mut *connection).await?;
+    let expected_call = source
+        .split_once("ADD CONSTRAINT ck_issuance_explicit_jwt_vc_profile ")
+        .and_then(|(_, rest)| rest.split_once(';'))
+        .map(|(call, _)| call)
+        .ok_or_else(|| sqlx::Error::Protocol("explicit JWT-VC check source is invalid".into()))?;
+    if !function_valid
+        || !dependency_valid
+        || normalize_profile_check_call(&actual_call) != normalize_profile_check_call(expected_call)
+    {
+        return Err(sqlx::Error::Protocol(
+            "explicit JWT-VC check changed".into(),
+        ));
+    }
+    for (table, name) in [
+        ("issuance_transactions", "guard_explicit_jwt_vc_transaction"),
+        (
+            "authorization_sessions",
+            "guard_explicit_jwt_vc_authorization",
+        ),
+    ] {
+        let marker = format!("CREATE OR REPLACE FUNCTION issuance_service.{name}()\nRETURNS trigger LANGUAGE plpgsql AS $$");
+        let expected = source
+            .split_once(&marker)
+            .and_then(|(_, rest)| rest.split_once("$$;"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| {
+                sqlx::Error::Protocol("explicit JWT-VC guard source is invalid".into())
+            })?;
+        let valid: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_trigger t
+            JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace
+            JOIN pg_language l ON l.oid=p.prolang
+            WHERE t.tgrelid=to_regclass('issuance_service.' || $1) AND t.tgname=$2
+            AND t.tgenabled='O' AND t.tgtype=23 AND NOT t.tgisinternal AND t.tgqual IS NULL AND t.tgattr::text='' AND t.tgnargs=0
+            AND n.nspname='issuance_service' AND p.proname=$2 AND p.pronargs=0
+            AND NOT p.prosecdef AND p.proconfig IS NULL AND p.prorettype='trigger'::regtype
+            AND p.prokind='f' AND p.provolatile='v' AND NOT p.proisstrict AND l.lanname='plpgsql' AND p.prosrc=$3)")
+            .bind(table).bind(name).bind(expected).fetch_one(&mut *connection).await?;
+        if !valid {
+            return Err(sqlx::Error::Protocol(
+                "explicit JWT-VC database guard is missing or changed".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+// The accepted expression is one qualified predicate call plus IS TRUE. Only
+// formatting and the fixed built-in casts differ across json/jsonb/varchar storage.
+fn normalize_profile_check_call(value: &str) -> String {
+    value
+        .replace("::text", "")
+        .replace("::jsonb", "")
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '(' && *c != ')')
+        .collect()
 }

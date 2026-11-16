@@ -190,7 +190,7 @@ def render(spec, command):
         )
         previous = compose(ROOT / SELFHOST["APPROVED"])
         selfhost = compose(ROOT / SELFHOST["GATE"]["BASE"])
-        SELFHOST["assert_models"](previous, selfhost)
+        SELFHOST["assert_models"](previous, selfhost, interpolated=True)
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {

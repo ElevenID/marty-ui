@@ -5,5 +5,3 @@ services:
   edge:
     environment:
       SELFHOST_CONSOLE_ENABLED: "false"
-    depends_on:
-      ui: !reset null

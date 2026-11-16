@@ -25,9 +25,11 @@ import installer_candidate_qemu_observe as observer
 from installer_candidate_vm_create import _bytes, _disk_digest, _read_record, _write
 from installer_candidate_vm_runtime import _named_disk, _same_path
 from installer_candidate_vm_seed import verify_seed
+from installer_candidate_vm_policy import ROOTLESS_PROFILES, memory_mib, seed_profile
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-launch/v1"
+ROOTLESS_SCHEMA = "elevenid.installer-vm-launch/v2"
 PID_SCHEMA = "elevenid.installer-vm-pid/v2"
 QEMU = Path("/usr/bin/qemu-system-x86_64")
 SETPRIV = Path("/usr/bin/setpriv")
@@ -36,7 +38,7 @@ CPUS = 2
 ENV = {"HOME": "/", "PATH": "/usr/bin:/bin", "LANG": "C"}
 
 
-def _host_headroom() -> int:
+def _host_headroom(resource_profile: str | None = None) -> int:
     raw = Path("/proc/meminfo").read_bytes()
     release.require(len(raw) <= 65536, "VM host memory inventory oversized")
     values = [
@@ -50,10 +52,11 @@ def _host_headroom() -> int:
         "VM host memory unavailable",
     )
     available = int(values[0][1]) * 1024
-    # Engineering trial only; the independent 32GiB/20GiB release gate stays.
+    # Nominal guest allocation plus controller headroom is not guest capacity
+    # evidence. The later guest and Docker measurements remain independent.
     release.require(
-        available >= (MEMORY_MIB + 2048) * 1024 * 1024,
-        "VM engineering host memory headroom insufficient",
+        available >= (memory_mib(resource_profile) + 2048) * 1024 * 1024,
+        "VM host memory headroom insufficient",
     )
     return available
 
@@ -134,7 +137,8 @@ def _kvm_group() -> int:
     return group.gr_gid
 
 
-def _arguments(runtime_dir: Path, vm_id: str, port: int) -> list[str]:
+def _arguments(runtime_dir: Path, vm_id: str, port: int,
+               resource_profile: str | None = None) -> list[str]:
     _safe_runtime_path(runtime_dir)
     disk = runtime_dir / "disk.qcow2"
     seed = runtime_dir / "seed.iso"
@@ -146,7 +150,7 @@ def _arguments(runtime_dir: Path, vm_id: str, port: int) -> list[str]:
         "-machine",
         "q35,accel=kvm",
         "-m",
-        str(MEMORY_MIB),
+        str(memory_mib(resource_profile)),
         "-smp",
         str(CPUS),
         "-nodefaults",
@@ -278,10 +282,13 @@ def _live(
 
 
 def launch(
-    source: Path, registry: Path, vm_parent: Path, runtime_parent: Path, *, vm_id: str
+    source: Path, registry: Path, vm_parent: Path, runtime_parent: Path, *, vm_id: str,
+    resource_profile: str | None = None,
 ) -> dict:
     release.require(os.geteuid() == 0, "root VM controller required")
     seed = verify_seed(source, registry, vm_parent, runtime_parent, vm_id=vm_id)
+    release.require(seed_profile(seed) == resource_profile,
+                    "VM launch resource profile differs from explicit seed selection")
     qemu_sha256 = _trusted_tool(QEMU)
     _trusted_tool(SETPRIV)
     kvm_gid = _kvm_group()
@@ -340,6 +347,8 @@ def _launch_held(
     qemu_sha256: str,
     kvm_gid: int,
 ) -> dict:
+    resource_profile = seed_profile(seed)
+
     def rebind() -> None:
         _same_path(
             runtime_dir,
@@ -375,12 +384,12 @@ def _launch_held(
         )
         _seed_media(runtime_fd, seed, runtime["runtime_gid"])
         _idle_uid(runtime["runtime_uid"])
-        _host_headroom()
+        _host_headroom(resource_profile) if resource_profile else _host_headroom()
         boot_id = _boot_id()
         release.require(
             not (runtime_dir / "qmp.sock").exists(), "VM monitor path already exists"
         )
-        args = _arguments(runtime_dir, vm_id, seed["ssh_port"])
+        args = _arguments(runtime_dir, vm_id, seed["ssh_port"], resource_profile)
         reserve = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             reserve.bind(("127.0.0.1", seed["ssh_port"]))
@@ -396,7 +405,7 @@ def _launch_held(
                 "VM receipt chain changed before launch",
             )
             intent = {
-                "schema": SCHEMA,
+                "schema": ROOTLESS_SCHEMA if resource_profile else SCHEMA,
                 "phase": "intent",
                 "vm_id": vm_id,
                 "seed_receipt_sha256": release.digest(seed_raw),
@@ -414,7 +423,7 @@ def _launch_held(
                 "gid": runtime["runtime_gid"],
                 "kvm_gid": kvm_gid,
                 "ssh_port": seed["ssh_port"],
-                "memory_mib": MEMORY_MIB,
+                "memory_mib": memory_mib(resource_profile),
                 "cpus": CPUS,
                 "args": args,
                 "qemu_sha256": qemu_sha256,
@@ -423,11 +432,13 @@ def _launch_held(
                 "qualified": False,
                 "dispatch_authorized": False,
             }
+            if resource_profile is not None:
+                intent["resource_profile"] = resource_profile
             intent_raw = _write(registry_fd, vm_id + ".launch-intent.json", intent)
         finally:
             reserve.close()
         rebind()
-        _host_headroom()
+        _host_headroom(resource_profile) if resource_profile else _host_headroom()
         _idle_uid(runtime["runtime_uid"])
         _named_disk(runtime_fd, disk_fd, runtime["runtime_uid"], runtime["runtime_gid"])
         _seed_media(runtime_fd, seed, runtime["runtime_gid"])
@@ -587,6 +598,7 @@ def observe_existing(registry: Path, runtime_parent: Path, *, vm_id: str) -> dic
             "VM launch already observed",
         )
         legacy_pid = spawned.get("schema") == SCHEMA
+        resource_profile = seed_profile(seed)
         release.exact(
             spawned,
             {"schema", "phase", "vm_id", "intent_sha256", "pid", "spawned_at"}
@@ -622,14 +634,16 @@ def observe_existing(registry: Path, runtime_parent: Path, *, vm_id: str) -> dic
                 "started_at",
                 "qualified",
                 "dispatch_authorized",
-            },
+            } | ({"resource_profile"} if resource_profile is not None else set()),
             "VM launch intent",
         )
         runtime_dir = runtime_parent / vm_id
         control_dir = registry / (vm_id + ".control")
         _safe_runtime_path(runtime_dir)
         release.require(
-            intent["schema"] == SCHEMA
+            intent["schema"] == (ROOTLESS_SCHEMA if resource_profile else SCHEMA)
+            and (resource_profile is None or
+                 (intent["resource_profile"] == resource_profile and not legacy_pid))
             and spawned["schema"] in (SCHEMA, PID_SCHEMA)
             and intent["phase"] == "intent"
             and spawned["phase"] == "spawned"
@@ -651,9 +665,10 @@ def observe_existing(registry: Path, runtime_parent: Path, *, vm_id: str) -> dic
             == (runtime["runtime_uid"], runtime["runtime_gid"])
             and intent["kvm_gid"] == _kvm_group()
             and intent["ssh_port"] == seed["ssh_port"]
-            and intent["memory_mib"] == MEMORY_MIB
+            and type(intent["memory_mib"]) is int
+            and intent["memory_mib"] == memory_mib(resource_profile)
             and intent["cpus"] == CPUS
-            and intent["args"] == _arguments(runtime_dir, vm_id, seed["ssh_port"])
+            and intent["args"] == _arguments(runtime_dir, vm_id, seed["ssh_port"], resource_profile)
             and intent["qemu_sha256"] == _trusted_tool(QEMU)
             and intent["controller_boot_id"] == _boot_id()
             and intent["qualified"] is False
@@ -791,11 +806,15 @@ def main() -> int:
     for name in ("source", "registry", "vm-parent", "runtime-parent"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--vm-id", required=True)
+    parser.add_argument("--resource-profile", choices=sorted(ROOTLESS_PROFILES))
     parser.add_argument("--observe-existing", action="store_true")
     args = parser.parse_args()
     try:
         if args.observe_existing:
-            observe_existing(args.registry, args.runtime_parent, vm_id=args.vm_id)
+            receipt = observe_existing(args.registry, args.runtime_parent, vm_id=args.vm_id)
+            release.require(args.resource_profile is None
+                            or receipt.get("resource_profile") == args.resource_profile,
+                            "VM launch resource profile differs")
         else:
             launch(
                 args.source,
@@ -803,6 +822,7 @@ def main() -> int:
                 args.vm_parent,
                 args.runtime_parent,
                 vm_id=args.vm_id,
+                resource_profile=args.resource_profile,
             )
     except (
         ValueError,

@@ -60,6 +60,11 @@ services:
   # It stores only job metadata/digests and sends KMS-signed callbacks.
   passport-callback-signer:
     image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    mem_limit: ${MARTY_PASSPORT_CALLBACK_SIGNER_MEMORY_LIMIT:-512m}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARTY_PASSPORT_CALLBACK_SIGNER_MEMORY_LIMIT:-512m}
     environment:
       SERVICE_NAME: passport_callback_signer
       ENVIRONMENT: beta
@@ -87,6 +92,11 @@ services:
 
   passport-beta-bureau:
     image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to the immutable services image digest}
+    mem_limit: ${MARTY_PASSPORT_BETA_BUREAU_MEMORY_LIMIT:-512m}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARTY_PASSPORT_BETA_BUREAU_MEMORY_LIMIT:-512m}
     environment:
       SERVICE_NAME: passport_beta_bureau
       ENVIRONMENT: beta

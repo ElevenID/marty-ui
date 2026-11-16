@@ -3,6 +3,17 @@ import { mergeApplicantsIntoApplications } from './orgApplicationsFlow';
 import { loadOrganizationApplications } from './orgApplicationsUseCases';
 
 describe('orgApplicationsFlow', () => {
+  it.each([
+    [{}, null, null],
+    [{ documents_uploaded: true, verification_passed: true }, true, true],
+    [{ documents_uploaded: false, verification_passed: false }, false, false],
+    [{ documents_uploaded: 'true', verification_passed: 'false' }, null, null],
+  ])('reports only explicit evidence booleans %#', (signals, documents, verification) => {
+    const [result] = mergeApplicantsIntoApplications([{ id: 'app-1', status: 'APPROVED', ...signals }]);
+    expect(result.documentsUploaded).toBe(documents);
+    expect(result.verificationPassed).toBe(verification);
+  });
+
   it('merges applicant emails into application records', () => {
     const apps = [
       { id: 'app-1', applicant_id: 'a-1', status: 'SUBMITTED', metadata: {} },

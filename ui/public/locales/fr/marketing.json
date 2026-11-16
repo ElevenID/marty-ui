@@ -1,73 +1,74 @@
 {
   "valueProposition": {
-    "headline": "La vérification d'identité ne suffit pas.",
-    "subheadline": "Construisez une infrastructure d'identité vérifiable.",
-    "extendedSubheadline": "Émettez, vérifiez et gouvernez les justificatifs — conçu pour les portefeuilles EUDI, Open Badges et la confiance d'entreprise.",
-    "primaryCTA": "Commencer gratuitement",
-    "secondaryCTA": "Pourquoi l'identité vérifiable"
+    "headline": "Marty : des parcours d’identité que vous exploitez.",
+    "subheadline": "Structurez la confiance autour de votre parcours.",
+    "extendedSubheadline": "Définissez un cas d’usage, évaluez-le avec des données synthétiques et exploitez le déploiement convenu avec votre équipe ou votre partenaire.",
+    "primaryCTA": "Consulter la documentation",
+    "secondaryCTA": "Voir l’API de vérification",
+    "supporting": "Identifiants portables, vérification des candidats et des documents, et Travel Trust."
   },
   "idvComparison": {
-    "title": "De l'IDV à l'identité vérifiable",
-    "takeaway": "ElevenID LLC remplace les vérifications répétées par une confiance réutilisable.",
+    "title": "Définir l’échange de confiance",
+    "takeaway": "Définissez les questions du parcours, puis évaluez l’implémentation retenue.",
     "traditional": {
-      "title": "IDV traditionnel",
-      "oneTimeChecks": "Vérifications de documents ponctuelles",
-      "vendorControlled": "Données d'identité contrôlées par le fournisseur",
-      "biometric": "Résultats de décision biométrique",
-      "closedAPIs": "API fermées et propriétaires",
-      "manualTrust": "Configuration manuelle de la confiance",
-      "reVerification": "Revérification partout"
+      "title": "Questions à résoudre",
+      "oneTimeChecks": "Quelle affirmation faut-il vérifier ?",
+      "vendorControlled": "Qui gère les données et les clés ?",
+      "biometric": "Comment relier le présentateur à l’identifiant ?",
+      "closedAPIs": "Quelles interfaces et quels profils sont nécessaires ?",
+      "manualTrust": "Quels émetteurs et quelles règles sont acceptés ?",
+      "reVerification": "Quand un identifiant peut-il être réutilisé ?"
     },
     "elevenid": {
-      "title": "ElevenID LLC",
-      "reusable": "Justificatifs vérifiables réutilisables",
-      "holderControlled": "Portefeuilles numériques contrôlés par le titulaire",
-      "cryptographic": "Preuves cryptographiques",
-      "openStandards": "Standards ouverts (W3C VC, OID4VC, ISO)",
-      "governedTrust": "Registres de confiance gouvernés",
-      "reuseAcross": "Réutilisation de l'identité à travers les écosystèmes"
+      "title": "Évaluation de Marty",
+      "reusable": "Entrées de documents et d’identifiants définies",
+      "holderControlled": "Exploitation par le client ou le partenaire choisi",
+      "cryptographic": "Tests de liaison au détenteur propres au profil",
+      "openStandards": "Interfaces documentées et combinaisons testées",
+      "governedTrust": "Configuration explicite de la confiance et des politiques",
+      "reuseAcross": "Réutilisation évaluée dans un parcours convenu"
     }
   },
   "eudiOpenBadges": {
-    "title": "Conçu pour les portefeuilles EUDI et les justificatifs vérifiables",
-    "verifyCredentials": "Vérifiez des justificatifs vérifiables — pas seulement des documents.",
-    "trustIssuers": "Faites confiance aux émetteurs — pas aux bases de données.",
-    "walletFirst": "Wallet-first par conception — prêt pour l'EUDI.",
-    "quote": "Les plateformes d'IDV s'arrêtent à une décision ponctuelle. ElevenID LLC produit des résultats cryptographiquement vérifiables réutilisables à travers les portefeuilles, les écosystèmes et les registres de confiance."
+    "title": "Explorer l’interopérabilité des portefeuilles et des identifiants",
+    "verifyCredentials": "Définissez le format et le profil de présentation nécessaires.",
+    "trustIssuers": "Identifiez les émetteurs de confiance et les règles d’acceptation.",
+    "walletFirst": "Testez les portefeuilles choisis avec la version retenue.",
+    "quote": "Un standard est un point de départ. Examinez la version et le profil précis ; compatibilité et conformité exigent leurs propres preuves."
   },
   "audienceRouting": {
     "title": "Choisissez votre parcours",
-    "subtitle": "Choisissez votre point d'entrée — entreprise, gouvernement ou développeurs.",
+    "subtitle": "Explorez Marty directement ou via un partenaire ou une intégration OEM.",
     "enterprise": {
       "title": "Entreprise",
-      "description": "Réduisez le KYC répétitif, activez l'interopérabilité partenaires et gouvernez la confiance à l'échelle.",
+      "description": "Définissez un parcours utile de documents ou d’identifiants et l’équipe qui l’exploitera.",
       "cta": "Explorer Entreprise"
     },
     "government": {
       "title": "Gouvernement",
-      "description": "Infrastructure prête pour l'EUDI pour des justificatifs ISO, listes de confiance et acceptation réglementée.",
+      "description": "Examinez les sources de confiance, les profils requis et les contraintes de déploiement.",
       "cta": "Explorer Gouvernement"
     },
     "developers": {
       "title": "Développeurs",
-      "description": "Docs, SDK et quickstarts pour l'émission et la vérification de VC.",
+      "description": "Examinez les API, le code et les besoins d’intégration du parcours choisi.",
       "cta": "Lire la documentation"
     }
   },
   "organizationOutcomes": {
-    "title": "Pourquoi cela compte pour les organisations",
-    "reduceKYC": "Réduire les coûts de KYC répétitif avec des justificatifs réutilisables",
-    "eudiReady": "Se préparer à l'acceptation du portefeuille EUDI",
-    "avoidLockIn": "Éviter l'enfermement fournisseur grâce aux standards ouverts",
-    "supportBadges": "Prendre en charge Open Badges, justificatifs RH et identités gouvernementales dans un seul système"
+    "title": "Ce que vous pouvez évaluer",
+    "reduceKYC": "Évaluer la réutilisation des identifiants dans un parcours défini",
+    "eudiReady": "Évaluer la confiance dans les documents de voyage et les règles du parcours",
+    "avoidLockIn": "Définir les vérifications des candidats et des documents",
+    "supportBadges": "Exploité par le client ou son partenaire"
   },
   "proofStrip": {
-    "title": "Construit sur des bases éprouvées",
-    "interoperability": "Interopérabilité",
-    "offlineVerification": "Vérification hors ligne",
-    "deployment": "Déploiement",
+    "title": "Un produit et un modèle d’exploitation définis",
+    "interoperability": "Périmètre",
+    "offlineVerification": "Évaluation",
+    "deployment": "Exploitation",
     "keySecurity": "Sécurité des clés",
-    "compliance": "Conformité"
+    "compliance": "Preuves"
   },
   "landingPage": {
     "loading": "Chargement...",
@@ -75,15 +76,15 @@
     "features": {
       "issuance": {
         "title": "Émission",
-        "description": "Émettez des justificatifs basés sur des standards avec signatures cryptographiques et application de politiques."
+        "description": "Définissez le format et le profil de présentation nécessaires."
       },
       "verification": {
         "title": "Vérification",
-        "description": "Vérifiez des justificatifs contre des ancres de confiance avec contrôle de révocation et divulgation sélective."
+        "description": "Identifiez les émetteurs de confiance et les règles d’acceptation."
       },
       "governance": {
         "title": "Gouvernance",
-        "description": "Gérez confiance, politiques et déploiement de façon centralisée — sans changer le code du vérificateur."
+        "description": "Configuration explicite de la confiance et des clés"
       }
     },
     "identityProblem": {
@@ -98,8 +99,8 @@
     },
     "solvesIt": {
       "title": "Comment ElevenID LLC résout cela",
-      "intro": "Gouvernez l'identité avec quatre primitives : profils de confiance, modèles de justificatifs, politiques de présentation et flows.",
-      "subheading": "Les politiques sont de la configuration, pas du code. Les endpoints exécutent des règles de confiance et de divulgation gouvernées centralement sans redéploiement."
+      "intro": "Définissez les entrées, les sources de confiance et le résultat attendu",
+      "subheading": "Un standard est un point de départ. Examinez la version et le profil précis ; compatibilité et conformité exigent leurs propres preuves."
     },
     "howItWorks": {
       "title": "Fonctionnement",
@@ -108,17 +109,17 @@
     },
     "standards": {
       "title": "Architecture basée sur des standards",
-      "subtitle": "Les standards ne sont pas des intégrations. Ils sont le produit.",
-      "description": "Ces couches permettent à ElevenID LLC d'interopérer entre gouvernements, portefeuilles et entreprises sans intégrations sur mesure.",
+      "subtitle": "Les standards guident la conception. Les tests établissent la compatibilité.",
+      "description": "Un standard est un point de départ. Examinez la version et le profil précis ; compatibilité et conformité exigent leurs propres preuves.",
       "cta": "Explorer les standards"
     },
     "startFirst": {
       "title": "Que faites-vous en premier ?",
-      "description": "Choisissez un point de départ. Vous pourrez étendre ensuite à un écosystème complet.",
+      "description": "Définissez un cas d’usage, évaluez-le avec des données synthétiques et exploitez le déploiement convenu avec votre équipe ou votre partenaire.",
       "cards": {
         "verify": {
           "title": "Vérifier des justificatifs",
-          "description": "Vérifiez les portefeuilles EUDI, Open Badges et justificatifs ISO."
+          "description": "Définissez le format et le profil de présentation nécessaires."
         },
         "issue": {
           "title": "Émettre des justificatifs",
@@ -126,53 +127,53 @@
         },
         "offline": {
           "title": "Hors ligne / site",
-          "description": "Vérifiez aux checkpoints avec connectivité limitée."
+          "description": "Les profils hors ligne et sans interface doivent être validés"
         },
         "wallet": {
           "title": "Expérience portefeuille",
-          "description": "Offrez aux utilisateurs un portefeuille pour stocker et présenter des justificatifs."
+          "description": "Testez les portefeuilles choisis avec la version retenue."
         }
       },
       "notSure": "Pas sûr ?",
       "startWithVerificationApi": "Commencer avec l'API de vérification"
     },
     "products": {
-      "title": "Produits & capacités",
-      "description": "Une plateforme complète — de l'émission à la vérification et à la gouvernance.",
+      "title": "Composants de Marty",
+      "description": "Composants d’un seul produit Marty. La disponibilité et le périmètre dépendent de la version et de l’accord.",
       "viewDetails": "Voir les détails",
-      "viewAll": "Voir tous les produits"
+      "viewAll": "Explorer les composants de Marty"
     },
     "trustSignals": {
-      "title": "Infrastructure de niveau entreprise",
+      "title": "Examen de la sécurité et du déploiement",
       "security": {
         "title": "Sécurité",
-        "item1": "Validation cryptographique de niveau entreprise",
-        "item2": "Gestion PKI et révocation",
-        "item3": "Intégration HSM et coffre de clés"
+        "item1": "Configuration explicite de la confiance et des clés",
+        "item2": "Tester les signatures, l’expiration et la gestion des erreurs",
+        "item3": "Examiner le stockage des clés du déploiement choisi"
       },
       "infrastructure": {
         "title": "Infrastructure",
-        "item1": "Capacité offline-first (cache 72h)",
-        "item2": "Déploiement SaaS haute disponibilité",
-        "item3": "Options self-hosted pour la souveraineté",
-        "item4": "Scalabilité horizontale et équilibrage de charge",
-        "item5": "Développé avec des workflows assistés par IA pour maintenir une haute qualité à moindre coût."
+        "item1": "Exploité par le client ou son partenaire",
+        "item2": "Exigences d’installation propres à la version",
+        "item3": "Les profils hors ligne et sans interface doivent être validés",
+        "item4": "Sans exploitation de production ni SLA de disponibilité inclus",
+        "item5": "Utilisez les canaux documentés pour les incidents et vulnérabilités"
       },
       "compliance": {
-        "title": "Conformité",
-        "item1": "Implémente ICAO 9303",
-        "item2": "Implémente ISO 18013-5 (mDoc)",
-        "item3": "RGPD et privacy by design",
-        "item4": "Divulgation sélective et minimisation des données"
+        "title": "Exigences d’acceptation",
+        "item1": "Définissez le format et le profil de présentation nécessaires.",
+        "item2": "Preuves propres à la version",
+        "item3": "Autoriser séparément le traitement des données réelles",
+        "item4": "Confirmer les exigences avec l’organisme responsable"
       }
     },
     "proofStrip": {
       "claims": {
-        "w3c": "W3C VC / SD-JWT / OID4VP",
-        "offlineCache": "Cache hors ligne 72 heures",
-        "deployment": "SaaS + Self-hosted",
-        "keySecurity": "Intégration HSM / Vault",
-        "auditLogs": "Journaux d'audit immuables"
+        "w3c": "Un produit Marty, trois cas d’usage",
+        "offlineCache": "D’abord une évaluation sur données synthétiques",
+        "deployment": "Exploité par le client ou son partenaire",
+        "keySecurity": "Configuration explicite de la confiance et des clés",
+        "auditLogs": "Preuves propres à la version"
       }
     },
     "portals": {
@@ -182,12 +183,26 @@
     },
     "footer": {
       "title": "Prêt à commencer ?",
-      "description": "Commencez gratuitement ou comparez les offres pour votre organisation.",
-      "viewPricing": "Voir les tarifs"
+      "description": "Consultez la documentation et une démonstration synthétique, puis discutez du parcours et du déploiement nécessaires.",
+      "viewPricing": "Examiner le périmètre commercial",
+      "descriptionComingSoon": "Consultez la documentation et une démonstration synthétique, puis discutez du parcours et du déploiement nécessaires."
     },
     "orientation": {
       "title": "Nouveau dans l'identité vérifiable ?",
       "cta": "Fonctionnement"
     }
+  },
+  "protocol": {
+    "heroTitle": "Fondé sur un protocole ouvert en cours de rédaction",
+    "badge": "Protocole ouvert en cours de rédaction",
+    "standardsSubtitle": "Un standard est un point de départ. Examinez la version et le profil précis ; compatibilité et conformité exigent leurs propres preuves.",
+    "componentsSubtitle": "Un standard est un point de départ. Examinez la version et le profil précis ; compatibilité et conformité exigent leurs propres preuves."
+  },
+  "infrastructure": {
+    "title": "Commencez par un parcours utile",
+    "commodity": "Définissez les entrées, les sources de confiance et le résultat attendu",
+    "orchestration": "Exploité par le client ou son partenaire",
+    "reusable": "D’abord une évaluation sur données synthétiques",
+    "preventLockIn": "Élargissez le périmètre lorsque les preuves le permettent"
   }
 }

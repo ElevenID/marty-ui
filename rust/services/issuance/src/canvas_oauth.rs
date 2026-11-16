@@ -326,6 +326,8 @@ pub enum CanvasOAuthError {
     RepositoryUnavailable,
     #[error("Canvas OAuth secret storage is temporarily unavailable")]
     SecretUnavailable,
+    #[error("The configured KMS cannot encrypt this integration secret")]
+    SecretCapabilityUnavailable,
     #[error("Canvas OAuth configuration is invalid")]
     InvalidConfiguration,
     #[error("Canvas OAuth refresh was rate limited")]

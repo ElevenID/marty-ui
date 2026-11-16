@@ -1,8 +1,10 @@
 {
   "schema_version": 1,
   "http_routes": [
+    {"method": "GET", "path": "/v1/auth/provider"},
     {"method": "GET", "path": "/v1/auth/login"},
     {"method": "GET", "path": "/v1/auth/register"},
+    {"method": "POST", "path": "/v1/auth/passkeys/enroll"},
     {"method": "GET", "path": "/v1/auth/canvas-lti/finalize"},
     {"method": "POST", "path": "/v1/auth/canvas-lti/finalize"},
     {"method": "GET", "path": "/v1/auth/callback"},

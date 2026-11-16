@@ -12,7 +12,48 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
-    location = /.well-known/ai-plugin.json { try_files $uri =404; }
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+    location ~ /\.marty-ui- { return 404; }
+    location = /runtime-config.js {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+        add_header Cache-Control "no-store" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+    # This exact browser callback is shared by both HTML entrypoints. Other
+    # /auth/ routes and /v1/auth/callback remain owned by the API upstream.
+    location = /auth/callback {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files /index.html /console/index.html =404;
+        add_header Cache-Control "no-store" always;
+        add_header X-Frame-Options "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    }
+    location = /config.json {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+    }
+    location = /manifest.json {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+    }
+    location ^~ /assets/ {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+        expires 1y;
+    }
+
+    location = /.well-known/ai-plugin.json {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+    }
 
     # Preserve API errors and machine-readable namespaces before any SPA route.
     location ~ ^/(v1(/|$)|api(/|$)|auth(/|$)|realms(/|$)|resources(/|$)|org(/|$)|orgs(/|$)|oid4vp(/|$)|credentials(/|$)|\.well-known(/|$)|openapi\.(json|yaml)$|docs(/|$)|redoc(/|$)|ready(/|$)|health(/|$)) {
@@ -35,11 +76,24 @@ server {
         proxy_cookie_domain ${MARTY_SERVER_HOST} $host;
     }
 
-    location = /robots.txt { default_type text/plain; try_files $uri =404; }
-    location = /sitemap.xml { types { application/xml xml; } try_files $uri =404; }
-    location = /sitemap-index.xml { types { application/xml xml; } try_files $uri =404; }
-    location ~ ^/sitemap-[0-9]+\.xml$ { types { application/xml xml; } try_files $uri =404; }
+    location = /robots.txt {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        default_type text/plain; try_files $uri =404;
+    }
+    location = /sitemap.xml {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        types { application/xml xml; } try_files $uri =404;
+    }
+    location = /sitemap-index.xml {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        types { application/xml xml; } try_files $uri =404;
+    }
+    location ~ ^/sitemap-[0-9]+\.xml$ {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        types { application/xml xml; } try_files $uri =404;
+    }
     location = /console {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
         try_files /console/index.html =404;
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
         add_header X-Frame-Options "SAMEORIGIN" always;
@@ -47,14 +101,49 @@ server {
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     }
     location ^~ /console/ {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
         try_files $uri $uri/ /console/index.html;
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     }
-    location ^~ /locales/ { try_files $uri =404; }
+    location = /catalog {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        return 308 /console/applicant/catalog$is_args$args;
+    }
+    location = /apply {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        try_files /index.html =404;
+    }
+    location ^~ /apply/ {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        try_files /index.html =404;
+    }
+    location = /credentials {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        return 308 /console/applicant/credentials$is_args$args;
+    }
+    location = /my-applications {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        return 308 /console/applicant/applications$is_args$args;
+    }
+    location = /my-documents {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        return 308 /console/applicant/devices$is_args$args;
+    }
+    location = /console-handoff/org/setup {
+        if (-f $document_root/.marty-ui-console-disabled) { return 404; }
+        return 308 /console/org/setup$is_args$args;
+    }
+    location ^~ /locales/ {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
+        try_files $uri =404;
+    }
     location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        if (-f $document_root/.marty-ui-disabled) { return 404; }
         try_files $uri =404;
         expires 1y;
         add_header Cache-Control "public, immutable";
@@ -63,6 +152,7 @@ server {
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     }
     location / {
+        if (-f $document_root/.marty-ui-public-disabled) { return 404; }
         try_files $uri $uri/ /index.html;
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
         add_header X-Frame-Options "SAMEORIGIN" always;

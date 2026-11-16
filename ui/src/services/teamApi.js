@@ -5,7 +5,9 @@
  */
 
 import { get, post, del } from './api';
-import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
+import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
+
+const PAGE_SIZE = 500;
 
 /**
  * List team members
@@ -15,14 +17,40 @@ import { buildTruthyQueryString, requireOrganizationId, withQuery } from './quer
  * @param {string} filters.status - Filter by status
  * @returns {Promise<Array>} List of team members
  */
-export async function listMembers(organizationId, filters = {}) {
+export async function listMembers(organizationId, filters = {}, { isCurrent = () => true } = {}) {
   const orgId = requireOrganizationId(organizationId, 'loading team members');
-  const queryString = buildTruthyQueryString({
-    role: filters.role,
-    status: filters.status,
-  });
   const path = `/v1/organizations/${encodeURIComponent(orgId)}/members`;
-  return get(withQuery(path, queryString));
+  const members = [];
+  const seen = new Set();
+  const ensureCurrent = () => {
+    if (!isCurrent()) {
+      const error = new Error('Team membership scope changed.');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
+  let offset = 0;
+  while (true) {
+    ensureCurrent();
+    const queryString = buildDefinedQueryString({
+      role: filters.role || undefined, status: filters.status || undefined, limit: PAGE_SIZE, offset,
+    });
+    const page = await get(withQuery(path, queryString));
+    ensureCurrent();
+    if (!Array.isArray(page) || page.length > PAGE_SIZE || page.some(member => !member
+      || typeof member.id !== 'string' || !member.id.trim() || member.organization_id !== orgId)) {
+      throw new Error('Team members returned an invalid response.');
+    }
+    for (const member of page) {
+      if (seen.has(member.id)) {
+        throw new Error('The team membership inventory changed while loading. Refresh and try again.');
+      }
+      seen.add(member.id);
+      members.push(member);
+    }
+    if (page.length < PAGE_SIZE) return members;
+    offset += page.length;
+  }
 }
 
 /**

@@ -97,7 +97,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
         {t('wizards.flowDefinition.preconditionsStep.title')}
       </Typography>
       
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ mb: "16px" }}>
         {isOID4VCIFlow 
           ? t('wizards.flowDefinition.preconditionsStep.descriptionOid4vci')
           : t('wizards.flowDefinition.preconditionsStep.descriptionDefault')
@@ -187,7 +187,7 @@ const PreconditionsStep = ({ flowType, preconditions = [], onUpdate }) => {
           <Typography variant="body2" gutterBottom sx={{ fontWeight: 600 }}>
             {t('wizards.flowDefinition.preconditionsStep.summaryTitle', { count: selectedPreconditions.length })}
           </Typography>
-          <Typography variant="body2" paragraph>
+          <Typography variant="body2" component="p" sx={{ mb: "16px" }}>
             {selectedPreconditions.length === 1 
               ? t('wizards.flowDefinition.preconditionsStep.summarySingle')
               : t('wizards.flowDefinition.preconditionsStep.summaryMultiple')}

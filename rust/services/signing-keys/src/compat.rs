@@ -319,6 +319,8 @@ pub enum CompatibilityError {
     BadRequest(String),
     #[error("Native issuer-profile backend is unavailable.")]
     Unavailable,
+    #[error("The configured KMS cannot encrypt this service credential.")]
+    SecretCapabilityUnavailable,
     #[error("{0}")]
     Invalid(String),
     #[error("{0}")]
@@ -337,10 +339,17 @@ impl IntoResponse for CompatibilityError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::AmbiguousProfile | Self::Conflict(_) => StatusCode::CONFLICT,
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
-            Self::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Invalid(_) | Self::SecretCapabilityUnavailable => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::SecretCapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("integration_secret_encryption");
+        }
+        (status, Json(body)).into_response()
     }
 }
 
@@ -1275,15 +1284,12 @@ impl SigningCompatibilityService {
         })
         .await
         .map_err(map_kms_error)?;
-        let mut jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
+        let jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
         validate_public_key_algorithm(
             &jwk,
             Some(required(profile, "algorithm")?),
             "The replacement signing key",
         )?;
-        if service_id == "managed-openbao-transit" {
-            jwk.remove("kid");
-        }
         let key_reference = clean(profile.get("signing_key_reference").and_then(Value::as_str));
         let published = self
             .documents
@@ -1295,15 +1301,10 @@ impl SigningCompatibilityService {
                     public_domain: public_domain.into(),
                     did_id: Some(issuer_did.into()),
                     org_slug: Some(org_slug),
-                    fragment: Some(issuer_did_fragment(
-                        organization_id,
-                        issuer_did,
-                        service_id,
-                        key_reference.as_deref(),
-                    )),
-                    key_reference: (service_id != "managed-openbao-transit")
-                        .then_some(key_reference)
-                        .flatten(),
+                    // The document owner generates the same opaque identifier
+                    // used by direct service publication and strips custody IDs.
+                    fragment: None,
+                    key_reference,
                     cert_pem: None,
                     cert_chain_pem: None,
                     relationship: documents::DidVerificationRelationship::AssertionMethod,
@@ -1374,6 +1375,22 @@ impl SigningCompatibilityService {
     }
 }
 
+fn requested_credential_wire_format(
+    credential_format: Option<&str>,
+    key_purpose: Option<&str>,
+) -> Result<Option<String>, CompatibilityError> {
+    clean(credential_format)
+        .map(|credential_format| {
+            profiles::custody_format(&CustodyFormatRequest {
+                credential_format,
+                key_purpose: clean(key_purpose).unwrap_or_else(|| "vc_jwt_issuer".to_owned()),
+            })
+            .map(|response| response.wire_format)
+            .map_err(map_profile_error)
+        })
+        .transpose()
+}
+
 pub fn resolve_issuer_context(
     profile_document: &Value,
     registry: &Value,
@@ -1390,6 +1407,10 @@ pub fn resolve_issuer_context(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
+    let wire_credential_format = requested_credential_wire_format(
+        request.credential_format.as_deref(),
+        request.key_purpose.as_deref(),
+    )?;
     let selected = profiles::find_profiles(
         profiles,
         &request.organization_id,
@@ -1400,6 +1421,7 @@ pub fn resolve_issuer_context(
                 .is_none()
                 .then(|| normalized_or(&request.issuer_mode, "org_managed")),
             key_purpose: clean(request.key_purpose.as_deref()),
+            wire_credential_format: wire_credential_format.clone(),
             require_signing_service: true,
             ..FindProfilesRequest::default()
         },
@@ -1445,6 +1467,14 @@ pub fn resolve_issuer_context(
         registry: registry.clone(),
     })
     .map_err(map_profile_error)?;
+
+    if let Some(format) = wire_credential_format.as_deref() {
+        if !supports(&service, "credential_formats", format) {
+            return Err(CompatibilityError::Invalid(format!(
+                "Signing service '{service_id}' is not configured for credential_format '{format}'."
+            )));
+        }
+    }
 
     let issuer_did = profile.get("issuer_did").cloned().unwrap_or(Value::Null);
     let issuer_did_text = issuer_did.as_str().unwrap_or_default();
@@ -1500,18 +1530,10 @@ pub async fn resolve_issuer_identity(
         .and_then(Value::as_array)
         .ok_or(CompatibilityError::Unavailable)?;
     let key_purpose = clean(request.key_purpose.as_deref());
-    let wire_credential_format = clean(request.credential_format.as_deref())
-        .map(|credential_format| {
-            profiles::custody_format(&CustodyFormatRequest {
-                credential_format,
-                key_purpose: key_purpose
-                    .clone()
-                    .unwrap_or_else(|| "vc_jwt_issuer".to_owned()),
-            })
-            .map(|response| response.wire_format)
-            .map_err(map_profile_error)
-        })
-        .transpose()?;
+    let wire_credential_format = requested_credential_wire_format(
+        request.credential_format.as_deref(),
+        key_purpose.as_deref(),
+    )?;
     let active_profiles = profiles::find_profiles(
         profiles,
         &request.organization_id,
@@ -1773,6 +1795,83 @@ fn selected_algorithm(
     Ok(algorithms.first().copied().unwrap_or("ES256").to_owned())
 }
 
+// Validate the selected VC issuer reference using the same service and
+// ceremony authority as an actual sign. Explicit bindings must be well formed;
+// other supported purposes on this key do not remove VC authority.
+pub(crate) fn authorize_current_issuer_binding(
+    registry: &Value,
+    service: &Map<String, Value>,
+    profile: &Value,
+    organization_id: &str,
+    service_id: &str,
+    key_reference: &str,
+) -> Result<(), CompatibilityError> {
+    for (field, expected) in [
+        ("organization_id", organization_id),
+        ("signing_service_id", service_id),
+        ("signing_key_reference", key_reference),
+        ("key_purpose", "vc_jwt_issuer"),
+        ("algorithm", "ES256"),
+    ] {
+        if profile.get(field).and_then(Value::as_str) != Some(expected) {
+            return Err(CompatibilityError::Conflict(
+                "Active issuer binding changed before validation.".into(),
+            ));
+        }
+    }
+    let binding = registry.pointer(&format!(
+        "/key_reference_purposes/{}/{}",
+        escape_pointer(service_id),
+        escape_pointer(key_reference)
+    ));
+    if let Some(binding) = binding {
+        let purposes = binding
+            .as_array()
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| {
+                CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                )
+            })?;
+        let mut seen = std::collections::HashSet::new();
+        for purpose in purposes {
+            let Some(purpose) = purpose.as_str() else {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            };
+            if !crate::domain::key_purposes()
+                .iter()
+                .any(|definition| definition.id == purpose)
+                || !seen.insert(purpose)
+            {
+                return Err(CompatibilityError::Conflict(
+                    "Selected issuer key purpose binding is malformed.".into(),
+                ));
+            }
+        }
+        if !seen.contains("vc_jwt_issuer") {
+            return Err(CompatibilityError::Conflict(
+                "Selected issuer key is not registered for VC signing.".into(),
+            ));
+        }
+    }
+    authorize_signing_binding(
+        registry,
+        service,
+        service_id,
+        Some(key_reference),
+        Some("vc_jwt_issuer"),
+        Some("ES256"),
+    )?;
+    profiles::validate_binding(&ValidateBindingRequest {
+        profile: profile.clone(),
+        service: Value::Object(service.clone()),
+        registry: registry.clone(),
+    })
+    .map_err(map_profile_error)
+}
+
 fn authorize_signing_binding(
     registry: &Value,
     service: &Map<String, Value>,
@@ -1963,40 +2062,11 @@ fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
     crate::domain::managed_key_purposes(reference)
 }
 
-fn issuer_did_fragment(
-    organization_id: &str,
-    issuer_did: &str,
-    service_id: &str,
-    key_reference: Option<&str>,
-) -> String {
-    if service_id == "managed-openbao-transit" {
-        let token = uuid::Uuid::new_v5(
-            &uuid::Uuid::NAMESPACE_URL,
-            format!(
-                "{organization_id}|{issuer_did}|{service_id}|{}",
-                key_reference.unwrap_or_default()
-            )
-            .as_bytes(),
-        )
-        .simple()
-        .to_string();
-        return format!("managed-{}", &token[..20]);
-    }
-    documents::did_fragment(service_id, key_reference)
-}
-
 fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
-    match (
+    kms::public_key_algorithm(
         jwk.get("kty").and_then(Value::as_str),
         jwk.get("crv").and_then(Value::as_str),
-    ) {
-        (Some("EC"), Some("P-256")) => Some("ES256"),
-        (Some("EC"), Some("P-384")) => Some("ES384"),
-        (Some("EC"), Some("P-521")) => Some("ES512"),
-        (Some("RSA"), _) => Some("RS256"),
-        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
-        _ => None,
-    }
+    )
 }
 
 fn validate_public_key_algorithm(
@@ -2038,6 +2108,11 @@ fn service_for(registry: &Value, service_id: &str) -> Option<Map<String, Value>>
 }
 
 fn supports(service: &Map<String, Value>, field: &str, requested: &str) -> bool {
+    if field == "credential_formats"
+        && !crate::domain::explicit_format_allowed(service.get(field), requested)
+    {
+        return false;
+    }
     service
         .get(field)
         .and_then(Value::as_array)
@@ -2599,6 +2674,9 @@ fn map_registry_binding_error(error: crate::registry::RegistryError) -> Compatib
             CompatibilityError::PreconditionFailed
         }
         crate::registry::RegistryError::Invalid(detail) => CompatibilityError::Invalid(detail),
+        crate::registry::RegistryError::SecretCapabilityUnavailable => {
+            CompatibilityError::SecretCapabilityUnavailable
+        }
         crate::registry::RegistryError::Storage(_) | crate::registry::RegistryError::Corrupt(_) => {
             CompatibilityError::Unavailable
         }
@@ -2836,53 +2914,6 @@ mod tests {
         .is_err());
     }
 
-    #[test]
-    fn managed_issuer_fragment_is_opaque_scoped_and_legacy_nonmanaged_is_unchanged() {
-        let first = issuer_did_fragment(
-            "org-a",
-            "did:web:issuer.example:orgs:a",
-            "managed-openbao-transit",
-            Some("cred-issuer-internal-key"),
-        );
-        assert_eq!(
-            first,
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:a",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert!(!first.contains("internal-key"));
-        assert_ne!(
-            first,
-            issuer_did_fragment(
-                "org-b",
-                "did:web:issuer.example:orgs:a",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert_ne!(
-            first,
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:b",
-                "managed-openbao-transit",
-                Some("cred-issuer-internal-key"),
-            )
-        );
-        assert_eq!(
-            issuer_did_fragment(
-                "org-a",
-                "did:web:issuer.example:orgs:a",
-                "service-a",
-                Some("legacy-key")
-            ),
-            documents::did_fragment("service-a", Some("legacy-key"))
-        );
-    }
-
     #[derive(Deserialize)]
     struct Contract {
         schema_version: u8,
@@ -2938,6 +2969,132 @@ mod tests {
     }
 
     #[test]
+    fn issuer_context_format_selects_compatible_profile_without_false_ambiguity() {
+        let mut contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .unwrap();
+        let mut jwt = contract.profile_document["profiles"][0].clone();
+        jwt["id"] = json!("jwt-profile");
+        jwt["credential_format"] = json!("VC_JWT");
+        contract.profile_document["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(jwt);
+        contract.registry["services"][0]["credential_formats"] =
+            json!(["dc+sd-jwt", "jwt_vc_json"]);
+        for format in ["VC_JWT", "JWT_VC", "jwt_vc_json"] {
+            contract.request.credential_format = Some(format.into());
+            let result = resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            )
+            .expect("select JWT capability, not the SD-JWT-only profile");
+            assert_eq!(result["issuer_profile_id"], "jwt-profile");
+        }
+        for format in ["SD_JWT_VC", "sd_jwt_vc", "dc+sd-jwt"] {
+            contract.request.credential_format = Some(format.into());
+            let result = resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            )
+            .expect("preserve legitimate SD-JWT aliases");
+            assert_eq!(result["issuer_profile_id"], "profile-1");
+        }
+        // Two genuinely compatible profiles still require explicit disposition.
+        contract.request.credential_format = Some("jwt_vc_json".into());
+        let mut duplicate = contract.profile_document["profiles"][1].clone();
+        duplicate["id"] = json!("other-jwt-profile");
+        contract.profile_document["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert!(matches!(
+            resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            ),
+            Err(CompatibilityError::AmbiguousProfile)
+        ));
+    }
+
+    #[test]
+    fn issuer_context_rejects_unsupported_or_incompatible_formats_without_fallback() {
+        let mut contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .unwrap();
+        contract.request.credential_format = Some("JWT_VC".into());
+        assert!(matches!(
+            resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            ),
+            Err(CompatibilityError::ProfileNotFound)
+        ));
+        contract.request.credential_format = Some("unsupported-format".into());
+        assert!(matches!(
+            resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            ),
+            Err(CompatibilityError::Invalid(_))
+        ));
+        for format in [None, Some("   ".into())] {
+            contract.request.credential_format = format;
+            let result = resolve_issuer_context(
+                &contract.profile_document,
+                &contract.registry,
+                &contract.certificates,
+                &contract.request,
+            )
+            .expect("missing format preserves existing optional behavior");
+            assert_eq!(result, contract.expected);
+        }
+    }
+
+    #[test]
+    fn issuer_context_requested_format_must_also_be_supported_by_selected_service() {
+        let mut contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .unwrap();
+        contract.request.credential_format = Some("JWT_VC".into());
+        contract.profile_document["profiles"][0]["credential_format"] = json!("VC_JWT");
+        // The profile advertises JWT while its bound service only supports SD-JWT.
+        let error = resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .unwrap_err();
+        assert!(matches!(error, CompatibilityError::Invalid(_)));
+        assert!(error
+            .to_string()
+            .contains("credential_format 'jwt_vc_json'"));
+        // Omission continues to preserve the previous service capability semantics.
+        contract.request.credential_format = None;
+        assert!(resolve_issuer_context(
+            &contract.profile_document,
+            &contract.registry,
+            &contract.certificates,
+            &contract.request,
+        )
+        .is_ok());
+    }
+
+    #[test]
     fn passport_certificates_are_profile_bound_even_with_a_shared_kms_service() {
         let mut contract: Contract = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-issuer-context-behavior.json"
@@ -2954,7 +3111,8 @@ mod tests {
             .as_array_mut()
             .unwrap()
             .push(second);
-        contract.registry["services"][0]["credential_formats"] = json!(["ICAO_EMRTD"]);
+        // Service capabilities use the canonical wire format; profiles use the native enum.
+        contract.registry["services"][0]["credential_formats"] = json!(["icao_emrtd"]);
         contract.registry["services"][0]["key_purposes"] = json!(["x509_doc_signer"]);
         contract.registry["key_reference_purposes"]["service-1"] =
             json!({"issuer-key": ["x509_doc_signer"], "other-key": ["x509_doc_signer"]});
@@ -3098,6 +3256,60 @@ mod tests {
                 "managed-key"
             ),
             Err(CompatibilityError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn existing_identity_keeps_its_provider_key_and_published_method_when_defaults_change() {
+        let contract: IdentityContract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-identity-behavior.json"
+        ))
+        .expect("issuer identity contract");
+        let mut registry = contract.registry.clone();
+        registry["services"].as_array_mut().unwrap().push(json!({
+            "id": "provider-b",
+            "service_type": "aws-kms",
+            "key_reference": "arn:aws:kms:us-east-2:111122223333:key/11111111-2222-3333-4444-555555555555",
+            "key_purposes": ["vc_jwt_issuer"],
+            "credential_formats": ["dc+sd-jwt"],
+            "algorithms": ["ES256"]
+        }));
+        registry["default_service_id"] = json!("provider-b");
+        registry["type_defaults"] = json!({"vc_jwt_issuer": "provider-b"});
+        registry["format_defaults"] = json!({"dc+sd-jwt": "provider-b"});
+        // Even the original registration's default key must not replace the
+        // explicit reference already bound to this issuer profile.
+        registry["services"][0]["key_reference"] = json!("another-default-key");
+        let resolved = resolve_issuer_identity(
+            &contract.profile_document,
+            &registry,
+            &contract.certificates,
+            &contract.did_document,
+            &contract.request,
+        )
+        .await
+        .expect("an existing identity does not follow new defaults");
+        assert_eq!(
+            resolved["issuer_profile"]["signing_service_id"],
+            "service-1"
+        );
+        assert_eq!(resolved["signing_key_reference"], "issuer-key");
+        assert_eq!(
+            resolved["verification_method_id"], "did:web:issuer.example:orgs:acme#issuer-key",
+            "previously published method IDs remain valid"
+        );
+
+        registry["services"].as_array_mut().unwrap().remove(0);
+        assert!(matches!(
+            resolve_issuer_identity(
+                &contract.profile_document,
+                &registry,
+                &contract.certificates,
+                &contract.did_document,
+                &contract.request,
+            )
+            .await,
+            Err(CompatibilityError::NotFound(_))
         ));
     }
 
@@ -3283,5 +3495,110 @@ mod tests {
                 assert_eq!(status, expected["status"], "{}", case.name);
             }
         }
+    }
+    #[test]
+    fn explicit_jwt_vc_public_context_and_custody_require_exact_capability() {
+        for formats in [
+            None,
+            Some(json!([])),
+            Some(json!(["jwt_vc_json"])),
+            Some(json!(["application/vc+jwt"])),
+        ] {
+            let mut contract: Contract = serde_json::from_str(include_str!(
+                "../../../../contracts/gateway-issuer-context-behavior.json"
+            ))
+            .unwrap();
+            contract.request.credential_format = Some("application/vc+jwt".into());
+            contract.profile_document["profiles"][0]["credential_format"] =
+                json!("VC_JWT_DIRECT_V1");
+            let allowed = formats
+                .as_ref()
+                .is_some_and(|v| v == &json!(["application/vc+jwt"]));
+            let service = contract.registry["services"][0].as_object_mut().unwrap();
+            service.remove("credential_formats");
+            if let Some(formats) = formats {
+                service.insert("credential_formats".into(), formats);
+            }
+            assert_eq!(
+                resolve_issuer_context(
+                    &contract.profile_document,
+                    &contract.registry,
+                    &contract.certificates,
+                    &contract.request
+                )
+                .is_ok(),
+                allowed
+            );
+            assert_eq!(
+                select_identity_custody(
+                    &contract.registry,
+                    "VC_JWT_DIRECT_V1",
+                    "vc_jwt_issuer",
+                    "ES256",
+                    "issuer-key"
+                )
+                .is_ok(),
+                allowed
+            );
+            assert_eq!(
+                supports(
+                    contract.registry["services"][0].as_object().unwrap(),
+                    "credential_formats",
+                    "application/vc+jwt"
+                ),
+                allowed
+            );
+            if allowed {
+                contract.profile_document["profiles"][0]["algorithm"] = json!("ES512");
+                contract.registry["services"][0]["algorithms"] = json!(["ES512"]);
+                assert!(resolve_issuer_context(
+                    &contract.profile_document,
+                    &contract.registry,
+                    &contract.certificates,
+                    &contract.request
+                )
+                .is_err());
+                assert!(select_identity_custody(
+                    &contract.registry,
+                    "VC_JWT_DIRECT_V1",
+                    "vc_jwt_issuer",
+                    "ES512",
+                    "issuer-key"
+                )
+                .is_err());
+            }
+        }
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-context-behavior.json"
+        ))
+        .unwrap();
+        for format in [
+            "application/vc+jwt",
+            "VC_JWT_DIRECT_V1",
+            " vc-jwt-direct-v1 ",
+        ] {
+            for purpose in ["oid4vp_request_signing", "lti_tool_signing"] {
+                assert!(profiles::custody_format(&CustodyFormatRequest {
+                    credential_format: format.into(),
+                    key_purpose: purpose.into(),
+                })
+                .is_err());
+                assert!(select_identity_custody(
+                    &contract.registry,
+                    format,
+                    purpose,
+                    "ES256",
+                    "issuer-key"
+                )
+                .is_err());
+            }
+        }
+        // Wildcard semantics are retained only for historical formats.
+        assert!(supports(&Map::new(), "credential_formats", "jwt_vc_json"));
+        assert!(supports(
+            json!({"credential_formats":[]}).as_object().unwrap(),
+            "credential_formats",
+            "jwt_vc_json"
+        ));
     }
 }

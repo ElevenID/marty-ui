@@ -83,24 +83,22 @@ pub struct FlowRuntime {
 
 impl FlowRuntime {
     pub fn new(config: &FlowServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "flow".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "http".into(),
-                "grpc".into(),
-                "postgres".into(),
-                "redis_nonce_store".into(),
-                "native_flow".into(),
-                "native_oid4vp".into(),
-            ],
-        });
-        for dependency in FlowDependency::all() {
-            state.register_required_component(dependency.name())?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "flow".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "http".into(),
+                    "grpc".into(),
+                    "postgres".into(),
+                    "redis_nonce_store".into(),
+                    "native_flow".into(),
+                    "native_oid4vp".into(),
+                ],
+            },
+            FlowDependency::all().map(|dependency| dependency.name()),
+        )?;
         Ok(Self { state })
     }
 
@@ -110,13 +108,7 @@ impl FlowRuntime {
     }
 
     pub fn mark_healthy(&self, dependency: FlowDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            dependency.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn mark_unhealthy(

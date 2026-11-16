@@ -44,6 +44,10 @@ pub enum FlowProviderError {
     },
     #[error("FLOW.PROVIDER_UNAVAILABLE: {provider}")]
     Unavailable { provider: &'static str },
+    #[error("FLOW.POLICY_REVISION_MISMATCH")]
+    PolicyRevisionMismatch,
+    #[error("FLOW.CREDENTIAL_AUTHORITY_CHANGED")]
+    CredentialAuthorityChanged,
     #[error("FLOW.PROVIDERS_MISSING: {0}")]
     Missing(String),
 }
@@ -64,6 +68,12 @@ pub struct CredentialTemplateReference {
     pub claims: Vec<CredentialClaimReference>,
     pub issuer_did: String,
     pub credential_format: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "marty_jwt_vc_issuance::optional_policy"
+    )]
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     #[serde(default)]
     pub issuance_protocol: String,
     #[serde(default)]
@@ -107,6 +117,14 @@ pub struct PresentationPolicyReference {
     pub id: String,
     pub organization_id: String,
     pub status: String,
+    pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub holder_binding_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerequisite_evidence_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_authority:
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
     #[serde(default)]
     pub credential_requirements: Vec<Value>,
 }
@@ -115,6 +133,7 @@ pub struct PresentationPolicyReference {
 pub struct PresentationEvaluationRequest {
     pub policy_id: String,
     pub organization_id: String,
+    pub expected_policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
     pub principal_id: String,
     pub presentation: String,
     pub nonce: String,
@@ -128,6 +147,17 @@ pub struct PresentationEvaluationRequest {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct PresentationEvaluationResult {
+    /// Opaque acquisition from the inspected Policy client. Wire JSON and
+    /// ordinary provider implementations cannot manufacture this capability.
+    #[serde(skip)]
+    pub managed_evidence: Option<crate::AcquiredManagedPolicyEvidence>,
+    pub policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity,
+    /// Actual Policy-owned observation time, never a Flow completion clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_timestamp: Option<String>,
+    /// Policy's request-bound validity projection. This is not issuance authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation_validity: Option<marty_oid4vp_contract::PolicyEvaluationValidityV1>,
     pub result: String,
     pub decision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +172,60 @@ pub struct PresentationEvaluationResult {
     pub error_codes: Vec<String>,
     #[serde(default)]
     pub warnings: Vec<String>,
+}
+
+impl PresentationEvaluationResult {
+    pub(crate) fn validate_validity_for(
+        &self,
+        request: &PresentationEvaluationRequest,
+    ) -> Result<(), FlowProviderError> {
+        let invalid = || FlowProviderError::InvalidResponse {
+            provider: "presentation_policy",
+            message: "evaluation validity binding mismatch".into(),
+        };
+        let Some(validity) = &self.evaluation_validity else {
+            if self.result == "passed"
+                && self.decision == "allow"
+                && request
+                    .oid4vp_transport
+                    .as_ref()
+                    .is_some_and(|transport| transport.credential_authority.is_some())
+            {
+                return Err(invalid());
+            }
+            return Ok(());
+        };
+        let transport = request.oid4vp_transport.as_ref().ok_or_else(invalid)?;
+        let result = serde_json::to_value(self).map_err(|_| invalid())?;
+        let context = serde_json::to_value(&request.context).map_err(|_| invalid())?;
+        validity
+            .validate_for_request(
+                &marty_oid4vp_contract::PolicyEvaluationValidityRequest {
+                    organization_id: &request.organization_id,
+                    policy: &request.expected_policy_revision,
+                    nonce: &request.nonce,
+                    audience: &request.audience,
+                    vp_token: &request.presentation,
+                    oid4vp_transport: transport,
+                    trust_profile_id: request
+                        .context
+                        .get("trust_profile_id")
+                        .and_then(Value::as_str),
+                    context: &context,
+                },
+                &result,
+            )
+            .map_err(|_| invalid())?;
+        let evaluated_at = self
+            .evaluation_timestamp
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.timestamp_micros());
+        if evaluated_at != Some(validity.evaluated_at_epoch_micros) {
+            return Err(invalid());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

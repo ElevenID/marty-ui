@@ -72,6 +72,10 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
                     // TLS/KMS configuration is checked separately in config tests.
                     .env("ENVIRONMENT", "test")
                     .env("DATABASE_URL", &database_url)
+                    .env(
+                        "MARTY_ORG_ID",
+                        marty_revocation_profile::DEFAULT_ORGANIZATION_ID,
+                    )
                     .env("REDIS_URL", &redis_url)
                     .env("ORG_GRPC_TARGET", &organization_target)
                     .env("GRPC_SERVICE_TOKEN", TOKEN)

@@ -8,6 +8,8 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,10 +39,43 @@ def get(url: str) -> tuple[int, bytes]:
         return response.status, response.read()
 
 
-def assert_beta() -> dict[str, str]:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args):
+        return None
+
+
+def assert_public_auth_redirect() -> None:
+    """Require the external connector and auth initiation without following OIDC state."""
+    request = urllib.request.Request(
+        f"{BETA_ORIGIN}/v1/auth/login?redirect_uri=%2Fconsole",
+        headers={"Cache-Control": "no-cache", "User-Agent": "canvas-oss-portability/1"},
+    )
+    try:
+        with urllib.request.build_opener(_NoRedirect()).open(request, timeout=20) as response:
+            status, location = response.status, response.headers.get("Location")
+    except urllib.error.HTTPError as error:
+        status, location = error.code, error.headers.get("Location")
+        error.close()
+    if status not in (302, 303) or not location:
+        raise RuntimeError("public beta auth redirect is unavailable")
+    target = urllib.parse.urlsplit(location)
+    query = urllib.parse.parse_qs(target.query, keep_blank_values=True)
+    expected = urllib.parse.urlsplit(BETA_ORIGIN)
+    if (target.scheme != "https" or target.netloc != expected.netloc
+            or target.path != "/realms/11id/protocol/openid-connect/auth"
+            or target.fragment or any(len(query.get(key, [])) != 1 or not query[key][0]
+                                   for key in ("client_id", "state", "code_challenge"))
+            or query.get("response_type") != ["code"]
+            or query.get("redirect_uri") != [f"{BETA_ORIGIN}/v1/auth/callback"]):
+        raise RuntimeError("public beta auth redirect is not bound to the canonical issuer")
+
+
+def assert_beta(*, browser_ready: bool = True) -> dict[str, str]:
     status, ready = get(f"{BETA_ORIGIN}/ready")
     if status != 200:
         raise RuntimeError("beta readiness check failed")
+    if browser_ready:
+        assert_public_auth_redirect()
     services = json.loads(get(f"{BETA_ORIGIN}/.well-known/marty-release")[1])
     ui = json.loads(get(f"{BETA_ORIGIN}/marty-ui-release.json")[1])
     if services.get("release_version") != ui.get("release_version") or services.get("marty_ui_sha") != ui.get("marty_ui_sha"):
@@ -105,7 +140,7 @@ def monitor(output: Path, stop_file: Path, interval: int) -> None:
     while not stop_file.exists():
         report["checks"] += 1
         try:
-            assert_beta()
+            assert_beta(browser_ready=False)
         except Exception:
             report["failures"] += 1
         output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

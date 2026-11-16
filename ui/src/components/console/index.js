@@ -21,6 +21,7 @@ export { default as RevocationProfileWizard } from './trust/RevocationProfileWiz
 export { default as TemplatesPage } from './templates/TemplatesPage';
 export { default as CredentialTemplatesPage } from './templates/CredentialTemplatesPage';
 export { default as CredentialTemplateDetailPage } from './templates/CredentialTemplateDetailPage';
+export { default as CredentialTemplateEditorPage } from './templates/CredentialTemplateEditorPage';
 export { default as ApplicationTemplatesPage } from './templates/ApplicationTemplatesPage';
 export { default as ApplicationTemplateEditorPage } from './templates/ApplicationTemplateEditorPage';
 export { default as ApplicationTemplateDetailPage } from './templates/ApplicationTemplateDetailPage';
@@ -82,8 +83,6 @@ export { default as AuditPage } from './audit/AuditPage';
 
 // Applicant
 export { default as ApplicantDashboard } from './applicant/ApplicantDashboard';
-export { default as MyCredentialsPage } from './applicant/MyCredentialsPage';
-export { default as MyApplicationsPage } from './applicant/MyApplicationsPage';
 export { default as MyIdentityPage } from './applicant/MyIdentityPage';
 export { default as ApplicantSettingsPage } from './applicant/ApplicantSettingsPage';
 export { default as DeviceManagementPage } from './applicant/DeviceManagementPage';

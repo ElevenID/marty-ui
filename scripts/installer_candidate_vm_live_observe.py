@@ -21,13 +21,20 @@ import installer_candidate_qemu_observe as observer
 import installer_candidate_vm_launch as launcher
 from installer_candidate_vm_runtime import _identity, _named_disk, _same_path
 from installer_candidate_vm_launch_evidence import bind_provisioned_launch
-from installer_candidate_vm_guest_readiness import pinned_guest
+from installer_candidate_vm_guest_readiness import (
+    pinned_guest, same_rootless_guest, validate_rootless_facts,
+)
+from installer_candidate_vm_policy import seed_profile
 import installer_release as release
 
 SCHEMA = "elevenid.installer-vm-live-process-observation/v1"
 GUEST_SCHEMA = "elevenid.installer-vm-guest-readiness/v1"
 PRE_DISPATCH_SCHEMA = "elevenid.installer-vm-pre-dispatch-observation/v1"
 PROCESS_CHECK_SCHEMA = "elevenid.installer-vm-process-check/v1"
+ROOTLESS_SCHEMA = "elevenid.installer-vm-live-process-observation/v2"
+ROOTLESS_GUEST_SCHEMA = "elevenid.installer-vm-guest-readiness/v2"
+ROOTLESS_PRE_DISPATCH_SCHEMA = "elevenid.installer-vm-pre-dispatch-observation/v2"
+ROOTLESS_PROCESS_CHECK_SCHEMA = "elevenid.installer-vm-process-check/v2"
 GUEST_FIELDS = {
     "schema", "phase", "vm_id", "controller_boot_id", "process_pid",
     "process_start_ticks", "process_disk_fd", "disk_device", "disk_inode",
@@ -42,6 +49,21 @@ RECORDS = (
 )
 
 
+def _initial_profile(initial: dict) -> str | None:
+    if initial["schema"] == GUEST_SCHEMA:
+        release.require(type(initial.get("guest")) is dict
+                        and "resource_profile" not in initial["guest"],
+                        "legacy VM readiness contains rootless selection")
+        return None
+    release.require(initial["schema"] == ROOTLESS_GUEST_SCHEMA,
+                    "VM guest readiness version unsupported")
+    guest = initial.get("guest")
+    release.require(type(guest) is dict, "VM rootless guest unavailable")
+    profile = guest.get("resource_profile")
+    validate_rootless_facts(guest, profile)
+    return profile
+
+
 def bind_pre_dispatch(initial_raw: bytes, current: dict, *,
                       observation_id: str, now: int) -> None:
     """Compare a fresh reobservation with the exact initial guest evidence."""
@@ -52,10 +74,11 @@ def bind_pre_dispatch(initial_raw: bytes, current: dict, *,
     release.exact(current, GUEST_FIELDS | {
         "observation_id", "initial_guest_readiness_sha256"},
         "pre-dispatch VM observation")
+    profile = _initial_profile(initial)
     release.require(
-        initial["schema"] == GUEST_SCHEMA
+        initial["schema"] == (ROOTLESS_GUEST_SCHEMA if profile else GUEST_SCHEMA)
         and initial["phase"] == "guest-ready"
-        and current["schema"] == PRE_DISPATCH_SCHEMA
+        and current["schema"] == (ROOTLESS_PRE_DISPATCH_SCHEMA if profile else PRE_DISPATCH_SCHEMA)
         and current["phase"] == "pre-dispatch"
         and current["observation_id"] == observation_id
         and current["initial_guest_readiness_sha256"]
@@ -74,9 +97,12 @@ def bind_pre_dispatch(initial_raw: bytes, current: dict, *,
         and current["guest"].get("docker_initially_empty") is True
         and all(type(current[key]) is type(value) and current[key] == value
                 for key, value in initial.items()
-                if key not in {"schema", "phase", "observed_at"}),
+                if key not in ({"schema", "phase", "observed_at", "guest"}
+                               if profile else {"schema", "phase", "observed_at"})),
         "pre-dispatch VM differs from initial readiness",
     )
+    if profile:
+        same_rootless_guest(initial["guest"], current["guest"])
 
 
 def bind_process_check(initial_raw: bytes, current: dict, *,
@@ -89,10 +115,11 @@ def bind_process_check(initial_raw: bytes, current: dict, *,
     release.exact(current, GUEST_FIELDS - {"guest"} | {
         "observation_id", "initial_guest_readiness_sha256"},
         "VM process check")
+    profile = _initial_profile(initial)
     release.require(
-        initial["schema"] == GUEST_SCHEMA
+        initial["schema"] == (ROOTLESS_GUEST_SCHEMA if profile else GUEST_SCHEMA)
         and initial["phase"] == "guest-ready"
-        and current["schema"] == PROCESS_CHECK_SCHEMA
+        and current["schema"] == (ROOTLESS_PROCESS_CHECK_SCHEMA if profile else PROCESS_CHECK_SCHEMA)
         and current["phase"] == "process-check"
         and current["observation_id"] == observation_id
         and current["initial_guest_readiness_sha256"]
@@ -152,6 +179,7 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
         bound = bind_provisioned_launch(**raw, boot_id=boot_id)
         runtime = records["runtime_receipt"]
         seed = records["seed_receipt"]
+        resource_profile = seed_profile(seed)
         intent = records["launch_intent"]
         spawned = records["launch_pid"]
         launch_receipt = records["launch_receipt"]
@@ -161,7 +189,7 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
         release.require(str(runtime_dir) == intent["runtime_dir"]
                         and str(control_dir) == intent["control_dir"]
                         and intent["args"] == launcher._arguments(
-                            runtime_dir, vm_id, seed["ssh_port"])
+                            runtime_dir, vm_id, seed["ssh_port"], resource_profile)
                         and intent["qemu_sha256"] == launcher._trusted_tool(
                             launcher.QEMU)
                         and intent["kvm_gid"] == launcher._kvm_group()
@@ -219,6 +247,7 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                             user=seed["guest_user"], packages=seed["packages"],
                             key_sha256=seed["controller_private_sha256"],
                             known_hosts_sha256=seed["known_hosts_sha256"],
+                            resource_profile=resource_profile,
                         )
                     _same_path(runtime_dir, runtime_fd,
                                lambda path: observer.open_vm_dir(
@@ -246,10 +275,14 @@ def observe(registry: Path, runtime_parent: Path, *, vm_id: str,
                         == raw[name.replace("-", "_")]
                         for name in RECORDS),
                         "VM registry records changed before observation write")
+                    schemas = ((ROOTLESS_SCHEMA, ROOTLESS_GUEST_SCHEMA,
+                                ROOTLESS_PRE_DISPATCH_SCHEMA, ROOTLESS_PROCESS_CHECK_SCHEMA)
+                               if resource_profile else
+                               (SCHEMA, GUEST_SCHEMA, PRE_DISPATCH_SCHEMA, PROCESS_CHECK_SCHEMA))
                     observed = dict(
-                        schema=(PRE_DISPATCH_SCHEMA if pre_dispatch_id is not None
-                                else PROCESS_CHECK_SCHEMA if process_check_id is not None
-                                else GUEST_SCHEMA if guest_readiness else SCHEMA),
+                        schema=(schemas[2] if pre_dispatch_id is not None
+                                else schemas[3] if process_check_id is not None
+                                else schemas[1] if guest_readiness else schemas[0]),
                         phase=("pre-dispatch" if pre_dispatch_id is not None
                                else "process-check" if process_check_id is not None
                                else "guest-ready" if guest_readiness

@@ -22,6 +22,12 @@ pub const LANES: [&str; 7] = [
 pub const MAX_SUMMARY_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) enum StackContext {
+    Candidate,
+    Released,
+}
+
 #[derive(Deserialize)]
 struct Outcome {
     exit_code: i32,
@@ -37,8 +43,16 @@ struct Stack {
     schema: String,
     marty_commit: String,
     manifest_sha256: String,
-    qualification_context: String,
-    published_release: bool,
+    #[serde(default)]
+    qualification_context: Option<String>,
+    #[serde(default)]
+    published_release: Option<bool>,
+    #[serde(default)]
+    release_tag: Option<String>,
+    #[serde(default)]
+    stack_release: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -244,7 +258,15 @@ pub fn validate_official_suite(
     harness: &str,
     run_id: u64,
 ) -> Result<OfficialReceipt, &'static str> {
-    let assessed = assess_official_suite(manifest, summaries, source, harness, run_id, false)?;
+    let assessed = assess_official_suite(
+        manifest,
+        summaries,
+        source,
+        harness,
+        run_id,
+        false,
+        StackContext::Candidate,
+    )?;
     Ok(assessed.receipt(source, harness, run_id, None))
 }
 
@@ -392,6 +414,7 @@ pub(crate) fn assess_official_suite(
     harness: &str,
     run_id: u64,
     collect_review: bool,
+    context: StackContext,
 ) -> Result<AssessedSuite, &'static str> {
     if !crate::is_source(source)
         || !crate::is_source(harness)
@@ -402,6 +425,51 @@ pub(crate) fn assess_official_suite(
         return Err("official candidate identity or evidence count is invalid");
     }
     let manifest_sha256 = digest(manifest);
+    let released_identity = if context == StackContext::Released {
+        let document: Value = crate::json_evidence::parse_strict(manifest)?;
+        if document.get("schema").and_then(Value::as_str) != Some("marty.stack/v1") {
+            return Err("released official manifest has an invalid schema");
+        }
+        let release = document
+            .get("release")
+            .and_then(Value::as_str)
+            .ok_or("released official manifest has no release identity")?;
+        let version = release
+            .strip_prefix("marty-ui@")
+            .ok_or("released official manifest has an invalid release identity")?;
+        if version.split('.').count() != 3
+            || version
+                .split('.')
+                .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+        {
+            return Err("released official manifest has an invalid release identity");
+        }
+        let components = document
+            .get("components")
+            .and_then(Value::as_array)
+            .ok_or("released official manifest has no components")?;
+        if components
+            .iter()
+            .filter(|component| {
+                component.get("name").and_then(Value::as_str) == Some("marty-ui")
+                    && component.get("commit").and_then(Value::as_str) == Some(source)
+            })
+            .count()
+            != 1
+            || components
+                .iter()
+                .filter(|component| {
+                    component.get("name").and_then(Value::as_str) == Some("marty-ui")
+                })
+                .count()
+                != 1
+        {
+            return Err("released official manifest has a foreign product source");
+        }
+        Some((format!("v{version}"), release.to_owned()))
+    } else {
+        None
+    };
     let mut seen = BTreeSet::new();
     let mut lanes = Vec::new();
     let mut pending = Vec::new();
@@ -419,8 +487,24 @@ pub(crate) fn assess_official_suite(
             || summary.stack.schema != "elevenid.official-stack-material/v1"
             || summary.stack.marty_commit != source
             || summary.stack.manifest_sha256 != manifest_sha256
-            || summary.stack.qualification_context != "PRE_PUBLICATION_CANDIDATE"
-            || summary.stack.published_release
+            || match context {
+                StackContext::Candidate => {
+                    summary.stack.qualification_context.as_deref()
+                        != Some("PRE_PUBLICATION_CANDIDATE")
+                        || summary.stack.published_release != Some(false)
+                }
+                StackContext::Released => {
+                    summary.stack.qualification_context.is_some()
+                        || summary.stack.published_release.is_some()
+                        || summary.stack.release_tag.as_ref()
+                            != released_identity.as_ref().map(|identity| &identity.0)
+                        || summary.stack.stack_release.as_deref()
+                            != released_identity
+                                .as_ref()
+                                .map(|identity| identity.1.as_str())
+                        || summary.stack.repository.as_deref() != Some("ElevenID/marty-ui")
+                }
+            }
         {
             return Err("official lane is failed, stale, foreign, duplicated or not a candidate");
         }

@@ -14,8 +14,9 @@
 #   'make setup-keycloak' runs the Compose configurator with its pinned image.
 # =============================================================================
 set -euo pipefail
-# File-backed credentials must never be expanded by shell tracing.
-if [ -n "${MARTY_ORG_ADMIN_PASSWORD_FILE:-}" ]; then set +x; fi
+# Configuration can contain operator, SMTP, or identity-provider credentials.
+# Disable tracing before reading any of them, including ordinary Compose inputs.
+set +x
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 KC_URL="${KC_URL:-http://localhost:8180}"
@@ -51,6 +52,9 @@ KEYCLOAK_VERIFY_EMAIL="${KEYCLOAK_VERIFY_EMAIL:-false}"
 KEYCLOAK_RESET_PASSWORD_ENABLED="${KEYCLOAK_RESET_PASSWORD_ENABLED:-true}"
 KEYCLOAK_SOCIAL_LOGIN_ENABLED="${KEYCLOAK_SOCIAL_LOGIN_ENABLED:-true}"
 KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED="${KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED:-false}"
+# Empty preserves existing policy, including legacy Keycloak installations.
+KEYCLOAK_PASSKEYS_ENABLED="${KEYCLOAK_PASSKEYS_ENABLED:-}"
+KEYCLOAK_PASSKEY_RP_ID="${KEYCLOAK_PASSKEY_RP_ID:-}"
 KEYCLOAK_SMTP_HOST="${KEYCLOAK_SMTP_HOST:-${SMTP_HOST:-}}"
 KEYCLOAK_SMTP_PORT="${KEYCLOAK_SMTP_PORT:-${SMTP_PORT:-1025}}"
 KEYCLOAK_SMTP_FROM="${KEYCLOAK_SMTP_FROM:-${SMTP_FROM:-noreply@marty.demo}}"
@@ -276,6 +280,7 @@ main() {
     configure_google_idp
     configure_google_picture_mapper
     configure_profile_scope_picture_mapper
+    configure_marty_ui_auth_time
     configure_marty_ui_redirect_uris
     configure_marty_api_secret
     ensure_marty_org_exists
@@ -283,6 +288,9 @@ main() {
     ensure_demo_reviewer_user
     ensure_marty_org_admin_user
     ensure_marty_org_admin_role
+    # Apply/read back passkey policy after other realm updates, so the final
+    # reported state includes the existing provider, email and browser settings.
+    configure_passkey_login
     
     log_success "=== Keycloak Setup Complete ==="
 }
@@ -372,33 +380,61 @@ EOF
 ensure_marty_org_exists() {
     log_info "Ensuring Keycloak organization exists: ${MARTY_ORG_NAME}"
 
-    local orgs
-    orgs=$(kcadm_safe get organizations -r "$REALM" 2>/dev/null || echo "[]")
-    if echo "$orgs" | tr -d '\n' | grep -q "\"name\"[[:space:]]*:[[:space:]]*\"${MARTY_ORG_NAME}\""; then
+    local orgs required
+    required="$(normalize_bool "$KEYCLOAK_ORGANIZATION_IDENTITY_FIRST_ENABLED" false)"
+    if ! orgs=$(kcadm_safe get organizations -r "$REALM" --fields name 2>/dev/null); then
+        if [ "$required" = true ]; then
+            log_error "Cannot inspect the organization required for identity-first login"
+            return 1
+        fi
+        log_info "Optional Keycloak organization API is unavailable"
+        return 0
+    fi
+    if organization_names_contain "$orgs" "$MARTY_ORG_NAME"; then
         log_success "Keycloak organization already present: ${MARTY_ORG_NAME}"
         return 0
     fi
 
-        local payload
-        payload=$(create_temp_file)
-        cat > "$payload" <<EOF
+    local payload
+    payload=$(create_temp_file)
+    TEMP_FILES="${TEMP_FILES:-} $payload"
+    cat > "$payload" <<EOF
 {
-    "name": "${MARTY_ORG_NAME}",
+    "name": "$(json_escape "$MARTY_ORG_NAME")",
     "enabled": true,
     "domains": [
         {
-            "name": "${MARTY_ORG_DOMAIN}",
+            "name": "$(json_escape "$MARTY_ORG_DOMAIN")",
             "verified": true
         }
     ]
 }
 EOF
 
-        if kcadm_safe create organizations -r "$REALM" -f "$payload" > /dev/null; then
-        log_success "Created Keycloak organization: ${MARTY_ORG_NAME}"
-    else
+    if ! kcadm_safe create organizations -r "$REALM" -f "$payload" > /dev/null; then
+        rm -f -- "$payload"
+        if [ "$required" = true ]; then
+            log_error "Failed to create the organization required for identity-first login"
+            return 1
+        fi
         log_warning "Could not create Keycloak organization '${MARTY_ORG_NAME}' (may already exist or org API unavailable)"
+        return 0
     fi
+    rm -f -- "$payload"
+    if [ "$required" = true ]; then
+        if ! orgs=$(kcadm_safe get organizations -r "$REALM" --fields name 2>/dev/null) \
+            || ! organization_names_contain "$orgs" "$MARTY_ORG_NAME"; then
+            log_error "Cannot verify the organization required for identity-first login"
+            return 1
+        fi
+    fi
+    log_success "Created Keycloak organization: ${MARTY_ORG_NAME}"
+}
+
+organization_names_contain() {
+    # Treat the selected display name literally, including JSON quotation.
+    printf '%s' "$1" | sed 's/"name"[[:space:]]*:[[:space:]]*/"name":/g' \
+        | grep -F -- "\"name\":\"$(json_escape "$2")\"" > /dev/null
 }
 
 ensure_canvas_demo_admin_user() {
@@ -620,7 +656,7 @@ get_browser_execution_id_by_display_name() {
     local display_name="$1"
     local executions current_id current_name
 
-    executions=$(kcadm_safe get "authentication/flows/browser/executions" -r "$REALM" 2>/dev/null || echo "")
+    executions=$(kcadm_safe get "authentication/flows/browser/executions" -r "$REALM" 2>/dev/null) || return 1
     if [ -z "$executions" ]; then
         return 0
     fi
@@ -651,21 +687,43 @@ configure_browser_flow_alignment() {
 
     if [ "$identity_first_enabled" = "true" ]; then
         desired_requirement="ALTERNATIVE"
+        # The imported realm disables organizations. Enabling only the browser
+        # execution leaves the requested organization login mode ineffective.
+        if ! kcadm_secret_safe update "realms/${REALM}" -s organizationsEnabled=true; then
+            log_error "Failed to enable Keycloak organizations for identity-first login"
+            return 1
+        fi
+        local organizations
+        if ! organizations=$("$KCADM" get "realms/${REALM}" --fields organizationsEnabled 2>/dev/null) \
+            || [ "$(printf '%s' "$organizations" | tr -d '\n[:space:]')" != '{"organizationsEnabled":true}' ]; then
+            log_error "Cannot verify Keycloak organizations are enabled"
+            return 1
+        fi
     else
         desired_requirement="DISABLED"
     fi
 
     log_info "Patching browser flow alignment (organizationIdentityFirst=${identity_first_enabled})"
 
-    execution_id="$(get_browser_execution_id_by_display_name "Organization")"
+    if ! execution_id="$(get_browser_execution_id_by_display_name "Organization")"; then
+        log_error "Cannot inspect the browser flow Organization execution"
+        return 1
+    fi
     if [ -z "$execution_id" ]; then
-        log_warning "Could not locate the browser flow Organization execution; leaving browser flow unchanged"
+        if [ "$identity_first_enabled" = "true" ]; then
+            log_error "Organization identity-first login requires the browser flow Organization execution"
+            return 1
+        fi
+        log_info "No browser flow Organization execution is present; identity-first login remains disabled"
         return 0
     fi
 
-    current_execution="$(kcadm_safe get "authentication/executions/${execution_id}" -r "$REALM" 2>/dev/null || echo "")"
-    current_requirement="$(printf '%s' "$current_execution" | tr -d '\n[:space:]' | sed -n 's/.*"requirement":"\([^"]*\)".*/\1/p')"
-    if [ "$current_requirement" = "$desired_requirement" ]; then
+    if ! current_execution=$("$KCADM" get "authentication/executions/${execution_id}" -r "$REALM" --fields requirement 2>/dev/null); then
+        log_error "Cannot verify the current browser flow alignment"
+        return 1
+    fi
+    current_requirement="$(printf '%s' "$current_execution" | tr -d '\n[:space:]')"
+    if [ "$current_requirement" = "{\"requirement\":\"${desired_requirement}\"}" ]; then
         log_success "Browser flow alignment already configured"
         return 0
     fi
@@ -676,7 +734,12 @@ configure_browser_flow_alignment() {
         -s "id=${execution_id}" \
         -s "requirement=${desired_requirement}" \
         -s "priority=26" > /dev/null; then
-        log_success "Browser flow alignment configured"
+        if ! current_execution=$("$KCADM" get "authentication/executions/${execution_id}" -r "$REALM" --fields requirement 2>/dev/null) \
+            || [ "$(printf '%s' "$current_execution" | tr -d '\n[:space:]')" != "{\"requirement\":\"${desired_requirement}\"}" ]; then
+            log_error "Browser flow alignment does not match the requested configuration"
+            return 1
+        fi
+        log_success "Browser flow alignment configured and verified"
     else
         log_error "Failed to configure browser flow alignment"
         return 1
@@ -713,35 +776,140 @@ configure_realm_login_settings() {
 
     log_info "Patching realm login settings (registration=${registration_enabled}, verifyEmail=${verify_email}, resetPassword=${reset_password_enabled})"
 
+    local update_succeeded=false
     if kcadm_safe update "realms/${REALM}" \
         -s "registrationAllowed=${registration_enabled}" \
         -s "verifyEmail=${verify_email}" \
         -s "resetPasswordAllowed=${reset_password_enabled}"; then
-        log_success "Realm login settings configured"
-    else
-        local realm_config flattened current_registration current_verify_email current_reset_password
-        realm_config=$(kcadm_safe get "realms/${REALM}" --fields registrationAllowed,verifyEmail,resetPasswordAllowed 2>/dev/null || echo "")
-        if [ -z "$realm_config" ]; then
-            log_warning "Realm login settings update failed and Keycloak could not return the realm representation; continuing because Keycloak ${REALM} admin endpoint is unavailable"
-            return 0
-        fi
+        update_succeeded=true
+    fi
 
-        flattened="$(printf '%s' "$realm_config" | tr -d '\n[:space:]')"
-        current_registration="$(printf '%s' "$flattened" | sed -n 's/.*"registrationAllowed":\(true\|false\).*/\1/p')"
-        current_verify_email="$(printf '%s' "$flattened" | sed -n 's/.*"verifyEmail":\(true\|false\).*/\1/p')"
-        current_reset_password="$(printf '%s' "$flattened" | sed -n 's/.*"resetPasswordAllowed":\(true\|false\).*/\1/p')"
-
-        if [ "$current_registration" = "$registration_enabled" ] \
-            && [ "$current_verify_email" = "$verify_email" ] \
-            && [ "$current_reset_password" = "$reset_password_enabled" ]; then
-            log_warning "Realm login settings update failed, but current settings already match desired values; continuing"
-            log_success "Realm login settings configured"
-            return 0
-        fi
-
-        log_error "Failed to configure realm login settings"
+    # A successful update alone is not evidence that the requested policy is
+    # effective. Read only the three public booleans; never the realm's secrets.
+    local realm_config flattened current_registration current_verify_email current_reset_password
+    if ! realm_config=$(kcadm_safe get "realms/${REALM}" --fields registrationAllowed,verifyEmail,resetPasswordAllowed 2>/dev/null); then
+        log_error "Cannot verify the configured realm login settings"
         return 1
     fi
+    flattened="$(printf '%s' "$realm_config" | tr -d '\n[:space:]')"
+    local boolean_fields='^\{("[A-Za-z]+":(true|false),){2}"[A-Za-z]+":(true|false)\}$'
+    if [[ ! "$flattened" =~ $boolean_fields ]]; then
+        log_error "Realm login settings readback is incomplete or invalid"
+        return 1
+    fi
+    current_registration="$(printf '%s' "$flattened" | sed -n 's/.*"registrationAllowed":\(true\|false\)[,}].*/\1/p')"
+    current_verify_email="$(printf '%s' "$flattened" | sed -n 's/.*"verifyEmail":\(true\|false\)[,}].*/\1/p')"
+    current_reset_password="$(printf '%s' "$flattened" | sed -n 's/.*"resetPasswordAllowed":\(true\|false\)[,}].*/\1/p')"
+
+    if [ "$current_registration" != "$registration_enabled" ] \
+        || [ "$current_verify_email" != "$verify_email" ] \
+        || [ "$current_reset_password" != "$reset_password_enabled" ]; then
+        log_error "Realm login settings do not match the requested configuration"
+        return 1
+    fi
+    if [ "$update_succeeded" != true ]; then
+        log_warning "Realm update failed; readback confirms the requested login settings are already effective"
+    fi
+    log_success "Realm login settings configured and verified"
+}
+
+# Read a single public JSON field. Never fetch or log the entire realm.
+passkey_field_matches() {
+    local resource="$1" field="$2" expected="$3" current
+    current=$("$KCADM" get "$resource" -r "$REALM" --fields "$field" 2>/dev/null) || return 1
+    # Normalize formatting for these closed scalar/algorithm-array responses,
+    # preserving spaces inside values such as the "not specified" sentinel.
+    current=$(printf '%s' "$current" | sed -E 's/^[[:space:]]*//;s/[[:space:]]*$//;s/"[[:space:]]*:[[:space:]]*/":/g;s/,[[:space:]]*/,/g;s/\[[[:space:]]*/[/g;s/[[:space:]]*\]/]/g;s/\{[[:space:]]*/{/g;s/[[:space:]]*\}/}/g' | tr -d '\n\r')
+    [ "$current" = "{\"${field}\":${expected}}" ]
+}
+
+configure_passkey_login() {
+    local enabled="$KEYCLOAK_PASSKEYS_ENABLED" rp="$KEYCLOAK_PASSKEY_RP_ID" label current server_info
+    [ -n "$enabled" ] || return 0
+    if [[ "$enabled" != true && "$enabled" != false ]]; then
+        log_error "KEYCLOAK_PASSKEYS_ENABLED must be true, false, or empty to preserve policy"
+        return 1
+    fi
+    if [ "$enabled" = true ]; then
+        if [[ -z "$rp" || ${#rp} -gt 253 ]]; then
+            log_error "Passkeys require an explicit stable public RP hostname"
+            return 1
+        fi
+        local -a labels
+        IFS='.' read -r -a labels <<< "$rp"
+        for label in "${labels[@]}"; do
+            if [[ ${#label} -gt 63 || ! "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+                log_error "Passkey RP ID must be a lowercase hostname without a scheme, port or path"
+                return 1
+            fi
+        done
+        if [[ "$rp" == *. ]]; then
+            log_error "Passkey RP ID must not have a trailing dot"
+            return 1
+        fi
+    fi
+    # The integrated forms and native passkey policy are qualified
+    # against the exact pinned version. Requalify before extending this boundary.
+    # Fail closed for explicit management on a different version, rather than
+    # claiming that an ignored representation field successfully enabled login.
+    # kcadm's top-level field filter drops the nested version. Server info is
+    # public admin metadata, not a realm credential representation; keep it local
+    # and extract only the system version without logging the response.
+    server_info=$("$KCADM" get serverinfo 2>/dev/null) || return 1
+    server_info=$(printf '%s' "$server_info" | tr -d '\n\r\t ')
+    current=$(printf '%s' "$server_info" | sed -n 's/.*"systemInfo":{[^}]*"version":"\([^"]*\)".*/\1/p')
+    if [ "$current" != "26.8.0" ]; then
+        log_error "Managed passkey login requires qualified Keycloak 26.8.0"
+        return 1
+    fi
+    if [ "$enabled" = true ]; then
+        # A configured RP ID is a credential boundary, not a replaceable setting.
+        if ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId '""' \
+            && ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessRpId "\"$rp\""; then
+            log_error "Existing passkey RP ID differs or cannot be verified; preserve credentials and plan migration"
+            return 1
+        fi
+        kcadm_secret_safe update "realms/$REALM" \
+            -s "webAuthnPolicyPasswordlessRpId=$rp" \
+            -s 'webAuthnPolicyPasswordlessRpEntityName=ElevenID' \
+            -s 'webAuthnPolicyPasswordlessSignatureAlgorithms=["ES256","RS256"]' \
+            -s webAuthnPolicyPasswordlessUserVerificationRequirement=required \
+            -s webAuthnPolicyPasswordlessResidentKey=required \
+            -s webAuthnPolicyPasswordlessAttestationConveyancePreference=none \
+            -s 'webAuthnPolicyPasswordlessAuthenticatorAttachment=not specified' \
+            -s webAuthnPolicyPasswordlessMediation=conditional || return 1
+        local field expected
+        for field in RpId RpEntityName SignatureAlgorithms UserVerificationRequirement ResidentKey AttestationConveyancePreference AuthenticatorAttachment Mediation; do
+            case "$field" in
+                RpId) expected="\"$rp\"" ;;
+                RpEntityName) expected='"ElevenID"' ;;
+                SignatureAlgorithms) expected='["ES256","RS256"]' ;;
+                UserVerificationRequirement|ResidentKey) expected='"required"' ;;
+                AttestationConveyancePreference) expected='"none"' ;;
+                AuthenticatorAttachment) expected='"not specified"' ;;
+                Mediation) expected='"conditional"' ;;
+            esac
+            if ! passkey_field_matches "realms/$REALM" "webAuthnPolicyPasswordless$field" "$expected"; then
+                log_error "Passwordless policy readback failed for $field"
+                return 1
+            fi
+        done
+        kcadm_secret_safe update authentication/required-actions/webauthn-register-passwordless \
+            -r "$REALM" -s enabled=true -s defaultAction=false || return 1
+        if ! passkey_field_matches authentication/required-actions/webauthn-register-passwordless enabled true \
+            || ! passkey_field_matches authentication/required-actions/webauthn-register-passwordless defaultAction false; then
+            log_error "Optional passkey enrollment could not be verified"
+            return 1
+        fi
+    fi
+    # Disable only login on rollback: do not delete credentials, alter provider
+    # links or rewrite the remaining passwordless policy and required actions.
+    kcadm_secret_safe update "realms/$REALM" -s "webAuthnPolicyPasswordlessPasskeysEnabled=$enabled" || return 1
+    if ! passkey_field_matches "realms/$REALM" webAuthnPolicyPasswordlessPasskeysEnabled "$enabled"; then
+        log_error "Passkey login setting did not persist"
+        return 1
+    fi
+    log_success "Passkey login configured and verified; existing login methods retained"
 }
 
 configure_realm_smtp_settings() {
@@ -764,29 +932,29 @@ configure_realm_smtp_settings() {
 
     log_info "Patching realm SMTP settings (host=${KEYCLOAK_SMTP_HOST}, port=${KEYCLOAK_SMTP_PORT}, auth=${smtp_auth}, ssl=${smtp_ssl}, starttls=${smtp_starttls})"
 
-    local args=(
-        update "realms/${REALM}"
-        -s "smtpServer.host=${KEYCLOAK_SMTP_HOST}"
-        -s "smtpServer.port=${KEYCLOAK_SMTP_PORT}"
-        -s "smtpServer.from=${KEYCLOAK_SMTP_FROM}"
-        -s "smtpServer.fromDisplayName=${KEYCLOAK_SMTP_FROM_DISPLAY_NAME}"
-        -s "smtpServer.auth=${smtp_auth}"
-        -s "smtpServer.ssl=${smtp_ssl}"
-        -s "smtpServer.starttls=${smtp_starttls}"
-    )
-    if [ -n "$KEYCLOAK_SMTP_USERNAME" ]; then
-        args+=(-s "smtpServer.user=${KEYCLOAK_SMTP_USERNAME}")
-    fi
-    if [ -n "$KEYCLOAK_SMTP_PASSWORD" ]; then
-        args+=(-s "smtpServer.password=${KEYCLOAK_SMTP_PASSWORD}")
-    fi
-
-    if kcadm_secret_safe "${args[@]}"; then
-        log_success "Realm SMTP settings configured"
-    else
+    # Keep credentials out of process arguments as well as command output.
+    local payload
+    payload=$(create_temp_file)
+    TEMP_FILES="${TEMP_FILES:-} $payload"
+    cat > "$payload" <<EOF
+{"smtpServer":{
+  "host":"$(json_escape "$KEYCLOAK_SMTP_HOST")",
+  "port":"$(json_escape "$KEYCLOAK_SMTP_PORT")",
+  "from":"$(json_escape "$KEYCLOAK_SMTP_FROM")",
+  "fromDisplayName":"$(json_escape "$KEYCLOAK_SMTP_FROM_DISPLAY_NAME")",
+  "auth":"$smtp_auth","ssl":"$smtp_ssl","starttls":"$smtp_starttls",
+  "user":"$(json_escape "$KEYCLOAK_SMTP_USERNAME")",
+  "password":"$(json_escape "$KEYCLOAK_SMTP_PASSWORD")"
+}}
+EOF
+    # --file disables kcadm's default merge; retain unrelated realm settings.
+    if ! kcadm_secret_safe update "realms/${REALM}" --merge -f "$payload"; then
+        rm -f -- "$payload"
         log_error "Failed to configure realm SMTP settings"
         return 1
     fi
+    rm -f -- "$payload"
+    log_success "Realm SMTP settings configured"
 }
 
 # ─── Google Identity Provider ────────────────────────────────────────────────
@@ -794,9 +962,12 @@ configure_google_idp() {
     local social_enabled
     social_enabled="$(normalize_bool "$KEYCLOAK_SOCIAL_LOGIN_ENABLED" true)"
     if [ "$social_enabled" != "true" ]; then
-        log_info "KEYCLOAK_SOCIAL_LOGIN_ENABLED=false — disabling Google IdP if present"
-        kcadm_safe update identity-provider/instances/google -r "$REALM" -s enabled=false > /dev/null || \
-            log_warning "Google IdP not found or could not be disabled"
+        log_info "KEYCLOAK_SOCIAL_LOGIN_ENABLED=false — disabling the imported Google IdP"
+        if ! kcadm_secret_safe update identity-provider/instances/google -r "$REALM" -s enabled=false; then
+            log_error "Failed to disable Google IdP"
+            return 1
+        fi
+        verify_google_idp_enabled false || return 1
         return 0
     fi
 
@@ -806,15 +977,59 @@ configure_google_idp() {
     fi
     
     log_info "Patching Google Identity Provider..."
-    
-    if kcadm_safe update identity-provider/instances/google \
-        -r "$REALM" \
-        -s enabled=true \
-        -s "config.clientId=${GOOGLE_CID}" \
-        -s "config.clientSecret=${GOOGLE_SEC}"; then
-        log_success "Google IdP configured (clientId: ${GOOGLE_CID:0:20}...)"
-    else
+
+    # Google does not accept OIDC's `login` prompt. Marty deliberately requests
+    # fresh Keycloak authentication, so do not pass that client prompt through
+    # to Google. Retain an operator's explicit provider prompt.
+    local current_config prompt_setting="" payload
+    # Do not filter with --fields config: kcadm omits nested map entries. The
+    # full representation can contain credentials; capture it without logging.
+    if ! current_config=$("$KCADM" get identity-provider/instances/google -r "$REALM" 2>/dev/null); then
+        log_error "Cannot read Google IdP prompt configuration"
+        return 1
+    fi
+    if ! printf '%s' "$current_config" | grep -Eq '"config"[[:space:]]*:[[:space:]]*\{'; then
+        log_error "Google IdP config readback is incomplete"
+        return 1
+    fi
+    if ! printf '%s' "$current_config" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"[^"]+'; then
+        prompt_setting=',"prompt":"select_account"'
+    fi
+    payload=$(create_temp_file)
+    TEMP_FILES="${TEMP_FILES:-} $payload"
+    cat > "$payload" <<EOF
+{"enabled":true,"config":{
+  "clientId":"$(json_escape "$GOOGLE_CID")",
+  "clientSecret":"$(json_escape "$GOOGLE_SEC")"${prompt_setting}
+}}
+EOF
+    if ! kcadm_secret_safe update identity-provider/instances/google \
+        -r "$REALM" --merge -f "$payload"; then
+        rm -f -- "$payload"
         log_error "Failed to configure Google IdP"
+        return 1
+    fi
+    rm -f -- "$payload"
+    verify_google_idp_enabled true || return 1
+    if [ -n "$prompt_setting" ]; then
+        if ! current_config=$("$KCADM" get identity-provider/instances/google -r "$REALM" 2>/dev/null) ||
+           ! printf '%s' "$current_config" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"select_account"'; then
+            log_error "Google IdP prompt does not match the supported default"
+            return 1
+        fi
+    fi
+    log_success "Google IdP configured and verified"
+}
+
+verify_google_idp_enabled() {
+    local expected="$1" current
+    if ! current=$("$KCADM" get identity-provider/instances/google -r "$REALM" --fields enabled 2>/dev/null); then
+        log_error "Cannot verify Google IdP enablement"
+        return 1
+    fi
+    current="$(printf '%s' "$current" | tr -d '\n[:space:]')"
+    if [ "$current" != "{\"enabled\":${expected}}" ]; then
+        log_error "Google IdP enablement does not match the requested configuration"
         return 1
     fi
 }
@@ -911,6 +1126,66 @@ PROTOEOF
 }
 
 # ─── Marty UI Client Configuration ───────────────────────────────────────────
+configure_marty_ui_auth_time() {
+    # Imported realms do not necessarily have Keycloak's built-in basic scope.
+    # Auth requires this provider-owned session timestamp for max_age checks.
+    local client_uuid mapper_id existing payload operation readback compact field
+    mapper_id="77d88d3d-5860-44f1-9598-5b528566fd4a"
+    client_uuid=$(get_client_uuid "marty-ui")
+    if [ -z "$client_uuid" ] || ! existing=$(kcadm_safe get \
+        "clients/$client_uuid/protocol-mappers/models" -r "$REALM" --fields id); then
+        log_error "Cannot inspect Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    payload=$(create_temp_file)
+    cat > "$payload" <<'AUTHTIME'
+{
+  "id": "77d88d3d-5860-44f1-9598-5b528566fd4a",
+  "name": "marty-auth-time",
+  "protocol": "openid-connect",
+  "protocolMapper": "oidc-usersessionmodel-note-mapper",
+  "consentRequired": false,
+  "config": {
+    "user.session.note": "AUTH_TIME",
+    "claim.name": "auth_time",
+    "jsonType.label": "long",
+    "id.token.claim": "true",
+    "access.token.claim": "false",
+    "userinfo.token.claim": "false"
+  }
+}
+AUTHTIME
+    operation=create
+    if printf '%s' "$existing" | grep -Fq "\"$mapper_id\""; then
+        operation=update
+    fi
+    local resource="clients/$client_uuid/protocol-mappers/models"
+    if [ "$operation" = update ]; then resource="$resource/$mapper_id"; fi
+    if ! kcadm_safe "$operation" "$resource" -r "$REALM" -f "$payload" >/dev/null; then
+        log_error "Cannot configure Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    if ! readback=$(kcadm_safe get "clients/$client_uuid/protocol-mappers/models/$mapper_id" \
+        -r "$REALM"); then
+        log_error "Cannot verify Marty UI authentication timestamp mapper"
+        return 1
+    fi
+    # Normalize delimiter whitespace only; spaces inside a claim value matter.
+    compact=$(printf '%s' "$readback" | sed -E 's/"[[:space:]]*:[[:space:]]*/":/g' | tr -d '\n\r')
+    for field in '"id":"77d88d3d-5860-44f1-9598-5b528566fd4a"' \
+        '"name":"marty-auth-time"' '"protocol":"openid-connect"' \
+        '"protocolMapper":"oidc-usersessionmodel-note-mapper"' \
+        '"user.session.note":"AUTH_TIME"' '"claim.name":"auth_time"' \
+        '"jsonType.label":"long"' '"id.token.claim":"true"' \
+        '"access.token.claim":"false"' '"userinfo.token.claim":"false"'; do
+        if ! printf '%s' "$compact" | grep -Fq "$field"; then
+            log_error "Marty UI authentication timestamp mapper readback differs"
+            return 1
+        fi
+    done
+    log_success "Marty UI authentication timestamp mapper configured and verified"
+}
+
 configure_marty_ui_redirect_uris() {
     if [ -z "$PUBLIC_DOMAIN" ] && [ -z "$UI_BASE_URL" ]; then
         log_warning "PUBLIC_DOMAIN and UI_BASE_URL are not set — skipping marty-ui client redirect URI configuration"
@@ -923,8 +1198,8 @@ configure_marty_ui_redirect_uris() {
     client_uuid=$(get_client_uuid "marty-ui")
     
     if [ -z "$client_uuid" ]; then
-        log_warning "marty-ui client not found in realm $REALM — skipping"
-        return 0
+        log_error "Required marty-ui client not found in realm $REALM"
+        return 1
     fi
 
     local origins_csv
@@ -1020,6 +1295,7 @@ configure_marty_ui_redirect_uris() {
                 log_success "Added redirect URI: $origin_redirect"
             else
                 log_error "Failed to add redirect URI: $origin_redirect"
+                return 1
             fi
         else
             log_success "Redirect URI already present: $origin_redirect"
@@ -1045,6 +1321,7 @@ configure_marty_ui_redirect_uris() {
                 log_success "Added web origin: $ui_origin"
             else
                 log_error "Failed to add web origin: $ui_origin"
+                return 1
             fi
         else
             log_success "Web origin already present: $ui_origin"
@@ -1072,6 +1349,7 @@ configure_marty_ui_redirect_uris() {
                 log_success "Added post-logout redirect URI: $origin_post_logout"
             else
                 log_error "Failed to add post-logout redirect URI: $origin_post_logout"
+                return 1
             fi
         else
             log_success "Post-logout URI already present: $origin_post_logout"
@@ -1092,17 +1370,21 @@ configure_marty_api_secret() {
     client_uuid=$(get_client_uuid "marty-api")
     
     if [ -z "$client_uuid" ]; then
-        log_warning "marty-api client not found in realm $REALM — skipping"
-        return 0
+        log_error "Required marty-api client not found in realm $REALM"
+        return 1
     fi
     
-    if kcadm_safe update "clients/$client_uuid" -r "$REALM" \
-        -s "secret=${MARTY_API_SECRET}"; then
-        log_success "marty-api client secret configured"
-    else
+    local payload
+    payload=$(create_temp_file)
+    TEMP_FILES="${TEMP_FILES:-} $payload"
+    printf '{"secret":"%s"}\n' "$(json_escape "$MARTY_API_SECRET")" > "$payload"
+    if ! kcadm_secret_safe update "clients/$client_uuid" -r "$REALM" --merge -f "$payload"; then
+        rm -f -- "$payload"
         log_error "Failed to configure marty-api client secret"
         return 1
     fi
+    rm -f -- "$payload"
+    log_success "marty-api client secret configured"
 }
 
 # ─── Execute ─────────────────────────────────────────────────────────────────

@@ -725,13 +725,17 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     ]
 
 
-@pytest.mark.parametrize("regression", [None, "secret", "legacy", "unrelated"])
+@pytest.mark.parametrize("regression", [
+    None, "secret", "api-token-secret", "shared-file", "api-token-file",
+    "didcomm", "legacy", "portable", "mirror", "unrelated", "passport", "bureau",
+])
 def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
     compose_worker_gate, regression
 ):
     original_service = {
         "environment": [
             "CANVAS_CREDENTIALS_SHARED_SECRET_FILE=/run/secrets/canvas_credentials_shared_secret",
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE=/run/secrets/canvas_credentials_api_token",
             "CANVAS_PORTABLE_INTEGRATION_ENABLED=true",
             "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true",
             "CANVAS_MIRROR_WORKER_ENABLED=true",
@@ -740,32 +744,69 @@ def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
         "secrets": [
             {"source": "marty_db_password"},
             {"source": "canvas_credentials_shared_secret"},
+            {"source": "canvas_credentials_api_token"},
         ],
         "restart": "unless-stopped",
     }
     base = {
         "services": {name: deepcopy(original_service) for name in ("issuance", "issuance-native")}
     }
+    for secret in ("passport_tenant_api_keys", "personalization_bureau_api_key"):
+        base["services"]["issuance-native"]["secrets"].append({"source": secret})
+        base["services"]["issuance-native"]["environment"].append(
+            f"{secret.upper()}_FILE=/run/secrets/{secret}"
+        )
     preview = deepcopy(base)
     for service in preview["services"].values():
         service["environment"] = {
+            **compose_worker_gate["environment_mapping"](service["environment"]),
             "CANVAS_CREDENTIALS_SHARED_SECRET_FILE": "",
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
             "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
             "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
             "CANVAS_MIRROR_WORKER_ENABLED": "false",
             "ISSUER_BASE_URL": "https://issuer.example.invalid",
         }
-        service["secrets"] = [{"source": "marty_db_password"}]
+        service["secrets"] = [
+            secret for secret in service["secrets"]
+            if secret["source"] not in {"canvas_credentials_shared_secret", "canvas_credentials_api_token"}
+        ]
     if regression == "secret":
         preview["services"]["issuance"]["secrets"].append(
             {"source": "canvas_credentials_shared_secret"}
         )
-    elif regression == "legacy":
-        preview["services"]["issuance-native"]["environment"][
-            "CANVAS_LEGACY_EVENT_INGEST_ENABLED"
-        ] = "true"
+    elif regression == "api-token-secret":
+        preview["services"]["issuance-native"]["secrets"].append(
+            {"source": "canvas_credentials_api_token"}
+        )
+    elif regression in {"shared-file", "api-token-file"}:
+        key = (
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" if regression == "shared-file"
+            else "CANVAS_CREDENTIALS_API_TOKEN_FILE"
+        )
+        preview["services"]["issuance"]["environment"][key] = "/run/secrets/reselected-canvas-credential"
+    elif regression == "didcomm":
+        preview["services"]["issuance-native"]["secrets"].append(
+            {"source": "didcomm_issuance_openbao_token"}
+        )
+    elif regression in {"legacy", "portable", "mirror"}:
+        key = {
+            "legacy": "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+            "portable": "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+            "mirror": "CANVAS_MIRROR_WORKER_ENABLED",
+        }[regression]
+        preview["services"]["issuance-native"]["environment"][key] = "true"
     elif regression == "unrelated":
         preview["services"]["issuance"]["restart"] = "no"
+    elif regression in {"passport", "bureau"}:
+        secret_name = (
+            "passport_tenant_api_keys" if regression == "passport"
+            else "personalization_bureau_api_key"
+        )
+        preview["services"]["issuance-native"]["secrets"] = [
+            secret for secret in preview["services"]["issuance-native"]["secrets"]
+            if secret["source"] != secret_name
+        ]
     compare = compose_worker_gate["assert_no_canvas_issuance_secret"]
     if regression:
         with pytest.raises(AssertionError, match="No-Canvas issuance"):
@@ -935,6 +976,53 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
         if step.get("uses", "").startswith("docker/build-push-action@")
     ]
     assert builds and consumers < min(builds)
+
+
+def test_ci_fetches_private_sources_before_host_canvas_catalog_compilation():
+    workflow = _yaml(".github/workflows/ci.yml")
+    job = workflow["jobs"]["test-rust-service-images"]
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+    authorization = names.index("Authorize private fork access")
+    fetch = names.index(
+        "Fetch locked private fork dependencies for Compose catalog checks"
+    )
+    toolchains = [
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("dtolnay/rust-toolchain@")
+    ]
+    assert len(toolchains) == 1
+    toolchain = toolchains[0]
+    first_render = names.index("Verify merged Canvas worker deployment configuration")
+    consumer = names.index("Verify complete Canvas worker consumer configurations")
+    assert authorization < toolchain < fetch < first_render < consumer
+    assert steps[authorization]["if"] == "vars.PRIVATE_FORKS_ENABLED == 'true'"
+    assert steps[authorization]["run"].strip() == (
+        'python3 ".github/scripts/private-forks.py" check'
+    )
+    assert steps[toolchain] == {
+        "uses": "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8",
+        "with": {"toolchain": "1.95.0"},
+    }
+    assert steps[fetch] == {
+        "name": "Fetch locked private fork dependencies for Compose catalog checks",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "timeout-minutes": 5,
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": (
+            'python3 ".github/scripts/private-forks.py" fetch '
+            '--manifest-path "rust/Cargo.toml"'
+        ),
+    }
+    assert "PRIVATE_FORKS_READ_TOKEN" not in workflow.get("env", {})
+    assert "PRIVATE_FORKS_READ_TOKEN" not in job.get("env", {})
+    for index, step in enumerate(steps):
+        if index == fetch or step.get("uses", "").startswith("docker/build-push-action@"):
+            continue
+        assert "PRIVATE_FORKS_READ_TOKEN" not in step.get("env", {})
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:

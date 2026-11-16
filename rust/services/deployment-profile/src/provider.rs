@@ -6,7 +6,7 @@ use marty_flow::{
 };
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles,
+    KeylessGrpcTransportOptions,
 };
 use mmf_security::TenantMembershipProvider;
 
@@ -16,27 +16,21 @@ pub async fn tenant_membership_provider(
     config: &DeploymentServiceConfig,
 ) -> Result<Arc<dyn TenantMembershipProvider>, DeploymentError> {
     let channel = if let Some(files) = &config.workload_tls {
-        OpenBaoTlsIdentityFiles {
-            certificate_chain_file: files.certificate.clone(),
-            kms_ca_cert_file: files.kms_ca_certificate.clone(),
-            kms_endpoint: files.kms_endpoint.clone(),
-            kms_token_file: files.kms_token_file.clone(),
-            kms_key_name: files.kms_key_name.clone(),
-            kms_key_version: files.kms_key_version,
-            request_timeout: config.dependency_timeout,
-            max_concurrent_signs: 64,
-        }
-        .grpc_channel_connected(
-            &config.organization_grpc_target,
-            &files.ca_certificate,
-            KeylessGrpcTransportOptions {
-                connect_timeout: config.dependency_timeout,
-                request_timeout: config.dependency_timeout,
-                ..KeylessGrpcTransportOptions::default()
-            },
-        )
-        .await
-        .map_err(|_| unavailable("Organization keyless gRPC connection is unavailable"))?
+        files
+            .identity
+            .clone()
+            .with_request_timeout(config.dependency_timeout)
+            .grpc_channel_connected(
+                &config.organization_grpc_target,
+                &files.ca_certificate,
+                KeylessGrpcTransportOptions {
+                    connect_timeout: config.dependency_timeout,
+                    request_timeout: config.dependency_timeout,
+                    ..KeylessGrpcTransportOptions::default()
+                },
+            )
+            .await
+            .map_err(|_| unavailable("Organization keyless gRPC connection is unavailable"))?
     } else {
         let (target, security, trust) = match &config.workload_tls {
             None if config.organization_grpc_target.starts_with("https://") => (

@@ -21,68 +21,6 @@ mod startup_snapshot;
 
 const TOKEN_HMAC_KEY: &str = "synthetic-fresh-main-hmac";
 const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";
-const CREDENTIAL_GRANT_KEY: &str =
-    marty_signing_grant::SigningOrigin::IssuanceCredential.transit_key_name();
-
-async fn credential_grant_token(directory: &std::path::Path, base_url: &str) -> std::path::PathBuf {
-    let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
-    let ca_file = std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap();
-    let client = super::issuance_named_peers::canvas_openbao_client(std::path::Path::new(&ca_file));
-    let key_url = format!("{base_url}/v1/transit/keys/{CREDENTIAL_GRANT_KEY}");
-    let lookup = client
-        .get(&key_url)
-        .header("X-Vault-Token", &root)
-        .send()
-        .await
-        .unwrap();
-    if lookup.status() == StatusCode::NOT_FOUND {
-        let created = client.post(&key_url).header("X-Vault-Token", &root)
-            .json(&json!({"type":"hmac","key_size":32,"exportable":false,"allow_plaintext_backup":false}))
-            .send().await.unwrap();
-        assert!(created.status().is_success() || created.status() == StatusCode::BAD_REQUEST);
-    } else {
-        lookup.error_for_status().unwrap();
-    }
-    let metadata: Value = client
-        .get(&key_url)
-        .header("X-Vault-Token", &root)
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    assert_eq!(metadata["data"]["type"], "hmac");
-    assert_eq!(metadata["data"]["exportable"], false);
-    assert_eq!(metadata["data"]["allow_plaintext_backup"], false);
-    let policy_name = format!("canvas-credential-grant-{}", uuid::Uuid::new_v4().simple());
-    client.put(format!("{base_url}/v1/sys/policies/acl/{policy_name}"))
-        .header("X-Vault-Token", &root)
-        .json(&json!({"policy":format!("path \"transit/hmac/{CREDENTIAL_GRANT_KEY}/sha2-256\" {{ capabilities = [\"update\"] }}")}))
-        .send().await.unwrap().error_for_status().unwrap();
-    let issued: Value = client
-        .post(format!("{base_url}/v1/auth/token/create"))
-        .header("X-Vault-Token", &root)
-        .json(&json!({"policies":[policy_name],"no_default_policy":true,"ttl":"1h"}))
-        .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json()
-        .await
-        .unwrap();
-    let token_file = directory.join("credential-grant-openbao-token");
-    std::fs::write(
-        &token_file,
-        issued["auth"]["client_token"].as_str().unwrap(),
-    )
-    .unwrap();
-    token_file
-}
-
 fn access_token_digest(token: &str) -> String {
     let mut hmac = Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes()).unwrap();
     hmac.update(token.as_bytes());
@@ -209,6 +147,17 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
     } else {
         &[(false, true), (true, true)]
     };
+    // One registered sender remains unchanged across all process cases. The
+    // enclosing parent owns namespace Redis and removes it after the child exits.
+    let sender_directory = tempfile::tempdir().unwrap();
+    let remote_sender = RemoteSenderFixture::create_with_redis(
+        sender_directory.path(),
+        ISSUER,
+        ORGANIZATION,
+        rendered_redis,
+    )
+    .await;
+    let credential_grant_file = remote_sender.registered.mint_file.clone();
     for &(authenticated, allow_private_ips) in cases {
         let CaseDatabaseKeys {
             mode,
@@ -219,11 +168,6 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         let wallet = WalletFixture::start(200);
         let endpoint = format!("{}/inbox", wallet.origin);
         let (mut recipient, recipient_secret) = holder_with_id(HOLDER);
-        let remote_sender =
-            RemoteSenderFixture::create(wallet.ca_file.parent().unwrap(), ISSUER, ORGANIZATION)
-                .await;
-        let credential_grant_file =
-            credential_grant_token(wallet.ca_file.parent().unwrap(), &remote_sender.base_url).await;
         let signer = Arc::new(
             RemoteIssuerSigner::create(
                 &remote_sender.base_url,
@@ -300,7 +244,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "fresh-main-policy.json"
             });
         let encryption = if authenticated {
-            json!({"mode":"authcrypt","sender_key_ref":remote_sender.reference})
+            json!({"mode":"authcrypt"})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -428,9 +372,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
                 "kms_url":remote_sender.base_url, "kms_ca_file":remote_sender.ca_file,
-                "kms_token_file":remote_sender.token_file,
-                "integration_secret_kms_url":super::issuance_process::remote_integration_secret::base_url(),
-                "integration_secret_kms_ca_file":super::issuance_process::remote_integration_secret::ca_file(),
+                "integration_secret_kms_url":remote_sender.registered.url,
+                "integration_secret_kms_ca_file":remote_sender.registered.ca_file,
                 "authcrypt":authenticated, "allow_private_ips":allow_private_ips
             });
             // Native-only stage reserves but does not launch the gateway. The
@@ -476,9 +419,14 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
                 .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
                 .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
-                .env("DIDCOMM_KMS_ADDR", &remote_sender.base_url)
-                .env("DIDCOMM_KMS_CA_CERT_FILE", &remote_sender.ca_file)
-                .env("DIDCOMM_KMS_TOKEN_FILE", &remote_sender.token_file)
+                .env(
+                    "INTEGRATION_SECRET_KMS_URL",
+                    remote_sender.registered.url.as_str(),
+                )
+                .env(
+                    "INTEGRATION_SECRET_KMS_CA_FILE",
+                    &remote_sender.registered.ca_file,
+                )
                 .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
             command
         };

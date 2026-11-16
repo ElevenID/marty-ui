@@ -134,14 +134,11 @@ impl NativeCredentialTemplateControlPlane {
     }
 
     fn grpc_request<T>(&self, body: T) -> Request<T> {
-        let mut request = Request::new(body);
-        request.set_timeout(self.timeout);
-        if let Some(token) = &self.service_token {
-            request
-                .metadata_mut()
-                .insert(SERVICE_TOKEN_HEADER, token.clone());
-        }
-        request
+        marty_service_runtime::grpc_request::with_service_token(
+            body,
+            self.timeout,
+            self.service_token.as_ref(),
+        )
     }
 
     async fn membership(
@@ -241,6 +238,14 @@ impl NativeCredentialTemplateControlPlane {
         if response.status() == StatusCode::NOT_FOUND {
             return Err(ControlPlaneError::TrustProfileRejected(
                 "trust_profile_id does not reference a Trust Profile".into(),
+            ));
+        }
+        if response.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            // The dependency answered and rejected its current policy or issuer
+            // keys. Retrying an unchanged draft cannot repair that configuration.
+            // Do not relay its response body, which is outside this API's contract.
+            return Err(ControlPlaneError::TrustProfileRejected(
+                "The selected Trust Profile cannot be validated. Review its issuer keys and policy before retrying activation.".into(),
             ));
         }
         if !response.status().is_success() {
@@ -624,6 +629,65 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn trust_profile_http_rejection_is_distinct_from_dependency_failure() {
+        use axum::{http::HeaderMap, routing::get, Json, Router};
+
+        for status in [
+            StatusCode::UNPROCESSABLE_ENTITY,
+            StatusCode::NOT_FOUND,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::OK,
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().route(
+                        "/internal/v1/trust-profiles/profile-1",
+                        get(move |headers: HeaderMap| async move {
+                            assert_eq!(headers["x-service-token"], "existing-service-token");
+                            (status, Json(json!({"detail": "private-upstream-diagnostic", "id": "profile-1"})))
+                        }),
+                    ),
+                )
+                .await
+                .unwrap();
+            });
+            let control_plane = NativeCredentialTemplateControlPlane::connect_lazy(
+                "http://127.0.0.1:1",
+                "http://127.0.0.1:1",
+                Some("existing-service-token"),
+                "http://127.0.0.1:1/internal",
+                None,
+                format!("http://{address}"),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+            let result = control_plane.trust_profile("profile-1").await;
+            server.abort();
+            match status {
+                StatusCode::OK => assert_eq!(result.unwrap()["id"], "profile-1"),
+                StatusCode::UNPROCESSABLE_ENTITY | StatusCode::NOT_FOUND => {
+                    assert!(matches!(
+                        &result,
+                        Err(ControlPlaneError::TrustProfileRejected(_))
+                    ));
+                    let message = result.unwrap_err().to_string();
+                    assert!(!message.contains("private-upstream-diagnostic"));
+                    if status == StatusCode::UNPROCESSABLE_ENTITY {
+                        assert!(message.contains("Review its issuer keys and policy"));
+                    }
+                }
+                _ => assert!(matches!(result, Err(ControlPlaneError::Unavailable(_)))),
+            }
+        }
+    }
 
     fn fixture() -> Value {
         serde_json::from_str(include_str!(concat!(

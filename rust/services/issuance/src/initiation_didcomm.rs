@@ -16,6 +16,10 @@ use marty_didcomm::{
     encrypt_for_recipient, pack_credential_for_holder, unpack_didcomm_message, DidDocument,
     DidResolver,
 };
+use marty_signing_grant::didcomm::{
+    public_key_bytes, DidcommKeyReference, DidcommOperationBinding, DidcommPackPhase,
+    DidcommPackRequest, RemoteRecipientPublic,
+};
 use reqwest::{redirect::Policy, Certificate, Client, Url};
 use serde::{
     de::{self, MapAccess, Visitor},
@@ -28,11 +32,12 @@ use url::Host;
 use crate::{
     credential::{
         apply_issuer_context, didcomm_format_policy, materialize_credential,
-        reserved_credential_id, CredentialBuilder, CredentialIssuanceError, CredentialLifecycle,
-        CredentialMaterializationContext, CredentialTransaction, CredentialTransactionStatus,
-        IssuedCredential, IssuerContextResolver, VerifiedCredentialProof,
+        reject_retired_open_badge, reserved_credential_id, CredentialBuilder,
+        CredentialIssuanceError, CredentialLifecycle, CredentialMaterializationContext,
+        CredentialTransaction, CredentialTransactionStatus, IssuedCredential,
+        IssuerContextResolver, VerifiedCredentialProof,
     },
-    didcomm_remote_kms::{DidcommKeyReference, RemoteDidcommKms, RemoteRecipientPublic},
+    didcomm_kms::RegisteredDidcommKms,
     initiation_response::{
         InitiationDidcommDelivery, InitiationDidcommDeliveryError, InitiationDidcommDeliveryReceipt,
     },
@@ -69,6 +74,8 @@ pub enum NativeDidcommError {
     EndpointNotPublic,
     #[error("DIDComm encryption policy is unavailable")]
     EncryptionPolicyUnavailable,
+    #[error("DIDComm authcrypt requires a registered OpenBao extension")]
+    CapabilityUnavailable,
     #[error("DIDComm sender authentication is unavailable")]
     SenderAuthenticationUnavailable,
     #[error("holder DID has no compatible DIDComm key agreement")]
@@ -348,6 +355,7 @@ pub trait DidcommEnvelopePort: Send + Sync {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError>;
@@ -390,7 +398,7 @@ pub trait DidcommTransportPort: Send + Sync {
 pub struct NativeDidcommEnvelope {
     resolver: Arc<DidResolver>,
     policy_file: Option<Arc<PathBuf>>,
-    remote_kms: Option<Arc<RemoteDidcommKms>>,
+    remote_kms: Option<Arc<RegisteredDidcommKms>>,
 }
 
 impl fmt::Debug for NativeDidcommEnvelope {
@@ -423,7 +431,7 @@ impl NativeDidcommEnvelope {
     }
 
     #[must_use]
-    pub fn with_remote_kms(mut self, remote_kms: RemoteDidcommKms) -> Self {
+    pub fn with_registered_kms(mut self, remote_kms: RegisteredDidcommKms) -> Self {
         self.remote_kms = Some(Arc::new(remote_kms));
         self
     }
@@ -455,6 +463,7 @@ impl NativeDidcommEnvelope {
     pub async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
@@ -469,33 +478,37 @@ impl NativeDidcommEnvelope {
                     .map_err(|_| NativeDidcommError::IncompatibleKeyAgreement)?;
                 PreparedEncryptionMode::Anoncrypt
             }
-            ActiveEncryptionPolicy::Authcrypt(key_reference) => {
-                if key_reference.tenant() != organization_id {
+            ActiveEncryptionPolicy::Authcrypt(legacy_reference) => {
+                if legacy_reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.tenant() != organization_id)
+                {
                     return Err(NativeDidcommError::SenderAuthenticationUnavailable);
                 }
                 let kms = self
                     .remote_kms
                     .as_ref()
-                    .ok_or(NativeDidcommError::SenderAuthenticationUnavailable)?;
+                    .ok_or(NativeDidcommError::CapabilityUnavailable)?;
+                let binding = kms.resolve(organization_id, issuer_did).await?;
+                if legacy_reference
+                    .as_ref()
+                    .is_some_and(|reference| reference.to_string() != binding.key_reference)
+                {
+                    return Err(NativeDidcommError::SenderAuthenticationUnavailable);
+                }
                 let sender_document = self
                     .resolver
                     .resolve(issuer_did)
                     .await
                     .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
-                if sender_document.id != issuer_did {
-                    return Err(NativeDidcommError::SenderAuthenticationUnavailable);
-                }
-                let sender = kms
-                    .public_key(&key_reference, issuer_did)
-                    .await
+                let public = public_key_bytes(&binding.public_key)
                     .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
-                if !sender_document
-                    .x25519_key_agreement_methods()
-                    .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?
-                    .iter()
-                    .any(|(kid, public)| {
-                        kid == &sender.sender_key_id && public == &sender.public_key
-                    })
+                if sender_document.id != issuer_did
+                    || !sender_document
+                        .x25519_key_agreement_methods()
+                        .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?
+                        .iter()
+                        .any(|(kid, key)| kid == &binding.sender_key_id && key == &public)
                 {
                     return Err(NativeDidcommError::SenderAuthenticationUnavailable);
                 }
@@ -508,18 +521,21 @@ impl NativeDidcommEnvelope {
                 if recipients.is_empty() || recipients.len() > 32 {
                     return Err(NativeDidcommError::IncompatibleKeyAgreement);
                 }
-                kms.pack(
-                    &key_reference,
-                    &sender.sender_key_id,
-                    &recipient_document.id,
-                    &recipients,
-                    &plaintext,
-                )
-                .await
-                .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable)?;
+                kms.pack(&DidcommPackRequest {
+                    organization_id: organization_id.into(),
+                    issuer_did: issuer_did.into(),
+                    operation_id: operation_id.into(),
+                    phase: DidcommPackPhase::Preflight,
+                    binding: binding.clone(),
+                    recipient_did: recipient_document.id.clone(),
+                    recipients: recipients.clone(),
+                    plaintext,
+                })
+                .await?;
                 PreparedEncryptionMode::Authcrypt {
-                    key_reference,
-                    sender_key_id: sender.sender_key_id,
+                    organization_id: organization_id.into(),
+                    operation_id: operation_id.into(),
+                    binding,
                     recipients,
                 }
             }
@@ -571,22 +587,26 @@ impl NativeDidcommEnvelope {
                     .map_err(|_| NativeDidcommError::IncompatibleKeyAgreement)
             }
             PreparedEncryptionMode::Authcrypt {
-                key_reference,
-                sender_key_id,
+                organization_id,
+                operation_id,
+                binding,
                 recipients,
-            } => self
-                .remote_kms
-                .as_ref()
-                .ok_or(NativeDidcommError::SenderAuthenticationUnavailable)?
-                .pack(
-                    key_reference,
-                    sender_key_id,
-                    &prepared.recipient_document.id,
-                    recipients,
-                    plaintext,
-                )
-                .await
-                .map_err(|_| NativeDidcommError::SenderAuthenticationUnavailable),
+            } => {
+                self.remote_kms
+                    .as_ref()
+                    .ok_or(NativeDidcommError::CapabilityUnavailable)?
+                    .pack(&DidcommPackRequest {
+                        organization_id: organization_id.clone(),
+                        issuer_did: prepared.issuer_did.clone(),
+                        operation_id: operation_id.clone(),
+                        phase: DidcommPackPhase::Delivery,
+                        binding: binding.clone(),
+                        recipient_did: prepared.recipient_document.id.clone(),
+                        recipients: recipients.clone(),
+                        plaintext: plaintext.into(),
+                    })
+                    .await
+            }
         }
     }
 }
@@ -603,12 +623,14 @@ impl DidcommEnvelopePort for NativeDidcommEnvelope {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
         NativeDidcommEnvelope::prepare_encryption(
             self,
             organization_id,
+            operation_id,
             issuer_did,
             recipient_document,
         )
@@ -677,8 +699,9 @@ impl fmt::Debug for PreparedDidcommEncryption {
 enum PreparedEncryptionMode {
     Anoncrypt,
     Authcrypt {
-        key_reference: DidcommKeyReference,
-        sender_key_id: String,
+        organization_id: String,
+        operation_id: String,
+        binding: DidcommOperationBinding,
         recipients: Vec<RemoteRecipientPublic>,
     },
 }
@@ -979,6 +1002,8 @@ pub enum NativeInitiationDidcommDeliveryError {
     Prerequisite(NativeDidcommError),
     #[error("credential materialization is unavailable")]
     CredentialUnavailable,
+    #[error("Open Badges 2.0 is retired; request a newly issued Open Badges 3.0 credential")]
+    RetiredOpenBadge,
     #[error("another delivery attempt owns the issuance transaction")]
     ConcurrentDelivery,
     #[error("DIDComm delivery outcome is unknown and requires reconciliation")]
@@ -1089,13 +1114,15 @@ impl NativeInitiationDidcommDelivery {
         transaction: &CredentialTransaction,
         holder_did: &str,
     ) -> Result<NativeInitiationDidcommDeliveryReceipt, NativeInitiationDidcommDeliveryError> {
-        match self
+        let transport_outcome = self
             .ports
             .repository
             .claim_transport(&transaction.organization_id, &transaction.id, holder_did)
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?
-        {
+            .map_err(|_| NativeInitiationDidcommDeliveryError::CredentialUnavailable)?;
+        self.reject_retired_delivery_work(transaction, &transport_outcome)
+            .await?;
+        match transport_outcome {
             InitiationDidcommTransportClaimOutcome::Claimed(claim) => {
                 Self::validate_pending_delivery(transaction, holder_did, claim.pending())?;
                 let endpoint = match self
@@ -1186,6 +1213,7 @@ impl NativeInitiationDidcommDelivery {
             .envelope
             .prepare_encryption(
                 &transaction.organization_id,
+                &transaction.id,
                 &issuer.issuer_did,
                 recipient.document,
             )
@@ -1218,11 +1246,15 @@ impl NativeInitiationDidcommDelivery {
         .await
         {
             Ok(issued) => issued,
-            Err(_) => {
+            Err(error) => {
                 return self
                     .release_failure(
                         &claim,
-                        NativeInitiationDidcommDeliveryError::CredentialUnavailable,
+                        if error == CredentialIssuanceError::RetiredOpenBadge {
+                            NativeInitiationDidcommDeliveryError::RetiredOpenBadge
+                        } else {
+                            NativeInitiationDidcommDeliveryError::CredentialUnavailable
+                        },
                     )
                     .await
             }
@@ -1252,11 +1284,15 @@ impl NativeInitiationDidcommDelivery {
             .await
         {
             Ok(encrypted) => encrypted,
-            Err(_) => {
+            Err(error) => {
                 return self
                     .release_failure(
                         &claim,
-                        NativeInitiationDidcommDeliveryError::DidcommUnavailable,
+                        if error == NativeDidcommError::CapabilityUnavailable {
+                            NativeInitiationDidcommDeliveryError::Prerequisite(error)
+                        } else {
+                            NativeInitiationDidcommDeliveryError::DidcommUnavailable
+                        },
                     )
                     .await
             }
@@ -1281,7 +1317,7 @@ impl NativeInitiationDidcommDelivery {
                 )
                 .await;
         }
-        let transport_claim = match self
+        let transport_outcome = self
             .ports
             .repository
             .claim_transport(
@@ -1290,8 +1326,10 @@ impl NativeInitiationDidcommDelivery {
                 holder_did,
             )
             .await
-            .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?
-        {
+            .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+        self.reject_retired_delivery_work(&claim.transaction, &transport_outcome)
+            .await?;
+        let transport_claim = match transport_outcome {
             InitiationDidcommTransportClaimOutcome::Claimed(claim) => claim,
             InitiationDidcommTransportClaimOutcome::Busy => {
                 return Err(NativeInitiationDidcommDeliveryError::ConcurrentDelivery)
@@ -1316,6 +1354,44 @@ impl NativeInitiationDidcommDelivery {
         };
         Self::validate_pending_delivery(&claim.transaction, holder_did, transport_claim.pending())?;
         self.deliver_claimed(transport_claim, endpoint).await
+    }
+
+    async fn reject_retired_delivery_work(
+        &self,
+        transaction: &CredentialTransaction,
+        outcome: &InitiationDidcommTransportClaimOutcome,
+    ) -> Result<(), NativeInitiationDidcommDeliveryError> {
+        // Only terminal receipts may be read without activating the credential.
+        // Transported recovery still runs lifecycle and mirror work, so it is
+        // subject to the same gate as a new issuance or a pending transport.
+        let pending = match outcome {
+            InitiationDidcommTransportClaimOutcome::Claimed(claim) => Some(claim.pending()),
+            InitiationDidcommTransportClaimOutcome::Transported(pending) => Some(pending.as_ref()),
+            InitiationDidcommTransportClaimOutcome::Absent => None,
+            InitiationDidcommTransportClaimOutcome::Delivered(_)
+            | InitiationDidcommTransportClaimOutcome::OutcomeUnknown(_, _)
+            | InitiationDidcommTransportClaimOutcome::Busy
+            | InitiationDidcommTransportClaimOutcome::BindingMismatch => return Ok(()),
+        };
+        if reject_retired_open_badge(transaction, None).is_err()
+            || pending.is_some_and(|pending| {
+                reject_retired_open_badge(
+                    &pending.transaction,
+                    Some(&pending.credential.credential),
+                )
+                .is_err()
+            })
+        {
+            if let InitiationDidcommTransportClaimOutcome::Claimed(claim) = outcome {
+                self.ports
+                    .repository
+                    .mark_transport_unattempted(claim)
+                    .await
+                    .map_err(|_| NativeInitiationDidcommDeliveryError::RetryStateUnavailable)?;
+            }
+            return Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge);
+        }
+        Ok(())
     }
 
     async fn deliver_claimed(
@@ -1504,13 +1580,18 @@ impl InitiationDidcommDelivery for NativeInitiationDidcommDelivery {
                 service_endpoint: receipt.service_endpoint,
                 delivered: receipt.status == NativeDidcommDeliveryStatus::Delivered,
             })
-            .map_err(|_| InitiationDidcommDeliveryError)
+            .map_err(|error| match error {
+                NativeInitiationDidcommDeliveryError::Prerequisite(
+                    NativeDidcommError::CapabilityUnavailable,
+                ) => InitiationDidcommDeliveryError::CapabilityUnavailable,
+                _ => InitiationDidcommDeliveryError::Unavailable,
+            })
     }
 }
 
 enum ActiveEncryptionPolicy {
     Anoncrypt,
-    Authcrypt(DidcommKeyReference),
+    Authcrypt(Option<DidcommKeyReference>),
 }
 
 #[derive(Deserialize)]
@@ -1522,7 +1603,7 @@ struct EncryptionPolicyFile {
 
 enum ConfiguredIssuerPolicy {
     Anoncrypt,
-    Authcrypt { sender_key_ref: String },
+    Authcrypt { sender_key_ref: Option<String> },
 }
 
 impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
@@ -1552,6 +1633,9 @@ impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
                 let mode = values.get("mode").and_then(serde_json::Value::as_str);
                 match mode {
                     Some("anoncrypt") if values.len() == 1 => Ok(Self::Value::Anoncrypt),
+                    Some("authcrypt") if values.len() == 1 => Ok(Self::Value::Authcrypt {
+                        sender_key_ref: None,
+                    }),
                     Some("authcrypt")
                         if values.len() == 2 && values.contains_key("sender_key_ref") =>
                     {
@@ -1561,7 +1645,9 @@ impl<'de> Deserialize<'de> for ConfiguredIssuerPolicy {
                             .ok_or_else(|| {
                                 de::Error::custom("authcrypt sender key must be a reference string")
                             })?;
-                        Ok(Self::Value::Authcrypt { sender_key_ref })
+                        Ok(Self::Value::Authcrypt {
+                            sender_key_ref: Some(sender_key_ref),
+                        })
                     }
                     _ => Err(de::Error::custom(
                         "DIDComm encryption policy entry has invalid fields or mode",
@@ -1649,13 +1735,18 @@ fn load_active_policy(
     for (did, configured) in std::mem::take(&mut policy.issuers.0) {
         let resolved = match configured {
             ConfiguredIssuerPolicy::Anoncrypt => ActiveEncryptionPolicy::Anoncrypt,
-            ConfiguredIssuerPolicy::Authcrypt { sender_key_ref } => {
+            ConfiguredIssuerPolicy::Authcrypt {
+                sender_key_ref: None,
+            } => ActiveEncryptionPolicy::Authcrypt(None),
+            ConfiguredIssuerPolicy::Authcrypt {
+                sender_key_ref: Some(sender_key_ref),
+            } => {
                 let key = DidcommKeyReference::parse(&sender_key_ref)
                     .map_err(|_| NativeDidcommError::EncryptionPolicyUnavailable)?;
                 if !used_authcrypt_keys.insert(sender_key_ref) {
                     return Err(NativeDidcommError::EncryptionPolicyUnavailable);
                 }
-                ActiveEncryptionPolicy::Authcrypt(key)
+                ActiveEncryptionPolicy::Authcrypt(Some(key))
             }
         };
         if did == issuer_did {
@@ -1790,6 +1881,9 @@ mod tests {
 
     fn transaction() -> CredentialTransaction {
         CredentialTransaction {
+            jwt_vc_profile: None,
+            jwt_vc_signing_timing: None,
+
             id: "transaction-1".to_owned(),
             organization_id: "org-a".to_owned(),
             credential_template_id: "template-a".to_owned(),
@@ -2311,6 +2405,7 @@ mod tests {
         async fn prepare_encryption(
             &self,
             _organization_id: &str,
+            _operation_id: &str,
             _issuer_did: &str,
             recipient_document: DidDocument,
         ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
@@ -3294,6 +3389,7 @@ mod tests {
             (NativeDidcommError::IncompatibleKeyAgreement, false),
             (NativeDidcommError::EncryptionPolicyUnavailable, false),
             (NativeDidcommError::SenderAuthenticationUnavailable, false),
+            (NativeDidcommError::CapabilityUnavailable, false),
         ] {
             let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
                 endpoint_fail: false,
@@ -3370,6 +3466,35 @@ mod tests {
             assert!(!observed.contains(&"transport"));
             assert_eq!(observed.contains(&"encrypt"), !packing);
         }
+    }
+
+    #[tokio::test]
+    async fn removed_authcrypt_capability_releases_the_claim_without_staging_or_delivery() {
+        let (mut delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        delivery.ports.envelope = Arc::new(HarnessEnvelope {
+            order: order.clone(),
+            resolve_error: None,
+            prepare_error: None,
+            pack_error: None,
+            encrypt_error: Some(NativeDidcommError::CapabilityUnavailable),
+        });
+        assert_eq!(
+            delivery
+                .deliver_native(&transaction(), "did:example:holder")
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::CapabilityUnavailable
+            ))
+        );
+        assert_eq!(repository.releases.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+        assert!(repository.delivery.lock().unwrap().is_none());
+        assert_eq!(order.lock().unwrap().last(), Some(&"release"));
     }
 
     #[tokio::test]
@@ -3537,6 +3662,158 @@ mod tests {
             ["validate-endpoint", "transport", "mark-transport-failed"]
         );
         assert_eq!(repository.finalizations.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn retired_ob2_new_deliveries_fail_before_prerequisite_work() {
+        for document_marker in [false, true] {
+            let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                endpoint_fail: false,
+                builder_fail: false,
+                transport_outcome: DidcommTransportOutcome::Delivered,
+                post_issuance_fail: false,
+            });
+            let mut current = transaction();
+            if document_marker {
+                current.claims.insert(
+                    "_credential_document".into(),
+                    json!({
+                        "@context": "https://w3id.org/openbadges/v2", "type": "Assertion"
+                    }),
+                );
+            } else {
+                current.credential_type = Some("OpenBadgeV2".into());
+            }
+            assert_eq!(
+                delivery
+                    .deliver_native(&current, "did:example:holder")
+                    .await,
+                Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge)
+            );
+            assert!(order.lock().unwrap().is_empty());
+            assert!(repository.delivery.lock().unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn retired_ob2_pending_or_transported_deliveries_cannot_activate_credentials() {
+        let legacy = json!({
+            "@context": "https://w3id.org/openbadges/v2",
+            "type": "Assertion"
+        });
+        let legacy_jwt = format!(
+            "{}.{}.signature",
+            URL_SAFE_NO_PAD.encode(json!({"alg": "ES256"}).to_string()),
+            URL_SAFE_NO_PAD.encode(json!({"vc": legacy}).to_string())
+        );
+        for transported in [false, true] {
+            for case in [
+                "stored_json",
+                "stored_jwt",
+                "stored_sd_jwt",
+                "pending_type",
+                "pending_document",
+                "current_type",
+                "current_document",
+            ] {
+                let (delivery, repository, order) = delivery_harness(HarnessOptions {
+                    endpoint_fail: false,
+                    builder_fail: false,
+                    transport_outcome: DidcommTransportOutcome::Delivered,
+                    post_issuance_fail: false,
+                });
+                let mut current = transaction();
+                let mut pending = staged_pending_delivery();
+                pending.transported = transported;
+                match case {
+                    "stored_json" => pending.credential.credential = legacy.to_string(),
+                    "stored_jwt" => pending.credential.credential = legacy_jwt.clone(),
+                    "stored_sd_jwt" => pending.credential.credential = format!("{legacy_jwt}~"),
+                    "pending_type" => {
+                        pending.transaction.credential_type = Some("OpenBadgeV2".into())
+                    }
+                    "pending_document" => {
+                        pending
+                            .transaction
+                            .claims
+                            .insert("_credential_document".into(), legacy.clone());
+                    }
+                    "current_type" => current.credential_type = Some("OpenBadgeV2".into()),
+                    "current_document" => {
+                        current
+                            .claims
+                            .insert("_credential_document".into(), legacy.clone());
+                    }
+                    _ => unreachable!(),
+                }
+                let before = InitiationDidcommDeliveryState::Pending(Box::new(pending));
+                *repository.delivery.lock().unwrap() = Some(before.clone());
+                assert_eq!(
+                    delivery
+                        .deliver_native(&current, "did:example:holder")
+                        .await,
+                    Err(NativeInitiationDidcommDeliveryError::RetiredOpenBadge),
+                    "{case}; transported={transported}"
+                );
+                assert!(
+                    !order.lock().unwrap().iter().any(|stage| matches!(
+                        *stage,
+                        "build" | "allocate-status" | "transport" | "after-didcomm"
+                    )),
+                    "{case}"
+                );
+                assert_eq!(*repository.delivery.lock().unwrap(), Some(before));
+                assert_eq!(
+                    *repository.transport_claim.lock().unwrap(),
+                    HarnessTransportClaimState::Idle,
+                    "rejection must release the claim without rewriting the archived payload"
+                );
+                assert_eq!(repository.finalizations.load(Ordering::SeqCst), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn current_ob3_transported_recovery_and_terminal_receipts_do_not_resend() {
+        let (delivery, repository, order) = delivery_harness(HarnessOptions {
+            endpoint_fail: false,
+            builder_fail: false,
+            transport_outcome: DidcommTransportOutcome::Delivered,
+            post_issuance_fail: false,
+        });
+        let mut current = transaction();
+        current.credential_type = Some("OpenBadgeCredential".into());
+        let mut pending = staged_pending_delivery();
+        pending.transaction.credential_type = current.credential_type.clone();
+        pending.credential.credential = json!({
+            "@context": "https://w3id.org/openbadges/v3",
+            "type": ["VerifiableCredential", "OpenBadgeCredential"]
+        })
+        .to_string();
+        pending.transported = true;
+        *repository.delivery.lock().unwrap() =
+            Some(InitiationDidcommDeliveryState::Pending(Box::new(pending)));
+        let receipt = delivery
+            .deliver_native(&current, "did:example:holder")
+            .await
+            .unwrap();
+        assert_eq!(receipt.status, NativeDidcommDeliveryStatus::Delivered);
+        assert_eq!(*order.lock().unwrap(), ["after-didcomm"]);
+
+        // A terminal receipt carries only identifiers and status. Reading it
+        // remains safe even if an archived transaction uses a retired label.
+        order.lock().unwrap().clear();
+        current.credential_type = Some("OpenBadgeV2".into());
+        let before = repository.delivery.lock().unwrap().clone();
+        assert_eq!(
+            delivery
+                .deliver_native(&current, "did:example:holder")
+                .await
+                .unwrap(),
+            receipt
+        );
+        assert!(order.lock().unwrap().is_empty());
+        assert_eq!(*repository.delivery.lock().unwrap(), before);
     }
 
     #[tokio::test]
@@ -3882,7 +4159,12 @@ mod tests {
     async fn anoncrypt_preflight_is_frozen_and_reused_for_delivery() {
         let envelope = NativeDidcommEnvelope::new(None, None, None);
         let prepared = envelope
-            .prepare_encryption("organization-1", "did:example:issuer", recipient_document())
+            .prepare_encryption(
+                "organization-1",
+                "operation-1",
+                "did:example:issuer",
+                recipient_document(),
+            )
             .await
             .unwrap();
         assert_eq!(prepared.mode.name(), "anoncrypt");
@@ -3969,7 +4251,12 @@ mod tests {
         assert_eq!(resolved.endpoint, endpoint);
         assert_embedded_key_binding(&resolved.document, &holder_did, expected_key);
         let prepared = envelope
-            .prepare_encryption("organization-1", &sender.id, resolved.document)
+            .prepare_encryption(
+                "organization-1",
+                "operation-1",
+                &sender.id,
+                resolved.document,
+            )
             .await
             .unwrap();
         let packed = envelope
@@ -4009,17 +4296,22 @@ mod tests {
         ));
         assert_eq!(
             envelope
-                .prepare_encryption("other-organization", &sender.id, recipient.clone())
+                .prepare_encryption(
+                    "other-organization",
+                    "operation-1",
+                    &sender.id,
+                    recipient.clone()
+                )
                 .await
                 .err(),
             Some(NativeDidcommError::SenderAuthenticationUnavailable)
         );
         assert_eq!(
             envelope
-                .prepare_encryption("organization-1", &sender.id, recipient)
+                .prepare_encryption("organization-1", "operation-1", &sender.id, recipient)
                 .await
                 .err(),
-            Some(NativeDidcommError::SenderAuthenticationUnavailable),
+            Some(NativeDidcommError::CapabilityUnavailable),
             "missing remote KMS must not downgrade authcrypt to anoncrypt"
         );
         std::fs::remove_file(policy).unwrap();
@@ -4046,6 +4338,26 @@ mod tests {
             );
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn provider_neutral_authcrypt_policy_fails_explicitly_without_registered_extension() {
+        let issuer = "did:example:issuer";
+        let policy =
+            policy_file(&json!({"version":1,"issuers":{issuer:{"mode":"authcrypt"}}}).to_string());
+        assert!(matches!(
+            load_active_policy(Some(&policy), issuer),
+            Ok(ActiveEncryptionPolicy::Authcrypt(None))
+        ));
+        let envelope = NativeDidcommEnvelope::new(None, None, Some(policy.to_str().unwrap()));
+        assert_eq!(
+            envelope
+                .prepare_encryption("org-a", "transaction-a", issuer, recipient_document())
+                .await
+                .err(),
+            Some(NativeDidcommError::CapabilityUnavailable)
+        );
+        std::fs::remove_file(policy).unwrap();
     }
 
     #[test]

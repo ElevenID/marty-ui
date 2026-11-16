@@ -17,7 +17,6 @@ use marty_notification::{
 use sqlx::postgres::PgPoolOptions;
 use std::{env, error::Error, fs, future::Future, io, net::SocketAddr, pin::Pin, sync::Arc};
 use subtle::ConstantTimeEq;
-use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
 use tonic::{metadata::MetadataMap, service::Interceptor, transport::Server, Request, Status};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -130,6 +129,7 @@ fn address(port_name: &str, default: u16) -> Result<SocketAddr, io::Error> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    marty_service_runtime::install_tls_crypto_provider();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -188,15 +188,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
             if let Some(acceptor) = tls_acceptor {
                 let listener = tokio::net::TcpListener::bind(grpc_address).await?;
-                let incoming = TcpListenerStream::new(listener).then(move |connection| {
-                    let acceptor = acceptor.clone();
-                    async move {
-                        match connection {
-                            Ok(stream) => acceptor.accept(stream).await,
-                            Err(error) => Err(error),
-                        }
-                    }
-                });
+                let incoming = marty_service_runtime::keyless_incoming(listener, acceptor);
                 Box::pin(router.serve_with_incoming(incoming))
             } else {
                 Box::pin(router.serve(grpc_address))

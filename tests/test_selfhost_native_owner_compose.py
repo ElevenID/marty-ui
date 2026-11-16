@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 
@@ -27,11 +28,59 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     services = model["services"]
     expected = (
-        "did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
-        "${MARTY_ORG_SLUG:-marty}"
+        "${MARTY_ISSUER_DID:-did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
+        "${MARTY_ORG_SLUG:-marty}}"
     )
     assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
+@pytest.mark.parametrize("owner,key", [
+    ("auth", "KEYCLOAK_PASSKEYS_ENABLED"),
+    ("keycloak-configurator", "KEYCLOAK_PASSKEYS_ENABLED"),
+    ("keycloak-configurator", "KEYCLOAK_PASSKEY_RP_ID"),
+])
+def test_passkey_configuration_drift_remains_closed(rendered_models, owner, key):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"][key] = "unreviewed"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_customer_organization_name_reaches_managed_identity_and_runtime_owners():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    for owner in ("keycloak-configurator", "db-migrate", "organization", "auth",
+                  "issuance", "issuance-native"):
+        assert model["services"][owner]["environment"].get("MARTY_ORG_NAME") == (
+            "${MARTY_ORG_NAME:-Marty}"
+        ), owner
+
+
+@pytest.mark.parametrize("filename,memory", [
+    ("docker-compose.selfhost.prod.yml", "256mb"),
+    ("docker-compose.base.yml", "128mb"),
+    ("docker-compose.beta.yml", "128mb"),
+])
+def test_shared_redis_configures_retention_and_bounded_memory(filename, memory):
+    model = yaml.safe_load((ROOT / filename).read_text())
+    command = model["services"]["redis"]["command"]
+    if isinstance(command, list):
+        command = " ".join(command)
+    assert f"--maxmemory {memory}" in command
+    assert "--maxmemory-policy noeviction" in command
+    assert "--appendonly yes" in command
+
+
+@pytest.mark.parametrize("owner,setting", [
+    ("auth", "CREDENTIAL_LOGIN_ISSUER_DID"),
+    ("flow", "OID4VP_ISSUER_DID"),
+    ("issuance-native", "MARTY_ISSUER_DID"),
+])
+def test_preservation_gate_rejects_issuer_identity_drift(rendered_models, owner, setting):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"][setting] = "did:web:unreviewed.example"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
@@ -85,6 +134,19 @@ def test_selfhost_openbao_requires_transactional_raft_storage():
     assert "bao operator raft list-peers" in bootstrap
 
 
+@pytest.mark.parametrize("changed", [None, "false", "${KEYCLOAK_SETUP_STRICT:-true}"])
+def test_ordinary_keycloak_setup_cannot_suppress_configuration_failure(rendered_models, changed):
+    approved, current = deepcopy(rendered_models)
+    environment = current["services"]["keycloak-configurator"]["environment"]
+    assert environment["KEYCLOAK_SETUP_STRICT"] == "true"
+    if changed is None:
+        del environment["KEYCLOAK_SETUP_STRICT"]
+    else:
+        environment["KEYCLOAK_SETUP_STRICT"] = changed
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
 def test_selfhost_redis_is_socket_only_and_available_to_exact_consumers():
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     services = model["services"]
@@ -119,12 +181,41 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "b5d4dd978c59f424d90e8cefeb5f5da0fbd2146faf40f28355dc4355a3de0122"
+        == GATE["APPROVED_SHA256"]
     )
     import json
 
     descriptor = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text())
     assert "docker-compose.service.issuance-native-runtime.yml" in descriptor["assets"]
+
+
+def test_required_inputs_preserve_historical_and_current_contracts():
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    historical, required = GATE["required_input_sets"](approved, current)
+    assert len(historical) == 63
+    assert len(required) == 10
+    assert "BAO_ADDR" in historical - required
+    assert "PUBLIC_DOMAIN" in required
+
+
+@pytest.mark.parametrize("fault", ["dropped", "added"])
+def test_required_inputs_reject_unrelated_changes(fault):
+    approved = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8")
+    current = (ROOT / GATE["GATE"]["BASE"]).read_text(encoding="utf-8")
+    if fault == "dropped":
+        changed, count = re.subn(
+            r"\$\{PUBLIC_DOMAIN:\?[^}]*\}", "${PUBLIC_DOMAIN:-}", current
+        )
+    else:
+        changed, count = re.subn(
+            r"\$\{MARTY_ORG_SLUG:-[^}]*\}",
+            "${MARTY_ORG_SLUG:?unreviewed required input}",
+            current,
+        )
+    assert count > 0
+    with pytest.raises(AssertionError, match="Unreviewed required self-host inputs"):
+        GATE["required_input_sets"](approved, changed)
 
 
 @pytest.fixture(scope="module")
@@ -135,6 +226,205 @@ def rendered_models():
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
+
+
+@pytest.mark.parametrize("owner", ["organization", "auth"])
+def test_customer_name_cannot_drift_between_identity_consumers(rendered_models, owner):
+    approved, current = deepcopy(rendered_models)
+    current["services"][owner]["environment"]["MARTY_ORG_NAME"] = "Another tenant"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("replacement", [
+    "--maxmemory 256mb --maxmemory-policy allkeys-lru",
+    "--maxmemory 512mb --maxmemory-policy noeviction",
+])
+def test_redis_preservation_change_does_not_admit_eviction_or_capacity_drift(rendered_models, replacement):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["redis"]["command"] = (
+        "redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 "
+        "--appendonly yes " + replacement
+    )
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("fault", ["missing-file-setting", "missing-mount", "wrong-target", "inline-key"])
+def test_applicant_template_auth_cannot_drift_from_reviewed_binding(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    applicant = current["services"]["applicant"]
+    if fault == "missing-file-setting":
+        applicant["environment"].pop("ISSUANCE_API_KEY_FILE")
+    elif fault == "missing-mount":
+        applicant["secrets"] = [s for s in applicant["secrets"] if s["source"] != "issuance_api_key"]
+    elif fault == "wrong-target":
+        next(s for s in applicant["secrets"] if s["source"] == "issuance_api_key")["target"] = "/run/secrets/other"
+    else:
+        applicant["environment"]["ISSUANCE_API_KEY"] = "PUBLIC_SYNTHETIC_INLINE_KEY"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_core_hosting_separates_optional_connectors_from_the_frozen_model(rendered_models):
+    approved, current = rendered_models
+    for section, names in (
+        ("services", {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}),
+        ("secrets", {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"}),
+    ):
+        assert names <= set(approved[section])
+        assert not names & set(current[section])
+    assert current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] == (
+        "${GATEWAY_OBSERVE_CLIENT_IP:-true}"
+    )
+
+
+def test_edge_startup_changes_only_reviewed_dependencies_and_health_target(rendered_models):
+    approved, current = rendered_models
+    original = approved["services"]["edge"]
+    selected = current["services"]["edge"]
+    assert original["depends_on"] == {
+        owner: {"condition": "service_healthy", "required": True}
+        for owner in ("ui", "gateway", "flow", "keycloak")
+    }
+    assert "depends_on" not in selected
+    assert original["healthcheck"]["test"] == [
+        "CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/ready",
+    ]
+    assert selected["healthcheck"] == {
+        **original["healthcheck"],
+        "test": ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/edge-healthz"],
+    }
+
+
+@pytest.mark.parametrize("fault", ["dependency", "readiness", "health-command", "health-timing", "port", "mount", "upstream"])
+def test_edge_review_does_not_allow_product_gates_or_unrelated_ingress_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    edge = current["services"]["edge"]
+    if fault == "dependency":
+        edge["depends_on"] = {"gateway": {"condition": "service_healthy", "required": True}}
+    elif fault == "readiness":
+        edge["healthcheck"]["test"][-1] = "http://127.0.0.1/ready"
+    elif fault == "health-command":
+        edge["healthcheck"]["test"] = ["CMD", "true"]
+    elif fault == "health-timing":
+        edge["healthcheck"]["interval"] = "1s"
+    elif fault == "port":
+        assert edge["ports"][0].startswith("127.0.0.1:")
+        edge["ports"][0] = edge["ports"][0].replace("127.0.0.1:", "0.0.0.0:", 1)
+    elif fault == "mount":
+        edge["volumes"].pop()
+    else:
+        edge["environment"]["GATEWAY_UPSTREAM"] = "unreviewed:8000"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_web_selection_changes_only_the_reviewed_ui_inputs(rendered_models):
+    approved, current = rendered_models
+    original = approved["services"]["ui"]
+    selected = current["services"]["ui"]
+    assert "UI_ENABLED_SECTIONS" not in original["environment"]
+    assert original["healthcheck"]["test"][-1] == "http://127.0.0.1:80/"
+    assert selected["environment"] == {
+        **original["environment"],
+        "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
+        "ORGANIZATION_CREATION_ENABLED": "${ORGANIZATION_CREATION_ENABLED:-false}",
+    }
+    assert selected["healthcheck"] == {
+        **original["healthcheck"],
+        "test": [*original["healthcheck"]["test"][:-1], "http://127.0.0.1:80/healthz"],
+    }
+
+
+@pytest.mark.parametrize("external_foundation", [False, True])
+def test_optional_credentials_have_only_the_existing_consumers(rendered_models, external_foundation):
+    _, current = rendered_models
+    if external_foundation:
+        current = GATE["GATE"]["render"](
+            GATE["GATE"]["BASE"],
+            "deploy-config/compose/selfhost-installer/compose.aws-foundation.yml",
+        )
+    for secret, owners in (
+        ("passport_tenant_api_keys", {"gateway", "flow", "issuance-native"}),
+        ("personalization_bureau_api_key", {"issuance-native"}),
+        ("canvas_credentials_api_token", {"issuance", "issuance-native"}),
+    ):
+        mounted = {name for name, service in current["services"].items()
+                   if any(item["source"] == secret for item in service.get("secrets", []))}
+        assert mounted == owners
+        assert current["secrets"][secret]["file"].endswith("/" + secret)
+        setting = secret.upper() + "_FILE"
+        for owner in owners:
+            service = current["services"][owner]
+            environment = GATE["GATE"]["environment_mapping"](service["environment"])
+            assert environment[setting] == "${" + setting + ":-}"
+            selected = [item for item in service["secrets"] if item["source"] == secret]
+            assert len(selected) == 1
+            assert selected[0]["target"] in {secret, f"/run/secrets/{secret}"}
+
+
+def test_passport_credentials_cannot_gain_an_unrelated_consumer(rendered_models):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["ui"].setdefault("secrets", []).append({
+        "source": "passport_tenant_api_keys", "target": "/run/secrets/passport_tenant_api_keys"})
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("path,replacement", [
+    (("environment", "UI_ENABLED_SECTIONS"), None),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS-none}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "${UI_ENABLED_SECTIONS:-public,console}"),
+    (("environment", "UI_ENABLED_SECTIONS"), "public,console"),
+    (("environment", "ORGANIZATION_CREATION_ENABLED"), None),
+    (("environment", "ORGANIZATION_CREATION_ENABLED"), "true"),
+    (("environment", "UI_PRODUCTION_MARKETING"), "true"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/"),
+    (("healthcheck", "test", -1), "http://127.0.0.1:80/console"),
+    (("healthcheck", "test"), ["CMD-SHELL", "true"]),
+    (("healthcheck", "disable"), True),
+    (("healthcheck", "interval"), "1h"),
+])
+def test_web_selection_gate_rejects_defaults_bypass_and_healthcheck_drift(
+    rendered_models, path, replacement,
+):
+    approved, current = deepcopy(rendered_models)
+    target = current["services"]["ui"]
+    for key in path[:-1]:
+        target = target[key]
+    if replacement is None:
+        del target[path[-1]]
+    else:
+        target[path[-1]] = replacement
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+def test_web_selection_cannot_change_another_service_environment(rendered_models):
+    approved, current = deepcopy(rendered_models)
+    current["services"]["gateway"]["environment"]["UI_ENABLED_SECTIONS"] = "none"
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
+
+
+@pytest.mark.parametrize("fault", ["connector", "token", "gateway-default", "gateway-missing"])
+def test_core_hosting_gate_rejects_optional_owner_or_gateway_default_drift(rendered_models, fault):
+    approved, current = deepcopy(rendered_models)
+    if fault == "connector":
+        current["services"]["cloudflared"] = deepcopy(approved["services"]["cloudflared"])
+    elif fault == "token":
+        current["secrets"]["cloudflare_tunnel_token"] = deepcopy(
+            approved["secrets"]["cloudflare_tunnel_token"]
+        )
+    elif fault == "gateway-default":
+        current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"] = (
+            "${GATEWAY_OBSERVE_CLIENT_IP:-false}"
+        )
+    else:
+        del current["services"]["gateway"]["environment"]["GATEWAY_OBSERVE_CLIENT_IP"]
+    with pytest.raises(AssertionError, match="Unreviewed self-host model change"):
+        GATE["assert_models"](approved, current)
 
 
 def test_ordinary_migration_cannot_provision_kms(rendered_models):

@@ -45,12 +45,18 @@ function StatCard({ icon: Icon, label, count, color = 'primary' }) {
             {label}
           </Typography>
         </Box>
-        <Typography variant="h4" fontWeight={600}>
+        <Typography variant="h4" sx={{ fontWeight: 600 }}>
           {count}
         </Typography>
       </CardContent>
     </Card>
   );
+}
+
+function countActiveResources(resources) {
+  if (!Array.isArray(resources)) return 0;
+  // Flow definitions use ACTIVE; other resource adapters return active.
+  return resources.filter(resource => String(resource?.status || '').trim().toLowerCase() === 'active').length;
 }
 
 /**
@@ -60,11 +66,11 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
   const { t } = useTranslation('console');
   
   // Calculate counts of active resources
-  const activeTrustProfiles = data?.trustProfiles?.filter(t => t.status === 'active')?.length || 0;
-  const activeTemplates = data?.templates?.filter(t => t.status === 'active')?.length || 0;
-  const activePolicies = data?.policies?.filter(p => p.status === 'active')?.length || 0;
-  const activeDeployments = data?.deployments?.filter(d => d.status === 'active')?.length || 0;
-  const activeFlows = data?.flows?.filter(f => f.status === 'active')?.length || 0;
+  const activeTrustProfiles = countActiveResources(data?.trustProfiles);
+  const activeTemplates = countActiveResources(data?.templates);
+  const activePolicies = countActiveResources(data?.policies);
+  const activeDeployments = countActiveResources(data?.deployments);
+  const activeFlows = countActiveResources(data?.flows);
 
   // Determine if org is operationally ready
   const isOperational = activeTrustProfiles > 0 && 
@@ -108,7 +114,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
       </Box>
 
       <Grid container spacing={2}>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={VerifiedUserIcon}
             label={t('dashboard.organizationHealth.activeTrustProfiles')}
@@ -116,7 +122,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeTrustProfiles > 0 ? 'success' : 'error'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={DescriptionIcon}
             label={t('dashboard.organizationHealth.activeTemplates')}
@@ -124,7 +130,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeTemplates > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={PolicyIcon}
             label={t('dashboard.organizationHealth.activePolicies')}
@@ -132,7 +138,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activePolicies > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={CloudUploadIcon}
             label={t('dashboard.organizationHealth.activeDeployments')}
@@ -140,7 +146,7 @@ export function OrganizationHealthPanel({ data, organizationName, isActive = tru
             color={activeDeployments > 0 ? 'success' : 'warning'}
           />
         </Grid>
-        <Grid item xs={12} sm={6} md={2.4}>
+        <Grid size={{ xs: 12, sm: 6, md: 2.4 }}>
           <StatCard
             icon={AccountTreeIcon}
             label={t('dashboard.organizationHealth.activeFlows')}

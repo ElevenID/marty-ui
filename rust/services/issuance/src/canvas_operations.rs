@@ -13,8 +13,9 @@ use axum::{
     Json, Router,
 };
 use mmf_config::numeric_config::PythonConfigInteger;
+use serde::Serialize;
 use serde_json::{json, Map, Value};
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -35,6 +36,22 @@ pub struct CanvasOperationsService {
     security: ManagementSecurity,
     jobs: Option<PostgresCanvasLtiBootstrapSyncEnqueuer>,
     reviews: Option<crate::canvas_review_resolution::CanvasReviewResolver>,
+}
+
+#[derive(Debug, Serialize)]
+struct CanvasBindingApplication {
+    id: String,
+    status: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CanvasBindingApplicationInventory {
+    organization_id: String,
+    binding_id: String,
+    platform_id: String,
+    binding_disabled: bool,
+    complete: bool,
+    applications: Vec<CanvasBindingApplication>,
 }
 
 impl std::fmt::Debug for CanvasOperationsService {
@@ -178,6 +195,91 @@ impl CanvasOperationsService {
                     .unwrap_or((StatusCode::UNAUTHORIZED, "Invalid API Key"));
                 OperationsError::detail(status, detail)
             })
+    }
+
+    async fn binding_applications(
+        &self,
+        headers: &HeaderMap,
+        binding_id: &str,
+    ) -> Result<CanvasBindingApplicationInventory, OperationsError> {
+        self.authorize(headers)?;
+        let organization_id = organization(headers)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| OperationsError::Internal)?;
+        // Bootstrap creation locks this same binding row. A completed disable
+        // therefore precedes this read, or an older creation finishes first.
+        let binding = sqlx::query(
+            "SELECT platform_id, enabled, activated_at IS NULL AS activation_cleared
+             FROM issuance_service.canvas_program_bindings
+             WHERE organization_id=$1 AND id=$2 AND archived_at IS NULL FOR UPDATE",
+        )
+        .bind(organization_id)
+        .bind(binding_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|_| OperationsError::Internal)?
+        .ok_or_else(|| {
+            OperationsError::detail(StatusCode::NOT_FOUND, "Canvas binding not found")
+        })?;
+        let platform_id: String = binding
+            .try_get("platform_id")
+            .map_err(|_| OperationsError::Internal)?;
+        let enabled: bool = binding
+            .try_get("enabled")
+            .map_err(|_| OperationsError::Internal)?;
+        let activation_cleared: bool = binding
+            .try_get("activation_cleared")
+            .map_err(|_| OperationsError::Internal)?;
+        if enabled || !activation_cleared {
+            return Err(OperationsError::detail(
+                StatusCode::CONFLICT,
+                "Canvas binding must be disabled before application inventory",
+            ));
+        }
+        let rows = sqlx::query(
+            "SELECT id, status
+             FROM issuance_service.applications
+             WHERE organization_id=$1
+               AND integration_context #>> '{canvas,canvas_program_binding_id}'=$2
+             ORDER BY id DESC LIMIT 101",
+        )
+        .bind(organization_id)
+        .bind(binding_id)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|_| OperationsError::Internal)?;
+        if rows.len() > 100 {
+            return Err(OperationsError::detail(
+                StatusCode::CONFLICT,
+                "Canvas binding application inventory is incomplete",
+            ));
+        }
+        let applications = rows
+            .into_iter()
+            .map(|row| {
+                Ok(CanvasBindingApplication {
+                    id: row.try_get("id").map_err(|_| OperationsError::Internal)?,
+                    status: row
+                        .try_get("status")
+                        .map_err(|_| OperationsError::Internal)?,
+                })
+            })
+            .collect::<Result<Vec<_>, OperationsError>>()?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| OperationsError::Internal)?;
+        Ok(CanvasBindingApplicationInventory {
+            organization_id: organization_id.to_owned(),
+            binding_id: binding_id.to_owned(),
+            platform_id,
+            binding_disabled: true,
+            complete: true,
+            applications,
+        })
     }
 
     async fn list(
@@ -366,6 +468,10 @@ pub fn candidate_router(service: CanvasOperationsService) -> Router {
         .route(
             "/v1/integrations/canvas/canvas-award-candidates",
             get(candidates),
+        )
+        .route(
+            "/v1/integrations/canvas/program-bindings/{binding_id}/applications",
+            get(binding_applications),
         )
         .route(
             "/v1/integrations/canvas/evidence-policy-reviews",
@@ -620,6 +726,16 @@ async fn candidates(
 ) -> Result<Json<Value>, OperationsError> {
     service
         .list(Collection::Candidates, &headers, query.as_deref())
+        .await
+        .map(Json)
+}
+async fn binding_applications(
+    State(service): State<CanvasOperationsService>,
+    headers: HeaderMap,
+    Path(binding_id): Path<String>,
+) -> Result<Json<CanvasBindingApplicationInventory>, OperationsError> {
+    service
+        .binding_applications(&headers, &binding_id)
         .await
         .map(Json)
 }

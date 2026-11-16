@@ -6,8 +6,12 @@ use serde_json::{json, Map, Value};
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 
+use crate::legacy_json_compat::untrimmed_json_text as text;
+
 use crate::{
-    canvas_award_candidate_approval::CanvasApplicationApprovalSnapshot,
+    canvas_award_candidate_approval::{
+        project_approval_binding, CanvasApplicationApprovalSnapshot,
+    },
     canvas_award_candidate_approval_postgres::reserve_management_canvas_issuance_in_transaction,
     canvas_award_candidate_postgres::record_fact_and_policy_in_transaction,
     canvas_issuance_guard::LIST_CURRENT_FACTS,
@@ -305,7 +309,7 @@ impl CanvasLegacyIngestRepository for PostgresCanvasLegacyIngestRepository {
             .map_err(legacy_repository_error)?
             .ok_or(CanvasLegacyIngestError::RepositoryUnavailable)?;
         let receipt = stored_receipt(&row).map_err(map_stored_error)?;
-        ensure_replay_matches(&receipt, payload_hash)?;
+        crate::canvas_legacy_ingest::validate_replay(&receipt, payload_hash)?;
         sqlx::query(
             "UPDATE issuance_service.canvas_event_receipts SET last_seen_at = $3
              WHERE canvas_account_id = $1 AND provider_event_id = $2",
@@ -387,7 +391,7 @@ async fn commit_atomic(
             .await
             .map_err(legacy_repository_error)?;
         let receipt = stored_receipt(&row).map_err(map_stored_error)?;
-        if ensure_replay_matches(&receipt, &commit.payload_hash).is_ok() {
+        if crate::canvas_legacy_ingest::validate_replay(&receipt, &commit.payload_hash).is_ok() {
             sqlx::query(
                 "UPDATE issuance_service.canvas_event_receipts SET last_seen_at = $3
                  WHERE canvas_account_id = $1 AND provider_event_id = $2",
@@ -564,7 +568,7 @@ async fn commit_atomic(
                 application: approval_application,
                 application_template: approval_template(template),
                 platform: snapshot.platform.clone(),
-                binding: approval_binding(&snapshot.binding),
+                binding: project_approval_binding(&snapshot.binding),
                 existing_transaction: snapshot.existing_transaction.clone(),
             };
             let transaction_id = reserve_management_canvas_issuance_in_transaction(
@@ -915,31 +919,6 @@ async fn lock_dependencies(
     Ok(())
 }
 
-fn approval_binding(binding: &Map<String, Value>) -> Map<String, Value> {
-    project(
-        binding,
-        &[
-            "id",
-            "organization_id",
-            "platform_id",
-            "application_template_id",
-            "credential_template_id",
-            "approval_policy_set_id",
-            "auto_approve_on_evidence",
-            "evidence_requirements",
-            "feature_flags",
-            "enabled",
-            "config_version",
-            "validated_config_version",
-            "readiness_checks",
-            "readiness_validated_at",
-            "credential_template_snapshot",
-            "activated_at",
-            "archived_at",
-        ],
-    )
-}
-
 fn approval_template(template: &Map<String, Value>) -> Map<String, Value> {
     project(
         template,
@@ -1061,33 +1040,12 @@ fn stored_receipt(row: &PgRow) -> Result<CanvasLegacyStoredReceipt, CanvasLegacy
     })
 }
 
-fn ensure_replay_matches(
-    receipt: &CanvasLegacyStoredReceipt,
-    payload_hash: &str,
-) -> Result<(), CanvasLegacyIngestError> {
-    if receipt.payload_hash != payload_hash {
-        return Err(CanvasLegacyIngestError::ReplayPayloadConflict);
-    }
-    if receipt.status != "evidence_received" {
-        return Err(CanvasLegacyIngestError::ReplayFlowConflict);
-    }
-    Ok(())
-}
-
 fn timestamp(value: Option<&Value>) -> Result<DateTime<Utc>, CanvasLegacyIngestError> {
     value
         .and_then(Value::as_str)
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
         .ok_or(CanvasLegacyIngestError::RepositoryUnavailable)
-}
-
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').to_owned(),
-    }
 }
 
 fn repository_error(error: sqlx::Error) -> CanvasLegacyRepositoryError {

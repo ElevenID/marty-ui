@@ -1,0 +1,83 @@
+{
+  "runtime__organization_member": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "organization_id",
+      "roles",
+      "status",
+      "permissions",
+      "has_org_console_access",
+      "is_owner"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "organization_id": {
+        "type": "string",
+        "format": "uuid"
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "email": {
+        "type": "string"
+      },
+      "roles": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "name"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "name": {
+              "type": "string"
+            },
+            "display_name": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "active",
+          "pending",
+          "invited",
+          "deactivated"
+        ]
+      },
+      "permissions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "has_org_console_access": {
+        "type": "boolean"
+      },
+      "is_owner": {
+        "type": "boolean"
+      },
+      "invited_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "joined_at": {
+        "type": "string",
+        "format": "date-time"
+      }
+    }
+  }
+}

@@ -6,6 +6,7 @@ name: marty-ui-prod
 
 services:
   ui-prod:
+    mem_limit: ${MARTY_UI_PROD_MEMORY_LIMIT:-256m}
     image: nginx:alpine
     container_name: marty-ui-prod
     restart: unless-stopped

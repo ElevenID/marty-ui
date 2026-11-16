@@ -141,9 +141,10 @@ class Client:
 def inputs(authorization, inventory, *, harness_source_sha, run_id, run_attempt, now):
     a, i = read_record(authorization), read_record(inventory)
     record = release.decode(a)
-    expected = {key: record.get(key) for key in release.CONTEXT_FIELDS}
+    expected = release.candidate_context(record)
     expected.update(harness_source_sha=harness_source_sha, run_id=run_id, run_attempt=run_attempt)
     release.bind_candidate_authorization(a, i, expected=expected, now=now)
+    release.candidate_hosting.check_file(record, authorization.parent)
     release.require(record["phase"] in ("staged", "published"), "candidate transport phase invalid")
     return a, i, expected, record
 

@@ -187,17 +187,17 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
                     let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
-                    assert_eq!(native_mounts.len(), 7);
-                    assert_eq!(native_mounts[4]["name"], "issuance-sign-grants");
-                    assert_eq!(native_mounts[5..], added_mounts);
+                    assert_eq!(native_mounts.len(), 6);
+                    assert_eq!(native_mounts[3]["name"], "issuance-sign-grants");
+                    assert_eq!(native_mounts[4..], added_mounts);
                     let native_volumes = native_owner
                         .pointer("/spec/template/spec/volumes")
                         .unwrap()
                         .as_array()
                         .unwrap();
-                    assert_eq!(native_volumes.len(), 7);
-                    assert_eq!(native_volumes[4]["name"], "issuance-sign-grants");
-                    assert_eq!(native_volumes[5..], added_volumes);
+                    assert_eq!(native_volumes.len(), 6);
+                    assert_eq!(native_volumes[3]["name"], "issuance-sign-grants");
+                    assert_eq!(native_volumes[4..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -545,7 +545,7 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
     let deployment = index(&template, "Deployment", "issuance-native");
     for (path, value) in [
         (
-            "/spec/template/spec/volumes/2/secret/items/0/key",
+            "/spec/template/spec/volumes/3/secret/items/0/key",
             json!("OPENBAO_SERVICE_TOKEN"),
         ),
         (
@@ -1203,11 +1203,16 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
         assert!(!native_env
             .keys()
             .any(|name| (name.starts_with("BAO") && name != "BAO_ADDR")
-                || name.starts_with("OPENBAO")));
+                || name.starts_with("OPENBAO")
+                || name.starts_with("DIDCOMM_KMS_")));
         let signing = env(&rows[index(rows, "Deployment", "signing-keys")]);
         assert_eq!(
             signing["SIGNING_KEYS_REDIS_URL"]["value"],
             "redis://redis:6379/2"
+        );
+        assert_eq!(
+            signing["DIDCOMM_KMS_TOKEN_FILE"]["value"],
+            "/run/secrets/didcomm-kms/token"
         );
         assert_eq!(
             signing["BAO_ADDR"],
@@ -1257,7 +1262,14 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
         );
     }
     let i = index(&template, "Deployment", "signing-keys");
-    for fault in ["secret-ref", "redis", "custody-leak", "sidecar"] {
+    for fault in [
+        "secret-ref",
+        "redis",
+        "custody-leak",
+        "sidecar",
+        "wrong-didcomm-token",
+        "writable-didcomm-token",
+    ] {
         let mut template = template.clone();
         match fault {
             "secret-ref" => owner_mut(&mut template[i])["env"]
@@ -1280,10 +1292,69 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
                 .as_array_mut()
                 .unwrap()
                 .push(json!({"name":"unapproved"})),
+            "wrong-didcomm-token" => {
+                template[i]["spec"]["template"]["spec"]["volumes"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|volume| volume["name"] == "didcomm-kms-token")
+                    .unwrap()["secret"]["items"][0]["key"] = json!("SIGNING_KEYS_OPENBAO_TOKEN");
+            }
+            "writable-didcomm-token" => {
+                owner_mut(&mut template[i])["volumeMounts"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|mount| mount["name"] == "didcomm-kms-token")
+                    .unwrap()["readOnly"] = json!(false);
+            }
             _ => unreachable!(),
         }
         assert_eq!(
             native::compose(&baseline, &template, &ready, &values),
+            Err(REFUSAL),
+            "{fault}"
+        );
+    }
+}
+
+#[test]
+fn didcomm_consumer_requires_registered_https_owner_and_credential_grant() {
+    let (baseline, template, ready, values) = fixtures();
+    let issuance = index(&template, "Deployment", "issuance-native");
+    for fault in [
+        "direct-plugin",
+        "plain-http",
+        "wrong-issuer-key",
+        "missing-grant",
+    ] {
+        let mut changed = template.clone();
+        let entries = owner_mut(&mut changed[issuance])["env"]
+            .as_array_mut()
+            .unwrap();
+        match fault {
+            "direct-plugin" => entries.push(
+                json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/direct-plugin/token"}),
+            ),
+            "plain-http" => {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "INTEGRATION_SECRET_KMS_URL")
+                    .unwrap()["value"] = json!("http://signing-keys:8017/internal")
+            }
+            "wrong-issuer-key" => {
+                entries
+                    .iter_mut()
+                    .find(|entry| entry["name"] == "SIGNING_KEYS_ISSUER_SIGN_KEY")
+                    .unwrap()["valueFrom"]["secretKeyRef"]["key"] =
+                    json!("SIGNING_KEYS_INTERNAL_API_KEY")
+            }
+            "missing-grant" => entries
+                .retain(|entry| entry["name"] != "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            native::compose(&baseline, &changed, &ready, &values),
             Err(REFUSAL),
             "{fault}"
         );

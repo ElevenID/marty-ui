@@ -2,7 +2,7 @@ use chrono::{TimeZone, Utc};
 use marty_flow::{
     advance_instance_record, create_definition_record, parse_request, start_instance_record,
     start_instance_record_with_trusted_context, AdvanceFlowRequest, CreateFlowDefinitionRequest,
-    DefinitionStatus, StartFlowRequest,
+    DefinitionStatus, FlowInstanceExecutionError, FlowType, StartFlowRequest,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use serde::Deserialize;
@@ -64,6 +64,24 @@ fn start_request() -> StartFlowRequest {
         "initial_context": {"application": {"id": "application-1"}}
     }))
     .unwrap()
+}
+
+#[test]
+fn persisted_beta_candidate_cannot_use_public_instance_execution() {
+    let mut definition = active_oid4vp();
+    let mut request = start_request();
+    request.flow_definition_id.clone_from(&definition.id);
+    let instance = start_instance_record(&definition, request.clone(), "user-1", now()).unwrap();
+    definition.flow_type = FlowType::PassportDigitalHandoff;
+    assert!(matches!(
+        start_instance_record(&definition, request, "user-1", now()),
+        Err(FlowInstanceExecutionError::CandidateUnavailable)
+    ));
+    let advance: AdvanceFlowRequest = parse_request(json!({"step_result": "success"})).unwrap();
+    assert!(matches!(
+        advance_instance_record(&definition, &instance, advance, "user-1", now()),
+        Err(FlowInstanceExecutionError::CandidateUnavailable)
+    ));
 }
 
 #[test]
@@ -215,6 +233,36 @@ fn application_approval_requires_trusted_evidence() {
             "authenticated_at": now().to_rfc3339()
         }}),
     )]);
+    for field in ["event_id_sha256", "payload_sha256"] {
+        for invalid in [
+            json!(null),
+            json!(false),
+            json!(""),
+            json!("a".repeat(63)),
+            json!("a".repeat(65)),
+            json!("A".repeat(64)),
+            json!("g".repeat(64)),
+            json!(format!(" {}", "a".repeat(63))),
+            json!("é".repeat(32)),
+        ] {
+            let mut malformed = trusted.clone();
+            malformed
+                .get_mut("_marty_precondition_evidence_v1")
+                .unwrap()["application_approved"][field] = invalid;
+            assert!(matches!(
+                start_instance_record_with_trusted_context(
+                    &definition,
+                    start.clone(),
+                    "marty-applicant-service",
+                    now(),
+                    malformed,
+                ),
+                Err(marty_flow::FlowInstanceExecutionError::PreconditionsNotMet(
+                    _
+                ))
+            ));
+        }
+    }
     let instance = start_instance_record_with_trusted_context(
         &definition,
         start,

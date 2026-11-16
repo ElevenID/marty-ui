@@ -4,7 +4,7 @@
   "description": "Optional beta Cloudflare tunnel profile for the self-host production edge and Keycloak.",
   "parent_stack": "selfhost-production",
   "env_file": ".env.selfhost.production.local",
-  "compose_files": ["docker-compose.selfhost.prod.yml"],
+  "compose_files": ["docker-compose.selfhost.prod.yml", "docker-compose.selfhost.cloudflare-legacy.yml"],
   "compose_profiles": ["beta-tunnel"],
   "domains": ["beta.elevenidllc.com"],
   "primary_domain": "beta.elevenidllc.com",

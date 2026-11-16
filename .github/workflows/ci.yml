@@ -40,6 +40,9 @@ jobs:
     outputs:
       all: ${{ steps.classify.outputs.all }}
       ui: ${{ steps.classify.outputs.ui }}
+      website: ${{ steps.classify.outputs.website }}
+      website_only: ${{ steps.classify.outputs.website_only }}
+      plan: ${{ steps.classify.outputs.plan }}
       python: ${{ steps.classify.outputs.python }}
       rust: ${{ steps.classify.outputs.rust }}
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
@@ -53,7 +56,6 @@ jobs:
       security: ${{ steps.classify.outputs.security }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -62,418 +64,25 @@ jobs:
         shell: bash
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          set -euo pipefail
+          source scripts/ci/affected_components.sh
 
-          all=false
-          ui=false
-          python=false
-          rust=false
-          rust_runtime=false
-          rust_matrix='["canvas","contracts","selfhost"]'
-          openbao=false
-          rollback_test_only=false
-          didcomm_release_test_only=false
-          k8s_policy_test_only=false
-          release=false
-          verification=false
-          security=false
-
-          # Observation only. Neither this result nor a missing diff may
-          # narrow the mandatory merge-group matrix. This broad candidate
-          # closure precedes any future historical-oracle tier decision.
-          report_historical_input_shadow() {
-            local event="$1" diff_status="$2"
-            shift 2
-            local candidate=unknown path
-            if [[ "$diff_status" == proved ]]; then
-              candidate=false
-              for path in "$@"; do
-                case "$path" in
-                  scripts/*|contracts/*|rust/services/issuance/migrations/*|rust/services/issuance/tests/support/*|rust/crates/canvas-acceptance/tests/*|rust/crates/flow-acceptance/tests/*|.github/workflows/ci.yml)
-                    candidate=true
-                    ;;
-                esac
-              done
-            fi
-            printf 'MARTY_CI_HISTORICAL_INPUT_SHADOW_V1 {"event":"%s","diff":"%s","path_count":%s,"candidate":"%s","authority":"shadow-only"}\n' \
-              "$event" "$diff_status" "$#" "$candidate" >&2
-          }
-
-          if [[ "${{ github.event_name }}" == merge_group ]]; then
-            all=true
-            # Checkout is the exact combined head. A missing base or diff is
-            # an unknown observation, never permission to skip a check.
-            if [[ -n "$BASE_SHA" ]] &&
-               git fetch --no-tags --depth=1 origin "$BASE_SHA" &&
-               git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$RUNNER_TEMP/ci-merge-group-changed-paths"; then
-              mapfile -d '' -t merge_group_changed_files < "$RUNNER_TEMP/ci-merge-group-changed-paths"
-              report_historical_input_shadow merge_group proved "${merge_group_changed_files[@]}"
-            else
-              report_historical_input_shadow merge_group unavailable
-            fi
-          elif [[ -z "$BASE_SHA" ]]; then
-            all=true
-          else
-            git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            # Keep rename endpoints/newlines; direct diff failure is fatal.
-            changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
-            git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
-            mapfile -d '' -t changed_files < "$changed_paths_file"
-            report_historical_input_shadow pull_request proved "${changed_files[@]}"
-            # Only the regular rollback test leaf gets root-pytest feedback.
-            if [[ "${{ github.event_name }}" == pull_request &&
-                  ${#changed_files[@]} -eq 1 &&
-                  "${changed_files[0]}" == tests/test_beta_worker_launch_rollback.py &&
-                  -f tests/test_beta_worker_launch_rollback.py &&
-                  ! -L tests/test_beta_worker_launch_rollback.py ]]; then
-              rollback_test_only=true
-            fi
-            # These exact DIDComm policy tests are collected by root release
-            # pytest, not by a service or image. Only one regular test source
-            # may narrow a PR; moves, deletion, mixed changes and untrusted
-            # checkout entries retain the complete plan.
-            if [[ "${{ github.event_name }}" == pull_request &&
-                  ${#changed_files[@]} -eq 1 ]]; then
-              case "${changed_files[0]}" in
-                tests/test_didcomm_native_consumer_ownership.py)
-                  if [[ -f "${changed_files[0]}" && ! -L "${changed_files[0]}" ]]; then
-                    didcomm_release_test_only=true
-                  fi
-                  ;;
-              esac
-            fi
-            # These six exact policy-test leaves have one root-pytest owner.
-            # Only a nonempty PR of regular, unique files may use its bounded
-            # source suite; manifests, scripts and protected heads stay full.
-            if [[ "${{ github.event_name }}" == pull_request &&
-                  ${#changed_files[@]} -gt 0 ]]; then
-              k8s_policy_test_only=true
-              seen_k8s_policy_paths=()
-              for path in "${changed_files[@]}"; do
-                case "$path" in
-                  tests/test_issuance_consumer_bindings.py|tests/test_kubernetes_app_service_coverage.py|tests/test_check_kubernetes_services_release.py|tests/test_kubernetes_token_hmac_secret.py|tests/test_passport_supported_k8s_deployment.py|tests/test_passport_supported_consumer_routing.py) ;;
-                  *) k8s_policy_test_only=false; break ;;
-                esac
-                if [[ ! -f "$path" || -L "$path" ]]; then
-                  k8s_policy_test_only=false
-                  break
-                fi
-                for previous in "${seen_k8s_policy_paths[@]}"; do
-                  if [[ "$path" == "$previous" ]]; then
-                    k8s_policy_test_only=false
-                    break
-                  fi
-                done
-                seen_k8s_policy_paths+=("$path")
-              done
-            fi
-            leaf_only=false
-            leaf_candidate=true
-            if (( ${#changed_files[@]} == 0 )); then
-              leaf_candidate=false
-            fi
-            for path in "${changed_files[@]}"; do
-              case "$path" in
-                rust/services/issuance/src/*_tests.rs|rust/crates/oid4vp-contract/tests/contract_vectors.rs|rust/crates/oid4vp-contract/tests/transport_metadata.rs) ;;
-                *) leaf_candidate=false; break ;;
-              esac
-            done
-            if [[ "$leaf_candidate" == true ]]; then
-              verified_leaves_file="$RUNNER_TEMP/ci-verified-test-leaves"
-              if python3 tests/test_rust_test_only_docker_context.py \
-                --emit-verified-leaves > "$verified_leaves_file"; then
-                mapfile -d '' -t owned_leaves < "$verified_leaves_file"
-                leaf_only=true
-                for path in "${changed_files[@]}"; do
-                  owned=false
-                  for leaf in "${owned_leaves[@]}"; do
-                    if [[ "$path" == "$leaf" ]]; then
-                      owned=true
-                      break
-                    fi
-                  done
-                  if [[ "$owned" != true ]]; then
-                    leaf_only=false
-                    break
-                  fi
-                done
-              fi
-            fi
-            # Exact cfg(test) Issuance leaves with no separately owned DB cases.
-            # Passport's ignored PostgreSQL cases stay on the broader route.
-            renewal_unit_test_only=false
-            if [[ "$leaf_only" == true &&
-                  "${{ github.event_name }}" == pull_request ]]; then
-              renewal_unit_test_only=true
-              for path in "${changed_files[@]}"; do
-                case "${path#rust/services/issuance/src/}" in
-                  canvas_operation_http_prepared_tests.rs|canvas_sync_provider_http_tests.rs|canvas_sync_processor_tests.rs|canvas_sync_worker_retry_tests.rs|canvas_sync_worker_renewal_tests.rs|initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|python_format_tests.rs|signing_http_projection_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
-                  *) renewal_unit_test_only=false; break ;;
-                esac
-              done
-            fi
-            # These exact test-source cohorts and their six-context/sole-owner
-            # proofs live in one checked-out verifier. Malformed, mixed, and
-            # unproved diffs keep the complete Rust matrix.
-            worker_test_only=false
-            flow_test_only=false
-            selfhost_test_only=false
-            acceptance_candidate=true
-            if [[ "${{ github.event_name }}" == pull_request &&
-                  ${#changed_files[@]} -gt 0 ]]; then
-              for path in "${changed_files[@]}"; do
-                case "$path" in
-                  rust/crates/canvas-worker-acceptance/tests/*|rust/crates/flow-acceptance/tests/*|rust/crates/selfhost-acceptance/tests/*) ;;
-                  *) acceptance_candidate=false; break ;;
-                esac
-              done
-            else
-              acceptance_candidate=false
-            fi
-            # This prefix can only reject; the checked-out exact-file and
-            # six-context proofs below alone grant a narrower PR matrix.
-            if [[ "$acceptance_candidate" == true ]]; then
-              if acceptance_lane=$(printf '%s\0' "${changed_files[@]}" |
-                python3 tests/test_rust_test_only_docker_context.py \
-                  --select-acceptance-test-lane); then
-                case "$acceptance_lane" in
-                  worker) worker_test_only=true ;;
-                  flow) flow_test_only=true ;;
-                  selfhost) selfhost_test_only=true ;;
-                esac
-              fi
-            fi
-            contract_test_only=false
-            contract_test_candidate=true
-            if [[ "${{ github.event_name }}" != pull_request || ${#changed_files[@]} -eq 0 ]]; then
-              contract_test_candidate=false
-            fi
-            for path in "${changed_files[@]}"; do
-              case "$path" in
-                rust/crates/service-acceptance/tests/*|rust/services/signing-keys/tests/*) ;;
-                *) contract_test_candidate=false; break ;;
-              esac
-            done
-            # The prefix only rejects; exact ownership and all Rust contexts grant.
-            if [[ "$contract_test_candidate" == true ]] &&
-               printf '%s\0' "${changed_files[@]}" |
-                 python3 tests/test_rust_test_only_docker_context.py \
-                   --select-contract-tests; then
-              contract_test_only=true
-            fi
-            for path in "${changed_files[@]}"; do
-              case "$path" in
-                rust/services/issuance/src/canvas_sync_processor_contract.md)
-                  # include_str! makes this documentation a compiler input.
-                  rust=true
-                  ;;
-                SELFHOST_BUNDLE.md)
-                  # The self-host bundle ships this file as a package asset.
-                  rust=true
-                  ;;
-                *.md|docs/*|.github/ISSUE_TEMPLATE/*)
-                  ;;
-                ui/*|demo-apps/*)
-                  ui=true
-                  security=true
-                  ;;
-                services/Dockerfile|services/Dockerfile.dockerignore|services/entrypoint.sh|services/auth/assets/*)
-                  rust=true
-                  python=true
-                  security=true
-                  ;;
-                services/*|packages/*|requirements-services.txt)
-                  python=true
-                  security=true
-                  ;;
-                contracts/canvas-worker-provider-recovery-current-inputs.json)
-                  # This overlay has only release-pytest consumers. The
-                  # inherited REST record and every script/scenario
-                  # input retain their existing Rust/release or broad owner.
-                  release=true
-                  ;;
-                contracts/canvas-*-current-inputs.json)
-                  # Only immediate-child CI input records use the reviewed
-                  # Docker exclusion. A nested lookalike is unknown input.
-                  if [[ "$path" == contracts/*/* ]]; then
-                    all=true
-                  else
-                    rust=true
-                    release=true
-                  fi
-                  ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
-                  # Retain Rust qualification for contract metadata and also
-                  # run release-collected evidence/obligation ownership checks.
-                  rust=true
-                  release=true
-                  ;;
-                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_rest_input_evidence.py|tests/test_canvas_worker_provider_signals_input_evidence.py|tests/test_canvas_worker_timeout_input_evidence.py|tests/test_canvas_worker_retry_after_input_evidence.py|tests/test_canvas_json_depth_current_inputs.py|tests/test_canvas_operations_input_current_inputs.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
-                  # These exact test-only sources run in release pytest. Their
-                  # manifest inputs retain the Rust discovery/evidence owner;
-                  # implementation scripts, unknown siblings, and corpora
-                  # remain conservatively broad.
-                  release=true
-                  ;;
-                rust/services/flow/src/request_object.rs|rust/services/flow/src/verification_submission.rs|rust/services/flow/src/http_verification.rs|rust/services/flow/src/http_providers.rs|rust/services/flow/src/providers.rs|rust/services/flow/src/connections.rs|rust/services/flow/src/config.rs|rust/services/flow/tests/haip_*|rust/services/signing-keys/src/flow_envelope.rs|rust/services/signing-keys/src/http.rs|rust/services/signing-keys/src/http/*.rs|rust/services/signing-keys/src/kms.rs|rust/services/signing-keys/src/kms_*.rs|rust/services/signing-keys/src/config.rs|rust/services/signing-keys/src/main.rs|rust/crates/oid4vp-contract/src/haip_key.rs)
-                  # These owners can change the live HAIP custody path even
-                  # when the OpenBao plugin source is untouched.
-                  rust=true
-                  openbao=true
-                  security=true
-                  ;;
-                rust/*|proto/*|contracts/*)
-                  rust=true
-                  ;;
-                openbao/*|docker/openbao-*|keycloak/openbao-provider/*|scripts/probe_keycloak_remote_rs256.py|scripts/sql/keycloak-kms-only-verify.sql)
-                  openbao=true
-                  rust=true
-                  security=true
-                  ;;
-                release/stack-lock.json|.github/workflows/ci.yml|.github/actions/*|docker-compose*.yml|k8s/*)
-                  all=true
-                  ;;
-                release/*|scripts/stack_tag_gate.py|scripts/release_transaction.py|.github/stack-tag-policy.json)
-                  release=true
-                  ;;
-                tests/test_stack_tag_gate.py|tests/test_release_transaction.py|tests/test_stack_release_contract.py|tests/test_build_stack_manifest.py|tests/test_prepare_official_beta_release.py|tests/test_stack_pre_promotion.py)
-                  # The release lane executes the complete root Python test
-                  # suite. These exact test sources do not enter runtime
-                  # images; unknown siblings retain the full PR matrix.
-                  release=true
-                  ;;
-                tests/test_check_release_absent.py|tests/test_github_release_environment_preflight.py|tests/test_release_environment_workflow_contract.py|tests/test_create_local_release_manifest.py|tests/test_local_beta_release_runner.py)
-                  # These exact release-environment/manifest contract tests
-                  # also run in the required release lane, not service images.
-                  release=true
-                  ;;
-                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_canvas_published_preflight.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
-                  # These test-only policy and fixture guards are collected by
-                  # the root release pytest step, with no other CI/image owner.
-                  # Their implementation inputs still retain their own lanes.
-                  release=true
-                  ;;
-                tests/test_kubernetes_resolved_runtime.py|tests/test_base_native_runtime_fixture.py|tests/test_envoy_native_configuration.py|tests/test_flow_public_startup.py|tests/test_selfhost_runtime_model.py|tests/test_passport_supported_rust_model.py|tests/test_passport_supported_compose_ownership.py|tests/test_ci_canvas_compile_scope.py)
-                  # These exact fixture-policy test sources run in root release
-                  # pytest. Renderers, acceptance targets, and unknown siblings
-                  # retain the broad source-input selection below.
-                  release=true
-                  ;;
-                tests/test_issuance_rust_candidate.py|tests/test_kubernetes_native_issuance.py|tests/test_shared_rust_service_image.py|tests/test_passport_supported_provisioning_producer.py|tests/test_issuance_passport_native_compose.py|tests/test_conformance_native.py|tests/test_passport_supported_disposable_compose.py|tests/test_gateway_rust_cutover.py)
-                  # These exact model/Compose policy test sources are collected
-                  # by root release pytest, not runtime images or another CI
-                  # job. Production inputs and unknown test siblings stay broad.
-                  release=true
-                  ;;
-                tests/test_issuance_consumer_bindings.py|tests/test_kubernetes_app_service_coverage.py|tests/test_check_kubernetes_services_release.py|tests/test_kubernetes_token_hmac_secret.py|tests/test_passport_supported_k8s_deployment.py|tests/test_passport_supported_consumer_routing.py)
-                  # These exact Kubernetes/consumer policy test sources run in
-                  # root release pytest. Their source scripts, manifests, and
-                  # unknown test siblings keep their existing broad selection.
-                  release=true
-                  ;;
-                tests/test_signing_response_reference.py|tests/test_token_rate_reference.py|tests/test_canvas_url_template_reference.py)
-                  # Frozen-reference guards are collected by root release
-                  # pytest only. Their corpora and native Rust consumers keep
-                  # the existing Rust selection; capture scripts stay broad.
-                  release=true
-                  ;;
-                tests/test_beta_worker_launch_rollback.py)
-                  if [[ "$rollback_test_only" == true ]]; then
-                    release=true
-                    security=true
-                  else
-                    all=true
-                  fi
-                  ;;
-                tests/test_didcomm_native_consumer_ownership.py)
-                  if [[ "$didcomm_release_test_only" == true ]]; then
-                    release=true
-                  else
-                    all=true
-                  fi
-                  ;;
-                scripts/ci/canvas_oracle_current_inputs.py)
-                  # Only root release-pytest Canvas input guards import this
-                  # helper. Capture scripts, manifest inputs, and unknown
-                  # script siblings keep their existing broader selection.
-                  release=true
-                  ;;
-                .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
-                  verification=true
-                  release=true
-                  ;;
-                scripts/register-canvas-oss-runner.ps1|scripts/runner-routing-label-policy.ps1|scripts/runner-host-capacity-policy.ps1|scripts/setup-canvas-oss-runner.ps1|tests/test_runner_routing_labels.py|tests/test_canvas_oss_runner_quarantine.py)
-                  # These host-registration inputs are checked by the root
-                  # release pytest suite; they are not public image inputs.
-                  # Manual self-hosted workflows retain their own preflights.
-                  release=true
-                  ;;
-                tests/*|scripts/*|.github/workflows/*|.github/codeql/*|.dockerignore)
-                  all=true
-                  ;;
-                *)
-                  # Unknown paths deliberately receive the complete suite.
-                  all=true
-                  ;;
-              esac
-            done
-          fi
-
-          if [[ "$all" == true ]]; then
-            ui=true
-            python=true
-            rust=true
-            openbao=true
-            release=true
-            verification=true
-            security=true
-          fi
-
-          if [[ "$rust" == true ]]; then
-            rust_runtime=true
-            if [[ "${worker_test_only:-false}" == true && "$all" == false &&
-                  "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["worker"]'
-            elif [[ "${flow_test_only:-false}" == true && "$all" == false &&
-                    "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["flow"]'
-            elif [[ "${selfhost_test_only:-false}" == true && "$all" == false &&
-                    "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["selfhost"]'
-            elif [[ "${contract_test_only:-false}" == true && "$all" == false &&
-                    "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["contracts"]'
-            elif [[ "${renewal_unit_test_only:-false}" == true && "$all" == false &&
-                    "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["renewal-unit"]'
-            elif [[ "${leaf_only:-false}" == true && "$all" == false &&
-                  "${{ github.event_name }}" == pull_request ]]; then
-              rust_runtime=false
-              rust_matrix='["contracts"]'
-            fi
-          fi
-
-          {
-            printf 'all=%s\n' "$all"
-            printf 'ui=%s\n' "$ui"
-            printf 'python=%s\n' "$python"
-            printf 'rust=%s\n' "$rust"
-            printf 'rust_runtime=%s\n' "$rust_runtime"
-            printf 'rust_matrix=%s\n' "$rust_matrix"
-            printf 'openbao=%s\n' "$openbao"
-            printf 'rollback_test_only=%s\n' "$rollback_test_only"
-            printf 'didcomm_release_test_only=%s\n' "$didcomm_release_test_only"
-            printf 'k8s_policy_test_only=%s\n' "$k8s_policy_test_only"
-            printf 'release=%s\n' "$release"
-            printf 'verification=%s\n' "$verification"
-            printf 'security=%s\n' "$security"
-          } >> "$GITHUB_OUTPUT"
+  release-preflight:
+    name: Release Source Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify private fork access policy
+        run: python3 -m unittest discover -s tests -p test_private_forks.py
+      - name: Validate source release metadata before expensive setup
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: python3 scripts/ci/check_release_preflight.py --source-sha "$SOURCE_SHA"
 
   lint:
     name: Lint Python
@@ -482,10 +91,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.11.3"
           enable-cache: false
@@ -495,9 +104,52 @@ jobs:
       - name: Enforce canonical Rust ownership
         run: python scripts/check_rust_ownership.py
 
+  test-website:
+    name: Website Surface
+    needs: [changes, release-preflight]
+    if: needs.changes.outputs.website == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: ui
+    env:
+      MARTY_UI_SHA: ${{ github.sha }}
+      MARTY_PRODUCTION_PAGES: public
+      PRERENDER_CONCURRENCY: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '24'
+      - name: Bootstrap released UI dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
+          bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
+          bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
+          PUPPETEER_SKIP_DOWNLOAD=true bun install
+          bun x --no-install puppeteer browsers install
+      - name: Test website routing and all surface boundary guards
+        run: bun run test:website
+      - name: Build and check crawlable website output
+        run: |
+          bun run build:website
+          node scripts/assert-website-dist.mjs dist-website
+      - name: Prove application and customer outputs exclude marketing modules
+        run: |
+          bun run build:application
+          bun run build:selfhost
+
   fast-feedback:
     name: Fast Feedback
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -507,7 +159,9 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
       - name: Bootstrap released UI dependencies
@@ -519,6 +173,9 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           PUPPETEER_SKIP_DOWNLOAD=true bun install
+      - name: Verify development checker cleanup
+        working-directory: ui
+        run: node --test scripts/checker-worker-cleanup.test.mjs
       - name: Validate shard completeness and run fast checks
         working-directory: ui
         shell: bash
@@ -568,7 +225,7 @@ jobs:
 
   test-ui-crawler-artifacts:
     name: UI Crawler Build Artifacts
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -580,10 +237,12 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Bootstrap released UI dependencies
@@ -604,9 +263,9 @@ jobs:
             fi
             sleep 2
           done
-      - name: Verify crawler configuration and artifact validator
+      - name: Verify crawler and production build contracts
         run: |
-          node --test scripts/crawler-config.test.mjs
+          node --test scripts/crawler-config.test.mjs scripts/production-build-contract.test.mjs
           python3 scripts/test_crawler_artifacts.py
       - name: Build and validate the normal public site
         env:
@@ -627,7 +286,7 @@ jobs:
 
   test-ui-crawler-nginx:
     name: UI Crawler Nginx Integration
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -637,7 +296,7 @@ jobs:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Test both configs against the pinned production Nginx image
@@ -645,7 +304,7 @@ jobs:
 
   test-ui:
     name: UI Tests (${{ matrix.shard }}/4)
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -661,7 +320,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
       - name: Bootstrap released UI dependencies
@@ -680,7 +341,7 @@ jobs:
         id: ui_timing_upload
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
@@ -690,7 +351,7 @@ jobs:
         id: ui_timing_retry
         if: always() && steps.ui_timing_upload.outcome == 'failure'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
@@ -712,7 +373,7 @@ jobs:
 
   test-services:
     name: Service Tests
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
     # Retained Python tests use fake storage and their own loopback mTLS fixture.
@@ -721,10 +382,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.11.3"
           enable-cache: true
@@ -774,18 +435,33 @@ jobs:
 
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path ".github/feature-regression/rust-probe/Cargo.toml"
       - name: Verify frozen Rust feature-regression probe
         shell: bash
         run: |
@@ -809,19 +485,29 @@ jobs:
 
   test-openbao-didcomm-plugin:
     name: Test OpenBao DIDComm plugin image
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # Cold image/browser setup plus the eight Rust preparation phases can use
+    # 35 minutes before the coordinated restore proof starts. Keep time for
+    # that complete proof and evidence cleanup, without skipping any gate.
+    timeout-minutes: 60
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
@@ -835,6 +521,7 @@ jobs:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Expose public image compiler cache credentials
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -865,33 +552,46 @@ jobs:
           push: false
           tags: marty-keycloak-openbao:ci
           provenance: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Use mold linker for Rust recovery probe
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache for Rust recovery probe
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust recovery independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Prepare Rust KMS operator before scoped provisioning probes
         run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody
         shell: bash
+        env:
+          MARTY_PASSKEY_PACKAGED_IMAGE: marty-keycloak-openbao:ci
+          MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE: marty-openbao-didcomm:ci
         run: |
           set -euo pipefail
-          python3 -m pip install --disable-pip-version-check cryptography==44.0.3
-          python3 scripts/probe_keycloak_remote_rs256.py --require-browser \
-            --keycloak-image marty-keycloak-openbao:ci \
-            --openbao-image marty-openbao-didcomm:ci
+          python3 -m pip install --disable-pip-version-check cryptography==44.0.3 pytest==8.3.5 playwright==1.56.0
+          google-chrome --version
+          docker image inspect "$MARTY_PASSKEY_PACKAGED_IMAGE" >/dev/null
+          docker image inspect "$MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE" >/dev/null
+          python3 -m pytest -q -s tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods tests/test_passkey_test_lab.py tests/test_passkey_application_lab.py
       - name: Prove disposable self-host Keycloak secret closure and token scopes
         shell: bash
         run: |
@@ -917,7 +617,7 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: 0
         run: python3 scripts/probe_integration_secret_coordinated_restore.py
       - name: Record optional recovery compiler cache outcomes
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -927,7 +627,7 @@ jobs:
       - name: Retain recovery preparation evidence
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rust-recovery-preparation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -939,7 +639,7 @@ jobs:
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     strategy:
@@ -976,21 +676,50 @@ jobs:
       actions: read
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_SESSION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          # The PR merge ref may move after this event; checkout the immutable event SHA.
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         if: matrix.lane != 'renewal-unit'
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Reclaim unused hosted SDK disk for contracts
+        if: matrix.lane == 'contracts' && runner.environment == 'github-hosted' && runner.os == 'Linux'
+        env:
+          CONTRACTS_LANE: ${{ matrix.lane }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_ACTIONS" == true && "$RUNNER_ENVIRONMENT" == github-hosted ]]
+          [[ "$RUNNER_OS" == Linux && "$CONTRACTS_LANE" == contracts ]]
+          # These preinstalled SDKs are not inputs to this Rust-only lane.
+          # Preserve source, fixtures, Docker, compiler caches and test outputs.
+          df -Pk /
+          for sdk in /usr/local/lib/android /usr/share/dotnet; do
+            if [[ -e "$sdk" || -L "$sdk" ]]; then
+              [[ -d "$sdk" && ! -L "$sdk" && "$(realpath -e -- "$sdk")" == "$sdk" ]]
+              sudo du -sk -- "$sdk"
+              sudo rm -rf -- "$sdk"
+            fi
+          done
+          df -Pk /
       - name: Select the exact BuildKit image with registry fallback
         if: matrix.lane != 'renewal-unit'
         shell: bash
@@ -1021,11 +750,85 @@ jobs:
           echo "MARTY_RUST_CI_POSTGRES_ID=$postgres_id" >> "$GITHUB_ENV"
           echo "MARTY_RUST_CI_REDIS_ID=$redis_id" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        id: rust_contract_builder
         if: matrix.lane != 'renewal-unit'
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - name: Record selfhost disk before public image
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          mkdir -p "$evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-before-image-df.txt"
+          for directory in "$GITHUB_WORKSPACE/rust/target" "${CARGO_HOME:-$HOME/.cargo}"; do
+            if [[ -d "$directory" && ! -L "$directory" ]]; then
+              timeout 20s du -sk --one-file-system -- "$directory" >> "$evidence/selfhost-before-image-du.txt" ||
+                printf 'size unavailable within telemetry bound\n' >> "$evidence/selfhost-before-image-du.txt"
+            fi
+          done
+      - name: Expose public image compiler cache credentials
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            const url = process.env.ACTIONS_RESULTS_URL;
+            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
+            core.setSecret(token);
+            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
+            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
+            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
+      - name: Build public selfhost image
+        id: public_selfhost_image
+        if: matrix.lane == 'selfhost'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
+        with:
+          builder: ${{ steps.rust_contract_builder.outputs.name }}
+          context: .
+          file: services/Dockerfile
+          load: true
+          push: false
+          tags: marty-selfhost-public:contract
+          provenance: false
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            SERVICE_NAME=issuance_native
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
+      - name: Retire completed selfhost builder cache
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        env:
+          SELFHOST_BUILDER: ${{ steps.rust_contract_builder.outputs.name }}
+          EXPECTED_SELFHOST_IMAGE: ${{ steps.public_selfhost_image.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          [[ "$SELFHOST_BUILDER" =~ ^builder-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]
+          [[ "$EXPECTED_SELFHOST_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
+          image_id="$(docker image inspect --format '{{.Id}}' marty-selfhost-public:contract)"
+          [[ "$image_id" == "$EXPECTED_SELFHOST_IMAGE" ]]
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-image-loaded-df.txt"
+          timeout 30s docker buildx du --builder "$SELFHOST_BUILDER" > "$evidence/selfhost-builder-du.txt" ||
+            printf 'cache size unavailable within telemetry bound\n' >> "$evidence/selfhost-builder-du.txt"
+          # The job-created builder completed this exact image. Keep the loaded
+          # image and acceptance outputs; only its unused cache is reclaimable.
+          timeout 120s docker buildx prune --builder "$SELFHOST_BUILDER" --all --force > "$evidence/selfhost-builder-prune.txt"
+          [[ "$(docker image inspect --format '{{.Id}}' marty-selfhost-public:contract)" == "$image_id" ]]
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-after-builder-prune-df.txt"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Prepare isolated Canvas worker harness dependencies
@@ -1074,18 +877,27 @@ jobs:
           "$RUNNER_TEMP/flow-renderer/bin/python" -c \
             'import yaml; assert yaml.__version__ == "6.0.3"'
           printf '%s\n' "$RUNNER_TEMP/flow-renderer/bin" >> "$GITHUB_PATH"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Use mold linker
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust service tests independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Prepare source-matched Rust execution policy
@@ -1097,12 +909,38 @@ jobs:
           set -euo pipefail
           command -v bash
           command -v envsubst
+      - name: Bind offline compiler cache to the exact Bookworm recipe
+        id: bookworm-cache-key
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        env:
+          RUST_LANE: ${{ matrix.lane }}
+        run: python3 scripts/ci/bookworm_cache_key.py
+      - name: Restore trusted offline Bookworm compiler objects
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/bookworm-sccache/cache
+          key: ${{ steps.bookworm-cache-key.outputs.key }}
+          restore-keys: ${{ steps.bookworm-cache-key.outputs.prefix }}
+      - name: Install verified portable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'canvas' || matrix.lane == 'worker' || matrix.lane == 'flow' || matrix.lane == 'selfhost')
+        continue-on-error: true
+        run: bash scripts/ci/install-bookworm-sccache.sh
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
+          bookworm_cache_args=()
+          if [[ -x "${BOOKWORM_SCCACHE_BIN:-}" && -d "${BOOKWORM_CACHE_DIR:-}" ]]; then
+            bookworm_cache_args=(
+              --volume "$BOOKWORM_SCCACHE_BIN:/opt/marty-cache/sccache:ro"
+              --volume "$BOOKWORM_CACHE_DIR:/opt/marty-cache/data:rw"
+              --env SCCACHE_DIR=/opt/marty-cache/data
+            )
+          fi
           if [[ "${{ matrix.lane }}" == renewal-unit ]]; then
             # Additive ordinary-library diagnostic; normal PR lanes remain required.
             # this package-scoped compile has no database, image or service fixture.
@@ -1119,26 +957,36 @@ jobs:
             bookworm_builder="${builder_images[0]}"
             [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
             bookworm_builder="$(bash ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
+            # Share the full lane's compiler profile/linker so its trusted cache
+            # also serves scoped acceptance jobs. sccache hashes each feature set.
+            host_mold="$(command -v mold)"
+            [[ "$(realpath "$host_mold")" == /usr/local/bin/mold ]]
+            mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
             host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
             test -d "$host_cargo_home"
             mkdir -p target
             [[ ! -L target && "$(realpath target)" == "$GITHUB_WORKSPACE/rust/target" ]]
             [[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]
             docker run --rm --network none --read-only \
+              "${bookworm_cache_args[@]}" \
               --user "$(id -u):$(id -g)" \
               --env HOME=/tmp \
               --env "CARGO_HOME=$host_cargo_home" \
               --env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target" \
               --env CARGO_INCREMENTAL=0 \
               --env CARGO_PROFILE_TEST_DEBUG=0 \
+              --env CARGO_PROFILE_DEV_DEBUG=0 \
+              --env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold' \
               --env "MARTY_RUST_ACCEPTANCE_SCOPE=${{ matrix.lane }}" \
               --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+              --volume "$host_mold:/usr/local/bin/ld.mold:ro" \
               --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
               --volume "$host_cargo_home:$host_cargo_home" \
               --volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw" \
               --workdir "$GITHUB_WORKSPACE/rust" \
               "$bookworm_builder" \
               sh -ceu '
+                . ../scripts/ci/bookworm-cache-env.sh
                 case "$MARTY_RUST_ACCEPTANCE_SCOPE" in
                   worker)
                     cargo test --locked --offline -p marty-canvas-worker-acceptance \
@@ -1220,6 +1068,7 @@ jobs:
             [[ "$(realpath target)" == "$GITHUB_WORKSPACE/rust/target" ]]
             [[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]
             run_host_phase container_compile docker run --rm --network none --read-only \
+              "${bookworm_cache_args[@]}" \
               --user "$(id -u):$(id -g)" \
               --env HOME=/tmp \
               --env "CARGO_HOME=$host_cargo_home" \
@@ -1236,6 +1085,7 @@ jobs:
               --workdir "$GITHUB_WORKSPACE/rust" \
               "$bookworm_builder" \
               sh -ceu '
+                . ../scripts/ci/bookworm-cache-env.sh
                  ld.mold --version | grep -Eq "^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$"
                  probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"
                  printf "int main(void){return 0;}\\n" | cc -x c - \
@@ -1288,7 +1138,7 @@ jobs:
               "$artifacts" target
           fi
       - name: Capture host compiler cache counters after compile
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -1309,6 +1159,20 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
+      - name: Record selfhost acceptance compile disk
+        if: matrix.lane == 'selfhost'
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rust-build-evidence"
+          df -Pk "$GITHUB_WORKSPACE" "$RUNNER_TEMP" > "$evidence/selfhost-after-acceptance-compile-df.txt"
+          timeout 20s du -sk --one-file-system -- "$GITHUB_WORKSPACE/rust/target" > "$evidence/selfhost-after-acceptance-compile-du.txt" ||
+            printf 'size unavailable within telemetry bound\n' >> "$evidence/selfhost-after-acceptance-compile-du.txt"
+      - name: Require unprivileged installer recovery fixtures
+        if: matrix.lane == 'contracts'
+        timeout-minutes: 10
+        shell: bash
+        run: bash scripts/ci/qualify-installer-recovery-fixtures.sh "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Execute ordinary Issuance library obligations
         if: matrix.lane == 'renewal-unit'
         working-directory: rust
@@ -1459,37 +1323,6 @@ jobs:
         working-directory: rust
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py preflights
-      - name: Expose public image compiler cache credentials
-        if: matrix.lane == 'selfhost'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        with:
-          script: |
-            const token = process.env.ACTIONS_RUNTIME_TOKEN;
-            const url = process.env.ACTIONS_RESULTS_URL;
-            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
-            core.setSecret(token);
-            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
-            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
-            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
-      - name: Build public selfhost image
-        if: matrix.lane == 'selfhost'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: services/Dockerfile
-          load: true
-          push: false
-          tags: marty-selfhost-public:contract
-          provenance: false
-          build-args: |
-            MARTY_RELEASE_VERSION=ci
-            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-            SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Prepare public selfhost image loader acceptance
         if: matrix.lane == 'selfhost'
         shell: bash
@@ -1581,6 +1414,12 @@ jobs:
             exit 1
           fi
           cp "$credential_template_migration_executable" target/debug/credential-template-migration-contract
+          notification_migration_executable="$(resolve_recorded_contract_executable marty-notification migration_contract)"
+          if [[ -z "$notification_migration_executable" || ! -x "$notification_migration_executable" ]]; then
+            echo "Unable to locate the compiled Notification migration contract executable." >&2
+            exit 1
+          fi
+          cp "$notification_migration_executable" target/debug/notification-migration-contract
           presentation_policy_executable="$(resolve_recorded_contract_executable marty-presentation-policy postgres_integration)"
           if [[ -z "$presentation_policy_executable" || ! -x "$presentation_policy_executable" ]]; then
             echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
@@ -1650,7 +1489,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
           # Use the real upstream Rust schema owners. The former hand-made
@@ -1864,7 +1703,7 @@ jobs:
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in csca_lifecycle_storage_contract:2 document_storage_contract:1; do
+          for entry in csca_lifecycle_storage_contract:2 document_storage_contract:1 didcomm_publication_routes:2; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
@@ -1891,6 +1730,47 @@ jobs:
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
           run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1
+      - name: Exercise managed Policy evidence through Flow PostgreSQL commit
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        env:
+          FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("#marty-presentation-policy@"))
+            | select(.target.name == "marty_presentation_policy")
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          test_name=verification_tests::bounded_sd_jwt_query_evidence::managed_authority::live_keyless_managed_policy_evidence
+          "${executables[0]}" "$test_name" --ignored --exact --list | grep -Fx "$test_name: test"
+          # Reuse the reviewed 2.5.5 base identity from openbao/didcomm-authcrypt/Dockerfile.
+          # The shared contracts daemon is older; this fixture owns an isolated native child.
+          image=quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
+          bash ../scripts/ci/pull-pinned-quay-openbao.sh "$image"
+          container="$(docker create "$image")"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          binary="$RUNNER_TEMP/managed-policy-openbao"
+          docker cp "$container:/bin/bao" "$binary"
+          chmod 700 "$binary"
+          "$binary" version | grep -F '028992583c693c4de6350b8aa52ff85e30375a99'
+          run_timed managed_policy_evidence python3 ../scripts/with_disposable_policy_owner_kms.py \
+            --openbao "$binary" -- "${executables[0]}" "$test_name" \
+            --ignored --exact --nocapture | tee "$RUNNER_TEMP/managed-policy-evidence.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/managed-policy-evidence.log"
+          owner_executable="$(resolve_recorded_contract_executable marty-presentation-policy control_plane_behavior)"
+          owner_test=managed_authority_http::live_keyless_managed_owner_channels
+          "$owner_executable" "$owner_test" --ignored --exact --list | grep -Fx "$owner_test: test"
+          run_timed managed_owner_channels python3 ../scripts/with_disposable_policy_owner_kms.py \
+            --openbao "$binary" -- "$owner_executable" "$owner_test" \
+            --ignored --exact --nocapture | tee "$RUNNER_TEMP/managed-owner-channels.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' "$RUNNER_TEMP/managed-owner-channels.log"
       - name: Prepare owned runtime failure diagnostics
         if: matrix.lane == 'canvas'
         shell: bash
@@ -2024,7 +1904,7 @@ jobs:
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: owned-runtime-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*
@@ -2051,7 +1931,7 @@ jobs:
           "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
           "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification "$MARTY_CANVAS_FULL_QUALIFICATION"
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -2062,7 +1942,7 @@ jobs:
           fi
       - name: Upload Rust build evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rust-build-evidence-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rust-build-evidence/
@@ -2079,7 +1959,7 @@ jobs:
           test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"
       - name: Preserve fresh full-main startup attestation
         if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canvas-startup-fresh-run.json
@@ -2089,7 +1969,7 @@ jobs:
       # comparison and owned cleanup. It attests a new run, not the old capture.
       - name: Preserve fresh full-main REST requalification evidence
         if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: canvas-rest-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canvas-rest-fresh-run.json
@@ -2104,9 +1984,33 @@ jobs:
           export MARTY_RUST_CI_REDIS_IMAGE=redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
             down --volumes --remove-orphans
+      # Diagnostic identity only; never permission to skip merge-group qualification.
+      # success() includes all Rust checks and the owned cleanup above.
+      - name: Record successful PR Rust checkout identity
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        shell: bash
+        env:
+          MARTY_RUST_ATTESTATION_LANE: ${{ matrix.lane }}
+        run: python3 scripts/ci/write_pr_rust_checkout_attestation.py "$RUNNER_TEMP/pr-rust-checkout-attestation.json"
+      - name: Upload successful PR Rust checkout identity
+        if: success() && github.event_name == 'pull_request' && (matrix.lane == 'canvas' || matrix.lane == 'contracts')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: pr-rust-checkout-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pr-rust-checkout-attestation.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Save successful trusted-main offline compiler objects
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (success() && github.repository == 'ElevenID/marty-ui' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.lane == 'canvas')
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/bookworm-sccache/cache
+          key: ${{ steps.bookworm-cache-key.outputs.key }}
+
   test-native-operator:
     name: Native KMS Operator (${{ matrix.arch }})
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
     # Cold static compilation plus the required HTTPS/custody matrix exceeded
@@ -2130,6 +2034,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             elf_machine: AArch64
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       TARGET: ${{ matrix.target }}
@@ -2139,13 +2044,53 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      # Materialize private sources before the credential-free bounded target
+      # fetch below. Both steps keep the same Cargo home and locked graph.
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - name: Fetch locked native operator dependencies
+        timeout-minutes: 5
+        shell: bash
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          host_target="$(rustc -vV | sed -n 's/^host: //p')"
+          test -n "$host_target"
+          for attempt in 1 2; do
+            printf 'Locked native operator dependency acquisition: attempt %s of 2.\n' "$attempt"
+            if timeout --kill-after=5s 120s \
+              cargo --config net.git-fetch-with-cli=true fetch --locked \
+                --manifest-path rust/Cargo.toml \
+                --target "$host_target" --target "$TARGET"; then
+              exit 0
+            else
+              status=$?
+              printf 'Locked native operator dependency acquisition attempt %s failed (exit %s).\n' "$attempt" "$status" >&2
+            fi
+            if [ "$attempt" -eq 1 ]; then sleep 2; fi
+          done
+          echo '::error::Locked native operator dependency acquisition failed after two bounded attempts.'
+          exit 1
       - name: Exercise the static native operator against real HTTPS
         shell: bash
         run: |
@@ -2155,8 +2100,8 @@ jobs:
           MARTY_DEPLOY_SOURCE_SHA="$(git rev-parse HEAD)"
           export MARTY_DEPLOY_SOURCE_SHA
           export MARTY_DEPLOY_RELEASE_TAG=v0.0.0
-          cargo test --locked --manifest-path rust/Cargo.toml -p marty-managed-key-reference
-          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --target "$TARGET" \
+          cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-managed-key-reference
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --offline --target "$TARGET" \
             --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
           export MARTY_DEPLOY_BIN="$GITHUB_WORKSPACE/rust/target/$TARGET/debug/marty-deploy"
           readelf -h "$MARTY_DEPLOY_BIN" | grep -F "$ELF_MACHINE"
@@ -2164,6 +2109,8 @@ jobs:
           MARTY_DEPLOY_BIN_SHA256="$(sha256sum "$MARTY_DEPLOY_BIN" | cut -d ' ' -f 1)"
           export MARTY_DEPLOY_BIN_SHA256
           python -m pip install --disable-pip-version-check pytest cryptography pyyaml
+          python -m pytest -q tests/test_selfhost_operator_inputs.py tests/test_selfhost_windows_inputs.py tests/test_selfhost_windows_renewal.py tests/test_selfhost_windows_selection.py tests/test_windows_unstarted_activation.py tests/test_windows_product_transition.py tests/test_windows_product_journal.py tests/test_windows_product_probe.py tests/test_windows_product_deploy.py
+          python -m pytest -q tests/test_native_retained_certificates.py tests/test_native_recovery_candidate.py tests/test_windows_failed_current_receipts.py tests/test_windows_failed_current_inspection.py tests/test_windows_stage_recovery_generation.py tests/test_windows_recovery_phase_receipts.py tests/test_windows_recovery_operator.py tests/test_windows_recovery_publication.py tests/test_windows_recovery_activation.py tests/test_windows_recovery_journal.py tests/test_windows_recovery_resolver.py tests/test_windows_recovery_resolver_positive.py tests/test_windows_private_promotion.py tests/test_windows_private_output_directory.py tests/test_windows_managed_recovery_cli.py
           python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_native_rotation.py tests/test_selfhost_native_certificates.py tests/test_selfhost_native_ca_profile.py tests/test_selfhost_native_keycloak.py tests/test_selfhost_native_ca_issuer.py tests/test_selfhost_native_activation.py tests/test_provision_selfhost_renewal_identity.py tests/test_check_selfhost_root_retirement.py tests/test_stage_selfhost_renewed_secrets.py tests/test_activate_selfhost_renewed_secrets.py tests/test_provision_selfhost_keycloak_kms.py tests/test_provision_selfhost_ca_rotation_identity.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_operator_cleanup_cli.py tests/test_selfhost_native_operator.py::test_native_transactions_cannot_be_killed_during_cleanup tests/test_selfhost_native_operator.py::test_keycloak_abnormal_exit_is_sanitized_recovery tests/test_selfhost_native_operator.py::test_ca_issuer_abnormal_exit_is_sanitized_recovery tests/test_selfhost_native_operator.py::test_ca_issuer_malformed_delivery_requires_recovery tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys tests/test_selfhost_native_operator.py::test_native_custody_signer_preserves_latest_and_provisioning_modes tests/test_selfhost_native_operator.py::test_native_custody_signer_refuses_custody_and_current_key_drift tests/test_provision_selfhost_custody_signer.py tests/test_ci_quay_pinned_retry.py tests/test_selfhost_native_leaf_tokens.py tests/test_selfhost_owned_handoff.py tests/test_provision_selfhost_audit_token.py
           python_bin="$(command -v python)"
           sudo env PYTHONDONTWRITEBYTECODE=1 MARTY_DEPLOY_BIN="$MARTY_DEPLOY_BIN" \
@@ -2174,35 +2121,51 @@ jobs:
 
   rust-lint-policy:
     name: Rust Lint and Packaging
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}
+      SCCACHE_GHA_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
       SCCACHE_GHA_RW_MODE: READ_ONLY
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           components: clippy,rustfmt
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml" --manifest-path ".github/feature-regression/rust-probe/Cargo.toml"
       - name: Use mold linker
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
         with:
           mold-version: 2.41.0
       - name: Enable compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
       - name: Keep Rust lint independent of optional compiler cache
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         shell: bash
         run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Check formatting
@@ -2220,6 +2183,9 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Test the opt-in unsigned installer development boundary
+        working-directory: rust
+        run: cargo test --locked --offline -p marty-deployment-catalog --features installer-development --lib
       - name: Lint frozen Rust feature-regression probe
         shell: bash
         run: |
@@ -2328,7 +2294,7 @@ jobs:
           grep -F 'SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
       - name: Report compiler cache effectiveness
-        if: always()
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
         run: |
           set -euo pipefail
@@ -2340,16 +2306,24 @@ jobs:
 
   test-rust-service-images:
     name: Rust Service Images
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
@@ -2362,6 +2336,19 @@ jobs:
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: 1.95.0
+      # Catalog-backed Compose checks invoke Cargo on the runner, independently
+      # of later image builds. Fetch sources here without giving tests a token.
+      - name: Fetch locked private fork dependencies for Compose catalog checks
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        timeout-minutes: 5
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
       - name: Verify self-host native owner preservation
@@ -2389,6 +2376,7 @@ jobs:
       - name: Verify default native Envoy configuration
         run: python3 scripts/test_envoy_native_compose.py --compose-command "$RUNNER_TEMP/compose-render-v5.4.0"
       - name: Expose compiler cache credentials to BuildKit secrets
+        if: vars.PRIVATE_FORKS_ENABLED != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -2401,6 +2389,9 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build event-stream image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           context: .
           file: rust/services/Dockerfile.ci
@@ -2411,16 +2402,23 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
           # Only the trusted main-branch warmer publishes shared build caches.
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
       - name: Build issuance image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: issuance
@@ -2430,11 +2428,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build gateway image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: gateway
@@ -2444,8 +2448,9 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Export the actual gateway contract without service startup
         run: |
           python3 scripts/check_gateway_openapi_export.py \
@@ -2463,7 +2468,7 @@ jobs:
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
           "$RUNNER_TEMP/gateway-schema-check/bin/python" scripts/check_gateway_template_openapi.py \
             --openapi "$RUNNER_TEMP/gateway-openapi.json"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: gateway-openapi-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gateway-openapi.json
@@ -2471,7 +2476,12 @@ jobs:
           retention-days: 14
       - name: Build revocation-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: revocation_profile
@@ -2481,11 +2491,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build signing-keys image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: signing_keys
@@ -2495,11 +2511,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build notification image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: notification
@@ -2509,11 +2531,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build flow image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: flow
@@ -2523,11 +2551,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build organization image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: organization
@@ -2537,11 +2571,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build credential-template image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: credential_template
@@ -2551,11 +2591,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build presentation-policy image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: presentation_policy
@@ -2565,11 +2611,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build trust-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: trust_profile
@@ -2579,11 +2631,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build applicant image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: applicant
@@ -2593,11 +2651,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build device-registration image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: device_registration
@@ -2607,11 +2671,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build verification image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: verification
@@ -2621,14 +2691,20 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Smoke-test verification migration and compatibility runtime from one image
         shell: bash
         run: bash scripts/smoke-verification-image.sh marty-verification-service:ci dedicated
       - name: Build deployment-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: deployment_profile
@@ -2638,11 +2714,17 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Build compliance-profile image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: rust/services/Dockerfile.ci
           target: compliance_profile
@@ -2652,8 +2734,9 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: false
-          cache-from: type=gha,scope=marty-ui-rust-service-images
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-rust-service-images' || '' }}
       - name: Smoke-test gateway image
         shell: bash
         run: |
@@ -2822,7 +2905,7 @@ jobs:
 
   public-protocol-contract:
     name: Public Protocol Contract
-    needs: changes
+    needs: [changes, release-preflight]
     if: >-
       needs.changes.outputs.ui == 'true' ||
       needs.changes.outputs.python == 'true' ||
@@ -2848,10 +2931,10 @@ jobs:
           repository: Marty-Protocol/Marty-Protocol
           ref: ${{ env.MARTY_PROTOCOL_REF }}
           path: marty-protocol
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.11.3"
           enable-cache: true
@@ -2881,24 +2964,31 @@ jobs:
 
   test-release-contracts:
     name: Release Contract Tests
-    needs: changes
+    needs: [changes, release-preflight]
     if: >-
       needs.changes.outputs.release == 'true' ||
       needs.changes.outputs.verification == 'true' ||
       needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
       PYTHONPATH: packages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12.10"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.11.3"
           enable-cache: true
@@ -2972,9 +3062,16 @@ jobs:
           assert result.not_revoked is None
           assert result.error
           PY
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare Rust KMS operator for release contracts
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: bash scripts/ci/prepare-native-model-operator.sh
@@ -3074,6 +3171,7 @@ jobs:
             tests/test_installer_candidate_vm_host_probe.py \
             tests/test_installer_candidate_vm_host_preflight.py \
             tests/test_installer_candidate_vm_exchange.py \
+            tests/test_installer_candidate_vm_rootless.py \
             tests/test_installer_engineering_trial.py -p no:cacheprovider --junitxml="$report"
           python - "$report" <<'PY'
           import sys
@@ -3085,16 +3183,54 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned VM creation test report is missing")
           cases = list(suite.iter("testcase"))
-          if len(cases) != 108 or any(
+          if len(cases) != 158 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 108), ("skipped", 0),
+              for name, expected in (("tests", 158), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           ):
               raise SystemExit("root-owned VM creation cases did not all execute and pass")
           PY
+      - name: Exercise root-owned optional secret staging contracts
+        if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          report="$RUNNER_TEMP/selfhost-root-optional-secrets-contracts.xml"
+          sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
+            tests/test_stage_selfhost_disabled_optional_secrets.py::test_creates_exact_nine_empty_private_files \
+            tests/test_stage_selfhost_disabled_optional_secrets.py::test_enabled_integration_cannot_receive_empty_secret \
+            tests/test_stage_selfhost_disabled_optional_secrets.py::test_late_mode_failure_rolls_back_owned_outputs \
+            -p no:cacheprovider --junitxml="$report"
+          python - "$report" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suite = ET.parse(sys.argv[1]).getroot()
+          if suite.tag == "testsuites":
+              suite = suite.find("testsuite")
+          if suite is None or suite.tag != "testsuite":
+              raise SystemExit("root-owned optional secret test report is missing")
+          cases = list(suite.iter("testcase"))
+          expected_names = {
+              "test_creates_exact_nine_empty_private_files",
+              "test_enabled_integration_cannot_receive_empty_secret",
+              "test_late_mode_failure_rolls_back_owned_outputs",
+          }
+          if (len(cases) != 3
+              or {case.attrib.get("name") for case in cases} != expected_names
+              or any(case.find(tag) is not None for case in cases
+                     for tag in ("skipped", "failure", "error"))
+              or any(
+                  int(suite.attrib.get(name, "-1")) != expected
+                  for name, expected in (("tests", 3), ("skipped", 0),
+                                         ("failures", 0), ("errors", 0))
+              )):
+              raise SystemExit("root-owned optional secret cases did not all execute and pass")
+          PY
       - name: Configure the pinned containerd image store
         if: needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
+        uses: docker/setup-docker-action@3f1ab1ab0e29231562e4db4ca600c1a49653bac6 # v5.7.0
         with:
           version: v29.7.2
           daemon-config: |
@@ -3129,7 +3265,7 @@ jobs:
           tests/test_verification_candidate_workflow.py
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -3138,7 +3274,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          bun-version: "1.4.4"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
           cache: npm
@@ -3180,7 +3318,7 @@ jobs:
         run: npx playwright test --config playwright.applicant-wallet.config.js
       - name: Upload browser evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: mip-03-credential-lifecycle-browser
           path: |
@@ -3192,21 +3330,23 @@ jobs:
 
   security:
     name: Security Scanning
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.security == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "0.11.3"
           enable-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: "1.4.4"
       - name: Install scanners
         run: uv pip install --system bandit semgrep pip-audit
       - name: Run security scans concurrently
@@ -3264,7 +3404,7 @@ jobs:
           exit "$status"
       - name: Upload security reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: security-reports
           path: |
@@ -3275,31 +3415,49 @@ jobs:
 
   rust-supply-chain:
     name: Rust Supply Chain
-    needs: changes
+    needs: [changes, release-preflight]
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Audit Rust advisories, licenses, bans, and sources
         run: bash scripts/ci/run-cargo-deny.sh
 
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, release-preflight, lint, test-website, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
     env:
       CI_LANE_RESULTS: ${{ join(needs.*.result, ' ') }}
+      WEBSITE_SELECTED: ${{ needs.changes.outputs.website }}
+      WEBSITE_ONLY: ${{ needs.changes.outputs.website_only }}
+      WEBSITE_RESULT: ${{ needs.test-website.result }}
       UI_SELECTED: ${{ needs.changes.outputs.ui }}
       PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
       RUST_SELECTED: ${{ needs.changes.outputs.rust }}
@@ -3313,6 +3471,7 @@ jobs:
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
       CHANGES_RESULT: ${{ needs.changes.result }}
       LINT_RESULT: ${{ needs.lint.result }}
+      PREFLIGHT_RESULT: ${{ needs.release-preflight.result }}
       FAST_FEEDBACK_RESULT: ${{ needs.fast-feedback.result }}
       CRAWLER_ARTIFACTS_RESULT: ${{ needs.test-ui-crawler-artifacts.result }}
       CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
@@ -3337,7 +3496,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 18 ]]
+          [[ "${#results[@]}" -eq 20 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3353,7 +3512,7 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY" "$DIDCOMM_RELEASE_TEST_ONLY"; do
+          for selected in "$WEBSITE_SELECTED" "$WEBSITE_ONLY" "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY" "$DIDCOMM_RELEASE_TEST_ONLY"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
           if [[ "$DIDCOMM_RELEASE_TEST_ONLY" == true ]]; then
@@ -3379,7 +3538,7 @@ jobs:
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
-          if [[ "${{ github.event_name }}" == merge_group ]]; then
+          if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
                "$RUST_MATRIX" == '["canvas","contracts","selfhost"]' ]]
@@ -3389,6 +3548,8 @@ jobs:
           else
             require_result changes "$CHANGES_RESULT" success
             require_result lint "$LINT_RESULT" success
+            require_result release-preflight "$PREFLIGHT_RESULT" success
+            require_selected test-website "$WEBSITE_RESULT" "$WEBSITE_SELECTED"
             require_selected fast-feedback "$FAST_FEEDBACK_RESULT" "$UI_SELECTED"
             require_selected test-ui-crawler-artifacts "$CRAWLER_ARTIFACTS_RESULT" "$UI_SELECTED"
             require_selected test-ui-crawler-nginx "$CRAWLER_NGINX_RESULT" "$UI_SELECTED"
@@ -3414,6 +3575,19 @@ jobs:
             require_selected test-release-contracts "$RELEASE_CONTRACTS_RESULT" "$release_selected"
             require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"
           fi
+      - name: Checkout source for the closed plan guard
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Bind every result to the exact CI plan
+        env:
+          CI_PLAN: ${{ needs.changes.outputs.plan }}
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: python3 scripts/ci/affected_components.py gate
       - name: Summarize CI performance
         # Telemetry must not fail a green required-lane gate during a GitHub API outage.
         continue-on-error: true
@@ -3463,6 +3637,7 @@ jobs:
     permissions:
       contents: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Check out the exact PR head
@@ -3470,6 +3645,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Bind this disposable build to its source
         shell: bash
         env:
@@ -3488,7 +3669,11 @@ jobs:
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Build exact-head gateway image for an unqualified VM trial
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: services/Dockerfile
           push: false
@@ -3499,6 +3684,7 @@ jobs:
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=engineering-trial
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           outputs: type=oci,dest=${{ runner.temp }}/installer-trial-image/services.oci.tar,compression=gzip,force-compression=true
           provenance: false
           sbom: false
@@ -3534,7 +3720,7 @@ jobs:
           output.write_text(json.dumps(record, sort_keys=True, separators=(',', ':')) + '\n')
           PY
       - name: Upload short-lived engineering image
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-trial-image-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-trial-image/

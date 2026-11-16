@@ -104,7 +104,15 @@ impl PresentationPolicyProvider for Policies {
         policy_id: &str,
     ) -> Result<PresentationPolicyReference, FlowProviderError> {
         Ok(PresentationPolicyReference {
+            prerequisite_evidence_profile: None,
+            credential_authority: None,
+            holder_binding_required: false,
             id: policy_id.into(),
+            policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
+                id: policy_id.into(),
+                version: 1,
+                content_digest: format!("sha256:{}", "1".repeat(64)),
+            },
             organization_id: "org-1".into(),
             status: "active".into(),
             credential_requirements: vec![json!({
@@ -153,6 +161,7 @@ impl CredentialTemplateProvider for Templates {
             issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),
+            jwt_vc_profile: None,
         })
     }
 
@@ -174,6 +183,12 @@ impl EvaluationProvider for Evaluation {
         request: &PresentationEvaluationRequest,
     ) -> Result<EvaluationResult, VerificationError> {
         assert_eq!(request.principal_id, "user-1");
+        assert_eq!(request.expected_policy_revision.id, request.policy_id);
+        assert_eq!(request.expected_policy_revision.version, 1);
+        assert_eq!(
+            request.expected_policy_revision.content_digest,
+            format!("sha256:{}", "1".repeat(64))
+        );
         Ok(EvaluationResult {
             result: "passed".into(),
             decision: "allow".into(),

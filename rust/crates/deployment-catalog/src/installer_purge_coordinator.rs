@@ -5,12 +5,14 @@
 
 use crate::{
     installer_complete_purge_plan::{self, PrepareNormalOutcome},
+    installer_compose::ProjectResources,
+    installer_compose_volume_creation::VolumeIdentity,
     installer_purge_host::{HostIdentity, Kind},
     installer_purge_ledger::{self, ConfirmationBinding, DirectoryStamp, PurgeLedger},
-    installer_purge_plan::{CleanupResource, DockerRead, VolumeCreation},
+    installer_purge_plan::{DockerRead, NativeCleanupBinding},
     installer_runtime::DockerRunner,
     installer_state::LockedInspection,
-    installer_top_level_census::TopLevelName,
+    installer_top_level_census::CensusProfile,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -26,7 +28,7 @@ use std::{
 };
 use uuid::{Variant, Version};
 
-const SCHEMA: &str = "elevenid.installer-private-normal-purge-candidate/v1";
+const SCHEMA: &str = "elevenid.installer-private-normal-purge-candidate/v2";
 const MAX_PLAN: usize = 4 * 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
 const MAX_PATH: usize = 1024;
@@ -138,29 +140,32 @@ mod tests {
             mode: stamp.mode,
             kind: Kind::Directory,
         };
-        let mut entries: Vec<_> = TopLevelName::REQUIRED
-            .iter()
-            .enumerate()
-            .map(|(index, name)| Entry {
-                relative_path: name.name(),
-                parent: root.clone(),
-                target: HostIdentity {
-                    dev: root.dev,
-                    ino: root.ino + index as u64 + 1,
-                    uid: root.uid,
-                    gid: root.gid,
-                    mode: if name.expected_kind() == Kind::Directory {
-                        0o700
-                    } else {
-                        0o600
-                    },
-                    kind: name.expected_kind(),
+        let mut entries: Vec<_> = CensusProfile::NativeComposeV2 {
+            local_operator_password: true,
+        }
+        .names()
+        .iter()
+        .enumerate()
+        .map(|(index, name)| Entry {
+            relative_path: name.name(),
+            parent: root.clone(),
+            target: HostIdentity {
+                dev: root.dev,
+                ino: root.ino + index as u64 + 1,
+                uid: root.uid,
+                gid: root.gid,
+                mode: if name.expected_kind() == Kind::Directory {
+                    0o700
+                } else {
+                    0o600
                 },
-            })
-            .collect();
+                kind: name.expected_kind(),
+            },
+        })
+        .collect();
         entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
         let receipt = digest(b"synthetic-local-receipt");
-        Plan {
+        let mut plan = Plan {
             schema: SCHEMA.into(),
             coverage: "expected_normal_profile_current_tree".into(),
             installation_id: uuid::Uuid::new_v4(),
@@ -168,8 +173,14 @@ mod tests {
             release_tag: "synthetic".into(),
             source_inventory_sha256: format!("sha256:{}", "b".repeat(64)),
             journal_revision: 3,
-            cleanup_plan_sha256: digest(b"synthetic-cleanup-plan"),
-            cleanup_result_sha256: digest(b"synthetic-cleanup-result"),
+            native_cleanup: NativeCleanupBinding {
+                selected_session_sha256: digest(b"synthetic-session"), cleanup_intent_sha256: digest(b"synthetic-intent"),
+                cleanup_result_sha256: digest(b"synthetic-result"), volume_creation_record_sha256: None,
+                volume_source_records_sha256: ["compose-application-cleanup-plan.json", "application-native-model.json",
+                    "compose-application-up-intent.json", "compose-application-up-result.json"].into_iter().map(|name| (name.into(),digest(name.as_bytes()))).collect(),
+            },
+            top_level_profile: "native_compose_initial_managed_openbao_non_acme/v2".into(),
+            local_operator_password: true,
             absolute_installation_path: root_path.to_str().unwrap().into(),
             root,
             root_mount_id: stamp.mount_id,
@@ -179,25 +190,19 @@ mod tests {
                 application_sha256: receipt.clone(),
                 openbao_state_sha256: receipt.clone(),
                 openbao_owner_transition_sha256: receipt.clone(),
-                openbao_created_sha256: receipt.clone(),
-                openbao_tls_completion_sha256: receipt,
+                openbao_native_custody_sha256: receipt.clone(),
+                openbao_tls_completion_sha256: receipt.clone(),
+                native_storage_receipts_sha256: ["openbao-control-created.json", "openbao-seal-created.json"].into_iter().map(|name| (name.into(),receipt.clone())).collect(),
             },
             entries_deepest_first: entries,
             engine_id: "synthetic-engine".into(),
-            project: "synthetic-project".into(),
-            removed_containers: Vec::new(),
-            removed_network_id: "synthetic-network".into(),
-            removed_network_name: "synthetic-name".into(),
-            retained_redis_volume: VolumeCreation {
-                schema: "synthetic-volume".into(),
-                installation_id: String::new(),
-                engine_id: "synthetic-engine".into(),
-                name: "synthetic-volume".into(),
-                created_at: "2026-01-01T00:00:00Z".into(),
-                labels: BTreeMap::from([("x".into(), "y".into())]),
-                driver: "local".into(),
-                scope: "local".into(),
-            },
+            project: String::new(), // Bound to the fixture UUID below.
+            native_prior_resources: serde_json::from_value(serde_json::json!({
+                "containers":{"synthetic":{"id":"a".repeat(64),"service":"synthetic","image":"synthetic-image",
+                    "config_hash":"b".repeat(64),"setup":false,"setup_execution":null,"health_required":false,
+                    "cap_add":[],"cap_drop":[],"read_only":true,"memory_limit":134217728}}, "networks":{}, "volumes":[]
+            })).unwrap(),
+            retained_volumes: BTreeMap::new(),
             execution_quarantine: ExecutionQPolicy {
                 relative_name: ".marty-purge-quarantine".into(),
                 creation: "exclusive_create_after_confirmation".into(),
@@ -210,7 +215,9 @@ mod tests {
             not_atomic_snapshot: true,
             deletion_eligible: false,
             deletion_authorized: false,
-        }
+        };
+        plan.project = format!("marty-install-{}", plan.installation_id.simple());
+        plan
     }
     struct ResumeFixture {
         _temp: tempfile::TempDir,
@@ -366,10 +373,11 @@ mod tests {
         let fixture = resume_fixture();
         let bytes = serde_json::to_vec(&fixture.plan).unwrap();
         let text = String::from_utf8(bytes).unwrap();
-        let duplicate = text.replace(
-            "\"labels\":{\"x\":\"y\"}",
-            "\"labels\":{\"x\":\"y\",\"x\":\"y\"}",
+        let field = format!(
+            "\"selected_session_sha256\":\"{}\"",
+            fixture.plan.native_cleanup.selected_session_sha256
         );
+        let duplicate = text.replacen(&field, &format!("{field},{field}"), 1);
         assert_ne!(duplicate, text);
         assert!(matches!(
             parse_plan(duplicate.as_bytes(), &digest(duplicate.as_bytes())),
@@ -428,8 +436,9 @@ struct Receipts {
     application_sha256: String,
     openbao_state_sha256: String,
     openbao_owner_transition_sha256: String,
-    openbao_created_sha256: String,
+    openbao_native_custody_sha256: String,
     openbao_tls_completion_sha256: String,
+    native_storage_receipts_sha256: BTreeMap<String, String>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -457,8 +466,9 @@ struct Plan {
     release_tag: String,
     source_inventory_sha256: String,
     journal_revision: u64,
-    cleanup_plan_sha256: String,
-    cleanup_result_sha256: String,
+    native_cleanup: NativeCleanupBinding,
+    top_level_profile: String,
+    local_operator_password: bool,
     absolute_installation_path: String,
     root: HostIdentity,
     root_mount_id: u64,
@@ -466,10 +476,8 @@ struct Plan {
     entries_deepest_first: Vec<Entry>,
     engine_id: String,
     project: String,
-    removed_containers: Vec<CleanupResource>,
-    removed_network_id: String,
-    removed_network_name: String,
-    retained_redis_volume: VolumeCreation,
+    native_prior_resources: ProjectResources,
+    retained_volumes: BTreeMap<String, VolumeIdentity>,
     execution_quarantine: ExecutionQPolicy,
     not_atomic_snapshot: bool,
     deletion_eligible: bool,
@@ -493,6 +501,119 @@ fn valid_relative(path: &str) -> bool {
             .split('/')
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
+fn native_profile(plan: &Plan) -> CensusProfile {
+    CensusProfile::NativeComposeV2 {
+        local_operator_password: plan.local_operator_password,
+    }
+}
+fn valid_native_cleanup(plan: &Plan) -> bool {
+    let binding = &plan.native_cleanup;
+    let resources = &plan.native_prior_resources;
+    let mut source_names: BTreeSet<&str> = [
+        "compose-application-cleanup-plan.json",
+        "application-native-model.json",
+        "compose-application-up-intent.json",
+        "compose-application-up-result.json",
+    ]
+    .into();
+    if let Some(hash) = &binding.volume_creation_record_sha256 {
+        source_names.insert("compose-application-up-created-volumes.json");
+        if !hex64(hash)
+            || resources.volumes.is_empty()
+            || binding
+                .volume_source_records_sha256
+                .get("compose-application-up-created-volumes.json")
+                != Some(hash)
+        {
+            return false;
+        }
+    } else if !resources.volumes.is_empty() {
+        return false;
+    }
+    let valid_name = |name: &str| {
+        !name.is_empty()
+            && name.len() <= 255
+            && name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    };
+    let scoped = |name: &str| valid_name(name) && name.starts_with(&format!("{}_", plan.project));
+    let receipts = &plan.creation_receipts.native_storage_receipts_sha256;
+    plan.top_level_profile == "native_compose_initial_managed_openbao_non_acme/v2"
+        && plan.project == format!("marty-install-{}", plan.installation_id.simple())
+        && plan.source_sha.len() == 40
+        && plan
+            .source_sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        && plan
+            .source_inventory_sha256
+            .strip_prefix("sha256:")
+            .is_some_and(hex64)
+        && plan.journal_revision > 0
+        && [
+            binding.selected_session_sha256.as_str(),
+            binding.cleanup_intent_sha256.as_str(),
+            binding.cleanup_result_sha256.as_str(),
+        ]
+        .into_iter()
+        .all(hex64)
+        && source_names
+            == binding
+                .volume_source_records_sha256
+                .keys()
+                .map(String::as_str)
+                .collect()
+        && binding
+            .volume_source_records_sha256
+            .values()
+            .all(|hash| hex64(hash))
+        && receipts.keys().map(String::as_str).collect::<BTreeSet<_>>()
+            == ["openbao-control-created.json", "openbao-seal-created.json"].into()
+        && receipts.values().all(|hash| hex64(hash))
+        && (1..=128).contains(&resources.containers.len())
+        && resources
+            .containers
+            .values()
+            .map(|c| &c.id)
+            .collect::<BTreeSet<_>>()
+            .len()
+            == resources.containers.len()
+        && resources.containers.iter().all(|(role, c)| {
+            valid_name(role)
+                && c.service == *role
+                && hex64(&c.id)
+                && hex64(&c.config_hash)
+                && !c.image.is_empty()
+                && c.image.len() <= 512
+                && !c.image.chars().any(char::is_control)
+        })
+        && resources.networks.len() <= 64
+        && resources
+            .networks
+            .iter()
+            .all(|(name, id)| scoped(name) && hex64(id))
+        && resources.volumes.len() <= 64
+        && resources.volumes.iter().all(|name| scoped(name))
+        && resources.volumes == plan.retained_volumes.keys().cloned().collect()
+        && plan.retained_volumes.iter().all(|(name, v)| {
+            v.name == *name
+                && v.driver == "local"
+                && v.scope == "local"
+                && v.created_at.len() <= 64
+                && chrono::DateTime::parse_from_rfc3339(&v.created_at)
+                    .is_ok_and(|time| time.timestamp() > 0)
+                && (2..=16).contains(&v.labels.len())
+                && v.labels
+                    .iter()
+                    .all(|(k, v)| k.len() <= 256 && v.len() <= 4096)
+                && v.labels.get("com.docker.compose.project") == Some(&plan.project)
+                && v.labels
+                    .get("com.docker.compose.volume")
+                    .is_some_and(|key| valid_name(key))
+        })
+}
+
 fn parse_plan(bytes: &[u8], sha256: &str) -> Result<Plan> {
     if bytes.is_empty() || bytes.len() > MAX_PLAN || !hex64(sha256) || digest(bytes) != sha256 {
         return Err(Refusal::InvalidPlan);
@@ -513,15 +634,14 @@ fn parse_plan(bytes: &[u8], sha256: &str) -> Result<Plan> {
         || plan.root_mount_id == 0
         || plan.absolute_installation_path.len() > MAX_PATH
         || !Path::new(&plan.absolute_installation_path).is_absolute()
-        || !hex64(&plan.cleanup_plan_sha256)
-        || !hex64(&plan.cleanup_result_sha256)
+        || !valid_native_cleanup(&plan)
         || ![
             &plan.creation_receipts.initial_sha256,
             &plan.creation_receipts.credential_sha256,
             &plan.creation_receipts.application_sha256,
             &plan.creation_receipts.openbao_state_sha256,
             &plan.creation_receipts.openbao_owner_transition_sha256,
-            &plan.creation_receipts.openbao_created_sha256,
+            &plan.creation_receipts.openbao_native_custody_sha256,
             &plan.creation_receipts.openbao_tls_completion_sha256,
         ]
         .iter()
@@ -529,7 +649,7 @@ fn parse_plan(bytes: &[u8], sha256: &str) -> Result<Plan> {
         || plan.engine_id.is_empty()
         || plan.engine_id.len() > 128
         || plan.engine_id.bytes().any(|byte| byte.is_ascii_control())
-        || plan.entries_deepest_first.len() < TopLevelName::REQUIRED.len()
+        || plan.entries_deepest_first.len() < native_profile(&plan).names().len()
         || plan.entries_deepest_first.len() > MAX_ENTRIES
         || !plan.not_atomic_snapshot
         || plan.deletion_eligible
@@ -561,7 +681,8 @@ fn parse_plan(bytes: &[u8], sha256: &str) -> Result<Plan> {
         previous = Some((depth, path));
         identities.insert(path, &entry.target);
     }
-    let expected_top: BTreeSet<_> = TopLevelName::REQUIRED
+    let expected_top: BTreeSet<_> = native_profile(&plan)
+        .names()
         .iter()
         .map(|name| name.name())
         .collect();
@@ -574,7 +695,7 @@ fn parse_plan(bytes: &[u8], sha256: &str) -> Result<Plan> {
     if observed_top != expected_top {
         return Err(Refusal::InvalidPlan);
     }
-    for name in TopLevelName::REQUIRED {
+    for name in native_profile(&plan).names() {
         let fixed = name.name();
         if identities.get(fixed.as_str()).map(|identity| identity.kind)
             != Some(name.expected_kind())

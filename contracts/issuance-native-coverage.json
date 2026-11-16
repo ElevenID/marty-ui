@@ -913,6 +913,15 @@
       "adaptation": "Explicit native-only recovery for an open review whose credential is already revoked; preserves the frozen resolve endpoint's repeated-revocation error."
     },
     {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/applications",
+      "operation": "read_disabled_canvas_binding_applications",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_operations.rs",
+      "behavior_test": "rust/services/issuance/tests/canvas_management_postgres_contract.rs",
+      "adaptation": "Authenticated tenant-owned and binding-scoped inventory for cleanup after a disabled binding is fenced; complete bounded ID/status projection only, separate from frozen legacy operations."
+    },
+    {
       "method": "POST",
       "path": "/v1/passport/applications/{application_id}/cancel",
       "operation": "administratively_cancel_passport_job",

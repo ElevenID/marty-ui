@@ -549,6 +549,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "role",
         ),
         rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/members/[^/]+/approve$",
+            &[("POST", "team:manage")],
+            "team",
+        ),
+        rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/members(?:/[^/]+)?$",
             &[
                 ("GET", "team:view"),
@@ -589,6 +594,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             r"^/v1(?:/organizations/[a-f0-9\-]{36})?/policy-sets/[^/]+/validate$",
             &[("POST", "policy-set:validate")],
             "policy-set",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/defaults$",
+            &[("GET", "organization:view"), ("PATCH", "organization:edit")],
+            "organization",
         ),
         rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/lifecycle$",
@@ -1159,6 +1169,47 @@ mod tests {
             required.permission,
             &["integrations:write".into()]
         ));
+    }
+
+    #[test]
+    fn disabled_canvas_binding_application_inventory_requires_owned_integration_read() {
+        let path = "/v1/integrations/canvas/program-bindings/binding-1/applications";
+        let required = resolve_action("GET", path).expect("binding inventory read route");
+        assert_eq!(required.permission, "integration-connector:view");
+        assert_eq!(required.resource, "integration-connector");
+        let lookup = resolve_resource_lookup(path).expect("exact binding owner lookup");
+        assert_eq!(lookup.service, "issuance");
+        assert_eq!(
+            lookup.path,
+            "/v1/integrations/canvas/program-bindings/binding-1"
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-2",
+                Some("org-1"),
+                &["integrations:read".into()]
+            ),
+            Err(TenantAuthorizationFailure::ApiKeyOrganizationMismatch),
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-1",
+                Some("org-1"),
+                &["applications:read".into()]
+            ),
+            Err(TenantAuthorizationFailure::ApiKeyPermissionMissing),
+        );
+        assert_eq!(
+            authorize_api_key(
+                required.permission,
+                "org-1",
+                Some("org-1"),
+                &["integrations:read".into()]
+            ),
+            Ok(()),
+        );
     }
 
     #[test]

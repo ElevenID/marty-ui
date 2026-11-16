@@ -492,10 +492,6 @@ fn native_template(resources: &[Value]) -> Result<()> {
         "ISSUER_BASE_URL",
         config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
     );
-    expected.insert(
-        "DIDCOMM_KMS_ADDR",
-        config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
-    );
     expected.insert("BAO_ADDR", config_ref("BAO_ADDR", "BAO_ADDR"));
     for (name, key) in [
         ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "ISSUANCE_TLS_KMS_ADDR"),
@@ -524,10 +520,6 @@ fn native_template(resources: &[Value]) -> Result<()> {
             json!({"name":name,"value":format!("/run/secrets/issuance-sign-grants/{path}")}),
         );
     }
-    expected.insert(
-        "DIDCOMM_KMS_TOKEN_FILE",
-        json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/didcomm-kms/token"}),
-    );
     expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
     expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
     for (name, value) in [
@@ -548,10 +540,6 @@ fn native_template(resources: &[Value]) -> Result<()> {
         ),
         (
             "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-            "/run/secrets/issuance-server-kms/ca.crt",
-        ),
-        (
-            "DIDCOMM_KMS_CA_CERT_FILE",
             "/run/secrets/issuance-server-kms/ca.crt",
         ),
         (
@@ -592,7 +580,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
     Ok(())
 }
 
-fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) -> Result<()> {
+fn closed_runtime_pod(deployment: &Value, owner: &Value, native_issuance: bool) -> Result<()> {
     require(deployment["apiVersion"] == "apps/v1")?;
     let mut owner_keys = vec![
         "name",
@@ -621,7 +609,7 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
     )?;
     require_keys(
         &owner["readinessProbe"],
-        if didcomm_token {
+        if native_issuance {
             &["httpGet", "initialDelaySeconds", "periodSeconds"]
         } else {
             &[
@@ -650,23 +638,23 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
             && pod["containers"].as_array().is_some_and(|v| v.len() == 1),
     )?;
     require(pod.get("hostNetwork").is_none())?;
-    if didcomm_token {
+    if native_issuance {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"issuance-server-tls","mountPath":"/run/secrets/issuance-server-tls","readOnly":true},{"name":"issuance-server-kms","mountPath":"/run/secrets/issuance-server-kms","readOnly":true},{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
+                == json!([{"name":"issuance-server-tls","mountPath":"/run/secrets/issuance-server-tls","readOnly":true},{"name":"issuance-server-kms","mountPath":"/run/secrets/issuance-server-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
+                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
         )?;
     } else {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"signing-keys-tls-kms","mountPath":"/run/secrets/signing-keys-tls-kms","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true}]),
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"signing-keys-tls-kms","mountPath":"/run/secrets/signing-keys-tls-kms","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true},{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"signing-keys-tls-kms","secret":{"secretName":"signing-keys-tls-kms"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}}]),
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"signing-keys-tls-kms","secret":{"secretName":"signing-keys-tls-kms"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}},{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}}]),
         )?;
     }
     Ok(())
@@ -707,6 +695,7 @@ fn signing_template(resources: &[Value]) -> Result<()> {
             "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
             "/run/secrets/signing-grant-verify/token",
         ),
+        ("DIDCOMM_KMS_TOKEN_FILE", "/run/secrets/didcomm-kms/token"),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }

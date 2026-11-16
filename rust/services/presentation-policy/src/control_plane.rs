@@ -1,13 +1,19 @@
-use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_verification::credential_format::DetectedCredentialFormat;
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+    OutboundHttpClient, OutboundHttpMethod, OutboundHttpRequest, ReqwestOutboundHttpClient,
 };
-use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use tonic::{
     metadata::AsciiMetadataValue,
     transport::{Channel, Endpoint},
@@ -21,18 +27,24 @@ use crate::{
         organization_service_client::OrganizationServiceClient, GetMemberRequest, MemberResponse,
     },
     CredentialStatusEvidence, CredentialStatusResolver, IssuerTrustEvidence, PolicyAuthorization,
-    PresentationTrustResolver, PresentationVerificationError, ResolvedTrustProfile,
+    PresentationTrustResolver, PresentationVerificationError, ResolvedCredentialTemplate,
+    ResolvedTrustProfile, ResolvedVerificationPolicy,
 };
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
+const MAX_TRUST_PROFILE_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CREDENTIAL_STATUS_BYTES: usize = 64 * 1024;
 
 #[derive(Clone)]
 pub struct NativePresentationControlPlane {
     organizations: OrganizationServiceClient<Channel>,
-    http: Client,
+    http: Arc<dyn OutboundHttpClient>,
+    owner_channels: Option<crate::owner_channel::ManagedOwnerChannels>,
     service_token: Option<AsciiMetadataValue>,
     service_token_header: Option<Arc<str>>,
     trust_profile_url: Arc<str>,
+    credential_template_url: Option<Arc<str>>,
+    organization_url: Option<Arc<str>>,
     status_url_template: Arc<str>,
     issuance_api_key: Option<Arc<str>>,
     timeout: Duration,
@@ -55,6 +67,18 @@ impl std::fmt::Debug for NativePresentationControlPlane {
 }
 
 impl NativePresentationControlPlane {
+    /// Managed owner evidence requires dedicated, authenticated HTTPS channels.
+    /// Missing configuration never falls back to ordinary control-plane HTTP.
+    pub fn with_managed_owner_channels(
+        mut self,
+        config: Option<&crate::ManagedOwnerChannelConfig>,
+    ) -> Result<Self, PresentationVerificationError> {
+        self.owner_channels = config
+            .map(|config| crate::owner_channel::ManagedOwnerChannels::new(config, self.timeout))
+            .transpose()?;
+        Ok(self)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn connect_lazy(
         organization_target: &str,
@@ -131,31 +155,80 @@ impl NativePresentationControlPlane {
             .map_err(|_| failed("service token is not valid ASCII metadata"))?;
         let trust_profile_url = service_url(trust_profile_url, "trust-profile")?;
         validate_status_template(status_url_template)?;
-        let http = Client::builder()
-            .timeout(timeout)
-            .build()
+        // These endpoints are explicitly configured internal services, including
+        // self-hosted HTTP/private addresses. MMF still forbids redirects and
+        // bounds every body; credential input can only occupy an encoded ID.
+        let http = ReqwestOutboundHttpClient::new(timeout)
             .map_err(|error| failed(&format!("HTTP client configuration failed: {error}")))?;
         Ok(Self {
             organizations,
-            http,
+            http: Arc::new(http),
+            owner_channels: None,
             service_token: service_token_metadata,
             service_token_header: service_token.map(Arc::<str>::from),
             trust_profile_url: Arc::from(trust_profile_url),
+            credential_template_url: None,
+            organization_url: None,
             status_url_template: Arc::from(status_url_template),
             issuance_api_key: issuance_api_key.map(Arc::<str>::from),
             timeout,
         })
     }
 
-    fn grpc_request<T>(&self, body: T) -> Request<T> {
-        let mut request = Request::new(body);
-        request.set_timeout(self.timeout);
-        if let Some(token) = &self.service_token {
-            request
-                .metadata_mut()
-                .insert(SERVICE_TOKEN_HEADER, token.clone());
+    pub fn with_verification_sources(
+        mut self,
+        credential_template_url: &str,
+        organization_url: &str,
+    ) -> Result<Self, PresentationVerificationError> {
+        self.credential_template_url = Some(Arc::from(service_url(
+            credential_template_url,
+            "credential-template",
+        )?));
+        self.organization_url = Some(Arc::from(service_url(organization_url, "organization")?));
+        Ok(self)
+    }
+
+    async fn verification_document(
+        &self,
+        url: String,
+    ) -> Result<Value, PresentationVerificationError> {
+        let token = self
+            .service_token_header
+            .as_ref()
+            .ok_or_else(|| failed("Verification metadata requires service authentication"))?;
+        let response = self
+            .http
+            .execute(OutboundHttpRequest {
+                method: OutboundHttpMethod::Get,
+                url,
+                headers: BTreeMap::from([
+                    ("accept".into(), "application/json".into()),
+                    (SERVICE_TOKEN_HEADER.into(), token.to_string()),
+                ]),
+                body: None,
+                maximum_response_bytes: MAX_TRUST_PROFILE_BYTES,
+            })
+            .await
+            .map_err(|_| PresentationVerificationError::Unavailable)?;
+        if response.status == 404 {
+            return Err(failed(
+                "Required verification metadata does not exist in this organization",
+            ));
         }
-        request
+        if !(200..300).contains(&response.status) {
+            return Err(PresentationVerificationError::Unavailable);
+        }
+        response
+            .json_object("verification metadata")
+            .map_err(|_| failed("Verification metadata is malformed"))
+    }
+
+    fn grpc_request<T>(&self, body: T) -> Request<T> {
+        marty_service_runtime::grpc_request::with_service_token(
+            body,
+            self.timeout,
+            self.service_token.as_ref(),
+        )
     }
 
     async fn membership(
@@ -188,14 +261,6 @@ impl NativePresentationControlPlane {
         }
         Ok(member)
     }
-
-    fn http_request(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
-        let mut request = self.http.get(url);
-        if let Some(token) = &self.service_token_header {
-            request = request.header(SERVICE_TOKEN_HEADER, token.as_ref());
-        }
-        request
-    }
 }
 
 #[async_trait]
@@ -222,28 +287,177 @@ impl PolicyAuthorization for NativePresentationControlPlane {
 
 #[async_trait]
 impl PresentationTrustResolver for NativePresentationControlPlane {
+    async fn load_credential_template(
+        &self,
+        template_id: &str,
+        organization_id: Uuid,
+    ) -> Result<ResolvedCredentialTemplate, PresentationVerificationError> {
+        let base = self
+            .credential_template_url
+            .as_ref()
+            .ok_or_else(|| failed("Credential template source is not configured"))?;
+        if template_id.is_empty() || template_id.len() > 255 || matches!(template_id, "." | "..") {
+            return Err(failed("Credential template ID is invalid"));
+        }
+        let encoded: String =
+            url::form_urlencoded::byte_serialize(template_id.as_bytes()).collect();
+        let document = self.verification_document(format!("{base}/internal/v1/organizations/{organization_id}/credential-templates/{encoded}/verification-type")).await?;
+        let template: ResolvedCredentialTemplate = serde_json::from_value(document)
+            .map_err(|_| failed("Credential template metadata is invalid"))?;
+        if template.id != template_id || template.organization_id != organization_id {
+            return Err(failed(
+                "Credential template identity or organization mismatch",
+            ));
+        }
+        Ok(template)
+    }
+
+    async fn load_verification_policy(
+        &self,
+        policy_set_id: Uuid,
+        organization_id: Uuid,
+    ) -> Result<ResolvedVerificationPolicy, PresentationVerificationError> {
+        let base = self
+            .organization_url
+            .as_ref()
+            .ok_or_else(|| failed("Verification PolicySet source is not configured"))?;
+        let document = self
+            .verification_document(format!(
+                "{base}/internal/v1/organizations/{organization_id}/policy-sets/{policy_set_id}"
+            ))
+            .await?;
+        let object = document
+            .as_object()
+            .ok_or_else(|| failed("Verification PolicySet is invalid"))?;
+        if uuid_field(object, "id")? != policy_set_id
+            || uuid_field(object, "organization_id")? != organization_id
+            || object.get("status").and_then(Value::as_str) != Some("ACTIVE")
+            || object.get("policy_type").and_then(Value::as_str) != Some("CREDENTIAL_VERIFICATION")
+            || object.get("cedar_schema_version").and_then(Value::as_str) != Some("MIP/1.0")
+        {
+            return Err(failed("Verification PolicySet identity, organization, lifecycle, type, or schema mismatch"));
+        }
+        let policies = object
+            .get("cedar_policies")
+            .and_then(Value::as_array)
+            .filter(|values| !values.is_empty())
+            .ok_or_else(|| failed("Verification PolicySet has no policy documents"))?;
+        let mut identifiers = BTreeSet::new();
+        let mut sources = Vec::new();
+        for policy in policies {
+            let id = policy
+                .get("policy_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| failed("Verification PolicySet document ID is invalid"))?;
+            if !identifiers.insert(id) {
+                return Err(failed(
+                    "Verification PolicySet has duplicate policy document IDs",
+                ));
+            }
+            let enabled = policy
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| failed("Verification PolicySet document state is invalid"))?;
+            if enabled {
+                let source = policy
+                    .get("cedar_text")
+                    .and_then(Value::as_str)
+                    .filter(|source| !source.trim().is_empty())
+                    .ok_or_else(|| {
+                        failed("Verification PolicySet contains an empty enabled policy")
+                    })?;
+                sources.push(source);
+            }
+        }
+        let cedar_policies = sources.join("\n");
+        let revision = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(cedar_policies.as_bytes()))
+        );
+        Ok(ResolvedVerificationPolicy {
+            id: policy_set_id,
+            organization_id,
+            revision,
+            cedar_policies,
+        })
+    }
+
+    async fn freeze_credential_authority(
+        &self,
+        organization_id: Uuid,
+        profile_id: Uuid,
+    ) -> Result<
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1,
+        >,
+        PresentationVerificationError,
+    > {
+        self.owner_channels
+            .as_ref()
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .freeze(
+                organization_id,
+                profile_id,
+                self.service_token_header
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
+            )
+            .await
+    }
+
+    async fn evaluate_credential_authority(
+        &self,
+        request: &marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationRequestV1,
+    ) -> Result<
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::trust_authority::CredentialTrustEvaluationResponseV1,
+        >,
+        PresentationVerificationError,
+    > {
+        self.owner_channels
+            .as_ref()
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .evaluate(
+                request,
+                self.service_token_header
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
+            )
+            .await
+    }
+
     async fn load_profile(
         &self,
         profile_id: Uuid,
         organization_id: Uuid,
     ) -> Result<ResolvedTrustProfile, PresentationVerificationError> {
+        let mut headers = BTreeMap::from([("accept".into(), "application/json".into())]);
+        if let Some(token) = &self.service_token_header {
+            headers.insert(SERVICE_TOKEN_HEADER.into(), token.to_string());
+        }
         let response = self
-            .http_request(format!(
-                "{}/internal/v1/trust-profiles/{profile_id}",
-                self.trust_profile_url
-            ))
-            .send()
+            .http
+            .execute(OutboundHttpRequest {
+                method: OutboundHttpMethod::Get,
+                url: format!(
+                    "{}/internal/v1/trust-profiles/{profile_id}",
+                    self.trust_profile_url
+                ),
+                headers,
+                body: None,
+                maximum_response_bytes: MAX_TRUST_PROFILE_BYTES,
+            })
             .await
             .map_err(|_| PresentationVerificationError::Unavailable)?;
-        if response.status() == StatusCode::NOT_FOUND {
+        if response.status == 404 {
             return Err(failed("Trust Profile does not exist"));
         }
-        if !response.status().is_success() {
+        if !(200..300).contains(&response.status) {
             return Err(PresentationVerificationError::Unavailable);
         }
         let mut document = response
-            .json::<Value>()
-            .await
+            .json_object("trust profile")
             .map_err(|_| PresentationVerificationError::Unavailable)?;
         let object = document
             .as_object_mut()
@@ -278,6 +492,27 @@ impl PresentationTrustResolver for NativePresentationControlPlane {
 
 #[async_trait]
 impl CredentialStatusResolver for NativePresentationControlPlane {
+    async fn observe_managed_status(
+        &self,
+        request: &marty_oid4vp_contract::managed_status::ManagedCredentialStatusRequestV1,
+    ) -> Result<
+        crate::AuthenticatedOwnerResponse<
+            marty_oid4vp_contract::managed_status::ManagedCredentialStatusObservationV1,
+        >,
+        PresentationVerificationError,
+    > {
+        self.owner_channels
+            .as_ref()
+            .ok_or(PresentationVerificationError::Unavailable)?
+            .observe(
+                request,
+                self.issuance_api_key
+                    .as_deref()
+                    .ok_or(PresentationVerificationError::Unavailable)?,
+            )
+            .await
+    }
+
     async fn resolve(
         &self,
         organization_id: Uuid,
@@ -289,30 +524,40 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
             return Ok(CredentialStatusEvidence::default());
         }
         for credential_id in credential_ids {
+            // URL parsers normalize literal and percent-encoded dot segments.
+            // Such IDs cannot be represented faithfully in a path template.
+            if matches!(credential_id.as_str(), "." | "..") {
+                continue;
+            }
             let encoded: String =
                 url::form_urlencoded::byte_serialize(credential_id.as_bytes()).collect();
             let endpoint = self
                 .status_url_template
                 .replace("{credential_id}", &encoded);
-            let mut request = self.http.get(endpoint).header("accept", "application/json");
+            let mut headers = BTreeMap::from([("accept".into(), "application/json".into())]);
             if let Some(api_key) = &self.issuance_api_key {
-                request = request
-                    .header("x-api-key", api_key.as_ref())
-                    .header("x-organization-id", organization_id.to_string());
+                headers.insert("x-api-key".into(), api_key.to_string());
+                headers.insert("x-organization-id".into(), organization_id.to_string());
             }
-            let response = request
-                .send()
+            let response = self
+                .http
+                .execute(OutboundHttpRequest {
+                    method: OutboundHttpMethod::Get,
+                    url: endpoint,
+                    headers,
+                    body: None,
+                    maximum_response_bytes: MAX_CREDENTIAL_STATUS_BYTES,
+                })
                 .await
                 .map_err(|_| PresentationVerificationError::Unavailable)?;
-            if response.status() == StatusCode::NOT_FOUND {
+            if response.status == 404 {
                 continue;
             }
-            if !response.status().is_success() {
+            if !(200..300).contains(&response.status) {
                 return Err(PresentationVerificationError::Unavailable);
             }
             let payload = response
-                .json::<Value>()
-                .await
+                .json_object("credential status")
                 .map_err(|_| PresentationVerificationError::Unavailable)?;
             let object = payload
                 .as_object()
@@ -745,23 +990,40 @@ fn trusted_without_relationship() -> IssuerTrustEvidence {
 
 fn service_url(value: &str, name: &str) -> Result<String, PresentationVerificationError> {
     let parsed = Url::parse(value).map_err(|_| failed(&format!("invalid {name} URL")))?;
-    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
         return Err(failed(&format!("invalid {name} URL")));
     }
     Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
 fn validate_status_template(value: &str) -> Result<(), PresentationVerificationError> {
-    if !value.contains("{credential_id}") {
+    if value.matches("{credential_id}").count() != 1 {
         return Err(failed(
             "credential status URL template requires {credential_id}",
         ));
     }
-    service_url(
-        &value.replace("{credential_id}", "test"),
-        "credential status",
-    )
-    .map(drop)
+    let parsed = Url::parse(&value.replace("{credential_id}", "credential-id-probe"))
+        .map_err(|_| failed("invalid credential status URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+        || parsed
+            .host_str()
+            .is_some_and(|host| host.contains("credential-id-probe"))
+    {
+        return Err(failed(
+            "credential status template must bind an ID in its path or query",
+        ));
+    }
+    Ok(())
 }
 
 fn channel(target: &str, timeout: Duration) -> Result<Channel, PresentationVerificationError> {

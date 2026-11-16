@@ -78,9 +78,15 @@ Required files:
 - `sign_grant_mint_issuance_canvas_token`
 - `sign_grant_mint_issuance_readiness_token`
 - `sign_grant_mint_issuance_passport_token`
-- `cloudflare_tunnel_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
+
+`passport_tenant_api_keys` and `personalization_bureau_api_key` are optional,
+empty placeholders. Import the tenant keyring only when the Passport tenant-key
+mode is selected; internal service authentication leaves its `_FILE` setting
+empty. The tenant file is mounted only by Gateway, Flow, and native Issuance.
+The bureau credential is mounted only by native Issuance and is selected through
+`PERSONALIZATION_BUREAU_API_KEY_FILE`. Do not put either value in Compose arguments.
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
 
@@ -114,6 +120,9 @@ events that can create credential offers; do not reuse `grpc_service_token`.
 Optional files may be left empty when the related integration is disabled:
 
 - `canvas_credentials_shared_secret`
+- `canvas_credentials_api_token`
+- `passport_tenant_api_keys`
+- `personalization_bureau_api_key`
 - `cloudflare_beta_tunnel_token`
 - `google_client_id`
 - `google_client_secret`
@@ -123,9 +132,18 @@ Optional files may be left empty when the related integration is disabled:
 
 `canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
 
-Canvas Credentials API tokens are configured by organization administrators from the Canvas integration wizard. Issuance stores them in purpose-bound envelopes encrypted by the remote KMS through signing-keys; do not put institution-specific Canvas Credentials bearer tokens in self-host deployment secret files.
+Organization administrators configure institution-specific Canvas Credentials API
+tokens through the Canvas integration wizard. Issuance retains those tokens in
+purpose-bound envelopes encrypted by the remote KMS through signing-keys. For
+the separately selected global mirror worker, `canvas_credentials_api_token`
+supplies the supported `CANVAS_CREDENTIALS_API_TOKEN_FILE` input and is mounted
+only by Issuance and native Issuance. Leave it empty and its file setting blank
+when that global integration is disabled. It is distinct from the shared callback
+credential and does not replace organization-managed tokens.
 
 The standalone read-only Canvas Credentials contract checker can still read `CANVAS_CREDENTIALS_API_TOKEN` or `CANVAS_CREDENTIALS_API_TOKEN_FILE` from an operator shell for one-off vendor sandbox validation.
+
+`cloudflare_tunnel_token` is required only for the explicitly selected Cloudflare integration; the core installer and direct hosting do not need it. The signed installer copies a separately supplied private token into its owned secret generation.
 
 `cloudflare_beta_tunnel_token` is only required when the optional self-host `beta-tunnel` compose profile is enabled to route a second Cloudflare tunnel, such as `beta.elevenidllc.com`, into the same self-host edge.
 

@@ -1,10 +1,10 @@
-//! Shared internal gRPC channels. Client identity keys remain in OpenBao.
+//! Shared internal gRPC channels. Client identity keys remain in the selected KMS.
 
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles,
+    KeylessGrpcTransportOptions,
 };
 use tonic::transport::Channel;
 
@@ -69,51 +69,28 @@ async fn channel_with_values(
     if ca.is_some() && !target.starts_with("https://") {
         return Err("gRPC CA requires an explicit HTTPS target".into());
     }
-    let client_names = [
-        "GRPC_TLS_CLIENT_CERT",
-        "GRPC_TLS_CLIENT_KMS_ADDR",
-        "GRPC_TLS_CLIENT_KMS_CA_CERT",
-        "GRPC_TLS_CLIENT_KMS_TOKEN_FILE",
-        "GRPC_TLS_CLIENT_KMS_KEY_NAME",
-        "GRPC_TLS_CLIENT_KMS_KEY_VERSION",
-    ];
-    let configured = client_names
-        .iter()
-        .filter(|name| value(name).is_some())
-        .count();
-    if configured != 0 {
-        if configured != client_names.len() || ca.is_none() {
-            return Err(
-                "gRPC client TLS requires a public certificate, CA and remote KMS identity".into(),
-            );
-        }
-        let version = value(client_names[5])
-            .unwrap_or_default()
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or("gRPC client KMS key version is invalid")?;
-        return OpenBaoTlsIdentityFiles {
-            certificate_chain_file: PathBuf::from(value(client_names[0]).unwrap_or_default()),
-            kms_endpoint: value(client_names[1]).unwrap_or_default().into(),
-            kms_ca_cert_file: PathBuf::from(value(client_names[2]).unwrap_or_default()),
-            kms_token_file: PathBuf::from(value(client_names[3]).unwrap_or_default()),
-            kms_key_name: value(client_names[4]).unwrap_or_default().into(),
-            kms_key_version: version,
-            request_timeout: timeout.min(Duration::from_secs(30)),
-            max_concurrent_signs: 64,
-        }
-        .grpc_channel(
-            &target,
-            &PathBuf::from(ca.unwrap_or_default()),
-            KeylessGrpcTransportOptions {
-                connect_timeout: timeout,
-                request_timeout: timeout,
-                ..KeylessGrpcTransportOptions::default()
-            },
-        )
-        .await
-        .map_err(|_| "gRPC remote TLS identity is invalid or unavailable".into());
+    let identity = marty_service_runtime::RemoteTlsIdentityFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_TLS_CLIENT"),
+        timeout.min(Duration::from_secs(30)),
+        64,
+    )
+    .map_err(|_| "gRPC client TLS requires a public certificate, CA and remote KMS identity")?;
+    if let Some(identity) = identity {
+        let ca =
+            ca.ok_or("gRPC client TLS requires a public certificate, CA and remote KMS identity")?;
+        return identity
+            .grpc_channel(
+                &target,
+                &PathBuf::from(ca),
+                KeylessGrpcTransportOptions {
+                    connect_timeout: timeout,
+                    request_timeout: timeout,
+                    ..KeylessGrpcTransportOptions::default()
+                },
+            )
+            .await
+            .map_err(|_| "gRPC remote TLS identity is invalid or unavailable".into());
     }
     let (target, security, trust, material) = if let Some(ca) = ca {
         (
@@ -159,6 +136,39 @@ async fn channel_with_values(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn configured_aws_identity_cannot_fall_back_to_server_only_tls() {
+        let ca = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../signing-keys/tests/fixtures/public_certificates/root-ca.pem");
+        let mut values = BTreeMap::from([
+            ("GRPC_TLS_CA_CERT".into(), ca.to_string_lossy().into_owned()),
+            (
+                "GRPC_TLS_CLIENT_CERT".into(),
+                "/nonexistent/issuance-public-cert.pem".into(),
+            ),
+            ("GRPC_TLS_CLIENT_KMS_PROVIDER".into(), "aws-kms".into()),
+            ("GRPC_TLS_CLIENT_KMS_REGION".into(), "us-east-1".into()),
+            (
+                "GRPC_TLS_CLIENT_KMS_KEY_ARN".into(),
+                "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012"
+                    .into(),
+            ),
+        ]);
+        assert_eq!(
+            channel_with_values("https://issuer:9000", Duration::from_secs(1), &values)
+                .await
+                .unwrap_err(),
+            "gRPC remote TLS identity is invalid or unavailable"
+        );
+        values.insert("GRPC_TLS_CLIENT_KMS_TOKEN_FILE".into(), "old-token".into());
+        assert_eq!(
+            channel_with_values("https://issuer:9000", Duration::from_secs(1), &values)
+                .await
+                .unwrap_err(),
+            "gRPC client TLS requires a public certificate, CA and remote KMS identity"
+        );
+    }
 
     #[tokio::test]
     async fn public_ca_and_private_key_file_configuration_fail_closed() {

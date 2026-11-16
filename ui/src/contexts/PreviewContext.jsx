@@ -5,7 +5,7 @@
  * components when viewed by admins/vendors for testing and validation.
  */
 
-import { createContext, useContext, useState, useCallback } from 'react';
+import { createContext, useContext, useState, useCallback, useLayoutEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import PropTypes from 'prop-types';
 import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
@@ -30,24 +30,39 @@ export function PreviewProvider({
   const navigate = useNavigate();
   const location = useLocation();
   const [contextLabel, setContextLabel] = useState(null);
+  const exitTimer = useRef(null);
+  const exitGeneration = useRef(0);
+
+  const cancelExit = useCallback(() => {
+    exitGeneration.current += 1;
+    if (exitTimer.current !== null) window.clearTimeout(exitTimer.current);
+    exitTimer.current = null;
+  }, []);
+
+  useLayoutEffect(() => cancelExit, [cancelExit, location.key, location.pathname, location.search, returnUrl]);
 
   const exitPreview = useCallback(() => {
-    // Try to close the window (works if opened via window.open)
-    const closed = window.close();
-    
-    // If window.close() didn't work (e.g., not opened by script),
-    // navigate back to the return URL
-    setTimeout(() => {
-      if (!closed && returnUrl) {
-        if (shouldBrowserRedirect({ currentPathname: location.pathname, destination: returnUrl })) {
-          redirectBrowser(returnUrl, { replace: false });
-          return;
-        }
+    cancelExit();
+    const generation = exitGeneration.current;
+    try {
+      window.close();
+    } catch {
+      // Browsers may refuse to close a tab that the user opened directly.
+    }
+    if (window.closed) return;
 
-        navigate(returnUrl);
+    exitTimer.current = window.setTimeout(() => {
+      if (exitGeneration.current !== generation) return;
+      exitTimer.current = null;
+      if (window.closed || !returnUrl) return;
+      if (shouldBrowserRedirect({ currentPathname: location.pathname, destination: returnUrl })) {
+        redirectBrowser(returnUrl, { replace: false });
+        return;
       }
+
+      navigate(returnUrl);
     }, 100);
-  }, [location.pathname, navigate, returnUrl]);
+  }, [cancelExit, location.pathname, navigate, returnUrl]);
 
   const updateContextLabel = useCallback((label) => {
     setContextLabel(label);

@@ -24,6 +24,7 @@ pub const CREDENTIAL_TEMPLATE_HTTP_ROUTES: &[&str] = &[
     "GET /internal/credential-templates/{template_id}/issuance-context",
     "GET /internal/credential-configurations",
     "GET /internal/v1/resource-owners/credential-templates/{template_id}",
+    "GET /internal/v1/organizations/{organization_id}/credential-templates/{template_id}/verification-type",
 ];
 
 pub const CREDENTIAL_TEMPLATE_GRPC_METHODS: &[&str] = &[

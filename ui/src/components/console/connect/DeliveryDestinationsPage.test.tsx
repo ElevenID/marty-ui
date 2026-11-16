@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, waitFor } from '@testing-library/react';
+import { act, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { renderWithRouter, screen } from '@test/utils';
 import { server } from '@test/mocks/server';
@@ -96,16 +96,51 @@ describe('DeliveryDestinationsPage', () => {
     expect(screen.queryByText('Destination service unavailable')).not.toBeInTheDocument();
   });
 
-  it('retains a failed creation form and offers the existing error recovery', async () => {
-    server.use(http.post('http://localhost:8000/v1/delivery-destinations', () => HttpResponse.json({ detail: 'Bureau not approved' }, { status: 403 })));
+  it.each(['retry', 'cancel'] as const)('shows creation failure inside the dialog and preserves the draft and inventory on %s', async (action) => {
+    const keys: Array<string | null> = [];
+    server.use(http.post('http://localhost:8000/v1/delivery-destinations', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>;
+      writes.push(body);
+      keys.push(request.headers.get('Idempotency-Key'));
+      return writes.length === 1
+        ? HttpResponse.json({ detail: 'Bureau not approved' }, { status: 403 })
+        : HttpResponse.json({ id: 'destination-1', ...body }, { status: 201 });
+    }));
     const { user } = renderWithRouter(<DeliveryDestinationsPage />);
     await screen.findByText('Configured wallet destination');
     await user.click(screen.getByRole('button', { name: 'Add Production Destination' }));
+    const dialog = screen.getByRole('dialog', { name: 'Add physical production destination' });
     await user.type(screen.getByRole('textbox', { name: 'Destination name' }), 'Campus Bureau');
+    await user.type(screen.getByRole('textbox', { name: 'Description' }), 'Reviewed production destination');
     await user.click(screen.getByRole('button', { name: 'Add Destination' }));
-    expect(await screen.findByText('Bureau not approved')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Bureau not approved')).toBeVisible();
     expect(screen.getByRole('textbox', { name: 'Destination name' })).toHaveValue('Campus Bureau');
+    expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('Reviewed production destination');
+    expect(screen.getByRole('button', { name: 'Add Destination' })).toBeEnabled();
+    expect(writes).toHaveLength(1);
     expect(reads).toHaveLength(1);
+    expect(keys[0]).toBeTruthy();
+
+    if (action === 'retry') {
+      await user.click(screen.getByRole('button', { name: 'Add Destination' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(keys[1]).toBeTruthy();
+      expect(keys[1]).not.toBe(keys[0]);
+      await waitFor(() => expect(reads).toHaveLength(2));
+    } else {
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      expect(screen.getByText('Configured wallet destination')).toBeVisible();
+      expect(screen.queryByText('Bureau not approved')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Add Production Destination' }));
+      expect(screen.queryByText('Bureau not approved')).not.toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: 'Destination name' })).toHaveValue('Campus Bureau');
+      expect(screen.getByRole('textbox', { name: 'Description' })).toHaveValue('Reviewed production destination');
+      expect(writes).toHaveLength(1);
+      expect(reads).toHaveLength(1);
+    }
   });
 
 });

@@ -12,6 +12,7 @@ pub mod envoy_config;
 mod json_evidence;
 pub mod kubernetes_native;
 pub mod official;
+pub mod official_automation;
 pub mod official_review;
 pub mod signing_capability;
 

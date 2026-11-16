@@ -402,9 +402,16 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     signing = names["Sign and checksum manifest evidence"]
     attest = next(i for i, step in enumerate(steps) if step.get("id") == "stable_installer_publication_provenance")
     export = names["Export and verify offline stable installer proofs"]
-    late_tag = names["Create or verify the late annotated source tag"]
+    seal = names["Seal all signed publication bytes for the bounded tag handoff"]
+    checkpoint = names["Preserve the exact publication checkpoint before the tag wait"]
+    late_tag = names["Wait for the exact operator tag handoff"]
     publish = names["Publish the qualified GitHub release and exact assets"]
-    assert checks < signing < attest < export < late_tag < publish
+    assert checks < signing < attest < export < seal < checkpoint < late_tag < publish
+    assert "operator_release_verify_published_assets" in steps[seal]["run"]
+    assert steps[checkpoint]["with"]["name"] == (
+        "stack-release-publication-inputs-${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+    assert "release_tag_handoff.py wait" in steps[late_tag]["run"]
     subjects = steps[attest]["with"]["subject-path"].splitlines()
     assert len(subjects) == len(set(subjects)) == 27
     assert not any(name.endswith(".provenance.jsonl") for name in subjects)
@@ -422,11 +429,22 @@ def test_stable_installer_publication_closes_payload_proofs_and_remote_bytes() -
     assert 'gh release download "$TAG" --dir published-release-assets' in fresh
     assert 'operator_release_verify_published_assets published-release-assets' in fresh
     assert 'for asset in "${OPERATOR_RELEASE_ASSETS[@]}"' in fresh
-    assert 'cmp --silent "$asset" "published-release-assets/$asset"' in fresh
-    existing = steps[names["Detect only an exact resumable immutable release"]]["run"]
-    assert 'for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json' in existing
-    assert 'cmp --silent installer-inventory.json' not in existing
-    assert 'cmp --silent "$payload" "existing-release/$payload"' in existing
+    assert 'cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"' in fresh
+    assert "stable_publication_checkpoint.py verify" in fresh
+    assert 'cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"' in fresh
+    assert fresh.index("stable_publication_checkpoint.py verify") < fresh.index("check_stack_pre_promotion.py") < fresh.index('gh release create "$TAG"')
+    assert fresh.index("check_stack_pre_promotion.py") < fresh.rindex("stable_publication_checkpoint.py verify") < fresh.index('gh release create "$TAG"')
+    existing = steps[names["Require the release coordinate to remain absent"]]["run"]
+    assert "200)" in existing and "first-attempt coordinate" in existing
+    assert "exit 1" in existing.split("200)", 1)[1].split(";;", 1)[0]
+    assert "gh release download" not in existing
+    assert steps[publish]["if"] == "inputs.publication_contract == 'v1'"
+    candidate = steps[names["Seal the immutable v2 publication candidate"]]
+    assert candidate["if"] == "inputs.publication_contract == 'v2'"
+    assert late_tag < names["Seal the immutable v2 publication candidate"] < publish
+    # The prospective v2 branch still uses all original qualification and
+    # signing gates; only its final release mutation moves to a fresh publisher.
+    assert all("if" not in steps[i] for i in (checks, signing, attest, export, seal, late_tag))
     assert all("continue-on-error" not in steps[i] for i in (checks, signing, attest, export, publish))
 
 
@@ -465,19 +483,18 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
         assert condition in installer
 
 
-def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration(
+def test_original_publication_verifies_all_proofs_and_rejects_altered_payloads(
     tmp_path: Path,
 ) -> None:
-    """A retry may produce different valid Sigstore bundles for the same source."""
+    """The retained verifier checks every subject; the new path never adopts a retry."""
     workflow = yaml.safe_load(_text(".github/workflows/cd.yml"))
     step = next(
         step["run"] for step in workflow["jobs"]["publish-manifest"]["steps"]
-        if step.get("name") == "Detect only an exact resumable immutable release"
+        if step.get("name") == "Require the release coordinate to remain absent"
     )
-    assert "operator_release_verify_published_assets existing-release" in step
-    assert "cmp --silent stack-manifest.json existing-release/stack-manifest.json" in step
-    assert "cmp --silent release-transaction.json existing-release/release-transaction.json" in step
-    assert 'cmp --silent "$asset"' not in step
+    assert "first-attempt coordinate" in step
+    assert "exit 1" in step.split("200)", 1)[1].split(";;", 1)[0]
+    assert "existing-release" not in step
 
     old = tmp_path / "published"
     new = tmp_path / "regenerated"
@@ -642,7 +659,7 @@ def test_passport_publication_installs_pinned_chromium_before_verification() -> 
 
 
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
-    action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
+    action = "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"
     matched_steps: list[tuple[str, dict[str, object]]] = []
 
     for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
@@ -707,14 +724,20 @@ def test_beta_lifecycle_installs_each_playwright_browser_revision() -> None:
     assert "python -m playwright install chromium" in workflow
 
 
-def test_stack_release_ui_smoke_checks_real_homepage_content() -> None:
-    workflow = _text(".github/workflows/cd.yml")
-
-    assert "Smoke-test UI image" in workflow
-    assert "UI image contains the default Nginx homepage" in workflow
-    assert "UI image homepage is missing ElevenID content" in workflow
-    assert "grep --quiet 'Welcome to nginx'" in workflow
-    assert "grep --quiet 'ElevenID'" in workflow
+def test_stack_release_ui_smoke_checks_customer_audience_and_disabled_web() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    image = next(step["with"] for step in jobs["build-ui"]["steps"] if step.get("id") == "build")
+    assert image["target"] == "selfhost"
+    assert "UI_VARIANT=selfhost" in image["build-args"]
+    assert "NGINX_CONFIG=nginx.spa.conf" in image["build-args"]
+    smoke = next(step for step in jobs["public-stack-smoke"]["steps"]
+                 if step.get("name") == "Smoke-test UI image")
+    assert smoke["working-directory"] == "marty-ui"
+    assert "check-image --audience customer" in smoke["run"]
+    assert "UI_ENABLED_SECTIONS=none" in smoke["run"]
+    assert "http://127.0.0.1:18080/healthz" in smoke["run"]
+    assert "--retry-all-errors" in smoke["run"]
+    assert smoke["run"].count("= 404") == 2
 
 
 def test_public_ui_build_requires_a_prerendered_root_page() -> None:
@@ -727,6 +750,23 @@ def test_public_ui_build_requires_a_prerendered_root_page() -> None:
     assert "route.outputPath = PRERENDERED_ROOT_STAGING_PATH" in vite_config
     assert "promotePrerenderedRootPlugin()" in vite_config
     assert "unlinkSync(stagedPath)" in vite_config
+
+
+def _assert_final_public_ui_runtime_stage(dockerfile: str) -> None:
+    stages = list(re.finditer(r"^[ \t]*FROM[ \t]+[^\r\n]+$", dockerfile, re.MULTILINE | re.IGNORECASE))
+    assert stages and stages[-1].group(0).strip() == "FROM runtime-base AS public", (
+        "public UI must remain the default final Docker stage"
+    )
+    public_lines = dockerfile[stages[-1].end():].splitlines()
+    for required in (
+        'RUN test "$UI_VARIANT" = public && test "$UI_SURFACE" = combined',
+        'LABEL io.elevenid.ui.audience="production" io.elevenid.ui.surface="combined"',
+        "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
+        "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
+        "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",
+        "RUN chmod +x /docker-entrypoint.d/40-ui-production.sh /scripts/load-secrets-env.sh",
+    ):
+        assert required in public_lines, f"public UI stage is missing runtime contract: {required}"
 
 
 def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
@@ -748,9 +788,34 @@ def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
     assert "--target selfhost" in selfhost_build
     assert "--build-arg UI_VARIANT=selfhost" in selfhost_build
     assert "--build-arg NGINX_CONFIG=nginx.spa.conf" in selfhost_build
-    assert dockerfile.rstrip().endswith(
-        "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html"
-    )
+    assert "http://127.0.0.1:80/healthz" in selfhost_stage
+    assert 'io.elevenid.ui.audience="customer"' in selfhost_stage
+    _assert_final_public_ui_runtime_stage(dockerfile)
+
+
+@pytest.mark.parametrize("removed_line", [
+    "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html",
+    "COPY scripts/ui-production-start.sh /docker-entrypoint.d/40-ui-production.sh",
+    "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh",
+    "RUN chmod +x /docker-entrypoint.d/40-ui-production.sh /scripts/load-secrets-env.sh",
+])
+def test_public_ui_stage_requires_compiled_assets_and_executable_runtime_hooks(
+    removed_line: str,
+) -> None:
+    before, public_stage = _text("docker/ui.Dockerfile").rsplit("FROM runtime-base AS public", 1)
+    assert removed_line in public_stage.splitlines()
+    mutated = before + "FROM runtime-base AS public" + public_stage.replace(removed_line + "\n", "", 1)
+
+    with pytest.raises(AssertionError, match="public UI stage is missing runtime contract"):
+        _assert_final_public_ui_runtime_stage(mutated)
+
+
+@pytest.mark.parametrize("later_stage", ["FROM runtime-base AS later", "from runtime-base as later"])
+def test_public_ui_stage_must_remain_the_default_final_target(later_stage: str) -> None:
+    dockerfile = _text("docker/ui.Dockerfile") + "\n" + later_stage + "\n"
+
+    with pytest.raises(AssertionError, match="default final Docker stage"):
+        _assert_final_public_ui_runtime_stage(dockerfile)
 
 
 def test_stack_release_allows_only_successful_one_shot_exits() -> None:
@@ -782,11 +847,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.90"
-    assert integration["commit"] == "5b3ec6a802a5e13201be8883741889405a86d146"
+    assert integration["version"] == "1.2.96"
+    assert integration["commit"] == "b46fbd7bc79135e715efb1d5cfe271778d712313"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:2dddf814b58d0214c41407c92eca331e54ff85ee30990c224fb3a82dccec589c"
+            "sha256:3d9d285c9addb885b897ba1d9193912ef46cadca761e7266080309a0ff344d27"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -800,22 +865,22 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.263"
+    release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.263")
+    stack_tag_gate.require_release_eligible(ROOT, release_tag)
     workflow = _text(".github/workflows/cd.yml")
     assert 'manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"' in workflow
     assert '--generated-at "$manifest_timestamp" --output stack-manifest.json' in workflow
     assert 'mandatory installer inputs' in _text("docs/selfhost-disposable-qualification-runbook.md")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
-    assert release_tag in cutover_guide
+    assert "release/stack-lock.json" in cutover_guide
     kms_tracker = _text("docs/remote-kms-hardening-plan.md")
-    assert f"source stack lock currently selects `{lock['release']}`" in kms_tracker
+    assert "release/stack-lock.json" in kms_tracker
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.90"
+    assert components["marty-integration-tests"]["version"] == "1.2.96"
 
     # Detailed producer incident history belongs in the incident/runbook owners,
     # rather than being duplicated in the current migration requirements.
@@ -929,15 +994,29 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
 def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
     release = yaml.safe_load(_text(".github/workflows/cd.yml"))
     steps = release["jobs"]["verifier-differential"]["steps"]
+    prepare = next(step for step in steps if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    fetch = next(step for step in steps if step.get("name") == "Fetch the attested Core private fork dependencies")
     producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
-    assert "--source-digest \"$commit\"" in producer["run"]
-    assert "--deny-self-hosted-runners" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
-    assert "--expected-sha256 \"$digest\"" in producer["run"]
-    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert steps.index(prepare) < steps.index(fetch) < steps.index(producer)
+    for step in (prepare, producer):
+        assert "if" not in step
+        assert not step.get("continue-on-error", False)
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+    assert fetch == {
+        "name": "Fetch the attested Core private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "shell": "bash",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": "python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml",
+    }
+    assert "config/credentials-verifier-positive-producer.json" in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in prepare["run"]
+    assert "--source-digest \"$commit\"" in prepare["run"]
+    assert "--deny-self-hosted-runners" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
+    assert "--expected-sha256 \"$digest\"" in prepare["run"]
+    assert "--expected-commit \"$commit\"" in prepare["run"]
     assert "cargo +1.97.1 build --locked" in producer["run"]
     verifier = next(
         step for step in steps
@@ -1047,25 +1126,28 @@ def test_release_workflows_never_checkout_dispatch_or_transaction_data() -> None
         assert all(reference not in workflow for reference in forbidden_refs)
 
 
-def test_stack_release_uses_read_only_default_permissions() -> None:
+def test_stack_release_uses_read_only_defaults_and_scoped_operator_dispatch() -> None:
     document = yaml.safe_load(_text(".github/workflows/cd.yml"))
 
     assert document["permissions"] == {"contents": "read"}
-    for job in document["jobs"].values():
+    for name, job in document["jobs"].items():
         permissions = job.get("permissions", {})
-        assert permissions.get("actions") != "write"
+        if name == "publish-manifest":
+            assert permissions.get("actions") == "write"
+        else:
+            assert permissions.get("actions") != "write"
         assert permissions.get("security-events") != "write"
 
 
 def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     verifier = jobs["verifier-differential"]
-    producer = next(step for step in verifier["steps"]
-                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
-    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
-    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
-    assert "gh attestation verify" in producer["run"]
-    assert "extract_verified_source.py" in producer["run"]
+    prepare = next(step for step in verifier["steps"]
+                   if step.get("name") == "Prepare the exact attested Core KMS verifier source")
+    assert 'select(.repository == "ElevenID/marty-core")' in prepare["run"]
+    assert 'all(.[]; . == [$commit, $version])' in prepare["run"]
+    assert "gh attestation verify" in prepare["run"]
+    assert "extract_verified_source.py" in prepare["run"]
     script = next(step["run"] for step in verifier["steps"]
                   if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
     assert "--jwk-tool" in script
@@ -1239,22 +1321,88 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
 
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
-    assert "Create or verify the late annotated source tag" in workflow
-    helper = _text("scripts/push_promoted_release_tag.py")
-    assert 'command("git", "tag", "-a", tag, source' in helper
-    assert 'command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main"' in helper
-    assert 'f"refs/tags/{tag}:refs/tags/{tag}"' in helper
-    assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
-    assert (
-        'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow
-    )
-    assert 'grep -Fx "Release-Transaction: $TRANSACTION_ID"' in workflow
+    assert "Wait for the exact operator tag handoff" in workflow
+    operator = _text("scripts/push_promoted_release_tag.py")
+    handoff = _text("scripts/release_tag_handoff.py")
+    native = _text("scripts/release_git_atomic.py")
+    helper = operator + handoff + native
+    # Native atomic transport remains available for the real negative probe
+    # and historical replay. The new positive path promises tag absence only.
+    assert '"atomic", "report-status", "side-band-64k"' in native
+    assert '"old_oid"' in native and '"new_oid"' in native
+    assert "marty.native-git-atomic-transaction/v1" in native
+    assert "marty.release-tag-operator-observations/v3" in operator
+    assert 'TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"' in handoff
+    assert 'TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"' in handoff
+    assert 'TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"' in handoff
+    assert 'REF_CREATION_SCOPE = "absent_tag_only"' in handoff
+    assert 'MAIN_CHECK_SCOPE = "before_after_observation"' in handoff
+    assert '"tag_alone_authorizes_publication": False' in operator
+    assert 'SCHEMA = "elevenid.stable-publication-checkpoint/v2"' in _text("scripts/stable_publication_checkpoint.py")
+    policy = json.loads(_text("release/stable-publication-policy.json"))
+    assert policy["schema"] == "elevenid.stable-publication-policy/v4"
+    assert policy["source_authority_policy"] == "marty.immutable-source-authority/v1"
+    assert policy["tag_handoff_contract"] == "marty.create-only-annotated-tag/v1"
+
+    capability = operator.split("def qualify_capability(", 1)[1].split("\ndef verify_crypto(", 1)[0]
+    assert "marty.release-tag-capability/v5" in capability
+    assert '"negative_probe_scope": "stale_or_policy_refusal_only"' in capability
+    assert capability.count("native.exchange(") == 1
+    assert 'f"capability-negative-{run_id}-1"' in capability
+    assert '"confirmed_stale_main_refusal", "confirmed_main_policy_refusal"' in capability
+    assert capability.index("negative = native.exchange(") < capability.index("intent_reservation = github.create_tag_ref(")
+    assert capability.index("intent_reservation = github.create_tag_ref(") < capability.index("positive = github.create_tag_ref(")
+    assert '"positive_ref_creation": positive' in capability
+    assert "positive_transaction" not in capability
+
+    production = operator.split("def create_qualified_tag(", 1)[1].split("\ndef main(", 1)[0]
+    first_write = production.index("intent_object = create_tag_object(")
+    # Exact source, original claim/CD, review, signatures, immutable bytes,
+    # promoted digests, protection and deadline gates precede BOTH tag objects.
+    for gate in (
+        "require_capability_main_protection(inspection)", "request = load_checkpoint(checkpoint)",
+        'request["run_id"] == cd_run', 'request["source_sha"] == source',
+        'request["claim_run_id"] == claim_run', 'request["protected_main_commit"] == source',
+        'required_state="promoted"', "authority = gate_authority(", "require_review_only_history(",
+        'claim.get("conclusion") == "success"', 'required_state="claimed"',
+        'seed["transaction_id"] == transaction["transaction_id"]', "verify_crypto(",
+        "promoted_digests(", 'git/ref/tags/{intent_tag}', 'releases/tags/{request[\'tag\']}',
+        "github.artifact(cd_run, artifact_name, source) == artifact", "waiting_run(github, cd_run, source)",
+        "handoff.candidate_main(github, source, main)", "handoff.remaining(github.deadline)",
+    ):
+        assert production.index(gate) < first_write, gate
+    assert production.count("load_checkpoint(checkpoint)") == 2
+    assert "native.exchange(" not in production
+    assert production.count("github.create_tag_ref(") == 2
+    owner_write = production.index("intent_reservation = github.create_tag_ref(intent_tag,")
+    production_object = production.index("tag_object = create_tag_object(")
+    production_write = production.index('reservation = github.create_tag_ref(request["tag"],')
+    owner_reads = [match.start() for match in re.finditer(re.escape("read_exact_tag(github, intent_tag,"), production)]
+    assert len(owner_reads) == 3
+    assert first_write < owner_write < owner_reads[0] < production_object < owner_reads[1] < production_write < owner_reads[2]
+    assert production_write < production.index('read_exact_tag(github, request["tag"],')
+    source_reads = [match.start() for match in re.finditer(re.escape("handoff.candidate_main(github, source, main)"), production)]
+    assert len(source_reads) == 6
+    assert source_reads[0] < source_reads[1] < first_write < source_reads[2] < owner_write
+    assert owner_reads[0] < source_reads[3] < production_object < source_reads[4] < production_write < source_reads[5]
+    assert production_write < production.index("main_after = handoff.candidate_main(github, source, main)")
+    assert production_write < production.index("final_run, final_source, final_inspection = inspect_repository(")
+    for field in ('"intent_tag"', '"intent_object_sha"', '"intent_ref_creation"', '"tag_ref_creation"'):
+        assert field in production
+    assert "A retained original operator already owns this release version" in production
+    assert "Intent-Ref: refs/tags/" in handoff and "Intent-Object:" in handoff
+    assert "owned_intent(github, request, request_sha, artifact, operator_run)" in handoff
+    assert "h.owned_intent(" in _text("scripts/stable_publication.py")
+
+    assert "updateRefs" not in helper
+    assert '"--atomic"' not in helper
+    assert "git push" not in workflow
     assert workflow.index("stack-release-qualified-") < workflow.index(
-        "Create or verify the late annotated source tag"
+        "Wait for the exact operator tag handoff"
     )
 
 
-def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
+def test_workflow_changing_source_tag_uses_authenticated_operator_handoff() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     assert "STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/cd.yml")
 
@@ -1266,14 +1414,37 @@ def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
     assert checkout["with"]["persist-credentials"] is False
     tag_step = next(
         step for step in publisher["steps"]
-        if step.get("name") == "Create or verify the late annotated source tag"
+        if step.get("name") == "Wait for the exact operator tag handoff"
     )
-    assert "GH_TOKEN" not in tag_step["env"]
-    assert "stack-release-promotion-complete-$GITHUB_RUN_ID" in tag_step["run"]
-    assert "exit 1" in tag_step["run"]
+    assert tag_step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert "--artifact-id" in tag_step["run"]
+    assert "--artifact-digest" in tag_step["run"]
+    assert "release_tag_handoff.py wait" in tag_step["run"]
+    assert '--dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json"' in tag_step["run"]
+    dispatch_receipt = next(
+        step for step in publisher["steps"]
+        if step.get("with", {}).get("path") == "${{ runner.temp }}/stable-tag-dispatch.json"
+    )
+    assert dispatch_receipt["uses"].startswith("actions/upload-artifact@")
+    assert dispatch_receipt["with"]["if-no-files-found"] == "error"
+    assert "gh release create" not in tag_step["run"]
     helper = _text("scripts/push_promoted_release_tag.py")
-    assert 'required_state="promoted"' in helper
-    assert "gh\", \"auth\", \"setup-git" in helper
+    assert "setup-git" not in helper
+    assert '"--atomic"' not in helper
+    assert "secrets.STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/release-tag-handoff.yml")
+
+
+def test_bounded_publication_rejects_later_attempt_and_resume_before_builds() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    first = jobs["resolve-transaction"]["steps"][0]
+    assert first["name"] == "Require a fresh bounded original release attempt"
+    assert 'test "$GITHUB_RUN_ATTEMPT" = 1' in first["run"]
+    assert 'test "$GITHUB_EVENT_NAME" = workflow_dispatch' in first["run"]
+    assert 'test "$GITHUB_REF" = refs/heads/main' in first["run"]
+    assert '[ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]' in first["run"]
+    assert "exit 1" in first["run"]
+    assert jobs["official-gate-evidence"]["timeout-minutes"] == 30
+    assert jobs["publish-manifest"]["timeout-minutes"] == 90
 
 
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:

@@ -252,6 +252,112 @@ fn print_plan(plan: &Value) {
     }
 }
 
+// These helpers return compiled public metadata and static usage text only.
+// Credential resolution belongs exclusively to the separate publication command.
+fn kubernetes_publication_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-secrets-contract"),
+        "marty-deploy kubernetes-secrets-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_publication_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::kubernetes_secrets::contract())
+            .map(|contract| format!("{contract}\n"))
+            .map_err(|error| error.to_string()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-secrets-contract"))
+        }
+        _ => Err(kubernetes_publication_usage_error()),
+    }
+}
+
+fn kubernetes_application_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-application-token-contract"),
+        "marty-deploy kubernetes-application-token-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_application_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::application_tokens::contract())
+            .map(|inventory| format!("{inventory}\n"))
+            .map_err(|_| "cannot encode compiled application inventory".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-application-token-contract"))
+        }
+        _ => Err(kubernetes_application_usage_error()),
+    }
+}
+
+fn kubernetes_activation_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-application-activation-contract"),
+        "marty-deploy kubernetes-application-activation-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_activation_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(
+            &marty_deployment_catalog::kubernetes_application::activation_metadata(),
+        )
+        .map(|metadata| format!("{metadata}\n"))
+        .map_err(|_| "cannot encode compiled activation metadata".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-application-activation-contract"))
+        }
+        _ => Err(kubernetes_activation_usage_error()),
+    }
+}
+
+fn kubernetes_renewal_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-renewal-contract"),
+        "marty-deploy kubernetes-renewal-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_renewal_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(&marty_deployment_catalog::kubernetes_renewal::metadata())
+            .map(|metadata| format!("{metadata}\n"))
+            .map_err(|_| "cannot encode compiled renewal metadata".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-renewal-contract"))
+        }
+        _ => Err(kubernetes_renewal_usage_error()),
+    }
+}
+
+fn kubernetes_renewal_activation_usage_error() -> String {
+    usage_error(
+        &command_usage("kubernetes-renewal-activation-contract"),
+        "marty-deploy kubernetes-renewal-activation-contract",
+        "this command accepts no arguments except -h or --help",
+    )
+}
+
+fn kubernetes_renewal_activation_metadata(params: &[String]) -> Result<String, String> {
+    match params {
+        [] => serde_json::to_string(
+            &marty_deployment_catalog::kubernetes_renewal_activation::metadata(),
+        )
+        .map(|metadata| format!("{metadata}\n"))
+        .map_err(|_| "cannot encode compiled renewal activation metadata".to_owned()),
+        [help] if help == "--help" || help == "-h" => {
+            Ok(frozen_help("kubernetes-renewal-activation-contract"))
+        }
+        _ => Err(kubernetes_renewal_activation_usage_error()),
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
     if args
@@ -265,6 +371,99 @@ fn run() -> Result<(), String> {
         return marty_deployment_catalog::installer_census_helper::run();
         #[cfg(not(target_os = "linux"))]
         return Err("internal census refused".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-renewal-activation-contract")
+    {
+        print!("{}", kubernetes_renewal_activation_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-renewal-contract")
+    {
+        print!("{}", kubernetes_renewal_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-application-activation-contract")
+    {
+        print!("{}", kubernetes_activation_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-application-token-contract")
+    {
+        print!("{}", kubernetes_application_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "kubernetes-secrets-contract")
+    {
+        print!("{}", kubernetes_publication_metadata(&args[1..])?);
+        return Ok(());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "installer-rootless-canary-helper")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_canary_helper::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal rootless canary helper requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "restore-rootless-canary")
+    {
+        if args.len() != 5 || args[1] != "--installation" || args[3] != "--docker-bin" {
+            return Err(
+                "rootless canary restore requires exact installation and Docker executable".into(),
+            );
+        }
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_rootless_storage_canary::restore_interrupted(
+            &PathBuf::from(&args[2]),
+            &PathBuf::from(&args[4]),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("rootless canary restore requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| {
+        matches!(
+            arg.as_str(),
+            "installer-acme-custody-provision" | "installer-acme-credentials-provision"
+        )
+    }) {
+        if args.len() != 5 || args[1] != "--installation-id" || args[3] != "--plan-sha256" {
+            return Err("internal ACME bootstrap requires an owned container invocation".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let runtime = tokio::runtime::Runtime::new()
+                .map_err(|_| "cannot start ACME bootstrap runtime")?;
+            let count = if args[0] == "installer-acme-custody-provision" {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_custody(
+                        &args[2], &args[4],
+                    ),
+                )?
+            } else {
+                runtime.block_on(
+                    marty_deployment_catalog::installer_acme_bootstrap::provision_credentials(
+                        &args[2], &args[4],
+                    ),
+                )?
+            };
+            println!("{}", serde_json::json!({"outputs_written":count}));
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("internal ACME bootstrap requires Linux".into());
     }
     if args.first().is_some_and(|arg| {
         matches!(
@@ -386,6 +585,18 @@ fn run() -> Result<(), String> {
     }
     if args
         .first()
+        .is_some_and(|arg| arg == "published-acquisition-observe")
+    {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_candidate_command::observe_acquisition(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("published acquisition observation requires Linux amd64".into());
+    }
+    if args
+        .first()
         .is_some_and(|arg| arg == "fetch-published-candidate")
     {
         #[cfg(target_os = "linux")]
@@ -427,6 +638,12 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
+    if args.first().is_some_and(|arg| arg == "kms") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_kms::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer KMS registration currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "trust-info") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy trust-info --install-dir ABSOLUTE_PATH".into());
@@ -445,6 +662,54 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer trust information currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "startup-observe") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_startup_observation::run(&args[1..]);
+        #[cfg(not(target_os = "linux"))]
+        return Err("signed startup observation requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "acme") {
+        #[cfg(target_os = "linux")]
+        return marty_deployment_catalog::installer_command::acme(
+            &args[1..],
+            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+        );
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer ACME status currently requires Linux".into());
+    }
+    if args
+        .first()
+        .is_some_and(|arg| arg == "operator-upgrade-contract")
+    {
+        if args.len() != 1 {
+            return Err("operator-upgrade-contract takes no arguments".into());
+        }
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_operator_upgrade::contract()
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator-only successors require Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "operator-upgrade") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_operator_upgrade::run(
+                    &args[1..],
+                    env!("MARTY_DEPLOY_BUILD_IDENTITY")
+                )?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("operator-only successors require Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "status") {
         if args.len() != 3 || args[1] != "--install-dir" {
             return Err("usage: marty-deploy status --install-dir ABSOLUTE_PATH".into());
@@ -455,13 +720,18 @@ fn run() -> Result<(), String> {
                 std::path::Path::new(&args[2]),
             )?;
             let journal = inspection.journal();
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
+            let operator_owner =
+                marty_deployment_catalog::installer_operator_upgrade::status_locked(
+                    &inspection,
+                    std::path::Path::new(&args[2]),
+                )?;
             inspection.require_unchanged()?;
             println!(
                 "{}",
                 serde_json::json!({
                     "scope": "installation-journal", "runtime_observed": false, "journal": journal,
-                    "cleanup": cleanup,
+                    "cleanup": cleanup, "operator_owner": operator_owner,
                 })
             );
             return Ok(());
@@ -510,11 +780,11 @@ fn run() -> Result<(), String> {
                 docker, runtime, directory,
             )?;
             let observation = runner.preflight()?;
-            let cleanup = inspection.cleanup_status()?;
+            let cleanup = marty_deployment_catalog::installer_uninstall::status(&inspection)?;
             let services = marty_deployment_catalog::installer_doctor::services(
                 &inspection,
                 directory,
-                &runner,
+                docker,
             )?;
             let creation_evidence = marty_deployment_catalog::installer_doctor::creation_evidence(
                 &inspection,
@@ -547,6 +817,66 @@ fn run() -> Result<(), String> {
         #[cfg(not(target_os = "linux"))]
         return Err("installer logs currently requires Linux".into());
     }
+    if args.first().is_some_and(|arg| arg == "lifecycle") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_lifecycle::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer lifecycle currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "external-oidc") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_oidc_command::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("external OIDC operator commands currently require Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "root-retirement") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_root_retirement::run(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("initial OpenBao root retirement currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "start") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::start(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer start currently requires Linux".into());
+    }
+    if args.first().is_some_and(|arg| arg == "stop") {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                marty_deployment_catalog::installer_uninstall::stop(&args[1..])?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        return Err("installer stop currently requires Linux".into());
+    }
     if args.first().is_some_and(|arg| arg == "uninstall") {
         #[cfg(target_os = "linux")]
         {
@@ -566,6 +896,92 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-contract") if args.len() == 2 => {
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &marty_deployment_catalog::kubernetes_legacy_recovery::contract(),
+                )
+                .map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-stage-contract") if args.len() == 2 => {
+                serde_json::to_writer(
+                    std::io::stdout(),
+                    &marty_deployment_catalog::kubernetes_legacy_recovery::stage_contract(),
+                )
+                .map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some(
+                command @ ("kubernetes-legacy-recovery-targets"
+                | "kubernetes-legacy-recovery-predecessors"
+                | "kubernetes-legacy-recovery-stage"
+                | "kubernetes-legacy-recovery-qualify"),
+            ) if args.len() == 2 => {
+                use marty_deployment_catalog::kubernetes_legacy_recovery as recovery;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let summary = if command == "kubernetes-legacy-recovery-targets" {
+                    recovery::secret_targets(&input)?
+                } else if command == "kubernetes-legacy-recovery-predecessors" {
+                    recovery::inspect_predecessors(&input)?
+                } else {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|_| REFUSAL)?;
+                    if command == "kubernetes-legacy-recovery-stage" {
+                        runtime.block_on(recovery::stage_candidate(&input))?
+                    } else {
+                        runtime.block_on(recovery::qualify_candidate(&input))?
+                    }
+                };
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-target") if args.len() == 4 => {
+                let summary = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_legacy_recovery::target(
+                            std::path::Path::new(&args[2]),
+                            &args[3],
+                        ),
+                    )?;
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-legacy-recovery-inspect") if args.len() == 3 => {
+                use std::path::Path;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(512 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 512 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let summary = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_legacy_recovery::inspect_to_file(
+                            &input,
+                            Path::new(&args[2]),
+                        ),
+                    )?;
+                serde_json::to_writer(std::io::stdout(), &summary).map_err(|_| REFUSAL)
+            }
             Some("beta-rehearsal") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()
@@ -603,9 +1019,20 @@ fn run() -> Result<(), String> {
                 Ok(())
             }
 
+            Some("recovery-contract") if args.len() == 2 => serde_json::to_writer(
+                std::io::stdout(),
+                &serde_json::json!({
+                    "schema":"marty.windows-recovery-operator/v1",
+                    "retained_certificates":true,"recovery_candidate":true,
+                    "expired_rollback":false,"automatic_activation":false
+                }),
+            )
+            .map_err(|_| "KMS operator input refused"),
             Some(
                 "ca-issuer"
                 | "activation-certificates"
+                | "retained-certificates"
+                | "recovery-candidate"
                 | "activation-tokens"
                 | "authority-check"
                 | "renewal-inventory"
@@ -646,6 +1073,14 @@ fn run() -> Result<(), String> {
                             "activation-certificates" => preflight::certificates(&bao, &context)
                                 .await
                                 .map(|_| Value::Null),
+                            "retained-certificates" => {
+                                preflight::retained_certificates(&bao, &context)
+                                    .await
+                                    .map(|_| Value::Null)
+                            }
+                            "recovery-candidate" => preflight::recovery_candidate(&bao, &context)
+                                .await
+                                .map(|_| Value::Null),
                             "activation-tokens" => {
                                 preflight::tokens(&bao, &context).await.map(|_| Value::Null)
                             }
@@ -674,6 +1109,160 @@ fn run() -> Result<(), String> {
                 let mut output = std::io::stdout().lock();
                 serde_json::to_writer(&mut output, &value).map_err(|_| refusal)?;
                 output.flush().map_err(|_| refusal)
+            }
+            #[cfg(target_os = "linux")]
+            Some("kubernetes-renewal-adoption-verify") if args.len() == 5 => {
+                use std::{io::IsTerminal, path::Path};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(
+                        marty_deployment_catalog::kubernetes_renewal_adoption::verify(
+                            &args[2],
+                            Path::new(&args[3]),
+                            Path::new(&args[4]),
+                            &context,
+                            env!("MARTY_DEPLOY_BUILD_IDENTITY"),
+                        ),
+                    )?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &result).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
+            }
+            Some(
+                "kubernetes-renewal-enroll"
+                | "kubernetes-renewal-stage"
+                | "kubernetes-renewal-verify",
+            ) if args.len() == 5 => {
+                use marty_deployment_catalog::kubernetes_renewal;
+                use std::{io::IsTerminal, path::Path};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(async {
+                        if args[1] == "kubernetes-renewal-enroll" {
+                            kubernetes_renewal::enroll(
+                                &args[2],
+                                Path::new(&args[3]),
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        } else if args[1] == "kubernetes-renewal-stage" {
+                            kubernetes_renewal::stage(
+                                &args[2],
+                                Path::new(&args[3]),
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        } else {
+                            kubernetes_renewal::verify_candidate(
+                                &args[2],
+                                Path::new(&args[3]),
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        }
+                    })?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &result)
+                    .map_err(|_| kubernetes_renewal::RECOVERY)?;
+                output.flush().map_err(|_| kubernetes_renewal::RECOVERY)
+            }
+            Some("application-token-stage" | "application-token-verify") if args.len() == 5 => {
+                use marty_deployment_catalog::application_authority;
+                use std::{io::IsTerminal, path::Path, time::Duration};
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let bao = marty_openbao_http::OpenBaoHttp::connect(
+                    &args[2],
+                    Some(Path::new(&args[3])),
+                    Duration::from_secs(10),
+                )
+                .map_err(|_| REFUSAL)?;
+                let value = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(async {
+                        if args[1] == "application-token-verify" {
+                            application_authority::verify_candidate(
+                                &bao,
+                                Path::new(&args[4]),
+                                &context,
+                            )
+                            .await
+                        } else {
+                            application_authority::stage(&bao, Path::new(&args[4]), &context).await
+                        }
+                    })?;
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value)
+                    .map_err(|_| application_authority::RECOVERY)?;
+                output.flush().map_err(|_| application_authority::RECOVERY)
+            }
+            Some("kubernetes-application-publication" | "kubernetes-renewal-publication")
+                if args.len() == 2 =>
+            {
+                use std::io::IsTerminal;
+                if std::io::stdout().is_terminal() {
+                    return Err(REFUSAL.into());
+                }
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let value = if args[1] == "kubernetes-renewal-publication" {
+                    marty_deployment_catalog::kubernetes_renewal_activation::operation(&context)?
+                } else {
+                    marty_deployment_catalog::kubernetes_application::operation(&context)?
+                };
+                let mut output = std::io::stdout().lock();
+                serde_json::to_writer(&mut output, &value).map_err(|_| REFUSAL)?;
+                output.flush().map_err(|_| REFUSAL)
             }
             Some("generation") if args.len() == 2 => {
                 use marty_deployment_catalog::generation;
@@ -818,6 +1407,10 @@ fn run() -> Result<(), String> {
                 let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
                 let reference = marty_managed_key_reference::selfhost_reference(
                     context["org"].as_str().ok_or(REFUSAL)?,
+                    context["issuer_did"]
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .ok_or(REFUSAL)?,
                     context["purpose"].as_str().ok_or(REFUSAL)?,
                 )
                 .ok_or(REFUSAL)?;
@@ -961,7 +1554,16 @@ fn run() -> Result<(), String> {
                         })
                         .map_err(str::to_owned)?
                 };
-                serde_json::to_writer(std::io::stdout().lock(), &output).map_err(|_| REFUSAL)
+                if role == Role::Application && operation != "approle-policy" {
+                    let mut destination = std::io::stdout().lock();
+                    serde_json::to_writer(&mut destination, &output)
+                        .map_err(|_| marty_deployment_catalog::application_authority::RECOVERY)?;
+                    destination
+                        .flush()
+                        .map_err(|_| marty_deployment_catalog::application_authority::RECOVERY)
+                } else {
+                    serde_json::to_writer(std::io::stdout().lock(), &output).map_err(|_| REFUSAL)
+                }
             }
             Some("export-snapshot") if args.len() == 7 => {
                 use std::path::Path;
@@ -1009,6 +1611,23 @@ fn run() -> Result<(), String> {
         .first()
         .map(String::as_str)
         .ok_or_else(|| "command is required".to_owned())?;
+    // The standalone contract was already dispatched before global options.
+    // Reaching it here means --repo-root was supplied before the command.
+    if command == "kubernetes-secrets-contract" {
+        return Err(kubernetes_publication_usage_error());
+    }
+    if command == "kubernetes-application-token-contract" {
+        return Err(kubernetes_application_usage_error());
+    }
+    if command == "kubernetes-application-activation-contract" {
+        return Err(kubernetes_activation_usage_error());
+    }
+    if command == "kubernetes-renewal-contract" {
+        return Err(kubernetes_renewal_usage_error());
+    }
+    if command == "kubernetes-renewal-activation-contract" {
+        return Err(kubernetes_renewal_activation_usage_error());
+    }
     let params = &args[1..];
     if params.iter().any(|arg| arg == "--help" || arg == "-h") {
         if command == "kubernetes-secrets" {
@@ -1156,9 +1775,13 @@ fn main() {
             marty_deployment_catalog::approle::CLEANUP_LEAF,
             marty_deployment_catalog::approle::CLEANUP_ROTATION,
             marty_deployment_catalog::approle::CLEANUP_REFRESH,
+            marty_deployment_catalog::application_authority::RECOVERY,
+            marty_deployment_catalog::kubernetes_renewal::RECOVERY,
             marty_deployment_catalog::keycloak::RECOVERY,
             marty_deployment_catalog::ca_issuer::RECOVERY,
             marty_deployment_catalog::beta_rehearsal::RECOVERY,
+            #[cfg(target_os = "linux")]
+            marty_deployment_catalog::kubernetes_legacy_recovery::RECOVERY,
         ]
         .contains(&error.as_str())
         {
@@ -1170,7 +1793,133 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::posix_shell_quote;
+    use super::{
+        kubernetes_application_metadata, kubernetes_publication_metadata,
+        kubernetes_renewal_activation_metadata, kubernetes_renewal_metadata, posix_shell_quote,
+    };
+
+    #[test]
+    fn kubernetes_renewal_activation_contract_is_public_and_refuses_input_paths() {
+        let output = kubernetes_renewal_activation_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_renewal_activation::metadata()
+        );
+        assert_eq!(actual["secretCount"], 33);
+        assert_eq!(actual["inputs"].as_array().unwrap().len(), 39);
+        for args in [
+            vec!["private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["--help", "-h"],
+        ] {
+            let error = kubernetes_renewal_activation_metadata(
+                &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+        for flag in ["--help", "-h"] {
+            assert!(kubernetes_renewal_activation_metadata(&[flag.into()])
+                .unwrap()
+                .starts_with("usage: marty-deploy kubernetes-renewal-activation-contract"));
+        }
+    }
+
+    #[test]
+    fn kubernetes_renewal_contract_is_public_and_refuses_input_paths() {
+        let output = kubernetes_renewal_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_renewal::metadata()
+        );
+        assert_eq!(actual["renewableFiles"].as_array().unwrap().len(), 40);
+        assert_eq!(actual["changedFiles"], 39);
+        for args in [
+            vec!["private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["--help", "-h"],
+        ] {
+            let error = kubernetes_renewal_metadata(
+                &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
+            )
+            .unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+        for flag in ["--help", "-h"] {
+            assert!(kubernetes_renewal_metadata(&[flag.into()])
+                .unwrap()
+                .starts_with("usage: marty-deploy kubernetes-renewal-contract"));
+        }
+    }
+
+    #[test]
+    fn kubernetes_application_contract_returns_only_compiled_inventory() {
+        let output = kubernetes_application_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::application_tokens::contract()
+        );
+        assert!(output.ends_with('\n'));
+    }
+
+    #[test]
+    fn kubernetes_application_contract_accepts_only_standalone_help() {
+        for flag in ["--help", "-h"] {
+            let output = kubernetes_application_metadata(&[flag.into()]).unwrap();
+            assert!(output.starts_with("usage: marty-deploy kubernetes-application-token-contract"));
+        }
+        for args in [
+            vec!["private-sentinel"],
+            vec!["--repo-root", "private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["private-sentinel", "--help"],
+            vec!["--help", "-h"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = kubernetes_application_metadata(&args).unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+    }
+
+    #[test]
+    fn kubernetes_publication_contract_command_returns_compiled_metadata() {
+        let output = kubernetes_publication_metadata(&[]).unwrap();
+        let actual: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(
+            actual,
+            marty_deployment_catalog::kubernetes_secrets::contract()
+        );
+    }
+
+    #[test]
+    fn kubernetes_publication_contract_command_accepts_only_standalone_help() {
+        for flag in ["--help", "-h"] {
+            let output = kubernetes_publication_metadata(&[flag.into()]).unwrap();
+            assert!(output.starts_with("usage: marty-deploy kubernetes-secrets-contract"));
+        }
+        for args in [
+            vec!["kubernetes-production"],
+            vec!["--repo-root", "private-sentinel"],
+            vec!["--repo-root=private-sentinel"],
+            vec!["--help", "private-sentinel"],
+            vec!["private-sentinel", "--help"],
+            vec!["--help", "-h"],
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let error = kubernetes_publication_metadata(&args).unwrap_err();
+            assert!(error.starts_with("__USAGE__"));
+            assert!(!error.contains("private-sentinel"));
+        }
+    }
 
     #[test]
     fn compose_preview_quotes_posix_shell_metacharacters() {

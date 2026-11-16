@@ -33,7 +33,6 @@ TOKEN_FILE = TOKEN_TARGET + "/token"
 CA_TARGET = "/run/secrets/didcomm-conformance-root-ca.pem"
 NATIVE_GRANT_MOUNTS = {
     ("openbao_public_ca", "/bao/public-ca"),
-    ("openbao_didcomm_issuance_token", TOKEN_TARGET),
     ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
     ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
     ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
@@ -101,26 +100,6 @@ def expected_model(baseline, *, authcrypt, conformance):
     expected = deepcopy(baseline)
     native = expected["services"]["issuance-native"]
     if authcrypt:
-        for key, value in (
-            ("DIDCOMM_KMS_ADDR", "https://openbao:8200"),
-            ("DIDCOMM_KMS_CA_CERT_FILE", "/bao/public-ca/ca.crt"),
-            ("DIDCOMM_KMS_TOKEN_FILE", TOKEN_FILE),
-        ):
-            native["environment"].setdefault(key, value)
-        existing_targets = {item.get("target") for item in native.get("volumes", [])}
-        for source, target in (
-            ("openbao_public_ca", "/bao/public-ca"),
-            ("openbao_didcomm_issuance_token", TOKEN_TARGET),
-        ):
-            if target not in existing_targets:
-                native.setdefault("volumes", []).append(
-                    {
-                        "type": "volume",
-                        "source": source,
-                        "target": target,
-                        "read_only": True,
-                    }
-                )
         native["environment"].update(
             {
                 "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY_FILE,
@@ -286,9 +265,9 @@ def assert_bindings(model, compose_command):
         assert environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE") == (
             POLICY_FILE if has_policy else None
         )
-        assert environment["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
-        assert environment["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
-        assert environment["DIDCOMM_KMS_TOKEN_FILE"] == TOKEN_FILE
+        assert not {"DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE", "DIDCOMM_KMS_TOKEN_FILE"} & set(environment)
+        assert environment["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
+        assert environment["ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"] == "/bao/issuance-credential-grant/token"
         assert environment.get("DIDCOMM_TLS_CA_FILE") == (CA_TARGET if has_ca else None)
         sources = {
             item["target"]: item["source"].replace("\\", "/")
@@ -385,6 +364,7 @@ def run(compose_command=None):
 
     base = render(BASE, BETA)
     assert_initiation_consumer_bindings(base)
+    assert_native_kms_policy(base)
     native = base["services"]["issuance-native"]
     legacy = base["services"]["issuance"]
     for name in (
@@ -419,6 +399,7 @@ def run(compose_command=None):
         ]
         actual = render(*files, *overlays)
         assert_initiation_consumer_bindings(actual)
+        assert_native_kms_policy(actual)
         assert_model(
             actual,
             expected_model(baseline, authcrypt=authcrypt, conformance=conformance),

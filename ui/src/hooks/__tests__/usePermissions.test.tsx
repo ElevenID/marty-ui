@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { usePermissions } from '../usePermissions';
 
 const { auth, consoleState, getMyPermissions } = vi.hoisted(() => ({
-  auth: { isAuthenticated: true, user: { sub: 'alice' } },
+  auth: { isAuthenticated: true, user: { sub: 'alice' } as { user_id?: string; sub?: string; id?: string } },
   consoleState: { activeOrgId: 'org-a', memberships: [{ id: 'org-a' }, { id: 'org-b' }], membershipsLoaded: true, mode: 'org' },
   getMyPermissions: vi.fn(),
 }));
@@ -57,6 +57,34 @@ describe('organization-scoped permissions', () => {
     expect(result.current.can('signing-key', 'view')).toBe(false);
     expect(getMyPermissions).toHaveBeenCalledTimes(2);
   });
+  it('withdraws grants when the native user_id changes within the same organization', async () => {
+    auth.user = { user_id: 'alice-native', sub: 'legacy-subject' };
+    const { result, rerender } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
+    const pending = deferred(); getMyPermissions.mockReturnValueOnce(pending.promise);
+    auth.user = { user_id: 'bob-native', sub: 'legacy-subject' }; rerender();
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+    expect(result.current.roles).toEqual([]);
+    expect(result.current.isLoading).toBe(true);
+    expect(getMyPermissions).toHaveBeenCalledTimes(2);
+    await act(async () => { pending.resolve(denied); });
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+  });
+  it('ignores late grants from a prior native account while its replacement is loading', async () => {
+    auth.user = { user_id: 'alice-native' };
+    const old = deferred(), current = deferred();
+    getMyPermissions.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+    const { result, rerender } = renderHook(() => usePermissions());
+    auth.user = { user_id: 'bob-native' }; rerender();
+    expect(getMyPermissions).toHaveBeenCalledTimes(2);
+    await act(async () => { old.resolve(grants); });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.roles).toEqual([]);
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+    await act(async () => { current.resolve(denied); });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.can('signing-key', 'view')).toBe(false);
+  });
   it('fails closed on logout and reloads grants after login', async () => {
     const { result, rerender } = renderHook(() => usePermissions());
     await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
@@ -72,6 +100,62 @@ describe('organization-scoped permissions', () => {
     await act(async () => { await result.current.refresh(); });
     await act(async () => { old.resolve(grants); });
     expect(result.current.can('signing-key', 'create')).toBe(false);
+  });
+  it('exposes a transient refresh failure while withdrawing grants, then recovers on retry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { result } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
+    const failure = Object.assign(new Error('Permissions unavailable'), { status: 503 });
+    getMyPermissions.mockRejectedValueOnce(failure);
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe(failure);
+    expect(result.current.can('signing-key', 'create')).toBe(false);
+    expect(result.current.roles).toEqual([]);
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBeNull();
+    expect(result.current.can('signing-key', 'create')).toBe(true);
+    vi.restoreAllMocks();
+  });
+  it('ignores a retained retry from the previous organization without invalidating the current request', async () => {
+    const { result, rerender } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
+    const previousRefresh = result.current.refresh;
+    const next = deferred(); getMyPermissions.mockReturnValueOnce(next.promise);
+    consoleState.activeOrgId = 'org-b'; rerender();
+    await act(async () => { await previousRefresh(); });
+    expect(getMyPermissions.mock.calls).toEqual([['org-a'], ['org-b']]);
+    await act(async () => { next.resolve(grants); });
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.can('signing-key', 'create')).toBe(true);
+  });
+  it('does not dispatch a retained retry after its consumer unmounts', async () => {
+    const { result, unmount } = renderHook(() => usePermissions());
+    await waitFor(() => expect(result.current.can('signing-key', 'create')).toBe(true));
+    const retry = result.current.refresh;
+    unmount();
+    await retry();
+    expect(getMyPermissions).toHaveBeenCalledOnce();
+  });
+  it.each(['organization', 'account'])('withdraws the previous load error before the new %s request finishes', async change => {
+    const silence = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failure = new Error('Previous permissions unavailable');
+      getMyPermissions.mockRejectedValueOnce(failure);
+      const { result, rerender } = renderHook(() => usePermissions());
+      await waitFor(() => expect(result.current.error).toBe(failure));
+      const current = deferred(); getMyPermissions.mockReturnValueOnce(current.promise);
+      if (change === 'organization') consoleState.activeOrgId = 'org-b';
+      else auth.user = { sub: 'bob' };
+      rerender();
+      expect(result.current.error).toBeNull();
+      expect(result.current.isLoading).toBe(true);
+      expect(result.current.can('signing-key', 'view')).toBe(false);
+      await act(async () => { current.resolve(grants); });
+      expect(result.current.error).toBeNull();
+      expect(result.current.can('signing-key', 'view')).toBe(true);
+    } finally {
+      silence.mockRestore();
+    }
   });
   it.each(['00000000-0000-0000-0000-000000000001', 'not-a-member'])('never requests organization %s without membership', (org) => {
     consoleState.activeOrgId = org;

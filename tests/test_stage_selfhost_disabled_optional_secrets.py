@@ -17,7 +17,7 @@ PROJECT = "marty-selfhost-qual-1234567890abcdef"
 
 
 def disabled_model() -> dict:
-    return {"services": {
+    model = {"services": {
         "keycloak-configurator": {"environment": {
             "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
         }},
@@ -25,8 +25,19 @@ def disabled_model() -> dict:
         "issuance": {"environment": {
             **{name: "false" for name in journey.CANVAS_DISABLED_FLAGS},
             **{name: "" for name in journey.CANVAS_UNUSED_SETTINGS},
+            "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
         }},
     }}
+    for owner, flags in journey.PASSPORT_DISABLED_FLAGS.items():
+        model["services"][owner] = {"environment": {
+            **{name: "false" for name in flags},
+            "PASSPORT_TENANT_API_KEYS": "", "PASSPORT_TENANT_API_KEYS_FILE": "",
+        }}
+    model["services"]["issuance-native"]["environment"].update({
+        **{name: "" for name in journey.BUREAU_UNUSED_SETTINGS},
+        "CANVAS_CREDENTIALS_API_TOKEN_FILE": "",
+    })
+    return model
 
 
 def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
@@ -46,11 +57,11 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, 
     return secret_root, install_root, env_file
 
 
-def test_creates_exact_six_empty_private_files(
+def test_creates_exact_nine_empty_private_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_root, install_root, env_file = setup(tmp_path, monkeypatch)
-    assert optional.stage(secret_root, install_root, env_file, PROJECT) == 6
+    assert optional.stage(secret_root, install_root, env_file, PROJECT) == 9
     assert {path.name for path in secret_root.iterdir()} == journey.OPTIONAL_LOCAL_SECRET_NAMES
     for path in secret_root.iterdir():
         assert path.stat().st_size == 0

@@ -96,3 +96,10 @@ rust/crates/service-acceptance/tests/csca_capability_contract.rs
 rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
 rust/services/signing-keys/tests/csca_lifecycle_behavior.rs
 rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs
+
+# Only the credential-free helper code enters the build context. The reader
+# itself is supplied as a BuildKit secret and is never copied into a layer.
+!.github/
+!.github/scripts/
+!.github/scripts/private-forks.py
+**/.cargo

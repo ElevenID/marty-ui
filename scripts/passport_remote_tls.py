@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import ssl
 import stat
+from typing import Literal
+
+if __package__:
+    from .selfhost_native_operator import operator_bytes
+else:
+    from selfhost_native_operator import operator_bytes
 
 
 TLS_PREFIXES = (
@@ -14,7 +21,7 @@ TLS_PREFIXES = (
     "compliance_profile_workload_client",
     "deployment_profile_workload_client", "org_workload_server",
     "es_workload_server", "rp_workload_server",
-    "ct_workload_server", "issuance_workload_server",
+    "ct_workload_server", "issuance_workload_server", "trust_profile_workload_server",
     "flow_workload_client", "flow_workload_server", "pp_workload_server",
 )
 PUBLIC_TLS_FILES = frozenset({"workload_identity_ca_cert"}) | frozenset(
@@ -37,7 +44,9 @@ SELFHOST_TOKEN_FILES = frozenset({
     "flow_client_tls_kms_token", "flow_server_tls_kms_token",
     "pp_tls_kms_token", "verification_tls_kms_token",
 })
-SELFHOST_CERT_FILES = (PASSPORT_CERT_FILES - {"passport_edge_tls_cert"}) | {
+SELFHOST_CERT_FILES = (PASSPORT_CERT_FILES - {
+    "passport_edge_tls_cert", "trust_profile_workload_server_cert"
+}) | {
     "verification_workload_client_cert", "notification_workload_server_cert"
 }
 SELFHOST_TLS_FILES = SELFHOST_CERT_FILES | SELFHOST_TOKEN_FILES
@@ -47,8 +56,22 @@ def accept_remote_tls(
     output: Path, secret_dir: Path, root_token: str, *,
     expected_files: frozenset[str] = PUBLIC_TLS_FILES,
     certificate_files: frozenset[str] = PASSPORT_CERT_FILES,
+    profile: Literal["passport", "passport-role-repair"] = "passport",
+    role: str | None = None,
+    expected_workload_ca: Path | None = None,
 ) -> None:
-    """Move a complete, verified keyless bootstrap set into private Compose secrets."""
+    """Move an exact admitted output set through the existing custody owner."""
+    repair = profile == "passport-role-repair"
+    if repair:
+        if (role != "trust-profile-server" or expected_workload_ca is None
+                or expected_files != PUBLIC_TLS_FILES or certificate_files != PASSPORT_CERT_FILES):
+            raise ValueError("Selective remote TLS repair contract is invalid")
+        expected_files = frozenset({"workload_identity_ca_cert",
+                                    "trust_profile_workload_server_cert",
+                                    "trust_profile_workload_server_kms_token"})
+        certificate_files = expected_files - {"trust_profile_workload_server_kms_token"}
+    elif profile != "passport" or role is not None or expected_workload_ca is not None:
+        raise ValueError("Selective remote TLS repair requires its explicit profile")
     if (not output.is_absolute() or not secret_dir.is_absolute()
         or output.is_symlink() or secret_dir.is_symlink()
         or not output.is_dir() or not secret_dir.is_dir()):
@@ -78,13 +101,34 @@ def accept_remote_tls(
             raise ValueError("Disposable remote TLS destination already exists")
     if len(set(tokens)) != len(expected_files - certificate_files):
         raise ValueError("Disposable remote TLS tokens are shared")
+    if repair:
+        if (not expected_workload_ca.is_absolute() or expected_workload_ca.is_symlink()
+                or not expected_workload_ca.is_file()
+                or expected_workload_ca.stat().st_size > 64 * 1024):
+            raise ValueError("Selective remote TLS expected CA is invalid")
+        expected_ca = expected_workload_ca.read_text(encoding="ascii")
+        produced_ca = entries["workload_identity_ca_cert"].read_text(encoding="ascii")
+        if ssl.PEM_cert_to_DER_cert(expected_ca) != ssl.PEM_cert_to_DER_cert(produced_ca):
+            raise ValueError("Selective remote TLS issuer certificate changed")
+        root = Path(__file__).resolve().parents[1]
+        try:
+            expected_spki = operator_bytes(root, "operator", "certificate-spki", input=expected_ca.encode("ascii"))
+            actual_spki = operator_bytes(root, "operator", "certificate-spki", input=produced_ca.encode("ascii"))
+            if not expected_spki or expected_spki != actual_spki:
+                raise ValueError("Selective remote TLS issuer public key changed")
+            operator_bytes(root, "operator", "certificate-chain", input=json.dumps({
+                "certificate": entries["trust_profile_workload_server_cert"].read_text(encoding="ascii"),
+                "issuer": expected_ca,
+            }).encode("ascii"))
+        except RuntimeError as error:
+            raise ValueError("Selective remote TLS issuer validation failed") from error
     moved: list[str] = []
     try:
         for name in sorted(expected_files):
             entries[name].rename(secret_dir / name)
             moved.append(name)
             if os.name == "posix":
-                os.chmod(secret_dir / name, 0o644)
+                os.chmod(secret_dir / name, 0o600 if repair else 0o644)
     except OSError as error:
         rollback_failed = False
         for name in reversed(moved):

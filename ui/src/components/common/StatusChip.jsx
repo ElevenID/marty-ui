@@ -53,6 +53,10 @@ const getStatusConfigs = (t) => ({
   
   // Flow instance statuses
   running: { label: t('status.running'), color: 'info', icon: PendingIcon },
+  in_progress: { label: t('status.inProgress', 'In progress'), color: 'info', icon: PendingIcon },
+  awaiting_wallet: { label: t('status.awaitingWallet', 'Awaiting wallet'), color: 'info', icon: PendingIcon },
+  awaiting_approval: { label: t('status.awaitingApproval', 'Awaiting approval'), color: 'warning', icon: PendingIcon },
+  awaiting_evidence: { label: t('status.awaitingEvidence', 'Awaiting evidence'), color: 'warning', icon: PendingIcon },
   completed: { label: t('status.completed'), color: 'success', icon: CheckCircleIcon },
   failed: { label: t('status.failed'), color: 'error', icon: ErrorIcon },
   
@@ -86,7 +90,7 @@ function StatusChip({
   const { t } = useTranslation('common');
   const normalizedStatus = String(status || '').trim().toLowerCase();
   const statusConfigs = getStatusConfigs(t);
-  const config = statusConfigs[normalizedStatus] || statusConfigs.unknown;
+  const config = Object.hasOwn(statusConfigs, normalizedStatus) ? statusConfigs[normalizedStatus] : statusConfigs.unknown;
   const { label, color, icon: IconComponent } = config;
 
   return (

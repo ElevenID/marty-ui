@@ -1,180 +1,109 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { describe, expect, it, vi } from 'vitest';
 
-import {
-  PUBLIC_TABS as publicTabs,
-  DISABLE_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtonsDisabled,
-  DISABLE_PUBLIC_LOGIN_BUTTON as publicLoginButtonDisabled,
-  DISABLE_PUBLIC_PRICING_BUTTONS as publicPricingButtonsDisabled,
-  ENABLE_ORGANIZATION_CREATION as publicOrganizationCreationEnabled,
-  ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as publicLegacyImpersonationBannerEnabled,
-  SHOW_PUBLIC_GET_STARTED_BUTTONS as publicGetStartedButtons,
-  SHOW_PUBLIC_LOGIN_BUTTON as publicLoginButton,
-  SHOW_PUBLIC_PRICING_BUTTONS as publicPricingButtons,
-  WALLET_SELECTION_ALLOWED_WALLET_IDS as publicWalletSelectionAllowedWalletIds,
-} from '../publicConfig.public';
-import {
-  PUBLIC_TABS as selfhostTabs,
-  DISABLE_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtonsDisabled,
-  DISABLE_PUBLIC_LOGIN_BUTTON as selfhostLoginButtonDisabled,
-  DISABLE_PUBLIC_PRICING_BUTTONS as selfhostPricingButtonsDisabled,
-  ENABLE_ORGANIZATION_CREATION as selfhostOrganizationCreationEnabled,
-  ENABLE_LEGACY_ADMIN_IMPERSONATION_BANNER as selfhostLegacyImpersonationBannerEnabled,
-  SHOW_PUBLIC_GET_STARTED_BUTTONS as selfhostGetStartedButtons,
-  SHOW_PUBLIC_LOGIN_BUTTON as selfhostLoginButton,
-  SHOW_PUBLIC_PRICING_BUTTONS as selfhostPricingButtons,
-  WALLET_SELECTION_ALLOWED_WALLET_IDS as selfhostWalletSelectionAllowedWalletIds,
-  getSelfhostPublicTabs,
-  getSelfhostPublicUiFlags,
-  isSelfhostProductionPublicHost,
-} from '../publicConfig.selfhost';
+import * as publicConfig from '../publicConfig.public';
+import * as customerConfig from '../publicConfig.selfhost';
+import { getPublicLoginFallback, renderMarketingRoutes, renderPublicRoot } from '../publicSite.selfhost';
 
-vi.mock('../publicSite.public', () => ({
-  getPublicLoginFallback: () => '/',
-  renderPublicRoot: () => <div>Original landing page</div>,
-  renderMarketingRoutes: () => null,
-}));
+import { redirectBrowser } from '../../application/routing/appHandoff';
 
-import { getPublicLoginFallback, renderPublicRoot } from '../publicSite.selfhost';
+vi.mock('../../application/routing/appHandoff', () => ({ redirectBrowser: vi.fn() }));
 
-function renderSelfhostRoot(authState: {
-  isAuthenticated: boolean;
-  isAdministrator: boolean;
-  isVendor: boolean;
-  isApplicant: boolean;
-}) {
+const originalUrl = window.location.href;
+
+function renderCustomerRoot(isAuthenticated = false) {
   return render(
-    <MemoryRouter initialEntries={['/']}>
+    <MemoryRouter>
       <Routes>
-        <Route path="/" element={renderPublicRoot(authState)} />
+        <Route path="/" element={renderPublicRoot({ isAuthenticated })} />
+        <Route path="/login" element={<div>Customer login</div>} />
+        <Route path="/organizations" element={<div>Customer organizations</div>} />
       </Routes>
     </MemoryRouter>,
   );
 }
 
-describe('publicSite.selfhost', () => {
-  it('keeps login enabled and disables marketing CTAs only on the production host', () => {
-    const expectedPublicPaths = ['/', '/product', '/solutions', '/developers', '/standards', '/demos', '/resources', '/pricing'];
-    const publicResourcesTab = publicTabs.find((tab) => tab.path === '/resources');
-    const selfhostResourcesTab = selfhostTabs.find((tab) => tab.path === '/resources');
+// Importing the production route module is itself a customer build regression.
+vi.mock('../publicSite.public', () => {
+  throw new Error('Customer UI must not import production marketing routes');
+});
 
-    expect(publicLoginButton).toBe(true);
-    expect(publicLoginButtonDisabled).toBe(false);
-    expect(publicGetStartedButtons).toBe(true);
-    expect(publicGetStartedButtonsDisabled).toBe(false);
-    expect(publicPricingButtons).toBe(true);
-    expect(publicPricingButtonsDisabled).toBe(false);
-    expect(publicLegacyImpersonationBannerEnabled).toBe(false);
-    expect(publicOrganizationCreationEnabled).toBe(true);
-    expect(publicWalletSelectionAllowedWalletIds).toBeNull();
-    expect(publicTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
-    expect(publicResourcesTab?.prefixes).toEqual(expect.arrayContaining(['/privacy-policy', '/privacy', '/terms-of-service', '/terms']));
+afterEach(() => {
+  vi.clearAllMocks();
+  delete (window as any).__MARTY_RUNTIME_CONFIG__;
+  (globalThis as any).jsdom.reconfigure({ url: originalUrl });
+});
 
-    expect(isSelfhostProductionPublicHost('elevenidllc.com')).toBe(true);
-    expect(isSelfhostProductionPublicHost('www.elevenidllc.com')).toBe(true);
-    expect(isSelfhostProductionPublicHost('beta.elevenidllc.com')).toBe(false);
+describe('customer UI variant', () => {
+  it('keeps authentication and application destinations without production marketing', () => {
+    expect(customerConfig.SHOW_PUBLIC_LOGIN_BUTTON).toBe(true);
+    expect(customerConfig.DISABLE_PUBLIC_LOGIN_BUTTON).toBe(false);
+    expect(customerConfig.SHOW_PUBLIC_GET_STARTED_BUTTONS).toBe(false);
+    expect(customerConfig.SHOW_PUBLIC_PRICING_BUTTONS).toBe(false);
+    expect(customerConfig.SHOW_PUBLIC_CTA).toBe(false);
+    expect(customerConfig.SHOW_PUBLIC_DEMOS).toBe(false);
+    expect(customerConfig.I18N_NAMESPACES).not.toContain('marketing');
+    expect(customerConfig.ENABLE_ORGANIZATION_CREATION).toBe(false);
+    expect(customerConfig.WALLET_SELECTION_ALLOWED_WALLET_IDS).toEqual(['wr-spruce-001', 'wr-marty-001']);
+    expect(customerConfig.PUBLIC_TABS.map((tab) => tab.path)).toEqual(['/', '/console', '/apply', '/docs']);
 
-    expect(selfhostLoginButton).toBe(true);
-    expect(selfhostLoginButtonDisabled).toBe(false);
-    expect(selfhostGetStartedButtons).toBe(true);
-    expect(selfhostGetStartedButtonsDisabled).toBe(false);
-    expect(selfhostPricingButtons).toBe(true);
-    expect(selfhostPricingButtonsDisabled).toBe(false);
-    expect(selfhostLegacyImpersonationBannerEnabled).toBe(false);
-    expect(selfhostOrganizationCreationEnabled).toBe(false);
-    expect(selfhostWalletSelectionAllowedWalletIds).toEqual(['wr-spruce-001', 'wr-marty-001']);
-    expect(selfhostTabs.map((tab) => tab.path)).toEqual(expectedPublicPaths);
-    expect(selfhostTabs).toEqual(publicTabs);
-    expect(selfhostResourcesTab?.prefixes).toEqual(expect.arrayContaining(['/privacy-policy', '/privacy', '/terms-of-service', '/terms']));
-
-    expect(getSelfhostPublicUiFlags('elevenidllc.com')).toEqual({
-      showPublicLoginButton: true,
-      disablePublicLoginButton: false,
-      showPublicGetStartedButtons: true,
-      disablePublicGetStartedButtons: true,
-      showPublicPricingButtons: true,
-      disablePublicPricingButtons: true,
-      enableLegacyAdminImpersonationBanner: false,
-    });
-    expect(getSelfhostPublicTabs('elevenidllc.com')).toEqual(
-      publicTabs.map((tab) => (tab.path === '/pricing' ? { ...tab, disabled: true } : tab)),
-    );
-
-    expect(getSelfhostPublicUiFlags('beta.elevenidllc.com')).toEqual({
-      showPublicLoginButton: true,
-      disablePublicLoginButton: false,
-      showPublicGetStartedButtons: true,
-      disablePublicGetStartedButtons: false,
-      showPublicPricingButtons: true,
-      disablePublicPricingButtons: false,
-      enableLegacyAdminImpersonationBanner: false,
-    });
-    expect(getSelfhostPublicTabs('beta.elevenidllc.com')).toEqual(publicTabs);
+    expect(publicConfig.SHOW_PUBLIC_DEMOS).toBe(true);
+    expect(publicConfig.SHOW_PUBLIC_CTA).toBe(true);
+    expect(publicConfig.PUBLIC_TABS.map((tab) => tab.path)).toContain('/product');
+    expect(publicConfig.I18N_NAMESPACES).toContain('marketing');
   });
 
-  it('keeps the full surface available but omits tester-only navigation and pricing actions', () => {
-    expect(getSelfhostPublicUiFlags('tester.example', 'tester')).toMatchObject({
+  it.each(['elevenidllc.com', 'www.elevenidllc.com', 'customer.example'])('never enables marketing based on hostname %s', (hostname) => {
+    expect(customerConfig.getSelfhostPublicUiFlags(hostname)).toMatchObject({
       showPublicLoginButton: true,
       showPublicGetStartedButtons: false,
       showPublicPricingButtons: false,
     });
-    expect(getSelfhostPublicTabs('tester.example', 'tester').map((tab) => tab.path)).toEqual([
-      '/', '/product', '/solutions', '/standards', '/resources',
-    ]);
-    expect(getSelfhostPublicTabs('tester.example', 'full').map((tab) => tab.path)).toEqual(
-      publicTabs.map((tab) => tab.path),
+  });
+
+  it('opens login for a signed-out customer instead of a homepage', () => {
+    renderCustomerRoot();
+    expect(screen.getByText('Customer login')).toBeVisible();
+    expect(redirectBrowser).not.toHaveBeenCalled();
+    expect(getPublicLoginFallback()).toBe('/console');
+  });
+
+  it('loads the console entrypoint for a signed-in customer', () => {
+    renderCustomerRoot(true);
+    expect(redirectBrowser).toHaveBeenCalledWith('/console', { replace: true });
+    expect(screen.queryByText('Customer login')).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])('respects a disabled console (authenticated=%s)', (authenticated) => {
+    (window as any).__MARTY_RUNTIME_CONFIG__ = { web: { enabled_sections: ['public'] } };
+    renderCustomerRoot(authenticated);
+    expect(screen.getByText(authenticated ? 'Customer organizations' : 'Customer login')).toBeVisible();
+    expect(redirectBrowser).not.toHaveBeenCalled();
+    expect(getPublicLoginFallback()).toBe('/organizations');
+  });
+
+  it('hands authentication from the IP entry to the configured DNS origin', () => {
+    const alias = 'https://203.0.113.10:8443';
+    const canonical = 'https://customer.example:8443';
+    (globalThis as any).jsdom.reconfigure({ url: `${alias}/` });
+    (window as any).__MARTY_RUNTIME_CONFIG__ = {
+      web: { enabled_sections: ['public', 'console'] },
+      hosting: { canonicalOrigin: canonical, publicEntryOrigins: [alias] },
+    };
+    renderCustomerRoot();
+    expect(redirectBrowser).toHaveBeenCalledWith(`${canonical}/login`, { replace: true });
+  });
+
+  it.each(['/product', '/pricing', '/blog', '/authors', '/demos', '/privacy-policy'])('does not register production route %s', (pathname) => {
+    render(
+      <MemoryRouter initialEntries={[pathname]}>
+        <Routes>
+          {renderMarketingRoutes()}
+          <Route path="*" element={<div>Not available</div>} />
+        </Routes>
+      </MemoryRouter>,
     );
-  });
-
-  it('renders the original landing page when unauthenticated', () => {
-    renderSelfhostRoot({
-      isAuthenticated: false,
-      isAdministrator: false,
-      isVendor: false,
-      isApplicant: false,
-    });
-
-    expect(screen.getByText('Original landing page')).toBeInTheDocument();
-  });
-
-  it('matches the public login fallback', () => {
-    expect(getPublicLoginFallback()).toBe('/');
-  });
-
-  it.each([
-    {
-      label: 'administrator',
-      authState: {
-        isAuthenticated: true,
-        isAdministrator: true,
-        isVendor: false,
-        isApplicant: false,
-      },
-    },
-    {
-      label: 'vendor',
-      authState: {
-        isAuthenticated: true,
-        isAdministrator: false,
-        isVendor: true,
-        isApplicant: false,
-      },
-    },
-    {
-      label: 'applicant',
-      authState: {
-        isAuthenticated: true,
-        isAdministrator: false,
-        isVendor: false,
-        isApplicant: true,
-      },
-    },
-  ])('renders the original landing page for authenticated $label users', ({ authState }) => {
-    renderSelfhostRoot({
-      ...authState,
-    });
-
-    expect(screen.getByText('Original landing page')).toBeInTheDocument();
+    expect(screen.getByText('Not available')).toBeVisible();
   });
 });

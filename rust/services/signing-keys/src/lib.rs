@@ -7,6 +7,7 @@ pub mod certificate_issuance;
 pub mod compat;
 pub mod config;
 pub mod csca_lifecycle;
+pub mod didcomm_remote_kms;
 pub mod documents;
 pub mod domain;
 pub mod dsc_issuance_store;

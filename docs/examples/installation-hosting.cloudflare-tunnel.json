@@ -1,0 +1,17 @@
+{
+  "schema": "elevenid.installation-hosting/v1",
+  "mode": "external-proxy",
+  "public_origin": "https://marty.example.com",
+  "listener": {
+    "bind_address": "127.0.0.1",
+    "port": 8443
+  },
+  "tls": {
+    "termination": "marty-keyless",
+    "certificate_source": "managed-ca"
+  },
+  "connector": {
+    "kind": "cloudflare-tunnel",
+    "token_file": "/home/marty/private/cloudflare-tunnel-token"
+  }
+}

@@ -9,7 +9,7 @@
  * the same browser each keep their own list.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 
 import { WALLET_SELECTION_ALLOWED_WALLET_IDS } from '@ui-public-config';
 import { filterAllowedWalletIds } from '../utils/walletSelectionRestrictions';
@@ -37,37 +37,67 @@ function writeToStorage(userId, ids) {
 
 /**
  * @param {string} userId — authenticated user ID (from useAuth)
- * @returns {{ walletIds: string[], addWallet, removeWallet, setWalletIds }}
+ * @returns {{ walletIds: string[], error: string|null, retry, addWallet, removeWallet, setWalletIds }}
  */
 export default function useWalletPreferences(userId) {
-  const [walletIds, setWalletIdsState] = useState(() => readFromStorage(userId));
+  const scope = useMemo(() => ({ userId }), [userId]);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const active = useRef(false);
+  const [state, setState] = useState(() => ({ scope, walletIds: readFromStorage(userId), pendingIds: null, error: null }));
+  const currentState = state.scope === scope
+    ? state
+    : { scope, walletIds: readFromStorage(userId), pendingIds: null, error: null };
+  const stateRef = useRef(currentState);
+  stateRef.current = currentState;
+
+  useLayoutEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   useEffect(() => {
-    setWalletIdsState(readFromStorage(userId));
-  }, [userId]);
+    setState(previous => previous.scope === scope
+      ? previous
+      : { scope, walletIds: readFromStorage(userId), pendingIds: null, error: null });
+  }, [scope, userId]);
 
   const setWalletIds = useCallback(
     (ids) => {
-      const list = filterAllowedWalletIds(ids, WALLET_SELECTION_ALLOWED_WALLET_IDS);
-      writeToStorage(userId, list);
-      setWalletIdsState(list);
+      if (!active.current || currentScope.current !== scope) return false;
+      const list = [...filterAllowedWalletIds(ids, WALLET_SELECTION_ALLOWED_WALLET_IDS)];
+      let nextState;
+      try {
+        writeToStorage(userId, list);
+        nextState = { scope, walletIds: list, pendingIds: null, error: null };
+      } catch {
+        nextState = {
+          ...stateRef.current,
+          pendingIds: list,
+          error: 'Wallet choices could not be saved in this browser. Please try again.',
+        };
+      }
+      stateRef.current = nextState;
+      setState(nextState);
+      return !nextState.error;
     },
-    [userId],
+    [scope, userId],
   );
 
   const addWallet = useCallback(
-    (id) => {
-      setWalletIds([...new Set([...readFromStorage(userId), id])]);
-    },
+    (id) => setWalletIds([...new Set([...readFromStorage(userId), id])]),
     [userId, setWalletIds],
   );
 
   const removeWallet = useCallback(
-    (id) => {
-      setWalletIds(readFromStorage(userId).filter((w) => w !== id));
-    },
+    (id) => setWalletIds(readFromStorage(userId).filter((w) => w !== id)),
     [userId, setWalletIds],
   );
 
-  return { walletIds, addWallet, removeWallet, setWalletIds };
+  const retry = useCallback(() => {
+    if (stateRef.current.scope !== scope || !stateRef.current.pendingIds) return false;
+    return setWalletIds(stateRef.current.pendingIds);
+  }, [scope, setWalletIds]);
+
+  return { walletIds: currentState.walletIds, error: currentState.error, retry, addWallet, removeWallet, setWalletIds };
 }

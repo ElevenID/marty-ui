@@ -37,7 +37,9 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [policyType, setPolicyType] = useState('CUSTOM');
-  const [policies, setPolicies] = useState([]);
+  const [policyRows, setPolicyRows] = useState([]);
+  const nextPolicyRowId = useRef(0);
+  const policies = policyRows.map(({ policy }) => policy);
   const [validation, setValidation] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -62,17 +64,21 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
   }, [organizationId, canCreate, grantsLoading, revision]);
 
   const chooseTemplate = (template) => {
-    if (!applies() || saving || validating) return;
+    if (!applies() || saving || validating || selectedTemplate === template.template_id) return;
     setSelectedTemplate(template.template_id);
     setPolicyType(template.policy_type);
     setName(template.name);
     setDescription(template.description);
-    setPolicies(template.cedar_policies.map((policy) => ({ ...policy })));
+    setPolicyRows(template.cedar_policies.map((policy) => ({
+      rowId: nextPolicyRowId.current++,
+      policy: { ...policy },
+    })));
     setValidation(null);
   };
 
   const updatePolicy = (index, updates) => {
-    setPolicies((current) => current.map((policy, policyIndex) => policyIndex === index ? { ...policy, ...updates } : policy));
+    setPolicyRows((current) => current.map((row, policyIndex) => policyIndex === index
+      ? { ...row, policy: { ...row.policy, ...updates } } : row));
     setValidation(null);
   };
 
@@ -126,7 +132,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
       <Typography variant="h6" sx={{ mb: 1.5 }}>Start from a template</Typography>
       <Grid container spacing={1.5} sx={{ mb: 3 }}>
         {templates.map((template) => (
-          <Grid item xs={12} sm={4} key={template.template_id}>
+          <Grid key={template.template_id} size={{ xs: 12, sm: 4 }}>
             <Card variant="outlined" sx={{ height: '100%', borderColor: selectedTemplate === template.template_id ? 'primary.main' : 'divider' }}>
               <CardActionArea disabled={busy || !canValidate} onClick={() => chooseTemplate(template)} sx={{ height: '100%' }}>
                 <CardContent>
@@ -154,12 +160,12 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
             <Alert severity="info">Select a template to continue.</Alert>
           ) : advanced ? (
             <Stack spacing={2}>
-              {policies.map((policy, index) => (
-                <Box key={`${policy.policy_id}-${index}`} sx={{ borderTop: index ? 1 : 0, borderColor: 'divider', pt: index ? 2 : 0 }}>
+              {policyRows.map(({ rowId, policy }, index) => (
+                <Box key={rowId} sx={{ borderTop: index ? 1 : 0, borderColor: 'divider', pt: index ? 2 : 0 }}>
                   <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 1.5 }}>
                     <TextField fullWidth label="Policy ID" value={policy.policy_id} onChange={(event) => updatePolicy(index, { policy_id: event.target.value })} />
                     <TextField fullWidth label="Effect" value={policy.effect} disabled />
-                    <IconButton aria-label={`Delete ${policy.policy_id}`} disabled={policies.length === 1} onClick={() => { setPolicies(policies.filter((_, policyIndex) => policyIndex !== index)); setValidation(null); }}><DeleteIcon /></IconButton>
+                    <IconButton aria-label={`Delete ${policy.policy_id}`} disabled={policies.length === 1} onClick={() => { setPolicyRows((current) => current.filter((_, policyIndex) => policyIndex !== index)); setValidation(null); }}><DeleteIcon /></IconButton>
                   </Stack>
                   <TextField
                     fullWidth
@@ -177,11 +183,11 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
             </Stack>
           ) : (
             <Stack spacing={1}>
-              {policies.map((policy) => (
-                <Stack key={policy.policy_id} direction="row" alignItems="center" gap={1.5}>
+              {policyRows.map(({ rowId, policy }) => (
+                <Stack key={rowId} direction="row" sx={{ alignItems: "center", gap: 1.5 }}>
                   <CheckIcon color="success" fontSize="small" />
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Typography variant="body2" fontWeight={600}>{policy.description || policy.policy_id}</Typography>
+                    <Typography variant="body2" sx={{ fontWeight: 600 }}>{policy.description || policy.policy_id}</Typography>
                     <Typography variant="caption" color="text.secondary">{policy.effect} / {policy.policy_id}</Typography>
                   </Box>
                 </Stack>
@@ -191,7 +197,7 @@ const ScopedPolicySetWizard = ({ organizationId, canCreate, canValidate, grantsL
 
           {validation && <Alert severity={validation.valid ? 'success' : 'error'}>{validation.valid ? 'Policy Set is valid.' : validation.errors.join(' ')}</Alert>}
 
-          <Stack direction="row" justifyContent="flex-end" spacing={1.5}>
+          <Stack direction="row" spacing={1.5} sx={{ justifyContent: "flex-end" }}>
             <Button variant="outlined" onClick={runValidation} disabled={!policies.length || busy || !canValidate}>Validate</Button>
             <Button variant="contained" startIcon={<SaveIcon />} onClick={save} disabled={!name.trim() || !policies.length || busy || !canValidate}>Create draft</Button>
           </Stack>

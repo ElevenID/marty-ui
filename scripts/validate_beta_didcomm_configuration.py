@@ -11,8 +11,6 @@ import sys
 
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
 POLICY_FILE = POLICY_TARGET + "/didcomm-encryption-policy.json"
-TOKEN_TARGET = "/run/secrets/didcomm-kms"
-TOKEN_FILE = TOKEN_TARGET + "/openbao-token"
 NATIVE_URL = "http://issuance-native:8005"
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 
@@ -40,212 +38,141 @@ def bind_does_not_create_host_path(mount):
 
 
 def assert_native_kms_policy(model):
-    try:
-        services = model["services"]
-        if "issuance-native" not in services:
-            return
-        legacy, native = services["issuance"], services["issuance-native"]
-        legacy_env = environment_mapping(legacy["environment"])
-        native_env = environment_mapping(native["environment"])
-        if "DIDCOMM_ENCRYPTION_POLICY_FILE" in legacy_env or any(
-            key in legacy_env for key in ("DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_TOKEN_FILE")
-        ):
-            raise DidcommConfigurationError("Legacy DIDComm key custody is forbidden")
-        policy = native_env.get("DIDCOMM_ENCRYPTION_POLICY_FILE")
-        if policy is None:
-            if any(
-                key in native_env
-                for key in ("DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_TOKEN_FILE")
-            ):
-                raise DidcommConfigurationError(
-                    "DIDComm KMS requires an explicit native policy"
-                )
-            return
-        if (
-            policy != POLICY_FILE
-            or native_env.get("DIDCOMM_KMS_ADDR") != "http://openbao:8200"
-            or native_env.get("DIDCOMM_KMS_TOKEN_FILE") != TOKEN_FILE
-        ):
-            raise DidcommConfigurationError(
-                "Native DIDComm remote custody is incomplete"
-            )
-        selected = [
-            item
-            for item in native.get("volumes", [])
-            if item.get("target") in {POLICY_FILE, TOKEN_TARGET}
-        ]
-        mounts = {
-            item["target"]: item
-            for item in native.get("volumes", [])
-            if item.get("target") in {POLICY_FILE, TOKEN_TARGET}
-        }
-        if len(selected) != 2 or set(mounts) != {POLICY_FILE, TOKEN_TARGET}:
-            raise DidcommConfigurationError(
-                "Native DIDComm policy and token mounts are incomplete"
-            )
-        policy_mount = mounts[POLICY_FILE]
-        policy_source = policy_mount["source"]
-        if (
-            policy_mount["type"] != "bind"
-            or policy_mount["read_only"] is not True
-            or not bind_does_not_create_host_path(policy_mount)
-            or not isinstance(policy_source, str)
-            or not policy_source.endswith("/didcomm-encryption-policy.json")
-        ):
-            raise DidcommConfigurationError(
-                "Native DIDComm reference policy mount is incomplete"
-            )
-        directory = policy_source.rsplit("/", 1)[0]
-        if not directory or any(
-            str(path) == path.anchor
-            for path in (PurePosixPath(directory), PureWindowsPath(directory))
-        ):
-            raise DidcommConfigurationError(
-                "DIDComm policy source cannot be a filesystem root"
-            )
-        token_mount = mounts[TOKEN_TARGET]
-        if (
-            token_mount["type"] != "volume"
-            or token_mount["source"] != "didcomm_issuance_token"
-            or token_mount["read_only"] is not True
-        ):
-            raise DidcommConfigurationError("Native DIDComm token volume is incomplete")
-        token_resource = model.get("volumes", {}).get("didcomm_issuance_token")
-        if (
-            not isinstance(token_resource, dict)
-            or set(token_resource) - {"name"}
-            or (
-                model.get("name")
-                and token_resource.get("name")
-                != model["name"] + "_didcomm_issuance_token"
-            )
-        ):
-            raise DidcommConfigurationError(
-                "Native DIDComm scoped token volume is missing"
-            )
-        openbao, bootstrap = services["openbao"], services["openbao-init"]
-        image = openbao.get("image")
-        unresolved_image = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}"
-        if (
-            not isinstance(image, str)
-            or (
-                not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
-                and image != unresolved_image
-            )
-            or bootstrap.get("image") != image
-            or environment_mapping(bootstrap["environment"]).get(
-                "DIDCOMM_KMS_PLUGIN_REQUIRED"
-            )
-            != "true"
-            or environment_mapping(bootstrap["environment"]).get(
-                "DIDCOMM_ISSUANCE_TOKEN_FILE"
-            )
-            != "/run/didcomm-token/openbao-token"
-            or openbao.get("command")
-            != ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"]
-            or not any(
-                isinstance(mount, dict)
-                and mount.get("type") == "volume"
-                and mount.get("source") == "didcomm_issuance_token"
-                and mount.get("target") == "/run/didcomm-token"
-                and mount.get("read_only") is not True
-                for mount in bootstrap.get("volumes", [])
-            )
-            or native.get("depends_on", {}).get("openbao-init", {}).get("condition")
-            != "service_completed_successfully"
-            or not any(
-                isinstance(mount, dict)
-                and mount.get("target") == "/bao/config/didcomm-plugin.hcl"
-                and mount.get("type") == "bind"
-                and mount.get("read_only") is True
-                and bind_does_not_create_host_path(mount)
-                and str(mount.get("source", ""))
-                .replace("\\", "/")
-                .endswith("/docker/openbao-didcomm-dev.hcl")
-                for mount in openbao.get("volumes", [])
-            )
-        ):
-            raise DidcommConfigurationError(
-                "DIDComm OpenBao plugin backend is incomplete"
-            )
-        for name, service in services.items():
-            if name == "issuance-native":
-                continue
-            if any(
-                isinstance(item, dict)
-                and (
-                    item.get("source") == policy_source
-                    or (
-                        item.get("source") == "didcomm_issuance_token"
-                        and name != "openbao-init"
-                    )
-                )
-                for item in service.get("volumes", [])
-            ):
-                raise DidcommConfigurationError(
-                    "DIDComm policy or token is mounted outside native issuance"
-                )
-    except (KeyError, TypeError, StopIteration, AttributeError):
-        raise DidcommConfigurationError("Invalid DIDComm owner model") from None
+    # Retain the existing guard entrypoint; the retired HTTP development owner
+    # is not an alternative to the current HTTPS Signing Keys route.
+    assert_base_https_native_kms(model)
 
 
 def assert_base_https_native_kms(model):
-    services = model["services"]
-    native = services["issuance-native"]
-    environment = environment_mapping(native["environment"])
-    expected = {
-        "DIDCOMM_KMS_ADDR": "https://openbao:8200",
-        "DIDCOMM_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
-        "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
-    }
-    if any(environment.get(key) != value for key, value in expected.items()):
-        raise DidcommConfigurationError("Native HTTPS DIDComm custody is incomplete")
-    mounts = {item.get("target"): item for item in native.get("volumes", [])}
-    for source, target in (
-        ("openbao_public_ca", "/bao/public-ca"),
-        ("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"),
-    ):
-        mount = mounts.get(target)
-        if not isinstance(mount, dict) or any(
-            mount.get(key) != value
-            for key, value in (
-                ("type", "volume"),
-                ("source", source),
-                ("read_only", True),
-            )
-        ):
-            raise DidcommConfigurationError(
-                "Native HTTPS DIDComm CA or token mount is incomplete"
-            )
-    policy_file = environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE")
-    if policy_file is None and POLICY_FILE in mounts:
-        raise DidcommConfigurationError("Native DIDComm policy mount lacks a selector")
-    if policy_file is not None:
-        if policy_file != POLICY_FILE:
-            raise DidcommConfigurationError(
-                "Native DIDComm reference policy path is invalid"
-            )
-        policy_mount = mounts.get(POLICY_FILE)
+    try:
+        services = model["services"]
+        native, signing = services["issuance-native"], services["signing-keys"]
+        environment = environment_mapping(native["environment"])
+        signing_environment = environment_mapping(signing["environment"])
+        direct_fields = {"DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE", "DIDCOMM_KMS_TOKEN_FILE"}
+        for name in ("issuance", "issuance-native"):
+            if direct_fields & set(environment_mapping(services[name]["environment"])):
+                raise DidcommConfigurationError("Direct Issuance DIDComm key custody is forbidden")
+        expected = {
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE": "/bao/issuance-credential-grant/token",
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/public-ca/ca.crt",
+        }
+        signing_expected = {
+            "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/bao/verify-grant/token",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": "/run/secrets/dev_integration_secret_server_cert",
+            "BAO_ADDR": "https://openbao:8200",
+        }
+        issuer_key = environment.get("SIGNING_KEYS_ISSUER_SIGN_KEY")
+        verifier_key = signing_environment.get("SIGNING_KEYS_ISSUER_SIGN_KEY")
+        same_issuer_key = bool(issuer_key) and issuer_key == verifier_key
+        if not same_issuer_key:
+            # The source-only merge gate keeps Compose interpolation intact;
+            # required/default forms must still select this exact one input.
+            selector = r"\$\{SIGNING_KEYS_ISSUER_SIGN_KEY:(?:-|\?)[^{}]*\}"
+            same_issuer_key = all(isinstance(value, str) and re.fullmatch(selector, value)
+                                  for value in (issuer_key, verifier_key))
         if (
-            not isinstance(policy_mount, dict)
-            or policy_mount.get("type") != "bind"
-            or policy_mount.get("read_only") is not True
-            or not bind_does_not_create_host_path(policy_mount)
-            or not str(policy_mount.get("source", ""))
-            .replace("\\", "/")
-            .endswith("/didcomm-encryption-policy.json")
+            any(environment.get(key) != value for key, value in expected.items())
+            or any(signing_environment.get(key) != value for key, value in signing_expected.items())
+            or not same_issuer_key
+            or {"DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE"} & set(signing_environment)
         ):
-            raise DidcommConfigurationError(
-                "Native DIDComm reference policy mount is incomplete"
-            )
-        for name, service in services.items():
-            if name != "issuance-native" and any(
-                isinstance(item, dict) and item.get("target") == POLICY_FILE
-                for item in service.get("volumes", [])
+            raise DidcommConfigurationError("Registered DIDComm HTTPS authority is incomplete")
+        signing_ca = signing_environment.get("BAO_CACERT")
+        if signing_ca not in {"/bao/public-ca/ca.crt", "/run/secrets/openbao_tls_ca_cert"}:
+            raise DidcommConfigurationError("Registered DIDComm public trust is incomplete")
+        if signing_ca == "/run/secrets/openbao_tls_ca_cert" and not any(
+            isinstance(item, dict) and item.get("source") == "openbao_tls_ca_cert"
+            and item.get("target") == signing_ca for item in signing.get("secrets", [])
+        ):
+            raise DidcommConfigurationError("Registered DIDComm public trust mount is incomplete")
+
+        def readonly_volume(service, source, target):
+            matches = [item for item in service.get("volumes", [])
+                       if isinstance(item, dict) and item.get("target") == target]
+            if len(matches) != 1 or any(matches[0].get(key) != value for key, value in (
+                ("type", "volume"), ("source", source), ("read_only", True)
+            )):
+                raise DidcommConfigurationError("DIDComm scoped authority mount is incomplete")
+
+        for service, source, target in (
+            (native, "openbao_public_ca", "/bao/public-ca"),
+            (native, "openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+            (signing, "openbao_public_ca", "/bao/public-ca"),
+            (signing, "openbao_verify_grant", "/bao/verify-grant"),
+            (signing, "openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"),
+        ):
+            readonly_volume(service, source, target)
+        token_resource = model.get("volumes", {}).get("openbao_didcomm_issuance_token")
+        if (
+            not isinstance(token_resource, dict)
+            or set(token_resource) - {"name"}
+            or (model.get("name") and token_resource.get("name")
+                != model["name"] + "_openbao_didcomm_issuance_token")
+        ):
+            raise DidcommConfigurationError("DIDComm scoped token volume is missing")
+        bootstrap = services["openbao-init"]
+        bootstrap_environment = environment_mapping(bootstrap["environment"])
+        openbao = services["openbao"]
+        image = openbao.get("image")
+        if (
+            not isinstance(image, str)
+            or (not re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+                and not (image in {"marty-openbao-didcomm:dev", "${MARTY_OPENBAO_DIDCOMM_IMAGE:-marty-openbao-didcomm:dev}"}
+                         and openbao.get("build", {}).get("dockerfile") == "openbao/didcomm-authcrypt/Dockerfile"))
+            or bootstrap.get("image") != image
+            or bootstrap_environment.get("DIDCOMM_KMS_PLUGIN_REQUIRED") != "true"
+            or bootstrap_environment.get("BAO_DIDCOMM_ISSUANCE_TOKEN_FILE") != "/bao/didcomm-issuance-token/token"
+            or signing.get("depends_on", {}).get("openbao-init", {}).get("condition") != "service_completed_successfully"
+            or not any(isinstance(item, dict) and item.get("type") == "volume"
+                       and item.get("source") == "openbao_didcomm_issuance_token"
+                       and item.get("target") == "/bao/didcomm-issuance-token"
+                       and item.get("read_only") is not True
+                       for item in bootstrap.get("volumes", []))
+        ):
+            raise DidcommConfigurationError("DIDComm OpenBao plugin backend is incomplete")
+
+        policy_file = environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE")
+        policy_mounts = [item for item in native.get("volumes", [])
+                         if isinstance(item, dict) and item.get("target") == POLICY_FILE]
+        if policy_file is None and policy_mounts:
+            raise DidcommConfigurationError("Native DIDComm policy mount lacks a selector")
+        policy_source = None
+        if policy_file is not None:
+            if policy_file != POLICY_FILE or len(policy_mounts) != 1:
+                raise DidcommConfigurationError("Native DIDComm reference policy path is invalid")
+            policy_mount = policy_mounts[0]
+            policy_source = policy_mount.get("source")
+            if (
+                policy_mount.get("type") != "bind"
+                or policy_mount.get("read_only") is not True
+                or not bind_does_not_create_host_path(policy_mount)
+                or not isinstance(policy_source, str)
+                or not policy_source.replace("\\", "/").endswith("/didcomm-encryption-policy.json")
             ):
-                raise DidcommConfigurationError(
-                    "DIDComm policy is mounted outside native issuance"
-                )
+                raise DidcommConfigurationError("Native DIDComm reference policy mount is incomplete")
+            directory = policy_source.replace("\\", "/").rsplit("/", 1)[0]
+            if not directory or any(str(path) == path.anchor
+                                    for path in (PurePosixPath(directory), PureWindowsPath(directory))):
+                raise DidcommConfigurationError("DIDComm policy source cannot be a filesystem root")
+        for name, service in services.items():
+            for item in service.get("volumes", []):
+                if not isinstance(item, dict):
+                    continue
+                if (item.get("source") == "openbao_didcomm_issuance_token"
+                    and name not in {"signing-keys", "openbao-init"}):
+                    raise DidcommConfigurationError("DIDComm token is mounted outside Signing Keys")
+                if name != "issuance-native" and (
+                    item.get("target") == POLICY_FILE
+                    or (policy_source is not None and item.get("source") == policy_source)
+                ):
+                    raise DidcommConfigurationError("DIDComm policy is mounted outside native issuance")
+    except (KeyError, TypeError, AttributeError):
+        raise DidcommConfigurationError("Invalid DIDComm owner model") from None
 
 
 def validate_model(model, *, authcrypt_enabled, base_https=False):

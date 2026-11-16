@@ -1,73 +1,74 @@
 {
   "valueProposition": {
-    "headline": "Identitätsprüfung allein reicht nicht aus.",
-    "subheadline": "Bauen Sie verifizierbare Identitätsinfrastruktur auf.",
-    "extendedSubheadline": "Ausstellen, verifizieren und steuern Sie Nachweise – entwickelt für EUDI-Wallets, Open Badges und unternehmensweiten Vertrauensbetrieb.",
-    "primaryCTA": "Kostenlos starten",
-    "secondaryCTA": "Warum verifizierbare Identität"
+    "headline": "Marty: Identitätsabläufe in Ihrer Hand.",
+    "subheadline": "Vertrauen passend zu Ihrem Ablauf.",
+    "extendedSubheadline": "Wählen Sie einen klaren Anwendungsfall, testen Sie mit synthetischen Daten und betreiben Sie die vereinbarte Lösung selbst oder mit Ihrem Partner.",
+    "primaryCTA": "Entwicklerdokumentation lesen",
+    "secondaryCTA": "Verifizierungs-API ansehen",
+    "supporting": "Portable Nachweise, Bewerber- und Dokumentenprüfung sowie Travel Trust."
   },
   "idvComparison": {
-    "title": "Von IDV zu verifizierbarer Identität",
-    "takeaway": "ElevenID LLC ersetzt wiederholte Prüfungen durch wiederverwendbares Vertrauen.",
+    "title": "Den Vertrauensaustausch planen",
+    "takeaway": "Beginnen Sie mit den Fragen Ihres Ablaufs und prüfen Sie die gewählte Implementierung.",
     "traditional": {
-      "title": "Traditionelles IDV",
-      "oneTimeChecks": "Einmalige Dokumentenprüfungen",
-      "vendorControlled": "Anbieter-kontrollierte Identitätsdaten",
-      "biometric": "Biometrische Entscheidungswerte",
-      "closedAPIs": "Geschlossene, proprietäre APIs",
-      "manualTrust": "Manuelle Vertrauenseinstellungen",
-      "reVerification": "Überall erneute Verifizierung"
+      "title": "Zu klärende Fragen",
+      "oneTimeChecks": "Welche Aussage muss geprüft werden?",
+      "vendorControlled": "Wer verwaltet Daten und Schlüssel?",
+      "biometric": "Wie wird der Nachweis an den Vorzeigenden gebunden?",
+      "closedAPIs": "Welche Schnittstellen und Profile sind erforderlich?",
+      "manualTrust": "Welchen Ausstellern und Regeln wird vertraut?",
+      "reVerification": "Wann kann ein Nachweis wiederverwendet werden?"
     },
     "elevenid": {
-      "title": "ElevenID LLC",
-      "reusable": "Wiederverwendbare verifizierbare Nachweise",
-      "holderControlled": "Wallets unter Kontrolle der Inhaber",
-      "cryptographic": "Kryptografische Nachweise",
-      "openStandards": "Offene Standards (W3C VC, OID4VC, ISO)",
-      "governedTrust": "Governte Vertrauensregister",
-      "reuseAcross": "Identität über Ökosysteme hinweg wiederverwenden"
+      "title": "Marty-Evaluierung",
+      "reusable": "Definierte Nachweis- und Dokumenteneingaben",
+      "holderControlled": "Betrieb durch Kunden oder gewählten Partner",
+      "cryptographic": "Profilspezifische Tests zur Inhaberbindung",
+      "openStandards": "Dokumentierte Schnittstellen und getestete Kombinationen",
+      "governedTrust": "Explizite Aussteller- und Richtlinienkonfiguration",
+      "reuseAcross": "Wiederverwendung im vereinbarten Ablauf prüfen"
     }
   },
   "eudiOpenBadges": {
-    "title": "Für EUDI-Wallets und verifizierbare Nachweise entwickelt",
-    "verifyCredentials": "Verifizieren Sie verifizierbare Nachweise – nicht nur Dokumente.",
-    "trustIssuers": "Vertrauen Sie Ausstellern – nicht Datenbanken.",
-    "walletFirst": "Wallet-first by design – EUDI-ready.",
-    "quote": "IDV-Plattformen enden bei einer einmaligen Entscheidung. ElevenID LLC liefert kryptografisch verifizierbare Ergebnisse, die über Wallets, Ökosysteme und Vertrauensregister hinweg wiederverwendet werden können."
+    "title": "Wallet- und Nachweis-Kompatibilität prüfen",
+    "verifyCredentials": "Benötigtes Nachweisformat und Präsentationsprofil festlegen.",
+    "trustIssuers": "Vertrauenswürdige Aussteller und Akzeptanzregeln bestimmen.",
+    "walletFirst": "Gewählte Wallets und Softwareversion gemeinsam testen.",
+    "quote": "Ein Standard ist ein Ausgangspunkt. Prüfen Sie die konkrete Version und das Profil; Kompatibilität und Konformität benötigen eigene Nachweise."
   },
   "audienceRouting": {
     "title": "Wählen Sie Ihren Pfad",
-    "subtitle": "Wählen Sie Ihren Einstieg – Unternehmen, Behörden oder Entwickler.",
+    "subtitle": "Marty direkt oder über Partner- und OEM-Integrationen prüfen.",
     "enterprise": {
       "title": "Unternehmen",
-      "description": "Wiederholte KYC-Kosten senken, Partner-Interoperabilität ermöglichen und Vertrauen im großen Maßstab steuern.",
+      "description": "Einen nützlichen Nachweis- oder Dokumentenablauf und das Betriebsteam festlegen.",
       "cta": "Unternehmen entdecken"
     },
     "government": {
       "title": "Behörden",
-      "description": "EUDI-fähige Infrastruktur für ISO-Nachweise, Trust Lists und regulierte Akzeptanz.",
+      "description": "Vertrauensquellen, benötigte Profile und Betriebsanforderungen prüfen.",
       "cta": "Behörden entdecken"
     },
     "developers": {
       "title": "Entwickler",
-      "description": "Docs, SDKs und Quickstarts für VC-Ausstellung und -Verifizierung.",
+      "description": "APIs, Quellcode und Integrationsanforderungen des gewählten Ablaufs prüfen.",
       "cta": "Dokumentation lesen"
     }
   },
   "organizationOutcomes": {
-    "title": "Warum das für Organisationen wichtig ist",
-    "reduceKYC": "Wiederholte KYC-Kosten durch wiederverwendbare Nachweise reduzieren",
-    "eudiReady": "Auf die Akzeptanz der EUDI-Wallet vorbereiten",
-    "avoidLockIn": "Vendor-Lock-in durch offene Standards vermeiden",
-    "supportBadges": "Open Badges, Workforce-Nachweise und staatliche IDs in einem System unterstützen"
+    "title": "Was Sie prüfen können",
+    "reduceKYC": "Wiederverwendung von Nachweisen im vereinbarten Ablauf prüfen",
+    "eudiReady": "Vertrauen in Reisedokumente und Reiseregeln prüfen",
+    "avoidLockIn": "Bewerber- und Dokumentenprüfungen klar definieren",
+    "supportBadges": "Betrieb durch Kunden oder Partner"
   },
   "proofStrip": {
-    "title": "Auf bewährten Grundlagen aufgebaut",
-    "interoperability": "Interoperabilität",
-    "offlineVerification": "Offline-Verifizierung",
-    "deployment": "Bereitstellung",
+    "title": "Klar definiertes Produkt und Betriebsmodell",
+    "interoperability": "Umfang",
+    "offlineVerification": "Evaluierung",
+    "deployment": "Betrieb",
     "keySecurity": "Schlüsselsicherheit",
-    "compliance": "Compliance"
+    "compliance": "Nachweise"
   },
   "landingPage": {
     "loading": "Wird geladen...",
@@ -75,15 +76,15 @@
     "features": {
       "issuance": {
         "title": "Ausstellung",
-        "description": "Stellen Sie standardbasierte Nachweise mit kryptografischen Signaturen und Policy Enforcement aus."
+        "description": "Benötigtes Nachweisformat und Präsentationsprofil festlegen."
       },
       "verification": {
         "title": "Verifizierung",
-        "description": "Verifizieren Sie Nachweise gegen Trust Anchors mit Sperrprüfung und selektiver Offenlegung."
+        "description": "Vertrauenswürdige Aussteller und Akzeptanzregeln bestimmen."
       },
       "governance": {
         "title": "Governance",
-        "description": "Steuern Sie Vertrauen, Richtlinien und Deployment zentral – ohne Verifier-Code zu ändern."
+        "description": "Explizite Vertrauens- und Schlüsselkonfiguration"
       }
     },
     "identityProblem": {
@@ -98,8 +99,8 @@
     },
     "solvesIt": {
       "title": "Wie ElevenID LLC das löst",
-      "intro": "Governieren Sie Identität mit vier Bausteinen: Trust Profiles, Credential Templates, Presentation Policies und Flows.",
-      "subheading": "Policies sind Konfiguration, kein Code. Endpoints führen zentral gesteuerte Vertrauens- und Offenlegungsregeln ohne Redeployment aus."
+      "intro": "Eingaben, Vertrauensquellen und erwartetes Ergebnis vereinbaren",
+      "subheading": "Ein Standard ist ein Ausgangspunkt. Prüfen Sie die konkrete Version und das Profil; Kompatibilität und Konformität benötigen eigene Nachweise."
     },
     "howItWorks": {
       "title": "So funktioniert's",
@@ -108,17 +109,17 @@
     },
     "standards": {
       "title": "Standards-basierte Architektur",
-      "subtitle": "Standards sind keine Integrationen. Sie sind das Produkt.",
-      "description": "Diese Ebenen ermöglichen Interoperabilität über Regierungen, Wallets und Unternehmen hinweg – ohne Custom Integrations.",
+      "subtitle": "Standards leiten das Design. Tests belegen die Kompatibilität.",
+      "description": "Ein Standard ist ein Ausgangspunkt. Prüfen Sie die konkrete Version und das Profil; Kompatibilität und Konformität benötigen eigene Nachweise.",
       "cta": "Standards entdecken"
     },
     "startFirst": {
       "title": "Womit starten Sie zuerst?",
-      "description": "Wählen Sie einen Einstiegspunkt. Später können Sie zu einem vollständigen Ökosystem ausbauen.",
+      "description": "Wählen Sie einen klaren Anwendungsfall, testen Sie mit synthetischen Daten und betreiben Sie die vereinbarte Lösung selbst oder mit Ihrem Partner.",
       "cards": {
         "verify": {
           "title": "Nachweise verifizieren",
-          "description": "EUDI-Wallets, Open Badges und ISO-Nachweise verifizieren."
+          "description": "Benötigtes Nachweisformat und Präsentationsprofil festlegen."
         },
         "issue": {
           "title": "Nachweise ausstellen",
@@ -126,53 +127,53 @@
         },
         "offline": {
           "title": "Offline / Einrichtung",
-          "description": "An Checkpoints mit eingeschränkter Konnektivität verifizieren."
+          "description": "Offline- und Headless-Profile müssen validiert werden"
         },
         "wallet": {
           "title": "Wallet-Erlebnis",
-          "description": "Geben Sie Nutzern eine Wallet zum Halten und Vorzeigen von Nachweisen."
+          "description": "Gewählte Wallets und Softwareversion gemeinsam testen."
         }
       },
       "notSure": "Unsicher?",
       "startWithVerificationApi": "Mit der Verification API starten"
     },
     "products": {
-      "title": "Produkte & Fähigkeiten",
-      "description": "Eine vollständige Plattform – von Ausstellung über Verifizierung bis Governance.",
+      "title": "Marty-Komponenten",
+      "description": "Komponenten eines Marty-Produkts. Verfügbarkeit und Umfang hängen von Version und Vereinbarung ab.",
       "viewDetails": "Details ansehen",
-      "viewAll": "Alle Produkte ansehen"
+      "viewAll": "Marty-Komponenten ansehen"
     },
     "trustSignals": {
-      "title": "Enterprise-taugliche Infrastruktur",
+      "title": "Sicherheits- und Betriebsprüfung",
       "security": {
         "title": "Sicherheit",
-        "item1": "Kryptografische Validierung auf Enterprise-Niveau",
-        "item2": "PKI- und Sperrmanagement",
-        "item3": "HSM- und Key-Vault-Integration"
+        "item1": "Explizite Vertrauens- und Schlüsselkonfiguration",
+        "item2": "Signatur-, Ablauf- und Fehlerbehandlung testen",
+        "item3": "Schlüsselspeicherung der gewählten Umgebung prüfen"
       },
       "infrastructure": {
         "title": "Infrastruktur",
-        "item1": "Offline-first (72h Cache)",
-        "item2": "Hochverfügbare SaaS-Bereitstellung",
-        "item3": "Self-hosted Optionen für Souveränität",
-        "item4": "Horizontale Skalierung und Load Balancing",
-        "item5": "Mit KI-unterstützten Workflows entwickelt, um hohe Qualität zu geringeren Kosten zu sichern."
+        "item1": "Betrieb durch Kunden oder Partner",
+        "item2": "Versionsspezifische Installationsanforderungen",
+        "item3": "Offline- und Headless-Profile müssen validiert werden",
+        "item4": "Kein enthaltener Produktionsbetrieb oder Verfügbarkeits-SLA",
+        "item5": "Dokumentierte Meldewege für Probleme und Schwachstellen nutzen"
       },
       "compliance": {
-        "title": "Compliance",
-        "item1": "Implementiert ICAO 9303",
-        "item2": "Implementiert ISO 18013-5 (mDoc)",
-        "item3": "GDPR und Privacy by Design",
-        "item4": "Selektive Offenlegung und Datenminimierung"
+        "title": "Akzeptanzanforderungen",
+        "item1": "Benötigtes Nachweisformat und Präsentationsprofil festlegen.",
+        "item2": "Versionsspezifische Nachweise",
+        "item3": "Verarbeitung realer Daten separat genehmigen",
+        "item4": "Akzeptanzanforderungen mit der zuständigen Organisation klären"
       }
     },
     "proofStrip": {
       "claims": {
-        "w3c": "W3C VC / SD-JWT / OID4VP",
-        "offlineCache": "72-Stunden Offline-Cache",
-        "deployment": "SaaS + Self-hosted",
-        "keySecurity": "HSM / Vault-Integration",
-        "auditLogs": "Unveränderliche Audit-Logs"
+        "w3c": "Ein Marty-Produkt, drei Anwendungsfälle",
+        "offlineCache": "Zuerst mit synthetischen Daten testen",
+        "deployment": "Betrieb durch Kunden oder Partner",
+        "keySecurity": "Explizite Vertrauens- und Schlüsselkonfiguration",
+        "auditLogs": "Versionsspezifische Nachweise"
       }
     },
     "portals": {
@@ -182,12 +183,26 @@
     },
     "footer": {
       "title": "Bereit loszulegen?",
-      "description": "Kostenlos starten oder Pläne für Ihre Organisation vergleichen.",
-      "viewPricing": "Preise ansehen"
+      "description": "Dokumentation und synthetische Demonstration ansehen, dann den benötigten Ablauf und Betrieb besprechen.",
+      "viewPricing": "Kommerziellen Umfang prüfen",
+      "descriptionComingSoon": "Dokumentation und synthetische Demonstration ansehen, dann den benötigten Ablauf und Betrieb besprechen."
     },
     "orientation": {
       "title": "Neu bei verifizierbarer Identität?",
       "cta": "So funktioniert's"
     }
+  },
+  "protocol": {
+    "heroTitle": "Auf Basis eines offenen Protokollentwurfs",
+    "badge": "Offenes Protokoll im Entwurf",
+    "standardsSubtitle": "Ein Standard ist ein Ausgangspunkt. Prüfen Sie die konkrete Version und das Profil; Kompatibilität und Konformität benötigen eigene Nachweise.",
+    "componentsSubtitle": "Ein Standard ist ein Ausgangspunkt. Prüfen Sie die konkrete Version und das Profil; Kompatibilität und Konformität benötigen eigene Nachweise."
+  },
+  "infrastructure": {
+    "title": "Mit einem nützlichen Ablauf beginnen",
+    "commodity": "Eingaben, Vertrauensquellen und erwartetes Ergebnis vereinbaren",
+    "orchestration": "Betrieb durch Kunden oder Partner",
+    "reusable": "Zuerst mit synthetischen Daten testen",
+    "preventLockIn": "Umfang erweitern, wenn Nachweise vorliegen"
   }
 }

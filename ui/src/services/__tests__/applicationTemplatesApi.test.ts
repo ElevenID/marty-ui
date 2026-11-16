@@ -9,9 +9,16 @@ vi.mock('../api', () => ({
   del: vi.fn(),
 }));
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
 describe('applicationTemplatesApi', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it('fails fast without an organization id', async () => {
@@ -46,6 +53,41 @@ describe('applicationTemplatesApi', () => {
         }),
       })
     );
+  });
+
+  it('does not retry a failed creation after the calling editor has departed', async () => {
+    let current = true;
+    const first = deferred<unknown>();
+    vi.mocked(post).mockReturnValueOnce(first.promise);
+    const payload = { organization_id: 'org-1', name: 'Application' };
+
+    // Keep the real create API and idempotency helper; only hold the transport.
+    const outcome = createApplicationTemplate(payload, {
+      isCurrent: () => current,
+      idempotencyKey: 'application-editor-save',
+      headers: { 'X-Request-Context': 'editor' },
+    }).catch((error) => error);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/v1/application-templates', payload, {
+      headers: { 'X-Request-Context': 'editor', 'Idempotency-Key': 'application-editor-save' },
+    });
+
+    current = false;
+    first.reject(new TypeError('Failed to fetch'));
+
+    expect(await outcome).toMatchObject({ name: 'AbortError', message: 'The view or action changed.' });
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the default same-key retry for existing callers without an action owner', async () => {
+    const created = { id: 'template-1', organization_id: 'org-1', status: 'DRAFT' };
+    vi.mocked(post).mockRejectedValueOnce(new TypeError('Failed to fetch')).mockResolvedValueOnce(created);
+
+    await expect(createApplicationTemplate({ organization_id: 'org-1', name: 'Application' })).resolves.toEqual(created);
+
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(post).mock.calls[0]).toEqual(vi.mocked(post).mock.calls[1]);
+    expect(vi.mocked(post).mock.calls[0][2]?.headers).toMatchObject({ 'Idempotency-Key': expect.any(String) });
   });
 
   it('patches draft templates without a full-resource PUT', async () => {

@@ -68,7 +68,7 @@ impl OrganizationAuditSink for RecordingAuditSink {
 fn every_legacy_event_maps_to_one_canonical_message_and_audit_record() {
     let fixture = fixture();
     assert_eq!(fixture.schema_version, 1);
-    assert_eq!(fixture.cases.len(), 12);
+    assert_eq!(fixture.cases.len(), 13);
     for case in fixture.cases {
         let event = OrganizationEvent::new(case.kind, fixture.organization_id, case.data, now())
             .expect("valid event vector");
@@ -107,6 +107,38 @@ fn every_legacy_event_maps_to_one_canonical_message_and_audit_record() {
         assert_eq!(message.payload["data"], Value::Object(event.data.clone()));
         assert_eq!(message.payload["aggregate_id"], event.aggregate_id());
     }
+}
+
+#[test]
+fn membership_approval_audit_attributes_the_decision_to_the_reviewer() {
+    let case = fixture()
+        .cases
+        .into_iter()
+        .find(|case| case.kind == OrganizationEventKind::MemberApproved)
+        .expect("approval event vector");
+    for (actor_type, actor_id) in [("user", "reviewer-1"), ("api_key", "api_key:reviewer-key")] {
+        let mut data = case.data.clone();
+        data.insert("approved_by".into(), Value::String(actor_id.into()));
+        data.insert("approved_by_type".into(), Value::String(actor_type.into()));
+        let event =
+            OrganizationEvent::new(case.kind, fixture().organization_id, data, now()).unwrap();
+        let audit = event.to_audit_event().unwrap();
+        assert_eq!(audit.actor_id.as_deref(), Some(actor_id));
+        assert_eq!(audit.actor_type, actor_type);
+        assert_eq!(audit.resource_name.as_deref(), Some("user-1"));
+        assert_eq!(
+            audit.changes,
+            Some(serde_json::json!({"status":{"from":"pending","to":"active"}}))
+        );
+        let message = event.to_message().unwrap();
+        assert_eq!(message.message_type, "member.approved.event");
+        assert_eq!(message.payload["data"]["approved_by"], actor_id);
+    }
+    let mut invalid = case.data;
+    invalid.insert("approved_by_type".into(), Value::String("untrusted".into()));
+    let event =
+        OrganizationEvent::new(case.kind, fixture().organization_id, invalid, now()).unwrap();
+    assert!(event.to_audit_event().is_err());
 }
 
 #[test]

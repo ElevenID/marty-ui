@@ -204,10 +204,12 @@ build_and_push \
   "." \
   "--build-arg UI_VARIANT=public --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
-build_and_push \
-  "cloudflared-wrapper" \
-  "docker/cloudflared-wrapper.Dockerfile" \
-  "."
+if [[ "${BUILD_CLOUDFLARE_ADDON:-false}" == true ]]; then
+  build_and_push \
+    "cloudflared-wrapper" \
+    "docker/cloudflared-wrapper.Dockerfile" \
+    "."
+fi
 
 echo ""
 success "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

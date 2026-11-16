@@ -5,6 +5,26 @@
 Microservice-based control plane and UI for Marty credential, trust, policy,
 applicant, and flow management.
 
+## Repository navigation
+
+| Start here | Location |
+| --- | --- |
+| Documentation and operator guides | [Documentation index](docs/README.md) |
+| Console and applicant UI | [ui/](ui/) |
+| Canonical Rust backend services | [rust/services/](rust/services/) |
+| Remaining Python services and compatibility code | [services/](services/) |
+| gRPC definitions and service contracts | [proto/](proto/) · [contracts/](contracts/) |
+| Installation and deployment | [Installation paths](docs/installation-paths.md) · [deploy/](deploy/) · [k8s/](k8s/) |
+| Tests and developer tools | [tests/](tests/) · [scripts/](scripts/) |
+| File-placement conventions and remaining cleanup | [Repository layout](docs/development/repository-layout.md) |
+
+Marty is one customer-operated product with education/workforce credential,
+applicant/document-verification, and Travel Trust use cases. The customer or
+their selected integrator owns production operation. The current commercial
+direction is a bounded annual software license; managed deployment, guaranteed
+support response, uptime SLAs, and 24/7 operations are not included. Applicable
+orders and component licenses define the released scope and rights.
+
 For custom applications and CLI consumers, see
 [machine API authentication](docs/API_MACHINE_AUTHENTICATION.md), including
 organization-scoped API keys, credential lifecycle and the current OAuth
@@ -12,22 +32,33 @@ limitation.
 
 ## 🚀 Quick Start
 
-### Nightly installer bootstrap
+Choose the [installation path and configuration owner](docs/installation-paths.md)
+before starting. The signed Linux candidate, AWS/K3s development chart, manual
+Compose operations and retained Windows recovery have different prerequisites.
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/ElevenID/marty-ui/main/install.sh | sh -s -- --channel nightly
-```
+### Linux installer testing
 
-Initially supports Linux amd64 with an accessible Docker Engine and Compose.
-A published, signed admission for the selected release is required; unavailable
-or unqualified releases are refused. Use `--version TAG` instead of `--channel
-nightly` to select an exact admitted version.
-An external tester can select an unqualified, exact nightly with
-`--candidate-test TAG` on a disposable Linux amd64 host; this path preserves
-diagnostics and never grants installer admission or Ready status.
+Start with the [Linux installer tester quickstart](docs/linux-installer-tester.md).
+It covers rootless Docker preparation, the download-free `--check-host` check,
+an exact signed nightly selected with `--candidate-test TAG`, certificate setup,
+browser access, and feedback. No source checkout or organization credentials
+are required. Use a disposable Linux amd64 host with the 8 GiB test target and
+at least 20 GiB free on Docker's data filesystem.
+
+Candidate testing preserves diagnostics and does not grant installer admission,
+Ready status, or production qualification. Normal `--channel nightly`,
+`--channel stable`, and `--version TAG` installation require separate signed
+admission and remain held; they are not the current external tester entry point.
 
 See [bootstrap usage and platform support](docs/installer-bootstrap.md) for
 requirements and the boundary between the bootstrap and deployment operations.
+Use the optional `--hosting-file ABSOLUTE_PATH` for direct VM hosting or an
+external proxy, including an explicitly selected Cloudflare Tunnel connector.
+Managed OpenBao and private localhost access remain the defaults. See
+[hosting configuration and browser trust](docs/installer-hosting.md).
+Use `--settings-file ABSOLUTE_PATH` for typed application choices such as
+registration, Keycloak email, organization creation and optional integrations;
+see the [application settings and credential matrix](docs/installer-application-settings.md).
 
 ### Local Development (Recommended)
 
@@ -127,71 +158,47 @@ The Compose services do not mount sibling source repositories. Release images
 are built from pinned Rust revisions and immutable compatibility artifacts; they
 do not install a Python MMF package.
 
-See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
+## Workflow scope and qualification
 
-## Features
+Choose one useful workflow and verify its exact release, profile, inputs, and
+limitations. These use cases share a product and backlog; they are not three
+independently qualified distributions.
 
-### Issuer Service
+| Use case | Evidence required for the selected scope |
+| --- | --- |
+| Education and workforce credentials | Synthetic issuance, holder delivery, policy-based verification, and applicable rejected/revoked cases |
+| Applicant and document verification | Named supported input and demonstrated checks; structural checks, cryptographic authenticity, and holder binding distinguished |
+| Travel Trust | Customer-operated trust-material import, provenance, validation, policy, and verification using synthetic or authorized sources |
 
-- **Credential Issuance**: Creates ISO 18013-5 compliant mDL credentials
-- **Document Types**: Supports driving licenses, ID cards, and custom documents
-- **Security**: Uses secure random generation for credential IDs
-- **Standards Compliance**: Implements mso_mdoc format with proper
-  cryptographic signatures
+Travel Trust does not include an ElevenID-operated CA, shared trust network,
+redistributed certificate feed, or automatic international acceptance. Confirm
+source rights, freshness rules, and customer trust decisions for any real
+material.
 
-### Verifier Service
+Repository modules and demo screens describe implementation areas. They do not
+establish blanket ISO conformance, certified identity proofing, secure wallet
+storage, zero-knowledge proofs, network-free replay protection, or support for
+every wallet, transport, and document format. Link each external capability claim
+to the specific component/version, test, evidence, and known limitations.
 
-- **Presentation Verification**: Validates mDoc presentations using OpenID4VP
-- **Proximity Verification**: Supports ISO 18013-5 proximity presentation via BLE
-- **Selective Disclosure**: Verifies only requested attributes
-- **Security Validation**: Checks cryptographic signatures and certificate chains
+Linux amd64 and API/CLI operation are the initial delivery focus. The
+[console-free source composition](docs/SELFHOST_API_ONLY.md) is not yet a
+qualified distribution in published self-host bundles or installers. Built-in
+[read-only installer validation](docs/installer-bootstrap.md#deployment-validation)
+reports the optional credential journey as `SKIP` and retains
+`installation_ready: false`. The separately recorded disposable journey result
+covers its stated release and workflow; it does not change that validator result
+or grant signed installer admission, independent customer acceptance, or
+production authorization. Read-only health and metadata checks do not establish
+those outcomes either.
 
-### Wallet Service
-
-- **Credential Management**: Stores and organizes multiple credentials
-- **Selective Disclosure**: Allows users to share only required information
-- **Secure Storage**: Implements secure area storage for sensitive data
-- **Presentation Logic**: Handles both remote and proximity presentation flows
-
-## Enhanced Features
-
-### 🛡️ Age Verification with Selective Disclosure
-
-- **Privacy-Preserving**: Verify age without disclosing birth date
-- **Multiple Use Cases**: Alcohol purchase, voting, senior discounts, employment
-- **Zero-Knowledge Proofs**: Demonstrate age thresholds without revealing exact
-  age
-- **Policy-Based**: Context-aware verification with privacy level reporting
-
-### 📱 Offline QR Code Verification
-
-- **Network-Free**: Verify credentials without internet connectivity
-- **Cryptographic Security**: ECDSA signatures with CBOR encoding
-- **Single-Use**: QR codes with built-in replay protection
-- **Compact**: Optimized for mobile QR code display and scanning
-
-### 🔒 Certificate Lifecycle Monitoring
-
-- **mDL DSC Tracking**: Monitor Document Signer Certificate expiry
-- **Proactive Alerts**: Early warning system for certificate renewals
-- **Renewal Simulation**: Automated certificate renewal workflows
-- **Dashboard**: Comprehensive certificate health monitoring
-
-### 📋 Policy-Based Selective Disclosure
-
-- **Context-Aware**: Intelligent attribute sharing based on verification context
-- **Trust Levels**: Verifier trust assessment and appropriate disclosure
-- **Privacy Controls**: User consent and attribute sensitivity classification
-- **Integration**: Uses Marty's authorization engine for policy decisions
-
-### Demo UI
-
-- **Interactive Testing**: Web interface for all demo scenarios
-- **QR Code Generation**: For mobile wallet integration and offline verification
-- **Real-time Updates**: Live status updates during credential flows
-- **Responsive Design**: Works on desktop and mobile devices
-- **Enhanced Navigation**: Dedicated tab for advanced features
-- **Interactive Demos**: Hands-on exploration of all enhanced capabilities
+Use the exact release's
+[disposable qualification runbook](docs/selfhost-disposable-qualification-runbook.md)
+to obtain independent installation and workflow evidence. Evaluate with synthetic
+data; real-data and production authorization require the applicable customer
+operator, security/privacy review, and recovery evidence. Source tests, CI smoke
+results, artifact signatures, and commercial payment each establish different
+facts and do not substitute for this qualification.
 
 ## Detailed local start
 
@@ -216,7 +223,11 @@ npm run dev
 - Gateway: <http://localhost:8000>
 - API docs: <http://localhost:8000/docs>
 
-## Prerequisites
+## Local development prerequisites
+
+These prerequisites and commands are for the source-based development stack.
+For the published Linux installer, follow the separate
+[rootless host setup](docs/linux-installer-tester.md#1-prepare-the-linux-host).
 
 - **Docker Desktop** or Docker Engine with Compose support
 - **Node.js** (optional, for native UI development)
@@ -240,7 +251,7 @@ sudo systemctl start docker
 sudo usermod -aG docker $USER
 ```
 
-## Quick Start
+## Start the development stack
 
 1. **Start the backend stack:**
 
@@ -493,6 +504,9 @@ This project works across standards and service domains including:
 - **OpenID4VP**
 - **W3C VC Data Model**: Verifiable Credentials specification
 - **Trust / policy / revocation profile services** used by the Marty platform
+
+Verify the exact standards version and interoperability profile against release
+evidence. This list does not establish certification or regulatory compliance.
 
 ## 📋 Future Work - SEO & Analytics
 

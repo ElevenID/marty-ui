@@ -6,10 +6,12 @@
 #![allow(dead_code)] // Dormant until the reviewed purge coordinator exists.
 
 use crate::{
+    installer_compose::ProjectResources,
+    installer_compose_volume_creation::VolumeIdentity,
     installer_host_snapshot::{self, BuildOutcome, RootSpec},
     installer_purge_host::{HostIdentity, HostPurgeEntry},
     installer_runtime::DockerRunner,
-    installer_state::{CleanupState, ExecutionScope, Journal, LockedInspection, Phase},
+    installer_state::{ExecutionScope, Journal, LockedInspection, Phase},
 };
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
@@ -20,7 +22,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const SCHEMA: &str = "elevenid.installer-private-storage-candidate/v1";
+const SCHEMA: &str = "elevenid.installer-private-storage-candidate/v2";
 
 /// All variants are fixed strings; no file path, Docker output, or label is
 /// copied into a public error. None authorizes deletion.
@@ -90,23 +92,59 @@ pub(crate) enum NormalProfileError {
 pub(crate) struct PendingNormalProfileFacts {
     installation_id: Uuid,
     journal_revision: u64,
-    plan_sha256: String,
-    plan: CleanupPlan,
-    volume: VolumeCreation,
+    binding: NativeCleanupBinding,
+    plan: NativeCleanupPlan,
 }
 
-/// Typed, point-in-time facts for a fresh first attempt. These are not an
-/// ownership proof, a durable snapshot, or deletion authorization.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NativeCleanupBinding {
+    pub(crate) selected_session_sha256: String,
+    pub(crate) cleanup_intent_sha256: String,
+    pub(crate) cleanup_result_sha256: String,
+    pub(crate) volume_creation_record_sha256: Option<String>,
+    pub(crate) volume_source_records_sha256: BTreeMap<String, String>,
+}
+
+struct NativeCleanupPlan {
+    installation_id: String,
+    engine_id: String,
+    project: String,
+    resources: ProjectResources,
+    volumes: BTreeMap<String, VolumeIdentity>,
+}
+
+/// Fresh resource observations plus exact historical owner-record bindings.
+/// Neither these facts nor their hashes authorize deletion.
 pub(crate) struct ValidatedNormalProfileFacts {
     pub(crate) installation_id: Uuid,
     pub(crate) journal_revision: u64,
     pub(crate) engine_id: String,
-    pub(crate) cleanup_plan_sha256: String,
     pub(crate) project: String,
-    pub(crate) network_id: String,
-    pub(crate) network_name: String,
-    pub(crate) resources: Vec<CleanupResource>,
-    pub(crate) volume: VolumeCreation,
+    pub(crate) native_cleanup: NativeCleanupBinding,
+    pub(crate) resources: ProjectResources,
+    pub(crate) volumes: BTreeMap<String, VolumeIdentity>,
+}
+
+#[derive(Serialize)]
+struct NativePrivatePlan<'a> {
+    schema: &'static str,
+    coverage: &'static str,
+    installation_id: Uuid,
+    journal_revision: u64,
+    engine_id: &'a str,
+    project: &'a str,
+    native_cleanup: &'a NativeCleanupBinding,
+    host_receipt_sha256: &'a str,
+    host_root: &'a HostIdentity,
+    host_mount_id: u64,
+    host_entries: &'a [HostPurgeEntry],
+    native_prior_resources: &'a ProjectResources,
+    retained_volumes: &'a BTreeMap<String, VolumeIdentity>,
+    point_in_time: bool,
+    deletion_eligible: bool,
+    installation_root_included: bool,
+    deletion_authorized: bool,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -175,10 +213,13 @@ fn supported_journal(journal: &Journal) -> Result<(), UnsupportedReason> {
     if !matches!(journal.execution_scope(), ExecutionScope::Unclassified) {
         return Err(UnsupportedReason::ClassifiedTestInstallation);
     }
-    // Current normal installation intentionally remains Provisioning after
-    // application startup observations. Full cleanup records, not a Ready
-    // phase, establish that the 34 recorded resources were uninstalled.
-    if journal.phase() != Phase::Provisioning || journal.runtime().is_none() {
+    // Phase alone never proves cleanup. Exact native operation evidence and
+    // fresh resource observations establish the candidate below.
+    if !matches!(
+        journal.phase(),
+        Phase::Provisioning | Phase::Provisioned | Phase::Ready
+    ) || journal.runtime().is_none()
+    {
         return Err(UnsupportedReason::UnexpectedLifecyclePhase);
     }
     Ok(())
@@ -240,10 +281,7 @@ fn volume_evidence(bytes: &[u8], id: Uuid, engine: &str, name: &str) -> Option<V
     .then_some(v)
 }
 
-pub(crate) trait DockerRead {
-    fn engine_id(&self) -> Result<String, ()>;
-    fn run(&self, args: &[&str]) -> Result<String, ()>;
-}
+pub(crate) use crate::installer_purge_docker_observation::DockerRead;
 impl DockerRead for DockerRunner {
     fn engine_id(&self) -> Result<String, ()> {
         self.preflight().map(|v| v.engine_id).map_err(|_| ())
@@ -253,6 +291,38 @@ impl DockerRead for DockerRunner {
     }
 }
 
+fn docker_absent_except_volumes<D: DockerRead>(
+    docker: &D,
+    plan: &NativeCleanupPlan,
+) -> Result<(), IncompleteReason> {
+    use crate::installer_purge_docker_observation::{self, ObservationError, Scope};
+    installer_purge_docker_observation::observe(
+        docker,
+        &Scope {
+            installation_id: plan.installation_id.clone(),
+            engine_id: plan.engine_id.clone(),
+            project: plan.project.clone(),
+            container_ids: plan
+                .resources
+                .containers
+                .values()
+                .map(|c| c.id.clone())
+                .collect(),
+            network_ids: plan.resources.networks.values().cloned().collect(),
+            retained_volume_names: plan.resources.volumes.clone(),
+            volumes: plan.volumes.clone(),
+        },
+    )
+    .map_err(|error| match error {
+        ObservationError::Incomplete => IncompleteReason::DockerObservationIncomplete,
+        ObservationError::IdentityChanged => IncompleteReason::DockerIdentityChanged,
+        ObservationError::ResourcesRemain => IncompleteReason::DockerResourcesRemain,
+    })
+}
+
+// Preserve the former single-volume observer's isolated regression controls;
+// native callers above never reinterpret its legacy cleanup records.
+#[cfg(test)]
 fn docker_absent_except_volume<D: DockerRead>(
     docker: &D,
     plan: &CleanupPlan,
@@ -378,59 +448,51 @@ pub(crate) fn completed_normal_profile_cleanup(
     }
     let journal = locked.journal();
     supported_journal(journal).map_err(NormalProfileError::Unsupported)?;
-    match locked.cleanup_status() {
-        Ok(status)
-            if status.state == CleanupState::Completed && status.data_retained == Some(true) => {}
-        Ok(_) => return Err(NormalProfileError::Incomplete(CleanupNotComplete)),
-        Err(_) => return Err(NormalProfileError::Incomplete(InstallationChanged)),
-    }
-    let plan_bytes = match locked.diagnostic_record("uninstall-plan.json", true) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return Err(NormalProfileError::Incomplete(CleanupNotComplete)),
-        Err(_) => return Err(NormalProfileError::Incomplete(InstallationChanged)),
-    };
-    let Ok(plan) = serde_json::from_slice::<CleanupPlan>(&plan_bytes) else {
+    let cleanup = crate::installer_compose_cleanup_evidence::inspect_current(locked, installation)
+        .map_err(|_| NormalProfileError::Incomplete(CleanupNotComplete))?;
+    let creation = crate::installer_compose_volume_creation::inspect_initial_volumes(
+        locked,
+        installation,
+        &cleanup.selected,
+    )
+    .map_err(|_| NormalProfileError::Incomplete(InvalidCreationEvidence))?;
+    let resources: ProjectResources =
+        serde_json::from_value(cleanup.evidence.prior_resources.clone())
+            .map_err(|_| NormalProfileError::Incomplete(CleanupNotComplete))?;
+    if cleanup.selected.receipt.resources.as_ref() != Some(&resources) {
         return Err(NormalProfileError::Incomplete(CleanupNotComplete));
-    };
-    let runtime = journal.runtime().expect("checked above");
-    if plan.schema != "elevenid.installer-uninstall-plan/v1"
-        || plan.installation_id != journal.installation_id().to_string()
-        || plan.engine_id != runtime.engine_id
-        || plan.project != journal.compose_project()
-        || !hex64(&plan.network_id)
-        || plan.network_name != format!("{}-bao_default", plan.project)
-        || plan.resources.len() != 34
-        || plan.retained_redis_volume.is_none()
-        || plan.absent_redis_volume.is_some()
-        || plan.resources.iter().any(|r| !hex64(&r.container_id))
-    {
-        return Err(NormalProfileError::Unsupported(
-            UnsupportedReason::LegacyOrPreApplicationCleanup,
-        ));
     }
-    let volume_name = plan
-        .retained_redis_volume
-        .as_deref()
-        .expect("checked above");
-    let receipt_bytes = match locked.diagnostic_record("application-created-volume.json", true) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return Err(NormalProfileError::Incomplete(MissingCreationEvidence)),
-        Err(_) => return Err(NormalProfileError::Incomplete(InvalidCreationEvidence)),
-    };
-    let Some(volume) = volume_evidence(
-        &receipt_bytes,
-        journal.installation_id(),
-        &runtime.engine_id,
-        volume_name,
-    ) else {
+    if creation.volumes.keys().cloned().collect::<BTreeSet<_>>() != resources.volumes
+        || cleanup.evidence.retained_volumes != resources.volumes
+    {
         return Err(NormalProfileError::Incomplete(InvalidCreationEvidence));
+    }
+    let binding = NativeCleanupBinding {
+        selected_session_sha256: cleanup.evidence.selected_session_sha256,
+        cleanup_intent_sha256: cleanup.evidence.intent_sha256,
+        cleanup_result_sha256: cleanup.evidence.result_sha256,
+        volume_creation_record_sha256: creation.creation_record_sha256,
+        volume_source_records_sha256: creation
+            .source_records
+            .iter()
+            .map(|(name, bytes)| ((*name).to_owned(), crate::installer_release::sha256(bytes)))
+            .collect(),
     };
     Ok(PendingNormalProfileFacts {
         installation_id: journal.installation_id(),
         journal_revision: journal.revision(),
-        plan_sha256: format!("{:x}", Sha256::digest(&plan_bytes)),
-        plan,
-        volume,
+        binding,
+        plan: NativeCleanupPlan {
+            installation_id: journal.installation_id().to_string(),
+            engine_id: journal
+                .runtime()
+                .ok_or(NormalProfileError::Incomplete(InstallationChanged))?
+                .engine_id
+                .clone(),
+            project: journal.compose_project(),
+            resources,
+            volumes: creation.volumes,
+        },
     })
 }
 
@@ -441,23 +503,42 @@ impl PendingNormalProfileFacts {
     ) -> Result<ValidatedNormalProfileFacts, IncompleteReason> {
         self.verify_docker_with(docker)
     }
-
     pub(crate) fn verify_docker_with<D: DockerRead>(
         self,
         docker: &D,
     ) -> Result<ValidatedNormalProfileFacts, IncompleteReason> {
-        docker_absent_except_volume(docker, &self.plan, &self.volume)?;
+        docker_absent_except_volumes(docker, &self.plan)?;
         Ok(ValidatedNormalProfileFacts {
             installation_id: self.installation_id,
             journal_revision: self.journal_revision,
             engine_id: self.plan.engine_id,
-            cleanup_plan_sha256: self.plan_sha256,
             project: self.plan.project,
-            network_id: self.plan.network_id,
-            network_name: self.plan.network_name,
+            native_cleanup: self.binding,
             resources: self.plan.resources,
-            volume: self.volume,
+            volumes: self.plan.volumes,
         })
+    }
+}
+
+impl ValidatedNormalProfileFacts {
+    pub(crate) fn require_current_evidence(
+        &self,
+        locked: &LockedInspection,
+        installation: &Path,
+    ) -> Result<(), IncompleteReason> {
+        let latest = completed_normal_profile_cleanup(locked, installation)
+            .map_err(|_| IncompleteReason::InstallationChanged)?;
+        if latest.installation_id != self.installation_id
+            || latest.journal_revision != self.journal_revision
+            || latest.binding != self.native_cleanup
+            || latest.plan.resources != self.resources
+            || latest.plan.volumes != self.volumes
+            || latest.plan.project != self.project
+            || latest.plan.engine_id != self.engine_id
+        {
+            return Err(IncompleteReason::InstallationChanged);
+        }
+        Ok(())
     }
 }
 
@@ -512,23 +593,26 @@ pub(crate) fn prepare(
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return PrepareOutcome::Incomplete(InstallationChanged);
     }
-    let mut containers: Vec<_> = facts.resources.iter().collect();
-    containers.sort_unstable_by(|a, b| a.container_id.cmp(&b.container_id));
-    let private = PrivatePlan {
+    if facts
+        .require_current_evidence(locked, installation)
+        .is_err()
+    {
+        return PrepareOutcome::Incomplete(InstallationChanged);
+    }
+    let private = NativePrivatePlan {
         schema: SCHEMA,
         coverage: snapshot.coverage,
         installation_id: facts.installation_id,
         journal_revision: facts.journal_revision,
         engine_id: &facts.engine_id,
-        cleanup_plan_sha256: facts.cleanup_plan_sha256,
+        project: &facts.project,
+        native_cleanup: &facts.native_cleanup,
         host_receipt_sha256: host.receipt_sha256,
         host_root: &snapshot.root,
         host_mount_id: snapshot.mount_id,
         host_entries: &snapshot.entries,
-        containers,
-        network_id: &facts.network_id,
-        network_name: &facts.network_name,
-        volume: &facts.volume,
+        native_prior_resources: &facts.resources,
+        retained_volumes: &facts.volumes,
         point_in_time: true,
         deletion_eligible: false,
         installation_root_included: false,
@@ -575,10 +659,9 @@ mod tests {
         state.advance(Phase::Provisioning).unwrap();
         assert_eq!(supported_journal(state.journal()), Ok(()));
         state.advance(Phase::Provisioned).unwrap();
-        assert_eq!(
-            supported_journal(state.journal()),
-            Err(UnsupportedReason::UnexpectedLifecyclePhase)
-        );
+        assert_eq!(supported_journal(state.journal()), Ok(()));
+        state.advance(Phase::Ready).unwrap();
+        assert_eq!(supported_journal(state.journal()), Ok(()));
     }
 
     fn fixture() -> (Uuid, CleanupPlan, VolumeCreation) {
@@ -775,31 +858,90 @@ mod tests {
     #[test]
     fn verified_first_attempt_returns_exact_typed_cleanup_facts() {
         let (id, plan, volume) = fixture();
-        let plan_sha256 = "a".repeat(64);
+        let mut mock = docker(&plan, &volume);
+        let namespace = format!("name={}", plan.project);
+        for args in [
+            vec!["ps", "-aq", "--no-trunc", "--filter", &namespace],
+            vec!["network", "ls", "-q", "--no-trunc", "--filter", &namespace],
+            vec![
+                "network",
+                "ls",
+                "-q",
+                "--no-trunc",
+                "--filter",
+                &format!("label=com.elevenid.installer.id={id}"),
+            ],
+            vec![
+                "volume",
+                "ls",
+                "-q",
+                "--filter",
+                &format!("label=com.elevenid.installer.id={id}"),
+            ],
+        ] {
+            mock.outputs
+                .insert(args.into_iter().map(str::to_owned).collect(), String::new());
+        }
+        mock.outputs.insert(
+            vec!["volume".into(), "ls".into(), "-q".into()],
+            volume.name.clone(),
+        );
+        let binding = NativeCleanupBinding {
+            selected_session_sha256: "a".repeat(64),
+            cleanup_intent_sha256: "b".repeat(64),
+            cleanup_result_sha256: "c".repeat(64),
+            volume_creation_record_sha256: Some("d".repeat(64)),
+            volume_source_records_sha256: BTreeMap::new(),
+        };
+        // This unit boundary verifies Docker and preserves supplied historical
+        // bindings; completed_normal_profile_cleanup owns their authentication.
+        let resources: ProjectResources = serde_json::from_value(json!({
+            "containers":{"synthetic":{"id":"b".repeat(64),"service":"synthetic","image":"synthetic-image",
+                "config_hash":"c".repeat(64),"setup":false,"setup_execution":null,"health_required":false,
+                "cap_add":[],"cap_drop":[],"read_only":true,"memory_limit":134217728}},
+            "networks":{plan.network_name.clone():plan.network_id.clone()},"volumes":[volume.name.clone()]
+        })).unwrap();
         let pending = PendingNormalProfileFacts {
             installation_id: id,
             journal_revision: 17,
-            plan_sha256: plan_sha256.clone(),
-            plan,
-            volume,
+            binding: binding.clone(),
+            plan: NativeCleanupPlan {
+                installation_id: id.to_string(),
+                engine_id: plan.engine_id,
+                project: plan.project,
+                resources,
+                volumes: BTreeMap::from([(
+                    volume.name.clone(),
+                    VolumeIdentity {
+                        name: volume.name.clone(),
+                        driver: volume.driver,
+                        scope: volume.scope,
+                        created_at: volume.created_at.clone(),
+                        labels: volume.labels,
+                    },
+                )]),
+            },
         };
-        let mock = docker(&pending.plan, &pending.volume);
         let facts = pending.verify_docker_with(&mock).unwrap();
         assert_eq!(facts.installation_id, id);
         assert_eq!(facts.journal_revision, 17);
         assert_eq!(facts.engine_id, "synthetic-engine");
-        assert_eq!(facts.cleanup_plan_sha256, plan_sha256);
+        assert_eq!(facts.native_cleanup, binding);
         assert_eq!(facts.project, format!("marty-install-{}", id.simple()));
-        assert_eq!(facts.network_id, "a".repeat(64));
-        assert_eq!(facts.network_name, format!("{}-bao_default", facts.project));
-        assert_eq!(facts.resources.len(), 1);
-        assert_eq!(facts.resources[0].container_id, "b".repeat(64));
-        assert_eq!(facts.volume.name, format!("{}_redis-socket", facts.project));
-        assert_eq!(facts.volume.created_at, "2026-10-27T12:30:00Z");
+        assert_eq!(
+            facts.resources.networks.values().next(),
+            Some(&"a".repeat(64))
+        );
+        assert_eq!(facts.resources.containers.len(), 1);
+        assert_eq!(facts.resources.containers["synthetic"].id, "b".repeat(64));
+        assert_eq!(
+            facts.volumes[&volume.name].created_at,
+            "2026-10-27T12:30:00Z"
+        );
     }
 
     #[test]
-    fn completed_cleanup_helper_requires_recorded_result_and_volume_receipt() {
+    fn legacy_cleanup_and_volume_records_cannot_substitute_for_native_owner_evidence() {
         let parent = tempfile::tempdir().unwrap();
         std::fs::set_permissions(parent.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let installation = parent.path().join("installation");
@@ -905,7 +1047,7 @@ mod tests {
         assert!(matches!(
             inspect(&state),
             Err(NormalProfileError::Incomplete(
-                IncompleteReason::MissingCreationEvidence
+                IncompleteReason::CleanupNotComplete
             ))
         ));
         state
@@ -914,10 +1056,12 @@ mod tests {
                 &serde_json::to_vec(&volume).unwrap(),
             )
             .unwrap();
-        let pending = inspect(&state).ok().expect("valid completed cleanup");
-        assert_eq!(pending.installation_id, id);
-        assert_eq!(pending.plan.resources.len(), 34);
-        assert_eq!(pending.plan_sha256.len(), 64);
+        assert!(matches!(
+            inspect(&state),
+            Err(NormalProfileError::Incomplete(
+                IncompleteReason::CleanupNotComplete
+            ))
+        ));
     }
 
     #[test]

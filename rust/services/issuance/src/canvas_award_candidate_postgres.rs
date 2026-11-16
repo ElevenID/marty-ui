@@ -14,7 +14,8 @@ use crate::{
         CanvasAwardCandidateSnapshot,
     },
     canvas_issuance_guard::{
-        evaluate_canvas_evidence_policy, validated_requirements, LIST_CURRENT_FACTS,
+        evaluate_canvas_evidence_policy, trimmed_json_text, validated_requirements,
+        LIST_CURRENT_FACTS,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::{
@@ -130,7 +131,7 @@ impl CanvasAwardCandidateRepository for PostgresCanvasAwardCandidateRepository {
             .await
             .map_err(repository_error)?
             .flatten();
-        let verified_deployment = text(context.verified_launch.get("deployment_id"));
+        let verified_deployment = trimmed_json_text(context.verified_launch.get("deployment_id"));
         let deployment_id = (!verified_deployment.is_empty())
             .then_some(verified_deployment)
             .or(deployment)
@@ -287,14 +288,14 @@ pub(crate) async fn record_fact_and_policy(
     let fact = fact
         .as_object()
         .ok_or(CanvasAwardCandidateRepositoryError::Unavailable)?;
-    if text(fact.get("organization_id")) != application.organization_id
-        || text(fact.get("application_id")) != application.id
-        || !text(
+    if trimmed_json_text(fact.get("organization_id")) != application.organization_id
+        || trimmed_json_text(fact.get("application_id")) != application.id
+        || !trimmed_json_text(
             fact.get("verification")
                 .and_then(|value| value.get("status")),
         )
         .eq_ignore_ascii_case("VERIFIED")
-        || text(fact.get("requirement_id")).is_empty()
+        || trimmed_json_text(fact.get("requirement_id")).is_empty()
     {
         return Err(CanvasAwardCandidateRepositoryError::Unavailable);
     }
@@ -424,14 +425,14 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
         || fact_event_metadata
             .as_ref()
             .is_some_and(marty_key_material_policy::contains_private_key)
-        || text(fact.get("organization_id")) != application.organization_id
-        || text(fact.get("application_id")) != application.id
-        || !text(
+        || trimmed_json_text(fact.get("organization_id")) != application.organization_id
+        || trimmed_json_text(fact.get("application_id")) != application.id
+        || !trimmed_json_text(
             fact.get("verification")
                 .and_then(|value| value.get("status")),
         )
         .eq_ignore_ascii_case("VERIFIED")
-        || text(fact.get("logical_key")).is_empty()
+        || trimmed_json_text(fact.get("logical_key")).is_empty()
     {
         return Err(CanvasAwardCandidateRepositoryError::Unavailable);
     }
@@ -468,7 +469,7 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
             .map_err(|_| CanvasAwardCandidateRepositoryError::Unavailable)
         })
         .transpose()?;
-    let logical_key = text(fact.get("logical_key"));
+    let logical_key = trimmed_json_text(fact.get("logical_key"));
     let current = sqlx::query(LOAD_CURRENT_FACT)
         .bind(&application.organization_id)
         .bind(&application.id)
@@ -476,7 +477,7 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
         .fetch_optional(&mut **database)
         .await
         .map_err(repository_error)?;
-    let payload_hash = text(fact.get("payload_hash"));
+    let payload_hash = trimmed_json_text(fact.get("payload_hash"));
     let duplicate = current.as_ref().is_some_and(|row| {
         row.try_get::<String, _>("payload_hash").ok().as_deref() == Some(&payload_hash)
     });
@@ -503,19 +504,19 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
                        $13, $14, $15, $16, $17, $18)
              ON CONFLICT (id) DO NOTHING",
         )
-        .bind(text(fact.get("id")))
+        .bind(trimmed_json_text(fact.get("id")))
         .bind(&application.organization_id)
         .bind(&application.id)
-        .bind(text(fact.get("subject_id")))
-        .bind(text(fact.get("provider")))
-        .bind(text(fact.get("fact_type")))
+        .bind(trimmed_json_text(fact.get("subject_id")))
+        .bind(trimmed_json_text(fact.get("provider")))
+        .bind(trimmed_json_text(fact.get("fact_type")))
         .bind(value(fact, "scope"))
         .bind(value(fact, "assertion"))
         .bind(value(fact, "verification"))
         .bind(value(fact, "source"))
         .bind(optional_text(fact.get("requirement_id")))
         .bind(&logical_key)
-        .bind(text(fact.get("source_revision")))
+        .bind(trimmed_json_text(fact.get("source_revision")))
         .bind(&payload_hash)
         .bind(timestamp(fact, "observed_at")?)
         .bind(timestamp(fact, "effective_at")?)
@@ -542,7 +543,7 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
             .bind(&application.organization_id)
             .bind(&application.id)
             .bind(&logical_key)
-            .bind(text(fact.get("id")))
+            .bind(trimmed_json_text(fact.get("id")))
             .execute(&mut **database)
             .await
             .map_err(repository_error)?;
@@ -570,10 +571,10 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
             fact_event_metadata.unwrap_or_else(|| {
                 json!({
                     "organization_id": application.organization_id,
-                    "provider": text(fact.get("provider")),
-                    "requirement_id": text(fact.get("requirement_id")),
-                    "fact_id": text(fact.get("id")),
-                    "source_revision": text(fact.get("source_revision")),
+                    "provider": trimmed_json_text(fact.get("provider")),
+                    "requirement_id": trimmed_json_text(fact.get("requirement_id")),
+                    "fact_id": trimmed_json_text(fact.get("id")),
+                    "source_revision": trimmed_json_text(fact.get("source_revision")),
                 })
             }),
         )
@@ -621,7 +622,7 @@ async fn apply_review_transition(
     .map_err(repository_error)?;
     let current_allowed = current_decision.get("allowed").and_then(Value::as_bool) == Some(true);
     let previous_allowed = previous_decision.get("allowed").and_then(Value::as_bool) == Some(true);
-    let credential_id = text(locked_application.get("credential_id"));
+    let credential_id = trimmed_json_text(locked_application.get("credential_id"));
     if let Some(review) = review.as_ref() {
         let review_id: String = review.try_get("id").map_err(repository_error)?;
         let claimed = review
@@ -654,7 +655,7 @@ async fn apply_review_transition(
             )
             .bind(review_id)
             .bind(current_decision)
-            .bind(text(fact.get("id")))
+            .bind(trimmed_json_text(fact.get("id")))
             .execute(&mut **database)
             .await
             .map_err(repository_error)?;
@@ -675,7 +676,7 @@ async fn apply_review_transition(
             .bind(optional_text(binding.get("id")))
             .bind(previous_decision)
             .bind(current_decision)
-            .bind(text(fact.get("id")))
+            .bind(trimmed_json_text(fact.get("id")))
             .execute(&mut **database)
             .await
             .map_err(repository_error)?;
@@ -686,7 +687,7 @@ async fn apply_review_transition(
                 json!({
                     "review_id": review_id,
                     "credential_id": credential_id,
-                    "triggering_fact_id": text(fact.get("id")),
+                    "triggering_fact_id": trimmed_json_text(fact.get("id")),
                 }),
             )
             .await?;
@@ -702,7 +703,7 @@ async fn apply_review_transition(
             )
             .bind(review_id)
             .bind(current_decision)
-            .bind(text(fact.get("id")))
+            .bind(trimmed_json_text(fact.get("id")))
             .execute(&mut **database)
             .await
             .map_err(repository_error)?;
@@ -860,7 +861,7 @@ fn fact_order(fact: &Map<String, Value>) -> Result<FactOrder, CanvasAwardCandida
         timestamp(fact, "effective_at")?,
         timestamp(fact, "observed_at")?,
         timestamp(fact, "created_at")?,
-        text(fact.get("id")),
+        trimmed_json_text(fact.get("id")),
     ))
 }
 
@@ -888,16 +889,8 @@ fn value(value: &Map<String, Value>, name: &str) -> Value {
     value.get(name).cloned().unwrap_or(Value::Null)
 }
 
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').trim().to_owned(),
-    }
-}
-
 fn optional_text(value: Option<&Value>) -> Option<String> {
-    let value = text(value);
+    let value = trimmed_json_text(value);
     (!value.is_empty()).then_some(value)
 }
 

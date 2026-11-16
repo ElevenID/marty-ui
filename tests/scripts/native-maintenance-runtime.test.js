@@ -37,6 +37,7 @@ function fixture(t){
  const addBytes=bytes=>{const sha256=hash(bytes);buffers.set(sha256,bytes);return {path:'/synthetic/'+sha256,sha256,bytes:bytes.length};};
  t.mock.method(runtime,'boundBytes',ref=>buffers.get(ref.sha256)||Buffer.from('SYNTHETIC_SOURCE_OR_BACKUP_ONLY'));
  t.mock.method(runtime,'verifyBoundFile',()=>123);
+ t.mock.method(runtime,'verifyCommandOutput',()=>0);
  t.mock.method(runtime,'expectedRuntime',()=>f.expected);
  t.mock.method(runtime,'observeDocker',row=>f.observed.find(x=>x.role===row.role));
  const baseProfile={path:'/synthetic/base',sha256:shared.BASE},beforeBinding={path:'/synthetic/before',sha256:shared.BEFORE};docs.set(shared.BASE,{});docs.set(shared.BEFORE,{roles:f.before});
@@ -171,4 +172,11 @@ test('stored operation history cannot replace actual journal read',t=>{const f=f
 test('application schema verification follows both migrations and final ACL grants',()=>{
  const order=metadata.DATABASE_ORDER.map(x=>x[0]);
  for(const verify of ['FLOW_VERIFY','ISSUER_VERIFY'])for(const dependency of ['FLOW_MIGRATE','ISSUER_MIGRATE','ACL_FINALIZE'])assert(order.indexOf(dependency)<order.indexOf(verify));
+});
+
+test('real empty successful CLI output is hash-bound without weakening JSON or backup guards',t=>{
+ const os=require('node:os');const dir=fs.mkdtempSync(path.join(os.tmpdir(),'native-cli-empty-')),file=path.join(dir,'stdout');
+ t.after(()=>{fs.unlinkSync(file);fs.rmdirSync(dir);});fs.writeFileSync(file,Buffer.alloc(0));const reference={path:file,sha256:hash(Buffer.alloc(0))};
+ assert.equal(runtime.verifyCommandOutput(reference),0);assert.throws(()=>runtime.boundJson(reference));assert.throws(()=>runtime.verifyBoundFile(reference));
+ fs.writeFileSync(file,'changed');assert.throws(()=>runtime.verifyCommandOutput(reference));
 });

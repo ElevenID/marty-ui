@@ -36,6 +36,14 @@ pub const TRUST_PROFILE_HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     operation("GET", "/internal/v1/trust-profiles/{profile_id}"),
     operation(
+        "POST",
+        "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+    ),
+    operation(
+        "POST",
+        "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+    ),
+    operation(
         "GET",
         "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
     ),

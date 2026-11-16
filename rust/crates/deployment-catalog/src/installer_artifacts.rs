@@ -132,7 +132,7 @@ fn path_name(raw: &[u8], directory: bool) -> Result<String> {
 // Bound the parser's central-directory allocation BEFORE constructing ZipArchive.
 // Current production packager emits a single-disk classic ZIP with no comment;
 // ZIP64 and other extensions require an explicit reviewed contract change.
-fn central_directory_bound(bytes: &[u8]) -> Result<usize> {
+pub(crate) fn central_directory_bound(bytes: &[u8]) -> Result<usize> {
     if bytes.len() < 22 {
         return Err("truncated archive".into());
     }

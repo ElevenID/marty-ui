@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Duration as ChronoDuration;
-use marty_oid4vci::lti::validate_canvas_lti_service_url;
+use marty_oid4vci::lti::{validate_canvas_lti_service_url, VerifiedLtiLaunch};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
@@ -20,8 +20,8 @@ use crate::canvas_lti_experience::{
     CanvasLtiExperienceSessionGenerator,
 };
 use crate::canvas_lti_launch::{
-    feature_enabled, merge_verified_lti_binding_capabilities, plan_ags_line_item_pin,
-    plan_verified_identity, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
+    feature_enabled, launch_scope, merge_verified_lti_binding_capabilities, plan_ags_line_item_pin,
+    plan_verified_identity, scope_matches, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
     CanvasLtiAgsServiceUrlValidator, CanvasLtiCapabilitySnapshotRepository,
     CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock, CanvasLtiExperienceHandoffRepository,
     CanvasLtiExperienceHandoffRequest, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
@@ -100,9 +100,18 @@ const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
     WHERE organization_id = $1 AND platform_id = $2
     ORDER BY created_at";
 
-const GET_BOOTSTRAP_FEATURE_FLAGS: &str = "SELECT feature_flags
+const GET_BOOTSTRAP_FEATURE_FLAGS: &str = "SELECT feature_flags, enabled,
+        archived_at IS NOT NULL AS archived
     FROM issuance_service.canvas_program_bindings
     WHERE id = $1 AND organization_id = $2";
+
+const LOCK_BOOTSTRAP_BINDING: &str = "SELECT feature_flags, enabled,
+        archived_at IS NOT NULL AS archived, platform_id,
+        application_template_id, credential_template_id, delivery_mode,
+        deployment_profile_id, canvas_scope
+    FROM issuance_service.canvas_program_bindings
+    WHERE id = $1 AND organization_id = $2
+    FOR UPDATE";
 
 const GET_BOOTSTRAP_TEMPLATE: &str = "SELECT id, organization_id
     FROM issuance_service.application_templates
@@ -719,11 +728,8 @@ impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
             .fetch_optional(&self.pool)
             .await
             .map_err(bootstrap_repository_error)?;
-        let Some(row) = row else { return Ok(None) };
-        let flags: Value = row
-            .try_get("feature_flags")
-            .map_err(bootstrap_repository_error)?;
-        Ok(Some(feature_enabled(&flags, flag)))
+        let row = row.ok_or(CanvasLtiBootstrapRepositoryError::InvalidSession)?;
+        Ok(Some(bootstrap_binding_enabled(&row, flag)?))
     }
 
     async fn get_template(
@@ -790,6 +796,25 @@ impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
             .execute(&mut *transaction)
             .await
             .map_err(bootstrap_repository_error)?;
+        let bound_feature_enabled =
+            if let Some(binding_id) = context.canvas_program_binding_id.as_deref() {
+                let binding = sqlx::query(LOCK_BOOTSTRAP_BINDING)
+                    .bind(binding_id)
+                    .bind(&context.launch_state.organization_id)
+                    .fetch_optional(&mut *transaction)
+                    .await
+                    .map_err(bootstrap_repository_error)?
+                    .ok_or(CanvasLtiBootstrapRepositoryError::InvalidSession)?;
+                if !bootstrap_binding_matches_session(&binding, context)? {
+                    return Err(CanvasLtiBootstrapRepositoryError::InvalidSession);
+                }
+                if !bootstrap_binding_enabled(&binding, "enable_canvas_lti")? {
+                    return Err(CanvasLtiBootstrapRepositoryError::FeatureDisabled);
+                }
+                Some(true)
+            } else {
+                None
+            };
         let locked_applications = sqlx::query(LIST_LOCKED_BOOTSTRAP_APPLICATIONS)
             .bind(&context.launch_state.organization_id)
             .bind(template_id)
@@ -807,7 +832,7 @@ impl CanvasLtiBootstrapRepository for PostgresCanvasLtiLoginRepository {
             context,
             &CanvasLtiBootstrapRequest::default(),
             true,
-            Some(true),
+            bound_feature_enabled,
             Some(&template),
             &locked_applications,
             |_| CanvasLtiBootstrapApplicationSeed {
@@ -1047,6 +1072,55 @@ impl CanvasLtiJwksRefresher for PostgresCanvasLtiJwksRefresher {
         refreshed.lti_openid_configuration = Some(probe.raw_openid_configuration);
         Ok(refreshed)
     }
+}
+
+fn bootstrap_binding_enabled(
+    row: &sqlx::postgres::PgRow,
+    flag: &str,
+) -> Result<bool, CanvasLtiBootstrapRepositoryError> {
+    let flags: Value = row
+        .try_get("feature_flags")
+        .map_err(bootstrap_repository_error)?;
+    let enabled: bool = row.try_get("enabled").map_err(bootstrap_repository_error)?;
+    let archived: bool = row
+        .try_get("archived")
+        .map_err(bootstrap_repository_error)?;
+    Ok(enabled && !archived && feature_enabled(&flags, flag))
+}
+
+fn bootstrap_binding_matches_session(
+    row: &sqlx::postgres::PgRow,
+    context: &crate::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+) -> Result<bool, CanvasLtiBootstrapRepositoryError> {
+    let platform_id: String = row
+        .try_get("platform_id")
+        .map_err(bootstrap_repository_error)?;
+    let application_template_id: String = row
+        .try_get("application_template_id")
+        .map_err(bootstrap_repository_error)?;
+    let credential_template_id: String = row
+        .try_get("credential_template_id")
+        .map_err(bootstrap_repository_error)?;
+    let delivery_mode: Option<String> = row
+        .try_get("delivery_mode")
+        .map_err(bootstrap_repository_error)?;
+    let deployment_profile_id: Option<String> = row
+        .try_get("deployment_profile_id")
+        .map_err(bootstrap_repository_error)?;
+    let canvas_scope: Value = row
+        .try_get("canvas_scope")
+        .map_err(bootstrap_repository_error)?;
+    let verified: VerifiedLtiLaunch =
+        serde_json::from_value(Value::Object(context.verified_launch.clone()))
+            .map_err(|_| CanvasLtiBootstrapRepositoryError::InvalidSession)?;
+    let current_scope = launch_scope(&verified, &context.launch_state.canvas_account_id);
+    Ok(context.launch_state.platform_id == platform_id
+        && context.canvas_platform_id == platform_id
+        && context.application_template_id.as_deref() == Some(application_template_id.as_str())
+        && context.credential_template_id.as_deref() == Some(credential_template_id.as_str())
+        && context.delivery_mode == delivery_mode.as_deref().unwrap_or("wallet_only")
+        && context.deployment_profile_id == deployment_profile_id
+        && scope_matches(&canvas_scope, &current_scope))
 }
 
 fn bootstrap_template(

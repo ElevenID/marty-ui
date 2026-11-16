@@ -1,5 +1,15 @@
 # Disposable self-host clean-install rehearsal
 
+For the current signed rootless path on an existing nominal 8 GiB AWS host, see
+[signed rootless acceptance](installer-signed-rootless-acceptance.md). It binds
+explicit DNS/IP hosting and separates startup from the full 37-case functional
+and recovery contract; installed writers still hold that qualification gate.
+The 32 GiB/empty-host policy and rootful 4 GiB engineering VM described below
+remain historical v1 procedures. They are not prerequisites for the new direct
+SSH path and must not be relabeled as v2 evidence. The optional
+[rootless QEMU producer](selfhost-disposable-rootless-vm.md) has separate versioned
+records and does not require nesting a VM inside the existing AWS host.
+
 This procedure runs the exact prepared ZIP on an isolated Linux amd64 host. It
 does not qualify or publish the bundle: the runner writes an **unqualified**
 component report. Stack release now builds mandatory installer inputs and requires
@@ -7,48 +17,56 @@ its independent image digests on every dispatch. The public
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
-The Stack publisher needs no tag secret. The first release run qualifies and
-promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
-then stops at the late tag gate. Its prepared inputs remain unqualified and
-cannot pass the terminal-success producer binding. There is no preparation
-bypass: the obsolete `prepare_selfhost_lock` dispatch input has been removed.
-From a clean checkout of the
-**same current main commit**, an operator with local `gh` authentication including workflow
-permission runs:
+The Stack publisher needs no stored tag secret. One fresh run at attempt 1
+qualifies the five images and collects all seven official lanes. Complete pending
+review evidence is frozen before a fixed 60-minute protected-main review wait.
+Missing capture evidence remains a failure. Every pending image needs the actual
+review described in [the official release gate](official-release-gate.md).
 
-```bash
-python3 scripts/push_promoted_release_tag.py \
-  --promotion-run-id <first-stack-release-run-id> \
-  --claim-run-id <prepare-stack-claim-run-id>
-```
+After qualification, the same attempt prepares the mandatory installer inputs,
+promotes the exact five image digests, signs the 13 subjects, verifies all 32 publication assets,
+and retains `stack-release-publication-inputs-<run-id>-1`. It then waits at most
+15 minutes for `.github/workflows/release-tag-handoff.yml` on protected main.
+Use that workflow's closed qualified-tag mode with the original CD and claim
+run IDs. It validates the immutable files, provenance, registry identities,
+exact review-only ancestry and live publisher state before one create-only
+annotated-tag reservation. Main is checked before and after the operation;
+the reservation does not claim an atomic comparison with main. The publisher
+requires both the exact tag and that actual operator run's successful versioned
+receipt before admitting the original bytes. See the explicit guarantee change
+and activation requirements in the
+[reservation contract](release-tag-reservation-contract.md).
 
-The helper validates the promoted transaction, current main, and all five
-registry digests before pushing the exact annotated tag. Resume Stack release
-from the same source with `claim_run_id`, `resume_run_id=<first run ID>`,
-`resume_artifact=stack-release-promotion-complete-<first run ID>`,
-and the **same four immutable external-image digests**. The resumed run verifies the tag, publishes the release, and, when
-all its jobs succeed, owns the prepared self-host bundle as a terminally
-successful producer. Reusing the first failed promotion run as a producer is
-not valid. Installer inputs bind the exact workflow run **and attempt** through
-local attestation bundles. After a failed build or publication attempt, use a
-**fresh Stack release dispatch** with the supported same-source transaction
-checkpoint described above. Rerunning failed jobs cannot relabel older artifacts
-with the new attempt; existing run-ID artifact names must not be overwritten to
-bypass that check. `installer-inputs-unqualified-<run-id>-<attempt>` is a mandatory
-build prerequisite, not installer acceptance or admission. Stack publication
-now signs the installer payloads and inventory and includes five verified offline
-provenance files in its exact 32-asset release set. Normal one-line installation
-still requires separate acceptance and admission evidence; publishing these
-inputs does not grant it. Existing stack qualification gates remain mandatory.
-The operator-only download helper also accepts the exact historical 19-asset
-release set through an explicit legacy policy; the publisher does not downgrade.
-An immutable-release retry verifies the original producer's proofs and compares
-the four actual installer payloads with the new candidate. A differing same-source
-rebuild refuses the retry and preserves the original release; reproducibility
-is not assumed, and signatures or inventory are not overwritten. Never put a
-cross-repository access token into an Actions secret for this handoff.
+Qualify the scoped operator's real API capability before consuming a claim.
+Default inspect mode is read-only. The dedicated non-semver audit-tag probe must
+retain the actual negative protected-main refusal and prove successful
+create-only ownership and bound audit tags with exact before/after main and
+policy observations. Preserve both tags and their original receipts.
+The v5 capability cannot be relabeled as the earlier atomic guarantee. A tag
+alone never authorizes publication. Do not use local Git push, an overwrite,
+a new stored token or relaxed protections as substitutes. A failed or uncertain
+reservation may consume a version; preserve it without retry, adoption or
+cleanup.
 
-The current qualification target is 32 GiB RAM and 20 GiB free disk for all
+The publisher rejects later attempts and historical resume inputs before builds.
+Do not retry a failed gate or dispatch a new publisher at a review commit using
+older producer artifacts. The original run, attempt, inventory, certificates and
+signed files remain inseparable. If the fixed review or tag window expires,
+retain the failed evidence and consumed coordinate; a future candidate requires
+its own reviewed source, fresh gates and unused claim. No artifact overwrite or
+re-signing can repair an earlier invocation's identity.
+
+`installer-inputs-unqualified-<run-id>-<attempt>` remains a mandatory build
+prerequisite, not installed acceptance. Stack publication includes all five
+complete offline provenance sidecars in its exact 32-asset set. Normal one-line
+installation still requires separate acceptance and admission evidence;
+publishing these inputs does not grant it. The operator-only consumer can select
+the exact historical 19-asset policy explicitly; the publisher never downgrades.
+The final release readback checks every original asset byte and proof. Keep any
+private production UI package and its all-pages verification separate from
+unqualified billing runtime and from native Linux installer acceptance.
+
+The historical v1 qualification target is 32 GiB RAM and 20 GiB free disk for all
 locked images and fresh database state. The component rehearsal also requires
 Docker Compose, Python 3.12 with the pinned integration test dependencies,
 Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and anonymous registry
@@ -57,7 +75,7 @@ no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
 
-Acceptance requires 32 GiB of guest-visible RAM and 20 GiB free on Docker's data
+Historical v1 acceptance requires 32 GiB of guest-visible RAM and 20 GiB free on Docker's data
 filesystem before image pulls. The report validator enforces these byte thresholds;
 the harness must establish measurement location and timing. Provision extra VM memory
 for kernel reservations; nominal VM allocation is not the guest measurement.
@@ -920,7 +938,7 @@ not a claim that either channel is ready today; the bootstrap refuses missing or
 unqualified GitHub metadata. It checks a terminal marker so a truncated piped
 download cannot start an installation.
 
-An installer version is not promoted by a successful build or candidate-grant workflow. The required sequence is the exact version's real staged installed acceptance and anonymous published replay (all 23 cases and the 32 GiB host policy), signed admission through `installer-promote.yml` operation `admission`, publication of its separate immutable admission release, then `installer-promote.yml` operation `channel`, followed by `installer-publish-channel.yml`. The channel operation only consumes authenticated published admission and cannot create one. Existing version payload releases are never modified.
+An installer version is not promoted by a successful build or candidate-grant workflow. The required sequence is the exact version's real staged installed acceptance and anonymous published replay (all 23 cases and the historical v1 32 GiB host policy), signed admission through `installer-promote.yml` operation `admission`, publication of its separate immutable admission release, then `installer-promote.yml` operation `channel`, followed by `installer-publish-channel.yml`. The channel operation only consumes authenticated published admission and cannot create one. Existing version payload releases are never modified.
 
 The channel signing archive contains the channel triplet and a separately signed publication-context triplet. The context fixes the observed `installer-channel` branch commit and prior pointer hash. The publisher revalidates admission, predecessor signatures and invocation identities, publishes only the three channel files to immutable `installer-channel-<channel>-<generation>`, and creates a single-parent Git commit preserving the other channel pointer. Reference publication uses non-force update (or exclusive initial creation); a changed head, failed update or uncertain response retains immutable metadata and recovery evidence. Do not force, automatically retry, adopt a draft, or regenerate an older expected-head context. Same-version freshness renewal is deliberately not wired: it requires a separately reviewed fresh public replay.
 
@@ -933,7 +951,7 @@ These are implemented publication gates, not evidence that a real version has pa
 
 `installer-acceptance.yml` keeps grant-only behavior by default. With `execute: true`, the same invocation archives its signed execution grants, waits for the approved numeric controller principal to return `installer-acceptance-checkpoint.json` on the existing owned draft transport, verifies its exact run/attempt/nonce/guest/Engine/inventory/consumption binding, and signs a distinct checkpoint triplet. The artifact is named `installer-incomplete-checkpoint-<run>-<attempt>`, never either accepted staged/published report name. The job then fails explicitly because installed acceptance is incomplete. No checkpoint is accepted by the admission gate.
 
-The controller runs `scripts/installer_acceptance_runner.py` with the same explicit private inputs and pinned SSH options as `installer_candidate_dispatch.py`, plus a fresh private `--output` directory. It performs the real signature/provenance checks, sends the reviewed standalone read-only host probe to guest Python without a source checkout or controller credentials, requires the exact Engine and initial empty Docker state with at least 32 GiB guest-visible/daemon RAM and 20 GiB Docker-filesystem space, then invokes the existing native candidate dispatch. Host observations are preserved before dispatch. They do not establish exhaustive source/credential absence. A 4 GiB VM is refused before installation and produces an incomplete checkpoint.
+For historical v1 observations, the controller explicitly selects `--resource-profile qualification-32gib` when running `scripts/installer_acceptance_runner.py` with the same explicit private inputs and pinned SSH options as `installer_candidate_dispatch.py`, plus a fresh private `--output` directory. It performs the real signature/provenance checks, sends the reviewed standalone read-only host probe to guest Python without a source checkout or controller credentials, requires the exact Engine and initial empty Docker state with at least 32 GiB guest-visible/daemon RAM and 20 GiB Docker-filesystem space, then invokes the existing native candidate dispatch. Host observations are preserved before dispatch. They do not establish exhaustive source/credential absence. A 4 GiB VM is refused before installation and produces an incomplete checkpoint.
 
 The runner always exits nonzero after preserving its checkpoint; a native zero exit still cannot imply that the unimplemented browser/business/restart/cleanup probes passed. All 23 case entries are fixed by code, with only actual cryptographic artifact verification implemented as passed. Do not replace blocked entries manually. Upload only the nonsecret checkpoint to the descriptor's exact draft using the already approved controller identity; preserve local host observations and all guest recovery data. The transport records the approved uploader and exact bytes before signing, does not create a new authorization, does not retry dispatch, and does not delete remote or guest resources.
 
@@ -1016,8 +1034,9 @@ or dispatch. Changed VM/process/disk/Engine/SSH identity stops the transaction;
 replacement requires a new reconciled authorization and guest. Preserve the
 guest, ledger, creation receipt and incomplete checkpoint for recovery. A 4 GiB
 guest may test this machinery only as an engineering trial; release acceptance
-still enforces the existing 32 GiB RAM and 20 GiB free-space predicate until a
-complete measured installed journey and policy change justify another profile.
+under the historical v1 profile still enforces 32 GiB RAM and 20 GiB free space.
+The new rootless profiles have a separate 7 GiB measured admission floor and
+require their own installed proof owners; they do not reuse engineering evidence.
 
 The controller APIs now support an explicit `purpose="engineering-trial"` on
 `preflight`, `consume_preflight`, `verify_consumed_intent`, `exchange` and

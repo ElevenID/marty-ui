@@ -4,6 +4,8 @@
 #![allow(dead_code)] // No destructive coordinator calls this dormant module.
 
 use crate::{
+    installer_compose::ProjectResources,
+    installer_compose_volume_creation::VolumeIdentity,
     installer_creation_identity::ObservedDirectory,
     installer_creation_receipt_validation::{
         self, NormalInspectionOutcome, ObservedNormalCreation,
@@ -11,18 +13,17 @@ use crate::{
     installer_host_tree_observer::{self, TreeOutcome},
     installer_purge_host::{HostIdentity, HostPurgeEntry},
     installer_purge_plan::{
-        self, CleanupResource, DockerRead, NormalProfileError, ValidatedNormalProfileFacts,
-        VolumeCreation,
+        self, DockerRead, NativeCleanupBinding, NormalProfileError, ValidatedNormalProfileFacts,
     },
     installer_runtime::DockerRunner,
-    installer_state::{CleanupState, LockedInspection},
-    installer_top_level_census::{self, ExpectedTopLevel, TopLevelName},
+    installer_state::LockedInspection,
+    installer_top_level_census::{self, CensusProfile, ExpectedTopLevel, TopLevelName},
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
 
-const SCHEMA: &str = "elevenid.installer-private-normal-purge-candidate/v1";
+const SCHEMA: &str = "elevenid.installer-private-normal-purge-candidate/v2";
 const MAX_LEDGER_MANIFEST: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -71,8 +72,9 @@ struct CreationReceipts<'a> {
     application_sha256: &'a str,
     openbao_state_sha256: &'a str,
     openbao_owner_transition_sha256: &'a str,
-    openbao_created_sha256: &'a str,
+    openbao_native_custody_sha256: &'a str,
     openbao_tls_completion_sha256: &'a str,
+    native_storage_receipts_sha256: &'a BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -93,8 +95,9 @@ struct PrivateNormalPlan<'a> {
     release_tag: &'a str,
     source_inventory_sha256: &'a str,
     journal_revision: u64,
-    cleanup_plan_sha256: &'a str,
-    cleanup_result_sha256: &'a str,
+    native_cleanup: &'a NativeCleanupBinding,
+    top_level_profile: &'static str,
+    local_operator_password: bool,
     absolute_installation_path: &'a str,
     root: &'a HostIdentity,
     root_mount_id: u64,
@@ -102,10 +105,8 @@ struct PrivateNormalPlan<'a> {
     entries_deepest_first: &'a [HostPurgeEntry],
     engine_id: &'a str,
     project: &'a str,
-    removed_containers: Vec<&'a CleanupResource>,
-    removed_network_id: &'a str,
-    removed_network_name: &'a str,
-    retained_redis_volume: &'a VolumeCreation,
+    native_prior_resources: &'a ProjectResources,
+    retained_volumes: &'a BTreeMap<String, VolumeIdentity>,
     execution_quarantine: ExecutionQuarantinePolicy,
     not_atomic_snapshot: bool,
     deletion_eligible: bool,
@@ -127,29 +128,42 @@ fn receipts_match_fixed_specs(
     observed: &ObservedNormalCreation,
 ) -> bool {
     let credentials = &observed.application.credentials;
-    // normal_31_v1 includes a local operator file. External-auth layouts need
-    // their own accurately versioned complete census; never synthesize a file.
-    let Some(operator_password) = credentials.operator_password.as_ref() else {
-        return false;
-    };
     let initial = &credentials.initial;
     let mount = initial.root.mount_id;
     if mount == 0
         || initial.evidence.mount_id != mount
         || initial.downloads.mount_id != mount
         || credentials.secrets.mount_id != mount
-        || operator_password.mount_id != mount
         || observed.openbao_state.mount_id != mount
         || !receipt_bound(specs, TopLevelName::Evidence, &initial.evidence)
         || !receipt_bound(specs, TopLevelName::Downloads, &initial.downloads)
         || !receipt_bound(specs, TopLevelName::Secrets, &credentials.secrets)
         || !receipt_bound(specs, TopLevelName::OpenBaoState, &observed.openbao_state)
-        || !specs.iter().any(|spec| {
-            spec.name == TopLevelName::OperatorPassword
-                && spec.identity == operator_password.identity
-        })
     {
         return false;
+    }
+    match &credentials.operator_password {
+        Some(operator)
+            if operator.mount_id == mount
+                && specs.iter().any(|spec| {
+                    spec.name == TopLevelName::OperatorPassword
+                        && spec.identity == operator.identity
+                }) => {}
+        None if !specs
+            .iter()
+            .any(|spec| spec.name == TopLevelName::OperatorPassword) => {}
+        _ => return false,
+    }
+    for (name, top) in [
+        ("openbao-control", TopLevelName::OpenBaoControl),
+        ("openbao-seal", TopLevelName::OpenBaoSeal),
+    ] {
+        let Some(observed) = observed.native_storage_roots.get(name) else {
+            return false;
+        };
+        if observed.mount_id != mount || !receipt_bound(specs, top, observed) {
+            return false;
+        }
     }
     for (name, top) in [
         ("state", TopLevelName::State),
@@ -215,29 +229,35 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
     let journal = locked.journal();
+    let profile = match installer_top_level_census::current_native_profile(locked, installation) {
+        Ok(profile @ CensusProfile::NativeComposeV2 { .. }) => profile,
+        _ => return PrepareNormalOutcome::Unsupported(UnsupportedReason::UnsupportedLifecycle),
+    };
+    let CensusProfile::NativeComposeV2 {
+        local_operator_password,
+    } = profile
+    else {
+        unreachable!()
+    };
     let pending = match installer_purge_plan::completed_normal_profile_cleanup(locked, installation)
     {
         Ok(facts) => facts,
         Err(error) => return map_cleanup_error(error),
     };
-    let cleanup_result = match locked.diagnostic_record("uninstall-result.json", true) {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return PrepareNormalOutcome::Incomplete(CleanupNotComplete),
-        Err(_) => return PrepareNormalOutcome::Incomplete(InstallationChanged),
-    };
-    let cleanup_result_sha256 = format!("{:x}", Sha256::digest(&cleanup_result));
-    let first = match installer_creation_receipt_validation::inspect_normal(locked, installation) {
-        NormalInspectionOutcome::MatchedLocalReceipt(value) => value,
-        NormalInspectionOutcome::Missing | NormalInspectionOutcome::Unusable => {
-            return PrepareNormalOutcome::Incomplete(CreationEvidenceIncomplete);
-        }
-    };
+    let first =
+        match installer_creation_receipt_validation::inspect_native_normal(locked, installation) {
+            NormalInspectionOutcome::MatchedLocalReceipt(value) => value,
+            NormalInspectionOutcome::Missing | NormalInspectionOutcome::Unusable => {
+                return PrepareNormalOutcome::Incomplete(CreationEvidenceIncomplete);
+            }
+        };
     let root = &first.application.credentials.initial.root;
-    let specs = match installer_top_level_census::derive_current_fixed_specs(
+    let specs = match installer_top_level_census::derive_native_specs(
         locked,
         installation,
         &root.identity,
         root.mount_id,
+        profile,
     ) {
         Ok(value) => value,
         Err(_) => return PrepareNormalOutcome::Incomplete(FixedTopLevelIncomplete),
@@ -261,7 +281,7 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
         || tree.mount_id != root.mount_id
         || !tree.not_atomic_snapshot
         || tree.deletion_eligible
-        || tree.entries.len() < TopLevelName::REQUIRED.len()
+        || tree.entries.len() < profile.names().len()
     {
         return PrepareNormalOutcome::Incomplete(FullTreeIncomplete);
     }
@@ -269,33 +289,20 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
         Ok(value) => value,
         Err(error) => return map_docker_error(error),
     };
-    let second = match installer_creation_receipt_validation::inspect_normal(locked, installation) {
-        NormalInspectionOutcome::MatchedLocalReceipt(value) => value,
-        NormalInspectionOutcome::Missing | NormalInspectionOutcome::Unusable => {
-            return PrepareNormalOutcome::Incomplete(CreationEvidenceIncomplete);
-        }
-    };
+    let second =
+        match installer_creation_receipt_validation::inspect_native_normal(locked, installation) {
+            NormalInspectionOutcome::MatchedLocalReceipt(value) => value,
+            NormalInspectionOutcome::Missing | NormalInspectionOutcome::Unusable => {
+                return PrepareNormalOutcome::Incomplete(CreationEvidenceIncomplete);
+            }
+        };
     if first != second || !receipts_match_fixed_specs(&specs, &second) {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
-    if locked
-        .diagnostic_record("uninstall-result.json", true)
-        .ok()
-        .flatten()
-        .as_deref()
-        != Some(cleanup_result.as_slice())
+    if facts
+        .require_current_evidence(locked, installation)
+        .is_err()
     {
-        return PrepareNormalOutcome::Incomplete(InstallationChanged);
-    }
-    let same_plan = locked
-        .diagnostic_record("uninstall-plan.json", true)
-        .ok()
-        .flatten()
-        .is_some_and(|bytes| format!("{:x}", Sha256::digest(&bytes)) == facts.cleanup_plan_sha256);
-    let still_completed = locked.cleanup_status().is_ok_and(|status| {
-        status.state == CleanupState::Completed && status.data_retained == Some(true)
-    });
-    if !same_plan || !still_completed {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
     // Docker observation can take time. Do not silently adopt or omit children
@@ -333,16 +340,15 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
     if absolute_path.len() > 1024 || locked.require_path_binding(installation).is_err() {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
-    let mut containers: Vec<_> = facts.resources.iter().collect();
-    containers.sort_unstable_by(|a, b| a.container_id.cmp(&b.container_id));
     let receipts = CreationReceipts {
         initial_sha256: &first.application.credentials.initial.receipt_sha256,
         credential_sha256: &first.application.credentials.receipt_sha256,
         application_sha256: &first.application.receipt_sha256,
         openbao_state_sha256: &first.state_receipt_sha256,
         openbao_owner_transition_sha256: &first.transition_receipt_sha256,
-        openbao_created_sha256: &first.created_record_sha256,
+        openbao_native_custody_sha256: &first.created_record_sha256,
         openbao_tls_completion_sha256: &first.completion_sha256,
+        native_storage_receipts_sha256: &first.native_receipts_sha256,
     };
     let private = PrivateNormalPlan {
         schema: SCHEMA,
@@ -352,8 +358,9 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
         release_tag: &journal.identity().release_tag,
         source_inventory_sha256: &journal.identity().inventory_sha256,
         journal_revision: facts.journal_revision,
-        cleanup_plan_sha256: &facts.cleanup_plan_sha256,
-        cleanup_result_sha256: &cleanup_result_sha256,
+        native_cleanup: &facts.native_cleanup,
+        top_level_profile: "native_compose_initial_managed_openbao_non_acme/v2",
+        local_operator_password,
         absolute_installation_path: absolute_path,
         root: &tree.root,
         root_mount_id: tree.mount_id,
@@ -361,10 +368,8 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
         entries_deepest_first: &tree.entries,
         engine_id: &facts.engine_id,
         project: &facts.project,
-        removed_containers: containers,
-        removed_network_id: &facts.network_id,
-        removed_network_name: &facts.network_name,
-        retained_redis_volume: &facts.volume,
+        native_prior_resources: &facts.resources,
+        retained_volumes: &facts.volumes,
         execution_quarantine: ExecutionQuarantinePolicy {
             relative_name: ".marty-purge-quarantine",
             creation: "exclusive_create_after_confirmation",
@@ -383,7 +388,16 @@ pub(crate) fn prepare_normal_with<D: DockerRead>(
     if bytes.is_empty() || bytes.len() > MAX_LEDGER_MANIFEST {
         return PrepareNormalOutcome::Incomplete(PlanBoundExceeded);
     }
-    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+    if locked.require_path_binding(installation).is_err()
+        || locked.require_unchanged().is_err()
+        || facts
+            .require_current_evidence(locked, installation)
+            .is_err()
+        || installer_top_level_census::current_native_profile(locked, installation).ok()
+            != Some(profile)
+        || !matches!(installer_creation_receipt_validation::inspect_native_normal(locked, installation),
+            NormalInspectionOutcome::MatchedLocalReceipt(latest) if latest == first)
+    {
         return PrepareNormalOutcome::Incomplete(InstallationChanged);
     }
     let sha256 = format!("{:x}", Sha256::digest(&bytes));

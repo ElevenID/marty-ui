@@ -5,6 +5,7 @@ services:
     image: ${MARTY_CONSOLE_IMAGE:?Set the digest-pinned console image from its product package}
     environment:
       MARTY_SERVER_ORIGIN: ${MARTY_SERVER_ORIGIN:?Set the independently deployed public server origin}
+      UI_ENABLED_SECTIONS: ${UI_ENABLED_SECTIONS-public,console}
     ports:
       - "127.0.0.1:${MARTY_CONSOLE_PORT:-3002}:80"
     restart: unless-stopped

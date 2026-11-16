@@ -122,7 +122,7 @@ export function PermissionAlert({ resource, action }) {
       <Typography variant="h6" gutterBottom>
         {t('permissions.denied')}
       </Typography>
-      <Typography variant="body1" color="text.secondary" textAlign="center">
+      <Typography variant="body1" color="text.secondary" sx={{ textAlign: "center" }}>
         {getPermissionMessage(action)}
       </Typography>
     </Box>

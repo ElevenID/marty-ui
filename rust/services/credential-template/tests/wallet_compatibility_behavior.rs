@@ -32,6 +32,8 @@ fn contract() -> Contract {
 fn template() -> CredentialTemplate {
     let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
     CredentialTemplate {
+        jwt_vc_profile: None,
+
         id: "template-1".to_owned(),
         organization_id: "org-1".to_owned(),
         name: "Employee Badge".to_owned(),

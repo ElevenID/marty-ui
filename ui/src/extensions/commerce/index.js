@@ -3,5 +3,5 @@ export {
   commerceExtensionEnabled,
   configureCommerceApi,
   renderCommerceConsoleRoutes,
-  renderCommercePublicRoutes,
+  renderCommerceApplicationRoutes,
 } from '@marty/commerce-extension';

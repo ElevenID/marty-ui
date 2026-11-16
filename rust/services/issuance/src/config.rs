@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
-    path::PathBuf,
     time::Duration,
 };
 
@@ -218,16 +217,7 @@ impl PassportNativeConfig {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct IssuanceWorkloadServerTlsFiles {
-    pub ca_certificate: PathBuf,
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as IssuanceWorkloadServerTlsFiles;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
@@ -235,6 +225,7 @@ pub struct IssuanceServiceConfig {
     pub grpc_addr: SocketAddr,
     pub grpc_enabled: bool,
     pub workload_server_tls: Option<IssuanceWorkloadServerTlsFiles>,
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -1036,6 +1027,24 @@ impl IssuanceServiceConfig {
             settings.server.grpc_enabled,
             matches!(environment.as_str(), "production" | "prod" | "beta"),
         )?;
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|message| MmfError::new(ErrorCode::Configuration, message))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr
+                || (settings.server.grpc_enabled && https.address == grpc_addr)
+                || issuance_api_key
+                    .as_ref()
+                    .is_none_or(|key| key.trim().is_empty())
+            {
+                return Err(MmfError::new(
+                    ErrorCode::Configuration,
+                    "managed authority HTTPS requires a distinct listener and ISSUANCE_API_KEY",
+                ));
+            }
+        }
         let canvas_local_admin_token =
             if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
                 && !matches!(environment.as_str(), "production" | "prod")
@@ -1051,6 +1060,7 @@ impl IssuanceServiceConfig {
             grpc_addr,
             grpc_enabled: settings.server.grpc_enabled,
             workload_server_tls,
+            managed_authority_https,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -1497,57 +1507,21 @@ fn issuance_workload_server_tls(
     grpc_enabled: bool,
     deployed: bool,
 ) -> Result<Option<IssuanceWorkloadServerTlsFiles>, MmfError> {
-    let invalid = |message: &str| MmfError::new(ErrorCode::Configuration, message);
-    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
-        return Err(invalid("Issuance TLS private-key files are retired"));
-    }
-    const NAMES: [&str; 7] = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+    IssuanceWorkloadServerTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
         "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
-    let get = |name: &str| optional_environment_value(values, name);
-    let configured = NAMES.iter().filter(|name| get(name).is_some()).count();
-    if configured == 0 && !(deployed && grpc_enabled) {
-        return Ok(None);
-    }
-    if configured != NAMES.len() {
-        return Err(invalid(
-            "Issuance gRPC requires complete remote TLS identity",
-        ));
-    }
-    let endpoint = get(NAMES[2]).unwrap_or_default();
-    let parsed =
-        url::Url::parse(&endpoint).map_err(|_| invalid("Issuance TLS KMS origin is invalid"))?;
-    if parsed.scheme() != "https"
-        || parsed.host_str().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.path() != "/"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-    {
-        return Err(invalid("Issuance TLS KMS origin must be HTTPS"));
-    }
-    let version = get(NAMES[6])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid("Issuance TLS KMS key version is invalid"))?;
-    Ok(Some(IssuanceWorkloadServerTlsFiles {
-        certificate: PathBuf::from(get(NAMES[0]).unwrap_or_default()),
-        ca_certificate: PathBuf::from(get(NAMES[1]).unwrap_or_default()),
-        kms_endpoint: endpoint,
-        kms_ca_certificate: PathBuf::from(get(NAMES[3]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(get(NAMES[4]).unwrap_or_default()),
-        kms_key_name: get(NAMES[5]).unwrap_or_default(),
-        kms_key_version: version,
-    }))
+        (deployed && grpc_enabled)
+            || optional_environment_value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("Issuance requires a complete remote TLS identity: {error}"),
+        )
+    })
 }
 
 fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {

@@ -1,15 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use marty_schema_startup::SchemaStartupMode;
-use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
+use marty_signing_grant::{configuration::GrantAuthority, SigningOrigin};
 use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use thiserror::Error;
 use url::Url;
 
 use crate::{
-    migrate_flow_schema, FlowDependency, FlowGrpcChannelFactories, FlowMigrationError,
-    FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
+    migrate_flow_schema_for_organization, FlowDependency, FlowGrpcChannelFactories,
+    FlowMigrationError, FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
     HttpFlowReferenceProvider, HttpPhysicalDocumentProvider, HttpSigningProvider,
     PostgresFlowRepository,
 };
@@ -64,11 +64,16 @@ async fn connect_database(
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
+    let organization_id = crate::flow_seed_organization_id(Some(&config.marty_organization_id))?;
     match SchemaStartupMode::from_env()
         .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?
     {
-        SchemaStartupMode::Migrate => migrate_flow_schema(&pool).await?,
-        SchemaStartupMode::Validate => crate::validate_flow_schema(&pool).await?,
+        SchemaStartupMode::Migrate => {
+            migrate_flow_schema_for_organization(&pool, organization_id).await?
+        }
+        SchemaStartupMode::Validate => {
+            crate::validate_flow_schema_for_organization(&pool, organization_id).await?
+        }
     }
     sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&pool)
@@ -99,31 +104,22 @@ async fn connect_providers(
     runtime: &FlowRuntime,
 ) -> Result<FlowProviderRegistry, FlowConnectionError> {
     let factories = FlowGrpcChannelFactories::from_config(config)?;
-    let presentation_policy_mtls = factories.presentation_policy_workload_transport();
     let clients = factories.connect().await?;
     runtime.mark_healthy(FlowDependency::Organization)?;
     runtime.mark_healthy(FlowDependency::CredentialTemplate)?;
     runtime.mark_healthy(FlowDependency::PresentationPolicy)?;
     runtime.mark_healthy(FlowDependency::IssuanceGrpc)?;
-    let grpc = clients.providers_with_channel_security(
-        config.service_token.as_deref(),
-        presentation_policy_mtls,
-    )?;
+    let grpc = clients.providers(config.service_token.as_deref())?;
 
-    let grant_bao_addr = config.sign_grant_bao_addr.as_deref().ok_or_else(|| {
-        FlowConnectionError::Configuration("BAO_ADDR is required for signing grants".into())
-    })?;
-    let grant_token_file = config.sign_grant_mint_token_file.clone().ok_or_else(|| {
-        FlowConnectionError::Configuration(
-            "FLOW_SIGN_GRANT_MINT_TOKEN_FILE is required for signing grants".into(),
+    let grant_authority = GrantAuthority::from_environment()
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+    let grant_minter = grant_authority
+        .minter(
+            SigningOrigin::FlowWalletRequest,
+            config.sign_grant_bao_addr.as_deref(),
+            config.sign_grant_mint_token_file.clone(),
         )
-    })?;
-    let grant_minter = GrantMinter::for_managed_openbao(
-        grant_bao_addr,
-        SigningOrigin::FlowWalletRequest,
-        grant_token_file,
-    )
-    .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+        .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
     let signing = Arc::new(
         HttpSigningProvider::new(
             &config.signing_keys_url,

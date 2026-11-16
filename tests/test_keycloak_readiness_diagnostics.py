@@ -26,6 +26,18 @@ class Clock:
 
 
 class ReadinessDiagnostics(unittest.TestCase):
+    def test_cold_image_augmentation_can_finish_before_the_bounded_default_deadline(self):
+        clock = Clock()
+        def discovery(_, *, timeout):
+            self.assertGreater(timeout, 0)
+            self.assertLessEqual(timeout, 5)
+            if clock.now < 40:
+                raise URLError(ConnectionRefusedError("synthetic cold start"))
+            return {"issuer": "synthetic"}
+        with patch.object(probe, "time", clock), patch.object(probe, "http_json", side_effect=discovery), patch.object(probe.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="true")):
+            self.assertIsNone(probe.wait_for_keycloak("http://127.0.0.1", "disposable"))
+            self.assertGreaterEqual(clock.now, 40)
+
     def test_http_timeout_keeps_status_without_changing_failure(self):
         with patch.object(probe, "time", Clock()), patch.object(probe, "http_json",
                 side_effect=HTTPError("http://127.0.0.1", 503, "unready", {}, None)), patch.object(probe, "run", return_value="true"):

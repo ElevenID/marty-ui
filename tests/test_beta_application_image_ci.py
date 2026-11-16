@@ -12,7 +12,7 @@ def test_generated_application_image_gate_is_mandatory_and_additive():
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
     job = workflow["jobs"]["test-rust-service-images"]
-    assert job["needs"] == "changes"
+    assert job["needs"] == ["changes", "release-preflight"]
     assert job["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert job["runs-on"] == "ubuntu-latest"
     assert not job.get("continue-on-error", False)

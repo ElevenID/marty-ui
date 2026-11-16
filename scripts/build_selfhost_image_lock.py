@@ -20,17 +20,16 @@ import yaml
 SCHEMA = "marty.selfhost-image-lock/v1"
 SELFHOST_URIS = {
     "ui-selfhost": "ghcr.io/elevenid/marty-ui-oss/ui-selfhost",
-    "cloudflared-wrapper": "ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper",
 }
 LEGACY_ROLE = re.compile(
     r"^ghcr\.io/elevenid/marty-ui/"
-    r"(?P<role>services|db-migrate|ui-selfhost|cloudflared-wrapper):"
+    r"(?P<role>services|db-migrate|ui-selfhost):"
     r"(?P<version>[0-9]+\.[0-9]+\.[0-9]+)$"
 )
 SOURCE_ROLE = re.compile(
     r"^(?:\$\{SELFHOST_IMAGE_PREFIX:-ghcr\.io/elevenid/marty-ui\}|"
     r"ghcr\.io/elevenid/marty-ui)/"
-    r"(?P<role>services|db-migrate|ui-selfhost|cloudflared-wrapper):"
+    r"(?P<role>services|db-migrate|ui-selfhost):"
     r"(?:\$\{SELFHOST_IMAGE_TAG:\?SELFHOST_IMAGE_TAG must be set to an immutable release tag\}|"
     r"[^@\s]+)$"
 )
@@ -43,8 +42,6 @@ DEDICATED_SERVICES = {
     "db-migrate": "db-migrate",
     "kms-initialize": "db-migrate",
     "ui": "ui-selfhost",
-    "cloudflared": "cloudflared-wrapper",
-    "cloudflared-beta": "cloudflared-wrapper",
 }
 ISSUANCE_SERVICES = frozenset({"issuance", "issuance-migrations"})
 KEYCLOAK_SERVICES = frozenset({"keycloak", "keycloak-configurator"})
@@ -236,7 +233,7 @@ def build_lock(
     _require(source_lock.get("release") == f"marty-ui@{claim['version']}",
              "source stack lock release differs from transaction")
     _require(set(selfhost_images) == set(SELFHOST_URIS),
-             "self-host role digests must cover exactly the two missing roles")
+             "self-host role digests must cover exactly the core self-host roles")
     for role, image in selfhost_images.items():
         _exact_image(image, role)
         _require(image.startswith(SELFHOST_URIS[role] + "@"),
@@ -302,7 +299,7 @@ def main() -> None:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--claim-run-id", required=True)
     parser.add_argument("--selfhost-images", required=True, type=Path,
-                        help="JSON object with ui-selfhost and cloudflared-wrapper exact OCI refs")
+                        help="JSON object with the ui-selfhost exact OCI ref")
     parser.add_argument("--external-services", required=True, type=Path,
                         help="JSON service-to-exact-ref map for independent infrastructure")
     parser.add_argument("--output", required=True, type=Path)

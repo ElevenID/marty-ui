@@ -30,6 +30,8 @@ Local media composition and privacy scanning are ready with FFmpeg, ffprobe, Tes
 - Protected evidence remains authoritative. YouTube is a distribution copy whose transcoded bytes are not used as the evidence hash.
 - A first-party wallet cannot satisfy independent-wallet coverage.
 
+For D05 synthetic applicant fixtures, the Keycloak user ID is the login subject, while the application applicant ID is `/v1/me/applicant-profile.id`. Bind them through authenticated `/v1/auth/me.user.applicant_id` and require the same email before issuing. Generate a private password that satisfies the active realm length and character-category policy; keep its value out of evidence.
+
 ## Third-Party Wallet Media Policy
 
 - Third-party wallet names, marks, and limited interface footage may be shown for interoperability testing, compatibility commentary, comparison, documentation, and product education.

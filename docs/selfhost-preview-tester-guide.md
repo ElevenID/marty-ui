@@ -1,5 +1,10 @@
 # Experimental self-host tester preview
 
+> **Historical guide for the v1.1.247 manual preview.** For the current signed
+> Linux installer, use the [Linux installer tester quickstart](linux-installer-tester.md).
+> The older assets, commands, and qualification statements below describe that
+> preview and are retained for its existing testers.
+
 This is an **unsupported, unqualified preview** for technically experienced
 testers on disposable machines. Do not use production data, credentials, or
 domains. The exact image-locked ZIP was prepared from `marty-ui` v1.1.247

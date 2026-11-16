@@ -18,6 +18,15 @@ This bundle is the image-based distribution for the open-source self-host stack.
 - `scripts/check_selfhost_root_retirement.py` for a non-retiring audit of both active and rollback KMS generations before any initial-root revocation
 - the runtime `docker/*` and `scripts/*` files still mounted by the compose stack
 
+## Optional hosting integrations
+
+The core bundle does not contain a Cloudflare connector or require a tunnel token.
+New signed installer deployments can explicitly select the separately signed
+[Cloudflare hosting add-on](docs/hosting-cloudflare-addon.md). Its exact image and
+file inventory remain separate from the core image lock. Existing source-managed
+production and beta tunnel deployments use the explicit compatibility overlays
+listed in that guide.
+
 ## Image contract
 
 The bundle is an image-only packaging format. Its image roles must be published
@@ -220,7 +229,7 @@ docker compose --env-file .env.selfhost.production.local up -d
 
 ```bash
 docker compose --env-file .env.selfhost.production.local ps
-docker compose --env-file .env.selfhost.production.local logs -f edge cloudflared gateway keycloak
+docker compose --env-file .env.selfhost.production.local logs -f edge gateway keycloak
 docker compose --env-file .env.selfhost.production.local down
 ```
 

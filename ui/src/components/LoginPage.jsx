@@ -13,15 +13,17 @@ import {
 import { useAuth } from '../hooks/useAuth';
 import { getLoginEntryDecision, getLoginEntryRedirect } from '../application/routing';
 import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
+import AuthUnavailable from './AuthUnavailable';
 
 function LoginPage({ fallbackRedirectTo = '/' }) {
-  const { isAuthenticated, isLoading, login } = useAuth();
+  const { isAuthenticated, isLoading, authError, refreshUser, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const redirectTo = getLoginEntryRedirect(location.state, fallbackRedirectTo, location.search);
 
   useEffect(() => {
+    if (authError) return;
     const decision = getLoginEntryDecision({
       isAuthenticated,
       isLoading,
@@ -41,7 +43,11 @@ function LoginPage({ fallbackRedirectTo = '/' }) {
     if (decision.action === 'login') {
       login(redirectTo);
     }
-  }, [isAuthenticated, isLoading, location.pathname, login, navigate, redirectTo]);
+  }, [isAuthenticated, isLoading, authError, location.pathname, login, navigate, redirectTo]);
+
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={isLoading} />;
+  }
 
   // Show a neutral loading state while auth is checked or SSO redirect is in progress
   return (

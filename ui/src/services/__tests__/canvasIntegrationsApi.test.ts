@@ -17,6 +17,41 @@ import {
 } from '../canvasIntegrationsApi'
 
 describe('canvasIntegrationsApi', () => {
+  it.each([true, false])('retries a failed platform transport only while its owner remains current: %s', async (remainsCurrent) => {
+    let current = true;
+    let release!: () => void;
+    let started!: () => void;
+    const firstStarted = new Promise<void>((resolve) => { started = resolve; });
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const keys: Array<string | null> = [];
+    server.use(http.post('http://localhost:8000/v1/integrations/canvas/platforms', async ({ request }) => {
+      keys.push(request.headers.get('Idempotency-Key'));
+      if (keys.length === 1) {
+        started();
+        await held;
+        return HttpResponse.error();
+      }
+      return HttpResponse.json({ id: 'platform-new' }, { status: 201 });
+    }));
+    const creation = createCanvasPlatform({ display_name: 'Canvas', canvas_base_url: 'https://canvas.example.edu' }, {
+      organizationId: 'org-1', isCurrent: () => current,
+    }).then((value) => ({ value, error: null }), (error) => ({ value: null, error }));
+    await firstStarted;
+    current = remainsCurrent;
+    release();
+    const result = await creation;
+    expect(keys[0]).toBeTruthy();
+    if (remainsCurrent) {
+      expect(result.error).toBeNull();
+      expect(result.value).toEqual({ id: 'platform-new' });
+      expect(keys).toEqual([keys[0], keys[0]]);
+    } else {
+      expect(result.error).toMatchObject({ name: 'AbortError' });
+      expect(result.value).toBeNull();
+      expect(keys).toHaveLength(1);
+    }
+  });
+
   it('acknowledges a Canvas synchronization dead letter', async () => {
     let body: unknown;
     server.use(

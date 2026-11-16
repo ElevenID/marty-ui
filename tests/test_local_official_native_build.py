@@ -35,7 +35,10 @@ class OfficialNativeBuildTests(unittest.TestCase):
                      "sourceBeforeAfterMatched": True,
                      "sourceMountedReadOnly": True,
                      "targetHardlinksToSource": False}
-        self.script = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
+        # Modeled parser input for the closed profile, not a historical script.
+        self.script = "cargo build " + " ".join(
+            f"--bin {binary}" for _, binary in self.profile.roles
+        )
 
     def test_closed_profile_union_preserves_core_target_and_journal_dispatch(self):
         expected = (
@@ -74,6 +77,15 @@ class OfficialNativeBuildTests(unittest.TestCase):
         for delimiter in ("BOUNDARY", "ARTIFACTS"):
             code = recipe.split("<<'" + delimiter + "'\n", 1)[1].split("\n" + delimiter, 1)[0]
             compile(code, delimiter, "exec")
+
+    def test_current_build_outputs_cannot_enter_the_frozen_profile(self):
+        current = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
+        self.assertIn("--bin marty-installer-organization-api-key", current)
+        with self.assertRaisesRegex(ValueError, "CANONICAL_ALL_SERVICES_SET_CHANGED"):
+            build.verify_official_inputs(self.freeze, self.seed, current, self.scope)
+        with self.assertRaisesRegex(ValueError, "BUILD_TOOL_BINARY_SET_CHANGED"):
+            build.verify_official_inputs(self.freeze, self.seed, self.script,
+                                         self.scope, current)
 
     def test_localized_lock_allows_only_two_exact_unused_core_patch_source_removals(self):
         core_source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"

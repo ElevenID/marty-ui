@@ -6,7 +6,10 @@
  */
 
 import { useEffect } from 'react';
-import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
+import { useLocation } from 'react-router';
+import { useAuth } from '../../hooks/useAuth';
+import { usePreview } from '../../contexts/PreviewContext';
+import PreviewPage from './PreviewPage';
 import CredentialCatalog from '../applicant/CredentialCatalog';
 import { Box } from '@mui/material';
 
@@ -25,10 +28,16 @@ function PreviewCatalogContent() {
 }
 
 function PreviewCatalogPage() {
+  const location = useLocation();
+  const { user } = useAuth();
+  const scope = JSON.stringify([
+    user?.user_id || user?.sub || user?.id || null,
+    location.key, location.pathname, location.search,
+  ]);
   return (
-    <PreviewProvider resourceType="catalog" returnUrl="/console/org/templates/credentials">
+    <PreviewPage key={scope} resourceType="catalog" returnUrl="/console/org/templates/credentials">
       <PreviewCatalogContent />
-    </PreviewProvider>
+    </PreviewPage>
   );
 }
 

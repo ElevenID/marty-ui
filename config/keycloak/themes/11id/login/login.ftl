@@ -25,7 +25,7 @@
                                        value="${(login.username!'')}"
                                        type="text" 
                                        autofocus 
-                                       autocomplete="username"
+                                       autocomplete="${(enableWebAuthnConditionalUI?has_content)?then('username webauthn', 'username')}"
                                        aria-invalid="<#if messagesPerField.existsError('username','password')>true</#if>"
                                 />
                                 <#if messagesPerField.existsError('username','password')>
@@ -38,6 +38,10 @@
 
                         <#if usernameHidden??>
                             <#assign attemptedUser = (auth.attemptedUsername)!''>
+                            <#-- Associate the authenticated account with this password-only
+                                 form without submitting another username parameter. -->
+                            <input type="text" id="username" value="${attemptedUser}"
+                                   autocomplete="username" readonly="readonly" style="display:none;" />
                             <div class="elevenid-reauth-user">
                                 <span class="elevenid-reauth-username">${attemptedUser}</span>
                             </div>
@@ -126,6 +130,12 @@
                 </#if>
             </div>
         </div>
+        <#-- Inherit the version-matched Keycloak implementation. Import only when
+             supplied by the authenticator so disabled/older realms still render. -->
+        <#if enableWebAuthnConditionalUI?has_content>
+            <#import "passkeys.ftl" as passkeys>
+            <@passkeys.conditionalUIData />
+        </#if>
     <#elseif section = "info">
         <#if realm.password && realm.registrationAllowed && !registrationDisabled??>
             <div id="kc-registration-container">

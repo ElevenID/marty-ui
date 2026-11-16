@@ -29,7 +29,8 @@ async fn retention_purge_preserves_tenant_and_recent_event_ownership() {
     for statement in [
         "CREATE SCHEMA issuance_service",
         "CREATE TABLE issuance_service.applications (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
-        "CREATE TABLE issuance_service.issuance_transactions (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
+        "CREATE TABLE issuance_service.issuance_transactions (
+            jwt_vc_profile JSONB, jwt_vc_signing_timing JSONB,id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.authorization_sessions (id text PRIMARY KEY, organization_id text NOT NULL, created_at timestamptz NOT NULL)",
         "CREATE TABLE issuance_service.issued_credentials (id text PRIMARY KEY, organization_id text NOT NULL, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id))",
         "CREATE TABLE issuance_service.credential_delivery_records (id text PRIMARY KEY, organization_id text NOT NULL, credential_id text NOT NULL REFERENCES issuance_service.issued_credentials(id) ON DELETE CASCADE, transaction_id text NOT NULL REFERENCES issuance_service.issuance_transactions(id) ON DELETE CASCADE)",

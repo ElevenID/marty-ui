@@ -27,6 +27,28 @@ fn compose_compatible_development_configuration_is_normalized() {
         "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
     );
     assert!(config.workload_server_tls.is_none());
+    assert_eq!(config.marty_organization_id, uuid::Uuid::from_u128(1));
+}
+
+#[test]
+fn customer_organization_configuration_selects_builtin_policy_owner() {
+    let mut configured = values("development");
+    configured.insert(
+        "MARTY_ORG_ID".into(),
+        "750e8400-e29b-41d4-a716-446655440001".into(),
+    );
+    let config = PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap();
+    assert_eq!(
+        config.marty_organization_id.to_string(),
+        "750e8400-e29b-41d4-a716-446655440001"
+    );
+    configured.insert("MARTY_ORG_ID".into(), "not-a-uuid".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured).unwrap_err(),
+        PresentationPolicyConfigError::Invalid {
+            name: "MARTY_ORG_ID"
+        },
+    );
 }
 
 #[test]

@@ -8,7 +8,8 @@ use marty_auth::{
     attribute_strings, merge_oidc_user_info, normalize_keycloak_admin_url,
     normalize_keycloak_organization_claim, ExchangedTokenValidator, KeycloakAdminAdapter,
     KeycloakAdminConfig, KeycloakAdminTransport, KeycloakHttpRequest, KeycloakHttpResponse,
-    KeycloakUserCreate, OidcUserInfo, OidcValidatedIdentity, PortError,
+    KeycloakUserCreate, OidcUserInfo, OidcValidatedIdentity, PasskeyEmailEnrollment,
+    PasskeyEnrollmentEmail, PortError,
 };
 use serde_json::{json, Map, Value};
 
@@ -290,4 +291,81 @@ fn primary_oidc_context_wins_while_roles_are_union_preserving_order() {
     assert_eq!(merged.sub, "primary");
     assert_eq!(merged.email, "primary@example.com");
     assert_eq!(merged.roles, ["admin", "vendor"]);
+}
+
+fn enrollment_email() -> PasskeyEnrollmentEmail {
+    PasskeyEnrollmentEmail {
+        subject: "keycloak-account".into(),
+        expected_email: "alice@example.com".into(),
+        client_id: "marty-ui".into(),
+        redirect_uri: "https://ui.example/console/profile".into(),
+    }
+}
+
+#[tokio::test]
+async fn native_enrollment_email_rechecks_verified_account_and_sends_only_the_bound_required_action(
+) {
+    let profile = json!({"id":"keycloak-account","enabled":true,"emailVerified":true,"email":"alice@example.com"});
+    let (adapter, transport) = adapter(
+        [
+            service_token(),
+            response(200, profile),
+            response(204, Value::Null),
+        ],
+        false,
+    );
+    adapter
+        .send_enrollment_email(&enrollment_email())
+        .await
+        .unwrap();
+    let requests = transport.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[1].url.ends_with("/users/keycloak-account"));
+    assert_eq!(requests[2].method, marty_auth::KeycloakHttpMethod::PutJson);
+    assert!(requests[2]
+        .url
+        .ends_with("/users/keycloak-account/execute-actions-email"));
+    assert_eq!(
+        requests[2].json,
+        Some(json!(["webauthn-register-passwordless"]))
+    );
+    assert_eq!(
+        requests[2].query,
+        vec![
+            ("client_id".into(), "marty-ui".into()),
+            (
+                "redirect_uri".into(),
+                "https://ui.example/console/profile".into()
+            ),
+            ("lifespan".into(), "300".into())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn native_enrollment_email_refuses_unverified_changed_disabled_or_different_accounts() {
+    for mutation in [
+        "unverified",
+        "changed-email",
+        "disabled",
+        "subject",
+        "missing-verified",
+    ] {
+        let mut profile = json!({"id":"keycloak-account","enabled":true,"emailVerified":true,"email":"alice@example.com"});
+        match mutation {
+            "unverified" => profile["emailVerified"] = json!(false),
+            "changed-email" => profile["email"] = json!("different@example.com"),
+            "disabled" => profile["enabled"] = json!(false),
+            "subject" => profile["id"] = json!("different-account"),
+            _ => {
+                profile.as_object_mut().unwrap().remove("emailVerified");
+            }
+        }
+        let (adapter, transport) = adapter([service_token(), response(200, profile)], false);
+        assert!(adapter
+            .send_enrollment_email(&enrollment_email())
+            .await
+            .is_err());
+        assert_eq!(transport.requests.lock().unwrap().len(), 2);
+    }
 }

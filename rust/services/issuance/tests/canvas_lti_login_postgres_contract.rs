@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use marty_issuance_service::{
     canvas_lti_bootstrap::{
         plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplicationAction,
-        CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapRepository, CanvasLtiBootstrapRequest,
+        CanvasLtiBootstrapApplicationSeed, CanvasLtiBootstrapRepository,
+        CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest,
     },
     canvas_lti_experience::{
         canvas_lti_experience_session_context, sha256_hex, CanvasLtiExperienceExchangeError,
@@ -983,8 +984,11 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         "kind": "canvas_lti_experience_session",
         "launch_state": "launch-bootstrap",
         "verified_launch": {
+            "issuer": "https://canvas.example.test",
             "subject": "learner-bootstrap",
+            "audience": ["client-123"],
             "deployment_id": "deployment-123",
+            "roles": ["Learner"],
             "learner_identity": {"email": "trusted@example.test"},
             "raw_claims": {
                 "https://purl.imsglobal.org/spec/lti/claim/custom": {
@@ -1208,6 +1212,104 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .await
     .unwrap();
     assert_eq!(application_xmin_after, application_xmin_before);
+
+    // An already loaded, bound session must not replay after management deactivates
+    // its binding. The row update holds the same lock used by persist_plan.
+    let mut deactivation = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET enabled = false, activated_at = NULL
+         WHERE id = 'binding-bootstrap' AND organization_id = 'org-123'",
+    )
+    .execute(&mut *deactivation)
+    .await
+    .unwrap();
+    let mut pending = tokio::spawn({
+        let repository = handoff_repository.clone();
+        let context = context.clone();
+        let plan = exact_replay_plan.clone();
+        async move { repository.persist_plan(&context, &plan).await }
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), &mut pending)
+            .await
+            .is_err()
+    );
+    deactivation.commit().await.unwrap();
+    assert_eq!(
+        pending.await.unwrap(),
+        Err(CanvasLtiBootstrapRepositoryError::FeatureDisabled)
+    );
+    let stale_create_plan = if first_persisted.application.id == first_plan.application.id {
+        &second_plan
+    } else {
+        &first_plan
+    };
+    assert_eq!(
+        handoff_repository
+            .persist_plan(&context, stale_create_plan)
+            .await,
+        Err(CanvasLtiBootstrapRepositoryError::FeatureDisabled)
+    );
+    let stale_application_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.applications WHERE id = $1")
+            .bind(losing_plan_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(stale_application_count, 0);
+    assert_eq!(
+        handoff_repository
+            .bound_feature_enabled("org-123", "binding-bootstrap", "enable_canvas_lti")
+            .await
+            .unwrap(),
+        Some(false)
+    );
+    let application_xmin_after_deactivation: i64 = sqlx::query_scalar(
+        "SELECT xmin::text::bigint FROM issuance_service.applications WHERE id = $1",
+    )
+    .bind(&stored_application.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(application_xmin_after_deactivation, application_xmin_before);
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings SET enabled = true
+         WHERE id = 'binding-bootstrap' AND organization_id = 'org-123'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut stale_scope_context = context.clone();
+    stale_scope_context.application_template_id = Some("other-template".to_owned());
+    assert_eq!(
+        handoff_repository
+            .persist_plan(&stale_scope_context, &exact_replay_plan)
+            .await,
+        Err(CanvasLtiBootstrapRepositoryError::InvalidSession)
+    );
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET canvas_scope = '{\"course_id\":\"other-course\"}'::jsonb
+         WHERE id = 'binding-bootstrap' AND organization_id = 'org-123'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        handoff_repository
+            .persist_plan(&context, &exact_replay_plan)
+            .await,
+        Err(CanvasLtiBootstrapRepositoryError::InvalidSession)
+    );
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings
+         SET canvas_scope = '{}'::jsonb
+         WHERE id = 'binding-bootstrap' AND organization_id = 'org-123'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
 
     let expired_session_id = Uuid::new_v4().to_string();
     let expired_token = format!("expired-bootstrap-token-{}", Uuid::new_v4());

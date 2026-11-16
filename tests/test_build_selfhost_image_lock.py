@@ -32,9 +32,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "  gateway: {build: '.'}\n"
         "  issuance-migrations: {build: '.'}\n"
         "  issuance: {build: '.'}\n"
-        "  ui: {image: 'nginx:alpine'}\n"
-        "  cloudflared: {build: '.'}\n"
-        "  cloudflared-beta: {build: '.'}\n", encoding="utf-8")
+        "  ui: {image: 'nginx:alpine'}\n", encoding="utf-8")
     (tmp_path / "override.yml").write_text(
         "services:\n"
         f"  db-migrate: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
@@ -42,9 +40,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance: {{image: '{PREFIX}/services:1.2.3'}}\n"
-        f"  ui: {{image: '{PREFIX}/ui-selfhost:1.2.3'}}\n"
-        f"  cloudflared: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n"
-        f"  cloudflared-beta: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n",
+        f"  ui: {{image: '{PREFIX}/ui-selfhost:1.2.3'}}\n",
         encoding="utf-8")
     (tmp_path / "docker-compose.selfhost.openbao.yml").write_text(
         "services:\n"
@@ -90,12 +86,9 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "issuance-migrations": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance": {"image": f"{PREFIX}/services:1.2.3"},
         "ui": {"image": f"{PREFIX}/ui-selfhost:1.2.3"},
-        "cloudflared": {"image": f"{PREFIX}/cloudflared-wrapper:1.2.3"},
-        "cloudflared-beta": {"image": f"{PREFIX}/cloudflared-wrapper:1.2.3"},
     }}
     selfhost = {
         "ui-selfhost": reference("ui-selfhost", "4"),
-        "cloudflared-wrapper": reference("cloudflared-wrapper", "5"),
     }
     external = {
         "postgres": "docker.io/library/postgres@sha256:" + "7" * 64,
@@ -126,7 +119,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")
     assert result["services"]["ui"] == reference("ui-selfhost", "4")
-    assert result["services"]["cloudflared"] == result["services"]["cloudflared-beta"]
+    assert "cloudflared" not in result["services"]
 
 
 def test_early_external_preflight_reuses_lock_identity_rules(tmp_path: Path) -> None:
@@ -160,11 +153,19 @@ def test_current_compose_source_ownership_is_closed() -> None:
     )
     assert set(roles) | {
         "postgres", "redis", "keycloak", "keycloak-configurator",
-        "edge", "tunnel-nginx-proxy",
+        "edge",
     } == names
     assert roles["gateway"] == "services"
     assert roles["db-migrate"] == "db-migrate"
     assert roles["ui"] == "ui-selfhost"
+    assert not {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"} & names
+
+
+def test_core_rejects_optional_connector_image_as_an_extra_role(tmp_path: Path) -> None:
+    _, _, _, selfhost, _ = inputs(tmp_path)
+    selfhost["cloudflared-wrapper"] = reference("cloudflared-wrapper", "5")
+    with pytest.raises(builder.ImageLockError, match="roles"):
+        build(tmp_path, selfhost_images=selfhost)
 
 
 @pytest.mark.parametrize("service,image", [

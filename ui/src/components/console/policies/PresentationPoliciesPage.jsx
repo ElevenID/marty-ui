@@ -26,7 +26,6 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import QrCodeIcon from '@mui/icons-material/QrCode';
 import { Link } from 'react-router';
 
@@ -93,29 +92,6 @@ function PresentationPoliciesPage() {
     },
   ];
 
-  const TestActions = () => (
-    <Box sx={{ display: 'flex', gap: 1 }}>
-      <Button
-        variant="outlined"
-        size="small"
-        startIcon={<PlayArrowIcon />}
-        component={Link}
-        to="/console/org/policies/test"
-      >
-        {t('policies.testActions.evaluateVP')}
-      </Button>
-      <Button
-        variant="outlined"
-        size="small"
-        startIcon={<QrCodeIcon />}
-        component={Link}
-        to="/console/org/flows/definitions/new?type=verification"
-      >
-        {t('policies.testActions.startQRVerification')}
-      </Button>
-    </Box>
-  );
-
   return (
     <ResourcePage
       title={t('policies.presentationPolicies')}
@@ -125,7 +101,17 @@ function PresentationPoliciesPage() {
       newPath="/console/org/policies/presentation/new?mode=advanced"
       tabs={getPoliciesTabs(t)}
       breadcrumbs={getBreadcrumbs(t)}
-      actions={<TestActions />}
+      actions={
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<QrCodeIcon />}
+          component={Link}
+          to="/console/org/operate/verify"
+        >
+          {t('policies.verificationSessions')}
+        </Button>
+      }
     >
       {error && (
         <Alert
@@ -176,7 +162,7 @@ function PresentationPoliciesPage() {
                 return (
                   <TableRow key={policy.id} hover>
                     <TableCell>
-                      <Typography variant="body2" fontWeight={500}>
+                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
                         {policy.name}
                       </Typography>
                     </TableCell>

@@ -162,27 +162,29 @@ impl NewCredentials {
         self.initial_receipt.as_deref().ok_or(REFUSED.into())
     }
 
-    pub fn capture(&mut self, secrets: &File, operator: &File) -> Result<(), String> {
+    pub fn capture(&mut self, secrets: &File, operator: Option<&File>) -> Result<(), String> {
         if self.secrets.is_some() || self.operator.is_some() {
             return Err(REFUSED.into());
         }
         let secret_identity = observe(secrets)?;
-        let operator_identity = observe_operator(operator)?;
+        let operator_identity = operator.map(observe_operator).transpose()?;
         let recorded_evidence = self.evidence.as_ref().ok_or(REFUSED)?;
         if secret_identity.mount_id != self.root.mount_id
-            || operator_identity.mount_id != self.root.mount_id
             || secret_identity.identity.dev != self.root.identity.dev
-            || operator_identity.identity.dev != self.root.identity.dev
             || secret_identity.identity.ino == self.root.identity.ino
-            || operator_identity.identity.ino == self.root.identity.ino
-            || operator_identity.identity.ino == secret_identity.identity.ino
             || secret_identity.identity.ino == recorded_evidence.identity.ino
-            || operator_identity.identity.ino == recorded_evidence.identity.ino
+            || operator_identity.as_ref().is_some_and(|identity| {
+                identity.mount_id != self.root.mount_id
+                    || identity.identity.dev != self.root.identity.dev
+                    || identity.identity.ino == self.root.identity.ino
+                    || identity.identity.ino == secret_identity.identity.ino
+                    || identity.identity.ino == recorded_evidence.identity.ino
+            })
         {
             return Err(REFUSED.into());
         }
         self.secrets = Some(secret_identity);
-        self.operator = Some(operator_identity);
+        self.operator = operator_identity;
         Ok(())
     }
 
@@ -193,16 +195,16 @@ impl NewCredentials {
         root: &File,
         evidence: &File,
         secrets: &File,
-        operator: &File,
+        operator: Option<&File>,
     ) -> Result<Vec<u8>, String> {
         let recorded_evidence = self.evidence.as_ref().ok_or(REFUSED)?;
         self.initial_receipt()?;
         let recorded_secrets = self.secrets.as_ref().ok_or(REFUSED)?;
-        let recorded_operator = self.operator.as_ref().ok_or(REFUSED)?;
+        let recorded_operator = self.operator.as_ref();
         if observe(root)? != self.root
             || observe(evidence)? != *recorded_evidence
             || observe(secrets)? != *recorded_secrets
-            || observe_operator(operator)? != *recorded_operator
+            || operator.map(observe_operator).transpose()?.as_ref() != recorded_operator
             || source_sha.len() != 40
             || !source_sha
                 .bytes()
@@ -216,12 +218,16 @@ impl NewCredentials {
             installation_id: uuid::Uuid,
             source_sha: &'a str,
             secrets: &'a ObservedDirectory,
-            operator_password: &'a ObservedFile,
+            operator_password: Option<&'a ObservedFile>,
             local_historical_evidence: bool,
             deletion_authorized: bool,
         }
         serde_json::to_vec(&Receipt {
-            schema: "elevenid.installer-created-credentials/v1",
+            schema: if recorded_operator.is_some() {
+                "elevenid.installer-created-credentials/v1"
+            } else {
+                "elevenid.installer-created-credentials/v2"
+            },
             installation_id,
             source_sha,
             secrets: recorded_secrets,
@@ -1145,6 +1151,41 @@ mod tests {
         assert!(state
             .persist_credential_creation_receipt(&installation)
             .is_err());
+    }
+
+    #[test]
+    fn external_auth_credential_receipt_has_no_local_operator_or_keycloak_password() {
+        let (_parent, installation, mut state) = fresh();
+        state.create_private_directory("evidence").unwrap();
+        state.create_private_directory("downloads").unwrap();
+        state
+            .persist_initial_creation_receipt(&installation)
+            .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        state.generate_external_auth_credentials().unwrap();
+        state
+            .persist_credential_creation_receipt(&installation)
+            .unwrap();
+        assert!(!installation.join("operator-password").exists());
+        for name in crate::installer_state::LOCAL_AUTH_SCALAR_SECRETS {
+            assert!(!installation.join("secrets").join(name).exists());
+        }
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &fs::read(installation.join("evidence").join(CREDENTIAL_RECEIPT)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            receipt["schema"],
+            "elevenid.installer-created-credentials/v2"
+        );
+        assert!(receipt["operator_password"].is_null());
+        assert_eq!(receipt["deletion_authorized"], false);
+        assert_eq!(
+            fs::read_dir(installation.join("secrets")).unwrap().count(),
+            14
+        );
+        assert!(state.generate_external_auth_credentials().is_err());
     }
 
     #[test]

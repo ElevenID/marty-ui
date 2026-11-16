@@ -47,9 +47,12 @@ async fn tenant_mdoc_reference_index_resolves_actual_state_without_adopting_fore
     }
     // Exercise the real production migration owner and read-only startup
     // validator against PostgreSQL, rather than a hand-maintained table copy.
-    marty_issuance_service::migration::migrate_owned_schema(&pool)
-        .await
-        .unwrap();
+    marty_issuance_service::migration::migrate_owned_schema(
+        &pool,
+        marty_issuance_service::migration::seed_organization_id(None).unwrap(),
+    )
+    .await
+    .unwrap();
     marty_issuance_service::migration::validate(&pool)
         .await
         .unwrap();

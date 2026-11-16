@@ -182,6 +182,27 @@ def extract_exact(archive_stream, directory, parent_fd, names=NAMES):
       os.close(held)
 
 
+def initial_archive_names(archive_stream, base_names):
+    """Only fixed extra public inputs may be staged before signature checks."""
+    with zipfile.ZipFile(archive_stream) as bundle:
+        entries = bundle.infolist()
+        allowed = base_names | {release.candidate_hosting.NAME, release.candidate_hosting.ROOTS_NAME}
+        release.require(len(entries) <= len(allowed) and len({entry.filename for entry in entries}) == len(entries)
+                        and {entry.filename for entry in entries} <= allowed, "initial grant closure differs")
+        matches = [entry for entry in entries if entry.filename == "candidate-authorization.json"]
+        release.require(len(matches) == 1 and 0 < matches[0].file_size <= 65536
+                        and not matches[0].flag_bits & 1, "initial authorization member differs")
+        with bundle.open(matches[0]) as subject:
+            raw = subject.read(65537)
+        authorization = release.decode(raw)
+        release.hosting_fields(authorization, "candidate-authorization")
+        names = base_names | release.candidate_hosting.file_names(authorization)
+        release.require(len(entries) == len(names) and {entry.filename for entry in entries} == names,
+                        "versioned initial grant closure differs")
+    archive_stream.seek(0)
+    return names
+
+
 def receive(*, client, authorization, inventory, assets, descriptor, ledger,
             context_file, target_file, gh, cosign, output, harness_source_sha,
             run_id, run_attempt, controller_user_id, clock=time.time, sleep=time.sleep,
@@ -235,6 +256,7 @@ def _receive_archive(*, client, selected, output, held, gh, downloader, a, i,
     release.require(not output.exists() and not Path(str(output) + ".archive.zip").exists(),
                     "execution grant staging already exists")
     archive = Path(str(output) + ".archive.zip")
+    names = NAMES | release.candidate_hosting.file_names(release.decode(a))
     downloader(gh, client.token, selected["id"], archive, held)
     dispatch.registry_unchanged(held, output.parent)
     archive_fd = os.open(archive.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=held)
@@ -249,7 +271,7 @@ def _receive_archive(*, client, selected, output, held, gh, downloader, a, i,
             release.require("sha256:" + archive_sha == selected["digest"],
                             "execution grant archive digest differs")
             stream.seek(0)
-            extract_exact(stream, output, held)
+            extract_exact(stream, output, held, names)
         after_sha, after_size = hash_fd(archive_fd, selected["size_in_bytes"])
         release.require(after_sha == archive_sha and after_size == selected["size_in_bytes"]
                             and os.fstat(archive_fd).st_size == selected["size_in_bytes"],
@@ -257,7 +279,7 @@ def _receive_archive(*, client, selected, output, held, gh, downloader, a, i,
     finally:
         os.close(archive_fd)
     dispatch.registry_unchanged(held, output.parent)
-    snapshot = {name: dispatch.private_file(output / name, 1048576) for name in NAMES}
+    snapshot = {name: dispatch.private_file(output / name, 1048576) for name in names}
     release.require(read_record(output / "candidate-authorization.json") == a
                     and read_record(output / "controller-consumption.json") == raw_ledger
                     and read_record(output / "controller-transport.json") == read_record(descriptor),
@@ -281,7 +303,7 @@ def _receive_archive(*, client, selected, output, held, gh, downloader, a, i,
     release.require(int(clock()) < deadline and read_record(ledger) == raw_ledger,
                     "execution grant expired or controller ledger changed")
     dispatch.registry_unchanged(held, output.parent)
-    release.require({name: dispatch.private_file(output / name, 1048576) for name in NAMES} == snapshot,
+    release.require({name: dispatch.private_file(output / name, 1048576) for name in names} == snapshot,
                     "verified grant files changed")
     result = dict(schema="elevenid.installer-execution-grant-retrieval/v1", artifact=selected,
                   archive_sha256=archive_sha, authorization_sha256=release.digest(a),

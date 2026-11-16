@@ -5,6 +5,7 @@ import { render } from '@test/utils'
 import TemplateSelectionStep from '../steps/TemplateSelectionStep'
 
 const mockListCredentialTemplates = vi.fn()
+vi.mock('../../../../services/organizationsApi', () => ({ getOrganizationDefaults: async () => ({}) }))
 
 vi.mock('../../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({ activeOrgId: 'org-123' }),

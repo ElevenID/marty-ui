@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -34,6 +35,10 @@ def test_verifies_committed_rust_owner_with_exact_source(monkeypatch):
 
     def run(command):
         calls.append(command)
+        assert command[-2] == "-c"
+        assert not re.search(r"(?m)^\\[a-z]", command[-1], re.I)
+        assert "trg_administratively_cancelled_passport_job" in command[-1]
+        assert "FULL JOIN actual" in command[-1]
         return json.dumps({
             "schema": "marty.passport-beta-rust-owner-verification/v1",
             "phase": "rust_owner", "fence_epoch": 7, "transition_txid": 9,

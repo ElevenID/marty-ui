@@ -4,7 +4,8 @@
 use super::*;
 use crate::{
     credential_renewal::{
-        CredentialRenewalService, RenewalRepository, RenewalRepositoryError, RenewalSource,
+        CredentialRenewalService, RenewalError, RenewalRepository, RenewalRepositoryError,
+        RenewalSource,
     },
     initiation::{
         IdempotencyBinding, InitiationApplicationClaimsResolver, InitiationClientRepository,
@@ -14,10 +15,13 @@ use crate::{
         InitiationRevocationProfileValidator, InitiationSeed, InitiationSeedGenerator,
         InitiationService, InitiationTemplate, InitiationTemplateResolver, OrganizationValidation,
     },
-    initiation_http::InitiationHttpService,
-    initiation_response::InitiationOfferProjector,
+    initiation_http::{InitiationHttpError, InitiationHttpService},
+    initiation_response::{InitiationOfferProjectionError, InitiationOfferProjector},
 };
-use axum::http::{HeaderMap, HeaderValue};
+use axum::{
+    http::{HeaderMap, HeaderValue, StatusCode},
+    response::IntoResponse,
+};
 use chrono::DateTime;
 
 const SOURCE_ID: &str = "renewal-source-credential";
@@ -390,11 +394,10 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
             let mut headers = HeaderMap::new();
             headers.insert("X-API-Key", HeaderValue::from_static("renewal-key"));
             headers.insert("X-Organization-ID", HeaderValue::from_static("org-a"));
-            let response = renewal.renew(&headers, SOURCE_ID).await.unwrap();
-            assert_eq!(response.source_credential_id, SOURCE_ID);
+            let result = renewal.renew(&headers, SOURCE_ID).await;
             // Renewal admission persists its reservation in all four cases;
-            // private-IP refusal must stop only irreversible native issuance
-            // and delivery, while returning the existing pending offer.
+            // endpoint refusal retains the pending offer, while an absent
+            // required authcrypt provider remains an explicit capability error.
             assert_eq!(
                 graph
                     .reserved
@@ -408,6 +411,8 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
             );
             let messages = transport.messages.lock().unwrap().clone();
             if allow_private_ips && !authenticated {
+                let response = result.unwrap();
+                assert_eq!(response.source_credential_id, SOURCE_ID);
                 assert_eq!(
                     response.credential_offer_uris["didcomm"],
                     format!("didcomm://{ENDPOINT}")
@@ -426,13 +431,33 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                 assert_eq!(packed["from"], sender.id);
                 assert!(order.lock().unwrap().contains(&"build"));
             } else {
-                assert_eq!(
-                    response.credential_offer_uris["didcomm"],
-                    format!(
-                        "didcomm://pending?transaction_id={}",
-                        response.transaction_id
-                    )
-                );
+                if allow_private_ips {
+                    let error = result.unwrap_err();
+                    assert!(matches!(
+                        &error,
+                        RenewalError::Initiation(InitiationHttpError::Projection(
+                            InitiationOfferProjectionError::DidcommCapabilityUnavailable
+                        ))
+                    ));
+                    let response = error.into_response();
+                    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+                    let body = axum::body::to_bytes(response.into_body(), 2048)
+                        .await
+                        .unwrap();
+                    let body: Value = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(body["code"], "capability_unavailable");
+                    assert_eq!(body["capability"], "didcomm_authcrypt");
+                } else {
+                    let response = result.unwrap();
+                    assert_eq!(response.source_credential_id, SOURCE_ID);
+                    assert_eq!(
+                        response.credential_offer_uris["didcomm"],
+                        format!(
+                            "didcomm://pending?transaction_id={}",
+                            response.transaction_id
+                        )
+                    );
+                }
                 assert!(messages.is_empty());
                 assert!(
                     order.lock().unwrap().is_empty(),

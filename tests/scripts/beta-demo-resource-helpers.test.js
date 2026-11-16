@@ -9,6 +9,8 @@ const {
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   cancelOwnedIssuanceTransaction,
   cleanupApplicationCredential,
+  bindPublicUiClaimApplication,
+  preparePublicUiClaimOwnership,
   compactObject,
   ensureActiveResource,
   ensureGovernedIssuer,
@@ -22,8 +24,46 @@ const {
   safeErrorDetail,
   selectApplicationTransaction,
   selectCurrentCredential,
+  requireCurrentIssuerServiceReady,
   selectOrganization,
 } = require('./beta-demo-resource-helpers');
+
+test('stored issuer service readiness binds the active tuple before any offer', async () => {
+  const tuple = { organizationId: 'org-1', credentialTemplateId: 'template-1', issuerDid: 'did:web:issuer.example' };
+  const template = { id: 'template-1', organization_id: 'org-1', status: 'ACTIVE',
+    issuer_did: tuple.issuerDid, credential_payload_format: 'SD_JWT_VC' };
+  const ready = { ok: true, organization_id: 'org-1', issuer_did: tuple.issuerDid,
+    credential_format: 'SD_JWT_VC', service_id: 'svc-1', key_reference: 'key-1',
+    key_purpose: 'vc_jwt_issuer', algorithm: 'ES256', key_read: true, signer_capable: true,
+    signature_verified: true };
+  const page = fakePage([{ ok: true, status: 200, body: template }, { ok: true, status: 200, body: ready }]);
+  assert.deepEqual(await requireCurrentIssuerServiceReady(page, tuple), {
+    serviceId: 'svc-1', keyReference: 'key-1', issuerDid: tuple.issuerDid, credentialFormat: 'SD_JWT_VC',
+  });
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.requests[1].requestOptions.method, 'POST');
+  assert.deepEqual(JSON.parse(page.requests[1].requestOptions.body), {
+    organization_id: 'org-1', issuer_did: tuple.issuerDid, credential_format: 'SD_JWT_VC',
+  });
+  const d04 = fakePage([{ok:true,status:200,body:{...template,credential_payload_format:'w3c_vcdm_v2_sd_jwt'}},
+    {ok:true,status:200,body:ready}]);
+  assert.equal((await requireCurrentIssuerServiceReady(d04,tuple)).credentialFormat,'SD_JWT_VC');
+  assert.equal(JSON.parse(d04.requests[1].requestOptions.body).credential_format,'SD_JWT_VC');
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([{ok:true,status:200,
+    body:{...template,credential_payload_format:'unknown_format'}}]),tuple),/issuer tuple/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: false, status: 503, body: { ok: false } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: true, status: 200, body: { ...ready, key_reference: null } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: template }, { ok: true, status: 200, body: { ...ready, signature_verified: false } },
+  ]), tuple), /unavailable before offer/);
+  await assert.rejects(requireCurrentIssuerServiceReady(fakePage([
+    { ok: true, status: 200, body: { ...template, issuer_did: 'did:web:foreign.example' } },
+  ]), tuple), /issuer tuple/);
+});
 
 test('requestedClaim emits the strict public presentation-policy DTO', () => {
   assert.equal(DEFAULT_CREDENTIAL_RANKING_STRATEGY, 'FRESHEST_FIRST');
@@ -949,4 +989,114 @@ test('selectOrganization fails closed without an eligible organization membershi
     activeOrgId: null,
   });
   assert.equal(page.requests.length, 1);
+});
+
+function publicUiFixture() {
+  const owned = ownedRun({ applicationId: null, transactionId: null, credentialId: null,
+    principalId: 'registered-user/1', registeredEmail: 'owned@example.test' });
+  const startedAt = Date.parse('2026-11-04T19:00:00Z');
+  const identity = { authenticated: true, user: { user_id: owned.principalId,
+    organization_id: owned.organizationId, email: 'owned@example.test' } };
+  const profile = { id: owned.applicantId, user_id: owned.principalId,
+    organization_id: owned.organizationId, email: identity.user.email };
+  const captured = { applicationId: 'ui-created/1',
+    claimUrl: `https://beta.elevenidllc.com/console/applicant/apply/${encodeURIComponent(owned.credentialTemplateId)}` };
+  const app = application({ ...owned, applicationId: captured.applicationId }, {
+    integration_context: {}, created_at: new Date(startedAt + 1000).toISOString(), status: 'SUBMITTED' });
+  const ok = body => ({ ok: true, status: 200, body });
+  const beforePage = fakePage([ok(identity), ok({ total: 0, offset: 0, items: [] })]);
+  const afterPage = () => fakePage([ok(identity), ok(profile),
+    ok({ total: 1, offset: 0, items: [app] }), ok(app)]);
+  return { owned, startedAt, identity, profile, captured, app, ok, beforePage, afterPage };
+}
+
+test('public UI exact fresh claim uses shared withdrawal and preserves API run-tag guard', async () => {
+  const f = publicUiFixture();
+  const before = await preparePublicUiClaimOwnership(f.beforePage, f.owned, { now: () => f.startedAt });
+  const reads = f.afterPage();
+  await bindPublicUiClaimApplication(reads, f.owned, before, f.captured, { now: () => f.startedAt + 2000 });
+  assert.ok([...f.beforePage.requests, ...reads.requests].every(r => !r.requestOptions.method));
+  const page = fakePage([f.ok(f.app), f.ok([]), f.ok({}), f.ok({ ...f.app, status: 'WITHDRAWN' })]);
+  const result = await cleanupApplicationCredential(page, f.owned, 'Retire exact public UI claim');
+  assert.equal(result.ok, true);
+  assert.equal(result.applicationWithdrawn, true);
+  assert.deepEqual(page.requests.filter(r => r.requestOptions.method).map(r => r.requestPath),
+    ['/v1/organizations/org%2F1/applicants/ui-created%2F1/withdraw']);
+  const ordinary = fakePage([f.ok(f.app)]);
+  await assert.rejects(cleanupApplicationCredential(ordinary,
+    ownedRun({ applicationId: f.captured.applicationId }), 'No API tag'), /does not match this run/);
+  assert.equal(ordinary.requests.length, 1);
+});
+
+test('public UI claim rejects another principal and any existing application before custody', async () => {
+  for (const change of ['principal', 'email', 'existing', 'incomplete']) {
+    const f = publicUiFixture();
+    const page = fakePage([f.ok(change === 'principal'
+      ? { ...f.identity, user: { ...f.identity.user, user_id: 'foreign' } }
+      : change === 'email' ? { ...f.identity, user: { ...f.identity.user, email: 'foreign@example.test' } } : f.identity),
+    f.ok(change === 'existing' ? { total: 1, offset: 0, items: [f.app] }
+      : { total: 0, offset: 1, items: [] })]);
+    await assert.rejects(preparePublicUiClaimOwnership(page, f.owned, { now: () => f.startedAt }),
+      /principal|zero-before/);
+    assert.equal(f.owned.applicationId, null);
+    assert.ok(page.requests.every(r => !r.requestOptions.method));
+  }
+});
+
+test('public UI claim refuses out-of-window, cross-org, wrong-applicant and foreign context without mutation', async () => {
+  for (const change of ['early', 'late', 'cross-org', 'wrong-applicant', 'context', 'route', 'profile', 'inventory', 'stale']) {
+    const f = publicUiFixture();
+    const before = await preparePublicUiClaimOwnership(f.beforePage, f.owned, { now: () => f.startedAt });
+    if (change === 'early') f.app.created_at = new Date(f.startedAt - 1).toISOString();
+    if (change === 'late') f.app.created_at = new Date(f.startedAt + 2001).toISOString();
+    if (change === 'cross-org') f.app.organization_id = 'foreign';
+    if (change === 'wrong-applicant') f.app.applicant_id = 'foreign';
+    if (change === 'context') f.app.integration_context = { demo_run_id: f.owned.runId };
+    if (change === 'route') f.captured.claimUrl += '?application=foreign';
+    if (change === 'profile') f.profile.email = 'someone-else@example.test';
+    const page = f.afterPage();
+    if (change === 'inventory') page.evaluate = async (_cb, request) => {
+      page.requests.push(request);
+      return f.ok(request.requestPath === '/v1/auth/me' ? f.identity
+        : request.requestPath === '/v1/me/applicant-profile' ? f.profile
+          : { total: 2, offset: 0, items: [f.app, { id: 'foreign' }] });
+    };
+    await assert.rejects(bindPublicUiClaimApplication(page, f.owned, before, f.captured,
+      { now: () => f.startedAt + (change === 'stale' ? 30 * 60 * 1000 + 1 : 2000) }),
+    /public UI|Public UI|does not match this run/);
+    assert.equal(f.owned.applicationId, null);
+    assert.ok(page.requests.every(r => !r.requestOptions.method));
+  }
+});
+
+test('public UI claim reuses exact issued-credential revocation and history readback', async () => {
+  const f = publicUiFixture();
+  const before = await preparePublicUiClaimOwnership(f.beforePage, f.owned, { now: () => f.startedAt });
+  await bindPublicUiClaimApplication(f.afterPage(), f.owned, before, f.captured,
+    { now: () => f.startedAt + 2000 });
+  const page = fakePage([f.ok({ ...f.app, status: 'CREDENTIALED' }), f.ok([transaction(f.owned)]),
+    f.ok([credential(f.owned)]), f.ok({}), f.ok([transaction(f.owned)]),
+    f.ok([credential(f.owned, { status: 'REVOKED' })]), f.ok({ ...f.app, status: 'CREDENTIALED' })]);
+  const result = await cleanupApplicationCredential(page, f.owned, 'Retire stock-wallet credential');
+  assert.equal(result.ok, true);
+  assert.equal(result.credentialRevoked, true);
+  assert.equal(result.applicationHistoryPreserved, true);
+  assert.equal(result.applicationWithdrawn, false);
+  assert.deepEqual(page.requests.filter(r => r.requestOptions.method).map(r => r.requestPath),
+    ['/v1/issued-credentials/credential%2F1/revoke']);
+});
+
+test('public UI cleanup rechecks captured creation evidence before every mutation', async () => {
+  for (const changed of [{ created_at: '2026-11-04T19:00:01.500Z' },
+    { integration_context: { canvas_lti: {} } }, { applicant_id: 'foreign' }]) {
+    const f = publicUiFixture();
+    const before = await preparePublicUiClaimOwnership(f.beforePage, f.owned, { now: () => f.startedAt });
+    await bindPublicUiClaimApplication(f.afterPage(), f.owned, before, f.captured,
+      { now: () => f.startedAt + 2000 });
+    const page = fakePage([f.ok({ ...f.app, ...changed })]);
+    await assert.rejects(cleanupApplicationCredential(page, f.owned, 'No adoption'),
+      /public UI|does not match this run/);
+    assert.equal(page.requests.length, 1);
+    assert.ok(page.requests.every(r => !r.requestOptions.method));
+  }
 });

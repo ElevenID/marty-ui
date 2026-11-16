@@ -101,10 +101,10 @@ function VerificationSignal({ label, value, color }) {
   const colorMap = { success: 'success.main', warning: 'warning.main', error: 'error.main', default: 'text.secondary' };
   return (
     <Box sx={{ textAlign: 'center', px: 2 }}>
-      <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
+      <Typography variant="caption" color="text.secondary" gutterBottom sx={{ display: "block" }}>
         {label}
       </Typography>
-      <Typography variant="h6" fontWeight="bold" color={colorMap[color] || 'text.primary'}>
+      <Typography variant="h6" color={colorMap[color] || 'text.primary'} sx={{ fontWeight: "bold" }}>
         {value}
       </Typography>
     </Box>
@@ -116,7 +116,7 @@ function SectionCard({ title, icon, children }) {
     <Paper variant="outlined" sx={{ mb: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 2.5, py: 1.5, borderBottom: '1px solid', borderColor: 'divider' }}>
         {icon}
-        <Typography variant="subtitle1" fontWeight="medium">{title}</Typography>
+        <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>{title}</Typography>
       </Box>
       <Box sx={{ p: 2.5 }}>{children}</Box>
     </Paper>
@@ -127,9 +127,9 @@ function ClaimField({ label, value, source }) {
   const sourceColor = source === 'verified' ? 'success' : source === 'manual' ? 'default' : 'info';
   return (
     <Box sx={{ mb: 2 }}>
-      <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
+      <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{label}</Typography>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.25 }}>
-        <Typography variant="body2" fontWeight="medium">{value || '—'}</Typography>
+        <Typography variant="body2" sx={{ fontWeight: "medium" }}>{value || '—'}</Typography>
         {source && (
           <Chip label={source} size="small" color={sourceColor} variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
         )}
@@ -161,9 +161,9 @@ function CheckRow({ check }) {
           <Typography variant="caption" color="text.secondary">Provider: {check.external_provider}</Typography>
         )}
         {check.notes && <Typography variant="body2" sx={{ mt: 0.5 }}>Notes: {check.notes}</Typography>}
-        {check.performed_by && <Typography variant="caption" color="text.secondary" display="block">Performed by: {check.performed_by}</Typography>}
-        {check.started_at && <Typography variant="caption" color="text.secondary" display="block">Started: {fmt(check.started_at)}</Typography>}
-        {check.completed_at && <Typography variant="caption" color="text.secondary" display="block">Completed: {fmt(check.completed_at)}</Typography>}
+        {check.performed_by && <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Performed by: {check.performed_by}</Typography>}
+        {check.started_at && <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Started: {fmt(check.started_at)}</Typography>}
+        {check.completed_at && <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>Completed: {fmt(check.completed_at)}</Typography>}
         {check.result && Object.keys(check.result).length > 0 && (
           <Box sx={{ mt: 1 }}>
             <Typography variant="caption" color="text.secondary">Result data:</Typography>
@@ -201,16 +201,16 @@ function EvidenceFactRow({ fact }) {
       </AccordionSummary>
       <AccordionDetails sx={{ bgcolor: 'action.hover', pt: 1 }}>
         <Grid container spacing={2}>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <ClaimField label="Subject" value={fact.subject_id} />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <ClaimField label="Created" value={fmt(fact.created_at)} />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <ClaimField label="Source Event" value={fact.source?.provider_event_id || fact.source?.event_id} />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
             <ClaimField label="Verification Method" value={fact.verification?.method} />
           </Grid>
         </Grid>
@@ -245,7 +245,7 @@ function EvidencePolicySection({ summary, onRunCheck, runningCheckId, disabled }
 
   return (
     <SectionCard title="Evidence & Policy" icon={<PolicyIcon color="action" />}>
-      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: facts.length || availableChecks.length ? 2 : 0 }}>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", mb: facts.length || availableChecks.length ? 2 : 0 }}>
         <Chip label={`Policy: ${decisionLabel}`} color={decisionColor} size="small" />
         {summary?.policy_source && <Chip label={`Source: ${summary.policy_source}`} size="small" variant="outlined" />}
         {summary?.policy_set_id && <Chip label={`Policy Set: ${summary.policy_set_id}`} size="small" variant="outlined" />}
@@ -262,7 +262,7 @@ function EvidencePolicySection({ summary, onRunCheck, runningCheckId, disabled }
         </Alert>
       )}
       {availableChecks.length > 0 && (
-        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", mb: 2 }}>
           {availableChecks.map(check => {
             const isRunning = runningCheckId === check.check_id;
             return (
@@ -282,7 +282,7 @@ function EvidencePolicySection({ summary, onRunCheck, runningCheckId, disabled }
         </Stack>
       )}
       {availableChecks.length > 0 && (
-        <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", mb: 2 }}>
           {availableChecks.map(check => (
             <Chip
               key={`${check.check_id}-meta`}
@@ -657,7 +657,7 @@ export default function ApplicationReviewPage() {
 
           <Box sx={{ flexGrow: 1, minWidth: 0 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-              <Typography variant="subtitle1" fontWeight="bold" noWrap>
+              <Typography variant="subtitle1" noWrap sx={{ fontWeight: "bold" }}>
                 {applicantDisplay}
               </Typography>
               <Typography variant="body2" color="text.secondary" noWrap>
@@ -794,15 +794,15 @@ export default function ApplicationReviewPage() {
 
         {/* ── B. DECISION SUMMARY PANEL ── */}
         <SectionCard title="Decision Summary" icon={<AssignmentIcon color="action" />}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={6}>
+          <Grid container spacing={2} sx={{ alignItems: "center" }}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Typography variant="body2" color="text.secondary" gutterBottom>Credential</Typography>
-              <Typography variant="h6" fontWeight="bold">{credentialDisplay}</Typography>
+              <Typography variant="h6" sx={{ fontWeight: "bold" }}>{credentialDisplay}</Typography>
               {application.metadata?.issuer && (
                 <Typography variant="caption" color="text.secondary">Issuer: {application.metadata.issuer}</Typography>
               )}
             </Grid>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <Box sx={{ display: 'flex', justifyContent: { xs: 'flex-start', md: 'flex-end' }, gap: 2, flexWrap: 'wrap' }}>
                 <VerificationSignal
                   label="Verification"
@@ -836,7 +836,7 @@ export default function ApplicationReviewPage() {
           ) : (
             <Grid container spacing={0}>
               {claims.map((claim, i) => (
-                <Grid item xs={12} sm={6} md={4} key={i}>
+                <Grid key={i} size={{ xs: 12, sm: 6, md: 4 }}>
                   <ClaimField label={claim.label} value={claim.value} source={claim.source} />
                 </Grid>
               ))}
@@ -872,13 +872,13 @@ export default function ApplicationReviewPage() {
           {/* Previous system notes */}
           {application.metadata?.rejection_reason && (
             <Box sx={{ mt: 2, p: 1.5, bgcolor: 'error.50', borderRadius: 1, border: '1px solid', borderColor: 'error.light' }}>
-              <Typography variant="caption" color="error.main" fontWeight="medium">Rejection reason:</Typography>
+              <Typography variant="caption" color="error.main" sx={{ fontWeight: "medium" }}>Rejection reason:</Typography>
               <Typography variant="body2">{application.metadata.rejection_reason}</Typography>
             </Box>
           )}
           {application.metadata?.info_requests?.map((req, i) => (
             <Box key={i} sx={{ mt: 2, p: 1.5, bgcolor: 'info.50', borderRadius: 1, border: '1px solid', borderColor: 'info.light' }}>
-              <Typography variant="caption" color="info.main" fontWeight="medium">
+              <Typography variant="caption" color="info.main" sx={{ fontWeight: "medium" }}>
                 Info request — {fmt(req.requested_at)}
               </Typography>
               {req.missing_items?.length > 0 && (
@@ -896,7 +896,7 @@ export default function ApplicationReviewPage() {
           </AccordionSummary>
           <AccordionDetails>
             <Grid container spacing={2}>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField
                   label="Application Reference"
                   value={pickOfficialReference({
@@ -906,26 +906,26 @@ export default function ApplicationReviewPage() {
                   })}
                 />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Applicant Reference" value={formatOfficialReference(application.applicant_id, 'applicant')} />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Credential Template Reference" value={formatOfficialReference(application.credential_template_id, 'template')} />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Vetting Level" value={application.applicant_vetting_level} />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Created" value={fmt(application.created_at)} />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Reviewed" value={fmt(application.reviewed_at)} />
               </Grid>
-              <Grid item xs={6} md={3}>
+              <Grid size={{ xs: 6, md: 3 }}>
                 <ClaimField label="Issued" value={fmt(application.issued_at)} />
               </Grid>
               {application.metadata?.issuance_transaction_id && (
-                <Grid item xs={6} md={3}>
+                <Grid size={{ xs: 6, md: 3 }}>
                   <ClaimField label="Issuance Transaction Reference" value={formatOfficialReference(application.metadata.issuance_transaction_id, 'record')} />
                 </Grid>
               )}

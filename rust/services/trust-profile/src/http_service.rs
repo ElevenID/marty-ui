@@ -9,6 +9,9 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use marty_oid4vp_contract::trust_authority::{
+    CredentialAuthoritySnapshotRequestV1, CredentialTrustEvaluationRequestV1,
+};
 use mmf_security::ServiceTokenAuthenticator;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Map, Value};
@@ -44,6 +47,26 @@ pub struct TrustProfileHttpState {
     pub service_authenticator: Arc<ServiceTokenAuthenticator>,
     pub internal_api_key: Option<Arc<str>>,
     pub registry_synchronizer: Arc<dyn TrustRegistrySynchronizer>,
+}
+
+/// Only the managed owner operations are exposed on the direct HTTPS listener.
+pub fn trust_credential_authority_router(state: TrustProfileHttpState) -> Router {
+    credential_authority_routes().with_state(state)
+}
+
+fn credential_authority_routes() -> Router<TrustProfileHttpState> {
+    Router::new()
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
+            post(credential_authority_snapshot),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations",
+            post(credential_trust_evaluation),
+        )
+        .layer(axum::extract::DefaultBodyLimit::max(
+            marty_oid4vp_contract::MAX_FROZEN_REQUEST_BYTES,
+        ))
 }
 
 pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
@@ -92,6 +115,7 @@ pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
             "/internal/v1/trust-profiles/{profile_id}",
             get(internal_profile),
         )
+        .merge(credential_authority_routes())
         .route(
             "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
             get(wallet_issuer_keys),
@@ -426,32 +450,7 @@ async fn update_profile(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "name",
-            "description",
-            "profile_type",
-            "compliance_status",
-            "trust_purposes",
-            "trust_sources",
-            "validation_rules",
-            "allowed_algorithms",
-            "min_key_size_rsa",
-            "min_key_size_ec",
-            "require_key_usage",
-            "max_chain_depth",
-            "allow_self_signed",
-            "revocation_policy",
-            "revocation_profile_id",
-            "time_policy",
-            "supported_formats",
-            "trusted_assertion_formats",
-            "allowed_issuers",
-            "denied_issuers",
-            "system_issuer_overrides",
-            "compatible_compliance_codes",
-            "verification_policy_set_id",
-            "auto_generated",
-        ],
+        marty_service_contracts::trust_profile::UPDATE_FIELDS,
     )?;
     if object.is_empty() {
         return Err(unprocessable(
@@ -817,12 +816,7 @@ async fn update_relationship(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "trust_level",
-            "relationship_status",
-            "cascade_revocation_policy",
-            "metadata",
-        ],
+        marty_service_contracts::trust_profile::RELATIONSHIP_UPDATE_FIELDS,
     )?;
     if object.is_empty() {
         return Err(unprocessable(
@@ -946,21 +940,7 @@ async fn update_issuer_entity(
     let object = object(raw)?;
     reject_unknown(
         &object,
-        &[
-            "organization_id",
-            "display_name",
-            "description",
-            "issuer_type",
-            "compliance_status",
-            "accreditation_body",
-            "accreditations",
-            "accreditation_date",
-            "valid_from",
-            "valid_until",
-            "trust_anchor_id",
-            "metadata",
-            "revocation_reason",
-        ],
+        marty_service_contracts::trust_profile::ISSUER_UPDATE_FIELDS,
     )?;
     let organization_id = required_field::<String>(&object, "organization_id")?;
     if object.len() == 1 {
@@ -1129,6 +1109,88 @@ async fn registry_status(
         "dsc_entries": status.dsc_entries,
         "generated_at": Utc::now(),
     })))
+}
+
+async fn credential_authority_snapshot(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<Uuid>,
+    Json(request): Json<CredentialAuthoritySnapshotRequestV1>,
+) -> Result<Response, TrustProfileHttpError> {
+    credential_authority_service(&state, &headers)?;
+    request
+        .validate()
+        .map_err(|_| unprocessable("TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST"))?;
+    let snapshot = state
+        .repository
+        .credential_authority_snapshot(&request.organization_id, profile_id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    // Revision allocation includes unsupported settings; rejection happens only
+    // after that observation is durably recorded by the owner repository.
+    crate::credential_authority::validate_supported_configuration(&snapshot.basis)
+        .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(snapshot),
+    )
+        .into_response())
+}
+
+async fn credential_trust_evaluation(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<Uuid>,
+    Json(request): Json<CredentialTrustEvaluationRequestV1>,
+) -> Result<Response, TrustProfileHttpError> {
+    credential_authority_service(&state, &headers)?;
+    request
+        .validate()
+        .map_err(|_| unprocessable("TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST"))?;
+    if request.expected_profile.id != profile_id.to_string() {
+        return Err(unprocessable(
+            "TRUST_PROFILE.INVALID_CREDENTIAL_AUTHORITY_REQUEST",
+        ));
+    }
+    let snapshot = state
+        .repository
+        .credential_authority_snapshot(&request.organization_id, profile_id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    let result =
+        crate::credential_authority::evaluate_credential_authority(&snapshot, &request, Utc::now())
+            .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(result),
+    )
+        .into_response())
+}
+
+fn credential_authority_service(
+    state: &TrustProfileHttpState,
+    headers: &HeaderMap,
+) -> Result<(), TrustProfileHttpError> {
+    if !state.service_authenticator.is_configured() {
+        return Err(unauthorized(
+            "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
+        ));
+    }
+    internal_service(state, headers)
+}
+
+fn credential_authority_error(
+    error: crate::credential_authority::CredentialAuthorityError,
+) -> TrustProfileHttpError {
+    use crate::credential_authority::CredentialAuthorityError;
+    match error {
+        CredentialAuthorityError::InvalidRequest
+        | CredentialAuthorityError::UnsupportedConfiguration => unprocessable(error.to_string()),
+        CredentialAuthorityError::RevisionMismatch => conflict(error.to_string()),
+        CredentialAuthorityError::Unavailable => unavailable(error.to_string()),
+    }
 }
 
 async fn internal_profile(

@@ -7,6 +7,8 @@ use serde_json::Value;
 use tracing::error;
 use url::Url;
 
+use crate::legacy_json_compat::json_truthy as python_truthy;
+
 use crate::tenant_discovery::{ProofPolicyResolver, TenantDiscoveryError};
 
 #[derive(Clone)]
@@ -152,17 +154,6 @@ fn python_string(value: &Value) -> String {
         Value::Number(value) => value.to_string(),
         Value::String(value) => value.clone(),
         Value::Array(_) | Value::Object(_) => value.to_string(),
-    }
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 

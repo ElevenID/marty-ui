@@ -157,18 +157,13 @@ def test_native_authcrypt_mount_is_exact_read_only_and_explicit() -> None:
         == "service_completed_successfully"
     )
     selected = native_profile["services"]["issuance-native"]
-    assert selected["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
-    assert (
-        selected["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
-    )
-    assert (
-        selected["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
-        == "/bao/didcomm-issuance-token/token"
-    )
-    assert (
-        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
-        in selected["volumes"]
-    )
+    assert not {"DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE", "DIDCOMM_KMS_TOKEN_FILE"} & set(selected["environment"])
+    assert selected["environment"]["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
+    assert selected["environment"]["ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"] == "/bao/issuance-credential-grant/token"
+    signing = base["services"]["signing-keys"]
+    assert signing["environment"]["DIDCOMM_KMS_TOKEN_FILE"] == "/bao/didcomm-issuance-token/token"
+    assert "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro" in signing["volumes"]
+    assert "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro" not in selected["volumes"]
     assert (
         base["services"]["openbao-init"]["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"]
         == "true"
@@ -271,7 +266,9 @@ def test_configured_native_policy_retains_missing_issuer_fail_closed_guard() -> 
 )
 def test_native_kms_and_full_model_guards_reject_configuration_loss(mutation) -> None:
     gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
-    _, _, previous = _source_initiation_model()
+    # Use the existing typed fixture for the new two-service custody boundary;
+    # the source ownership tests above and Compose gate cover actual merging.
+    previous = runpy.run_path(str(ROOT / "tests/test_beta_didcomm_selector.py"))["model"](False)
     expected = gate["expected_model"](previous, authcrypt=True, conformance=False)
     gate["assert_native_kms_policy"](expected)
     actual = deepcopy(expected)

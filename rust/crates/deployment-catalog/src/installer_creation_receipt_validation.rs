@@ -566,6 +566,8 @@ pub(crate) struct ObservedNormalCreation {
     pub transition_receipt_sha256: String,
     pub created_record_sha256: String,
     pub completion_sha256: String,
+    pub native_storage_roots: BTreeMap<String, ObservedDirectory>,
+    pub native_receipts_sha256: BTreeMap<String, String>,
 }
 pub(crate) enum NormalInspectionOutcome {
     Missing,
@@ -598,9 +600,10 @@ fn unchanged_record(parent: &File, name: &str, held: &File, bytes: &[u8]) -> Res
     }
     Ok(())
 }
-fn verify_normal(
+fn verify_normal_with_profile(
     locked: &LockedInspection,
     installation: &Path,
+    native: bool,
 ) -> Result<Option<ObservedNormalCreation>> {
     let Some(application) = verify_application(locked, installation)? else {
         return Ok(None);
@@ -615,7 +618,13 @@ fn verify_normal(
     else {
         return Ok(None);
     };
-    let Some((created_record, created_bytes)) = read_record(root, "openbao-created.json")? else {
+    let created_parent = if native { &evidence } else { root };
+    let created_name = if native {
+        "compose-openbao-private-inputs.json"
+    } else {
+        "openbao-created.json"
+    };
+    let Some((created_record, created_bytes)) = read_record(created_parent, created_name)? else {
         return Ok(None);
     };
     let Some((completion_record, completion_bytes)) =
@@ -627,7 +636,6 @@ fn verify_normal(
     let state: OpenBaoStateReceipt = serde_json::from_slice(&state_bytes).map_err(|_| ())?;
     let transition: OwnerTransitionReceipt =
         serde_json::from_slice(&transition_bytes).map_err(|_| ())?;
-    let created: OpenBaoCreated = serde_json::from_slice(&created_bytes).map_err(|_| ())?;
     let completion: TlsCompletion = serde_json::from_slice(&completion_bytes).map_err(|_| ())?;
     let binding = locked.journal().runtime().ok_or(())?;
     let uuid = locked.journal().installation_id();
@@ -665,34 +673,43 @@ fn verify_normal(
         || transition.state_creation_receipt_sha256 != digest(&state_bytes)
         || transition.tls_init_completion_sha256 != digest(&completion_bytes)
         || transition.engine_id != binding.engine_id
-        || created.schema != "elevenid.installer-openbao-created/v1"
-        || created.installation_id != uuid.to_string()
-        || created.engine_id != binding.engine_id
-        || created.project != format!("{}-bao", locked.journal().compose_project())
-        || !hex64(&created.network_id)
-        || created.image != transition.image
-        || created.image_id != transition.image_id
-        || !created
-            .image
-            .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
-            .is_some_and(hex64)
-        || !created.image_id.strip_prefix("sha256:").is_some_and(hex64)
-        || created.container_ids.len() != roles.len()
-        || !roles
-            .iter()
-            .all(|role| created.container_ids.get(*role).is_some_and(|id| hex64(id)))
-        || created
-            .container_ids
-            .values()
-            .collect::<std::collections::BTreeSet<_>>()
-            .len()
-            != roles.len()
-        || created.container_ids.get("openbao-tls-init") != Some(&transition.tls_init_container_id)
         || completion.role != "openbao-tls-init"
         || completion.exit_code != 0
         || completion.container_id != transition.tls_init_container_id
     {
         return Err(());
+    }
+    if native {
+        verify_native_custody(locked, installation, &created_bytes, &transition)?;
+    } else {
+        let created: OpenBaoCreated = serde_json::from_slice(&created_bytes).map_err(|_| ())?;
+        if created.schema != "elevenid.installer-openbao-created/v1"
+            || created.installation_id != uuid.to_string()
+            || created.engine_id != binding.engine_id
+            || created.project != format!("{}-bao", locked.journal().compose_project())
+            || !hex64(&created.network_id)
+            || created.image != transition.image
+            || created.image_id != transition.image_id
+            || !created
+                .image
+                .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
+                .is_some_and(hex64)
+            || !created.image_id.strip_prefix("sha256:").is_some_and(hex64)
+            || created.container_ids.len() != roles.len()
+            || !roles
+                .iter()
+                .all(|role| created.container_ids.get(*role).is_some_and(|id| hex64(id)))
+            || created
+                .container_ids
+                .values()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != roles.len()
+            || created.container_ids.get("openbao-tls-init")
+                != Some(&transition.tls_init_container_id)
+        {
+            return Err(());
+        }
     }
     // O_PATH works for metadata even after TLS init changes the owner of a
     // mode-0700 directory. Never open or enumerate its secret-bearing children.
@@ -715,8 +732,8 @@ fn verify_normal(
             &transition_bytes,
         ),
         (
-            root,
-            "openbao-created.json",
+            created_parent,
+            created_name,
             &created_record,
             &created_bytes,
         ),
@@ -736,6 +753,11 @@ fn verify_normal(
     {
         return Err(());
     }
+    let (native_storage_roots, native_receipts_sha256) = if native {
+        verify_native_storage_roots(locked, installation, &application, &observed)?
+    } else {
+        (BTreeMap::new(), BTreeMap::new())
+    };
     Ok(Some(ObservedNormalCreation {
         application,
         openbao_state: observed,
@@ -743,13 +765,271 @@ fn verify_normal(
         transition_receipt_sha256: digest(&transition_bytes),
         created_record_sha256: digest(&created_bytes),
         completion_sha256: digest(&completion_bytes),
+        native_storage_roots,
+        native_receipts_sha256,
     }))
 }
+/// Native Compose custody is bound to the current initial-session owner and
+/// the exact original state-root transition. No Docker mutation or key reads.
+fn verify_native_custody(
+    locked: &LockedInspection,
+    installation: &Path,
+    bytes: &[u8],
+    transition: &OwnerTransitionReceipt,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Directory {
+        dev: u64,
+        ino: u64,
+        uid: u32,
+        gid: u32,
+        mode: u32,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Custody {
+        schema: String,
+        project: String,
+        engine_id: String,
+        tls_container_id: String,
+        tls_image: String,
+        directory: Directory,
+    }
+    let raw: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| ())?;
+    if serde_json::to_vec(&raw).map_err(|_| ())? != bytes {
+        return Err(());
+    }
+    let custody: Custody = serde_json::from_slice(bytes).map_err(|_| ())?;
+    let saved =
+        crate::installer_doctor::load_initial_session(locked, installation).map_err(|_| ())?;
+    let tls = saved
+        .receipt
+        .resources
+        .as_ref()
+        .and_then(|r| r.containers.get("openbao-tls-init"))
+        .ok_or(())?;
+    let after = &transition.openbao_state_after.identity;
+    if custody.schema != "elevenid.installer-openbao-private-inputs/v1"
+        || custody.project != locked.journal().compose_project()
+        || custody.engine_id != transition.engine_id
+        || custody.tls_container_id != transition.tls_init_container_id
+        || custody.tls_container_id != tls.id
+        || custody.tls_image != tls.image
+        || custody.tls_image != transition.image
+        || !saved.inputs.approved_images.contains(&custody.tls_image)
+        || !tls.setup
+        || !tls
+            .setup_execution
+            .as_ref()
+            .is_some_and(|e| e.completed_without_restart)
+        || saved
+            .receipt
+            .input_files
+            .get(&installation.join("evidence/compose-openbao-private-inputs.json"))
+            != Some(&digest(bytes))
+        || (
+            custody.directory.dev,
+            custody.directory.ino,
+            custody.directory.uid,
+            custody.directory.gid,
+            custody.directory.mode,
+        ) != (after.dev, after.ino, after.uid, after.gid, after.mode)
+        || after.uid == unsafe { libc::geteuid() }
+        || !transition
+            .image_id
+            .strip_prefix("sha256:")
+            .is_some_and(hex64)
+        || !transition
+            .image
+            .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
+            .is_some_and(hex64)
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Metadata of the newly introduced control and seal roots. Existing owner
+/// verifiers and receipt bindings remain required; current names alone cannot
+/// become historical ownership. Secret-bearing child file contents are unread.
+fn verify_native_storage_roots(
+    locked: &LockedInspection,
+    installation: &Path,
+    application: &ObservedApplicationCreation,
+    openbao_state: &ObservedDirectory,
+) -> Result<(
+    BTreeMap<String, ObservedDirectory>,
+    BTreeMap<String, String>,
+)> {
+    use crate::installer_top_level_census::{current_native_profile, CensusProfile};
+    let profile = current_native_profile(locked, installation).map_err(|_| ())?;
+    let CensusProfile::NativeComposeV2 {
+        local_operator_password,
+    } = profile
+    else {
+        return Err(());
+    };
+    if local_operator_password != application.credentials.operator_password.is_some() {
+        return Err(());
+    }
+    let root = locked.installation_directory();
+    let evidence = child(root, "evidence", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+    let mut observations = BTreeMap::new();
+    let mut records = BTreeMap::new();
+    let mut held_records = Vec::new();
+    let mut control_children = BTreeMap::new();
+    let field_matches = |value: &serde_json::Value, directory: &ObservedDirectory| {
+        value["device"] == directory.identity.dev
+            && value["inode"] == directory.identity.ino
+            && value["owner_uid"] == directory.identity.uid
+            && value["owner_gid"] == directory.identity.gid
+            && value["mode"] == directory.identity.mode
+    };
+    for (name, record) in [
+        ("openbao-control", "openbao-control-created.json"),
+        ("openbao-seal", crate::installer_openbao_seal::RECORD),
+    ] {
+        let held = child(root, name, libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+        let observed = observe(&held).map_err(|_| ())?;
+        if observed.mount_id != application.credentials.initial.root.mount_id
+            || observed.identity.dev != application.credentials.initial.root.identity.dev
+            || observed.identity.uid != unsafe { libc::geteuid() }
+            || observed.identity.mode != 0o700
+        {
+            return Err(());
+        }
+        let (file, bytes) = read_record(&evidence, record)?.ok_or(())?;
+        let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| ())?;
+        if serde_json::to_vec(&value).map_err(|_| ())? != bytes
+            || value["installation_id"] != locked.journal().installation_id().to_string()
+        {
+            return Err(());
+        }
+        if name == "openbao-seal" {
+            crate::installer_openbao_seal::verify(locked, installation).map_err(|_| ())?;
+            if !field_matches(&value["outer"], &observed) {
+                return Err(());
+            }
+        } else {
+            if value["schema"] != "elevenid.installer-openbao-control-created/v1"
+                || value["enrolled"] != false
+                || !field_matches(&value, &observed)
+                || value.as_object().is_none_or(|v| v.len() != 9)
+                || value["children"].as_object().is_none_or(|v| v.len() != 2)
+                || ["socket", "identity"].into_iter().any(|child| {
+                    value["children"][child]
+                        .as_object()
+                        .is_none_or(|v| v.len() != 5)
+                })
+            {
+                return Err(());
+            }
+            let identity =
+                child(&held, "identity", libc::O_RDONLY | libc::O_DIRECTORY)?.ok_or(())?;
+            let identity_observed = observe(&identity).map_err(|_| ())?;
+            let socket = child(&held, "socket", libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+            let socket_observed = observe(&socket).map_err(|_| ())?;
+            let before = &value["children"]["socket"];
+            if !field_matches(&value["children"]["identity"], &identity_observed)
+                || identity_observed.mount_id != observed.mount_id
+                || socket_observed.mount_id != observed.mount_id
+                || before["device"] != socket_observed.identity.dev
+                || before["inode"] != socket_observed.identity.ino
+                || before["owner_uid"] != observed.identity.uid
+                || before["owner_gid"] != observed.identity.gid
+                || before["mode"] != 0o700
+                || socket_observed.identity.mode != 0o700
+                || socket_observed.identity.uid != openbao_state.identity.uid
+                || socket_observed.identity.gid != openbao_state.identity.gid
+            {
+                return Err(());
+            }
+            control_children.insert("identity", identity_observed);
+            control_children.insert("socket", socket_observed);
+        }
+        unchanged_record(&evidence, record, &file, &bytes)?;
+        let latest = child(root, name, libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+        if observe(&latest).map_err(|_| ())? != observed {
+            return Err(());
+        }
+        observations.insert(name.to_owned(), observed);
+        records.insert(record.to_owned(), digest(&bytes));
+        held_records.push((record, file, bytes));
+    }
+    for (name, file, bytes) in &held_records {
+        unchanged_record(&evidence, name, file, bytes)?;
+    }
+    for (name, expected) in &observations {
+        let current = child(root, name, libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+        if observe(&current).map_err(|_| ())? != *expected {
+            return Err(());
+        }
+    }
+    crate::installer_openbao_seal::verify(locked, installation).map_err(|_| ())?;
+    if current_native_profile(locked, installation).map_err(|_| ())? != profile
+        || verify_application(locked, installation)?.as_ref() != Some(application)
+    {
+        return Err(());
+    }
+    require_current_control_children(root, &observations["openbao-control"], &control_children)?;
+    Ok((observations, records))
+}
+
+fn require_current_control_children(
+    root: &File,
+    expected_control: &ObservedDirectory,
+    expected: &BTreeMap<&str, ObservedDirectory>,
+) -> Result<()> {
+    if expected.len() != 2
+        || !["identity", "socket"]
+            .iter()
+            .all(|name| expected.contains_key(name))
+    {
+        return Err(());
+    }
+    let control = child(root, "openbao-control", libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+    if observe(&control).map_err(|_| ())? != *expected_control {
+        return Err(());
+    }
+    for (name, snapshot) in expected {
+        // O_PATH observes mapped socket metadata without opening its private
+        // contents or changing ownership/permissions to make it readable.
+        let current = child(&control, name, libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+        if observe(&current).map_err(|_| ())? != *snapshot {
+            return Err(());
+        }
+    }
+    let current_control =
+        child(root, "openbao-control", libc::O_PATH | libc::O_DIRECTORY)?.ok_or(())?;
+    if observe(&current_control).map_err(|_| ())? != *expected_control
+        || observe(&control).map_err(|_| ())? != *expected_control
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+pub(crate) fn inspect_native_normal(
+    locked: &LockedInspection,
+    installation: &Path,
+) -> NormalInspectionOutcome {
+    let result = verify_normal_with_profile(locked, installation, true);
+    if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
+        return NormalInspectionOutcome::Unusable;
+    }
+    match result {
+        Ok(Some(observed)) => NormalInspectionOutcome::MatchedLocalReceipt(Box::new(observed)),
+        Ok(None) => NormalInspectionOutcome::Missing,
+        Err(()) => NormalInspectionOutcome::Unusable,
+    }
+}
+
 pub(crate) fn inspect_normal(
     locked: &LockedInspection,
     installation: &Path,
 ) -> NormalInspectionOutcome {
-    let result = verify_normal(locked, installation);
+    let result = verify_normal_with_profile(locked, installation, false);
     if locked.require_path_binding(installation).is_err() || locked.require_unchanged().is_err() {
         return NormalInspectionOutcome::Unusable;
     }
@@ -769,6 +1049,33 @@ pub(crate) mod tests {
         os::unix::fs::{symlink, PermissionsExt},
         path::PathBuf,
     };
+    #[test]
+    fn native_control_child_replacement_after_initial_observation_is_refused() {
+        for replaced in ["identity", "socket"] {
+            let temp = tempfile::tempdir().unwrap();
+            let control = temp.path().join("openbao-control");
+            fs::create_dir(&control).unwrap();
+            fs::set_permissions(&control, fs::Permissions::from_mode(0o700)).unwrap();
+            let mut snapshots = BTreeMap::new();
+            for name in ["identity", "socket"] {
+                let path = control.join(name);
+                fs::create_dir(&path).unwrap();
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+                snapshots.insert(name, observe(&File::open(path).unwrap()).unwrap());
+            }
+            let root = File::open(temp.path()).unwrap();
+            let outer = observe(&File::open(&control).unwrap()).unwrap();
+            assert!(require_current_control_children(&root, &outer, &snapshots).is_ok());
+            // Preserve the original inode, so the new directory cannot reuse it.
+            fs::rename(control.join(replaced), temp.path().join("prior-child")).unwrap();
+            fs::create_dir(control.join(replaced)).unwrap();
+            fs::set_permissions(control.join(replaced), fs::Permissions::from_mode(0o700)).unwrap();
+            assert!(
+                require_current_control_children(&root, &outer, &snapshots).is_err(),
+                "{replaced}"
+            );
+        }
+    }
     fn fixture() -> (tempfile::TempDir, PathBuf, InstallerState) {
         let parent = tempfile::tempdir().unwrap();
         fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o700)).unwrap();

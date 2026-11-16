@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import organizationDomainContract from '../../../../contracts/organization-domain-behavior.json'
 import {
   DEFAULT_LOGIN_REDIRECT,
   createEnrichedUser,
@@ -271,6 +272,57 @@ describe('authSession helpers', () => {
     })).toBe(false)
   })
 
+  it.each(organizationDomainContract.member_cases)(
+    'matches native organization membership eligibility for $name',
+    ({ roles, has_console_access, is_owner }) => {
+      expect(membershipHasOrgConsoleAccess({
+        membership: {
+          roles: roles.map(({ name }) => ({ name })),
+          permissions: roles.flatMap(({ permissions }) => permissions),
+          has_org_console_access: has_console_access,
+          is_owner,
+          status: 'active',
+        },
+      })).toBe(has_console_access || is_owner)
+    },
+  )
+
+  it('does not promote the default native applicant membership into organization access', () => {
+    const applicant = organizationDomainContract.member_cases.find(({ name }) => name === 'applicant_only')!
+    const organizations = [{
+      id: 'marty-org',
+      name: 'Marty',
+      membership: {
+        roles: applicant.roles.map(({ name }) => ({ name })),
+        permissions: applicant.roles.flatMap(({ permissions }) => permissions),
+        has_org_console_access: false,
+        status: 'active',
+      },
+    }]
+    const enriched = createEnrichedUser({
+      user_id: 'native-applicant',
+      roles: ['applicant'],
+      organization_id: 'marty-org',
+    }, organizations, 'marty-org')
+
+    expect(enriched.organizations).toHaveLength(1)
+    expect(enriched.default_organization_id).toBe('marty-org')
+    expect(getConsoleEligibleOrganizations(enriched.organizations)).toEqual([])
+    expect(getAuthFlags(enriched)).toMatchObject({ isApplicant: true, isVendor: false })
+    expect(enriched.capabilities['org:view']).toBe(false)
+  })
+
+  it('retains explicit native console access for a custom read-only membership', () => {
+    expect(membershipHasOrgConsoleAccess({
+      membership: {
+        roles: [{ name: 'custom-reader' }],
+        permissions: ['organization:view'],
+        has_org_console_access: true,
+        status: 'active',
+      },
+    })).toBe(true)
+  })
+
   it('keeps Canvas LTI learners in applicant-only access even when they have an issuer org for catalog scope', () => {
     const rawUser = {
       user_id: 'canvas-learner-1',
@@ -289,6 +341,10 @@ describe('authSession helpers', () => {
     })
     expect(getConsoleEligibleOrganizations(enriched.organizations)).toEqual([])
     expect(enriched.default_organization_id).toBe('marty-org')
+    const applicant = organizationDomainContract.member_cases.find(({ name }) => name === 'applicant_only')!
+    expect(new Set(enriched.organizations[0].membership.permissions)).toEqual(
+      new Set(applicant.roles.flatMap(({ permissions }) => permissions)),
+    )
   })
 
   it('updates active organization in auth state', () => {

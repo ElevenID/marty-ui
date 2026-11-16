@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router';
+import { Link as RouterLink, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import {
   Box,
@@ -41,15 +41,12 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import WarningIcon from '@mui/icons-material/Warning';
 import BatchPredictionIcon from '@mui/icons-material/BatchPrediction';
 import LinkIcon from '@mui/icons-material/Link';
-import QrCode2Icon from '@mui/icons-material/QrCode2';
-import AppleIcon from '@mui/icons-material/Apple';
-import AndroidIcon from '@mui/icons-material/Android';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useAuth } from '../../hooks/useAuth';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { useNotifications } from '../../hooks/useNotifications';
-import flowsApi, { FLOW_STATES } from '../../services/flowsApi';
+import flowsApi from '../../services/flowsApi';
 import credentialsApi from '../../services/credentialsApi';
 import sseService, { EVENT_TYPES } from '../../services/sseService';
 import { listTrustProfiles, listCredentialTemplates } from '../../services/presentationPolicyApi';
@@ -70,8 +67,6 @@ import {
   toggleAllCredentialSelections,
   toggleCredentialSelection,
 } from '../../application/flows';
-import FlowPublishDialog from './FlowPublishDialog';
-import FlowDisableDialog from './FlowDisableDialog';
 import { EmptyState } from '../common';
 
 const isMissingOrganizationId = (organizationId) => (
@@ -97,6 +92,16 @@ const getPrerequisiteErrorMessage = (label, result) => {
   const message = result.reason?.message || 'unavailable';
   const messageId = result.reason?.message_id || result.reason?.messageId;
   return messageId ? `${label}: ${message} (message id: ${messageId})` : `${label}: ${message}`;
+};
+
+const getApplicantEntryUrl = (flow) => {
+  if (!getFlowStatusPresentation(flow.status).isActive || typeof flow.public_url !== 'string' || !flow.public_url.trim()) return null;
+  try {
+    const url = new URL(flow.public_url);
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? flow.public_url.trim() : null;
+  } catch {
+    return null;
+  }
 };
 
 const FlowManager = ({ hideHeader = false }) => {
@@ -132,9 +137,6 @@ const FlowManager = ({ hideHeader = false }) => {
   // Dialog states
   const [revocationDialog, setRevocationDialog] = useState(false);
   const [selectedCredentials, setSelectedCredentials] = useState([]);
-  const [publishDialog, setPublishDialog] = useState(false);
-  const [disableDialog, setDisableDialog] = useState(false);
-  const [selectedFlow, setSelectedFlow] = useState(null);
   const pendingExecutions = getPendingExecutions(executions);
   const credentialSelectionState = getCredentialSelectionState(credentials, selectedCredentials);
 
@@ -356,7 +358,7 @@ const FlowManager = ({ hideHeader = false }) => {
 
   if (loading) {
     return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <CircularProgress />
       </Box>
     );
@@ -365,7 +367,7 @@ const FlowManager = ({ hideHeader = false }) => {
   return (
     <Box>
       {!hideHeader && (
-        <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
           <Typography variant="h4">{t('flowManager.title')}</Typography>
           <Button
             variant="contained"
@@ -400,7 +402,7 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Flows Tab */}
         {activeTab === 0 && (
-          <Box p={2}>
+          <Box sx={{ p: 2 }}>
             {flows.length === 0 ? (
               <EmptyState
                 icon={AccountTreeIcon}
@@ -428,8 +430,8 @@ const FlowManager = ({ hideHeader = false }) => {
                 whyItMatters="Flows are the applicant-facing product. Templates are just inputs."
               />
             ) : (
-            <TableContainer>
-              <Table>
+            <TableContainer role="region" aria-label="Flow definitions" tabIndex={0} sx={{ maxWidth: '100%', overflowX: 'auto' }}>
+              <Table sx={{ minWidth: 720 }}>
                 <TableHead>
                   <TableRow>
                     <TableCell>Name</TableCell>
@@ -437,14 +439,15 @@ const FlowManager = ({ hideHeader = false }) => {
                     <TableCell>Credential</TableCell>
                     <TableCell>Applicant Entry</TableCell>
                     <TableCell>Approval Mode</TableCell>
-                    <TableCell>Wallet Targets</TableCell>
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {flows.map((flow) => {
-                    const statusPresentation = getFlowStatusPresentation(flow.status, FLOW_STATES);
+                    const statusPresentation = getFlowStatusPresentation(flow.status);
                     const approvalPresentation = getApprovalStrategyPresentation(flow.approval_strategy);
+                    const applicantEntryUrl = getApplicantEntryUrl(flow);
+                    const detailPath = `/console/org/flows/definitions/${encodeURIComponent(flow.id)}`;
                     
                     return (
                     <TableRow 
@@ -456,10 +459,10 @@ const FlowManager = ({ hideHeader = false }) => {
                           bgcolor: 'action.hover',
                         },
                       }}
-                      onClick={() => navigate(`/console/org/flows/definitions/${flow.id}`)}
+                      onClick={() => navigate(detailPath)}
                     >
                       <TableCell>
-                        <Typography variant="body2" fontWeight={500}>
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
                           {flow.name}
                         </Typography>
                         <Typography variant="caption" color="text.secondary">
@@ -471,38 +474,25 @@ const FlowManager = ({ hideHeader = false }) => {
                           label={statusPresentation.label}
                           color={statusPresentation.color}
                           size="small"
-                          icon={statusPresentation.icon === 'warning' ? <WarningIcon /> : statusPresentation.icon === 'success' ? <CheckCircleIcon /> : <CancelIcon />}
+                          icon={statusPresentation.icon === 'warning' ? <WarningIcon /> : statusPresentation.icon === 'success' ? <CheckCircleIcon /> : undefined}
                         />
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">
-                          {flow.credential_template_name || 'Not configured'}
+                          {flow.credential_template_name || (flow.credential_template_id
+                            ? formatTemplateReference(flow.credential_template_id)
+                            : 'No credential template linked')}
                         </Typography>
                       </TableCell>
                       <TableCell>
-                        {statusPresentation.hasApplicantEntry ? (
-                          <Box sx={{ display: 'flex', gap: 1 }}>
-                            <Tooltip title="Application URL available">
-                              <Chip 
-                                icon={<LinkIcon />} 
-                                label="URL" 
-                                size="small" 
-                                color="primary"
-                                variant="outlined"
-                              />
-                            </Tooltip>
-                            <Tooltip title="QR code available">
-                              <Chip 
-                                icon={<QrCode2Icon />} 
-                                label="QR" 
-                                size="small" 
-                                color="primary"
-                                variant="outlined"
-                              />
-                            </Tooltip>
-                          </Box>
+                        {applicantEntryUrl ? (
+                          <Button component="a" href={applicantEntryUrl} target="_blank" rel="noopener noreferrer"
+                            size="small" startIcon={<LinkIcon />} onClick={(event) => event.stopPropagation()}
+                            aria-label={`Open applicant entry for ${flow.name}`}>
+                            Open applicant entry
+                          </Button>
                         ) : (
-                          <Chip label="Not Published" size="small" variant="outlined" />
+                          <Typography variant="body2" color="text.secondary">No applicant URL available</Typography>
                         )}
                       </TableCell>
                       <TableCell>
@@ -513,45 +503,10 @@ const FlowManager = ({ hideHeader = false }) => {
                           variant="outlined"
                         />
                       </TableCell>
-                      <TableCell>
-                        <Box sx={{ display: 'flex', gap: 0.5 }}>
-                          <Tooltip title="Apple Wallet">
-                            <AppleIcon fontSize="small" color="action" />
-                          </Tooltip>
-                          <Tooltip title="Google Wallet">
-                            <AndroidIcon fontSize="small" color="action" />
-                          </Tooltip>
-                        </Box>
-                      </TableCell>
                       <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-                        {statusPresentation.isDraft && (
-                          <Tooltip title="Publish Flow">
-                            <IconButton
-                              size="small"
-                              color="success"
-                              onClick={() => {
-                                setSelectedFlow(flow);
-                                setPublishDialog(true);
-                              }}
-                            >
-                              <CheckCircleIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
-                        {statusPresentation.isPublished && (
-                          <Tooltip title="Disable Flow">
-                            <IconButton
-                              size="small"
-                              color="error"
-                              onClick={() => {
-                                setSelectedFlow(flow);
-                                setDisableDialog(true);
-                              }}
-                            >
-                              <CancelIcon />
-                            </IconButton>
-                          </Tooltip>
-                        )}
+                        <Button component={RouterLink} to={detailPath} size="small" aria-label={`View details for ${flow.name}`}>
+                          Details
+                        </Button>
                       </TableCell>
                     </TableRow>
                     );
@@ -565,8 +520,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Executions Tab */}
         {activeTab === 1 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="flex-end" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
               <Button
                 startIcon={<RefreshIcon />}
                 onClick={loadExecutions}
@@ -617,8 +572,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Approval Queue Tab */}
         {activeTab === 2 && (
-          <Box p={2}>
-            <Typography variant="body2" color="text.secondary" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
               Executions awaiting manual approval
             </Typography>
             <TableContainer>
@@ -679,8 +634,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Credentials Tab */}
         {activeTab === 3 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="space-between" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
               <Typography variant="body2" color="text.secondary">
                 {selectedCredentials.length} credential(s) selected
               </Typography>
@@ -751,8 +706,8 @@ const FlowManager = ({ hideHeader = false }) => {
 
         {/* Revocation Batches Tab */}
         {activeTab === 4 && (
-          <Box p={2}>
-            <Box display="flex" justifyContent="flex-end" mb={2}>
+          <Box sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
               <Button startIcon={<RefreshIcon />} onClick={loadRevocationBatches}>
                 Refresh
               </Button>
@@ -815,7 +770,7 @@ const FlowManager = ({ hideHeader = false }) => {
               by grouping revocations together.
             </Typography>
           </Alert>
-          <Typography variant="body2" color="text.secondary" mt={2}>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
             Choose revocation strategy:
           </Typography>
         </DialogContent>
@@ -837,35 +792,6 @@ const FlowManager = ({ hideHeader = false }) => {
           </Button>
         </DialogActions>
       </Dialog>
-
-
-      {/* Flow Publish Dialog */}
-      <FlowPublishDialog
-        open={publishDialog}
-        onClose={() => {
-          setPublishDialog(false);
-          setSelectedFlow(null);
-        }}
-        flow={selectedFlow}
-        onPublished={(updatedFlow) => {
-          loadFlows();
-          showSuccess(`Flow "${updatedFlow.name}" published successfully!`);
-        }}
-      />
-
-      {/* Flow Disable Dialog */}
-      <FlowDisableDialog
-        open={disableDialog}
-        onClose={() => {
-          setDisableDialog(false);
-          setSelectedFlow(null);
-        }}
-        flow={selectedFlow}
-        onDisabled={(updatedFlow) => {
-          loadFlows();
-          showSuccess(`Flow "${updatedFlow.name}" disabled successfully.`);
-        }}
-      />
     </Box>
   );
 };

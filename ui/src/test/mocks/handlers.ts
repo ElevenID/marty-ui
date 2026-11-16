@@ -127,6 +127,15 @@ export const errorResponses = {
 }
 
 export const handlers = [
+  http.get('*/v1/auth/provider', () => HttpResponse.json({
+    provider_mode: 'keycloak',
+    provider_name: 'Keycloak',
+    registration_supported: true,
+    passkey_enrollment_supported: true,
+    provider_logout_supported: true,
+    account_url: null,
+    recovery_url: null,
+  })),
   // Auth endpoints
   http.post(`${API_BASE}/auth/login`, async ({ request }) => {
     const body = await request.json() as any

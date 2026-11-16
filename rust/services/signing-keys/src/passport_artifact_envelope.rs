@@ -66,11 +66,14 @@ pub enum ArtifactEnvelopeError {
     DecryptFailed,
     #[error("KMS passport artifact provider is unavailable.")]
     Unavailable,
+    #[error("Passport artifact encryption requires a configured compatible remote provider.")]
+    CapabilityUnavailable,
 }
 
 impl IntoResponse for ArtifactEnvelopeError {
     fn into_response(self) -> Response {
         let status = match self {
+            Self::CapabilityUnavailable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::InvalidChunk | Self::InvalidCiphertext => StatusCode::UNPROCESSABLE_ENTITY,
             Self::BindingMismatch => StatusCode::CONFLICT,
@@ -78,7 +81,12 @@ impl IntoResponse for ArtifactEnvelopeError {
                 StatusCode::SERVICE_UNAVAILABLE
             }
         };
-        (status, Json(json!({"detail": self.to_string()}))).into_response()
+        let mut body = json!({"detail": self.to_string()});
+        if matches!(self, Self::CapabilityUnavailable) {
+            body["code"] = json!("capability_unavailable");
+            body["capability"] = json!("passport_artifact_encryption");
+        }
+        (status, Json(body)).into_response()
     }
 }
 

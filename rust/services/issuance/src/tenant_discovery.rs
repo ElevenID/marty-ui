@@ -19,12 +19,25 @@ pub enum TenantDiscoveryError {
     IncompletePlan,
 }
 
+#[derive(Clone, Debug)]
+pub struct ProfiledTenantTemplate {
+    pub policy: marty_jwt_vc_issuance::JwtVcTemplatePolicy,
+    pub template: TenantCredentialTemplate,
+}
+
 #[async_trait]
 pub trait TenantDiscoveryRepository: Send + Sync {
     async fn templates(
         &self,
         organization_id: &str,
     ) -> Result<Vec<TenantCredentialTemplate>, TenantDiscoveryError>;
+
+    async fn profiled_templates(
+        &self,
+        _organization_id: &str,
+    ) -> Result<Vec<ProfiledTenantTemplate>, TenantDiscoveryError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]
@@ -62,6 +75,63 @@ impl TenantDiscoveryService {
             repository,
             proof_policies,
         }
+    }
+
+    /// Serialize once at the wire boundary: the historical Core discovery DTO
+    /// has no extension field and must never deserialize these marked entries.
+    pub async fn metadata_with_profiles(
+        &self,
+        organization_id: &str,
+        variant: IssuerVariant,
+    ) -> Result<serde_json::Value, TenantDiscoveryError> {
+        let mut metadata = serde_json::to_value(self.metadata(organization_id, variant).await?)
+            .map_err(|_| TenantDiscoveryError::IncompletePlan)?;
+        if variant != IssuerVariant::Default {
+            return Ok(metadata);
+        }
+        let configurations = metadata
+            .get_mut("credential_configurations_supported")
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or(TenantDiscoveryError::IncompletePlan)?;
+        for profile in self.repository.profiled_templates(organization_id).await? {
+            let credential_type = profile.template.credential_type.clone();
+            let plan = self.documents.plan_organization_issuer_metadata(
+                organization_id,
+                IssuerVariant::Default,
+                vec![profile.template],
+            );
+            let mut policies = BTreeMap::new();
+            for legacy_request in plan.proof_policy_requests() {
+                if legacy_request.credential_format != "jwt_vc_json" {
+                    return Err(TenantDiscoveryError::IncompletePlan);
+                }
+                let mut exact_request = legacy_request.clone();
+                exact_request.credential_format = marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT.into();
+                // Reuse only the metadata constructor. Authorization is resolved
+                // for the exact new format, never for the historical alias.
+                policies.insert(
+                    legacy_request.clone(),
+                    self.proof_policies.resolve(&exact_request).await?,
+                );
+            }
+            let base = plan
+                .build(&policies)
+                .map_err(|_| TenantDiscoveryError::IncompletePlan)?;
+            let configuration = base
+                .credential_configurations_supported
+                .get(&credential_type)
+                .ok_or(TenantDiscoveryError::IncompletePlan)?;
+            let raw = serde_json::to_value(configuration)
+                .map_err(|_| TenantDiscoveryError::IncompletePlan)?;
+            let (id, raw) = profile
+                .policy
+                .profile_metadata(&credential_type, raw)
+                .map_err(|_| TenantDiscoveryError::IncompletePlan)?;
+            if configurations.insert(id, raw).is_some() {
+                return Err(TenantDiscoveryError::IncompletePlan);
+            }
+        }
+        Ok(metadata)
     }
 
     pub async fn metadata(

@@ -1,0 +1,62 @@
+{
+  "schema": "marty.vendored-acme-source/v1",
+  "crate": "instant-acme",
+  "version": "0.8.5",
+  "license": "Apache-2.0",
+  "archive_url": "https://static.crates.io/crates/instant-acme/instant-acme-0.8.5.crate",
+  "archive_sha256": "9f05ad37c421b962354c358d347d4a6130151df9407978372d3ad7f0c8f71a64",
+  "registry_checksum_url": "https://index.crates.io/in/st/instant-acme",
+  "registry_checksum_verified": true,
+  "upstream_revision": "c8c16a211d01bee3586c2639da00dcd96e70dcd2",
+  "upstream_repository": "https://github.com/instant-labs/instant-acme",
+  "files": {
+    "Cargo.toml": {
+      "original_sha256": "5b8233d9669b5b0c5f80494e39045fdb38d2d930eb12d354b1e240f8c2b2a636",
+      "vendored_sha256": "5514b8c9cf8432625170c5525bca950e41a06aa1feca8eeadc4a2b5b3e606914"
+    },
+    "README.md": {
+      "original_sha256": "63e870ccd83239295ab702ce950b45c6797a80610ef74b80a2a63a38a1b2338a",
+      "vendored_sha256": "63e870ccd83239295ab702ce950b45c6797a80610ef74b80a2a63a38a1b2338a"
+    },
+    "LICENSE": {
+      "original_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "vendored_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    "src/account.rs": {
+      "original_sha256": "d53f4b10b21f20ff07c938096713e1635005a6d433da66beff1b77a0b7cf991c",
+      "vendored_sha256": "6d8285c302cb17bfb3afafc44074dc5ff4e1779bf910f9fbb18decf34e2a1939"
+    },
+    "src/types.rs": {
+      "original_sha256": "7be27ac647b4dec0159a563d57756c83a922f81769b67cf8c13356d8fc2e7a87",
+      "vendored_sha256": "d0605a8be208e2d931399cd48a0da97d4302a5f4a07557249f3ddc35870dffce"
+    },
+    "src/lib.rs": {
+      "original_sha256": "e344a537df48b372eae21c804c3200fcfd5b8670baf91c370d88fc3d74369410",
+      "vendored_sha256": "25179cc4b4f7191044264bc727b1d44d1c58eb8e82fbb7001d525d98a4ad2c8d"
+    },
+    "src/order.rs": {
+      "original_sha256": "d23e49a02af011717147b54e4f04d694ed1a71010939a5c41267f2debff77800",
+      "vendored_sha256": "d912ec219940278b6c883f1ae1bea394ce5be78cf20c57e7e6102804733602c6"
+    }
+  },
+  "patches": {
+    "nonexportable-account-signer.patch": "e82c92599302c29b18ff1dd2c961db4abfb3d530ba2217837f9d6af097133953",
+    "vendor-manifest.patch": "b3b8312e63f503216496aa6904a9a210993f5d2df279cdb493a6055aa39603c7",
+    "durable-response-metadata.patch": "ad2df7d4e94d4f863d50afe43d03062597bee39d919234ff623be7ecb3a6f2ed",
+    "prepared-account-registration.patch": "729680fe6a48c9d90bf56c67d5ad7eb33ac3871ef3d6b5645f3e39e23469c6c0"
+  },
+  "omitted": [
+    "upstream Cargo.lock",
+    "upstream development tests and fixtures",
+    "upstream examples",
+    "upstream tooling/configuration"
+  ],
+  "scope": "External account signing, passive response metadata and explicit account preparation; no installation storage, automatic retry, activation or public CA qualification.",
+  "patch_application": "Apply patch_order sequentially to the verified archive using git apply --unidiff-zero; zero context avoids whitespace-only patch context lines.",
+  "patch_order": [
+    "nonexportable-account-signer.patch",
+    "durable-response-metadata.patch",
+    "prepared-account-registration.patch",
+    "vendor-manifest.patch"
+  ]
+}

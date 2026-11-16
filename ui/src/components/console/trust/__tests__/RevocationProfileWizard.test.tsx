@@ -27,6 +27,13 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
   useConsole: () => ({ activeOrgId: 'org-1' }),
 }));
 
+vi.mock('../../../../hooks/usePermissions', () => ({
+  usePermissions: () => ({
+    isLoading: false,
+    can: (resource: string, action: string) => resource === 'revocation-profile' && action === 'create',
+  }),
+}));
+
 const mockNavigate = vi.fn();
 
 vi.mock('react-router', async () => {
@@ -61,6 +68,8 @@ function getNameInput() {
 function getCreateButton() {
   return screen.getByRole('button', { name: /create profile/i });
 }
+
+const createdProfile = (id: string) => ({ id, organization_id: 'org-1', status: 'DRAFT' });
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -117,7 +126,7 @@ describe('RevocationProfileWizard', () => {
   });
 
   it('calls createRevocationProfile with correct payload on submit', async () => {
-    mockCreateRevocationProfile.mockResolvedValue({ id: 'rev-42' });
+    mockCreateRevocationProfile.mockResolvedValue(createdProfile('rev-42'));
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'StatusList Profile' } });
@@ -130,13 +139,14 @@ describe('RevocationProfileWizard', () => {
           check_mode: 'ALWAYS',
           revocation_mechanism: ['STATUS_LIST_2021'],
           organization_id: 'org-1',
-        })
+        }),
+        expect.objectContaining({ isCurrent: expect.any(Function) })
       );
     });
   });
 
   it('navigates to new profile detail page on successful submit', async () => {
-    mockCreateRevocationProfile.mockResolvedValue({ id: 'rev-new' });
+    mockCreateRevocationProfile.mockResolvedValue(createdProfile('rev-new'));
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'New Profile' } });
@@ -178,7 +188,7 @@ describe('RevocationProfileWizard', () => {
   });
 
   it('strips optional numeric fields when left blank', async () => {
-    mockCreateRevocationProfile.mockResolvedValue({ id: 'rev-1' });
+    mockCreateRevocationProfile.mockResolvedValue(createdProfile('rev-1'));
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'Clean Profile' } });
@@ -192,7 +202,7 @@ describe('RevocationProfileWizard', () => {
   });
 
   it('requires and includes cache TTL for cached mode', async () => {
-    mockCreateRevocationProfile.mockResolvedValue({ id: 'rev-2' });
+    mockCreateRevocationProfile.mockResolvedValue(createdProfile('rev-2'));
 
     renderWizard();
     fireEvent.change(getNameInput(), { target: { value: 'Timed Profile' } });

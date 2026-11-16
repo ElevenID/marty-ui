@@ -4,6 +4,54 @@ use std::collections::{BTreeMap, BTreeSet};
 use regex::Regex;
 use serde_yaml::Value;
 
+/// Native `config --no-interpolate` emits environment lists for services that
+/// merged environment maps. Compose applies a later `!reset` to map paths before
+/// normalizing those lists, silently retaining the original entries. Normalize
+/// only this equivalent representation in the one canonical bundle owner so
+/// authenticated later layers can remove a field without copying service maps.
+pub fn normalize_environment_maps(text: &str) -> Result<String, String> {
+    let mut compose: Value =
+        serde_yaml::from_str(text).map_err(|_| "Rendered Compose is invalid YAML")?;
+    let services = compose
+        .get_mut("services")
+        .and_then(Value::as_mapping_mut)
+        .ok_or("Rendered Compose has no services mapping")?;
+    let name = Regex::new(r"\A[A-Za-z_][A-Za-z0-9_]*\z").unwrap();
+    let mut changed = false;
+    for service in services.values_mut() {
+        let Some(environment) = service.get_mut("environment") else {
+            continue;
+        };
+        if environment.is_mapping() {
+            continue;
+        }
+        let entries = environment
+            .as_sequence()
+            .ok_or("Rendered environment is not a map or list")?;
+        let mut map = serde_yaml::Mapping::new();
+        for entry in entries {
+            let entry = entry
+                .as_str()
+                .ok_or("Rendered environment list contains a non-string")?;
+            let (key, value) = match entry.split_once('=') {
+                Some((key, value)) => (key, Value::String(value.into())),
+                None => (entry, Value::Null),
+            };
+            if !name.is_match(key) || map.insert(Value::String(key.into()), value).is_some() {
+                return Err("Rendered environment names are invalid or duplicated".into());
+            }
+        }
+        *environment = Value::Mapping(map);
+        changed = true;
+    }
+    if changed {
+        serde_yaml::to_string(&compose)
+            .map_err(|_| "Cannot serialize normalized Compose environment".into())
+    } else {
+        Ok(text.into())
+    }
+}
+
 /// Compose expands project-scoped network and volume names during `config`.
 /// Remove only renderer-generated names so a customer can use `--project-name`
 /// without joining another installation's network or Redis socket volume.
@@ -311,6 +359,42 @@ pub fn validate_customer_text(text: &str) -> Result<(), String> {
         return Err("Customer bundle contains mutable image tags".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod environment_tests {
+    use super::*;
+    #[test]
+    fn environment_lists_preserve_interpolation_empty_and_inherited_values() {
+        let input = "services:\n  app:\n    environment:\n      - 'URL=postgres://u:$${PASSWORD}@db?x=a=b'\n      - 'SELECTED=${SELECTED:-default}'\n      - 'EMPTY='\n      - INHERITED\n";
+        let output = normalize_environment_maps(input).unwrap();
+        let parsed: Value = serde_yaml::from_str(&output).unwrap();
+        let values = &parsed["services"]["app"]["environment"];
+        assert_eq!(values["URL"], "postgres://u:$${PASSWORD}@db?x=a=b");
+        assert_eq!(values["SELECTED"], "${SELECTED:-default}");
+        assert_eq!(values["EMPTY"], "");
+        assert_eq!(values["INHERITED"], Value::Null);
+        assert_eq!(normalize_environment_maps(&output).unwrap(), output);
+        let map = "services:\n  app:\n    environment: {EMPTY: '', INHERITED: null}\n";
+        assert_eq!(normalize_environment_maps(map).unwrap(), map);
+    }
+    #[test]
+    fn ambiguous_or_duplicate_environment_entries_are_rejected() {
+        for entries in [
+            "[A=one, A=two]",
+            "[A, A=two]",
+            "[1INVALID=x]",
+            "['BAD NAME=x']",
+            "['=value']",
+            "[123]",
+            "value",
+        ] {
+            assert!(normalize_environment_maps(&format!(
+                "services:\n  app:\n    environment: {entries}\n"
+            ))
+            .is_err());
+        }
+    }
 }
 
 #[cfg(test)]

@@ -20,7 +20,6 @@
     "migrations.sbom.cdx.json",
     "openbao_didcomm.sbom.cdx.json",
     "keycloak.sbom.cdx.json",
-    "ui_selfhost.sbom.cdx.json",
-    "cloudflared_wrapper.sbom.cdx.json"
+    "ui_selfhost.sbom.cdx.json"
   ]
 }

@@ -1,5 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use axum::{
+    body::{to_bytes, Body},
+    http::{Request, StatusCode},
+    Router,
+};
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     canvas_binding_domain::{CanvasApplicationTemplateProjection, CanvasProgramBindingRecord},
@@ -11,6 +16,7 @@ use marty_issuance_service::{
     canvas_management_domain::{CanvasOriginPolicy, CanvasPlatformRecord},
     canvas_management_postgres::PostgresCanvasManagementRepository,
     canvas_management_service::{CanvasBindingActivation, CanvasManagementRepositoryError},
+    canvas_operations::{candidate_router, CanvasOperationsService},
     canvas_readiness_runtime::{
         CanvasReadinessStateProvider, PostgresCanvasReadinessStateProvider,
     },
@@ -25,6 +31,29 @@ use marty_issuance_service::{
 use marty_oid4vci::lti::CanvasLtiPlatformProbe;
 use serde_json::{json, Map};
 use sqlx::{postgres::PgPoolOptions, Row};
+use tower::ServiceExt;
+
+async fn binding_application_inventory(
+    router: Router,
+    organization_id: &str,
+    key: &str,
+) -> (StatusCode, serde_json::Value) {
+    let response = router
+        .oneshot(
+            Request::builder()
+                .uri("/v1/integrations/canvas/program-bindings/binding-inventory/applications")
+                .header("x-organization-id", organization_id)
+                .header("x-api-key", key)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+    let body = serde_json::from_slice(&bytes).unwrap();
+    (status, body)
+}
 
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
@@ -1089,6 +1118,112 @@ async fn management_contract(storage_type: &str) {
         .await
         .unwrap()
         .is_none());
+    // The native cleanup read is tenant owned and serializes with bootstrap's
+    // binding-row lock. An application row is never interpreted as absence.
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings
+        (id, organization_id, platform_id, enabled, readiness_checks, updated_at)
+        VALUES ('binding-inventory', 'org-management', $1, false, '[]'::jsonb, clock_timestamp())",
+    )
+    .bind(&platform.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let router = candidate_router(CanvasOperationsService::new(
+        pool.clone(),
+        Some("synthetic-operations-key"),
+    ));
+    assert_eq!(
+        binding_application_inventory(router.clone(), "foreign-org", "synthetic-operations-key")
+            .await
+            .0,
+        StatusCode::NOT_FOUND,
+    );
+    assert_eq!(
+        binding_application_inventory(router.clone(), "org-management", "wrong-key")
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED,
+    );
+    let (status, empty) =
+        binding_application_inventory(router.clone(), "org-management", "synthetic-operations-key")
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty["binding_disabled"], true);
+    assert_eq!(empty["complete"], true);
+    assert_eq!(empty["applications"], json!([]));
+    sqlx::query(
+        "INSERT INTO issuance_service.applications
+        (id, organization_id, application_template_id, integration_context, status)
+        VALUES ('orphan-1', 'org-management', 'application-template-contract',
+        '{\"canvas\":{\"canvas_program_binding_id\":\"binding-inventory\"}}'::jsonb, 'approved')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let (status, orphan) =
+        binding_application_inventory(router.clone(), "org-management", "synthetic-operations-key")
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        orphan["applications"],
+        json!([{"id":"orphan-1","status":"approved"}])
+    );
+    for id in 0..100 {
+        sqlx::query(
+            "INSERT INTO issuance_service.applications
+            (id, organization_id, application_template_id, integration_context, status)
+            VALUES ($1, 'org-management', 'application-template-contract',
+            '{\"canvas\":{\"canvas_program_binding_id\":\"binding-inventory\"}}'::jsonb, 'draft')",
+        )
+        .bind(format!("orphan-{id:03}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        binding_application_inventory(router.clone(), "org-management", "synthetic-operations-key")
+            .await
+            .0,
+        StatusCode::CONFLICT,
+    );
+    sqlx::query(
+        "DELETE FROM issuance_service.applications WHERE integration_context
+        #>> '{canvas,canvas_program_binding_id}'='binding-inventory'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let mut creation = pool.begin().await.unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.canvas_program_bindings SET enabled=true
+        WHERE id='binding-inventory'",
+    )
+    .execute(&mut *creation)
+    .await
+    .unwrap();
+    let mut waiting = Box::pin(binding_application_inventory(
+        router.clone(),
+        "org-management",
+        "synthetic-operations-key",
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), &mut waiting)
+            .await
+            .is_err()
+    );
+    creation.commit().await.unwrap();
+    let (status, _) = tokio::time::timeout(Duration::from_secs(3), waiting)
+        .await
+        .unwrap();
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "an active binding cannot yield cleanup proof"
+    );
+    eprintln!(
+        "canvas_binding_application_inventory_pg_assertions_passed storage_type={storage_type}"
+    );
 }
 
 async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {

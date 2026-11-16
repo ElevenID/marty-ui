@@ -79,6 +79,22 @@ impl PostgresOrganizationStore {
         row.as_ref().map(organization_from_row).transpose()
     }
 
+    pub async fn lock_organization_for_member_review_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        // Match the audit FK's parent lock without waiting behind an org-first join.
+        // The caller must roll back on contention to release its member row lock.
+        Ok(sqlx::query(
+            "SELECT id FROM organization_service.organizations WHERE id=$1 FOR KEY SHARE NOWAIT",
+        )
+        .bind(organization_id)
+        .fetch_optional(&mut **transaction)
+        .await?
+        .is_some())
+    }
+
     pub async fn organization_by_slug(
         &self,
         slug: &str,

@@ -1,22 +1,23 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Button, Paper, Grid, Card, CardContent, Chip } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router';
-import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
+
+import { DISABLE_PUBLIC_PRICING_BUTTONS, SHOW_PUBLIC_PRICING_BUTTONS } from '@ui-public-config';
 import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function EudiWalletVerificationPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
   const structuredData = softwareApplicationSchema({
     name: 'EUDI Wallet Verification API',
-    description: 'Verify EUDI Wallet credentials with governed trust registries, issuer authorization, and revocation checking.',
+    description: 'Evaluate the exact EUDI wallet, presentation profile, and trust requirements for a Marty integration.',
   });
 
   return (
     <Box>
       <SEOHead
         title="EUDI Wallet Verification API"
-        description="Verify EUDI Wallet credentials with issuer authorization, revocation checks, and governed trust registries. Built for standards-based interoperability."
+        description="Review EUDI wallet verification requirements and release-specific interoperability evidence. No blanket EUDI readiness or regulatory approval is implied."
         canonicalPath="/eudi-wallet-verification"
         structuredData={structuredData}
         keywords={['EUDI wallet verifier', 'EUDI wallet verification API', 'EU digital identity verification', 'trust registry infrastructure']}
@@ -25,14 +26,14 @@ function EudiWalletVerificationPage() {
       <Box sx={{ textAlign: 'center', py: 7, mb: 5, background: 'linear-gradient(135deg, #1976d2 0%, #1565c0 100%)', color: 'white', borderRadius: 2 }}>
         <Typography variant="h3" component="h1" gutterBottom fontWeight="bold">EUDI Wallet Verification API</Typography>
         <Typography variant="h6" sx={{ maxWidth: 860, mx: 'auto', opacity: 0.95 }}>
-          Verify wallet-presented credentials with policy-driven trust, selective disclosure validation, and standards-first interoperability.
+          Define the wallet, credential, presentation profile, and acceptance requirements your integration needs.
         </Typography>
       </Box>
 
       <Typography variant="body1" sx={{ mb: 4, fontSize: '1.05rem' }}>
-        ElevenID LLC helps relying parties verify EUDI Wallet presentations without hard-coding trust logic into application code.
-        Verification is governed through centrally managed trust profiles, presentation policies, and revocation rules. This
-        lets organizations adapt to ecosystem changes without redeploying verifier applications.
+        EUDI wallet integration depends on the exact wallet build, presentation profile, trust framework, and Marty release.
+        Review the implementation and executed interoperability tests for that combination. This page does not claim
+        blanket EUDI compatibility, certification, or regulatory approval.
       </Typography>
 
       <Grid container spacing={3} sx={{ mb: 5 }}>
@@ -49,17 +50,17 @@ function EudiWalletVerificationPage() {
       </Paper>
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 6 }}>
-        {SHOW_PUBLIC_GET_STARTED_BUTTONS && (
+        {SHOW_PUBLIC_PRICING_BUTTONS && (
           <FutureFeatureButton
             variant="contained"
-            disabled={DISABLE_PUBLIC_GET_STARTED_BUTTONS}
+            disabled={DISABLE_PUBLIC_PRICING_BUTTONS}
             onClick={() => navigate('/pricing')}
             disabledSx={{
               bgcolor: 'rgba(25, 118, 210, 0.14)',
               color: 'rgba(25, 118, 210, 0.52)',
             }}
           >
-            Start Free
+            Review Commercial Scope
           </FutureFeatureButton>
         )}
         <Button variant="outlined" onClick={() => navigate('/docs')}>View API Docs</Button>

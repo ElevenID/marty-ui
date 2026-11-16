@@ -92,7 +92,7 @@ export function DeploymentActivityCard({ deployment }) {
       <CardContent>
         {/* Header */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
-          <Typography variant="h6" fontWeight={600}>
+          <Typography variant="h6" sx={{ fontWeight: 600 }}>
             {deployment.name}
           </Typography>
           <Chip
@@ -104,14 +104,14 @@ export function DeploymentActivityCard({ deployment }) {
         </Box>
 
         {deployment.description && (
-          <Typography variant="body2" color="text.secondary" paragraph>
+          <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
             {deployment.description}
           </Typography>
         )}
 
         {/* Activity Badges */}
         <Grid container spacing={1} sx={{ mb: 2 }}>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Tooltip title={t('deploy.deploymentActivityCard.tooltips.lastIssuance')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <BadgeIcon fontSize="small" color="primary" />
@@ -121,7 +121,7 @@ export function DeploymentActivityCard({ deployment }) {
               </Box>
             </Tooltip>
           </Grid>
-          <Grid item xs={12} sm={6}>
+          <Grid size={{ xs: 12, sm: 6 }}>
             <Tooltip title={t('deploy.deploymentActivityCard.tooltips.lastVerification')}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <VerifiedUserIcon fontSize="small" color="primary" />

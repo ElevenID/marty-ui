@@ -1,0 +1,558 @@
+# Kubernetes development milestone
+
+This target packages Marty with standard Kubernetes and Helm. It is an opt-in,
+single-node development path. Its runtime provenance comes from the existing
+signed installer inventory; it does not inherit the Compose installer's runtime
+qualification or admit a release to the consumer installation channel.
+
+Start with the [installation configuration guide](kubernetes-installation-configuration.md)
+to select the public origin, organization, login/mail policy and registry Secrets
+before bootstrap. Keep these nonsecret choices separate from signed image values
+and private credentials.
+
+**Plan the development lifetime before starting or resuming the node.** Workload
+identities expire after eight hours, and the initial migration token after two
+hours. Stopping EC2 does not pause those clocks. This profile does not install
+automatic application credential renewal; a successful reboot or a Helm
+`deployed` status does not establish current application readiness. Preserve the
+original state and use the documented staging/activation or applicable recovery
+path instead of rerunning fresh bootstrap against an existing OpenBao store.
+
+## Ownership
+
+| Responsibility | Implementation |
+| --- | --- |
+| Node and container runtime | K3s `v1.36.6+k3s1`, installed with its official installer |
+| Application installation | Helm 3 `v3.22.1`, `deploy/helm/marty` |
+| HTTPS routing | K3s's packaged Traefik, ordinary Ingress and TLS Secret |
+| Public certificate enrollment and renewal | Official cert-manager `v1.21.3` chart |
+| OpenBao server and Raft volume | Official OpenBao Helm chart `0.30.6` with the authenticated Marty plugin image |
+| Database, Redis and applicant storage | StatefulSets/PVCs and a single-writer applicant Deployment |
+| Migration and Keycloak configuration | Kubernetes Jobs and the existing application commands |
+| Workload signing keys, certificates and scoped tokens | Existing native Marty producers and the OpenBao CLI |
+| Application credential publication | Existing native Secret publisher and ordinary `kubectl apply` |
+| Ordinary token replacement authority and candidate staging | Existing native AppRole, OpenBao token roles and credential-generation commands |
+| Workload TLS and Keycloak renewal candidate staging | Existing Renewal AppRole, signed native producers and immutable generation verifier |
+| Credential activation and workload replacement | Conditional Kubernetes Secret updates, Deployment controllers and private delivery checks |
+| Release verification | Existing inventory validation, pinned `gh` and `cosign` verifiers |
+| Trial shutdown | A systemd timer with an absolute UTC deadline |
+
+There is no new operator, controller, package manager, cloud orchestrator, or
+certificate client. `prepare_kubernetes_helm_values.py` projects an authenticated
+inventory into Helm values. `bootstrap_kubernetes_openbao.py` transports the
+existing native provisioning commands over `kubectl`; it never retries an
+uncertain initialization or adopts an existing store.
+
+## Development envelope
+
+Use an isolated Linux amd64 node with **2 vCPU and 8 GiB RAM**. The first AWS
+trial uses an eligible `m7i-flex.large`, Ubuntu 24.04, and a 40 GiB encrypted gp3
+root disk. Confirm the account's active Free plan, remaining credits, instance
+eligibility, and AMI eligibility before starting each trial. This is a credit
+funded experiment, not a promise of permanently free Kubernetes hosting.
+
+The AWS profile reuses an existing network and instance profile. It does not
+create an EKS cluster, NAT gateway, AWS load balancer, domain, or paid account
+upgrade. HTTP-01 uses port 80; operator HTTPS uses port 8443. Keep the Kubernetes
+API and SSH behind the established private administration path. K3s ServiceLB
+is node software; its `LoadBalancer` Service does not request an AWS ELB.
+
+Fill the absolute stop deadline in
+[`cloud-init.yaml.example`](../deploy/k3s/cloud-init.yaml.example) before launching.
+Set EC2's instance-initiated shutdown behavior to `stop`. Verify the timer is
+active before deploying application workloads. The deadline is fixed across a
+reboot. Stopping a VM ends its compute usage; retained EBS storage remains a
+resource that requires an explicit retention or deletion decision.
+
+K3s local-path PVCs are bound to this node. They survive an ordinary reboot, but
+are not replicated storage or a backup. The OpenBao seal key is kept separately
+from the Raft PVC and also retained in the private bootstrap directory. Preserve
+both the seal material and Raft state when planning recovery.
+
+## Prepare the cluster
+
+The cloud-init example pins and verifies the K3s binary, official install script,
+and Helm archive before execution. It enables Kubernetes Secret encryption at
+rest and keeps the host kubeconfig mode `0600`.
+
+On the node, using its existing privileged administration session:
+
+```sh
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+systemctl list-timers marty-dev-stop.timer --no-pager
+kubectl get nodes
+kubectl get pods -A
+
+helm upgrade --install cert-manager \
+  oci://quay.io/jetstack/charts/cert-manager \
+  --version v1.21.3 --namespace cert-manager --create-namespace \
+  --set crds.enabled=true --wait --timeout 5m
+kubectl create namespace marty-dev
+```
+
+The application chart accepts an existing TLS Secret. For a raw public IPv4
+trial, use [`ip-certificate.yaml.example`](../deploy/k3s/ip-certificate.yaml.example)
+after choosing the CA account and accepting its subscriber agreement. Contact
+email is optional for the selected CA; remove the placeholder if no contact is
+being supplied. Replace `PUBLIC_IPV4` with the current instance address.
+cert-manager's `shortlived` profile handles the IP certificate. The separate
+Traefik TLSStore provides the default certificate for IP clients that omit SNI.
+For DNS hosting, use a normal hostname certificate and Ingress host.
+
+Do not expose the application until the certificate is Ready. A pending ACME
+order is not successful HTTPS startup. Do not bypass certificate validation to
+make acceptance pass.
+
+The production application configuration also requires verified Redis TLS.
+Use the standard cert-manager development CA and Redis certificate manifest:
+
+```sh
+kubectl --namespace marty-dev apply -f deploy/k3s/redis-certificate.yaml
+kubectl --namespace marty-dev wait --for=condition=Ready \
+  certificate/marty-redis-tls --timeout=120s
+```
+
+Redis receives its own TLS key. Application pods receive only the public CA,
+combined with their existing public trust roots, and use `rediss://` URLs.
+The chart disables Redis's plaintext listener. For another installation, supply
+an equivalent `marty-redis-tls` Secret with `tls.crt`, `tls.key`, and `ca.crt`.
+
+## Authenticate the runtime and bootstrap OpenBao
+
+Obtain a complete signed installer artifact set for an explicitly selected
+runtime source, release tag, producer run, and attempt. These identities must be
+chosen from the release/tag and workflow evidence, not inferred from an
+unverified inventory. Keep each of these five subjects and its `.sigstore.json`
+and `.provenance.jsonl` sidecars together in a private directory:
+
+- `installer-inventory.json`
+- `install.sh`
+- `marty-deploy-linux-amd64`
+- `prepared-selfhost-bundle.zip`
+- `prepared-selfhost-images.json`
+
+Use the existing installer verifier pins from `install.sh`. The adapter checks
+the `gh` and `cosign` executable hashes again. Directories must be `0700`, input
+artifacts `0600`, and verifier executables `0700`. The files and their immediate
+parent directories must also belong to the user running the adapter. A correct
+checksum and mode do not satisfy that ownership check.
+
+When staging the pinned GitHub CLI archive, explicitly discard its recorded
+ownership and apply the caller's umask. GNU tar otherwise restores archive
+owners when run as root; a publisher-owned `gh` then fails the private-input
+check even inside a root-owned `0700` directory. After downloading the archive
+into an existing caller-owned `0700` directory, use the current pins and extract
+only the verifier:
+
+```sh
+set -eu
+umask 077
+: "${VERIFIER_DIR:?Set the absolute private verifier directory}"
+test ! -e "$VERIFIER_DIR/gh"
+test ! -L "$VERIFIER_DIR/gh"
+printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 \
+  "$VERIFIER_DIR/gh.tar.gz" | sha256sum --check --strict
+tar -xzf "$VERIFIER_DIR/gh.tar.gz" --directory "$VERIFIER_DIR" \
+  --no-same-owner --no-same-permissions --strip-components=2 \
+  gh_2.103.2_linux_amd64/bin/gh
+printf '%s  %s\n' cbfdc94f3a5c0713c0d6df3e0a1d88a59a76b0c52332aad7d21d112f9da2cc0e \
+  "$VERIFIER_DIR/gh" | sha256sum --check --strict
+chmod 0700 "$VERIFIER_DIR/gh"
+```
+
+These extraction options work for both root and unprivileged staging. Keep the
+adapter's ownership checks enabled; `chmod` alone cannot correct an archive
+owner mismatch. See [GNU tar's ownership options](https://www.gnu.org/software/tar/manual/html_node/Option-Summary.html).
+
+Install the repository's existing PyYAML dependency (`python3-yaml` on Ubuntu).
+
+Download the official OpenBao chart archive; the bootstrap validates its exact
+checksum against [`upstream.json`](../deploy/helm/openbao/upstream.json):
+
+```sh
+helm pull openbao --repo https://openbao.github.io/openbao-helm \
+  --version 0.30.6 --destination /root/marty-k3s
+```
+
+Run `python3 scripts/bootstrap_kubernetes_openbao.py --help` for the explicit
+paths and identities. Supply an **unused** private state directory, the selected
+kubeconfig and context, a dedicated namespace, the authenticated artifact set,
+the two pinned verifiers, Helm, and the pinned chart archive. The bootstrap
+performs the full shared verification again before writing to the cluster.
+
+The authenticated `marty-deploy` must support the read-only
+`kubernetes-secrets-contract`, `kubernetes-application-token-contract` and
+`kubernetes-renewal-contract`
+commands. Before selecting the Kubernetes context or creating any resource,
+bootstrap compares their compiled contracts with this checkout's
+`deploy-config/catalog/kubernetes-secrets.json` and
+`deploy-config/catalog/kubernetes-application-tokens.json`. Schema
+`marty.kubernetes-secret-publication/v1` contains the compiled required inputs,
+Secret names, keys and input mappings used by the native publisher. It contains
+no credential values and requires no repository, kubeconfig or credentials:
+
+```sh
+/absolute/path/to/authenticated/marty-deploy kubernetes-secrets-contract
+/absolute/path/to/authenticated/marty-deploy kubernetes-application-token-contract
+/absolute/path/to/authenticated/marty-deploy kubernetes-renewal-contract
+```
+
+An unsupported command, malformed contract or different mapping stops bootstrap
+before cluster access. Select a compatible signed runtime to proceed. The
+operator's dynamic `--repo-root` input catalog cannot establish what an older
+binary publishes, and bootstrap does not infer support from a release tag,
+Secret count or existing cluster resources. Runtime and chart source commits
+may still differ when their publication contracts agree. The metadata command
+does not replace the signed inventory and build-identity verification above.
+
+The output contains `marty-images.json` and `openbao-images.json`. The Marty
+output preserves the signed `ui-selfhost` image and the signed PostgreSQL/Redis
+references. Runtime source and chart source are recorded separately. The
+OpenBao override selects the signed plugin image using `tag@sha256`, as required
+by the official chart's image template; the digest determines the bytes.
+
+Bootstrap validates its Helm 3 executable before creating private state. Each
+selected `--image-pull-secret` must already exist in the target namespace with
+type `kubernetes.io/dockerconfigjson` or `kubernetes.io/dockercfg`; it is checked
+after runtime authentication and context selection but before cluster writes.
+The same selection produces `marty-pull-secrets.json` for the application chart
+and `openbao-pull-secrets.json` for OpenBao. These files contain Secret names
+only, including an empty list when no registry Secret is selected. Include the
+application file in the render and install commands below.
+
+Root and recovery material stay in the private operator directory. Applications
+receive public certificates, scoped KMS credentials, and distinct service
+credentials through Kubernetes Secrets. The initial application operator has a
+separate generated password in the `marty-operator` Secret. It does not reuse
+Keycloak's bootstrap administrator password.
+
+The native publisher owns both `notification-workload-tls` and
+`notification-tls-kms` in the same catalog as the other workload credentials.
+Bootstrap creates only the separate initial `marty-operator` login afterward.
+The supported bootstrap uses the catalog's default Secret names; Helm's
+`existingSecrets` overrides require separately provisioned matching Secrets.
+
+`kubernetes-secret-publication.json` retains the checked, nonsecret compiled
+contract before cluster access. Successful `bootstrap-complete.json` includes
+the same contract as `credentialPublication`. This records publisher capability
+and ownership, not Kubernetes resource versions, token expiration or proof that
+an application has loaded its credentials. All native inputs are validated
+before publication, but sequential Secret applies are not an atomic operation.
+If an apply or the later operator-login creation fails, earlier Secrets may
+already exist; bootstrap withholds completion and preserves the attempt.
+
+The private state retains the original producer identity needed for later
+credential lifecycle work. Before OpenBao initialization,
+`initialize-requested.json` records the namespace UID, producer nonce and exact
+workload policy project. The nonce is independently generated; the bootstrap
+UUID cannot reconstruct it. Keep this record even when a later step fails.
+
+After credential publication and producer cleanup succeed,
+`bootstrap-complete.json` includes a `credentialLifecycle` object with schema
+`marty.kubernetes-credential-lifecycle/v1`. It binds that same producer identity
+to the namespace UID and the surrounding receipt's OpenBao cluster ID. Bootstrap
+checks the namespace and cluster identities before and after credential
+provisioning and withholds completion if either changes.
+
+The lifecycle object also records the requested policies, TTL and token options
+for all 13 ordinary application/migration token inputs: twelve eight-hour
+requests and the separate two-hour migration request. These settings come from
+the same specification that issues the tokens. They are requested settings,
+not observed expiration times or proof that a workload has loaded a token.
+Native workload TLS and Keycloak outputs remain separate from this inventory.
+The receipt contains no token values, token hashes, accessors or passwords.
+It preserves initial identity and configuration; it does not authorize replay,
+install periodic renewal, or establish that replacement credentials are active.
+
+## Stage ordinary application credentials
+
+The ordinary-token inventory is shared by bootstrap and the native replacement
+profile. It contains all 13 initial inputs and permits routine replacement of
+exactly 11 runtime inputs. The two excluded inputs are the initial migration
+token, `OPENBAO_BOOTSTRAP_TOKEN`, and the legacy service alias,
+`OPENBAO_SERVICE_TOKEN`. Their presence in an existing generation does not grant
+the application replacement profile permission to issue them.
+
+Bootstrap enrolls a dedicated OpenBao AppRole through the existing native
+operator. Its private identity contains `application-role-id`,
+`application-secret-id` and `application-binding.json`. Keep this identity with
+the original private bootstrap state. Its binding fixes the Kubernetes
+namespace and UID, OpenBao cluster ID and original workload project. The
+adapter observes the cluster identities again before requesting new authority;
+native code also checks the OpenBao cluster directly.
+
+The application profile can issue only its fixed runtime token bundles.
+Signing Keys requires both of its existing policies. Each replacement is a
+nonrenewable orphan service token without the default policy and with an
+eight-hour maximum lifetime. Native checks compare the observed policy bundle,
+creation route and lifetime with the closed specification. No root credential
+is used for routine replacement.
+
+Use `scripts/stage_kubernetes_application_credentials.py` with a successful
+bootstrap that enrolled this authority and retained both compiled contracts.
+Keep the original signed artifact closure and pinned verifiers available.
+The adapter reauthenticates them and requires the same runtime and chart
+identities as the original bootstrap. It takes the namespace, kubeconfig,
+current credentials and application identity from that retained state.
+Staging holds the same private state-directory lock as activation and resolves
+the verified current-generation selector. Until the first activation, that
+selection is the original bootstrap credentials. A pending activation blocks
+fresh staging until the same attempt is reconciled.
+The current runtime tokens must still pass OpenBao lookup; stage before their
+expiry. Recovery after expiry is not implemented by this command.
+
+Set these variables from the original bootstrap receipt and choose a new,
+unused operation directory on the same private encrypted operator storage:
+
+```sh
+python3 scripts/stage_kubernetes_application_credentials.py \
+  --state-dir "${BOOTSTRAP_STATE:?}" \
+  --operation-dir "${NEW_OPERATION_DIR:?}" \
+  --assets "${ORIGINAL_ASSETS:?}" \
+  --gh "${PINNED_GH:?}" --cosign "${PINNED_COSIGN:?}" \
+  --runtime-source-sha "${RUNTIME_SOURCE_SHA:?}" \
+  --chart-source-sha "${CHART_SOURCE_SHA:?}" \
+  --release-tag "${RELEASE_TAG:?}" \
+  --build-run-id "${BUILD_RUN_ID:?}" \
+  --build-run-attempt "${BUILD_RUN_ATTEMPT:?}"
+```
+
+Candidate generation is a separate native operation. It requires the complete
+53-file workload TLS, Keycloak and ordinary-token inventory, accepts exactly
+the 11 new runtime token files, and preserves any additional existing inputs.
+Every other byte and file mode stays unchanged. New tokens must be pairwise
+distinct and differ from all existing ordinary, TLS and Keycloak token values;
+adding a newline cannot turn an existing token into a replacement. The current
+generation is rechecked after writing the candidate to detect observed drift.
+
+The staging operation records its attempt before AppRole login and retains
+partial private results when the outcome is uncertain. An existing attempt
+directory is not a retry target. Completion describes a verified candidate
+only after the private export, identity recheck and transport cleanup succeed.
+It does not mean Kubernetes Secrets have changed or workloads have loaded the
+candidate. Preserve an unsuccessful attempt for operator recovery.
+
+The producer pod has the existing fixed 1,200-second active deadline and a
+memory-backed temporary volume. If private evidence cannot be exported, the
+adapter retains the pod and records its identity for recovery instead of
+deleting it. An uncertain mutating command also retains the pod, even if a
+best-effort evidence export succeeds: a local timeout or lost connection does
+not prove that remote issuance has stopped. That provides only the remaining
+execution window: pod termination,
+node loss or the deadline can still make unexported evidence unavailable. The
+adapter does not extend that deadline or treat retained pod memory as durable
+storage. Recover available evidence promptly and never replay uncertain
+enrollment or issuance.
+
+After application installation and successful migrations, use the explicit
+[application activation command](kubernetes-application-activation.md). It uses
+fresh native candidate proof, one UID/resourceVersion-conditioned ordinary
+Secret update, native Deployment rollouts and private credential-delivery checks
+before selecting the generation for the next staging cycle.
+Fresh bootstrap also enrolls the existing scoped Renewal AppRole. Use the
+[TLS and Keycloak renewal staging command](kubernetes-renewal-staging.md) to
+prepare a private candidate for those 39 replacements while preserving the full
+selected generation. The [Renewal activation command](kubernetes-renewal-activation.md)
+uses conditional updates to the 33 existing destinations and verifies the selected
+Deployment rollouts and credential delivery. Authenticated workload acceptance
+remains a separate gate.
+The ordinary token candidate alone does not extend those certificates or KMS
+tokens, install a renewal schedule, or qualify a production upgrade.
+
+If bootstrap stops, retain its namespace and private state and diagnose the
+reported step. Do not rerun initialization with a new output path against the
+same store. Reconcile the existing attempt or deliberately start a new isolated
+trial after preserving the failed attempt's evidence.
+
+## Install the application
+
+Create an installation values file with the actual public origin, organization
+identity and TLS Secret. For the bounded development trial, the existing native
+installer's `operator@localhost` identity avoids using an external mailbox.
+Keep the generated password private and use it only in the selected test system.
+Do not put passwords, root tokens, or private keys in Helm values.
+
+```yaml
+publicHost: YOUR_PUBLIC_IPV4
+publicOrigin: https://YOUR_PUBLIC_IPV4:8443
+organization:
+  id: YOUR_ORGANIZATION_UUID
+  slug: marty-dev
+  adminEmail: operator@localhost
+  did: YOUR_ORGANIZATION_DID
+ingress:
+  tlsSecretName: marty-public-tls
+```
+
+Render and validate before installation:
+
+```sh
+helm lint --strict deploy/helm/marty \
+  -f deploy/helm/marty/values-k3s-dev.yaml \
+  -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
+  -f /root/marty-k3s/installation.yaml
+
+helm template marty deploy/helm/marty --namespace marty-dev \
+  -f deploy/helm/marty/values-k3s-dev.yaml \
+  -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
+  -f /root/marty-k3s/installation.yaml \
+  | kubectl apply --dry-run=server -f -
+
+helm upgrade --install marty deploy/helm/marty --namespace marty-dev \
+  -f deploy/helm/marty/values-k3s-dev.yaml \
+  -f /root/marty-k3s/bootstrap/marty-images.json \
+  -f /root/marty-k3s/bootstrap/marty-pull-secrets.json \
+  -f /root/marty-k3s/installation.yaml \
+  --wait --wait-for-jobs --timeout 35m
+```
+
+Regular Jobs avoid a pre/post-install-hook readiness deadlock with the database
+and schema-validating services. Kubernetes bounds and retries the migration
+containers. Native issuance starts after the organization and credential
+template services have seeded their initial data. The selected graph retains
+the gateway's full readiness dependencies and uses native issuance exclusively.
+
+## Startup and native recovery checks
+
+Gateway initializes its Auth mTLS client before opening its HTTP listener.
+The new source candidate retries failures classified as `ProviderUnavailable` within a
+**300-second total deadline**, including time spent in attempts, with a
+two-second delay between attempts. Invalid configuration and other error
+classes fail immediately; exhausting the deadline fails startup. TLS trust,
+identity checks and the full gateway readiness dependency set are unchanged.
+MMF also classifies some persistent peer TLS failures as `ProviderUnavailable`;
+those attempts remain unsuccessful unless the same verification actually passes.
+
+The chart's gateway startup probe checks local `/health`, with a ten-second
+period and 60 failures allowed: approximately ten minutes per container start.
+It delays liveness checks while the process initializes, but cannot prevent a
+process from exiting itself. Increasing that probe budget cannot fix an early
+application exit and the resulting Kubernetes restart backoff. Once started,
+gateway readiness remains `/health/ready`; UI startup/liveness use local
+`/edge-healthz`, while UI readiness follows the gateway's `/health/ready`.
+
+The [November 7 trial](kubernetes-first-milestone-validation.md#corrected-runtime-qualification--2026-11-07-utc)
+qualified the preceding signed runtime. The bounded Auth startup retry still
+requires qualification in a new authenticated runtime; it has not been tested
+on AWS by that trial.
+
+Use native observations after a restart. On the single K3s node, select the
+existing kubeconfig and context, then run the following bounded check. It
+targets the default one-replica profile and the first Helm revision's Jobs;
+select the actual Job names after an upgrade. Reserve the entire observation
+window within the trial's original shutdown deadline.
+
+```bash
+(
+set -eu
+: "${KUBECONFIG:?Select the existing kubeconfig}"
+: "${CONTEXT:?Select the existing Kubernetes context}"
+export KUBECONFIG CONTEXT
+export NAMESPACE=marty-dev
+EXPECTED_BOOT_ID=$(cat /proc/sys/kernel/random/boot_id)
+test -n "$EXPECTED_BOOT_ID"
+export EXPECTED_BOOT_ID
+date -u '+Native readiness started: %Y-%m-%dT%H:%M:%SZ'
+status=0
+timeout --signal=TERM --kill-after=10s 10m bash -eu <<'READINESS' || status=$?
+k() { kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" --namespace "$NAMESPACE" "$@"; }
+k wait "--for=jsonpath={.status.nodeInfo.bootID}=$EXPECTED_BOOT_ID" \
+  nodes --all --timeout=120s
+k wait --for=condition=Ready nodes --all --timeout=60s
+k wait --for=condition=Available deployments --all --timeout=360s
+k wait '--for=jsonpath={.status.readyReplicas}=1' statefulsets --all --timeout=120s
+k wait --for=condition=Complete job/marty-migrate-1 job/marty-keycloak-1 --timeout=60s
+k wait --for=condition=Ready certificates --all --timeout=60s
+READINESS
+date -u '+Native readiness finished: %Y-%m-%dT%H:%M:%SZ'
+printf 'Native readiness check exit status: %s\n' "$status"
+exit "$status"
+)
+```
+
+Each native wait has its own limit; the outer timeout bounds the whole check
+to ten minutes plus at most ten seconds for forced termination. A nonzero
+status is a failed observation, including a timeout, and must be retained.
+Do not convert it to success because a later check passes. Record the later
+Ready condition transition and successful observation separately. Do not wait
+for all Pods to be Ready: completed Job Pods are correctly not Ready. OpenBao
+uses `OnDelete`, so its readiness check does not use `rollout status`.
+
+In a separate read-only observation, these projections retain workload and
+restart evidence without dumping environment values, Secret data or event
+messages. Keep the original wait's exit status and timestamp with the output.
+
+```sh
+(
+set -eu
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s \
+  get deployments,statefulsets \
+  -o 'custom-columns=KIND:.kind,NAME:.metadata.name,GEN:.metadata.generation,OBSERVED:.status.observedGeneration,WANTED:.spec.replicas,READY:.status.readyReplicas,UPDATED:.status.updatedReplicas'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s get pods \
+  -o 'custom-columns=NAME:.metadata.name,PHASE:.status.phase,CONTAINERS:.status.containerStatuses[*].name,READY:.status.containerStatuses[*].ready,RESTARTS:.status.containerStatuses[*].restartCount,WAITING:.status.containerStatuses[*].state.waiting.reason,LAST_EXIT:.status.containerStatuses[*].lastState.terminated.exitCode'
+kubectl --kubeconfig "$KUBECONFIG" --context "$CONTEXT" -n marty-dev --request-timeout=10s get events \
+  -o 'custom-columns=TYPE:.type,REASON:.reason,KIND:.involvedObject.kind,NAME:.involvedObject.name,COUNT:.count,FIRST:.firstTimestamp,LAST:.lastTimestamp'
+)
+```
+
+Check the expected workload membership, current observed generations and
+desired/ready/updated replica counts. For the unmodified profile, require all
+20 Deployments and three StatefulSets, plus both completed Jobs. A successful
+wait alone does not prove reboot persistence: compare host and Node boot IDs,
+the [public OpenBao status](../deploy/helm/openbao/README.md#restart-and-recovery-checks),
+PVC UIDs, bound PV names and UIDs, and PV claim references against the before
+record. Require the same OpenBao cluster, initialized and unsealed, Ready and
+unexpired certificates, and the unchanged active shutdown timer. Complete the
+acceptance driver's resume phase against the retained credential without new
+issuance. Keep credentials and raw diagnostic logs in private operator custody.
+
+## Acceptance and limits
+
+Helm lint and rendered manifests establish packaging behavior only. Qualify the
+actual isolated installation with all of the following evidence:
+
+1. The exact runtime artifact set passes signature, provenance and image binding.
+2. Database/credential bootstrap and migration/configuration Jobs complete.
+3. Every required workload is Ready; gateway readiness checks its complete core.
+4. HTTPS validates for the actual public origin, UI login succeeds, and a native
+   credential issuance demonstration completes.
+5. Reboot the same node; verify the same OpenBao cluster and PVC identities,
+   automatic unseal, full application readiness and retained application data.
+6. Record actual memory/CPU, pod restarts, events and shutdown status. Do not
+   interpret resource requests as observed capacity.
+
+The current native development workload identities last **eight hours**. The
+migration-only bootstrap token lasts **two hours**. This milestone does not
+install unattended application identity renewal; cert-manager renews the public
+ingress certificate separately. Ordinary application replacement tokens are
+**nonrenewable**. The existing TLS and Keycloak Renewal producers may issue
+renewable scoped orphan tokens, still bounded by their absolute eight-hour cap.
+Keeping the application running requires replacement credentials before expiration.
+The explicit ordinary-token staging and
+[activation commands](kubernetes-application-activation.md) reuse the existing
+native producer and Kubernetes APIs. They do not renew workload TLS or Keycloak
+credentials, recover expired identities, or install unattended scheduling. Their
+complete live application flow still requires the acceptance evidence above.
+The separate [TLS and Keycloak staging command](kubernetes-renewal-staging.md)
+prepares a private candidate; the [Renewal activation command](kubernetes-renewal-activation.md)
+installs it through the existing Secret owners and Deployment controllers. Both
+credential families preserve one shared current generation and separate activation
+markers. Authenticated runtime consumption and live AWS acceptance remain required.
+Do not extend credentials or disable their checks to hide expiration.
+
+Reboot testing here establishes recovery on the same single node. It does not
+establish high availability, node replacement, backup restoration, multi-node
+scaling, EKS compatibility, or production release admission.
+
+## Upstream references
+
+- [K3s architecture](https://docs.k3s.io/architecture)
+- [K3s packaged Traefik customization](https://docs.k3s.io/networking/networking-services)
+- [OpenBao official Helm chart](https://github.com/openbao/openbao-helm/releases/tag/openbao-0.30.6)
+- [OpenBao 2.5 static seal](https://openbao.org/docs/2.5.x/configuration/seal/static/)
+- [cert-manager supported versions](https://cert-manager.io/docs/releases/)
+- [cert-manager ACME profiles](https://cert-manager.io/docs/configuration/acme/)
+- [Let's Encrypt IP certificates](https://letsencrypt.org/2026/01/15/6day-and-ip-general-availability)
+- [AWS Free plan](https://aws.amazon.com/free/free-tier-faqs/)

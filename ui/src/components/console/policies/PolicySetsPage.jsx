@@ -6,6 +6,7 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Link as MuiLink,
   Paper,
   Stack,
   Table,
@@ -69,8 +70,15 @@ const ScopedPolicySets = ({ organizationId, canView, canCreate, grantsLoading })
             <TableHead><TableRow><TableCell>Name</TableCell><TableCell>Type</TableCell><TableCell>Status</TableCell><TableCell>Policies</TableCell></TableRow></TableHead>
             <TableBody>
               {items.map((item) => (
-                <TableRow key={item.id} hover component={RouterLink} to={`/console/org/policies/sets/${item.id}`} sx={{ textDecoration: 'none' }}>
-                  <TableCell><Stack><Typography variant="body2" fontWeight={600}>{item.name}</Typography><Typography variant="caption" color="text.secondary">{item.description}</Typography></Stack></TableCell>
+                <TableRow key={item.id} hover>
+                  <TableCell component="th" scope="row">
+                    <Stack>
+                      <MuiLink component={RouterLink} to={`/console/org/policies/sets/${item.id}`} variant="body2" sx={{ fontWeight: 600 }}>
+                        {item.name}
+                      </MuiLink>
+                      <Typography variant="caption" color="text.secondary">{item.description}</Typography>
+                    </Stack>
+                  </TableCell>
                   <TableCell>{item.policy_type}</TableCell>
                   <TableCell><Chip size="small" label={item.status} color={item.status === 'ACTIVE' ? 'success' : 'default'} /></TableCell>
                   <TableCell>{item.cedar_policies?.length || 0}</TableCell>

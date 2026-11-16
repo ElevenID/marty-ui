@@ -281,6 +281,8 @@ message FlowResultResponse {
   string decision_reason = 5;
   map<string, string> verified_claims = 6;
   string evaluation_timestamp = 7;
+  // Digest of committed managed evidence recovered by Flow's owner repository.
+  string canonical_evidence_digest = 8;
 }
 
 message ListFlowArtifactsRequest {

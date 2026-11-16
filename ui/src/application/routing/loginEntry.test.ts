@@ -46,3 +46,26 @@ describe('loginEntry helpers', () => {
     });
   });
 });
+
+
+describe('validated login return destinations', () => {
+  it('preserves path, query, and fragment from state and next', () => {
+    expect(getLoginEntryRedirect({ from: { pathname: '/console/org', search: '?page=2', hash: '#member' } })).toBe('/console/org?page=2#member');
+    expect(getLoginEntryRedirect(null, '/', '?next=' + encodeURIComponent('/console/org?page=2#member'))).toBe('/console/org?page=2#member');
+  });
+  it('rejects attacker-controlled state, next, and fallback destinations', () => {
+    for (const destination of ['https://example.invalid/', '//example.invalid/pricing', 'javascript:/pricing/?alert(1):alert(1)', 'data:text/html,hello', '/\\evil.example/', ' /pricing', '/pricing\n']) {
+      expect(getLoginEntryRedirect(null, '/console', '?next=' + encodeURIComponent(destination))).toBe('/console');
+      expect(getLoginEntryRedirect({ from: { pathname: destination } }, '/console')).toBe('/console');
+      expect(getLoginEntryRedirect(null, destination)).toBe('/');
+    }
+  });
+  it('rejects every literal ASCII control before URL parsing can normalize it', () => {
+    for (const code of [...Array.from({ length: 32 }, (_, index) => index), 127]) {
+      const destination = `/console/${String.fromCharCode(code)}org`;
+      expect(getLoginEntryRedirect({ from: { pathname: destination } }, '/console')).toBe('/console');
+      expect(getLoginEntryRedirect(null, '/console', '?next=' + encodeURIComponent(destination))).toBe('/console');
+    }
+    expect(getLoginEntryRedirect({ from: { pathname: '/console/org', search: '?name=José' } })).toBe('/console/org?name=Jos%C3%A9');
+  });
+});

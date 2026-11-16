@@ -380,7 +380,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     cache = steps["Record optional recovery compiler cache outcomes"]
     assert (
-        cache["if"] == "always()"
+        cache["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         and "timeout 10s sccache --show-stats 2>/dev/null" in cache["run"]
     )
     assert (
@@ -392,7 +392,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     assert retained["continue-on-error"] is True
     assert (
         retained["uses"]
-        == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+        == "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
     )
     assert retained["with"]["retention-days"] == 7
     assert retained["with"]["path"].splitlines() == [
@@ -428,7 +428,9 @@ def test_main_warmer_reuses_exact_recovery_build_only_owner():
         (ROOT / ".github/workflows/warm-ci-caches.yml").read_text()
     )
     warmer = workflow["jobs"]["rust"]
-    assert warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert warmer["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
+    )
     assert warmer["env"]["SCCACHE_GHA_RW_MODE"] == "READ_WRITE"
     assert (
         "scripts/probe_integration_secret_coordinated_restore.py"
@@ -447,7 +449,7 @@ def test_main_warmer_reuses_exact_recovery_build_only_owner():
     assert not steps[exact].get("continue-on-error", False)
     assert any(
         step.get("uses")
-        == "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
+        == "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
         and step.get("with", {}).get("python-version") == "3.12"
         for step in steps[:exact]
     )

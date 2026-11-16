@@ -20,6 +20,12 @@ else:
 
 
 def private_file(path: Path) -> str:
+    if os.name == "nt":
+        if __package__:
+            from .selfhost_windows_inputs import read_private_file
+        else:
+            from selfhost_windows_inputs import read_private_file
+        return read_private_file(path)
     if (not path.is_absolute() or path.is_symlink() or not path.is_file()
             or path.stat().st_size > 64 * 1024
             or stat.S_IMODE(path.stat().st_mode) & 0o077):

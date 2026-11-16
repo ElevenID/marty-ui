@@ -35,6 +35,8 @@ import CryptoValidityStep from './steps/CryptoValidityStep';
 import ReviewStep from './steps/ReviewStep';
 import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { templateIssuerRequest, templateIssuerRequirementsSatisfied, validTemplateIssuerSelection } from './templateIssuerSelection';
+import { buildWizardValidityRules, credentialTemplateValidity, INITIAL_TEMPLATE_VALIDITY } from './credentialTemplateValidity';
+import { validCredentialTemplateClaims } from './credentialTemplateClaims';
 
 const getSteps = (t) => [
   t('wizards.credentialTemplate.steps.basics'),
@@ -54,6 +56,11 @@ const CredentialTemplateWizard = () => {
   const organizationEpoch = useRef(0);
   const creation = useMemo(() => createTemplateCreationOperation(activeOrgId, principalId), [activeOrgId, principalId]);
   const [createdDraft, setCreatedDraft] = useState(null);
+  const [profileDisplay, setProfileDisplay] = useState({});
+  const submissionPending = useRef(false);
+  const updateProfileDisplay = useCallback((profiles) => {
+    setProfileDisplay((current) => ({ ...current, ...profiles }));
+  }, []);
 
   const validateStep = useCallback((stepIndex, data) => {
     switch (stepIndex) {
@@ -63,14 +70,17 @@ const CredentialTemplateWizard = () => {
           data.credential_type?.trim().length > 0
         );
       case 1: // Claims
-        return data.claims && data.claims.length > 0;
+        return validCredentialTemplateClaims(data);
       case 2: // Trust & Compliance
         return validTemplateIssuerSelection(data, effectiveOrganizationId);
-      case 3: // Crypto & Validity (optional)
-        return data._issuer_selection?.requirements?.revocation_profile === false
-          ? !data.revocation_profile_id : Boolean(data.revocation_profile_id);
+      case 3: // Crypto & Validity
+        return credentialTemplateValidity(data.validity_rules).valid
+          && (data._issuer_selection?.requirements?.revocation_profile === false
+            ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       case 4: // Review
-        return validTemplateIssuerSelection(data, effectiveOrganizationId)
+        return validCredentialTemplateClaims(data)
+          && validTemplateIssuerSelection(data, effectiveOrganizationId)
+          && credentialTemplateValidity(data.validity_rules).valid
           && (data._issuer_selection?.requirements?.revocation_profile === false ? !data.revocation_profile_id : Boolean(data.revocation_profile_id));
       default:
         return false;
@@ -84,8 +94,20 @@ const CredentialTemplateWizard = () => {
       }));
     }
 
+    if (!credentialTemplateValidity(data.validity_rules).valid) {
+      throw new Error(t('wizards.credentialTemplate.cryptoValidityStep.validation.reviewSettings', {
+        defaultValue: 'Review the highlighted validity settings before creating the template.',
+      }));
+    }
+    if (!validCredentialTemplateClaims(data)) {
+      throw new Error(t('wizards.credentialTemplate.claimsStep.reviewClaims', {
+        defaultValue: 'Return to Claims and review the credential structure before creating the template.',
+      }));
+    }
+    const { _organization_default_trust: _defaultTrust, ...templateData } = data;
     const payload = {
-      ...data,
+      ...templateData,
+      validity_rules: buildWizardValidityRules(data.validity_rules),
       organization_id: effectiveOrganizationId,
     };
     const epoch = organizationEpoch.current;
@@ -107,6 +129,17 @@ const CredentialTemplateWizard = () => {
     return result;
   }, [effectiveOrganizationId, t, creation]);
 
+  const submitReviewedData = useCallback(async (data) => {
+    const epoch = organizationEpoch.current;
+    // Lock edits before the first await, including events before loading renders.
+    submissionPending.current = true;
+    try {
+      return await handleSubmit(data);
+    } finally {
+      if (epoch === organizationEpoch.current) submissionPending.current = false;
+    }
+  }, [handleSubmit]);
+
   const wizard = useWizard({
     scopeKey: `${activeOrgId}:${principalId}`,
     steps: getSteps(t),
@@ -119,28 +152,33 @@ const CredentialTemplateWizard = () => {
       trust_profile_id: null,
       compliance_profile_id: null,
       issuer_did: null,
-      validity_rules: {
-        ttl_seconds: 31536000, // 1 year
-        not_before_offset: 0,
-        max_validity_seconds: 63072000, // 2 years
-      },
+      validity_rules: { ...INITIAL_TEMPLATE_VALIDITY },
       revocation_profile_id: null,
       activate_immediately: true,
     },
     validateStep,
-    onSubmit: handleSubmit,
+    onSubmit: submitReviewedData,
     onCancel: () => {
       navigate('/console/org/templates/credentials');
     },
   });
 
   const updateWizardData = wizard.updateData;
+  const updateFormData = useCallback((updates) => {
+    if (!submissionPending.current) updateWizardData(updates);
+  }, [updateWizardData]);
+  const goToWizardStep = wizard.goToStep;
+  const editStep = useCallback((step) => {
+    if (!submissionPending.current) goToWizardStep(step);
+  }, [goToWizardStep]);
   useLayoutEffect(() => {
     organizationEpoch.current += 1;
+    submissionPending.current = false;
     setCreatedDraft(null);
+    setProfileDisplay({});
     updateWizardData({ trust_profile_id: null, compliance_profile_id: null, issuer_did: null,
       revocation_profile_id: null, credential_payload_format: undefined, supported_formats: undefined,
-      issuance_protocol: undefined, _issuer_selection: null });
+      issuance_protocol: undefined, _issuer_selection: null, _organization_default_trust: null });
     return () => { organizationEpoch.current += 1; };
   }, [activeOrgId, principalId, updateWizardData]);
 
@@ -150,36 +188,40 @@ const CredentialTemplateWizard = () => {
         return (
           <BasicsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 1:
         return (
           <ClaimsStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
           />
         );
       case 2:
         return (
           <TrustComplianceStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
+            onProfilesResolved={updateProfileDisplay}
           />
         );
       case 3:
         return (
           <CryptoValidityStep
             data={wizard.data}
-            onChange={wizard.updateData}
+            onChange={updateFormData}
+            onProfilesResolved={updateProfileDisplay}
           />
         );
       case 4:
         return (
           <ReviewStep
             data={wizard.data}
-            onChange={wizard.updateData}
-            onEdit={wizard.goToStep}
+            onChange={updateFormData}
+            onEdit={editStep}
+            organizationId={effectiveOrganizationId}
+            profileDisplay={profileDisplay}
           />
         );
       default:
@@ -208,7 +250,7 @@ const CredentialTemplateWizard = () => {
           <Typography variant="h4" gutterBottom>
             {t('wizards.credentialTemplate.success.title')}
           </Typography>
-          <Typography variant="h6" color="text.secondary" paragraph>
+          <Typography variant="h6" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
             {wizard.data.activate_immediately 
               ? t('wizards.credentialTemplate.success.messageActive', { name: wizard.data.name })
               : t('wizards.credentialTemplate.success.messageDraft', { name: wizard.data.name })}
@@ -276,19 +318,20 @@ const CredentialTemplateWizard = () => {
             <Typography color="error.contrastText">
               {wizard.error}
             </Typography>
-            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}`)}>Open created draft</Button>}
+            {createdDraft && <Button onClick={() => navigate(`/console/org/templates/credentials/${encodeURIComponent(createdDraft.id)}/edit`)}>Open created draft</Button>}
           </Box>
         )}
 
         {/* Step Content */}
-        <Box sx={{ minHeight: 400, mb: 4 }}>
+        <Box component="fieldset" disabled={wizard.loading} aria-label={getSteps(t)[wizard.activeStep]}
+          sx={{ border: 0, p: 0, m: 0, minWidth: 0, minHeight: 400, mb: 4 }}>
           {renderStepContent()}
         </Box>
 
         {/* Navigation Buttons */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', pt: 2 }}>
           <Button
-            onClick={wizard.isFirstStep ? wizard.cancel : wizard.goBack}
+            onClick={() => { if (!submissionPending.current) (wizard.isFirstStep ? wizard.cancel : wizard.goBack)(); }}
             startIcon={<ArrowBackIcon />}
             disabled={wizard.loading}
             data-testid={wizard.isFirstStep ? 'wizard.template.cancel' : 'wizard.template.back'}
@@ -297,17 +340,6 @@ const CredentialTemplateWizard = () => {
           </Button>
 
           <Box sx={{ display: 'flex', gap: 1 }}>
-            {/* Show Skip button for optional step (Crypto & Validity) */}
-            {wizard.activeStep === 3 && (
-              <Button
-                onClick={wizard.goNext}
-                disabled={wizard.loading}
-                data-testid="wizard.template.skip"
-              >
-                {t('wizards.credentialTemplate.buttons.skip')}
-              </Button>
-            )}
-
             {wizard.isLastStep ? (
               <Button
                 variant="contained"
@@ -321,7 +353,7 @@ const CredentialTemplateWizard = () => {
             ) : (
               <Button
                 variant="contained"
-                onClick={wizard.goNext}
+                onClick={() => { if (!submissionPending.current) wizard.goNext(); }}
                 disabled={!wizard.isStepValid() || wizard.loading}
                 endIcon={<ArrowForwardIcon />}
                 data-testid="wizard.template.next"

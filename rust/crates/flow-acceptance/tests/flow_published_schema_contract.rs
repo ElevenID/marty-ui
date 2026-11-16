@@ -51,7 +51,7 @@ async fn didcomm_http_admission_recovers_real_keyed_reservation() {
         eprintln!("Admission recovery requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_admission_recovery::run(&owned.url).await;
@@ -64,7 +64,7 @@ async fn didcomm_flow_grpc_provider_preserves_keyed_admission() {
         eprintln!("Flow gRPC admission requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_admission_recovery::run_flow_grpc(&owned.url).await;
@@ -77,7 +77,7 @@ async fn flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_ht
         eprintln!("Flow consumer composition requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_admission_recovery::run_flow_consumer(&owned.url).await;
@@ -98,7 +98,7 @@ async fn flow_actual_main_boots_rendered_base_and_preserves_public_admission() {
         eprintln!("Actual Flow startup requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
@@ -113,7 +113,7 @@ async fn flow_rendered_settings_select_native_rpc_and_preserve_legacy_http() {
         eprintln!("Rendered Flow selection requires the exact-owned published schema gate");
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start()
+    let owned = canvas_published_database::PublishedDatabase::start_for_current_issuance()
         .await
         .unwrap();
     didcomm_admission_recovery::run_flow_rendered(&owned.url).await;

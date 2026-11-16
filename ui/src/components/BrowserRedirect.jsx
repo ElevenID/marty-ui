@@ -30,11 +30,13 @@ function BrowserRedirect({
 
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
       data-testid="browser-redirect"
     >
       <CircularProgress size={48} />

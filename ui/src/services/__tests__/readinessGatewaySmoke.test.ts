@@ -94,6 +94,30 @@ describe('readiness gateway smoke', () => {
     await expect(getOrganizationEnvironment('org_fresh')).resolves.toBeNull()
   })
 
+  it.each(['', false, {}, 'unknown'])('rejects an invalid environment value %j instead of treating it as unset', async (environment) => {
+    server.use(http.get('*/v1/organizations/:orgId/environment', ({ params }) =>
+      HttpResponse.json({ organization_id: params.orgId, environment })))
+
+    await expect(getOrganizationEnvironment('org_live')).rejects.toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INVALID', status: 502,
+    })
+  })
+
+  it('preserves a denied environment read as an error instead of an unset environment', async () => {
+    server.use(http.get('*/v1/organizations/:orgId/environment', () =>
+      HttpResponse.json({ error: 'forbidden', error_description: 'Organization membership required' }, { status: 403 })))
+
+    await expect(getOrganizationEnvironment('org_unavailable')).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('rejects an incomplete environment update response', async () => {
+    server.use(http.patch('*/v1/organizations/:orgId/environment', () => HttpResponse.json({})))
+
+    await expect(updateOrganizationEnvironment('org_live', 'staging')).rejects.toMatchObject({
+      code: 'DASHBOARD_PAYLOAD_INCOMPLETE',
+    })
+  })
+
   it('updates organization environment through the gateway v1 route', async () => {
     const requestedPaths: string[] = []
 
@@ -173,6 +197,7 @@ describe('readiness gateway smoke', () => {
         })
       }),
       http.get('*/v1/signing-keys/config', () => HttpResponse.json({
+        config_revision: '"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"',
         default_service_id: 'managed-openbao-transit',
         services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
       })),
@@ -218,6 +243,7 @@ describe('readiness gateway smoke', () => {
     const rotatedKey = await rotateSigningKey('key_1', { organization_id: 'org_live', immediate: true })
     const config = await updateKeyManagementConfig({
       organization_id: 'org_live',
+      config_revision: keyManagementConfig.config_revision,
       services: [{ id: 'managed-openbao-transit', service_type: 'openbao-transit' }],
       default_service_id: 'managed-openbao-transit',
     })
@@ -236,6 +262,7 @@ describe('readiness gateway smoke', () => {
       keys: [{ id: 'key_1', name: 'Issuer Key', status: 'active' }],
     })
     expect(keyManagementConfig).toEqual({
+      config_revision: '"r-e4195bec-8a3a-43d5-828d-c7b5a0c4921c"',
       default_service_id: 'managed-openbao-transit',
       services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
     })

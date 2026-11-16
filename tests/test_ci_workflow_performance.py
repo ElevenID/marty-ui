@@ -4,9 +4,11 @@ import ast
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,6 +28,11 @@ RELEASE_TEST_COMMAND = (
     "cat /sys/fs/cgroup/memory.events 2>/dev/null || true; "
     "grep \"^oom_kill \" /proc/vmstat 2>/dev/null || true; exit \"$status\"' EXIT\n"
     "python -X faulthandler -m pytest tests -n 2 -v --tb=short --durations=20\n"
+)
+ROOT_OPTIONAL_SECRET_CASES = (
+    "test_creates_exact_nine_empty_private_files",
+    "test_enabled_integration_cannot_receive_empty_secret",
+    "test_late_mode_failure_rolls_back_owned_outputs",
 )
 
 
@@ -77,15 +84,98 @@ def test_fresh_vm_creation_has_required_root_release_owner() -> None:
     assert command.count("tests/test_installer_candidate_vm_host_probe.py") == 1
     assert command.count("tests/test_installer_candidate_vm_host_preflight.py") == 1
     assert command.count("tests/test_installer_candidate_vm_exchange.py") == 1
+    assert command.count("tests/test_installer_candidate_vm_rootless.py") == 1
     assert command.count("tests/test_installer_engineering_trial.py") == 1
     assert "-p no:cacheprovider --junitxml=" in command
-    for required in ('len(cases) != 108', '("tests", 108)', '("skipped", 0)',
+    for required in ('len(cases) != 158', '("tests", 158)', '("skipped", 0)',
                      '("failures", 0)', '("errors", 0)'):
         assert required in command
+
+
+def test_optional_secret_staging_has_required_root_release_owner() -> None:
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-release-contracts"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    general = named["Run repository release checks"]
+    vm = named["Exercise root-owned fresh VM creation contracts"]
+    root = named["Exercise root-owned optional secret staging contracts"]
+    assert root["if"] == general["if"]
+    assert steps.index(root) == steps.index(vm) + 1
+    assert root["shell"] == "bash"
+    assert root.get("continue-on-error", False) is False
+    command = root["run"]
+    assert command.startswith("set -euo pipefail\n")
+    assert 'python_bin="$(command -v python)"' in command
+    assert 'sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin"' in command
+    assert re.findall(r"\btests/[^\s\\]+", command) == [
+        f"tests/test_stage_selfhost_disabled_optional_secrets.py::{name}"
+        for name in ROOT_OPTIONAL_SECRET_CASES
+    ]
+    assert "-p no:cacheprovider --junitxml=" in command
+    for required in ('len(cases) != 3', '("tests", 3)', '("skipped", 0)',
+                     '("failures", 0)', '("errors", 0)'):
+        assert required in command
+
+
+@pytest.mark.parametrize(
+    "attributes,case_tag,case_count,name_override,passes",
+    [
+        ({}, "", 3, None, True),
+        ({"skipped": "1"}, "skipped", 3, None, False),
+        ({}, "skipped", 3, None, False),
+        ({"failures": "1"}, "failure", 3, None, False),
+        ({}, "failure", 3, None, False),
+        ({"errors": "1"}, "error", 3, None, False),
+        ({}, "error", 3, None, False),
+        ({"tests": "2"}, "", 2, None, False),
+        ({}, "", 2, None, False),
+        ({}, "", 3, ROOT_OPTIONAL_SECRET_CASES[1], False),
+        ({}, "", 3, "test_unrelated", False),
+    ],
+)
+def test_optional_secret_root_report_requires_executed_passing_cases(
+    tmp_path: Path,
+    attributes: dict[str, str],
+    case_tag: str,
+    case_count: int,
+    name_override: str | None,
+    passes: bool,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    command = next(
+        step["run"] for step in workflow["jobs"]["test-release-contracts"]["steps"]
+        if step.get("name") == "Exercise root-owned optional secret staging contracts"
+    )
+    validator = command.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    counters = {"tests": "3", "skipped": "0", "failures": "0", "errors": "0"}
+    counters.update(attributes)
+    names = list(ROOT_OPTIONAL_SECRET_CASES[:case_count])
+    if name_override is not None:
+        names[0] = name_override
+    cases = "".join(
+        f'<testcase name="{name}">'
+        + (f"<{case_tag}/>" if case_tag and index == 0 else "")
+        + "</testcase>"
+        for index, name in enumerate(names)
+    )
+    report = tmp_path / "root-optional-secrets.xml"
+    summary = " ".join(f'{name}="{value}"' for name, value in counters.items())
+    report.write_text(
+        f"<testsuites><testsuite {summary}>{cases}</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, "-", str(report)], input=validator,
+        text=True, capture_output=True, check=False,
+    )
+    assert (result.returncode == 0) is passes, result.stderr
+
+
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
     'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    'BAO_ADDR="$kms_url" BAO_CACERT="$kms_ca_file" '
     'python3 "$obligation_runner" --name canvas_composition_acceptance '
     '--owner canvas -- "$composition_executable" --skip "$serial_composition_test" '
     '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
@@ -345,7 +435,7 @@ def test_off_path_ci_qualifies_full_canvas_without_weakening_pr_gates() -> None:
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     )
-    assert 'elif [[ -z "$BASE_SHA" ]]; then\n  all=true' in classifier["run"]
+    assert 'elif [[ "$EVENT_NAME" != pull_request ]]; then\n  all=true' in (ROOT / "scripts/ci/affected_components.sh").read_text()
     assert (
         "github.event.pull_request.base.sha || github.event.merge_group.base_sha || ''"
         in (classifier["env"]["BASE_SHA"])
@@ -359,7 +449,7 @@ def test_off_path_ci_qualifies_full_canvas_without_weakening_pr_gates() -> None:
 
 def _assert_python_service_job_preserves_full_suite(document) -> None:
     job = document["jobs"]["test-services"]
-    assert job["needs"] == "changes"
+    assert job["needs"] == ["changes", "release-preflight"]
     assert job["if"] == "needs.changes.outputs.python == 'true'"
     assert not job.get("continue-on-error", False)
     assert not job.get("services")
@@ -623,7 +713,10 @@ def _classify_changed_paths(
         if step.get("id") == "classify"
     ]
     assert event in {"pull_request", "merge_group", "push", "workflow_dispatch", "schedule"}
-    script = classifier["run"].replace("${{ github.event_name }}", event)
+    assert classifier["run"].strip() == "source scripts/ci/affected_components.sh"
+    script = (ROOT / "scripts/ci/affected_components.sh").read_text()
+    classifier_path = shlex.quote((ROOT / "scripts/ci/affected_components.py").as_posix())
+    script = script.replace("python3 scripts/ci/affected_components.py", "python3 " + classifier_path)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
     # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
@@ -633,6 +726,7 @@ def _classify_changed_paths(
 git() {
   case "$1" in
     fetch) return 0 ;;
+    rev-parse) printf '%s\\n' "$SOURCE_SHA" ;;
     diff)
       [[ " $* " == *" -z "* && " $* " == *" --no-renames "* ]] || return 98
       printf '%s\\0' "$SYNTHETIC_CHANGED_PATH" ;;
@@ -655,7 +749,7 @@ python3() {
   fi
 }
 SYNTHETIC_LEAVES_READY=false
-export BASE_SHA=synthetic-base
+export BASE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 index=0
 while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
   export SYNTHETIC_CHANGED_PATH
@@ -669,13 +763,15 @@ done < "$SYNTHETIC_PATHS_FILE"
     if proof_failure:
         start = prelude.index("python3() {")
         end = prelude.index("\nexport BASE_SHA=", start)
-        prelude = prelude[:start] + "python3() { return 43; }" + prelude[end:]
+        prelude = prelude[:start] + 'python3() { if [[ "$1" == tests/test_rust_test_only_docker_context.py ]]; then return 43; else "$SYNTHETIC_PYTHON" "$@"; fi; }' + prelude[end:]
     if fetch_failure:
         prelude = prelude.replace("fetch) return 0 ;;", "fetch) return 44 ;;")
     if missing_base:
         prelude = prelude.replace(
-            "export BASE_SHA=synthetic-base", "export BASE_SHA=''"
+            "export BASE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "export BASE_SHA=''"
         )
+    if event not in {"pull_request", "merge_group"}:
+        prelude = prelude.replace("export BASE_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "export BASE_SHA=''")
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -704,6 +800,7 @@ done < "$SYNTHETIC_PATHS_FILE"
     environment = dict(os.environ)
     environment.pop("BASH_ENV", None)
     environment.pop("ENV", None)
+    environment.update(EVENT_NAME=event, SOURCE_SHA="a" * 40, HEAD_SHA="a" * 40)
     environment["RUNNER_TEMP"] = tmp_path.as_posix()
     environment["SYNTHETIC_PYTHON"] = Path(sys.executable).as_posix()
     if combined:
@@ -722,7 +819,7 @@ done < "$SYNTHETIC_PATHS_FILE"
         # This executes the complete tracked-source ownership proof, not just
         # a string classifier. Bound hangs without treating runner load as
         # failure evidence; no ownership or full-plan fallback is relaxed.
-        timeout=30,
+        timeout=120,
         env=environment,
         cwd=working_directory or ROOT,
     )
@@ -735,7 +832,8 @@ done < "$SYNTHETIC_PATHS_FILE"
                 line.split("=", 1) for line in output.read_text().splitlines()
             )
             if (
-                (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
+                key not in {"website", "website_only", "plan"}
+                and (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
                 and (include_rollback_plan or key != "rollback_test_only")
                 and (include_k8s_plan or key != "k8s_policy_test_only")
                 and (include_didcomm_plan or key != "didcomm_release_test_only")
@@ -768,9 +866,7 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     checkout = workflow["jobs"]["changes"]["steps"][0]
-    assert checkout["if"] == (
-        "github.event_name == 'pull_request' || github.event_name == 'merge_group'"
-    )
+    assert "if" not in checkout
     assert checkout["with"]["persist-credentials"] is False
     for path, candidate in (
         ("contracts/canvas-json-depth-scenarios.json", "true"),
@@ -808,31 +904,12 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
         "authority": "shadow-only",
     }
     assert set(mixed.values()) == {"true"}
-    unavailable = _classify_changed_paths(
-        ["contracts/canvas-json-depth-scenarios.json"],
-        tmp_path,
-        event="merge_group",
-        include_shadow=True,
-        fetch_failure=True,
-    )[0]
-    observed = json.loads(unavailable.pop("historical_shadow"))
-    assert set(unavailable.values()) == {"true"}
-    assert observed == {
-        "event": "merge_group",
-        "diff": "unavailable",
-        "path_count": 0,
-        "candidate": "unknown",
-        "authority": "shadow-only",
-    }
-    absent_base = _classify_changed_paths(
-        ["contracts/canvas-json-depth-scenarios.json"],
-        tmp_path,
-        event="merge_group",
-        include_shadow=True,
-        missing_base=True,
-    )[0]
-    assert json.loads(absent_base.pop("historical_shadow")) == observed
-    assert set(absent_base.values()) == {"true"}
+    for failure in ({"fetch_failure": True}, {"missing_base": True}):
+        with pytest.raises(AssertionError):
+            _classify_changed_paths(
+                ["contracts/canvas-json-depth-scenarios.json"], tmp_path,
+                event="merge_group", include_shadow=True, **failure,
+            )
 
 
 def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
@@ -998,12 +1075,12 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
     # Keep headroom below GitHub's 21,000-character expression limit.
     assert len(classifier["run"].encode("utf-8")) < 20_500
     assert (
-        classifier["run"].index("rust/crates/service-acceptance/tests/*|")
-        < classifier["run"].index("--select-contract-tests")
+        (ROOT / "scripts/ci/affected_components.sh").read_text().index("rust/crates/service-acceptance/tests/*|")
+        < (ROOT / "scripts/ci/affected_components.sh").read_text().index("--select-contract-tests")
     )
     assert (
-        classifier["run"].index("rust/services/signing-keys/tests/*)")
-        < classifier["run"].index("--select-contract-tests")
+        (ROOT / "scripts/ci/affected_components.sh").read_text().index("rust/services/signing-keys/tests/*)")
+        < (ROOT / "scripts/ci/affected_components.sh").read_text().index("--select-contract-tests")
     )
     verified = subprocess.run(
         [
@@ -1386,9 +1463,15 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         step for step in job["steps"]
         if step.get("name") == "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody"
     )
-    assert "scripts/probe_keycloak_remote_rs256.py --require-browser" in keycloak_gate["run"]
-    assert "--keycloak-image marty-keycloak-openbao:ci" in keycloak_gate["run"]
-    assert "--openbao-image marty-openbao-didcomm:ci" in keycloak_gate["run"]
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_IMAGE"] == "marty-keycloak-openbao:ci"
+    assert keycloak_gate["env"]["MARTY_PASSKEY_PACKAGED_OPENBAO_IMAGE"] == "marty-openbao-didcomm:ci"
+    assert "tests/test_keycloak_passkey_packaged.py::test_packaged_passkeys_keep_remote_custody_and_surviving_authentication_methods" in keycloak_gate["run"]
+    assert "google-chrome --version" in keycloak_gate["run"]
+    # The composite proof must still invoke the complete prior custody/browser
+    # probe, and add qualification inside its live PostgreSQL/KMS lifetime.
+    packaged = (ROOT / "tests/test_keycloak_passkey_packaged.py").read_text()
+    assert "kms.probe(KEYCLOAK_IMAGE, OPENBAO_IMAGE" in packaged
+    assert "require_browser=True, qualify_ready=qualify_passkeys" in packaged
     storage_gate = next(
         step
         for step in job["steps"]
@@ -1494,6 +1577,9 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
     assert set(changes["outputs"]) == {
         "all",
         "ui",
+        "website",
+        "website_only",
+        "plan",
         "python",
         "rust",
         "rust_runtime",
@@ -1506,10 +1592,12 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "verification",
         "security",
     }
-    assert 'if [[ "${{ github.event_name }}" == merge_group ]]' in source
-    assert "Unknown paths deliberately receive the complete suite." in source
+    classifier_source = (ROOT / "scripts/ci/affected_components.sh").read_text()
+    assert '"$EVENT_NAME" == merge_group' in classifier_source
+    assert "Unknown paths deliberately receive the complete suite." in classifier_source
 
     conditional_jobs = {
+        "test-website",
         "fast-feedback",
         "test-ui",
         "test-ui-crawler-artifacts",
@@ -1528,11 +1616,11 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust-supply-chain",
     }
     for name in conditional_jobs:
-        assert jobs[name]["needs"] == "changes"
+        assert jobs[name]["needs"] == ["changes", "release-preflight"]
         assert jobs[name]["if"]
 
     gate_needs = set(jobs["ci-gate"]["needs"])
-    assert gate_needs == conditional_jobs | {"changes", "lint"}
+    assert gate_needs == conditional_jobs | {"changes", "lint", "release-preflight"}
     gate_script = jobs["ci-gate"]["steps"][0]["run"]
     assert (
         'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
@@ -1556,6 +1644,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert gate["env"]["CI_LANE_RESULTS"] == "${{ join(needs.*.result, ' ') }}"
 
     groups = {
+        "website": {"test-website"},
         "ui": {
             "fast-feedback",
             "test-ui-crawler-artifacts",
@@ -1583,6 +1672,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert set(gate["needs"]) == {
         "changes",
         "lint",
+        "release-preflight",
         "public-protocol-contract",
         "test-release-contracts",
     } | set().union(*groups.values())
@@ -1599,6 +1689,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     )
 
     selections = {
+        "WEBSITE_SELECTED": "website",
         "UI_SELECTED": "ui",
         "PYTHON_SELECTED": "python",
         "RUST_SELECTED": "rust",
@@ -1635,11 +1726,13 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         selfhost_only=False,
     ):
         selected = set(flags)
+        if "ui" in selected:
+            selected.add("website")
         if "rust" in selected and not (
             leaf_only or worker_only or flow_only or selfhost_only
         ):
             selected.add("rust_runtime")
-        active = {"changes", "lint"}
+        active = {"changes", "lint", "release-preflight"}
         for flag, names in groups.items():
             if flag in selected:
                 active.update(names)
@@ -1659,6 +1752,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             }
         )
         environment.update(selection_overrides or {})
+        environment.setdefault("WEBSITE_ONLY", "false")
         environment.setdefault("ROLLBACK_TEST_ONLY", "false")
         environment.setdefault("DIDCOMM_RELEASE_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
@@ -1805,6 +1899,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), {"test-rust-services": "success"}).returncode != 0
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
+    assert exercise((), {"release-preflight": "failure"}).returncode != 0
+    assert exercise((), {"release-preflight": "skipped"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=16).returncode != 0
     didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
@@ -1870,9 +1966,14 @@ def test_ci_gate_keeps_required_lanes_strict_when_optional_telemetry_fails() -> 
     assert not gate.get("continue-on-error", False)
     assert [step["name"] for step in gate["steps"]] == [
         "Require every CI lane",
+        "Checkout source for the closed plan guard",
+        "Bind every result to the exact CI plan",
         "Summarize CI performance",
     ]
-    required, telemetry = gate["steps"]
+    required, checkout, plan_guard, telemetry = gate["steps"]
+    assert plan_guard["run"] == "python3 scripts/ci/affected_components.py gate"
+    assert "continue-on-error" not in plan_guard
+    assert "if" not in plan_guard
     assert not required.get("continue-on-error", False)
     assert '[[ "$result" == success ]]' in required["run"]
     assert (
@@ -1897,7 +1998,7 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     jobs = document["jobs"]
     service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
     probe = jobs["test-rust-feature-probe"]
-    assert probe["needs"] == "changes"
+    assert probe["needs"] == ["changes", "release-preflight"]
     assert probe["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
     assert "test-rust-feature-probe" in jobs["ci-gate"]["needs"]
@@ -1913,6 +2014,205 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
         step.get("uses", "").startswith("actions/download-artifact@")
         for step in probe["steps"]
     )
+
+
+def _assert_gone_or_zombie_process(pid: str, *, wait_seconds: float = 0) -> None:
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        try:
+            observed = Path(f"/proc/{pid}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            # Linux can remove a task after procfs open succeeds but before read.
+            return
+        if observed.rsplit(") ", 1)[1].startswith("Z "):
+            return
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed-out worker {pid} survived its exit grace period")
+        time.sleep(0.02)
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError])
+def test_native_operator_timeout_accepts_process_disappearance(monkeypatch, error) -> None:
+    def read_stat(path):
+        assert path == Path("/proc/123/stat")
+        raise error("synthetic task disappeared")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    _assert_gone_or_zombie_process("123")
+
+
+@pytest.mark.parametrize("state", ["R", "S", "D"])
+def test_native_operator_timeout_rejects_surviving_process(monkeypatch, state) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {state} 1 2 3")
+    with pytest.raises(AssertionError):
+        _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_unreaped_zombie(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) Z 1 2 3")
+    _assert_gone_or_zombie_process("123")
+
+
+def test_native_operator_timeout_accepts_worker_settling_after_timeout(monkeypatch) -> None:
+    states = iter(("R", "Z"))
+    monkeypatch.setattr(Path, "read_text", lambda _: f"123 (cargo worker) {next(states)} 1 2 3")
+    _assert_gone_or_zombie_process("123", wait_seconds=0.2)
+
+
+def test_native_operator_timeout_rejects_survivor_after_grace(monkeypatch) -> None:
+    monkeypatch.setattr(Path, "read_text", lambda _: "123 (cargo worker) R 1 2 3")
+    with pytest.raises(AssertionError, match="survived its exit grace period"):
+        _assert_gone_or_zombie_process("123", wait_seconds=0.04)
+
+
+def test_native_operator_timeout_preserves_unavailable_procfs_failure(monkeypatch) -> None:
+    def read_stat(_):
+        raise PermissionError("synthetic procfs access denied")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    with pytest.raises(PermissionError):
+        _assert_gone_or_zombie_process("123")
+
+
+@pytest.mark.parametrize("arch,cpu,budget", [("amd64", "x86_64", 30), ("arm64", "aarch64", 25)])
+@pytest.mark.parametrize("scenario,expected_status,expected_modes", [
+    ("success", 0, ["fetch", "test", "build"]),
+    ("transient", 0, ["fetch", "fetch", "test", "build"]),
+    ("exhausted", 1, ["fetch", "fetch"]),
+    ("timeout", 1, ["fetch", "fetch"]),
+    ("test-failure", 37, ["fetch", "test"]),
+    ("build-failure", 38, ["fetch", "test", "build"]),
+])
+def test_native_operator_acquires_locked_targets_before_single_offline_execution(
+    tmp_path: Path, arch: str, cpu: str, budget: int,
+    scenario: str, expected_status: int, expected_modes: list[str],
+) -> None:
+    bash, timeout = shutil.which("bash"), shutil.which("timeout")
+    if sys.platform != "linux" or not bash or not timeout:
+        pytest.skip("Linux workflow process deadlines require Bash and GNU timeout")
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-native-operator"]
+    row = next(item for item in job["strategy"]["matrix"]["include"] if item["arch"] == arch)
+    assert row["timeout_minutes"] == budget
+    assert row["target"] == f"{cpu}-unknown-linux-musl"
+    assert job["timeout-minutes"] == "${{ matrix.timeout_minutes }}"
+    steps = job["steps"]
+    fetch = next(step for step in steps if step.get("name") == "Fetch locked native operator dependencies")
+    exercise = next(step for step in steps if step.get("name") == "Exercise the static native operator against real HTTPS")
+    position = steps.index(fetch)
+    assert steps[position - 2]["uses"] == "dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8"
+    assert steps[position - 2]["with"] == {"toolchain": "1.95.0", "targets": "${{ matrix.target }}"}
+    assert steps[position - 1] == {
+        "name": "Fetch locked private fork dependencies",
+        "if": "vars.PRIVATE_FORKS_ENABLED == 'true'",
+        "timeout-minutes": 5,
+        "shell": "bash",
+        "working-directory": "${{ github.workspace }}",
+        "env": {"PRIVATE_FORKS_READ_TOKEN": "${{ secrets.PRIVATE_FORKS_READ_TOKEN }}"},
+        "run": 'python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"',
+    }
+    assert steps[position + 1] is exercise
+    assert steps[0]["with"]["persist-credentials"] is False
+    assert fetch["timeout-minutes"] == 5 and fetch["shell"] == "bash"
+    assert fetch["env"] == {"GIT_TERMINAL_PROMPT": "0"}
+    for step in (fetch, exercise):
+        assert not step.get("continue-on-error") and not step.get("if")
+        assert "PRIVATE_FORKS_READ_TOKEN" not in str(step)
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    # Record actual workflow commands; only the acquisition may fail and retry.
+    fake_source = f"#!{sys.executable}\n" + '''import json, os, signal, sys, time
+from pathlib import Path
+name, args = Path(sys.argv[0]).name, sys.argv[1:]
+log = Path(os.environ["TEST_COMMAND_LOG"])
+with log.open("a") as stream:
+    stream.write(json.dumps({"name": name, "args": args, "prompt": os.environ.get("GIT_TERMINAL_PROMPT")}) + "\\n")
+if name == "rustc":
+    print("rustc 1.95.0\\nhost: " + os.environ["TEST_HOST_TARGET"])
+elif name == "cargo":
+    scenario = os.environ["TEST_SCENARIO"]
+    if "fetch" in args:
+        count = sum(row["name"] == "cargo" and "fetch" in row["args"] for row in map(json.loads, log.read_text().splitlines()))
+        if scenario == "timeout":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            with Path(os.environ["TEST_FETCH_PIDS"]).open("a") as stream:
+                stream.write(str(os.getpid()) + "\\n")
+            while True:
+                time.sleep(10)
+        if scenario == "exhausted" or (scenario == "transient" and count == 1):
+            print("synthetic public Git transfer failure", file=sys.stderr)
+            sys.exit(128)
+    elif args[0] == "test" and scenario == "test-failure":
+        sys.exit(37)
+    elif args[0] == "build" and scenario == "build-failure":
+        sys.exit(38)
+'''
+    for name in ("cargo", "rustc", "sleep"):
+        path = fake_bin / name
+        path.write_text(fake_source, encoding="utf-8")
+        path.chmod(0o755)
+    shim = fake_bin / "timeout"
+    shim.write_text('''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\\n' "$1" "$2" >> "$TEST_TIMEOUT_CALLS"
+[[ "$1" == --kill-after=5s && "$2" == 120s ]]
+shift 2
+if [[ "$TEST_SCENARIO" == timeout ]]; then
+  exec "$TEST_REAL_TIMEOUT" --kill-after=0.2s 0.2s "$@"
+fi
+exec "$TEST_REAL_TIMEOUT" --kill-after=1s 5s "$@"
+''', encoding="utf-8")
+    shim.chmod(0o755)
+    host_target, target = f"{cpu}-unknown-linux-gnu", row["target"]
+    log, calls, pids = (tmp_path / name for name in ("commands.jsonl", "timeouts", "pids"))
+    environment = dict(os.environ, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                       TARGET=target, TEST_HOST_TARGET=host_target, TEST_SCENARIO=scenario,
+                       TEST_COMMAND_LOG=str(log), TEST_TIMEOUT_CALLS=str(calls),
+                       TEST_FETCH_PIDS=str(pids), TEST_REAL_TIMEOUT=timeout)
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    result = subprocess.run([bash, "--noprofile", "--norc", "-s"], input=fetch["run"],
+                            cwd=tmp_path, env={**environment, **fetch["env"]},
+                            capture_output=True, text=True, timeout=15)
+    acquisition_status, acquisition_stdout, acquisition_stderr = result.returncode, result.stdout, result.stderr
+    if acquisition_status == 0:
+        # Execute the exact existing test/build commands, without provisioning.
+        commands = exercise["run"].split("cargo test ", 1)[1].split('export MARTY_DEPLOY_BIN=', 1)[0]
+        result = subprocess.run([bash, "--noprofile", "--norc", "-s"],
+                                input="set -euo pipefail\ncargo test " + commands,
+                                cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=15)
+    assert result.returncode == expected_status, result.stderr
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    cargo = [event for event in events if event["name"] == "cargo"]
+    modes = ["fetch" if "fetch" in event["args"] else event["args"][0] for event in cargo]
+    assert modes == expected_modes
+    expected_arguments = {
+        "fetch": ["--config", "net.git-fetch-with-cli=true", "fetch", "--locked",
+                  "--manifest-path", "rust/Cargo.toml", "--target", host_target, "--target", target],
+        "test": ["test", "--locked", "--offline", "--manifest-path", "rust/Cargo.toml", "-p", "marty-managed-key-reference"],
+        "build": ["build", "--locked", "--offline", "--target", target, "--manifest-path",
+                  "rust/Cargo.toml", "-p", "marty-deployment-catalog", "--bin", "marty-deploy"],
+    }
+    for event, mode in zip(cargo, modes):
+        assert event["args"] == expected_arguments[mode]
+        if mode == "fetch":
+            assert event["prompt"] == "0"
+    attempts = modes.count("fetch")
+    assert calls.read_text(encoding="utf-8").splitlines() == ["--kill-after=5s 120s"] * attempts
+    assert [event["args"] for event in events if event["name"] == "sleep"] == [["2"]] * (attempts - 1)
+    if attempts == 2:
+        status = 137 if scenario == "timeout" else 128
+        assert f"attempt 1 failed (exit {status})." in acquisition_stderr
+    if scenario in {"transient", "exhausted"}:
+        assert "synthetic public Git transfer failure" in acquisition_stderr
+    annotations = [line for line in acquisition_stdout.splitlines() if line.startswith("::error::")]
+    assert annotations == (["::error::Locked native operator dependency acquisition failed after two bounded attempts."]
+                           if acquisition_status else [])
+    if scenario == "timeout":
+        assert len(pids.read_text(encoding="utf-8").splitlines()) == 2
+        for pid in pids.read_text(encoding="utf-8").splitlines():
+            _assert_gone_or_zombie_process(pid, wait_seconds=1)
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
@@ -1956,6 +2256,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Exercise live Signing Keys public contracts on disposable Redis",
         "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
         "Run Flow database contract after workspace suite",
+        "Exercise managed Policy evidence through Flow PostgreSQL commit",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
         "Test native Canvas operation timeout TLS parity",
@@ -1964,13 +2265,16 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
     for name in (
-        "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
         "Verify local passport signing is forbidden",
     ):
         assert steps[name]["if"] == "matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
+    assert steps["Expose public image compiler cache credentials"]["if"] == (
+        "vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'selfhost')"
+    )
+    assert not steps["Expose public image compiler cache credentials"].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     )
@@ -1984,6 +2288,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Qualify scoped provider callback verification against disposable OpenBao"
     ]["run"]
     assert "document_storage_contract:1" in live_signing
+    assert "didcomm_publication_routes:2" in live_signing
     assert "service_rotation_live_contract" not in live_signing
     assert "vdsnc_registration_live_contract" not in live_signing
     live_openbao = steps[
@@ -2018,7 +2323,12 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         names.index("Compile reusable Rust test executables")
         < names.index("Fail fast on image-free Canvas renewal configuration")
         < names.index("Compile Bookworm-compatible base runtime acceptance")
-        < names.index("Build public selfhost image")
+    )
+    # The selfhost-only image phase is independent of Canvas preflights.
+    assert (
+        names.index("Build public selfhost image")
+        < names.index("Retire completed selfhost builder cache")
+        < names.index("Compile reusable Rust test executables")
     )
     assert (
         names.index("Compile reusable Rust test executables")
@@ -2124,7 +2434,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     ), "The release lane must still execute the inventory tests"
     inventory_consumers = {
         "canvas-worker-oracle-producers.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "contracts/canvas-worker-tier-obligations.json",
             "scripts/ci/check_canvas_tier_obligations.py",
             "tests/test_ci_workflow_performance.py",
@@ -2132,7 +2442,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_oracle_script_closure.py",
         },
         "canvas-worker-oracle-script-imports.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
@@ -2141,7 +2451,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_retry_after_input_evidence.py",
         },
         "canvas-worker-rest-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "contracts/canvas-worker-tier-obligations.json",
             "scripts/ci/check_canvas_tier_obligations.py",
             "contracts/canvas-worker-provider-recovery-current-inputs.json",
@@ -2151,50 +2461,50 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
         "canvas-worker-provider-signals-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_canvas_worker_provider_signals_input_evidence.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-timeout-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "scripts/canvas_native_rest_contract.py",
             "tests/test_canvas_native_rest_contract.py",
             "tests/test_canvas_worker_timeout_input_evidence.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-provider-recovery-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-mixed-roster-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-json-depth-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_json_depth_current_inputs.py",
         },
         "canvas-operations-input-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_operations_input_current_inputs.py",
         },
         "canvas-worker-retry-after-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
         },
         "canvas-worker-startup-current-inputs.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-tier-obligations.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "scripts/ci/check_canvas_tier_obligations.py",
             "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
@@ -2209,13 +2519,13 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
         "python-value-fast-obligations.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "scripts/ci/check_python_value_fast_obligations.py",
             "tests/test_python_value_fast_obligations.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-renewal-profile-obligations.json": {
-            ".github/workflows/ci.yml",
+            "scripts/ci/affected_components.sh",
             "tests/test_canvas_renewal_profile_obligations.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -2228,7 +2538,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     release_only_records = {
         "canvas-worker-provider-recovery-current-inputs.json",
     }
-    assert CI_PATH.read_text(encoding="utf-8").count(
+    assert (ROOT / "scripts/ci/affected_components.sh").read_text().count(
         "contracts/canvas-*-current-inputs.json"
     ) == 1, "Review the bounded classifier alongside the manifest inventory"
     for manifest, expected in inventory_consumers.items():
@@ -2244,7 +2554,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             for path in references.stdout.splitlines()
             if not path.endswith((".md", ".dockerignore"))
         } == (
-            expected - {".github/workflows/ci.yml"}
+            expected - {"scripts/ci/affected_components.sh"}
             if manifest in current_input_manifests and manifest not in release_only_records
             else expected
         ), f"Review new consumer of {manifest} before narrowing its gate"
@@ -2270,8 +2580,14 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
         "rust/services/event-stream/Dockerfile": ".dockerignore",
         "rust/services/revocation-profile/Dockerfile": ".dockerignore",
+        "rust/services/signing-keys/Dockerfile": ".dockerignore",
     }
-    assert copying_contracts == set(image_contexts), (
+    ui_copy_lines = [line for line in (ROOT / "docker/ui.Dockerfile").read_text().splitlines()
+                     if re.match(r"^(?:COPY|ADD)\s+(?:--\S+\s+)*contracts(?:/|\s)", line)]
+    assert ui_copy_lines == [
+        "COPY contracts/web-surface-routes.json contracts/protocol-support-catalog.json contracts/website-source-ownership.json /workspace/marty-ui/contracts/"
+    ]
+    assert copying_contracts == set(image_contexts) | {"docker/ui.Dockerfile"}, (
         "Review every image context that copies contracts before narrowing this gate"
     )
     current_input_pattern = "contracts/canvas-*-current-inputs.json"
@@ -2301,6 +2617,31 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    # Embedded production contracts retain the existing Signing Keys image
+    # owner; reviewing another COPY context must not select unrelated gates.
+    images = workflow["jobs"]["test-rust-service-images"]
+    assert images["if"] == "needs.changes.outputs.rust_runtime == 'true'"
+    signing_image = next(
+        step for step in images["steps"] if step.get("name") == "Build signing-keys image"
+    )
+    assert signing_image["with"]["target"] == "signing_keys"
+    compiler_inputs = [
+        "rust/services/signing-keys/Dockerfile",
+        "contracts/python-text-semantics.json",
+        "contracts/issuer-identity-capabilities-response.json",
+        "contracts/issuer-identity-inspection-response.json",
+    ]
+    assert all((ROOT / path).is_file() for path in compiler_inputs)
+    for selected in _classify_changed_paths(
+        compiler_inputs, tmp_path, include_rust_plan=True
+    ):
+        assert selected == {
+            "all": "false", "ui": "false", "python": "false",
+            "rust": "true", "rust_runtime": "true",
+            "rust_matrix": '["canvas","contracts","selfhost"]',
+            "openbao": "false", "release": "false",
+            "verification": "false", "security": "false",
+        }
     python_only_input_records = {
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
     }
@@ -2477,7 +2818,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
         "verification": "false",
         "security": "false",
     }
-    ci_source = CI_PATH.read_text(encoding="utf-8")
+    ci_source = CI_PATH.read_text(encoding="utf-8") + (ROOT / "scripts/ci/affected_components.sh").read_text()
     for path in paths:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
@@ -2552,7 +2893,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         path
         for path in references.stdout.splitlines()
         if not path.endswith(".md") and path != "tests/test_ci_workflow_performance.py"
-    } == owners | {".github/workflows/ci.yml"}, (
+    } == owners | {"scripts/ci/affected_components.sh"}, (
         "Review a new Canvas helper consumer before narrowing its PR checks"
     )
     for path in owners:
@@ -2565,7 +2906,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     )
-    assert CI_PATH.read_text(encoding="utf-8").count(helper) == 1
+    assert (ROOT / "scripts/ci/affected_components.sh").read_text().count(helper) == 1
     for other in (ROOT / ".github/workflows").glob("*.yml"):
         if other != CI_PATH:
             assert helper not in other.read_text(encoding="utf-8")
@@ -2667,7 +3008,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
             for path in references.stdout.splitlines()
             if not path.endswith(".md")
             and path
-            not in {".github/workflows/ci.yml", "tests/test_ci_workflow_performance.py"}
+            not in {".github/workflows/ci.yml", "scripts/ci/affected_components.sh", "tests/test_ci_workflow_performance.py"}
         } == expected, f"Review new consumer of {name} before narrowing its gate"
 
     selected = {
@@ -2802,7 +3143,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_passport_supported_compose_ownership.py",
         "tests/test_ci_canvas_compile_scope.py",
     )
-    ci_source = CI_PATH.read_text(encoding="utf-8")
+    ci_source = CI_PATH.read_text(encoding="utf-8") + (ROOT / "scripts/ci/affected_components.sh").read_text()
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
@@ -2973,7 +3314,7 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "tests/test_passport_supported_k8s_deployment.py",
         "tests/test_passport_supported_consumer_routing.py",
     )
-    ci_source = CI_PATH.read_text(encoding="utf-8")
+    ci_source = CI_PATH.read_text(encoding="utf-8") + (ROOT / "scripts/ci/affected_components.sh").read_text()
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         expected_references = 3 if path in candidates[-6:] else 1
@@ -3078,9 +3419,8 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
     assert protected["all"] == protected["release"] == "true"
     assert protected["k8s_policy_test_only"] == "false"
     assert classify([cohort[0]], event="push")["k8s_policy_test_only"] == "false"
-    no_base = classify([cohort[0]], missing_base=True)
-    assert no_base["all"] == "true"
-    assert no_base["k8s_policy_test_only"] == "false"
+    with pytest.raises(AssertionError):
+        classify([cohort[0]], missing_base=True)
 
     absent = tmp_path / "absent-k8s-policy-source"
     absent.mkdir()
@@ -3134,7 +3474,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
         "tests/test_didcomm_native_consumer_ownership.py": 38,
     }
     _, workflow = _workflow(CI_PATH)
-    ci_source = CI_PATH.read_text(encoding="utf-8")
+    ci_source = CI_PATH.read_text(encoding="utf-8") + (ROOT / "scripts/ci/affected_components.sh").read_text()
 
     def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
         return _classify_changed_paths(paths, tmp_path, combined=True, **kwargs)[0]
@@ -3169,7 +3509,8 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
             assert classify(paths)["all"] == "true", paths
         assert classify([source], event="merge_group")["all"] == "true"
         assert classify([source], event="push")["all"] == "true"
-        assert classify([source], missing_base=True)["all"] == "true"
+        with pytest.raises(AssertionError):
+            classify([source], missing_base=True)
 
         absent = tmp_path / f"absent-{Path(source).stem}"
         absent.mkdir()
@@ -3246,9 +3587,8 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
             official = classify([source], event=event, missing_base=True)
             assert official["didcomm_release_test_only"] == "false"
             assert official["all"] == "true"
-        no_base = classify([source], missing_base=True)
-        assert no_base["didcomm_release_test_only"] == "false"
-        assert no_base["all"] == "true"
+        with pytest.raises(AssertionError):
+            classify([source], missing_base=True)
     for retired in (
         "tests/test_didcomm_native_credentials_release.py",
         "tests/test_issuance_retention_credentials_release.py",
@@ -3350,9 +3690,8 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         assert mixed["rollback_test_only"] == "false", other
         assert mixed["all"] == "true", other
     assert classify([source, source])["all"] == "true"
-    no_base = classify([source], missing_base=True)
-    assert no_base["all"] == "true"
-    assert no_base["rollback_test_only"] == "false"
+    with pytest.raises(AssertionError):
+        classify([source], missing_base=True)
     protected = classify([source], event="merge_group")
     assert protected["all"] == "true"
     assert protected["rollback_test_only"] == "false"
@@ -3446,7 +3785,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         "verification": "false",
         "security": "false",
     }
-    ci_source = CI_PATH.read_text(encoding="utf-8")
+    ci_source = CI_PATH.read_text(encoding="utf-8") + (ROOT / "scripts/ci/affected_components.sh").read_text()
     for path in paths:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
@@ -3624,11 +3963,12 @@ def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
     environment = dict(os.environ)
     environment.pop("BASH_ENV", None)
     environment.pop("ENV", None)
-    environment["BASE_SHA"] = "synthetic-base"
+    environment.update(BASE_SHA="b" * 40, SOURCE_SHA="a" * 40, HEAD_SHA="a" * 40, EVENT_NAME="pull_request")
     environment["RUNNER_TEMP"] = tmp_path.as_posix()
     output = tmp_path / "synthetic-actions-output"
     environment["GITHUB_OUTPUT"] = output.as_posix()
-    prelude = 'git() { if [[ "$1" == fetch ]]; then return 0; fi; return 42; }\n'
+    prelude = 'git() { case "$1" in fetch) return 0 ;; rev-parse) printf "%s\\n" "$SOURCE_SHA" ;; *) return 42 ;; esac; }\n'
+    prelude += 'python3() { '+shlex.quote(Path(sys.executable).as_posix())+' "$@"; }\n'
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
         input=prelude + script,
@@ -3638,7 +3978,7 @@ def test_classifier_diff_failure_fails_closed(tmp_path: Path) -> None:
         timeout=10,
         env=environment,
     )
-    assert result.returncode != 0
+    assert result.returncode == 42
     assert not output.exists()
 
 
@@ -4300,6 +4640,9 @@ def _assert_no_rust_executable_transfer(steps) -> None:
             "${{ runner.temp }}/marty-owned-runtime-diagnostics/*.*"
         ),
         "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
+        "Upload successful PR Rust checkout identity": (
+            "${{ runner.temp }}/pr-rust-checkout-attestation.json"
+        ),
         "Preserve fresh full-main startup attestation": "${{ runner.temp }}/canvas-startup-fresh-run.json",
         "Preserve fresh full-main REST requalification evidence": "${{ runner.temp }}/canvas-rest-fresh-run.json",
     }
@@ -4513,7 +4856,7 @@ def test_ui_timing_upload_retry_keeps_tests_and_artifact_required(
     assert (
         first["uses"]
         == second["uses"]
-        == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+        == ("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9")
     )
     for upload in (first, second):
         assert upload["with"]["name"] == "ui-vitest-timing-${{ matrix.shard }}"
@@ -4685,9 +5028,11 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         assert guard["name"] == "Require the completed advanced CodeQL cutover"
         assert 'test "$CODEQL_ADVANCED_ENABLED" = "true"' in guard["run"]
         assert job["permissions"]["pull-requests"] == "read"
-        scope = job["steps"][1]
-        assert scope["id"] == "scope"
-        assert "github.paginate(github.rest.pulls.listFiles" in scope["with"]["script"]
+        scope = next(step for step in job["steps"] if step.get("id") == "scope")
+        source_guard = next(step for step in job["steps"] if step.get("name") == "Validate the complete source-bound analysis diff")
+        assert source_guard["run"] == "python3 scripts/ci/codeql_scope.py"
+        assert "github.paginate" not in scope["with"]["script"]
+        assert "scope.files" in scope["with"]["script"]
         assert "context.eventName !== 'pull_request'" in scope["with"]["script"]
         assert any(
             step.get("name") == "Record scoped analysis skip" for step in job["steps"]
@@ -4710,6 +5055,9 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             )
             assert init["with"]["languages"] == "rust"
             assert init["with"]["build-mode"] == "none"
+            assert init["with"]["dependency-caching"] is False
+            assert init["with"]["trap-caching"] is False
+            assert init["with"]["debug"] is False
             assert init["with"]["config-file"] == (
                 "${{ (github.event_name == 'schedule' || "
                 "github.event_name == 'workflow_dispatch') && "
@@ -4789,8 +5137,12 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
       };
       (async () => {
         const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-        await new AsyncFunction('core', 'github', 'context', payload.scope)(
-          core, github, context
+        const scopeRequire = name => {
+          if (name !== 'node:fs') throw new Error('unexpected scope module');
+          return {readFileSync: () => JSON.stringify({event: payload.event, files: payload.files, website_only: false})};
+        };
+        await new AsyncFunction('core', 'github', 'context', 'require', 'process', payload.scope)(
+          core, github, context, scopeRequire, {env: {CODEQL_SCOPE_FILE: 'bound-scope.json'}}
         );
         if (outputs.test_only_candidate === 'true') {
           const mockedRequire = name => {
@@ -4904,7 +5256,7 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
         "public-protocol-contract",
         "test-release-contracts",
     )
-    setup_uv = "astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7"
+    setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
     expected_inputs = {
         "version": "0.11.3",
         "enable-cache": True,
@@ -5012,8 +5364,12 @@ def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     for name in ("test-rust-services", "rust-lint-policy"):
         assert ci["jobs"][name]["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
-    for job in warm["jobs"].values():
-        assert job["if"] == "github.ref == 'refs/heads/main'"
+    for name, job in warm["jobs"].items():
+        assert job["if"] == (
+            "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
+            if name in {"rust", "images", "public-services"}
+            else "github.ref == 'refs/heads/main'"
+        )
     for job, mode in (
         (ci["jobs"]["test-rust-service-images"], "READ_ONLY"),
         (warm["jobs"]["images"], "READ_WRITE"),
@@ -5074,7 +5430,7 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
     lint = names.index("Lint Rust services")
     assert cache < fallback < names.index("Check formatting") < lint
     assert not steps[fallback].get("continue-on-error", False)
-    assert not steps[fallback].get("if")
+    assert steps[fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
     services = ci["jobs"]["test-rust-services"]
     service_steps = services["steps"]
     service_names = [step.get("name") for step in service_steps]
@@ -5088,9 +5444,10 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
         < service_names.index("Compile reusable Rust test executables")
     )
     assert not service_steps[service_fallback].get("continue-on-error", False)
-    assert not service_steps[service_fallback].get("if")
-    assert services["env"]["RUSTC_WRAPPER"] == "sccache"
-    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == "sccache"
+    assert service_steps[service_fallback]["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true'"
+    expected_wrapper = "${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'sccache' || '' }}"
+    assert services["env"]["RUSTC_WRAPPER"] == expected_wrapper
+    assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == expected_wrapper
     fallback_command = "bash scripts/ci/optional-sccache-fallback.sh"
     assert (
         steps[fallback]["run"]
@@ -5203,7 +5560,7 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     ):
         assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
     assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
-    assert capture_step["if"] == "always()"
+    assert capture_step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
     assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
     assert "-le 4096" in capture_step["run"]
     assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
@@ -5232,7 +5589,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         step = next(
             step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
-        assert step["if"] == "always()"
+        assert step["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (always())"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
     service_steps = jobs["test-rust-services"]["steps"]
@@ -5324,7 +5681,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
     _, warm = _workflow(ROOT / ".github/workflows/warm-ci-caches.yml")
     job = warm["jobs"]["images"]
-    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["if"] == "vars.PRIVATE_FORKS_ENABLED != 'true' && (github.ref == 'refs/heads/main')"
     probe = next(
         step
         for step in job["steps"]
@@ -5423,7 +5780,7 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(
     )
 
 
-def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds() -> (
+def test_service_acceptance_keeps_composition_dependencies_in_test_targets() -> (
     None
 ):
     directory = ROOT / "rust/crates/service-acceptance"
@@ -5440,17 +5797,17 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert {"marty-issuance-service", "marty-signing-keys"} <= set(
         acceptance["dev-dependencies"]
     )
-    assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
+    _assert_signing_keys_fixture_dependency(
+        issuance, workspace["workspace"]["dependencies"], "../signing-keys"
+    )
 
 
-def _dev_dependency_packages(
-    manifest: dict, workspace_dependencies: dict
+def _dependency_packages(
+    manifest: dict, workspace_dependencies: dict, kinds: tuple[str, ...]
 ) -> set[str]:
     tables = []
     for owner in (manifest, *manifest.get("target", {}).values()):
-        tables.extend(
-            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
-        )
+        tables.extend(owner.get(key, {}) for key in kinds)
     packages = set()
     for dependencies in tables:
         for alias, declaration in dependencies.items():
@@ -5464,7 +5821,36 @@ def _dev_dependency_packages(
     return packages
 
 
-def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() -> (
+def _dev_dependency_packages(
+    manifest: dict, workspace_dependencies: dict
+) -> set[str]:
+    return _dependency_packages(
+        manifest, workspace_dependencies, ("dev-dependencies", "dev_dependencies")
+    )
+
+
+def _assert_service_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, dependency: str, path: str
+) -> None:
+    # Registered composition fixtures must never reach production or build scripts,
+    # including renamed, workspace-inherited, or target-specific declarations.
+    assert manifest["dev-dependencies"][dependency] == {"path": path}
+    assert dependency not in _dependency_packages(
+        manifest,
+        workspace_dependencies,
+        ("dependencies", "build-dependencies", "build_dependencies"),
+    )
+
+
+def _assert_signing_keys_fixture_dependency(
+    manifest: dict, workspace_dependencies: dict, path: str
+) -> None:
+    _assert_service_fixture_dependency(
+        manifest, workspace_dependencies, "marty-signing-keys", path
+    )
+
+
+def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
     None
 ):
     rust = ROOT / "rust"
@@ -5482,7 +5868,30 @@ def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() 
         for dependency in _dev_dependency_packages(document, workspace_dependencies)
         if dependency in service_packages
     }
-    assert not edges, f"Move cross-service tests to an acceptance package: {sorted(edges)}"
+    # DIDComm exercises the real signing service; the existing issuance_credential
+    # PostgreSQL contract exercises template storage and the explicit-profile
+    # migration together. Managed evidence needs Policy's private native fixture
+    # and real gRPC acquisition through Flow's durable owner repository; keeping
+    # that joined test here avoids a public test-only authority constructor.
+    assert edges == {
+        ("marty-issuance-service", "marty-signing-keys"),
+        ("marty-issuance-service", "marty-credential-template"),
+        ("marty-presentation-policy", "marty-flow"),
+    }, (
+        "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
+        f"{sorted(edges)}"
+    )
+    issuance = documents[rust / "services/issuance/Cargo.toml"]
+    _assert_signing_keys_fixture_dependency(
+        issuance, workspace_dependencies, "../signing-keys"
+    )
+    _assert_service_fixture_dependency(
+        issuance, workspace_dependencies, "marty-credential-template", "../credential-template"
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/presentation-policy/Cargo.toml"],
+        workspace_dependencies, "marty-flow", "../flow",
+    )
 
 
 def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:
@@ -5520,7 +5929,35 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
     }
 
 
-def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> (
+@pytest.mark.parametrize("kind", ["dependencies", "build-dependencies", "build_dependencies"])
+@pytest.mark.parametrize("target_specific", [False, True])
+@pytest.mark.parametrize("dependency,path", [
+    ("marty-signing-keys", "../signing-keys"),
+    ("marty-credential-template", "../credential-template"),
+    ("marty-flow", "../flow"),
+])
+def test_service_fixture_dependencies_reject_production_edges(
+    kind: str, target_specific: bool, dependency: str, path: str
+) -> None:
+    manifest = {
+        "dev-dependencies": {dependency: {"path": path}}
+    }
+    owner = manifest
+    if target_specific:
+        owner = manifest.setdefault("target", {}).setdefault("cfg(unix)", {})
+    owner[kind] = {"renamed_service": {"workspace": True}}
+    workspace_dependencies = {
+        "renamed_service": {
+            "package": dependency, "path": f"services/{path.removeprefix('../')}"
+        }
+    }
+    with pytest.raises(AssertionError):
+        _assert_service_fixture_dependency(
+            manifest, workspace_dependencies, dependency, path
+        )
+
+
+def test_canvas_acceptance_has_distinct_targets_and_test_only_signing_owner() -> (
     None
 ):
     canvas = tomllib.loads(
@@ -5551,7 +5988,9 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "tls_openbao_keyless",
         "holder_remote_live_kms",
     }
-    assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    _assert_signing_keys_fixture_dependency(
+        canvas, workspace["workspace"]["dependencies"], "../../services/signing-keys"
+    )
     assert "marty-signing-keys" not in worker["dev-dependencies"]
     assert not {
         "marty-flow",
@@ -5788,3 +6227,30 @@ def test_retired_shadow_planner_paths_cannot_bypass_full_validation(tmp_path: Pa
     assert "planner_only" not in workflow["jobs"]["changes"]["outputs"]
     assert not any("shadow mode" in step.get("name", "")
                    for step in workflow["jobs"]["test-release-contracts"]["steps"])
+
+
+def test_managed_policy_evidence_ci_requires_real_positive_fixture_execution() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    name = "Exercise managed Policy evidence through Flow PostgreSQL commit"
+    step = named[name]
+    assert step["if"] == "matrix.lane == 'contracts'"
+    assert not step.get("continue-on-error", False)
+    assert steps.index(named["Run Flow database contract after workspace suite"]) < steps.index(step)
+    assert step["env"]["FLOW_POSTGRES_TEST_URL"].endswith("/marty_atomic_test")
+    run = step["run"]
+    assert '"#marty-presentation-policy@"' in run
+    assert 'select(.target.kind | index("lib"))' in run
+    assert 'select(.profile.test == true)' in run
+    assert '"$RUNNER_TEMP/rust-test-artifacts.json"' in run
+    assert 'live_keyless_managed_policy_evidence' in run
+    assert 'resolve_recorded_contract_executable marty-presentation-policy control_plane_behavior' in run
+    assert 'managed_authority_http::live_keyless_managed_owner_channels' in run
+    assert run.count('--ignored --exact --list') == 2
+    assert run.count('--ignored --exact --nocapture') == 2
+    assert run.count('1 passed; 0 failed; 0 ignored;') == 2
+    assert run.count('with_disposable_policy_owner_kms.py') == 2
+    image = re.search(r'image=(quay\.io/openbao/openbao@sha256:[a-f0-9]{64})', run).group(1)
+    assert image.split('@')[1] in (ROOT / 'openbao/didcomm-authcrypt/Dockerfile').read_text()
+    assert '028992583c693c4de6350b8aa52ff85e30375a99' in run

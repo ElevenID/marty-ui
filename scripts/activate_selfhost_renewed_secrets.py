@@ -163,6 +163,19 @@ def owned_service_closure(declared: set[str], running: set[str]) -> bool:
 
 def secret_mounts(project: str, secret_root: Path, services: set[str],
                   model: dict) -> int:
+    ids = subprocess.run(["docker", "ps", "-aq", "--filter",
+                          f"label=com.docker.compose.project={project}"],
+                         capture_output=True, text=True, timeout=30, check=True).stdout.split()
+    if len(ids) != len(services):
+        raise RuntimeError("owned project container count changed")
+    inspected = run_json(["docker", "inspect", *ids], cwd=secret_root)
+    return checked_secret_mounts(inspected, project, secret_root, services, model)
+
+
+def checked_secret_mounts(inspected: object, project: str, secret_root: Path,
+                          services: set[str], model: dict, *, path_equal=None) -> int:
+    """Validate already-inspected containers; transport remains at the caller."""
+    same_path = path_equal if path_equal is not None else lambda a, b: a == b
     definitions = model.get("secrets")
     declared = model.get("services")
     if not isinstance(definitions, dict) or not isinstance(declared, dict):
@@ -185,19 +198,13 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
             if (not isinstance(definition, dict) or not isinstance(target, str)
                     or not target.startswith("/run/secrets/")
                     or not target.removeprefix("/run/secrets/")
-                    or definition.get("file") != str(secret_root / source)
+                    or not same_path(definition.get("file"), str(secret_root / source))
                     or target in targets):
                 raise RuntimeError("owned Compose secret binding is invalid")
             targets[target] = str(secret_root / source)
             names.add(source)
         expected[service] = targets
-    ids = subprocess.run(["docker", "ps", "-aq", "--filter",
-                          f"label=com.docker.compose.project={project}"],
-                         capture_output=True, text=True, timeout=30, check=True).stdout.split()
-    if len(ids) != len(services):
-        raise RuntimeError("owned project container count changed")
-    inspected = run_json(["docker", "inspect", *ids], cwd=secret_root)
-    if (not isinstance(inspected, list) or len(inspected) != len(ids)
+    if (not isinstance(inspected, list) or len(inspected) != len(services)
             or not all(isinstance(item, dict) and isinstance(item.get("Mounts"), list)
                        for item in inspected)):
         raise RuntimeError("owned project mounts are invalid")
@@ -221,7 +228,7 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
                 continue
             mount_count += 1
             if (target in seen or target not in expected[service]
-                    or mount.get("Source") != expected[service][target]
+                    or not same_path(mount.get("Source"), expected[service][target])
                     or mount.get("Type") != "bind" or mount.get("RW") is not False):
                 raise RuntimeError("owned project secret mount differs from generation")
             seen.add(target)

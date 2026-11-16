@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "External observation admission candidate v1",
+  "description": "Proposed unsigned producer envelope. Not an enabled public endpoint or a verified EvidenceFact. Identity, resource scope and fact type come from the core-owned binding.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["binding_id", "binding_revision", "observation_id", "sequence", "observed_at_ms", "effective_at_ms", "claims"],
+  "properties": {
+    "binding_id": {"$ref": "#/$defs/id"},
+    "binding_revision": {"$ref": "#/$defs/positiveInteger"},
+    "observation_id": {"$ref": "#/$defs/id"},
+    "sequence": {"$ref": "#/$defs/positiveInteger"},
+    "observed_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Producer observation time, Unix milliseconds. Retries retain this original value."},
+    "effective_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Provider event time, Unix milliseconds; must not exceed observed_at_ms."},
+    "claims": {
+      "type": "object", "minProperties": 1, "maxProperties": 32,
+      "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$"},
+      "additionalProperties": {
+        "oneOf": [
+          {"type": "null"}, {"type": "boolean"}, {"type": "number"},
+          {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]+$"}
+        ]
+      },
+      "description": "Only primitive unsigned claims. The admission kernel additionally applies the exact administrator-approved claim allowlist, types, numeric ranges, UTF-8 byte lengths and reserved-name exclusions. JSON schema alone does not grant trust."
+    }
+  },
+  "$defs": {
+    "id": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_-]+$"},
+    "positiveInteger": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+  }
+}

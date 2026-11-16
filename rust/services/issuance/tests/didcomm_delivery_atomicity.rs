@@ -29,6 +29,9 @@ use serde_json::{json, Map};
 
 fn transaction() -> CredentialTransaction {
     CredentialTransaction {
+        jwt_vc_profile: None,
+        jwt_vc_signing_timing: None,
+
         id: "transaction-atomicity".to_owned(),
         organization_id: "organization-atomicity".to_owned(),
         credential_template_id: "template-atomicity".to_owned(),
@@ -292,11 +295,17 @@ impl DidcommEnvelopePort for LocalEnvelope {
     async fn prepare_encryption(
         &self,
         organization_id: &str,
+        operation_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
         self.native
-            .prepare_encryption(organization_id, issuer_did, recipient_document)
+            .prepare_encryption(
+                organization_id,
+                operation_id,
+                issuer_did,
+                recipient_document,
+            )
             .await
     }
 

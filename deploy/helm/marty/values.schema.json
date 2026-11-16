@@ -1,0 +1,747 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": [
+    "images",
+    "publicHost",
+    "organization",
+    "openbao",
+    "existingSecrets"
+  ],
+  "properties": {
+    "images": {
+      "type": "object",
+      "required": [
+        "ui",
+        "services",
+        "migrations",
+        "keycloak"
+      ],
+      "properties": {
+        "ui": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "services": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "migrations": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "keycloak": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "openbao_didcomm": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        }
+      }
+    },
+    "imagePullPolicy": {
+      "enum": [
+        "Always",
+        "IfNotPresent",
+        "Never"
+      ]
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "publicHost": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^[a-zA-Z0-9.\\[\\]:-]+$"
+    },
+    "publicOrigin": {
+      "type": "string",
+      "pattern": "^$|^https://[^/?#\\s]+$"
+    },
+    "organization": {
+      "type": "object",
+      "required": [
+        "id",
+        "slug",
+        "adminEmail"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "slug": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "adminEmail": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^[^\\s@]+@[^\\s@]+$"
+        },
+        "did": {
+          "type": "string"
+        }
+      }
+    },
+    "openbao": {
+      "type": "object",
+      "required": [
+        "address"
+      ],
+      "properties": {
+        "address": {
+          "type": "string",
+          "pattern": "^https://[^/?#\\s]+$"
+        }
+      }
+    },
+    "existingSecrets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "apps": {
+      "type": "object",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "canvasWorker": {
+      "type": "object",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "required": [
+        "image"
+      ],
+      "properties": {
+        "image": {
+          "type": "string",
+          "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "keycloak": {
+      "type": "object",
+      "properties": {
+        "configurator": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "properties": {
+        "development": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "checkoutPath",
+            "nodeImage"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "checkoutPath": {
+              "type": "string"
+            },
+            "nodeImage": {
+              "type": "string",
+              "pattern": "^[^@\\s]+@sha256:[a-f0-9]{64}$"
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "migrations": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "activeDeadlineSeconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "backoffLimit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ttlSecondsAfterFinished": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "object",
+          "required": [
+            "requests",
+            "limits"
+          ],
+          "properties": {
+            "requests": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "limits": {
+              "type": "object",
+              "required": [
+                "cpu",
+                "memory"
+              ],
+              "properties": {
+                "cpu": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "memory": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "className": {
+          "type": "string"
+        },
+        "host": {
+          "type": "string"
+        },
+        "tlsSecretName": {
+          "type": "string"
+        },
+        "useDefaultCertificate": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "if": {
+              "required": [
+                "useDefaultCertificate"
+              ],
+              "properties": {
+                "useDefaultCertificate": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "className": {
+                  "const": "traefik"
+                },
+                "tlsSecretName": {
+                  "maxLength": 0
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "tlsSecretName": {
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "ingressNamespace": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider"
+      ],
+      "properties": {
+        "provider": {
+          "enum": [
+            "keycloak",
+            "external"
+          ]
+        },
+        "external": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "issuerUrl": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https://[^\\s/?#@\\\\]+(/[^\\s?#\\\\]*)?$"
+            },
+            "clientId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"
+            },
+            "allowedAlgorithms": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 9,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "ES256",
+                  "ES384",
+                  "EdDSA",
+                  "RS256",
+                  "RS384",
+                  "RS512",
+                  "PS256",
+                  "PS384",
+                  "PS512"
+                ]
+              }
+            },
+            "trustedEndpointOrigins": {
+              "type": "array",
+              "maxItems": 8,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "maxLength": 2048,
+                "pattern": "^https://[^\\s/?#@\\\\]+/?$"
+              }
+            },
+            "scopes": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "contains": {
+                "const": "openid"
+              },
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[!#$%&()*+./0-9:;<=>?@A-Z\\[\\]^_`a-z{|}~-]+$"
+              }
+            },
+            "clientSecret": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "key"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253,
+                  "pattern": "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+                },
+                "key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253,
+                  "pattern": "^[A-Za-z0-9._-]+$"
+                }
+              }
+            },
+            "clientAuthMethod": {
+              "enum": [
+                "none",
+                "client_secret_post",
+                "client_secret_basic"
+              ]
+            },
+            "userinfoMode": {
+              "enum": [
+                "disabled",
+                "fallback"
+              ]
+            },
+            "prompt": {
+              "type": "array",
+              "maxItems": 4,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "login",
+                  "consent",
+                  "select_account",
+                  "none"
+                ]
+              }
+            },
+            "maxAge": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                },
+                {
+                  "const": "omit"
+                }
+              ]
+            },
+            "providerName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "pattern": "^[^\\x00-\\x1f\\x7f]+$"
+            },
+            "accountUrl": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https://[^\\s@\\\\]+"
+            },
+            "recoveryUrl": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^https://[^\\s@\\\\]+"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provider": {
+                "const": "external"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "external"
+            ],
+            "properties": {
+              "external": {
+                "required": [
+                  "issuerUrl",
+                  "clientId",
+                  "allowedAlgorithms"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

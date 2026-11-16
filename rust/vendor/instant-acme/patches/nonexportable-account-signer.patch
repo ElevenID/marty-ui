@@ -1,0 +1,289 @@
+--- a/src/account.rs
++++ b/src/account.rs
+@@ -24,0 +25 @@
++use crate::crypto::KeyPair;
+@@ -221,0 +223,6 @@
++        // Local extension: never replace a remotely held key with an exported local one.
++        if matches!(self.inner.key.inner, KeyMaterial::External { .. }) {
++            return Err(Error::Unsupported(
++                "local rollover of an external account key",
++            ));
++        }
+@@ -238,4 +245,4 @@
+-            old_key: Jwk::new(&self.inner.key.inner),
+-        };
+-
+-        let body = JoseJson::new(Some(&payload), header, &new_key)?;
++            old_key: self.inner.key.jwk.clone(),
++        };
++
++        let body = JoseJson::new(Some(&payload), header, &new_key).await?;
+@@ -391,0 +399 @@
++#[async_trait::async_trait]
+@@ -405,2 +413,2 @@
+-    fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
+-        self.key.sign(payload)
++    async fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
++        self.key.sign(payload).await
+@@ -417,0 +426,45 @@
++    /// Create or look up an account using a nonexportable external ES256 signer.
++    ///
++    /// The caller must durably store the signer key reference before calling this
++    /// method, then persist [`Account::id()`], the directory URL, and the pinned
++    /// public key. No private key bytes are requested or returned. Retrying an
++    /// interrupted registration must use the same signer and [`NewAccount`].
++    pub async fn create_with_signer(
++        self,
++        account: &NewAccount<'_>,
++        signer: Arc<dyn ExternalAccountSigner>,
++        directory_url: String,
++        external_account: Option<&ExternalAccountKey>,
++    ) -> Result<Account, Error> {
++        let key = Key::from_signer(signer)?;
++        Self::register(
++            account,
++            key,
++            external_account,
++            Client::new(directory_url, self.http).await?,
++        )
++        .await
++    }
++
++    /// Restore an account using its ID, original directory and external signer.
++    ///
++    /// The caller must bind these values and the signer's public key to the same
++    /// durable installation record. The CA verifies the binding on signed calls.
++    /// The signer is responsible for its network timeouts and fresh credentials.
++    #[allow(clippy::wrong_self_convention)]
++    pub async fn from_signer(
++        self,
++        id: String,
++        signer: Arc<dyn ExternalAccountSigner>,
++        directory_url: String,
++    ) -> Result<Account, Error> {
++        let key = Key::from_signer(signer)?;
++        Ok(Account {
++            inner: Arc::new(AccountInner {
++                id,
++                key,
++                client: Arc::new(Client::new(directory_url, self.http).await?),
++            }),
++        })
++    }
++
+@@ -526,0 +580,18 @@
++        let directory = client.directory_url.clone();
++        let account = Self::register(account, key, external_account, client).await?;
++        let credentials = AccountCredentials {
++            id: account.id().to_owned(),
++            key_pkcs8,
++            directory,
++            urls: None,
++        };
++        Ok((account, credentials))
++    }
++
++    // Local extension: both custody modes share the existing registration protocol.
++    async fn register(
++        account: &NewAccount<'_>,
++        key: Key,
++        external_account: Option<&ExternalAccountKey>,
++        client: Client,
++    ) -> Result<Account, Error> {
+@@ -529,2 +600,2 @@
+-            external_account_binding: external_account
+-                .map(|eak| {
++            external_account_binding: match external_account {
++                Some(eak) => Some(
+@@ -532 +603 @@
+-                        Some(&Jwk::new(&key.inner)),
++                        Some(&key.jwk),
+@@ -536,2 +607,4 @@
+-                })
+-                .transpose()?,
++                    .await?,
++                ),
++                None => None,
++            },
+@@ -554,9 +626,0 @@
+-        let credentials = AccountCredentials {
+-            id: id.clone(),
+-            key_pkcs8,
+-            directory: Some(client.directory_url.clone().unwrap()), // New clients always have `directory_url`
+-            // We support deserializing URLs for compatibility with versions pre 0.4,
+-            // but we prefer to get fresh URLs from the `directory_url` for newer credentials.
+-            urls: None,
+-        };
+-
+@@ -569,7 +633,31 @@
+-        Ok((
+-            Account {
+-                inner: Arc::new(account),
+-            },
+-            credentials,
+-        ))
+-    }
++        Ok(Account {
++            inner: Arc::new(account),
++        })
++    }
++}
++
++/// An asynchronous signer for a remotely held, nonexportable P-256 account key.
++///
++/// This signs ACME account JWS messages; it is independent of External Account
++/// Binding and of the certificate key used by [`Order::finalize_csr()`].
++#[async_trait::async_trait]
++pub trait ExternalAccountSigner: Send + Sync {
++    /// Uncompressed SEC1 public key: `0x04 || x || y`, exactly 65 bytes.
++    ///
++    /// The client snapshots this value once and verifies every signature against
++    /// it. A key version must remain fixed for the lifetime of the account.
++    fn public_key(&self) -> &[u8];
++
++    /// Sign the exact JWS signing input with ES256, hashing internally with SHA-256.
++    ///
++    /// Return the 64-byte JWS `r || s` encoding, not an ASN.1 DER signature. The
++    /// implementation must bound remote calls and must never export the key.
++    async fn sign(&self, signing_input: &[u8]) -> Result<[u8; 64], Error>;
++}
++
++enum KeyMaterial {
++    Local(crypto::EcdsaKeyPair),
++    External {
++        signer: Arc<dyn ExternalAccountSigner>,
++        public_key: [u8; 65],
++    },
+@@ -582 +670,2 @@
+-    inner: crypto::EcdsaKeyPair,
++    inner: KeyMaterial,
++    jwk: Jwk,
+@@ -615 +704,7 @@
+-        let thumb = BASE64_URL_SAFE_NO_PAD.encode(Jwk::thumb_sha256(&inner)?);
++        let public_key = inner
++            .public_key()
++            .as_ref()
++            .try_into()
++            .map_err(|_| Error::KeyRejected)?;
++        let jwk = Jwk::new(public_key);
++        let thumb = BASE64_URL_SAFE_NO_PAD.encode(jwk.thumb_sha256()?);
+@@ -619 +714,2 @@
+-            inner,
++            inner: KeyMaterial::Local(inner),
++            jwk,
+@@ -623,2 +719,22 @@
+-}
+-
++
++    fn from_signer(signer: Arc<dyn ExternalAccountSigner>) -> Result<Self, Error> {
++        let public_key: [u8; 65] = signer
++            .public_key()
++            .try_into()
++            .map_err(|_| Error::KeyRejected)?;
++        if public_key[0] != 4 {
++            return Err(Error::KeyRejected);
++        }
++        let jwk = Jwk::new(&public_key);
++        let thumb = BASE64_URL_SAFE_NO_PAD.encode(jwk.thumb_sha256()?);
++        Ok(Self {
++            rng: crypto::SystemRandom::new(),
++            signing_algorithm: SigningAlgorithm::Es256,
++            inner: KeyMaterial::External { signer, public_key },
++            jwk,
++            thumb,
++        })
++    }
++}
++
++#[async_trait::async_trait]
+@@ -626 +742 @@
+-    type Signature = crypto::Signature;
++    type Signature = Vec<u8>;
+@@ -632 +748 @@
+-            key: KeyOrKeyId::from_key(&self.inner),
++            key: KeyOrKeyId::Key(self.jwk.clone()),
+@@ -638,4 +754,14 @@
+-    fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
+-        self.inner
+-            .sign(&self.rng, payload)
+-            .map_err(|_| Error::Crypto)
++    async fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
++        match &self.inner {
++            KeyMaterial::Local(key) => key
++                .sign(&self.rng, payload)
++                .map(|signature| signature.as_ref().to_vec())
++                .map_err(|_| Error::Crypto),
++            KeyMaterial::External { signer, public_key } => {
++                let signature = signer.sign(payload).await?;
++                crypto::UnparsedPublicKey::new(&crypto::ECDSA_P256_SHA256_FIXED, public_key)
++                    .verify(payload, &signature)
++                    .map_err(|_| Error::Crypto)?;
++                Ok(signature.to_vec())
++            }
++        }
+@@ -665,0 +792 @@
++#[async_trait::async_trait]
+@@ -679 +806 @@
+-    fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
++    async fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error> {
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -22 +22 @@
+-use crate::crypto::{self, KeyPair};
++use crate::crypto;
+@@ -273,7 +273,2 @@
+-impl KeyOrKeyId<'_> {
+-    pub(crate) fn from_key(key: &crypto::EcdsaKeyPair) -> KeyOrKeyId<'static> {
+-        KeyOrKeyId::Key(Jwk::new(key))
+-    }
+-}
+-
+-#[derive(Debug, Serialize)]
++// Local extension: derive JWKs from public bytes, independent of key custody.
++#[derive(Clone, Debug, Serialize)]
+@@ -290,2 +285,2 @@
+-    pub(crate) fn new(key: &crypto::EcdsaKeyPair) -> Self {
+-        let (x, y) = key.public_key().as_ref()[1..].split_at(32);
++    pub(crate) fn new(public_key: &[u8; 65]) -> Self {
++        let (x, y) = public_key[1..].split_at(32);
+@@ -302,4 +297 @@
+-    pub(crate) fn thumb_sha256(
+-        key: &crypto::EcdsaKeyPair,
+-    ) -> Result<crypto::Digest, serde_json::Error> {
+-        let jwk = Self::new(key);
++    pub(crate) fn thumb_sha256(&self) -> Result<crypto::Digest, serde_json::Error> {
+@@ -309,4 +301,4 @@
+-                crv: jwk.crv,
+-                kty: jwk.kty,
+-                x: &jwk.x,
+-                y: &jwk.y,
++                crv: self.crv,
++                kty: self.kty,
++                x: &self.x,
++                y: &self.y,
+@@ -586 +578 @@
+-    pub(crate) fn new(
++    pub(crate) async fn new(
+@@ -598 +590 @@
+-        let signature = signer.sign(combined.as_bytes())?;
++        let signature = signer.sign(combined.as_bytes()).await?;
+@@ -607 +599,3 @@
+-pub(crate) trait Signer {
++// Local extension: network-backed account signing must not block the runtime.
++#[async_trait::async_trait]
++pub(crate) trait Signer: Sync {
+@@ -612 +606 @@
+-    fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error>;
++    async fn sign(&self, payload: &[u8]) -> Result<Self::Signature, Error>;
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -38 +38 @@
+-pub use account::{Account, AccountBuilder, ExternalAccountKey};
++pub use account::{Account, AccountBuilder, ExternalAccountKey, ExternalAccountSigner};
+@@ -122 +122 @@
+-        let body = JoseJson::new(payload, signer.header(Some(&nonce), url), signer)?;
++        let body = JoseJson::new(payload, signer.header(Some(&nonce), url), signer).await?;
+@@ -382 +382,2 @@
+-    pub(crate) use ring_like::signature::{KeyPair, Signature};
++    // Local extension: verify every external signature against its pinned public key.
++    pub(crate) use ring_like::signature::{ECDSA_P256_SHA256_FIXED, KeyPair, UnparsedPublicKey};

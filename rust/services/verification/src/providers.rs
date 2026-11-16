@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use http::uri::PathAndQuery;
@@ -7,7 +7,7 @@ use marty_flow::{
     organization_proto::organization_service_client::OrganizationServiceClient,
     presentation_policy_proto::{
         presentation_policy_service_client::PresentationPolicyServiceClient,
-        EvaluatePresentationRequest,
+        EvaluatePresentationRequest, PolicyRevision,
     },
     CredentialTemplateProvider, FlowProviderError, FlowProviderRegistry,
     GrpcCredentialTemplateProvider, GrpcPresentationPolicyProvider, GrpcTenantMembershipProvider,
@@ -16,7 +16,7 @@ use marty_flow::{
 use mmf_platform::{
     read_public_certificates, GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial,
     GrpcTransportSecurity, GrpcTrustMode, KeylessGrpcChannelFactory, KeylessGrpcTransportOptions,
-    KeylessTlsIdentity, OpenBaoTlsIdentityFiles,
+    KeylessTlsIdentity,
 };
 use mmf_security::TenantMembershipProvider;
 use prost::Message;
@@ -30,16 +30,7 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 const USER_ID_HEADER: &str = "x-user-id";
 const MAX_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 
-#[derive(Clone, Debug)]
-pub struct WorkloadClientTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as WorkloadClientTlsFiles;
 
 #[derive(Clone, Debug)]
 pub struct GrpcProviderConfig {
@@ -238,6 +229,12 @@ impl EvaluationProvider for GrpcEvaluationProvider {
                 "presentation policy response identity mismatch",
             ));
         }
+        let expected_revision = policy_revision_message(request)?;
+        if response.policy_revision.as_ref() != Some(&expected_revision) {
+            return Err(unavailable(
+                "presentation policy response revision mismatch",
+            ));
+        }
         Ok(EvaluationResult {
             result: response.result,
             decision: response.decision,
@@ -273,6 +270,25 @@ fn policy_evaluation_message(
         // This legacy service has no emitted verifier query or submission
         // authority to forward. Only Flow may attach the new metadata.
         oid4vp_transport: None,
+        expected_policy_revision: Some(policy_revision_message(request)?),
+    })
+}
+
+fn policy_revision_message(
+    request: &PresentationEvaluationRequest,
+) -> Result<PolicyRevision, VerificationError> {
+    request
+        .expected_policy_revision
+        .validate()
+        .map_err(|_| unavailable("expected policy revision is invalid"))?;
+    if request.expected_policy_revision.id != request.policy_id {
+        return Err(unavailable("expected policy revision identity mismatch"));
+    }
+    Ok(PolicyRevision {
+        organization_id: request.organization_id.clone(),
+        id: request.expected_policy_revision.id.clone(),
+        version: request.expected_policy_revision.version,
+        content_digest: request.expected_policy_revision.content_digest.clone(),
     })
 }
 
@@ -381,19 +397,13 @@ async fn keyless_setup(
     };
     let ca = read_public_certificates(&files.ca_certificate)
         .map_err(|_| unavailable("workload server CA is invalid"))?;
-    let identity = OpenBaoTlsIdentityFiles {
-        certificate_chain_file: files.certificate.clone(),
-        kms_ca_cert_file: files.kms_ca_certificate.clone(),
-        kms_endpoint: files.kms_endpoint.clone(),
-        kms_token_file: files.kms_token_file.clone(),
-        kms_key_name: files.kms_key_name.clone(),
-        kms_key_version: files.kms_key_version,
-        request_timeout: config.timeout.min(Duration::from_secs(30)),
-        max_concurrent_signs: 64,
-    }
-    .connect()
-    .await
-    .map_err(|_| unavailable("workload remote TLS identity is unavailable"))?;
+    let identity = files
+        .identity
+        .clone()
+        .with_request_timeout(config.timeout.min(Duration::from_secs(30)))
+        .connect()
+        .await
+        .map_err(|_| unavailable("workload remote TLS identity is unavailable"))?;
     Ok(Some((identity, ca)))
 }
 
@@ -461,6 +471,11 @@ mod tests {
     fn legacy_verification_provider_does_not_claim_flow_owned_oid4vp_metadata() {
         let request = PresentationEvaluationRequest {
             policy_id: "policy-1".into(),
+            expected_policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
+                id: "policy-1".into(),
+                version: 1,
+                content_digest: format!("sha256:{}", "1".repeat(64)),
+            },
             organization_id: "org-1".into(),
             principal_id: "user-1".into(),
             presentation: "header.payload.signature".into(),
@@ -474,6 +489,10 @@ mod tests {
         };
         let wire = policy_evaluation_message(&request).unwrap();
         assert!(wire.oid4vp_transport.is_none());
+        assert_eq!(
+            wire.expected_policy_revision,
+            Some(policy_revision_message(&request).unwrap())
+        );
         assert_eq!(wire.policy_id, request.policy_id);
         assert_eq!(wire.vp_token, request.presentation);
         assert_eq!(wire.nonce, request.nonce);

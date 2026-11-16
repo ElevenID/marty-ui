@@ -2,6 +2,7 @@
 
 #[tokio::main]
 async fn main() {
+    marty_service_runtime::install_tls_crypto_provider();
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     if arguments == ["--reference-json"] {
         use std::io::Read;
