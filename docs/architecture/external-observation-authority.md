@@ -143,3 +143,30 @@ establish a producer identity. Strip caller-supplied identity headers and forwar
 only authenticated identity using the existing trusted internal transport. The
 connector accesses only the public Gateway; Gateway-to-service transport does
 not authorize connector access to private endpoints or shared PostgreSQL.
+
+## Issuance HTTP adapter
+
+`external_observation_http::observation_router` is the core-side Axum adapter for
+POST `/v1/evidence/observations`. Its constructor requires the explicit Gateway
+service credential. It validates exactly one service credential, authenticated
+API-key ID and organization ID, rejects noncanonical/duplicate identities and
+query parameters, bounds body collection to 65,536 bytes with a read deadline,
+and passes original bytes/header values to the strict decoder and canonical
+transactional journal. Replies are fixed, non-sensitive, no-store errors or
+receipt IDs with a replay flag. Uncertain commits explicitly require
+reconciliation. It has no generic response-cache shortcut.
+
+This router is not mounted in production by the module. The public Gateway
+must first authenticate the real organization API key, enforce exact
+evidence:submit permission, strip caller identity and inject the trusted IDs
+using its established service-authenticated proxy. The adapter does not trust
+an arbitrary caller merely because it sent identity headers; its service
+credential must remain Gateway-only, with workload/network isolation. Never
+expose this service credential or private endpoint to the connector.
+
+Gateway route registration, early Gateway body/framing enforcement, generic
+idempotency-cache bypass, bootstrap mounting, reviewed schema/role/migration
+activation and administrator authority management remain required before
+activation. A service-side router test cannot establish those public Gateway
+or deployed network boundaries. Receipts still confer no evidence verification,
+application approval or credential issuance authority.

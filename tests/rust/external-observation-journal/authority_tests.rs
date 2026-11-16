@@ -18,7 +18,7 @@ fn identity() -> ProducerIdentity {
     }
 }
 
-async fn seed_authority(fixture: &Fixture) {
+pub(super) async fn seed_authority(fixture: &Fixture) {
     let pool = &fixture.pool;
     let organization = Uuid::parse_str(ORGANIZATION).unwrap();
     let key = Uuid::parse_str(API_KEY).unwrap();

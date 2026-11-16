@@ -24,7 +24,9 @@ WIRE = "rust/services/issuance/src/external_observation_wire.rs"
 WIRE_TEST = "rust/services/issuance/src/external_observation_wire_tests.rs"
 INGRESS = "rust/services/issuance/src/external_observation_ingress.rs"
 INGRESS_TEST = "tests/rust/external-observation-journal/ingress_tests.rs"
-FORMAT_FILES = (STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+HTTP = "rust/services/issuance/src/external_observation_http.rs"
+HTTP_TEST = "tests/rust/external-observation-journal/http_tests.rs"
+FORMAT_FILES = (HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -52,7 +54,7 @@ def run(command, *, cwd, log, environment):
 def compile_contract(artifacts):
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text())
     service = tomllib.loads((ROOT / "rust/services/issuance/Cargo.toml").read_text())
-    names = ("async-trait", "chrono", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
+    names = ("axum", "subtle", "tower", "async-trait", "chrono", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
     declarations = []
     for name in names:
         value = workspace["workspace"]["dependencies"][name]
@@ -78,10 +80,11 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / HTTP_TEST))}]\nmod http_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
             f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
-        modules = [
+        modules = [("external_observation_http", ROOT / HTTP),
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
             ("external_observation_authority_postgres", ROOT / AUTHORITY),
