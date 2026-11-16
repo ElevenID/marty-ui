@@ -1113,6 +1113,7 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
     for source in &profile.trust_sources {
         validate_trust_source(source)?;
         if source.source_type == crate::TrustSourceType::RegisteredVerifier {
+            crate::registered_verifier::validate_profile_policy(profile)?;
             let registration = crate::registered_verifier::registration(source)?;
             if !registered_clients.insert(registration.client_id) {
                 return Err(TrustProfileApplicationError::Invalid(

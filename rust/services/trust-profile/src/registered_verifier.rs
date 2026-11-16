@@ -30,6 +30,8 @@ pub struct RegisteredVerifierAuthority {
     pub revision: String,
     pub key_purpose: &'static str,
     pub algorithm: &'static str,
+    pub request_clock_skew_seconds: u32,
+    pub max_request_lifetime_seconds: u32,
     pub registration: RegisteredVerifier,
 }
 
@@ -44,6 +46,33 @@ pub struct RegisteredVerifier {
     pub valid_until: DateTime<Utc>,
 }
 
+pub(crate) fn validate_profile_policy(
+    profile: &TrustProfile,
+) -> Result<(), TrustProfileApplicationError> {
+    if profile.profile_type != crate::TrustProfileType::Custom
+        || !profile
+            .validation_rules
+            .allowed_algorithms
+            .iter()
+            .any(|algorithm| algorithm == "ES256")
+        || profile.validation_rules.min_key_size_ec > 256
+        || !profile.validation_rules.extensions.is_empty()
+        || profile
+            .trusted_assertion_formats
+            .as_ref()
+            .is_some_and(|formats| !formats.contains(&crate::TrustedAssertionFormat::Jwt))
+        || profile.time_policy.max_clock_skew_seconds < 30
+        || profile.verification_policy_set_id.is_some()
+        || profile.revocation_profile_id.is_some()
+        || !profile.compatible_compliance_codes.is_empty()
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registered_verifier_policy",
+        ));
+    }
+    Ok(())
+}
+
 /// Project one current registration from its owner profile, without resolving
 /// issuer relationships, remote URLs, or request-supplied keys.
 pub fn project_wallet_verifier_authority(
@@ -52,6 +81,7 @@ pub fn project_wallet_verifier_authority(
     client_id: &str,
     now: DateTime<Utc>,
 ) -> Result<WalletVerifierAuthoritySnapshot, TrustProfileApplicationError> {
+    validate_profile_policy(profile)?;
     if !text(client_id)
         || profile.organization_id != organization_id
         || !text(organization_id)
@@ -96,6 +126,10 @@ pub fn project_wallet_verifier_authority(
             "profile_updated_at":profile.updated_at,"profile_status":profile.status,
             "compliance_status":profile.compliance_status,"trust_purposes":profile.trust_purposes,
             "allowed_algorithms":profile.validation_rules.allowed_algorithms,
+            "min_key_size_ec":profile.validation_rules.min_key_size_ec,
+            "trusted_assertion_formats":profile.trusted_assertion_formats,
+            "profile_max_clock_skew_seconds":profile.time_policy.max_clock_skew_seconds,
+            "request_clock_skew_seconds":30,"max_request_lifetime_seconds":900,
             "source_id":source_id,"registration":registration,
         }),
     )
@@ -115,6 +149,8 @@ pub fn project_wallet_verifier_authority(
             revision,
             key_purpose: "oid4vp_request_signing",
             algorithm: "ES256",
+            request_clock_skew_seconds: 30,
+            max_request_lifetime_seconds: 900,
             registration,
         },
     };
@@ -309,6 +345,49 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn verifier_authority_enforces_applicable_profile_controls_without_policy_fallback() {
+        let baseline = profile();
+        let now = baseline.updated_at;
+        let first = project_wallet_verifier_authority(&baseline, "org-a", "registered-client", now)
+            .unwrap();
+        for case in 0..8 {
+            let mut profile = baseline.clone();
+            match case {
+                0 => profile.validation_rules.min_key_size_ec = 384,
+                1 => {
+                    profile.trusted_assertion_formats =
+                        Some(vec![crate::TrustedAssertionFormat::X509Certificate])
+                }
+                2 => profile.validation_rules.allowed_algorithms = vec!["ES384".into()],
+                3 => profile.time_policy.max_clock_skew_seconds = 0,
+                4 => {
+                    profile
+                        .validation_rules
+                        .extensions
+                        .insert("unknown_policy".into(), json!(true));
+                }
+                5 => profile.verification_policy_set_id = Some("unsupported-policy".into()),
+                6 => profile.revocation_profile_id = Some("unsupported-revocation".into()),
+                _ => profile.profile_type = crate::TrustProfileType::Eudi,
+            }
+            assert!(
+                project_wallet_verifier_authority(&profile, "org-a", "registered-client", now)
+                    .is_err(),
+                "ignored policy {case}"
+            );
+        }
+        let mut restricted = baseline.clone();
+        restricted.trusted_assertion_formats = Some(vec![crate::TrustedAssertionFormat::Jwt]);
+        restricted.time_policy.max_clock_skew_seconds = 30;
+        let second =
+            project_wallet_verifier_authority(&restricted, "org-a", "registered-client", now)
+                .unwrap();
+        assert_ne!(first.authority.revision, second.authority.revision);
+        assert_eq!(second.authority.request_clock_skew_seconds, 30);
+        assert_eq!(second.authority.max_request_lifetime_seconds, 900);
     }
 
     fn source() -> TrustSource {
