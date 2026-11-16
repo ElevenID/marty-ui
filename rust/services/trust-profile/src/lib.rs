@@ -10,6 +10,7 @@ pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
+pub mod registered_verifier;
 pub mod registry_scheduler;
 pub mod registry_sync;
 pub mod repository;

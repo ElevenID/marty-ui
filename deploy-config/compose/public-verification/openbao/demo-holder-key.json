@@ -1,0 +1,6 @@
+{
+  "type": "hmac",
+  "key_size": 32,
+  "exportable": false,
+  "allow_plaintext_backup": false
+}

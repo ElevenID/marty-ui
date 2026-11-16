@@ -79,7 +79,7 @@ impl FromRequestParts<FlowHttpState> for FlowRequestState {
     }
 }
 
-fn authenticate_gateway_service(
+pub(crate) fn authenticate_gateway_service(
     state: &FlowHttpState,
     headers: &HeaderMap,
 ) -> Result<(), FlowHttpError> {
@@ -170,6 +170,7 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         )
         .merge(flow_application_routes())
         .merge(flow_verification_routes())
+        .merge(crate::http_public_verification::flow_public_verification_routes())
         .with_state(state)
 }
 
