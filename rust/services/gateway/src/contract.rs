@@ -725,7 +725,7 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 
 fn special_service(path: &str) -> Option<&'static str> {
     if path == crate::external_observation::PATH
-        || crate::external_observation::admin_organization(path).is_some()
+        || crate::external_observation::is_admin_namespace(path)
     {
         return Some("issuance");
     }

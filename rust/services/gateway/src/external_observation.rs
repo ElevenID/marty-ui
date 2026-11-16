@@ -274,6 +274,22 @@ pub const BINDING_ACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/activate";
 pub const BINDING_DEACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
+/// Reserved administrator namespaces must enter the guard even when a path
+/// identifier is malformed. Canonical parsing is authorization, not routing.
+pub fn is_admin_namespace(path: &str) -> bool {
+    let mut parts = path.split('/');
+    if parts.next() != Some("")
+        || parts.next() != Some("v1")
+        || parts.next() != Some("organizations")
+        || parts.next().is_none()
+    {
+        return false;
+    }
+    matches!(
+        parts.next(),
+        Some("external-observation-producers" | "external-observation-bindings")
+    )
+}
 pub fn admin_organization(path: &str) -> Option<&str> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() != 7
@@ -641,5 +657,24 @@ mod binding_admin_guard_tests {
             )),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod reserved_admin_namespace_tests {
+    use super::*;
+    #[tokio::test]
+    async fn malformed_admin_identifiers_remain_guarded_and_cannot_become_aliases() {
+        let org = "20000000-0000-4000-8000-000000000001";
+        for path in [
+            "/v1/organizations/%32%30%30%30%30%30%30%30-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke",
+            "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/00000000-0000-0000-0000-000000000000/revoke",
+            "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/bad.name/activate",
+        ] {
+            assert!(is_admin_namespace(path));assert_eq!(admin_organization(path),None);
+            let request=Request::builder().method("POST").uri(path).header("content-type","application/json").body(Body::from("{}")).unwrap();
+            assert_eq!(admit_admin(request,true,Some(org),"admin-one",true).await.unwrap_err().0,StatusCode::FORBIDDEN);
+        }
+        assert!(!is_admin_namespace("/v1/organizations/one/api-keys"));
     }
 }
