@@ -38,7 +38,14 @@ def test_rust_owns_schema_history_and_postgresql_acceptance() -> None:
     runtime = text("scripts/ci/run-rust-db-contracts.sh")
     assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
     assert "export TEST_POSTGRES_URL=" in runtime
-    assert "target/debug/trust-profile-migration-contract --test-threads=1" in runtime
+    selected = runtime.split("run_timed trust_profile_migration", 1)[1].split("test -x", 1)[0]
+    assert "native_migration_is_additive_idempotent_and_scrubs_private_custody_metadata" in selected
+    assert "--ignored --exact --test-threads=1" in selected
+    assert "127.0.0.1:5432/marty_trust_profile_migration_test" in runtime
+    assert 'MARTY_TRUST_PROFILE_MIGRATION_NONCE:?' in runtime
+    assert "marty_trust_profile_migration_test" in workflow
+    assert "CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL)" in workflow
+    assert 'MARTY_TRUST_PROFILE_MIGRATION_NONCE=%s' in workflow
 
 
 def test_native_service_has_shared_and_dedicated_image_paths() -> None:

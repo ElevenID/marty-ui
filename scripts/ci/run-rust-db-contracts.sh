@@ -144,7 +144,11 @@ test -x target/debug/notification-migration-contract
 run_timed notification_migration target/debug/notification-migration-contract \
   native_postgres_preserves_both_envelope_formats_across_migration_reruns --ignored --exact --test-threads=1
 test -x target/debug/trust-profile-migration-contract
-run_timed trust_profile_migration target/debug/trust-profile-migration-contract --test-threads=1
+TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_trust_profile_migration_test \
+MARTY_TEST_POSTGRES_DISPOSABLE_NONCE="${MARTY_TRUST_PROFILE_MIGRATION_NONCE:?fresh owned Trust Profile migration fixture required}" \
+  run_timed trust_profile_migration target/debug/trust-profile-migration-contract \
+    native_migration_is_additive_idempotent_and_scrubs_private_custody_metadata \
+    --ignored --exact --test-threads=1
 test -x target/debug/organization-migration-contract
 test -x target/debug/organization-application-postgres-contract
 test -x target/debug/organization-repository-postgres-contract
