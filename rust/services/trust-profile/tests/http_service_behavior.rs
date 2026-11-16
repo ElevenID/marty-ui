@@ -19,6 +19,150 @@ use uuid::Uuid;
 #[derive(Debug)]
 struct AllowControlPlane;
 
+#[tokio::test]
+async fn registered_verifier_projection_requires_configured_workload_auth_and_tenant_scope() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let mut selected = profile("Registered verifier");
+    selected.status = TrustProfileStatus::Active;
+    selected.compliance_status = ComplianceStatus::Compliant;
+    selected.trust_purposes = Some(vec![TrustPurpose::PresentationVerifier]);
+    selected.supported_formats.clear();
+    let mut value: Value =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    value["enabled"] = json!(true);
+    value["registered_verifier"]["valid_from"] = json!(now - Duration::minutes(1));
+    value["registered_verifier"]["valid_until"] = json!(now + Duration::hours(1));
+    selected.trust_sources = vec![serde_json::from_value(value).unwrap()];
+    repository.save_profile(&selected, None).await.unwrap();
+    let token = "s".repeat(32);
+    let path=format!("/internal/v1/trust-profiles/{}/wallet-verifier-authority?organization_id=org-1&client_id=registered-client",selected.id);
+    for configured in [false, true] {
+        let state = TrustProfileHttpState {
+            application: Arc::new(TrustProfileApplication::new(
+                repository.clone(),
+                Arc::new(AllowControlPlane),
+            )),
+            repository: repository.clone(),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(configured.then(|| token.clone()), configured)
+                    .unwrap(),
+            ),
+            internal_api_key: Some(Arc::from("legacy-api-key")),
+            registry_synchronizer: Arc::new(EchoSynchronizer),
+        };
+        let app = marty_trust_profile::trust_credential_authority_router(state.clone());
+        for (credential, uri, expected) in [
+            (None, path.clone(), 401),
+            (Some("wrong"), path.clone(), 401),
+            (Some(token.as_str()), path.clone(), 200),
+            (
+                Some(token.as_str()),
+                path.replace("org-1", "other-org"),
+                422,
+            ),
+            (
+                Some(token.as_str()),
+                path.replace("registered-client", "unknown-client"),
+                422,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .uri(uri)
+                .header("x-api-key", "legacy-api-key");
+            if let Some(credential) = credential {
+                request = request.header("x-service-token", credential);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                if configured { expected } else { 401 }
+            );
+            if response.status().is_success() {
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                let snapshot = body(response).await;
+                assert_eq!(snapshot["contract"], "marty.wallet/verifier-authority/v1");
+                assert_eq!(snapshot["organization_id"], "org-1");
+                assert_eq!(
+                    snapshot["authority"]["key_purpose"],
+                    "oid4vp_request_signing"
+                );
+                assert!(snapshot.get("issuer_relationships").is_none());
+            }
+        }
+        if configured {
+            for suffix in [
+                "&client_id=registered-client",
+                "&request_uri=https://attacker.example",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("{path}{suffix}"))
+                            .header("x-service-token", &token)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status().as_u16(), 400);
+            }
+            let response = trust_profile_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/trust-profiles/{}", selected.id))
+                        .header("x-service-token", &token)
+                        .header("x-user-id", "user-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let projected = body(response).await;
+            assert_eq!(
+                projected["trust_sources"][0]["registered_verifier"]["request_key_id"],
+                "request-1"
+            );
+            let response=trust_profile_router(state).oneshot(Request::builder().method("POST")
+                .uri("/v1/trust-profiles").header("x-service-token",&token).header("x-user-id","user-1")
+                .header("content-type","application/json").body(Body::from(json!({
+                    "organization_id":"org-1","name":"Registered round trip","compliance_status":"COMPLIANT",
+                    "trust_purposes":["PRESENTATION_VERIFIER"],"trust_sources":projected["trust_sources"],
+                    "allowed_algorithms":["ES256"]
+                }).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let created = body(response).await;
+            assert_eq!(created["status"], "draft");
+            assert_eq!(
+                created["trust_sources"][0]["id"],
+                selected.trust_sources[0].id.to_string()
+            );
+            assert_eq!(
+                created["trust_sources"][0]["registered_verifier"]["request_key_id"],
+                "request-1"
+            );
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("x-service-token", &token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 405);
+    }
+}
+
 struct RejectKeyMembership;
 
 #[async_trait]

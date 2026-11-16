@@ -36,6 +36,7 @@ pub enum TrustSourceType {
     PinnedIssuer,
     RootCa,
     PkdUrl,
+    RegisteredVerifier,
     #[serde(rename = "REGISTRY")]
     LegacyRegistry,
 }
@@ -44,6 +45,7 @@ pub enum TrustSourceType {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TrustPurpose {
     CredentialIssuer,
+    PresentationVerifier,
     MachineIdentityCa,
     ManufacturerEndorser,
     AttestationVerifier,
@@ -54,7 +56,7 @@ pub enum TrustPurpose {
 impl TrustPurpose {
     #[must_use]
     pub const fn is_machine_identity(self) -> bool {
-        !matches!(self, Self::CredentialIssuer)
+        !matches!(self, Self::CredentialIssuer | Self::PresentationVerifier)
     }
 }
 

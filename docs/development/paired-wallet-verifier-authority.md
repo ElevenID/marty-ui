@@ -1,0 +1,15 @@
+# Paired wallet verifier authority
+
+The native Trust Profile owner now recognizes the explicit `PRESENTATION_VERIFIER` purpose and `REGISTERED_VERIFIER` source. This purpose is separate from credential-issuer and machine-identity authority. Profile writes still use the existing tenant authorization and validation path; creating a profile keeps it draft. Registered sources default to disabled through the HTTP API. This source change does not provision or activate a production profile.
+
+The `registered_verifier` object contains one pre-registered client ID, request-signing key ID, public ES256 JWK, up to eight exact HTTPS response URIs, and whole-second UTC key-validity boundaries. The closed schema rejects private key material, arbitrary key-resolution URLs, alternate algorithms, duplicate clients and mixed source purposes. No certificate, DID, issuer-key, registry or machine-identity setting implicitly supplies verifier authority. The synthetic public source in the native test fixtures is not a runtime configuration.
+
+`GET /internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority?organization_id=...&client_id=...` requires configured workload authentication. The owner loads one coherent profile and checks the exact tenant, active/compliant state, explicit purpose, enabled source, algorithm and registration validity. Its response is bounded to64KiB and marked `no-store`. It does not resolve issuer relationships or accept a request-provided JWK or URL.
+
+The versioned snapshot binds organization/profile, one registration, a profile-scoped authority ID and a canonical owner-state revision. `observed_at` and `expires_at` bound snapshot freshness to at most60seconds. Registration validity bounds the key separately; consumers must not replace the key expiry with the shorter snapshot deadline. Acquire fresh authority again at preparation and require the approved original signed request and its authority binding to remain unchanged.
+
+The regular profile API exposes the validated public registration, its stable source ID and enabled state for review and round-trip editing. Unsupported legacy source controls remain rejected; this adds no private-custody readback.
+
+This owner component is a prerequisite for Authenticator #57 and Core #439. Paired-device profile binding, its projection client and mobile/native consent/preparation integration remain incomplete. Core #439's initial profile also refuses the existing managed DID/VCT request profile; those semantics require their own owner implementation and qualification. The canonical credential-authority producer currently treats nonempty trust sources as unsupported, so do not assume that adding this source to an issuer profile qualifies that separate path. Preserve distinct authority decisions instead of weakening its controls.
+
+Current local tests use native library/application/HTTP adapters with in-memory persistence and mocked control-plane permissions. They are not installed-wallet, managed-runtime, public-network or official-suite acceptance.
