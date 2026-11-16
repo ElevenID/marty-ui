@@ -209,6 +209,9 @@ impl GatewayContract {
             crate::external_observation::CREATE_PATH,
             crate::external_observation::EXPIRY_PATH,
             crate::external_observation::BINDINGS_PATH,
+            crate::external_observation::BINDING_CREATE_PATH,
+            crate::external_observation::BINDING_ACTIVATE_PATH,
+            crate::external_observation::BINDING_DEACTIVATE_PATH,
         ] {
             table.add(RouteConfig {
                 name: format!("external-observation:manage:{path}"),
@@ -581,6 +584,22 @@ impl GatewayContract {
                     "403":{"description":"Tenant, Origin, canonical permission or replacement key denied"},"409":{"description":"Revision, state or transaction conflict"},
                     "413":{"description":"Request exceeds 4096 bytes"},"503":{"description":"Unavailable or uncertain commit; reconcile"}}
             }}));
+        }
+        for (path, action) in [
+            (crate::external_observation::BINDING_CREATE_PATH, "create"),
+            (
+                crate::external_observation::BINDING_ACTIVATE_PATH,
+                "activate",
+            ),
+            (
+                crate::external_observation::BINDING_DEACTIVATE_PATH,
+                "deactivate",
+            ),
+        ] {
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::binding_admin_operation(action)}),
+            );
         }
         json!({
             "openapi": "3.1.0",
@@ -1241,7 +1260,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 7
+                + 10
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1321,7 +1340,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 7
+                + 10
         );
         for operation in [
             "submit_external_observation",
@@ -1331,6 +1350,9 @@ mod tests {
             "create_external_observation_producer",
             "change_external_observation_producer_expiry",
             "replace_external_observation_producer_bindings",
+            "create_external_observation_binding",
+            "activate_external_observation_binding",
+            "deactivate_external_observation_binding",
         ] {
             assert!(
                 identifiers.contains(operation),
@@ -1535,7 +1557,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 7
+                + 10
         );
         assert_eq!(
             contract
@@ -1548,7 +1570,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 7
+                + 10
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1559,7 +1581,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 7
+                + 10
                 + 16
         );
         assert_eq!(
@@ -1957,6 +1979,25 @@ mod observation_admin_contract_tests {
             "replace-bindings",
         ] {
             let path = path.replace("/revoke", &format!("/{action}"));
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod binding_admin_route_contract_tests {
+    use super::*;
+    #[test]
+    fn binding_administration_uses_issuance_service_auth_without_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        for action in ["create", "activate", "deactivate"] {
+            let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
             let route = route_for(&table, HttpMethod::Post, &path).unwrap();
             assert_eq!(route.route.upstream_service, "issuance");
             assert_eq!(route.route.retries, 0);

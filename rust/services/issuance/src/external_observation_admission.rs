@@ -167,7 +167,7 @@ pub enum Denial {
     OutOfOrder,
 }
 
-fn id(value: &str) -> bool {
+pub(crate) fn id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -175,7 +175,7 @@ fn id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
 }
 
-fn label(value: &str) -> bool {
+pub(crate) fn label(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -183,7 +183,7 @@ fn label(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_.:-".contains(&c))
 }
 
-fn text(value: &str, max: usize) -> bool {
+pub(crate) fn text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
@@ -216,7 +216,7 @@ fn claim_name(value: &str) -> bool {
         )
 }
 
-fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
+pub(crate) fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
     !rules.is_empty()
         && rules.len() <= 32
         && rules.iter().all(|(name, rule)| {

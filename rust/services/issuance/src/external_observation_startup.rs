@@ -56,6 +56,10 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
         sqlx::query(statement).execute(&mut *tx).await.map_err(|_| FAILURE)?;
     }
     let writes: bool=sqlx::query_scalar("SELECT
+      has_table_privilege(current_user,'issuance_service.external_observation_bindings','INSERT') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','active','UPDATE') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','updated_by','UPDATE') AND
+      has_column_privilege(current_user,'issuance_service.external_observation_bindings','revision','UPDATE') AND
       has_table_privilege(current_user,'issuance_service.external_observation_grant_bindings','INSERT') AND
       has_table_privilege(current_user,'issuance_service.external_observation_grant_bindings','DELETE') AND
       has_table_privilege(current_user,'issuance_service.external_observation_producer_grants','INSERT') AND

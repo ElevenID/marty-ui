@@ -38,7 +38,9 @@ GRANT_EDIT = "rust/services/issuance/src/external_observation_grant_edit.rs"
 GRANT_EDIT_TEST = "tests/rust/external-observation-journal/grant_edit_tests.rs"
 MEMBERSHIP = "rust/services/issuance/src/external_observation_membership_admin.rs"
 MEMBERSHIP_TEST = "tests/rust/external-observation-journal/membership_admin_tests.rs"
-FORMAT_FILES = (MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+BINDING_ADMIN = "rust/services/issuance/src/external_observation_binding_admin.rs"
+BINDING_ADMIN_TEST = "tests/rust/external-observation-journal/binding_admin_tests.rs"
+FORMAT_FILES = (BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -92,6 +94,7 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / BINDING_ADMIN_TEST))}]\nmod binding_admin_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / MEMBERSHIP_TEST))}]\nmod membership_admin_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / GRANT_EDIT_TEST))}]\nmod grant_edit_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / LIFECYCLE_TEST))}]\nmod grant_lifecycle_tests;\n"
@@ -101,7 +104,7 @@ def compile_contract(artifacts):
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
             f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
-        modules = [("external_observation_membership_admin", ROOT / MEMBERSHIP), ("external_observation_grant_edit", ROOT / GRANT_EDIT), ("external_observation_grant_lifecycle", ROOT / LIFECYCLE), ("external_observation_admin_http", ROOT / ADMIN_HTTP), ("external_observation_admin", ROOT / ADMIN), ("external_observation_startup", ROOT / STARTUP), ("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
+        modules = [("external_observation_binding_admin", ROOT / BINDING_ADMIN), ("external_observation_membership_admin", ROOT / MEMBERSHIP), ("external_observation_grant_edit", ROOT / GRANT_EDIT), ("external_observation_grant_lifecycle", ROOT / LIFECYCLE), ("external_observation_admin_http", ROOT / ADMIN_HTTP), ("external_observation_admin", ROOT / ADMIN), ("external_observation_startup", ROOT / STARTUP), ("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
             ("external_observation_authority_postgres", ROOT / AUTHORITY),

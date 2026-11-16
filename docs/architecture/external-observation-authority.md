@@ -346,3 +346,49 @@ Binding creation/editing/activation and administrator audit/read reconciliation
 remain separate missing interfaces; membership selection does not manufacture
 those authorities. The connector continues to own only provider configuration
 and credentials, with Common Gateway as its sole Marty integration.
+
+
+## Binding creation and state administration
+
+Public session administrator POST routes under
+`/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}`
+provide `/create`, `/activate`, and `/deactivate`. They use the same bounded
+original-body, current tenant, allowed Origin and canonical administrator
+permission boundary as producer administration. API-key identities cannot use
+these operations. The shared HTTP body/authentication reader applies to both
+route families. Resource/claim maps reject duplicate keys before normalization;
+claim-rule structs reject duplicate or unknown fields. Provider, fact, resource
+and claim definitions must meet the existing admission validators, including
+reserved authority/secret claim-name exclusions and freshness bounds.
+
+Creation takes a source ID, existing application ID and its exact current
+microsecond `updated_at` revision, provider/fact type, resource scope, claim rules
+and freshness limits. It derives the subject from the locked canonical
+application; caller subject, tenant, active state and approval fields are not
+accepted. The application must belong to the current organization, be pending or
+under review, and be unexpired. Creation starts inactive without membership.
+Duplicate binding IDs conflict rather than overwriting or upserting.
+
+Activation requires both expected binding and application revisions. It validates
+the stored definition, current application subject/lifecycle/expiry and repeats
+application checks after audit insertion. Deactivation requires only the binding
+revision and remains available after application closure/expiry. Both operations
+deactivate every linked producer grant and clear its approval, even when the
+requested binding state is unchanged. Fresh explicit producer approval is
+required; changing binding state never transfers an old approval automatically.
+Linked key rows, grant rows, membership rows, binding, and application are locked
+in that order under SERIALIZABLE. Keys may already be revoked/expired because
+binding deactivation must remain possible. A concurrent membership insertion
+absent from initial discovery is fenced by the serializable transaction. Final
+checks validate the exact linked set, each inactive grant/key/revision, binding
+revision/state and application authority. Audit-trigger changes and expiry during
+staged writes roll the transaction back. Unknown commits have no automatic retry.
+
+Audits contain only binding revision/state and affected grant count; no subject,
+resource values, claim content or credentials. No application state, evidence
+verification, signing or issuance changes. Preflight now requires binding INSERT
+and active/updated_by/revision UPDATE privileges in addition to existing checks.
+Registered migrations, production least-privilege roles and actual Gateway
+runtime qualification remain required. Binding definition replacement and
+administrator reads/reconciliation remain unfinished; this is not a deployment
+or production readiness claim.

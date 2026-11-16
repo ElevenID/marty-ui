@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{
     external_observation_admin::{revoke_grant, AdminError},
+    external_observation_binding_admin::{
+        create_binding, set_binding_active, valid_definition, BindingDefinition,
+    },
     external_observation_grant_edit::{change_grant_expiry, create_grant},
     external_observation_grant_lifecycle::{approve_grant, rotate_grant_api_key},
     external_observation_http::{gateway_service_authenticated, one_header},
@@ -9,7 +12,7 @@ use crate::{
     },
 };
 use axum::{
-    body::to_bytes,
+    body::{to_bytes, Bytes},
     extract::{Path, Request, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -33,6 +36,12 @@ pub const CREATE_PATH: &str =
 pub const EXPIRY_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry";
 pub const BINDINGS_PATH: &str = "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/replace-bindings";
+pub const BINDING_CREATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/create";
+pub const BINDING_ACTIVATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/activate";
+pub const BINDING_DEACTIVATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
 #[derive(Clone, Copy)]
 enum Action {
     Bindings,
@@ -59,6 +68,9 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         .route(CREATE_PATH, post(mutate))
         .route(EXPIRY_PATH, post(mutate))
         .route(BINDINGS_PATH, post(mutate))
+        .route(BINDING_CREATE_PATH, post(mutate_binding))
+        .route(BINDING_ACTIVATE_PATH, post(mutate_binding))
+        .route(BINDING_DEACTIVATE_PATH, post(mutate_binding))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -115,83 +127,10 @@ async fn mutate(
         Some("rotate-api-key") => Action::Rotate,
         _ => Action::Revoke,
     };
-    let headers = request.headers();
-    // The proxy strips caller headers before inserting trusted user context.
-    // API-key identities may submit observations but cannot administer grants.
-    if !gateway_service_authenticated(headers, &state.gateway_service_key)
-        || headers.contains_key("x-api-key-id")
-        || one_header(headers, "x-organization-id") != Some(org.to_string().as_str())
-    {
-        return failure(
-            StatusCode::UNAUTHORIZED,
-            "administrator_authentication_required",
-        );
-    }
-    let Some(actor) = one_header(headers, "x-user-id")
-        .filter(|value| {
-            !value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control)
-        })
-        .map(str::to_owned)
-    else {
-        return failure(
-            StatusCode::UNAUTHORIZED,
-            "administrator_authentication_required",
-        );
+    let (actor, bytes) = match admin_body(&state, org, request).await {
+        Ok(value) => value,
+        Err(response) => return response,
     };
-    if request.uri().query().is_some() {
-        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
-    }
-    if !one_header(headers, "content-type")
-        .is_some_and(|value| value.eq_ignore_ascii_case("application/json"))
-        || one_header(headers, "content-encoding")
-            .is_some_and(|value| !value.eq_ignore_ascii_case("identity"))
-    {
-        return failure(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "unsupported_admin_format",
-        );
-    }
-    // Preserve strict framing before original-byte JSON decoding.
-    for name in ["content-length", "transfer-encoding", "content-encoding"] {
-        if headers.get_all(name).iter().count() > 1 {
-            return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
-        }
-    }
-    if headers.contains_key("trailer")
-        || (headers.contains_key("content-length") && headers.contains_key("transfer-encoding"))
-    {
-        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
-    }
-    if one_header(headers, "transfer-encoding")
-        .is_some_and(|value| !value.eq_ignore_ascii_case("chunked"))
-    {
-        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
-    }
-    let expected_length = if let Some(value) = one_header(headers, "content-length") {
-        match value.parse::<usize>() {
-            Ok(length)
-                if !value.is_empty()
-                    && value.bytes().all(|byte| byte.is_ascii_digit())
-                    && length <= 4096 =>
-            {
-                Some(length)
-            }
-            _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
-        }
-    } else {
-        None
-    };
-    let bytes =
-        match tokio::time::timeout(Duration::from_secs(10), to_bytes(request.into_body(), 4096))
-            .await
-        {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(_)) => return failure(StatusCode::PAYLOAD_TOO_LARGE, "admin_request_too_large"),
-            Err(_) => return failure(StatusCode::REQUEST_TIMEOUT, "admin_body_timeout"),
-        };
-    if expected_length.is_some_and(|length| length != bytes.len()) {
-        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
-    }
     if matches!(action, Action::Bindings) {
         let value = match serde_json::from_slice::<BindingsRequest>(&bytes) {
             Ok(value)
@@ -328,4 +267,167 @@ fn mutation_response(result: Result<(i64, Uuid), AdminError>) -> Response {
             failure(status, code)
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ActivateBindingRequest {
+    expected_revision: i64,
+    expected_application_revision: i64,
+}
+async fn mutate_binding(
+    State(state): State<Arc<AdminState>>,
+    Path((org, binding)): Path<(Uuid, String)>,
+    request: Request,
+) -> Response {
+    let action = request
+        .uri()
+        .path()
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_owned();
+    let (actor, bytes) = match admin_body(&state, org, request).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if !crate::external_observation_admission::id(&binding) {
+        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
+    }
+    let result = match action.as_str() {
+        "create" => {
+            let value = match serde_json::from_slice::<BindingDefinition>(&bytes) {
+                Ok(v) if valid_definition(&v) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            create_binding(&state.pool, org, &actor, &binding, &value).await
+        }
+        "activate" => {
+            let value = match serde_json::from_slice::<ActivateBindingRequest>(&bytes) {
+                Ok(v)
+                    if (1..=9007199254740991).contains(&v.expected_revision)
+                        && (1..=9007199254740991).contains(&v.expected_application_revision) =>
+                {
+                    v
+                }
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            set_binding_active(
+                &state.pool,
+                org,
+                &actor,
+                &binding,
+                value.expected_revision,
+                Some(value.expected_application_revision),
+            )
+            .await
+        }
+        "deactivate" => {
+            let value = match serde_json::from_slice::<RevokeRequest>(&bytes) {
+                Ok(v) if (1..=9007199254740991).contains(&v.expected_revision) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            set_binding_active(
+                &state.pool,
+                org,
+                &actor,
+                &binding,
+                value.expected_revision,
+                None,
+            )
+            .await
+        }
+        _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+    };
+    mutation_response(result.map(|r| (r.revision, r.audit_id)))
+}
+
+async fn admin_body(
+    state: &AdminState,
+    org: Uuid,
+    request: Request,
+) -> Result<(String, Bytes), Response> {
+    let headers = request.headers();
+    // The proxy strips caller headers before inserting trusted user context.
+    // API-key identities may submit observations but cannot administer grants.
+    if !gateway_service_authenticated(headers, &state.gateway_service_key)
+        || headers.contains_key("x-api-key-id")
+        || one_header(headers, "x-organization-id") != Some(org.to_string().as_str())
+    {
+        return Err(failure(
+            StatusCode::UNAUTHORIZED,
+            "administrator_authentication_required",
+        ));
+    }
+    let Some(actor) = one_header(headers, "x-user-id")
+        .filter(|value| {
+            !value.is_empty() && value.len() <= 255 && !value.chars().any(char::is_control)
+        })
+        .map(str::to_owned)
+    else {
+        return Err(failure(
+            StatusCode::UNAUTHORIZED,
+            "administrator_authentication_required",
+        ));
+    };
+    if request.uri().query().is_some() {
+        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+    }
+    if !one_header(headers, "content-type")
+        .is_some_and(|value| value.eq_ignore_ascii_case("application/json"))
+        || one_header(headers, "content-encoding")
+            .is_some_and(|value| !value.eq_ignore_ascii_case("identity"))
+    {
+        return Err(failure(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_admin_format",
+        ));
+    }
+    // Preserve strict framing before original-byte JSON decoding.
+    for name in ["content-length", "transfer-encoding", "content-encoding"] {
+        if headers.get_all(name).iter().count() > 1 {
+            return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+        }
+    }
+    if headers.contains_key("trailer")
+        || (headers.contains_key("content-length") && headers.contains_key("transfer-encoding"))
+    {
+        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+    }
+    if one_header(headers, "transfer-encoding")
+        .is_some_and(|value| !value.eq_ignore_ascii_case("chunked"))
+    {
+        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+    }
+    let expected_length = if let Some(value) = one_header(headers, "content-length") {
+        match value.parse::<usize>() {
+            Ok(length)
+                if !value.is_empty()
+                    && value.bytes().all(|byte| byte.is_ascii_digit())
+                    && length <= 4096 =>
+            {
+                Some(length)
+            }
+            _ => return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request")),
+        }
+    } else {
+        None
+    };
+    let bytes =
+        match tokio::time::timeout(Duration::from_secs(10), to_bytes(request.into_body(), 4096))
+            .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(_)) => {
+                return Err(failure(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "admin_request_too_large",
+                ))
+            }
+            Err(_) => return Err(failure(StatusCode::REQUEST_TIMEOUT, "admin_body_timeout")),
+        };
+    if expected_length.is_some_and(|length| length != bytes.len()) {
+        return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
+    }
+    Ok((actor, bytes))
 }

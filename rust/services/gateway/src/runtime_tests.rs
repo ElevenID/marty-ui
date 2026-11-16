@@ -7287,3 +7287,61 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
     }
     assert_eq!(recorder.0.lock().unwrap().len(), 12);
 }
+
+#[tokio::test]
+async fn binding_admin_gateway_forwards_only_trusted_session_context_and_original_bytes() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let router = gateway_router(state);
+    let bytes = br#"{ "expected_revision":1 }"#;
+    for action in ["create", "activate", "deactivate"] {
+        let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
+        let request = |session: bool| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("origin", "https://beta.elevenidllc.com")
+                .header("content-type", "application/json")
+                .header("x-user-id", "forged-user")
+                .header("x-api-key-id", "forged-key")
+                .header("x-organization-id", "forged-org");
+            builder = if session {
+                builder.header("cookie", "sessionId=observation-session")
+            } else {
+                builder.header("x-api-key", "observation-admin")
+            };
+            builder.body(Body::from(bytes.as_slice())).unwrap()
+        };
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let requests = recorder.0.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    for (service, request) in requests.iter() {
+        assert_eq!(service, "issuance");
+        assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+        assert_eq!(request.header("x-user-id"), Some("user-1"));
+        assert_eq!(request.header("x-api-key-id"), None);
+        assert_eq!(
+            request.header("x-organization-id"),
+            Some("20000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(request.body.as_deref(), Some(bytes.as_slice()));
+    }
+}
