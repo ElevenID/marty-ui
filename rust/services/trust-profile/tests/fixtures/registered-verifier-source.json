@@ -1,0 +1,24 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Fictional registered verifier",
+  "source_type": "REGISTERED_VERIFIER",
+  "purposes": ["PRESENTATION_VERIFIER"],
+  "pinned_certificates": [],
+  "refresh_interval_hours": 0,
+  "enabled": false,
+  "registry_sequence": 0,
+  "registry_entries": {},
+  "registered_verifier": {
+    "client_id": "registered-client",
+    "request_key_id": "request-1",
+    "public_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    },
+    "response_uris": ["https://verifier.example/response"],
+    "valid_from": "2026-11-01T00:00:00Z",
+    "valid_until": "2026-12-01T00:00:00Z"
+  }
+}

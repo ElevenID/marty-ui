@@ -37,6 +37,53 @@ fn disposable_openbao_client() -> reqwest::Client {
 }
 
 #[tokio::test]
+#[ignore = "requires guarded disposable TLS OpenBao and dedicated demo custody token"]
+async fn managed_demo_holder_es256_uses_scoped_remote_custody() {
+    let (endpoint, _) = disposable_openbao().await;
+    let config = json!({
+        "id": "managed-openbao-transit", "service_type": "openbao-transit",
+        "auth_mode": "service_token", "endpoint": endpoint, "mount": "transit",
+        "key_reference": format!("demo-holder-{}", Uuid::new_v4().simple()),
+        "algorithm": "ES256"
+    });
+    let metadata = create_managed_openbao(ProviderRequest {
+        service_config: config.clone(),
+    })
+    .await
+    .expect("scoped non-exportable demo key creation");
+    assert_eq!(metadata["status"], "active");
+    assert_eq!(metadata["exportable"], false);
+    assert_eq!(metadata["allow_plaintext_backup"], false);
+    assert!(metadata["public_jwk"].get("d").is_none());
+    let payload = b"synthetic-demo-holder.bound-proof";
+    let mut versioned = config;
+    versioned["key_version"] = json!(1);
+    let signed = marty_signing_keys::kms::sign(SignRequest {
+        service_config: versioned,
+        payload_b64: URL_SAFE_NO_PAD.encode(payload),
+    })
+    .await
+    .expect("native pinned-version remote demo signing");
+    let encoded = signed
+        .transcoded_signature_b64
+        .as_ref()
+        .unwrap_or(&signed.signature_b64);
+    let signature = URL_SAFE_NO_PAD.decode(encoded).unwrap();
+    for (input, expected) in [(payload.as_slice(), true), (b"tampered".as_slice(), false)] {
+        assert_eq!(
+            marty_oid4vci::jose::verify_detached_signature_with_public_jwk(
+                input,
+                &signature,
+                &metadata["public_jwk"].to_string(),
+                "ES256",
+            )
+            .unwrap(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
 #[ignore = "requires marked disposable OpenBao and managed signing token"]
 async fn managed_openbao_rs256_signature_matches_jose_pkcs1_profile() {
     let (endpoint, _) = disposable_openbao().await;

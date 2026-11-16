@@ -263,6 +263,12 @@ pub async fn build_flow_presentation_request(
     presentation_policy_id: &str,
     organization_id: &str,
 ) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    if providers.credential_template.is_none() {
+        return Err(FlowProviderError::Unavailable {
+            provider: "credential_template",
+        }
+        .into());
+    }
     let resolved =
         resolve_flow_presentation_policy(providers, presentation_policy_id, organization_id)
             .await?;
@@ -430,7 +436,7 @@ fn validate_template(
     Ok(())
 }
 
-fn requested_claims(
+pub(crate) fn requested_claims(
     value: Option<&Value>,
     requirement_index: usize,
 ) -> Result<Vec<RequestedClaimInput>, FlowPresentationRequestError> {

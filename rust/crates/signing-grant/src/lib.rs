@@ -33,6 +33,7 @@ pub enum SigningOrigin {
     GatewayService,
     GatewayIssuerDid,
     FlowWalletRequest,
+    FlowDemoHolder,
     IssuanceCredential,
     IssuanceCanvas,
     IssuanceReadiness,
@@ -40,10 +41,11 @@ pub enum SigningOrigin {
 }
 
 impl SigningOrigin {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::GatewayService,
         Self::GatewayIssuerDid,
         Self::FlowWalletRequest,
+        Self::FlowDemoHolder,
         Self::IssuanceCredential,
         Self::IssuanceCanvas,
         Self::IssuanceReadiness,
@@ -55,6 +57,7 @@ impl SigningOrigin {
             Self::GatewayService => "marty-sign-grant-gateway-service-v1",
             Self::GatewayIssuerDid => "marty-sign-grant-gateway-issuer-did-v1",
             Self::FlowWalletRequest => "marty-sign-grant-flow-wallet-v1",
+            Self::FlowDemoHolder => "marty-sign-grant-flow-demo-holder-v1",
             Self::IssuanceCredential => "marty-sign-grant-issuance-credential-v1",
             Self::IssuanceCanvas => "marty-sign-grant-issuance-canvas-v1",
             Self::IssuanceReadiness => "marty-sign-grant-issuance-readiness-v1",
@@ -63,6 +66,11 @@ impl SigningOrigin {
     }
 
     fn authorizes_route_shape(self, claims: &GrantClaims) -> bool {
+        // The synthetic holder has one producer even when another origin owns
+        // a generic service-sign route. Check this on both mint and verify.
+        if claims.key_purpose == "demo_holder_binding" && self != Self::FlowDemoHolder {
+            return false;
+        }
         match self {
             Self::GatewayService => claims
                 .route
@@ -86,6 +94,11 @@ impl SigningOrigin {
             Self::FlowWalletRequest => {
                 issuer_did_route_shape(claims)
                     && claims.key_purpose == "oid4vp_request_signing"
+                    && claims.algorithm == "ES256"
+            }
+            Self::FlowDemoHolder => {
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == "demo_holder_binding"
                     && claims.algorithm == "ES256"
             }
             Self::GatewayIssuerDid => {
@@ -415,21 +428,56 @@ mod tests {
 
     #[test]
     fn every_signing_origin_has_a_distinct_transit_key() {
-        let origins = [
-            SigningOrigin::GatewayService,
-            SigningOrigin::GatewayIssuerDid,
-            SigningOrigin::FlowWalletRequest,
-            SigningOrigin::IssuanceCredential,
-            SigningOrigin::IssuanceCanvas,
-            SigningOrigin::IssuanceReadiness,
-            SigningOrigin::IssuancePassport,
-        ];
+        let origins = SigningOrigin::ALL;
         let keys: HashSet<_> = origins
             .map(SigningOrigin::transit_key_name)
             .into_iter()
             .collect();
         assert_eq!(keys.len(), origins.len());
         assert!(keys.iter().all(|key| key.starts_with("marty-sign-grant-")));
+    }
+
+    #[test]
+    fn gateway_service_cannot_mint_the_dedicated_demo_holder_purpose() {
+        let mut claims = sample_claims();
+        claims.key_purpose = "demo_holder_binding".into();
+        claims.key_reference = Some("demo-holder-tenant-key".into());
+        assert!(!claims.origin.authorizes_route_shape(&claims));
+    }
+
+    #[test]
+    fn demo_holder_authority_cannot_sign_verifier_requests_or_credentials() {
+        let mut claims = sample_claims();
+        claims.origin = SigningOrigin::FlowDemoHolder;
+        claims.route = "/internal/compat/issuer-dids/sign".into();
+        claims.service_id = None;
+        claims.issuer_did = Some("did:web:example.test:demo-holder".into());
+        claims.key_purpose = "demo_holder_binding".into();
+        assert!(claims.origin.authorizes_route_shape(&claims));
+        for purpose in [
+            "vc_jwt_issuer",
+            "oid4vp_request_signing",
+            "mdoc_dsc",
+            "x509_csr",
+        ] {
+            let mut forged = claims.clone();
+            forged.key_purpose = purpose.into();
+            assert!(!forged.origin.authorizes_route_shape(&forged), "{purpose}");
+        }
+        for origin in [
+            SigningOrigin::FlowWalletRequest,
+            SigningOrigin::IssuanceCredential,
+            SigningOrigin::IssuanceCanvas,
+            SigningOrigin::IssuanceReadiness,
+            SigningOrigin::IssuancePassport,
+        ] {
+            assert!(!origin.authorizes_route_shape(&claims), "{origin:?}");
+        }
+        claims.algorithm = "RS256".into();
+        assert!(!claims.origin.authorizes_route_shape(&claims));
+        claims.algorithm = "ES256".into();
+        claims.key_reference = None;
+        assert!(!claims.origin.authorizes_route_shape(&claims));
     }
 
     fn sample_claims() -> GrantClaims {
@@ -558,6 +606,7 @@ mod tests {
     fn origin_keys_cannot_authorize_a_different_signing_route() {
         for origin in [
             SigningOrigin::FlowWalletRequest,
+            SigningOrigin::FlowDemoHolder,
             SigningOrigin::IssuanceCredential,
             SigningOrigin::IssuanceCanvas,
             SigningOrigin::IssuanceReadiness,
@@ -571,6 +620,9 @@ mod tests {
             match origin {
                 SigningOrigin::FlowWalletRequest => {
                     claims.key_purpose = "oid4vp_request_signing".into();
+                }
+                SigningOrigin::FlowDemoHolder => {
+                    claims.key_purpose = "demo_holder_binding".into();
                 }
                 SigningOrigin::IssuanceCanvas => {
                     claims.key_purpose = "lti_tool_signing".into();

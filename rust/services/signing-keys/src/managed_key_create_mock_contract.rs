@@ -1221,6 +1221,8 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
     let created_count = keys.lock().unwrap().len();
     for (purpose, algorithm) in [
         ("holder_binding", "RS256"),
+        ("demo_holder_binding", "RS256"),
+        ("demo_holder_binding", "EdDSA"),
         ("presentation_signing", "ES384"),
         ("oid4vp_request_signing", "EdDSA"),
         ("mdoc_dsc", "RS256"),
@@ -1246,6 +1248,7 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
         ("holder_binding", "dc+sd-jwt", "ES256"),
         ("presentation_signing", "dc+sd-jwt", "EdDSA"),
         ("oid4vp_request_signing", "oauth-authz-req+jwt", "ES256"),
+        ("demo_holder_binding", "dc+sd-jwt", "ES256"),
         ("mdoc_dsc", "mso_mdoc", "ES256"),
         ("x509_doc_signer", "mso_mdoc", "ES256"),
         ("vdsnc_signing", "mso_mdoc", "ES256"),
