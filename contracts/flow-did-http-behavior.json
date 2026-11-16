@@ -9,6 +9,7 @@
     "algorithm": "ES256"
   },
   "content_type": "application/did+json",
+  "representation": "did-json-without-json-ld-context",
   "cache_control": "no-store",
   "pragma": "no-cache",
   "cors": "*",
