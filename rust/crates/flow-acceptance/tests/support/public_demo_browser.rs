@@ -9,6 +9,7 @@ pub struct BrowserWorker {
     child: Child,
     output: BufReader<ChildStdout>,
     pub origin: String,
+    browser_channel: &'static str,
 }
 impl Drop for BrowserWorker {
     fn drop(&mut self) {
@@ -57,12 +58,25 @@ impl BrowserWorker {
                 command.env(name, value);
             }
         }
+        let browser_channel =
+            if let Some(channel) = std::env::var_os("MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL") {
+                assert_eq!(
+                    channel.to_str(),
+                    Some("chrome"),
+                    "unsupported fixture browser channel"
+                );
+                command.env("MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL", channel);
+                "chrome"
+            } else {
+                "bundled"
+            };
         let mut child = command.spawn().expect("owned browser worker");
         let output = BufReader::new(child.stdout.take().unwrap());
         let mut worker = Self {
             child,
             output,
             origin: String::new(),
+            browser_channel,
         };
         let ready = worker.read("MARTY_BROWSER_READY ");
         worker.origin = ready["origin"].as_str().unwrap().into();
@@ -105,6 +119,10 @@ impl BrowserWorker {
         ] {
             assert_eq!(result[field], true, "{field}");
         }
+        assert_eq!(
+            result["browserChannel"], self.browser_channel,
+            "selected browser provenance"
+        );
         println!(
             "PUBLIC_DEMO_BROWSER_QUALIFIED {}",
             serde_json::json!({
@@ -112,6 +130,7 @@ impl BrowserWorker {
             "walletRequestCancelled":result["walletRequestCancelled"],"chromiumPid":result["chromiumPid"],
             "customizedDenialVerified":result["customizedDenialVerified"],
             "browserVersion":result["browserVersion"],
+            "browserChannel":result["browserChannel"],
             "productionBundle":result["productionBundle"],
             "chromiumExited":result["chromiumExited"],"viteClosed":result["viteClosed"]})
         );

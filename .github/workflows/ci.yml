@@ -1775,18 +1775,21 @@ jobs:
         shell: bash
         env:
           PUPPETEER_SKIP_DOWNLOAD: 'true'
+          MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL: chrome
         run: |
           set -euo pipefail
           # Keep npm's checked-in dependency resolutions and integrity checks.
-          # The isolated Rust worker deliberately inherits only HOME/PATH, so
-          # install and use Puppeteer's default HOME cache without overrides.
+          # Use the runner's regular Chrome installation, whose Ubuntu package
+          # has a usable sandbox policy. Do not disable Chrome/AppArmor sandboxing
+          # or install a privileged helper for the downloaded testing browser.
           unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH
           npm ci
-          npx --no-install puppeteer browsers install chrome
           node scripts/public-verification-browser.mjs --check
       - name: Qualify production-built public UI against isolated Gateway and managed KMS
         if: matrix.lane == 'contracts'
         shell: bash
+        env:
+          MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL: chrome
         run: |
           set -euo pipefail
           unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH

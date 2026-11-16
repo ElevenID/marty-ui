@@ -7,23 +7,27 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import puppeteer from 'puppeteer';
-import { build, preview } from 'vite';
 
-const executable = await puppeteer.executablePath();
-assert(existsSync(executable), 'Cached Chromium is required before fixtures start');
+const channel = process.env.MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL;
+assert(channel === undefined || channel === 'chrome', 'Unsupported public fixture browser channel');
+const launchOptions = { headless: true, ...(channel ? { channel } : {}) };
+const executable = await puppeteer.executablePath(channel);
+assert(existsSync(executable), 'Selected sandboxed Chrome is required before fixtures start');
 if (process.argv[2] === '--check') {
   // Exercise the same sandboxed launch before allocating KMS fixtures. A cache
   // path alone does not establish that this host can start Chromium.
-  const probe = await puppeteer.launch({ headless: true });
+  const probe = await puppeteer.launch(launchOptions);
   let version;
   try {
     version = await probe.version();
   } finally {
     await probe.close();
   }
-  console.log(JSON.stringify({ browserAvailable: true, sandboxedLaunch: true, version }));
+  console.log(JSON.stringify({ browserAvailable: true, sandboxedLaunch: true,
+    browserChannel: channel || 'bundled', executable, version }));
   process.exit(0);
 }
+const { build, preview } = await import('vite');
 const gateway = new URL(process.argv[2]);
 assert.equal(gateway.protocol, 'http:');
 assert.equal(gateway.hostname, '127.0.0.1');
@@ -72,7 +76,7 @@ try {
   });
   const [command] = await once(input, 'line');
   assert.equal(command, 'RUN');
-  browser = await puppeteer.launch({ headless: true });
+  browser = await puppeteer.launch(launchOptions);
   const browserVersion = await browser.version();
   const chromium = browser.process();
   page = await browser.newPage();
@@ -158,7 +162,7 @@ try {
   await cleanup();
   assert(chromium.exitCode !== null || chromium.signalCode !== null, 'Owned Chromium must exit');
   console.log(`MARTY_BROWSER_RESULT ${JSON.stringify({ verified: true, reloadDidNotRelaunch: true, customizedDenialVerified: true,
-    walletRequestCancelled: true, browserVersion, chromiumPid: chromium.pid, chromiumExited: true, viteClosed: !server.httpServer.listening,
+    walletRequestCancelled: true, browserVersion, browserChannel: channel || 'bundled', chromiumPid: chromium.pid, chromiumExited: true, viteClosed: !server.httpServer.listening,
     productionBundle: true, apiResponses })}`);
 } catch (error) {
   console.error(`Browser qualification failed at ${stage}: ${error.message}`);
