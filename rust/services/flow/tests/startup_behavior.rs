@@ -160,6 +160,42 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
 }
 
 #[test]
+fn wallet_owner_https_is_default_off_and_requires_nonexportable_tls_and_workload_auth() {
+    assert!(FlowServiceConfig::from_values(baseline("development"))
+        .unwrap()
+        .managed_authority_https
+        .is_none());
+    let mut values = baseline("development");
+    values.insert(
+        "MANAGED_AUTHORITY_HTTPS_ADDR".into(),
+        "127.0.0.1:9443".into(),
+    );
+    assert!(FlowServiceConfig::from_values(values.clone()).is_err());
+    for (key, value) in [
+        ("MANAGED_AUTHORITY_TLS_CERT_FILE", "public.pem"),
+        ("MANAGED_AUTHORITY_TLS_KMS_PROVIDER", "openbao-transit"),
+        ("MANAGED_AUTHORITY_TLS_KMS_ADDR", "https://kms.example"),
+        ("MANAGED_AUTHORITY_TLS_KMS_CA_CERT_FILE", "public-ca.pem"),
+        ("MANAGED_AUTHORITY_TLS_KMS_TOKEN_FILE", "scoped-token-file"),
+        ("MANAGED_AUTHORITY_TLS_KMS_KEY_NAME", "owner-tls"),
+        ("MANAGED_AUTHORITY_TLS_KMS_KEY_VERSION", "1"),
+    ] {
+        values.insert(key.into(), value.into());
+    }
+    assert_eq!(
+        FlowServiceConfig::from_values(values.clone())
+            .unwrap()
+            .managed_authority_https
+            .unwrap()
+            .address
+            .port(),
+        9443
+    );
+    values.remove("GRPC_SERVICE_TOKEN");
+    assert!(FlowServiceConfig::from_values(values).is_err());
+}
+
+#[test]
 fn passport_tenant_keyring_is_optional_validated_and_redacted() {
     let mut values = baseline("beta");
     let secret = "a".repeat(32);

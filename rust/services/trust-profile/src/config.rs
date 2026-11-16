@@ -25,6 +25,7 @@ impl RuntimeEnvironment {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TrustProfileServiceConfig {
+    pub flow_owner: Option<FlowOwnerConfiguration>,
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
@@ -46,6 +47,13 @@ pub struct TrustProfileServiceConfig {
     pub marty_issuer_url: String,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FlowOwnerConfiguration {
+    pub producer_id: String,
+    pub origin: String,
+    pub ca_bundle: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -222,7 +230,38 @@ impl TrustProfileServiceConfig {
                 return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
             }
         }
+        let flow_owner = match (
+            value(&values, "WALLET_FLOW_PRODUCER_ID"),
+            value(&values, "WALLET_FLOW_OWNER_URL"),
+        ) {
+            (None, None) if value(&values, "WALLET_FLOW_OWNER_CA_FILE").is_none() => None,
+            (Some(producer_id), Some(origin)) => {
+                let ca_bundle = value(&values, "WALLET_FLOW_OWNER_CA_FILE")
+                    .map(|path| {
+                        fs::read(path).map_err(|_| TrustProfileConfigError::File {
+                            name: "WALLET_FLOW_OWNER_CA_FILE",
+                        })
+                    })
+                    .transpose()?;
+                crate::managed_flow_verifier::transport::FlowOwnerClient::new(
+                    producer_id,
+                    origin,
+                    service_token
+                        .as_deref()
+                        .ok_or_else(|| invalid("GRPC_SERVICE_TOKEN"))?,
+                    ca_bundle.as_deref(),
+                )
+                .map_err(|_| invalid("WALLET_FLOW_OWNER_URL"))?;
+                Some(FlowOwnerConfiguration {
+                    producer_id: producer_id.into(),
+                    origin: origin.into(),
+                    ca_bundle,
+                })
+            }
+            _ => return Err(invalid("WALLET_FLOW_OWNER_URL")),
+        };
         Ok(Self {
+            flow_owner,
             managed_authority_https,
             environment,
             http_addr,
@@ -381,6 +420,46 @@ fn invalid(name: &'static str) -> TrustProfileConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_flow_owner_is_default_off_and_never_uses_an_implicit_or_plaintext_host() {
+        assert!(
+            TrustProfileServiceConfig::from_values(values("development"))
+                .unwrap()
+                .flow_owner
+                .is_none()
+        );
+        for entries in [
+            vec![("WALLET_FLOW_PRODUCER_ID", "flow-primary")],
+            vec![("WALLET_FLOW_OWNER_URL", "https://flow.example")],
+            vec![
+                ("WALLET_FLOW_PRODUCER_ID", "flow-primary"),
+                ("WALLET_FLOW_OWNER_URL", "http://flow.example"),
+            ],
+            vec![
+                ("WALLET_FLOW_PRODUCER_ID", "flow-primary"),
+                ("WALLET_FLOW_OWNER_URL", "https://flow.example/path"),
+            ],
+        ] {
+            let mut input = values("development");
+            input.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+            for (key, value) in entries {
+                input.insert(key.into(), value.into());
+            }
+            assert!(TrustProfileServiceConfig::from_values(input).is_err());
+        }
+        let mut input = values("development");
+        input.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        input.insert("WALLET_FLOW_PRODUCER_ID".into(), "flow-primary".into());
+        input.insert(
+            "WALLET_FLOW_OWNER_URL".into(),
+            "https://flow.example".into(),
+        );
+        let accepted = TrustProfileServiceConfig::from_values(input.clone()).unwrap();
+        assert_eq!(accepted.flow_owner.unwrap().producer_id, "flow-primary");
+        input.remove("GRPC_SERVICE_TOKEN");
+        assert!(TrustProfileServiceConfig::from_values(input).is_err());
+    }
 
     fn values(environment: &str) -> BTreeMap<String, String> {
         BTreeMap::from([

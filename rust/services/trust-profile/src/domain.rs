@@ -37,6 +37,7 @@ pub enum TrustSourceType {
     RootCa,
     PkdUrl,
     RegisteredVerifier,
+    ManagedFlowVerifier,
     #[serde(rename = "REGISTRY")]
     LegacyRegistry,
 }

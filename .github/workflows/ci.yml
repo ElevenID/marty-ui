@@ -1759,11 +1759,35 @@ jobs:
           postgres_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_pairing_postgres)"
           redis_binary="$(resolve_recorded_contract_executable marty-device-registration pairing_ticket_redis)"
           tls_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_trust_tls)"
-          test -x "$postgres_binary" && test -x "$redis_binary" && test -x "$tls_binary"
+          http_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_governance_http)"
+          test -x "$postgres_binary" && test -x "$redis_binary" && test -x "$tls_binary" && test -x "$http_binary"
           run_timed wallet_verifier_pairing python3 scripts/qualify_wallet_verifier_pairing.py \
             --postgres-test-binary "$postgres_binary" --redis-test-binary "$redis_binary"
           run_timed wallet_verifier_tls python3 scripts/qualify_wallet_verifier_transport.py \
-            --test-binary "$tls_binary"
+            --test-binary "$tls_binary" --device-http-test-binary "$http_binary"
+      - name: Qualify canonical Flow request and managed verifier authority
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/ci/rust_contract_execution.sh
+          declare -A libraries
+          for package in marty-flow marty-trust-profile; do
+            target="${package//-/_}"
+            paths="$(jq -er --arg package "#$package@" --arg target "$target" '
+              select(.reason == "compiler-artifact")
+              | select(.package_id | contains($package))
+              | select(.target.name == $target)
+              | select(.target.kind | index("lib"))
+              | select(.profile.test == true)
+              | select(.executable != null) | .executable
+            ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)"
+            [[ -n "$paths" && "$paths" != *$'\n'* && -x "$paths" ]]
+            libraries["$package"]="$paths"
+          done
+          run_timed managed_flow_wallet_authority python3 scripts/qualify_flow_wallet_verifier_request.py \
+            --test-binary "${libraries[marty-flow]}" \
+            --trust-profile-test-binary "${libraries[marty-trust-profile]}"
       - name: Qualify scoped provider callback verification against disposable OpenBao
         if: matrix.lane == 'contracts'
         run: python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter
