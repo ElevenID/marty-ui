@@ -64,6 +64,8 @@ enum Action {
     Approve,
     Rotate,
 }
+pub const MATERIALIZE_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialize";
+pub const MATERIALIZATION_READ_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialization";
 struct AdminState {
     pool: PgPool,
     gateway_service_key: Vec<u8>,
@@ -529,6 +531,86 @@ async fn read_admin(
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
     match inspect(&state.pool, org, &actor, query).await {
+        Ok(value) => (StatusCode::OK, [("cache-control", "no-store")], Json(value)).into_response(),
+        Err(error) => mutation_response(Err(error)),
+    }
+}
+
+/// Mounted only with Core's canonical application-writer pool, never ingress credentials.
+pub fn materialization_router(
+    pool: PgPool,
+    gateway_service_key: &[u8],
+) -> Result<Router, &'static str> {
+    if !(32..=512).contains(&gateway_service_key.len())
+        || !gateway_service_key.iter().all(u8::is_ascii_graphic)
+    {
+        return Err("Invalid observation Gateway service credential");
+    }
+    Ok(Router::new()
+        .route(MATERIALIZE_PATH, post(materialize_receipt))
+        .route(MATERIALIZATION_READ_PATH, post(materialize_receipt))
+        .with_state(Arc::new(AdminState {
+            pool,
+            gateway_service_key: gateway_service_key.to_vec(),
+        })))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaterializeRequest {
+    source_id: String,
+    expected_application_revision: i64,
+}
+async fn materialize_receipt(
+    State(state): State<Arc<AdminState>>,
+    Path((org, observation)): Path<(Uuid, String)>,
+    request: Request,
+) -> Response {
+    let read = request.uri().path().ends_with("/materialization");
+    let (actor, bytes) = match admin_body(&state, org, request).await {
+        Ok(value) => value,
+        Err((status, code)) => return failure(status, code),
+    };
+    if !crate::external_observation_admission::id(&observation) {
+        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
+    }
+    let result = if read {
+        let value = match serde_json::from_slice::<ReceiptRead>(&bytes) {
+            Ok(v) => v,
+            Err(_) => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+        };
+        if !crate::external_observation_admission::id(&value.source_id) {
+            return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
+        }
+        crate::external_observation_materialization::inspect_materialization(
+            &state.pool,
+            org,
+            &actor,
+            &value.source_id,
+            &observation,
+        )
+        .await
+    } else {
+        let value = match serde_json::from_slice::<MaterializeRequest>(&bytes) {
+            Ok(v)
+                if crate::external_observation_admission::id(&v.source_id)
+                    && (1..=9007199254740991).contains(&v.expected_application_revision) =>
+            {
+                v
+            }
+            _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+        };
+        crate::external_observation_materialization::materialize(
+            &state.pool,
+            org,
+            &actor,
+            &value.source_id,
+            &observation,
+            value.expected_application_revision,
+        )
+        .await
+        .and_then(|v| serde_json::to_value(v).map_err(|_| AdminError::Unavailable))
+    };
+    match result {
         Ok(value) => (StatusCode::OK, [("cache-control", "no-store")], Json(value)).into_response(),
         Err(error) => mutation_response(Err(error)),
     }

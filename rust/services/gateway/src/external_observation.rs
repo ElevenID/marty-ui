@@ -285,6 +285,8 @@ pub const BINDING_AUDIT_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/audit";
 pub const RECEIPT_READ_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/inspect";
+pub const MATERIALIZE_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialize";
+pub const MATERIALIZATION_READ_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialization";
 /// Reserved administrator namespaces must enter the guard even when a path
 /// identifier is malformed. Canonical parsing is authorization, not routing.
 pub fn is_admin_namespace(path: &str) -> bool {
@@ -352,7 +354,7 @@ pub fn admin_organization(path: &str) -> Option<&str> {
                 && parts[5]
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && parts[6] == "inspect"
+                && matches!(parts[6], "inspect" | "materialize" | "materialization")
         }
         _ => false,
     };
@@ -779,6 +781,8 @@ mod admin_read_guard_tests {
             "external-observation-bindings/binding-one/inspect",
             "external-observation-bindings/binding-one/audit",
             "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
         ] {
             let path = format!("/v1/organizations/{org}/{tail}");
             assert!(is_admin_namespace(&path));
@@ -827,4 +831,20 @@ mod admin_read_guard_tests {
         assert!(is_admin_namespace(&alias));
         assert_eq!(admin_organization(&alias), None);
     }
+}
+
+pub fn materialization_operation(read: bool) -> serde_json::Value {
+    let mut properties = serde_json::json!({"source_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}});
+    let mut required = vec!["source_id"];
+    if !read {
+        properties["expected_application_revision"] =
+            serde_json::json!({"type":"integer","minimum":1,"maximum":9007199254740991u64});
+        required.push("expected_application_revision");
+    }
+    serde_json::json!({"operationId":if read {"inspect_external_observation_materialization"} else {"materialize_external_observation_receipt"},
+      "summary":if read {"Inspect original receipt materialization"} else {"Attach an admitted unsigned observation to application evidence"},
+      "description":"Session, allowed Origin, exact active tenant and current canonical external-observation:manage required. Connector API keys cannot materialize. Core derives every evidence identity from the immutable receipt. First attachment requires current active binding, latest observation head, matching eligible subject/application and expected application revision. The fact is always UNVERIFIED with UNSIGNED_PRODUCER_ATTESTATION; no requirement is satisfied by verification, and no approval, issuance transaction or signing occurs. Fact, head, application revision and actor event commit atomically. Matching retries return the original result without moving old heads. Original expected_application_revision is required on retries. After uncertain COMMIT, inspect the same source/observation; absence is a snapshot, not permission to regenerate identity or blindly retry. Existing attachment remains inspectable after source revocation or application closure. Responses are no-store. Request original JSON is limited to4096bytes.",
+      "security":[{"BearerAuth":[]}],"parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"observation_id","in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}}],
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":required,"properties":properties}}}},
+      "responses":{"200":{"description":"Original materialization or authorized snapshot; no-store"},"400":{"description":"Invalid original request"},"401":{"description":"Session required"},"403":{"description":"Canonical administrator or application authority denied"},"409":{"description":"Current revision/head conflict; inspect before manual reconciliation"},"413":{"description":"Request exceeds4096bytes"},"503":{"description":"Unavailable or uncertain COMMIT; inspect same identity"}}})
 }

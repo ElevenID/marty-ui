@@ -231,7 +231,7 @@ pub(crate) fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
         })
 }
 
-fn valid_claims(input: &Observation, binding: &EvidenceBinding) -> bool {
+pub(crate) fn valid_claims(input: &Observation, binding: &EvidenceBinding) -> bool {
     if input.claims.is_empty() || input.claims.len() > 32 {
         return false;
     }

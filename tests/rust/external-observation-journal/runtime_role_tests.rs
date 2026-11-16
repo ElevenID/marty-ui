@@ -15,6 +15,43 @@ fn fixture_sql(sql: String) -> sqlx::AssertSqlSafe<String> {
     sqlx::AssertSqlSafe(sql)
 }
 
+#[tokio::test]
+async fn ingress_role_cannot_gain_materialization_or_canonical_evidence_writes() {
+    let roles = Roles::new().await;
+    crate::external_observation_materialization::verify_materialization_storage(
+        &roles.fixture.pool,
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::external_observation_materialization::verify_materialization_storage(&roles.runtime)
+            .await
+            .is_err()
+    );
+    for table in ["evidence_facts", "evidence_fact_heads", "issuance_events"] {
+        sqlx::raw_sql(fixture_sql(format!(
+            "GRANT INSERT ON issuance_service.{table} TO {}",
+            roles.name
+        )))
+        .execute(&roles.fixture.pool)
+        .await
+        .unwrap();
+        assert!(
+            verify_runtime_role(&roles.runtime).await.is_err(),
+            "{table}"
+        );
+        sqlx::raw_sql(fixture_sql(format!(
+            "REVOKE INSERT ON issuance_service.{table} FROM {}",
+            roles.name
+        )))
+        .execute(&roles.fixture.pool)
+        .await
+        .unwrap();
+        verify_runtime_role(&roles.runtime).await.unwrap();
+    }
+    roles.close().await;
+}
+
 struct Roles {
     fixture: Fixture,
     runtime: PgPool,
@@ -25,6 +62,7 @@ struct Roles {
 impl Roles {
     async fn new() -> Self {
         let fixture = super::admin_tests::setup().await;
+        super::materialization_tests::install_evidence_schema(&fixture.pool).await;
         let suffix = Uuid::new_v4().simple().to_string();
         let owner = format!("observation_owner_{suffix}");
         let name = format!("observation_runtime_{suffix}");

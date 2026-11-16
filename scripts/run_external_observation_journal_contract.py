@@ -46,7 +46,9 @@ ADMIN_READ_TEST = "tests/rust/external-observation-journal/admin_read_tests.rs"
 SCHEMA = "rust/services/issuance/src/external_observation_schema.rs"
 SCHEMA_TEST = "tests/rust/external-observation-journal/schema_owner_tests.rs"
 ROLE_TEST = "tests/rust/external-observation-journal/runtime_role_tests.rs"
-FORMAT_FILES = (SCHEMA, SCHEMA_TEST,ROLE_TEST,ADMIN_READ, ADMIN_READ_TEST,BINDING_EDIT_TEST,BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+MATERIALIZATION = "rust/services/issuance/src/external_observation_materialization.rs"
+MATERIALIZATION_TEST = "tests/rust/external-observation-journal/materialization_tests.rs"
+FORMAT_FILES = (MATERIALIZATION,MATERIALIZATION_TEST,SCHEMA, SCHEMA_TEST,ROLE_TEST,ADMIN_READ, ADMIN_READ_TEST,BINDING_EDIT_TEST,BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -74,7 +76,7 @@ def run(command, *, cwd, log, environment):
 def compile_contract(artifacts):
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text())
     service = tomllib.loads((ROOT / "rust/services/issuance/Cargo.toml").read_text())
-    names = ("axum", "subtle", "tower", "async-trait", "chrono", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
+    names = ("axum", "subtle", "tower", "async-trait", "chrono", "http", "serde", "serde_json", "sha2", "sqlx", "tokio", "uuid")
     declarations = []
     for name in names:
         value = workspace["workspace"]["dependencies"][name]
@@ -88,6 +90,7 @@ def compile_contract(artifacts):
         if isinstance(override, dict):
             value["features"] = sorted(set(value.get("features", [])) | set(override.get("features", [])))
         declarations.append(f"{name} = {toml_value(value)}")
+    declarations.append('marty-key-material-policy = { path = ' + json.dumps(str(ROOT / "rust/crates/key-material-policy")) + ' }')
     with tempfile.TemporaryDirectory(prefix="observation-journal-") as temporary:
         directory = Path(temporary)
         manifest = ('[package]\nname = "external-observation-journal-contract"\nversion = "0.0.0"\n'
@@ -100,6 +103,7 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / MATERIALIZATION_TEST))}]\nmod materialization_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / ROLE_TEST))}]\nmod runtime_role_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / SCHEMA_TEST))}]\nmod schema_owner_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / ADMIN_READ_TEST))}]\nmod admin_read_tests;\n"
@@ -114,7 +118,7 @@ def compile_contract(artifacts):
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
             f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
-        modules = [("external_observation_schema", ROOT / SCHEMA), ("external_observation_admin_read", ROOT / ADMIN_READ), ("external_observation_binding_admin", ROOT / BINDING_ADMIN), ("external_observation_membership_admin", ROOT / MEMBERSHIP), ("external_observation_grant_edit", ROOT / GRANT_EDIT), ("external_observation_grant_lifecycle", ROOT / LIFECYCLE), ("external_observation_admin_http", ROOT / ADMIN_HTTP), ("external_observation_admin", ROOT / ADMIN), ("external_observation_startup", ROOT / STARTUP), ("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
+        modules = [("external_observation_materialization", ROOT / MATERIALIZATION),("external_observation_schema", ROOT / SCHEMA), ("external_observation_admin_read", ROOT / ADMIN_READ), ("external_observation_binding_admin", ROOT / BINDING_ADMIN), ("external_observation_membership_admin", ROOT / MEMBERSHIP), ("external_observation_grant_edit", ROOT / GRANT_EDIT), ("external_observation_grant_lifecycle", ROOT / LIFECYCLE), ("external_observation_admin_http", ROOT / ADMIN_HTTP), ("external_observation_admin", ROOT / ADMIN), ("external_observation_startup", ROOT / STARTUP), ("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
             ("external_observation_authority_postgres", ROOT / AUTHORITY),

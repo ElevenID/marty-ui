@@ -218,6 +218,8 @@ impl GatewayContract {
             crate::external_observation::BINDING_READ_PATH,
             crate::external_observation::BINDING_AUDIT_PATH,
             crate::external_observation::RECEIPT_READ_PATH,
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
         ] {
             table.add(RouteConfig {
                 name: format!("external-observation:manage:{path}"),
@@ -632,6 +634,12 @@ impl GatewayContract {
                 path.into(),
                 json!({"post":crate::external_observation::binding_admin_operation(action)}),
             );
+        }
+        for path in [
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            paths.insert(path.into(),json!({"post":crate::external_observation::materialization_operation(path==crate::external_observation::MATERIALIZATION_READ_PATH)}));
         }
         for (path, kind) in [
             (crate::external_observation::GRANT_READ_PATH, "grant"),
@@ -1310,7 +1318,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1423,7 +1431,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 16
+                + 18
         );
         for operation in [
             "submit_external_observation",
@@ -1442,6 +1450,8 @@ mod tests {
             "inspect_external_observation_binding",
             "read_external_observation_binding_audit",
             "inspect_external_observation_receipt",
+            "materialize_external_observation_receipt",
+            "inspect_external_observation_materialization",
         ] {
             assert!(
                 identifiers.contains(operation),
@@ -1647,7 +1657,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
         );
         assert_eq!(
             contract
@@ -1661,7 +1671,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1673,7 +1683,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
                 + 16
         );
         assert_eq!(
@@ -2112,6 +2122,8 @@ mod admin_read_route_tests {
             "external-observation-bindings/binding-one/inspect",
             "external-observation-bindings/binding-one/audit",
             "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
         ] {
             let path = format!("/v1/organizations/20000000-0000-4000-8000-000000000001/{tail}");
             let route = route_for(&table, HttpMethod::Post, &path).unwrap();

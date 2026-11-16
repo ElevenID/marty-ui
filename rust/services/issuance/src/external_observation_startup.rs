@@ -59,7 +59,10 @@ pub async fn prepare_isolated_observation_router(
             return Err(FAILURE);
         }
         verify_runtime_role(&pool).await?;
-        prepare_observation_router(&pool, true, service_key).await
+        let router = prepare_observation_router(&pool, true, service_key).await?;
+        crate::external_observation_materialization::verify_materialization_storage(canonical_pool).await?;
+        let materialization = crate::external_observation_admin_http::materialization_router(canonical_pool.clone(), service_key.ok_or(FAILURE)?.as_bytes())?;
+        Ok(router.map(|router| router.merge(materialization)))
     }
     .await;
     if result.is_err() {
@@ -117,6 +120,14 @@ pub async fn verify_runtime_role(pool: &PgPool) -> Result<(), &'static str> {
             OR pg_catalog.has_table_privilege(r.oid,c.name,'DELETE')
             OR pg_catalog.has_table_privilege(r.oid,c.name,'TRUNCATE')
             OR pg_catalog.has_table_privilege(r.oid,c.name,'TRIGGER'))
+          AND NOT EXISTS(SELECT 1 FROM reachable r CROSS JOIN (VALUES
+            ('issuance_service.evidence_facts'),('issuance_service.evidence_fact_heads'),
+            ('issuance_service.issuance_events'),('issuance_service.issuance_transactions')) evidence(name) WHERE
+            pg_catalog.has_any_column_privilege(r.oid,pg_catalog.to_regclass(evidence.name),'INSERT')
+            OR pg_catalog.has_any_column_privilege(r.oid,pg_catalog.to_regclass(evidence.name),'UPDATE')
+            OR pg_catalog.has_table_privilege(r.oid,pg_catalog.to_regclass(evidence.name),'DELETE')
+            OR pg_catalog.has_table_privilege(r.oid,pg_catalog.to_regclass(evidence.name),'TRUNCATE')
+            OR pg_catalog.has_table_privilege(r.oid,pg_catalog.to_regclass(evidence.name),'TRIGGER'))
           AND (SELECT count(DISTINCT oid)=5 AND bool_and(prosecdef
             AND proconfig=ARRAY['search_path=pg_catalog']::text[]
             AND NOT pg_catalog.pg_has_role(current_user::regrole::oid,proowner,'MEMBER')
