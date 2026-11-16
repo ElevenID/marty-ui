@@ -1524,7 +1524,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 4
+                + 6
         );
         assert_eq!(
             contract
@@ -1537,7 +1537,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 4
+                + 6
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1548,7 +1548,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 4
+                + 6
                 + 16
         );
         assert_eq!(
