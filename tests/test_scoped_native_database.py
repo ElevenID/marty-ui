@@ -279,3 +279,164 @@ def test_executable_ref_has_distinct_bound_and_generic_refs_stay_small(tmp_path)
         stream.truncate(EXECUTABLE_REF_MAXIMUM + 1)
     with pytest.raises(ValueError, match="BOUNDED_EXACT_REF_REQUIRED"):
         read_executable_ref(bound)
+
+
+def recovery_fixture(tmp_path):
+    from scoped_native_runtime import ref
+    def saved(name, value):
+        p = tmp_path / name; p.write_text(json.dumps(value)); return ref(p)
+    db = {"containerId": "SYNTHETIC_DATABASE"}
+    before = saved("db.json", {"databaseIdentity": db})
+    sql = saved("source.json", {"synthetic": True})
+    original = {"runId": "SYNTHETIC_RUN", "uiRevision": "source", "coreRevision": "core",
+        "selection": {"sha256": "selection"}, "runtimeBefore": {"sha256": "runtime"}, "databaseBefore": before,
+        "sqlSources": {"passport-beta-fence-install.sql": sql}, "d12Authority": {"sha256": "old-authority"}}
+    for key in database.RECOVERY_SOURCE_FIELDS: original[key] = {"sha256": "old-"+key}
+    for key in database.RECOVERY_TRUST_FIELDS: original[key] = {"sha256": "old-"+key}
+    url = tmp_path / "synthetic-url"
+    url.write_text("postgres://postgres:synthetic@postgres:5432/marty")
+    original.update(databaseAdminUrl=ref(url), compatibility={"plan": {}, "result": {}},
+                    migrationSources={}, migrationSetSha256="digest")
+    generation = tmp_path / "synthetic-generation"
+    beta = {"secrets": {"trust_profile_workload_server_cert": {"file": str(generation / "trust_profile_workload_server_cert")},
+                        "trust_profile_tls_kms_token": {"file": str(generation / "trust_profile_workload_server_kms_token")}},
+            "services": {"trust-profile": {"environment": {"MANAGED_AUTHORITY_TLS_KMS_KEY_NAME": "retained-key"}}}}
+    original["plannedModels"] = {"elevenid-beta": saved("beta.json", beta), "elevenid-beta-ui": saved("ui.json", {"services": {}})}
+    original["runScopedTrustLeaseProof"] = saved("lease.json", {"generationDirectory": str(generation)})
+    inputs = deepcopy(original)
+    for key in database.RECOVERY_SOURCE_FIELDS: inputs[key] = {"sha256": "new-"+key}
+    inputs["d12Authority"] = {"sha256": "new-authority"}
+    quiescence = saved("stopped.json", {"roles": []}); inputs["quiescence"] = quiescence
+    intent = {"schema": "marty.d12-current-apply-intent/v1", "runId": original["runId"],
+        "selectionSha256": "selection", "executorSource": original["executorSource"],
+        "runtimeBefore": original["runtimeBefore"], "databaseBefore": before, "authority": original["d12Authority"]}
+    request = {"kind": "PSQL", "source": sql, "stdin": {}, "transportArgv": ["synthetic"], "pgOptions": "synthetic"}
+    receipt = saved("fence-install.json", {"runId": inputs["runId"], "state": "exited", "exitCode": 0,
+        "oomKilled": False, "databaseIdentity": db, "source": sql, "stdin": {}, "transportArgv": ["synthetic"], "pgOptions": "synthetic"})
+    state = {"schema": "marty.native-d12-current-operation-state/v1", "phase": "DATABASE_OPERATION_TERMINAL",
+        "runId": inputs["runId"], "sourceRevision": "source", "coreRevision": "core", "selectionSha256": "selection",
+        "executorSource": original["executorSource"], "databaseIdentity": db, "pendingStep": None, "pendingRequest": None,
+        "operations": [{"stepId": "FENCE_INSTALL", "state": "SUCCEEDED", "unknownOutcome": False,
+            "exitCode": 0, "sequence": 1, "intentSequence": 1, "terminalSequence": 2,
+            "intentDurability": POSITIVE, "receipt": receipt, "request": request}]}
+    backend = saved("backend.json", {"rootProof": {"synthetic": True}})
+    journal = [{"state": "EXACT_ROOT_DURABLE_METADATA_READ_COMPLETE", "mountReadOnly": True,
+        "files": {"build-state.json": {"present": True, "sha256": "original-state-digest", "document": state},
+            "build-apply-intent.json": {"present": True, "document": intent},
+            "build-receipt.json": {"present": False}, "configuration-receipt.json": {"present": False}}}]
+    resource = saved("resource.json", {"runId": inputs["runId"], "runtimeBefore": original["runtimeBefore"],
+        "operationJournal": backend, "journalRead": saved("journal.json", journal)})
+    response = {"ok": True, "name": "build-state.json", "sha256": "original-state-digest", "value": state,
+        "rootProof": {"synthetic": True}, "barrier": POSITIVE}
+    terminal = saved("terminal.json", {"containerId": "SYNTHETIC_RETIRED_HELPER", "exitCode": 0,
+        "oomKilled": False, "logsCommandExitCode": 0, "stderr": "", "stdout": json.dumps(response)})
+    retired = saved("retired.json", {"containerId": "SYNTHETIC_RETIRED_HELPER", "removed": True, "consumersAfter": []})
+    recovery = {"schema": "marty.d12-fence-install-recovery/v1", "operation": "RESUME_AFTER_TERMINAL_FENCE_INSTALL",
+        "draftOnly": False, "dispatchAuthorized": True, "runId": inputs["runId"],
+        "originalInputs": saved("original-inputs.json", original), "originalDatabaseState": saved("state.json", state),
+        "originalApplyIntent": saved("intent.json", intent), "maintenanceResourceRecovery": resource,
+        "fenceInstallReceipt": receipt, "quiescence": quiescence, "originalTerminalWrite": terminal,
+        "originalTerminalRetirement": retired,
+        "sourceMap": {key: {"original": original[key], "recovery": inputs[key]} for key in database.RECOVERY_SOURCE_FIELDS},
+        "trustDataMap": {key: {"original": original[key], "recovery": inputs[key]} for key in database.RECOVERY_TRUST_FIELDS}}
+    return inputs, state, intent, recovery, saved
+
+
+def test_exact_terminal_fence_install_recovery_keeps_original_receipt_and_barrier(tmp_path):
+    inputs, state, intent, recovery, _saved = recovery_fixture(tmp_path)
+    before = deepcopy(state)
+    step, barrier = database.fence_install_recovery_checkpoint(inputs, state, intent, recovery)
+    assert step == state["operations"][0] and barrier == POSITIVE
+    assert "terminalDurability" not in step  # real serializer returns it after the first state write
+    assert state == before
+
+
+@pytest.mark.parametrize("change", ["pending", "extra", "unknown", "receipt", "source-map", "database", "intent", "missing-barrier"])
+def test_fence_install_recovery_refuses_pending_extra_or_changed_checkpoint(tmp_path, change):
+    inputs, state, intent, recovery, saved = recovery_fixture(tmp_path)
+    if change == "pending": state.update(phase="DATABASE_OPERATION_PENDING", pendingStep="FENCE_VERIFY")
+    elif change == "extra": state["operations"].append(deepcopy(state["operations"][0]))
+    elif change == "unknown": state["operations"][0]["unknownOutcome"] = True
+    elif change == "receipt": recovery["fenceInstallReceipt"] = {}
+    elif change == "source-map": recovery["sourceMap"]["executorSource"]["original"] = {}
+    elif change == "database": inputs["databaseBefore"] = saved("wrong-db.json", {"databaseIdentity": {}})
+    elif change == "intent": intent["executorSource"] = {}
+    else:
+        terminal = json.loads(Path(recovery["originalTerminalWrite"]["path"]).read_bytes())
+        response = json.loads(terminal["stdout"]); response["barrier"] = None; terminal["stdout"] = json.dumps(response)
+        recovery["originalTerminalWrite"] = saved("missing-barrier.json", terminal)
+    if change in ("pending", "extra", "unknown"):
+        # Consistent synthetic observations isolate the checkpoint policy,
+        # rather than merely fail snapshot equality after a one-sided edit.
+        recovery["originalDatabaseState"] = saved("changed-state.json", state)
+        resource = json.loads(Path(recovery["maintenanceResourceRecovery"]["path"]).read_bytes())
+        journal = json.loads(Path(resource["journalRead"]["path"]).read_bytes())
+        journal[0]["files"]["build-state.json"]["document"] = state
+        resource["journalRead"] = saved("changed-journal.json", journal)
+        recovery["maintenanceResourceRecovery"] = saved("changed-resource.json", resource)
+    with pytest.raises(ValueError):
+        database.fence_install_recovery_checkpoint(inputs, state, intent, recovery)
+
+
+def test_resume_enters_shared_sequence_at_fence_verify_without_rewriting_originals(tmp_path):
+    from scoped_native_runtime import ref
+    inputs, state, intent, recovery, saved = recovery_fixture(tmp_path)
+    recovery_ref = saved("recovery.json", recovery)
+    original_state = deepcopy(state); original_intent = deepcopy(intent)
+    value = database.D12CurrentDatabasePhase.__new__(database.D12CurrentDatabasePhase)
+    value.i = inputs; value.authority = inputs["d12Authority"]
+    value.selection = {"preparedSource": {}, "canonicalBuildReceipt": {}}
+    value.select_binaries = lambda *_: value.selection
+    value.check_compatibility = lambda *_: None
+    value.node = lambda *_args, **_kwargs: "digest"
+    value.sql_receipts = {}
+    writes = []; guards = []
+    class Store:
+        def read(self, name):
+            return deepcopy(intent if name == "build-apply-intent.json" else state)
+        def state(self, row):
+            writes.append(deepcopy(row)); return deepcopy(POSITIVE)
+        def exclusive(self, *_):
+            raise AssertionError("original one-shot intent must not be recreated")
+    value.store = Store()
+    value.g = {"dispatch_enabled": True, "build_journal": object(),
+        "recovery_authorization_verified": lambda *_: guards.append("authority") or True,
+        "verify_recovery_quiescent": lambda *_: guards.append("fresh22") or True}
+    reached = []
+    class FirstRemainingStep(Exception): pass
+    def step(step_id, operation):
+        reached.append(step_id)
+        raise FirstRemainingStep
+    value.step = step
+    with pytest.raises(FirstRemainingStep):
+        value.resume_after_fence_install(recovery_ref)
+    assert guards == ["authority", "fresh22"] and reached == ["FENCE_VERIFY"]
+    assert len(writes) == 1 and writes[0]["recoveryAuthority"] == recovery_ref
+    assert writes[0]["operations"][0]["receipt"] == state["operations"][0]["receipt"]
+    assert writes[0]["operations"][0]["terminalDurability"] == POSITIVE
+    assert state == original_state and intent == original_intent
+    assert value.sql_receipts["passport-beta-fence-install.sql"] == recovery["fenceInstallReceipt"]
+
+
+def test_recovery_trust_rebinding_refuses_any_other_target_model_change(tmp_path):
+    inputs, state, intent, recovery, saved = recovery_fixture(tmp_path)
+    model = json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+    model["services"]["trust-profile"]["environment"]["MANAGED_AUTHORITY_TLS_KMS_KEY_NAME"] = "foreign-key"
+    inputs["plannedModels"] = {**inputs["plannedModels"], "elevenid-beta": saved("changed-model.json", model)}
+    recovery["trustDataMap"]["plannedModels"]["recovery"] = inputs["plannedModels"]
+    with pytest.raises(ValueError, match="D12_RECOVERY_TARGET_MODEL_DRIFT"):
+        database.fence_install_recovery_checkpoint(inputs, state, intent, recovery)
+
+
+def test_recovery_trust_rebinding_accepts_only_honest_new_credential_paths(tmp_path):
+    inputs, state, intent, recovery, saved = recovery_fixture(tmp_path)
+    generation = tmp_path / "new-synthetic-generation"
+    model = json.loads(Path(inputs["plannedModels"]["elevenid-beta"]["path"]).read_bytes())
+    model["secrets"]["trust_profile_workload_server_cert"]["file"] = str(generation / "trust_profile_workload_server_cert")
+    model["secrets"]["trust_profile_tls_kms_token"]["file"] = str(generation / "trust_profile_workload_server_kms_token")
+    inputs["plannedModels"] = {**inputs["plannedModels"], "elevenid-beta": saved("new-credentials-model.json", model)}
+    inputs["runScopedTrustLeaseProof"] = saved("new-lease.json", {"generationDirectory": str(generation)})
+    for key in ("plannedModels", "runScopedTrustLeaseProof"):
+        recovery["trustDataMap"][key]["recovery"] = inputs[key]
+    step, _ = database.fence_install_recovery_checkpoint(inputs, state, intent, recovery)
+    assert step["stepId"] == "FENCE_INSTALL"

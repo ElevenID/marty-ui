@@ -1,0 +1,28 @@
+{
+  "schema": "marty.ob3-startup-prerequisites/v1",
+  "composeSourcePath": "docker-compose.beta.yml",
+  "composeSha256": "0a50810e53ca2a5333266e8427f88edaee11fac4a2a91335c21c9e758dd82a1e",
+  "installedModelChanged": false,
+  "requirements": [
+    {
+      "dependentRole": "canvas-sync-worker",
+      "prerequisiteRole": "signing-keys",
+      "readiness": "DOCKER_HEALTHY"
+    },
+    {
+      "dependentRole": "compliance-profile",
+      "prerequisiteRole": "organization",
+      "readiness": "DOCKER_HEALTHY"
+    },
+    {
+      "dependentRole": "deployment-profile",
+      "prerequisiteRole": "organization",
+      "readiness": "DOCKER_HEALTHY"
+    },
+    {
+      "dependentRole": "device-registration",
+      "prerequisiteRole": "organization",
+      "readiness": "DOCKER_HEALTHY"
+    }
+  ]
+}

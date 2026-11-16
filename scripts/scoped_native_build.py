@@ -16,7 +16,7 @@ import shutil
 import sys
 from contextlib import contextmanager
 from scoped_native_runtime import (CORE_REVISION, UI_REVISION, ROLE_BINARIES,
-    daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
+    available_physical_memory_bytes, daemon_source, durable_barrier, read_ref, ref, require, save_exclusive, save_state, selected_sources, sha)
 
 PACKAGES = ("marty-flow", "marty-gateway", "marty-issuance-service")
 CARGO_ARGV = ["cargo", "build", "--locked", "--offline", "--message-format=json"] + [item for package in PACKAGES for item in ("-p", package, "--bin", package)]
@@ -397,8 +397,7 @@ def build_arguments(plan, profile=None):
     return args + ["--entrypoint", "/bin/sh", plan["builderImage"], "/build.sh"]
 
 def current_issuer_capacity(helper, private, profile=CURRENT_ISSUER_READY_PROFILE):
-    host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                              "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
+    host_kib = available_physical_memory_bytes() // 1024
     require(host_kib >= current_issuer_limits(profile)[2], "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED")
     require(shutil.disk_usage(private).free >= 8 * 1024 ** 3, "CURRENT_ISSUER_DISK_HEADROOM_REQUIRED")
     return host_kib
@@ -529,8 +528,7 @@ def membership_required_free_bytes(profile, *, before_parent=False):
 
 def membership_capacity(helper, private, profile, *, before_parent=False):
     required_bytes = membership_required_free_bytes(profile, before_parent=before_parent)
-    host_kib = int(helper.run("powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
-                              "(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory").stdout.strip())
+    host_kib = available_physical_memory_bytes() // 1024
     # Admitted Linux and Windows caps + unchanged host reserve 1 GiB + 64 MiB.
     require(host_kib * 1024 >= required_bytes,
             "D05_HOST_HEADROOM_REQUIRED "

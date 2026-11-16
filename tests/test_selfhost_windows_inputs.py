@@ -336,5 +336,71 @@ class WindowsInputTests(unittest.TestCase):
                 alias.rmdir()
 
 
+class HeldCallerExceptionTests(unittest.TestCase):
+    """Synthetic holder boundaries only: no Windows APIs or subprocesses."""
+
+    def scopes(self, root, path):
+        return [
+            (windows.hold_storage_namespace(root), windows.REFUSAL),
+            (windows.hold_private_input(path), windows.REFUSAL),
+            (windows.hold_public_input(path), "Windows public immutable input is absent or changed"),
+            (windows.hold_private_generation(root, ["token"]), windows.REFUSAL),
+        ]
+
+    def test_caller_exceptions_keep_identity_and_release_every_held_handle(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "token"
+            path.write_bytes(b"SYNTHETIC")
+            entered, released = [], []
+            @contextmanager
+            def held(path, **kwargs):
+                entered.append(path)
+                try:
+                    yield b"SYNTHETIC"
+                finally:
+                    released.append(path)
+            with patch.object(windows, "os", SimpleNamespace(name="nt")), patch.object(windows, "_held_private_input", held):
+                for exception in (ValueError, OSError, TypeError, UnicodeError):
+                    for scope, _ in self.scopes(root, path):
+                        entered.clear(); released.clear()
+                        error = exception("CALLER_FAILURE")
+                        with self.subTest(exception=exception.__name__), self.assertRaises(exception) as caught:
+                            with scope:
+                                raise error
+                        self.assertIs(caught.exception, error)
+                        self.assertEqual(released, list(reversed(entered)))
+
+    def test_acquisition_errors_still_have_only_the_input_refusal(self):
+        from types import SimpleNamespace
+        @contextmanager
+        def refused(path, **kwargs):
+            raise OSError("PRIVATE_API_DETAIL")
+            yield
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); path = root / "token"; path.write_bytes(b"SYNTHETIC")
+            with patch.object(windows, "os", SimpleNamespace(name="nt")), patch.object(windows, "_held_private_input", refused):
+                for scope, refusal in self.scopes(root, path):
+                    with self.assertRaises(ValueError) as caught:
+                        with scope:
+                            self.fail("Acquisition must refuse before caller body")
+                    self.assertEqual(str(caught.exception), refusal)
+
+    def test_cleanup_api_failure_is_still_an_input_refusal(self):
+        from types import SimpleNamespace
+        @contextmanager
+        def held(path, **kwargs):
+            yield b"SYNTHETIC"
+            raise OSError("PRIVATE_RELEASE_API_DETAIL")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); path = root / "token"; path.write_bytes(b"SYNTHETIC")
+            with patch.object(windows, "os", SimpleNamespace(name="nt")), patch.object(windows, "_held_private_input", held):
+                for scope, refusal in self.scopes(root, path):
+                    with self.assertRaises(ValueError) as caught:
+                        with scope:
+                            pass
+                    self.assertEqual(str(caught.exception), refusal)
+
 if __name__ == "__main__":
     unittest.main()

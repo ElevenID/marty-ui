@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,7 +78,9 @@ def test_deployed_runtime_requires_scoped_workload_identity() -> None:
         assert "compliance-profile-workload-tls" in deployment or (
             "compliance_profile_workload_client_cert" in deployment
         )
-    assert 'compliance-profile:\n    environment:' in beta
+    service = re.search(r"(?ms)^  compliance-profile:\n(.*?)(?=^  \S|\Z)", beta)
+    assert service is not None
+    assert '    environment:' in service.group(1)
     assert 'GRPC_INSECURE_ALLOWED: "false"' in beta
     assert "compliance_profile_workload_client_cert" in beta
     assert "compliance_profile_tls_kms_token" in beta

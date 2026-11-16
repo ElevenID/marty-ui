@@ -89,6 +89,12 @@ def start_recorder_capture(required: bool):
     return module.PythonCapture()
 
 
+def recording_mode(requested: bool, environment=None) -> tuple[bool, bool, bool]:
+    """Functional mode retains events, never video or diagnostic screenshots."""
+    functional = (os.environ if environment is None else environment).get("RECORD_VIDEO") == "0"
+    return functional, bool(requested and not functional), bool(requested or functional)
+
+
 def bound_recorder_inputs(capture, signing_inputs, record_video, recording_pause_ms):
     scenario = capture.inputs["scenario"]
     expected_signing = {"endpoint": signing_inputs["endpoint"], "mount": signing_inputs["mount"],
@@ -501,7 +507,15 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
         step for step in steps
         if step.get("label") == "api-key-created"
     ]
-    if api_key_steps and not all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps):
+    functional_no_screenshots = (report.get("capture_mode") == "FUNCTIONAL_ONLY_METADATA"
+                                and report.get("screenshots") == []
+                                and report.get("summary", {}).get("screenshots") == 0
+                                and all(step.get("screenshot") is None for step in steps))
+    if api_key_steps and not all(step.get("api_key_secret_screenshot_redacted")
+                                or (functional_no_screenshots
+                                    and step.get("api_key_secret_screenshot_omitted") is True
+                                    and step.get("screenshot_status") == "NOT_CAPTURED_FUNCTIONAL")
+                                for step in api_key_steps):
         add_blocker(
             "api_key_screenshot_not_redacted",
             "The API key result step did not record that its screenshot was redacted.",
@@ -607,6 +621,8 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "api_key_secret_screenshot_redacted": bool(
                 api_key_steps and all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps)
             ),
+            "api_key_secret_screenshot_omitted": bool(functional_no_screenshots and api_key_steps
+                and all(step.get("api_key_secret_screenshot_omitted") is True for step in api_key_steps)),
         },
     }
 
@@ -844,6 +860,7 @@ class Audit:
         self.artifact_dir = artifact_dir
         self.base_url = base_url.rstrip("/")
         self.recording_pause_ms = max(0, recording_pause_ms)
+        self.capture_screenshots = os.environ.get("RECORD_VIDEO") != "0"
         self.steps: list[dict[str, Any]] = []
         self.console: list[dict[str, str]] = []
         self.failed_requests: list[dict[str, str]] = []
@@ -1158,35 +1175,37 @@ class Audit:
         redact_screenshot: bool = False,
     ) -> None:
         note = redact_sensitive(note)
-        filename = f"{len(self.steps) + 1:02d}-{slugify(label)[:80]}.png"
-        screenshot = self.artifact_dir / filename
-        scroll_position: dict[str, Any] | None = None
-        try:
-            scroll_position = self.page.evaluate("() => ({ x: window.scrollX, y: window.scrollY })")
-            self.page.evaluate("() => window.scrollTo(0, 0)")
-            self.page.wait_for_timeout(100)
-            if redact_screenshot:
-                redacted = write_redacted_screenshot_placeholder(
-                    screenshot,
-                    "Screenshot redacted",
-                    "This step can display a one-time API key secret. The report keeps the step metadata "
-                    "and redacted response details, but the screenshot is replaced to avoid storing live credentials.",
-                )
-                if not redacted:
-                    screenshot = None
-            else:
-                self.page.screenshot(path=str(screenshot), full_page=True)
-        except Exception:
-            screenshot = None
-        finally:
-            if scroll_position:
-                try:
-                    self.page.evaluate(
-                        "(pos) => window.scrollTo(pos.x || 0, pos.y || 0)",
-                        scroll_position,
+        screenshot = None
+        if self.capture_screenshots:
+            filename = f"{len(self.steps) + 1:02d}-{slugify(label)[:80]}.png"
+            screenshot = self.artifact_dir / filename
+            scroll_position: dict[str, Any] | None = None
+            try:
+                scroll_position = self.page.evaluate("() => ({ x: window.scrollX, y: window.scrollY })")
+                self.page.evaluate("() => window.scrollTo(0, 0)")
+                self.page.wait_for_timeout(100)
+                if redact_screenshot:
+                    redacted = write_redacted_screenshot_placeholder(
+                        screenshot,
+                        "Screenshot redacted",
+                        "This step can display a one-time API key secret. The report keeps the step metadata "
+                        "and redacted response details, but the screenshot is replaced to avoid storing live credentials.",
                     )
-                except Exception:
-                    pass
+                    if not redacted:
+                        screenshot = None
+                else:
+                    self.page.screenshot(path=str(screenshot), full_page=True)
+            except Exception:
+                screenshot = None
+            finally:
+                if scroll_position:
+                    try:
+                        self.page.evaluate(
+                            "(pos) => window.scrollTo(pos.x || 0, pos.y || 0)",
+                            scroll_position,
+                        )
+                    except Exception:
+                        pass
         self.steps.append(
             {
                 "label": label,
@@ -1196,6 +1215,8 @@ class Audit:
                 "body_excerpt": body_excerpt(self.page),
                 "screenshot": report_artifact_path(screenshot, self.artifact_dir) if screenshot else None,
                 **(extra or {}),
+                "screenshot_status": "NOT_CAPTURED_FUNCTIONAL" if not self.capture_screenshots else ("REDACTED_PLACEHOLDER" if redact_screenshot and screenshot else "CAPTURED" if screenshot else "NOT_CAPTURED_ERROR"),
+                **({"api_key_secret_screenshot_redacted": bool(self.capture_screenshots and screenshot), "api_key_secret_screenshot_omitted": not self.capture_screenshots} if redact_screenshot else {}),
             }
         )
         print(f"[audit] {label}: {note or first_heading(self.page) or self.page.url}")
@@ -1287,6 +1308,7 @@ class Audit:
         ]
         report = {
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "capture_mode": "RECORDED_VISUAL_AUDIT" if self.capture_screenshots else "FUNCTIONAL_ONLY_METADATA",
             "base_url": self.base_url,
             "artifact_dir": report_artifact_path(self.artifact_dir, self.artifact_dir),
             "summary": {
@@ -2790,11 +2812,9 @@ def main() -> int:
     parser.add_argument("--check-foreign-fixture", action="store_true",
                         help="Read only: verify the existing independent owner and select one active foreign organization.")
     args = parser.parse_args()
-    functional_rerun = os.environ.get("RECORD_VIDEO") == "0"
-    record_video = args.record_video and not functional_rerun
+    functional_rerun, record_video, record_trace = recording_mode(args.record_video)
     # The D-10 recorder contract requires a trace in both modes. Functional
     # traces retain execution events without capturing screenshots or DOMs.
-    record_trace = args.record_video or functional_rerun
 
     env = {} if os.environ.get("DEMO_PYTHON_CAPTURE_NONCE") else load_env_file(ENV_FILE)
     base_url = (

@@ -175,3 +175,92 @@ def test_exact_git_exported_sql_bytes_pass_and_crlf_checkout_bytes_refuse(tmp_pa
     inputs["sqlSources"][changed.name] = ref(changed)
     with pytest.raises(ValueError, match="D12_EXACT_GIT_EXPORTED_SQL_REQUIRED"):
         exact_exported_sql(plan, inputs)
+
+
+def test_recovery_entry_uses_recovery_preflight_and_shared_finish_without_stopping_again(tmp_path):
+    from scoped_native_runtime import ref
+    source = tmp_path / "recovery.json"
+    source.write_text(json.dumps({"quiescence": {"sha256": "actual-stopped-ref"}}))
+    value = execution.D12CurrentExecution.__new__(execution.D12CurrentExecution)
+    value.read_only_preflight = False
+    value.i = {"runId": "SYNTHETIC"}; value.state = {}
+    calls = []
+    class Database:
+        def resume_after_fence_install(self, recovery_ref):
+            calls.append(("resume", recovery_ref)); return "proof"
+    database = Database()
+    def preflight(recovery_ref):
+        calls.append(("recovery-preflight", recovery_ref))
+        return database, "before", "preview", "overlay"
+    value.recovery_preflight = preflight
+    value.preflight = lambda: (_ for _ in ()).throw(AssertionError("normal stop preflight must not replay"))
+    value._finish_after_database = lambda *args: calls.append(("shared-finish", args)) or "result"
+    recovery_ref = ref(source)
+    assert value.resume_after_fence_install(recovery_ref) == "result"
+    assert database.i == {"runId": "SYNTHETIC", "quiescence": {"sha256": "actual-stopped-ref"}}
+    assert value.i == {"runId": "SYNTHETIC"} and value.state["recoveryAuthority"] == recovery_ref
+    assert calls == [("recovery-preflight", recovery_ref), ("resume", recovery_ref),
+                     ("shared-finish", (database, "before", "preview", "overlay", "proof"))]
+
+
+@pytest.mark.parametrize("change", [None, "unselected", "quiescence-changed"])
+def test_shared_finish_binds_actual_quiescence_before_unselected_create_comparison(tmp_path, monkeypatch, change):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    import hashlib
+    value = D12CurrentExecution.__new__(D12CurrentExecution)
+    value.profile = execution.CURRENT_PROFILE
+    value.read_only_preflight = False
+    value.roles = {"flow": "fixture-bin"}
+    value.native_preimage = None
+    value.state = {"steps": []}
+    value.build_profile = SimpleNamespace(ui_revision="synthetic-source", core_revision="synthetic-core")
+    value.i = {"runId": "SYNTHETIC", "selection": {"sha256": "selected"},
+        "executorSource": {}, "databaseBefore": {"sha256": "database"}, "composeArguments": ["docker", "compose"]}
+    before = {"roles": [{"role": role, "containerId": hashlib.sha256(role.encode()).hexdigest(),
+        "imageId": "sha256:"+"a"*64, "state": "running", "running": True, "hostPid": 100,
+        "containerExitCode": 0, "oomKilled": False, "binaryMounts": []} for role in sorted(D12_CURRENT_RUNTIME_ROLES)]}
+    old_binary = str(tmp_path / "old-elf"); new_binary = str(tmp_path / "new-elf")
+    target = "/usr/local/bin/fixture-bin"
+    flow = next(row for row in before["roles"] if row["role"] == "flow")
+    flow["binaryMounts"] = [{"destination": target, "type": "bind", "writable": False, "source": old_binary}]
+    stopped = deepcopy(before)
+    for row in stopped["roles"]:
+        row.update(state="exited", running=False, hostPid=0)
+    q = tmp_path / "quiescence.json"; q.write_text(json.dumps(stopped)); qref = ref(q)
+    created = deepcopy(stopped)
+    selected = next(row for row in created["roles"] if row["role"] == "flow")
+    selected.update(containerId="f"*64, state="created")
+    selected["binaryMounts"][0]["source"] = new_binary
+    if change == "unselected":
+        next(row for row in created["roles"] if row["role"] == "gateway")["imageId"] = "sha256:"+"b"*64
+    if change == "quiescence-changed":
+        q.write_text("{}")
+    nodes = []
+    identity = {"containerId": "SYNTHETIC_DATABASE"}
+    database = SimpleNamespace(i={"quiescence": qref}, commands=[], baseline_refs={}, engine_id="engine", identity=identity,
+        selection={"binaries": {"flow": {"path": new_binary}}},
+        node=lambda *args, **kwargs: nodes.append(args) or {"sourceCommit": "synthetic-source", "databaseIdentity": identity})
+    saved = []
+    value.g = {"save": lambda name, data: saved.append((name, deepcopy(data))) or {"path": name, "sha256": "saved"}}
+    value.store = SimpleNamespace(state=lambda row: {"fileFsync": True, "parentDirectory": {"supported": True, "synced": True}})
+    value.inspect_all22 = lambda: deepcopy(created)
+    monkeypatch.setattr(execution.overlay, "compose_recreate_arguments", lambda *args, **kwargs: ["docker", "compose", "create"])
+    commands = []
+    class ReachedFirstStart(Exception): pass
+    def command(_database, step, args):
+        commands.append(step)
+        if step.startswith("START_"):
+            raise ReachedFirstStart
+    value.command = command
+    if change is None:
+        with pytest.raises(ReachedFirstStart):
+            value._finish_after_database(database, before, {"restoreOrder": ["flow"]}, {"path": "overlay"}, {})
+        assert commands == ["CREATE_SELECTED", "START_flow"]
+    else:
+        code = "D12_UNSELECTED_CREATE_CHANGED:gateway" if change == "unselected" else "BOUND_FILE_CHANGED"
+        with pytest.raises(ValueError, match=code):
+            value._finish_after_database(database, before, {"restoreOrder": ["flow"]}, {"path": "overlay"}, {})
+        assert commands == (["CREATE_SELECTED"] if change == "unselected" else [])
+        if change == "quiescence-changed":
+            assert nodes == []  # fail before DB metadata verification or recreate

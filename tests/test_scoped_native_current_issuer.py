@@ -114,18 +114,15 @@ class CurrentIssuerProfileTests(unittest.TestCase):
 
     def test_compact_host_gate_rejects_below_2point6g(self):
         compact = build.CURRENT_ISSUER_POLICY_COMPACT_PROFILE
-        class Capacity:
-            def __init__(self, kib):
-                self.kib = kib
-            def run(self, *args):
-                return type("Result", (), {"stdout": str(self.kib)})()
         threshold = build.current_issuer_limits(compact)[2]
-        with patch.object(build.shutil, "disk_usage", return_value=type("Disk", (), {"free": 9 * 1024 ** 3})()):
-            build.current_issuer_capacity(Capacity(threshold), Path("."), compact)
+        with patch.object(build.shutil, "disk_usage", return_value=type("Disk", (), {"free": 9 * 1024 ** 3})()), \
+             patch.object(build, "available_physical_memory_bytes",
+                          side_effect=[threshold * 1024, (threshold - 1) * 1024, threshold * 1024]):
+            build.current_issuer_capacity(None, Path("."), compact)
             with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED"):
-                build.current_issuer_capacity(Capacity(threshold - 1), Path("."), compact)
+                build.current_issuer_capacity(None, Path("."), compact)
             with self.assertRaisesRegex(ValueError, "CURRENT_ISSUER_HOST_HEADROOM_REQUIRED"):
-                build.current_issuer_capacity(Capacity(threshold), Path("."), PROFILE)
+                build.current_issuer_capacity(None, Path("."), PROFILE)
 
     def test_each_focused_test_receipt_requires_one_real_pass(self):
         with tempfile.TemporaryDirectory() as temporary:

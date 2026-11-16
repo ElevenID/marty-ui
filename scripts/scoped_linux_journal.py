@@ -136,7 +136,10 @@ def client_path(file):
 
 
 class LinuxBuildJournal:
-    def __init__(self, private, run_id, specification, *, initializing=False, sourceFiles=None):
+    def __init__(self, private, run_id, specification, *, initializing=False, sourceFiles=None, read_only=False):
+        require(type(read_only) is bool and not (read_only and initializing),
+                "JOURNAL_READ_ONLY_MODE_REQUIRED")
+        self.read_only = read_only
         require(os.name == "nt", "JOURNAL_WINDOWS_CONTROLLER_REQUIRED")
         self.private = Path(private).resolve()
         require(self.private.is_relative_to(Path.home() / ".codex/private") and self.private.is_dir() and not self.private.is_symlink()
@@ -198,6 +201,8 @@ class LinuxBuildJournal:
         return tuple(paths)
 
     def invoke(self, operation, name, value=None):
+        require(not getattr(self, "read_only", False) or operation == "read",
+                "JOURNAL_READ_ONLY_OPERATION_REFUSED")
         require(not getattr(self, "pending", False) and not list(self.private.glob("linux-journal-request-*.json")),
                 "LINUX_JOURNAL_PENDING_REQUEST_REQUIRES_RECONCILIATION")
         worker_file, shared_file, _ = self.verified_source_files()

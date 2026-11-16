@@ -39,7 +39,8 @@ function functionalBinding(client, environment) {
   const {loadFunctionalRuntimeObservation} = require(regularSource(path.join(directory, 'canvasNativeRuntime.js')));
   const acknowledged = validateFunctionalRuntimeContext(binding);
   const runtime = loadFunctionalRuntimeObservation(receipt,
-    environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true});
+    environment.DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256, {functionalRerun:true,
+      ...(acknowledged.ob3Configuration?{ob3Configuration:acknowledged.ob3Configuration}:{})});
   assert.deepEqual(acknowledged, functionalRuntimeContext(runtime), 'Functional runtime acknowledgement differs from mounted receipt');
   return acknowledged;
 }
@@ -62,6 +63,30 @@ function ownedWalletBinding(client, environment, functional) {
   assert.deepEqual(acknowledged,runtime.context,'Owned wallet acknowledgement differs from bound host receipt');
   assert.equal(environment.MARTY_TEST_WALLET_ORIGIN,acknowledged.origin);
   return acknowledged;
+}
+
+// Optional Recorder-owned capability; RECORD_VIDEO=0 remains the functional mode.
+function privateReviewCaptureContext(client, {scenario, supportingLane=null}, environment=process.env) {
+  const binding=client.privateReviewCaptureBinding;
+  if (!binding) return null;
+  assert.equal(environment.RECORD_VIDEO,'0','Private review requires the functional no-release-media mode');
+  const functional=functionalBinding(client,environment),wallet=ownedWalletBinding(client,environment,functional);
+  assert(functional&&wallet,'Private review requires owned functional runtime and wallet');
+  const directory=path.dirname(regularSource(environment.DEMO_EXECUTION_EVIDENCE_HELPER));
+  const {validatePrivateReviewCaptureContext}=require(regularSource(path.join(directory,'externalLiveEvidence.js')));
+  assert.equal(typeof validatePrivateReviewCaptureContext,'function','Recorder private-review capability owner required');
+  const acknowledged=validatePrivateReviewCaptureContext(binding);
+  assert.equal(acknowledged.runId,environment.DEMO_EXECUTION_EVIDENCE_RUN_ID);
+  assert.equal(acknowledged.scenario,scenario);assert.equal(acknowledged.supportingLane,supportingLane);
+  assert.equal(acknowledged.runtimeProfileSha256,functional.profileSha256);
+  assert.equal(acknowledged.runtimeReceiptSha256,functional.receiptSha256);
+  assert.equal(acknowledged.walletInstanceId,wallet.instanceId);
+  assert.equal(functional.ob3Readiness?.readinessScope,'OB3_FUNCTIONAL_ONLY');assert.equal(functional.ob3Readiness.fullStackQualified,false);
+  assert.deepEqual(acknowledged.configuration,functional.ob3Configuration,'Private review configuration differs from current OB3 runtime');
+  const prior=regularSource(acknowledged.priorFunctionalReport.path);
+  assert.equal(fs.statSync(prior).size,acknowledged.priorFunctionalReport.bytes);
+  assert.equal(createHash('sha256').update(fs.readFileSync(prior)).digest('hex'),acknowledged.priorFunctionalReport.sha256);
+  return Object.freeze(acknowledged);
 }
 
 async function createDemoLiveEvidence() {
@@ -101,7 +126,8 @@ function applyLocalNativeReadiness(report, client, {ready, cleanupComplete}, env
     report.releaseReady = false;
     report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
     report.localFunctionalRuntime = {profileSha256:functional.profileSha256, receiptSha256:functional.receiptSha256,
-      scope:functional.scope, releaseQualified:false, recordingQualified:false};
+      scope:functional.scope, releaseQualified:false, recordingQualified:false,
+      ...(functional.ob3Readiness?{ob3Readiness:functional.ob3Readiness,ob3Configuration:functional.ob3Configuration}:{})};
     if(wallet)report.localFunctionalWallet={...wallet};
     report.signedManifestVerified = false;
     report.demo_qualified = false;
@@ -142,4 +168,4 @@ async function acknowledgeDemoInputs(artifactDir, file, expected, client) {
   return actual;
 }
 
-module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness };
+module.exports = { createDemoLiveEvidence, acknowledgeDemoInputs, applyLocalNativeReadiness, privateReviewCaptureContext };

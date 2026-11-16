@@ -140,7 +140,7 @@ def test_quiescence_rechecks_fresh_all22_and_durable_journal(tmp_path, monkeypat
     for row in rows["roles"]:
         row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
     frozen = binding.save("quiescence.json", rows)
-    binding.store.read = lambda name: {"phase": "ALL22_QUIESCENT", "quiescenceSha256": frozen["sha256"]}
+    binding.store.read = lambda name: {"phase": "ALL22_QUIESCENT", "runId": binding.inputs["runId"], "quiescenceSha256": frozen["sha256"]}
     assert binding.verify_all22_quiescent(frozen) is True
     assert calls.count("actual22") == 1
     rows["roles"][0]["hostPid"] = 1
@@ -239,7 +239,7 @@ def test_owned_create_ack_rebinds_only_exact_three_cids_and_refuses_foreign_same
         observer.inspect_role("flow")
 
 
-@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost", "compose_fail"])
+@pytest.mark.parametrize("change", [None, "cid", "image", "generation", "failed", "bool_exit", "lock", "lock_lost", "compose_fail", "recovery"])
 def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_path, monkeypatch, change):
     binding, rows, _, inp, _ = setup_context(tmp_path, monkeypatch)
     for row in rows["roles"]:
@@ -251,6 +251,23 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
     runtime.write_text(json.dumps(rows))
     authority = tmp_path / "authority.json"
     authority.write_text("{}")
+    recovery_ref = None
+    stopped = None
+    if change == "recovery":
+        stopped = deepcopy(rows)
+        for row in stopped["roles"]:
+            row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
+        quiescence = private / "stopped.json"
+        quiescence.write_text(json.dumps(stopped))
+        resource_recovery = private / "maintenance-resource.json"
+        resource_recovery.write_text("{}")
+        recovery = private / "recovery.json"
+        recovery.write_text(json.dumps({"schema": "marty.d12-fence-install-recovery/v1",
+            "operation": "RESUME_AFTER_TERMINAL_FENCE_INSTALL", "dispatchAuthorized": True, "draftOnly": False,
+            "runId": binding.inputs["runId"], "quiescence": ref(quiescence),
+            "maintenanceResourceRecovery": ref(resource_recovery)}))
+        recovery_ref = ref(recovery)
+        authority.write_text(json.dumps({"approvedRecoveryAuthoritySha256": recovery_ref["sha256"]}))
     profile = private / "resource-profile.json"
     profile.write_text(json.dumps({"schema": "marty.functional-mixed-runtime/v2",
         "scope": "FUNCTIONAL_ONLY", "releaseQualified": False,
@@ -296,7 +313,7 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         lock_lease=lease, dispatch_permit_ref=ref(permit_path),
         compose_plugin_ref=ref(plugin))
     assert owner.context()["dispatch_enabled"] is True
-    actual = deepcopy(rows)
+    actual = deepcopy(stopped if change == "recovery" else rows)
     if change == "cid":
         actual["roles"][0]["containerId"] = "f" * 64
     if change == "image":
@@ -305,7 +322,7 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         actual["roles"][0]["startedAt"] = "2026-11-08T01:00:00Z"
     class Result:
         returncode = False if change == "bool_exit" else 1 if change == "failed" else 0
-        stdout = json.dumps({**actual, "scope": "FUNCTIONAL_ONLY",
+        stdout = json.dumps({**actual, "scope": "MAINTENANCE_RECOVERY_ONLY" if change == "recovery" else "FUNCTIONAL_ONLY",
             "releaseQualified": False, "recordingQualified": False}).encode()
         stderr = b""
         observation = {"timedOut": False, "failures": []}
@@ -323,7 +340,17 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
             live["held"] = False
         return Result()
     monkeypatch.setattr(effect, "bounded_run", run)
-    if change is None:
+    if change == "recovery":
+        assert owner.context()["recovery_authorization_verified"](ref(authority), recovery_ref) is True
+        assert len(calls) == 2 and "verifyMaintenanceRuntime" in calls[1][0][2]
+        receipt = json.loads((private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").read_bytes())
+        assert receipt["scope"] == "MAINTENANCE_RECOVERY_ONLY" and receipt["functionalQualification"] is False
+        assert receipt["recoveryAuthority"] == recovery_ref
+        request = json.loads((private / "run" / "d12-authorization-0001-d12-resource28-request.private.json").read_bytes())
+        assert request["scope"] == "MAINTENANCE_RECOVERY_ONLY"
+        with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE_RESULT_REQUIRED"):
+            owner.authorization_verified(ref(authority))
+    elif change is None:
         assert owner.context()["authorization_verified"](ref(authority)) is True
         assert len(calls) == 2
         assert calls[0][0][3:6] == ["compose", "version", "--short"]
@@ -339,6 +366,8 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         for number in (1, 2):
             receipt = json.loads((private / "run" / f"d12-authorization-{number:04d}-d12-resource28-bound.private.json").read_bytes())
             assert receipt["authorizationAttempt"] == number
+            request = json.loads((private / "run" / f"d12-authorization-{number:04d}-d12-resource28-request.private.json").read_bytes())
+            assert request["scope"] == "FUNCTIONAL_ONLY"
             assert len(receipt["observations"]) == 7
             for bound in receipt["observations"].values():
                 assert ref(Path(bound["path"])) == bound
@@ -363,3 +392,122 @@ def test_root_intent_requires_held_lock_and_actual_full_resource_binding(tmp_pat
         with pytest.raises(ValueError, match="D12_ACTUAL_RESOURCE28_VERIFIER_FAILED|D12_RESOURCE28_AND_NATIVE22_DIVERGED"):
             owner.context()["authorization_verified"](ref(authority))
         assert not (private / "run" / "d12-authorization-0001-d12-resource28-bound.private.json").exists()
+
+@pytest.mark.parametrize("shape", ["historical", "current", "extra", "wrong-engine", "writes-true", "writes-zero", "missing-engine", "missing-writes"])
+def test_database_preimage_closed_metadata_shape_preserves_observed_proof(tmp_path, shape):
+    from types import SimpleNamespace
+    engine = "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341"
+    identity = {"containerId": "a" * 64, "imageId": "sha256:" + "b" * 64,
+                "startedAt": "2026-11-11T14:54:24Z", "hostPid": 5202,
+                "project": "elevenid-beta", "service": "postgres"}
+    frozen = {"databaseIdentity": identity}
+    if shape != "historical":
+        frozen.update(engineId=engine, runtimeWrites=False)
+    if shape == "extra": frozen["unbound"] = True
+    if shape == "wrong-engine": frozen["engineId"] = "foreign"
+    if shape == "writes-true": frozen["runtimeWrites"] = True
+    if shape == "writes-zero": frozen["runtimeWrites"] = 0
+    if shape == "missing-engine": frozen.pop("engineId")
+    if shape == "missing-writes": frozen.pop("runtimeWrites")
+    path = tmp_path / "database.json"
+    path.write_text(json.dumps(frozen))
+    calls = []
+    def read(args):
+        calls.append(args)
+        if args == ["info", "--format", "{{.ID}}"]:
+            return engine.encode()
+        assert args == ["inspect", identity["containerId"]]
+        return json.dumps([{"Id": identity["containerId"], "Image": identity["imageId"],
+            "Config": {"Labels": {"com.docker.compose.project": "elevenid-beta",
+                                  "com.docker.compose.service": "postgres"}},
+            "State": {"StartedAt": identity["startedAt"], "Pid": identity["hostPid"],
+                      "Running": True, "Status": "running", "Paused": False,
+                      "OOMKilled": False, "Health": {"Status": "healthy"}}}]).encode()
+    observer = D12CurrentEffectObserver.__new__(D12CurrentEffectObserver)
+    observer.host = SimpleNamespace(engine_id=engine, _recheck_source=lambda: None, _docker=read)
+    if shape in ("historical", "current"):
+        assert observer.database_snapshot(ref(path)) == frozen
+        assert calls == [["info", "--format", "{{.ID}}"], ["inspect", identity["containerId"]],
+                         ["info", "--format", "{{.ID}}"]]
+    else:
+        with pytest.raises(ValueError, match="D12_DATABASE_PREIMAGE"):
+            observer.database_snapshot(ref(path))
+        assert not calls
+
+
+def test_two_real_database_steps_keep_the_durable_quiescence_binding(tmp_path, monkeypatch):
+    import scoped_native_database as database
+    binding, rows, calls, inp, _meta = setup_context(tmp_path, monkeypatch)
+    for row in rows["roles"]:
+        row.update(state="exited", running=False, hostPid=0, containerExitCode=0)
+    quiescence = binding.save("quiescence.json", rows)
+    before = binding.save("db-before.json", {"databaseIdentity": {"containerId": "a" * 64}})
+    binding.inputs.update(uiRevision="source", coreRevision="core", executorSource={"path": "executor", "sha256": "b" * 64}, databaseBefore=before)
+    inp.write_text(json.dumps(binding.inputs))
+    binding.inputs_ref = ref(inp)
+    inputs = {**binding.inputs, "quiescence": quiescence, "compatibility": {"plan": {}, "result": {}},
+              "databaseAdminUrl": binding.save_bytes("synthetic-url", b"postgres://postgres:synthetic@postgres:5432/marty"),
+              "migrationSources": {}, "migrationSetSha256": "digest"}
+    value = database.D12CurrentDatabasePhase.__new__(database.D12CurrentDatabasePhase)
+    value.i = inputs
+    value.selection = {"preparedSource": {}, "canonicalBuildReceipt": {}}
+    value.select_binaries = lambda *_: value.selection
+    value.check_compatibility = lambda *_: None
+    value.guard = lambda: None
+    value.state = {"schema": value.operation_schema, "phase": "NOT_STARTED", "runId": inputs["runId"],
+        "sourceRevision": "source", "coreRevision": "core", "selectionSha256": inputs["selection"]["sha256"],
+        "executorSource": inputs["executorSource"], "databaseIdentity": {"containerId": "a" * 64}, "operations": []}
+    value.SCHEMA_BINARIES = {}
+    durable = {"phase": "ALL22_QUIESCENT", "runId": inputs["runId"], "quiescenceSha256": quiescence["sha256"]}
+    history = []
+    intent = {"runId": inputs["runId"], "selectionSha256": inputs["selection"]["sha256"], "executorSource": inputs["executorSource"]}
+    class Journal:
+        def read(self, name):
+            return deepcopy(intent if name == "build-apply-intent.json" else durable)
+        def state(self, row):
+            durable.clear(); durable.update(deepcopy(row)); history.append(deepcopy(row))
+            return {"fileFsync": True, "parentDirectory": {"supported": True, "synced": True}}
+    value.store = binding.store = Journal()
+    value.g = {"dispatch_enabled": True, "build_journal": object(), "verify_all22_quiescent": binding.verify_all22_quiescent, "save": binding.save}
+    value.node = lambda mode, **_: "digest" if mode == "digest" else {"epoch": 1}
+    effects = []
+    value.sql = lambda name: effects.append(name) or {"stdout": {}, "state": "exited", "exitCode": 0}
+    value.sql_receipts = {}
+    class SelectedTwoStepsComplete(Exception):
+        pass
+    def selected_step(step_id, operation):
+        if step_id == "MAINTENANCE_START":
+            raise SelectedTwoStepsComplete
+        return database.NativeDatabasePhase.step(value, step_id, operation)
+    value.step = selected_step
+    with pytest.raises(SelectedTwoStepsComplete):
+        database.NativeDatabasePhase.run(value)
+    assert effects == ["passport-beta-fence-install.sql", "passport-beta-fence-verify.sql"]
+    assert [row["stepId"] for row in durable["operations"]] == ["FENCE_INSTALL", "FENCE_VERIFY"]
+    assert all(row["quiescenceSha256"] == quiescence["sha256"] for row in history)
+    assert durable["phase"] == "DATABASE_OPERATION_TERMINAL"
+    assert calls.count("actual22") == 3  # run entry and independently before both effects
+
+
+@pytest.mark.parametrize("change", ["missing-hash", "run", "selection", "executor", "database", "pending", "unknown-outcome"])
+def test_terminal_database_quiescence_refuses_unbound_or_unknown_checkpoint(tmp_path, change):
+    from scoped_native_database import require_bound_quiescence
+    p = tmp_path / "db.json"
+    p.write_text(json.dumps({"databaseIdentity": {"containerId": "a" * 64}}))
+    inputs = {"runId": "run", "uiRevision": "source", "coreRevision": "core", "selection": {"sha256": "b" * 64},
+              "executorSource": {"path": "executor", "sha256": "c" * 64}, "databaseBefore": ref(p)}
+    bound = {"sha256": "d" * 64}
+    state = {"schema": "marty.native-d12-current-operation-state/v1", "phase": "DATABASE_OPERATION_TERMINAL", "runId": "run",
+             "quiescenceSha256": bound["sha256"], "sourceRevision": "source", "coreRevision": "core",
+             "selectionSha256": inputs["selection"]["sha256"], "executorSource": inputs["executorSource"],
+             "databaseIdentity": {"containerId": "a" * 64}, "pendingStep": None, "pendingRequest": None,
+             "operations": [{"state": "SUCCEEDED", "exitCode": 0, "unknownOutcome": False}]}
+    if change == "missing-hash": state.pop("quiescenceSha256")
+    elif change == "run": state["runId"] = "foreign"
+    elif change == "selection": state["selectionSha256"] = "foreign"
+    elif change == "executor": state["executorSource"] = {}
+    elif change == "database": state["databaseIdentity"] = {}
+    elif change == "pending": state.update(phase="DATABASE_OPERATION_PENDING", pendingStep="FENCE_VERIFY")
+    else: state["operations"][0]["unknownOutcome"] = True
+    with pytest.raises(ValueError, match="D12_DURABLE_QUIESCENCE_NOT_BOUND"):
+        require_bound_quiescence(state, inputs, bound)

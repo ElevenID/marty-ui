@@ -48,13 +48,12 @@ class IssuanceProfileTests(unittest.TestCase):
         self.assertEqual(args[args.index("--network") + 1], "none")
         self.assertEqual(args[args.index("--cpus") + 1], "1")
         threshold = build.current_issuer_limits(profile)[2]
-        class Capacity:
-            def __init__(self, kib): self.kib = kib
-            def run(self, *args): return type("Result", (), {"stdout": str(self.kib)})()
-        with patch.object(build.shutil, "disk_usage", return_value=type("Disk", (), {"free": 9 * 1024 ** 3})()):
-            build.current_issuer_capacity(Capacity(threshold), Path("."), profile)
+        with patch.object(build.shutil, "disk_usage", return_value=type("Disk", (), {"free": 9 * 1024 ** 3})()), \
+             patch.object(build, "available_physical_memory_bytes",
+                          side_effect=[threshold * 1024, (threshold - 1) * 1024]):
+            build.current_issuer_capacity(None, Path("."), profile)
             with self.assertRaises(ValueError):
-                build.current_issuer_capacity(Capacity(threshold - 1), Path("."), profile)
+                build.current_issuer_capacity(None, Path("."), profile)
 
     def test_both_focused_receipts_reject_zero_matches(self):
         with tempfile.TemporaryDirectory() as temporary:

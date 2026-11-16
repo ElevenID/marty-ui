@@ -375,10 +375,12 @@ test('stock assignment launch retains the real popup and binds only its own cont
       getByText: () => ({ isVisible: async () => { calls.push('verified-resource-ui'); return true; } }),
       getByRole: () => ({ first: () => ({ isVisible: async () => false }) }) }),
   };
-  const locator = { first() { return this; }, or() { return this; },
+  const locator = { first() { return this; }, or() { return this; }, count: async () => 1,
+    evaluate: async (_readHref, expected) => { assert.equal(expected.path, '/courses/1/assignments/2'); return 'TARGET_ASSIGNMENT'; },
     isVisible: async () => true,
     waitFor: async () => {}, click: async () => calls.push('assignment-or-launch-click') };
-  const canvas = { goto: async url => calls.push(url), getByRole: () => locator,
+  const canvas = { goto: async url => calls.push(url), url: () => 'https://canvas-test.elevenidllc.com/courses/1/assignments/2',
+    getByRole: () => locator,
     on: (event, listener) => { assert.equal(event, 'response'); assert.equal(typeof listener, 'function'); calls.push('observe-documents'); },
     off: (event, listener) => { assert.equal(event, 'response'); assert.equal(typeof listener, 'function'); calls.push('release-documents'); },
     frames: () => [], mainFrame: () => null,
