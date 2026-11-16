@@ -602,7 +602,7 @@ impl GatewayContract {
             paths.insert(path.into(),json!({"post":{
                 "operationId":operation_id,"tags":["evidence"],"summary":summary,
                 "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Membership replacement accepts only current same-tenant/source binding IDs at exact revisions, including an empty set, and clears grant approval. It never changes binding definitions or applications. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
-                "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
+                "security":[{"sessionCookie":[]}],
                 "parameters":[
                     {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
                     {"name":"grant_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
@@ -2133,5 +2133,30 @@ mod admin_read_route_tests {
             assert!(requires_issuance_service_auth(&path));
             assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
         }
+    }
+}
+
+#[cfg(test)]
+mod observation_administrator_openapi_security_tests {
+    use super::*;
+    #[test]
+    fn every_observation_administrator_operation_uses_defined_session_only_security() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let mut count = 0;
+        for (path, item) in document["paths"].as_object().unwrap() {
+            if !crate::external_observation::is_admin_namespace(path) {
+                continue;
+            }
+            count += 1;
+            let operation = &item["post"];
+            assert_eq!(operation["security"], json!([{"sessionCookie":[]}]));
+            assert!(document["components"]["securitySchemes"]["sessionCookie"].is_object());
+            assert!(operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
+        assert_eq!(count, 17);
     }
 }
