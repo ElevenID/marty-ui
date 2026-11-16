@@ -291,6 +291,7 @@ impl GatewayIdentityProvider for RuntimeProvider {
         session_id: &str,
     ) -> Result<Option<SessionIdentity>, SecurityError> {
         let organization_id = match session_id {
+            "observation-session" => Some("20000000-0000-4000-8000-000000000001"),
             "valid" => Some("org-1"),
             "valid-org-2" => Some("org-2"),
             "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
@@ -7176,5 +7177,98 @@ async fn observation_gateway_retries_reach_upstream_with_only_trusted_identity()
         .await
         .unwrap();
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn observation_admin_gateway_requires_session_origin_and_forwards_only_trusted_actor() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let path="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+    let route = state
+        .routes
+        .find(&GatewayRequest::new(HttpMethod::Post, path, 0))
+        .unwrap();
+    assert_eq!(route.route.upstream_service, "issuance");
+    assert_eq!(route.route.retries, 0);
+    let router = gateway_router(state);
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("cookie", "sessionId=observation-session")
+                    .header("origin", "https://beta.elevenidllc.com")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-user")
+                    .header("x-api-key-id", "forged-key")
+                    .header("x-organization-id", "forged-org")
+                    .body(Body::from(br#"{ "expected_revision":2 }"#.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    {
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "each administration attempt must reach canonical authorization"
+        );
+        for (service, request) in requests.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(request.header("x-user-id"), Some("user-1"));
+            assert_eq!(request.header("x-api-key-id"), None);
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.body.as_deref(),
+                Some(br#"{ "expected_revision":2 }"#.as_slice())
+            );
+        }
+    }
+    for (credential, value, origin, status) in [
+        (
+            "x-api-key",
+            "observation-admin",
+            "https://beta.elevenidllc.com",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "cookie",
+            "sessionId=valid",
+            "https://beta.elevenidllc.com",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "cookie",
+            "sessionId=observation-session",
+            "https://attacker.example",
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(credential, value)
+                    .header("origin", origin)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{\"expected_revision\":2}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
     assert_eq!(recorder.0.lock().unwrap().len(), 2);
 }

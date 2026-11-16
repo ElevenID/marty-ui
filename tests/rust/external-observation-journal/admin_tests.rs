@@ -4,7 +4,7 @@ use crate::external_observation_admin::{lock_admin, revoke_grant, AdminError};
 use uuid::Uuid;
 const ORG: &str = "20000000-0000-4000-8000-000000000001";
 const GRANT: &str = "30000000-0000-4000-8000-000000000001";
-async fn setup() -> Fixture {
+pub(super) async fn setup() -> Fixture {
     let fixture = Fixture::new().await;
     super::authority_tests::seed_authority(&fixture).await;
     sqlx::raw_sql("CREATE TABLE organization_service.members(id uuid PRIMARY KEY,organization_id uuid,user_id varchar(255),status varchar(50));

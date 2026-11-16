@@ -452,7 +452,10 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
             Arc::clone(&state),
             content_type_middleware,
         ))
-        .layer(middleware::from_fn(observation_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observation_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authentication_middleware,
@@ -644,26 +647,53 @@ async fn authentication_middleware(
     next.run(request).await
 }
 
-async fn observation_middleware(request: Request, next: Next) -> Response {
-    if request.uri().path() != crate::external_observation::PATH {
+async fn observation_middleware(
+    State(state): State<Arc<GatewayRuntimeState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let producer = request.uri().path() == crate::external_observation::PATH;
+    let admin = crate::external_observation::admin_organization(request.uri().path()).is_some();
+    if !producer && !admin {
         return next.run(request).await;
     }
-    let identity = request.extensions().get::<GatewayIdentity>().cloned();
-    let Some(identity) = identity else {
+    let Some(identity) = request.extensions().get::<GatewayIdentity>().cloned() else {
         return detail_response(401, "observation_authentication_required");
     };
-    match crate::external_observation::admit(
-        request,
-        identity.source == AuthenticationSource::ApiKey,
-        identity.api_key_id.as_deref(),
-        identity.session_organization_id.as_deref(),
-        &identity.api_key_scopes,
-    )
-    .await
-    {
+    let result = if producer {
+        crate::external_observation::admit(
+            request,
+            identity.source == AuthenticationSource::ApiKey,
+            identity.api_key_id.as_deref(),
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .await
+    } else {
+        let mut origins = request.headers().get_all(header::ORIGIN).iter();
+        let origin = origins.next().and_then(|h| h.to_str().ok());
+        let allowed =
+            origins.next().is_none() && origin.is_some_and(|v| state.cors_origins.contains(v));
+        crate::external_observation::admit_admin(
+            request,
+            identity.source == AuthenticationSource::Session && identity.api_key_id.is_none(),
+            identity.session_organization_id.as_deref(),
+            &identity.user_id,
+            allowed,
+        )
+        .await
+    };
+    match result {
         Ok(mut request) => {
             let mut trusted = base_trusted_identity(&identity);
-            trusted.required_permission = Some("evidence:submit".into());
+            trusted.required_permission = Some(
+                if producer {
+                    "evidence:submit"
+                } else {
+                    "external-observation:manage"
+                }
+                .into(),
+            );
             request.extensions_mut().insert(trusted);
             next.run(request).await
         }
@@ -759,7 +789,9 @@ async fn tenant_authorization_middleware(
     next: Next,
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
-    if request.uri().path() == crate::external_observation::PATH {
+    if request.uri().path() == crate::external_observation::PATH
+        || crate::external_observation::admin_organization(request.uri().path()).is_some()
+    {
         return next.run(request).await;
     }
 
@@ -1001,7 +1033,9 @@ async fn idempotency_middleware(
     next: Next,
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
-    if request.uri().path() == crate::external_observation::PATH {
+    if request.uri().path() == crate::external_observation::PATH
+        || crate::external_observation::admin_organization(request.uri().path()).is_some()
+    {
         return next.run(request).await;
     }
 

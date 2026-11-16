@@ -48,7 +48,7 @@ pub fn observation_router(
         })))
 }
 
-fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+pub(crate) fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let mut values = headers.get_all(name).iter();
     let first = values.next()?.to_str().ok()?;
     if values.next().is_some() {
@@ -65,14 +65,13 @@ fn canonical_uuid(value: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
+pub(crate) fn gateway_service_authenticated(headers: &HeaderMap, expected: &[u8]) -> bool {
+    one_header(headers, "x-api-key")
+        .is_some_and(|supplied| supplied.as_bytes().ct_eq(expected).unwrap_u8() == 1)
+}
+
 fn identity(headers: &HeaderMap, state: &HttpState) -> Option<ProducerIdentity> {
-    let supplied = one_header(headers, "x-api-key")?;
-    if supplied
-        .as_bytes()
-        .ct_eq(&state.gateway_service_key)
-        .unwrap_u8()
-        != 1
-    {
+    if !gateway_service_authenticated(headers, &state.gateway_service_key) {
         return None;
     }
     Some(ProducerIdentity {

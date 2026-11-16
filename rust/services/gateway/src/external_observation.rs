@@ -255,3 +255,168 @@ mod tests {
         );
     }
 }
+
+/// Only this canonical path is eligible for the session administrator guard.
+pub const ADMIN_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/revoke";
+pub fn admin_organization(path: &str) -> Option<&str> {
+    let parts: Vec<_> = path.split('/').collect();
+    if parts.len() != 7
+        || parts[0] != ""
+        || parts[1] != "v1"
+        || parts[2] != "organizations"
+        || parts[4] != "external-observation-producers"
+        || parts[6] != "revoke"
+        || !canonical_id(Some(parts[3]))
+        || !canonical_id(Some(parts[5]))
+    {
+        return None;
+    }
+    Some(parts[3])
+}
+/// Permissions are reloaded and locked by core for every mutation. This guard
+/// requires an authenticated session, canonical active tenant and allowed Origin.
+pub async fn admit_admin(
+    request: Request,
+    session_identity: bool,
+    organization_id: Option<&str>,
+    user_id: &str,
+    allowed_origin: bool,
+) -> Result<Request, Rejection> {
+    if !session_identity
+        || !canonical_id(organization_id)
+        || user_id.is_empty()
+        || user_id.len() > 255
+        || user_id.chars().any(char::is_control)
+    {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "administrator_authentication_required",
+        ));
+    }
+    if !allowed_origin || admin_organization(request.uri().path()) != organization_id {
+        return Err((StatusCode::FORBIDDEN, "administrator_not_authorized"));
+    }
+    if request.method() != "POST" || request.uri().query().is_some() {
+        return Err(INVALID);
+    }
+    let headers = request.headers();
+    if !one(headers, "content-type")?.is_some_and(|v| v.eq_ignore_ascii_case("application/json")) {
+        return Err((
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_admin_format",
+        ));
+    }
+    if one(headers, "content-encoding")?.is_some_and(|v| !v.eq_ignore_ascii_case("identity"))
+        || one(headers, "transfer-encoding")?.is_some_and(|v| !v.eq_ignore_ascii_case("chunked"))
+        || headers.contains_key("trailer")
+    {
+        return Err(INVALID);
+    }
+    let length = one(headers, "content-length")?;
+    if length.is_some() && headers.contains_key("transfer-encoding") {
+        return Err(INVALID);
+    }
+    let expected = match length {
+        Some(v) if !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(v.parse::<usize>().map_err(|_| INVALID)?)
+        }
+        Some(_) => return Err(INVALID),
+        None => None,
+    };
+    if expected.is_some_and(|n| n > 4096) {
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "admin_request_too_large"));
+    }
+    let (parts, body) = request.into_parts();
+    let bytes = match tokio::time::timeout(Duration::from_secs(10), to_bytes(body, 4096)).await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(_)) => return Err((StatusCode::PAYLOAD_TOO_LARGE, "admin_request_too_large")),
+        Err(_) => return Err((StatusCode::REQUEST_TIMEOUT, "admin_body_timeout")),
+    };
+    if expected.is_some_and(|n| n != bytes.len()) {
+        return Err(INVALID);
+    }
+    Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+#[cfg(test)]
+mod admin_guard_tests {
+    use super::*;
+    const ORG: &str = "20000000-0000-4000-8000-000000000001";
+    const ROUTE: &str="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+    fn request() -> Request {
+        Request::builder()
+            .method("POST")
+            .uri(ROUTE)
+            .header("content-type", "application/json")
+            .body(Body::from("{ \"expected_revision\":2 }".replace("\\", "")))
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn administrator_guard_is_session_tenant_origin_and_framing_bound() {
+        assert_eq!(
+            admit_admin(request(), false, Some(ORG), "admin-one", true)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            admit_admin(request(), true, Some(ORG), "admin-one", false)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            admit_admin(
+                request(),
+                true,
+                Some("20000000-0000-4000-8000-000000000002"),
+                "admin-one",
+                true
+            )
+            .await
+            .unwrap_err()
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        let mut ambiguous = request();
+        ambiguous
+            .headers_mut()
+            .append("content-type", "application/json".parse().unwrap());
+        assert_eq!(
+            admit_admin(ambiguous, true, Some(ORG), "admin-one", true)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+        let mut oversized = request();
+        *oversized.body_mut() = Body::from(vec![b' '; 4097]);
+        assert_eq!(
+            admit_admin(oversized, true, Some(ORG), "admin-one", true)
+                .await
+                .unwrap_err()
+                .0,
+            StatusCode::PAYLOAD_TOO_LARGE
+        );
+        let accepted = admit_admin(request(), true, Some(ORG), "admin-one", true)
+            .await
+            .unwrap();
+        let bytes = to_bytes(accepted.into_body(), 4096).await.unwrap();
+        assert_eq!(bytes.as_ref(), br#"{ "expected_revision":2 }"#);
+    }
+    #[test]
+    fn administrator_route_requires_exact_canonical_identifiers() {
+        assert_eq!(admin_organization(ROUTE), Some(ORG));
+        for path in [
+            format!("{ROUTE}/"),
+            ROUTE.replace(ORG, "org-1"),
+            ROUTE.replace("/revoke", "/approve"),
+            ROUTE.replace("/external-observation-producers/", "/api-keys/"),
+        ] {
+            assert_eq!(admin_organization(&path), None);
+        }
+    }
+}

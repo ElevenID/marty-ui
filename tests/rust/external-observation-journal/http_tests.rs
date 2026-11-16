@@ -159,7 +159,7 @@ async fn observation_startup_is_explicit_and_requires_current_storage() {
         .unwrap()
         .is_none());
     assert!(prepare_observation_router(&pool, true, None).await.is_err());
-    let fixture = Fixture::new().await;
+    let fixture = super::admin_tests::setup().await;
     assert!(prepare_observation_router(&fixture.pool, true, Some(KEY))
         .await
         .unwrap()
