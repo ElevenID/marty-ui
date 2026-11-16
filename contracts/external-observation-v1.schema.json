@@ -11,7 +11,7 @@
     "observation_id": {"$ref": "#/$defs/id"},
     "sequence": {"$ref": "#/$defs/positiveInteger"},
     "observed_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Producer observation time, Unix milliseconds. Retries retain this original value."},
-    "effective_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Provider event time, Unix milliseconds; must not exceed observed_at_ms."},
+    "effective_at_ms": {"$ref": "#/$defs/positiveInteger", "description": "Time at which the unsigned producer attests the state was effective, Unix milliseconds; must not exceed observed_at_ms. Use the provider event time when available. A source without an event timestamp may use an explicitly opted-in as-of-read time only with provenance in the core-approved claim contract; it must never be presented as a provider event timestamp. No timestamp or provenance claim grants verification or issuance authority."},
     "claims": {
       "type": "object", "minProperties": 1, "maxProperties": 32,
       "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Za-z0-9_.:-]+$"},

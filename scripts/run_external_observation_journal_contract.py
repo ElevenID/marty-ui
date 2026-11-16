@@ -17,12 +17,24 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 STORE = "rust/services/issuance/src/external_observation_postgres.rs"
+AUTHORITY = "rust/services/issuance/src/external_observation_authority_postgres.rs"
+AUTHORITY_TEST = "tests/rust/external-observation-journal/authority_tests.rs"
 TEST = "tests/rust/external-observation-journal/tests.rs"
 WIRE = "rust/services/issuance/src/external_observation_wire.rs"
 WIRE_TEST = "rust/services/issuance/src/external_observation_wire_tests.rs"
 INGRESS = "rust/services/issuance/src/external_observation_ingress.rs"
 INGRESS_TEST = "tests/rust/external-observation-journal/ingress_tests.rs"
-FORMAT_FILES = (STORE, TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+HTTP = "rust/services/issuance/src/external_observation_http.rs"
+HTTP_TEST = "tests/rust/external-observation-journal/http_tests.rs"
+GATEWAY = "rust/services/gateway/src/external_observation.rs"
+STARTUP = "rust/services/issuance/src/external_observation_startup.rs"
+ADMIN = "rust/services/issuance/src/external_observation_admin.rs"
+ADMIN_TEST = "tests/rust/external-observation-journal/admin_tests.rs"
+LIFECYCLE = "rust/services/issuance/src/external_observation_grant_lifecycle.rs"
+LIFECYCLE_TEST = "tests/rust/external-observation-journal/grant_lifecycle_tests.rs"
+ADMIN_HTTP = "rust/services/issuance/src/external_observation_admin_http.rs"
+ADMIN_HTTP_TEST = "tests/rust/external-observation-journal/admin_http_tests.rs"
+FORMAT_FILES = (LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -50,7 +62,7 @@ def run(command, *, cwd, log, environment):
 def compile_contract(artifacts):
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text())
     service = tomllib.loads((ROOT / "rust/services/issuance/Cargo.toml").read_text())
-    names = ("async-trait", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
+    names = ("axum", "subtle", "tower", "async-trait", "chrono", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
     declarations = []
     for name in names:
         value = workspace["workspace"]["dependencies"][name]
@@ -76,11 +88,17 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / LIFECYCLE_TEST))}]\nmod grant_lifecycle_tests;\n"
+            f"\n#[path = {json.dumps(str(ROOT / ADMIN_HTTP_TEST))}]\nmod admin_http_tests;\n"
+            f"\n#[path = {json.dumps(str(ROOT / ADMIN_TEST))}]\nmod admin_tests;\n"
+            f"\n#[path = {json.dumps(str(ROOT / HTTP_TEST))}]\nmod http_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
+            f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
-        modules = [
+        modules = [("external_observation_grant_lifecycle", ROOT / LIFECYCLE), ("external_observation_admin_http", ROOT / ADMIN_HTTP), ("external_observation_admin", ROOT / ADMIN), ("external_observation_startup", ROOT / STARTUP), ("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
+            ("external_observation_authority_postgres", ROOT / AUTHORITY),
             ("external_observation_wire", ROOT / WIRE),
             ("external_observation_ingress", ROOT / INGRESS),
             ("postgres_contract", fixture),

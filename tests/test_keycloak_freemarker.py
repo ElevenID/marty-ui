@@ -26,6 +26,13 @@ class Response(io.BytesIO):
         return super().read(limit)
 
 
+@pytest.fixture(autouse=True)
+def clear_download_cache():
+    dependency._download_freemarker_jar.cache_clear()
+    yield
+    dependency._download_freemarker_jar.cache_clear()
+
+
 @pytest.fixture
 def network(monkeypatch):
     monkeypatch.delenv(LOGIN_OVERRIDE, raising=False)
@@ -69,7 +76,8 @@ def http_error(code):
 def test_artifact_identity_and_acquisition_budget_stay_pinned():
     primary = "https://repo.maven.apache.org/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
     alternate = "https://repo1.maven.org/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
-    assert dependency.JAR_ATTEMPTS == (primary, alternate, primary)
+    mirror = "https://maven-central.storage-download.googleapis.com/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
+    assert dependency.JAR_ATTEMPTS == (primary, alternate, mirror)
     assert dependency.JAR_SHA256 == "0fac87dddd78f1223139e8ef88e819c7f483c0a3835cdf5982ad5e4576d1d896"
     assert dependency.MAX_JAR_BYTES == 4 * 1024 * 1024
     assert dependency.REQUEST_TIMEOUT_SECONDS == 30
@@ -106,6 +114,50 @@ def test_acquisition_exhaustion_stops_after_three_attempts(network):
     assert opener.outcomes == [VALID]
 
 
+def test_throttled_central_hosts_use_the_hash_pinned_mirror(network):
+    response = Response(VALID, dependency.JAR_MIRROR_URL)
+    opener = network(http_error(429), http_error(429), response)
+    assert dependency.load_freemarker_jar() == VALID
+    assert opener.calls == [(url, 30) for url in dependency.JAR_ATTEMPTS]
+    assert opener.sleeps == [1, 2]
+    assert response.read_limits == [dependency.MAX_JAR_BYTES + 1]
+
+
+def test_corrupt_mirror_is_fatal_without_another_download(network):
+    opener = network(http_error(429), http_error(429),
+                     Response(b"corrupt", dependency.JAR_MIRROR_URL), VALID)
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        dependency.load_freemarker_jar()
+    assert opener.calls == [(url, 30) for url in dependency.JAR_ATTEMPTS]
+    assert opener.outcomes == [VALID]
+
+
+def test_verified_download_is_shared_across_theme_override_aliases(network):
+    opener = network(VALID)
+    assert dependency.load_freemarker_jar(EMAIL_OVERRIDE) == VALID
+    assert dependency.load_freemarker_jar(LOGIN_OVERRIDE, EMAIL_OVERRIDE) == VALID
+    assert opener.calls == [(dependency.JAR_URL, 30)]
+
+
+def test_failed_acquisition_is_not_cached(network):
+    opener = network(http_error(429), http_error(429), http_error(429), VALID)
+    with pytest.raises(urllib.error.HTTPError):
+        dependency.load_freemarker_jar()
+    assert dependency.load_freemarker_jar() == VALID
+    assert len(opener.calls) == 4
+
+
+def test_invalid_override_still_fails_after_a_verified_download(network, monkeypatch, tmp_path):
+    opener = network(VALID)
+    assert dependency.load_freemarker_jar() == VALID
+    bad = tmp_path / "bad.jar"
+    bad.write_bytes(b"corrupt")
+    monkeypatch.setenv(LOGIN_OVERRIDE, str(bad))
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        dependency.load_freemarker_jar(LOGIN_OVERRIDE)
+    assert opener.calls == [(dependency.JAR_URL, 30)]
+
+
 @pytest.mark.parametrize("error", [
     http_error(code) for code in (301, 302, 307, 308, 400, 401, 403)
 ] + [urllib.error.URLError(ssl.SSLCertVerificationError(1, "invalid certificate")),
@@ -136,7 +188,7 @@ def test_redirect_handler_refuses_redirect_without_fallback(network):
     (b"x" * (dependency.MAX_JAR_BYTES + 1), dependency.JAR_URL, 200, "maximum size"),
     (VALID, dependency.JAR_FALLBACK_URL, 200, "URL or status mismatch"),
     (VALID, dependency.JAR_URL, 206, "URL or status mismatch"),
-])
+], ids=["digest", "size", "url", "status"])
 def test_integrity_failures_are_fatal_without_fallback(network, data, url, status, message):
     opener = network(Response(data, url, status), VALID)
     with pytest.raises(ValueError, match=message):

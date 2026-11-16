@@ -237,6 +237,7 @@ pub struct IssuanceServiceConfig {
     pub database_url: String,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub external_observations_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
@@ -332,6 +333,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "passport_tenant_keys_configured",
                 &self.passport_tenant_keys.is_some(),
+            )
+            .field(
+                "external_observations_enabled",
+                &self.external_observations_enabled,
             )
             .field("passport_native", &self.passport_native)
             .field("signing_keys_internal_url", &self.signing_keys_internal_url)
@@ -1072,6 +1077,10 @@ impl IssuanceServiceConfig {
             database_url,
             token_hmac_key,
             issuance_api_key,
+            external_observations_enabled: environment_flag(
+                &values,
+                "MARTY_EXTERNAL_OBSERVATIONS_ENABLED",
+            ),
             passport_tenant_keys,
             passport_native,
             signing_keys_internal_url,
@@ -3305,4 +3314,21 @@ mod tests {
         );
         assert!(!format!("{config:?}").contains("shared-legacy-key"));
     }
+}
+
+#[test]
+fn observation_ingress_requires_explicit_activation_configuration() {
+    assert!(
+        !IssuanceServiceConfig::from_values(Vec::<(String, String)>::new())
+            .unwrap()
+            .external_observations_enabled
+    );
+    assert!(
+        IssuanceServiceConfig::from_values(vec![(
+            "MARTY_EXTERNAL_OBSERVATIONS_ENABLED".into(),
+            "true".into()
+        )])
+        .unwrap()
+        .external_observations_enabled
+    );
 }
