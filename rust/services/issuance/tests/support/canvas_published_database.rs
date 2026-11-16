@@ -289,6 +289,33 @@ fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
     .then_some(diagnostics)
 }
 
+fn safe_owned_blocker_diagnostics(report: &Value) -> Option<&Value> {
+    if report["error_class"] != "AssertionError" {
+        return None;
+    }
+    let value = report.get("owned_blocker_diagnostics")?;
+    let fields = value.as_object()?;
+    if fields.len() != 4
+        || ![
+            "waiting_count",
+            "matching_count",
+            "worker_pid",
+            "blocker_pid",
+        ]
+        .iter()
+        .all(|name| {
+            fields
+                .get(*name)
+                .and_then(Value::as_u64)
+                .is_some_and(|n| n <= i32::MAX as u64)
+        })
+        || value["blocker_pid"].as_u64()? <= 1
+    {
+        return None;
+    }
+    Some(value)
+}
+
 fn safe_lease_observation_diagnostics(report: &Value) -> Option<&Value> {
     if report["error_class"] != "LeaseObservationChanged" {
         return None;
@@ -1541,6 +1568,21 @@ impl PublishedDatabase {
             "/verification/scripts/prepare_canvas_published_schema.py",
         ];
         let (script, scenario, report_key, flag) = oracle.unwrap_or_default();
+        // Failure-only diagnostics preserve every frozen preparer/oracle byte.
+        // The wrapper calls the same prepare() and emits identical success JSON.
+        let lease_diagnostics_mount = format!(
+            "type=bind,source={},target=/verification/scripts/run_canvas_lease_probe_diagnostics.py,readonly",
+            root.join("scripts/run_canvas_lease_probe_diagnostics.py").display()
+        );
+        if script == "worker_lease_expiry" {
+            *arguments
+                .last_mut()
+                .ok_or("Missing published probe command")? =
+                "/verification/scripts/run_canvas_lease_probe_diagnostics.py";
+            let index = arguments.len() - 2;
+            arguments.splice(index..index, ["--mount", &lease_diagnostics_mount]);
+        }
+
         let multibyte_mount = format!(
             "type=bind,source={},target=/verification/scripts/canvas_multibyte_codec_oracle.py,readonly",
             root.join("scripts/canvas_multibyte_codec_oracle.py").display()
@@ -1911,7 +1953,10 @@ impl PublishedDatabase {
                     let lease_observation = safe_lease_observation_diagnostics(&report)
                         .map(|value| format!(", lease_observation_diagnostics={value}"))
                         .unwrap_or_default();
-                    return Err(format!("Published probe failed: class={}, frames={}{timing}{lease_observation} (exception messages suppressed)",
+                    let owned_blocker = safe_owned_blocker_diagnostics(&report)
+                        .map(|value| format!(", owned_blocker_diagnostics={value}"))
+                        .unwrap_or_default();
+                    return Err(format!("Published probe failed: class={}, frames={}{timing}{lease_observation}{owned_blocker} (exception messages suppressed)",
                         report["error_class"], report["frames"]));
                 }
                 break;

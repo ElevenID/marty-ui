@@ -529,6 +529,7 @@ def test_historical_capture_input_graph_is_reviewed():
     mounted_roots = {
         "canvas_worker_dispatch_hooks.py",
         "prepare_canvas_published_schema.py",
+        "run_canvas_lease_probe_diagnostics.py",
     }
     assert {f"scripts/{name}" for name in mounted_roots} <= set(
         harness["literal_paths"]
