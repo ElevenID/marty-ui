@@ -2,7 +2,7 @@
 //! Actual registered schema and catalog validator against the disposable database.
 //! These tests do not qualify the entire owner CLI or production runtime roles.
 use super::*;
-use crate::external_observation_schema::{validate, MIGRATION_SQL, VERSION};
+use crate::external_observation_schema::{validate, LOCK_MIGRATION_SQL, MIGRATION_SQL, VERSION};
 
 #[tokio::test]
 async fn registered_schema_verifies_in_read_only_transaction() {
@@ -100,9 +100,18 @@ async fn registered_migration_revokes_public_even_with_permissive_owner_defaults
             issuance_service.external_observation_grant_bindings, issuance_service.external_observation_receipts,
             issuance_service.external_observation_heads, issuance_service.external_observation_audit CASCADE;
         DROP FUNCTION issuance_service.bump_external_observation_revision(),
-            issuance_service.bump_external_observation_grant_membership(), issuance_service.reject_external_observation_membership_update();")
+            issuance_service.bump_external_observation_grant_membership(), issuance_service.reject_external_observation_membership_update(),
+            issuance_service.external_observation_lock_organization(uuid),
+            issuance_service.external_observation_lock_api_keys(uuid,uuid[]),
+            issuance_service.external_observation_lock_application(text,text),
+            issuance_service.external_observation_lock_administrator(uuid,text),
+            issuance_service.external_observation_lock_receipt(text,text,text);")
         .execute(&mut *tx).await.unwrap();
     sqlx::raw_sql(MIGRATION_SQL)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::raw_sql(LOCK_MIGRATION_SQL)
         .execute(&mut *tx)
         .await
         .unwrap();

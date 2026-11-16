@@ -39,15 +39,7 @@ pub(crate) async fn lock_admin(
     // These are the existing organization tables, not an authority mirror. Row
     // locks serialize revocation with membership/role/permission removal.
     let rows = sqlx::query(
-        "SELECT m.id FROM organization_service.organizations o
-      JOIN organization_service.members m ON m.organization_id=o.id
-      JOIN organization_service.member_roles mr ON mr.member_id=m.id
-      JOIN organization_service.roles r ON r.id=mr.role_id AND r.organization_id=o.id
-      JOIN organization_service.role_permissions rp ON rp.role_id=r.id
-      JOIN organization_service.permissions p ON p.id=rp.permission_id
-      WHERE o.id=$1 AND o.status='active' AND m.user_id=$2 AND m.status='active'
-        AND p.resource='external-observation' AND p.action='manage'
-      ORDER BY m.id,r.id,p.id FOR SHARE OF o,m,mr,r,rp,p",
+        "SELECT id FROM issuance_service.external_observation_lock_administrator($1,$2)",
     )
     .bind(organization_id)
     .bind(actor_id)
@@ -99,8 +91,7 @@ pub async fn revoke_grant(
     .map_err(database_error)?;
     let key = key.ok_or(AdminError::NotAuthorized)?;
     let found: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM organization_service.api_keys
-      WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+        "SELECT id FROM issuance_service.external_observation_lock_api_keys($2,ARRAY[$1]::uuid[])",
     )
     .bind(key)
     .bind(organization_id)

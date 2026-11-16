@@ -276,8 +276,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         })?;
     }
     let observations =
-        marty_issuance_service::external_observation_startup::prepare_observation_router(
+        marty_issuance_service::external_observation_startup::prepare_isolated_observation_router(
             &pool,
+            config.external_observation_database_url.as_deref(),
             config.external_observations_enabled,
             config.issuance_api_key.as_deref(),
         )

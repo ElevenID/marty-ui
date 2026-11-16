@@ -826,6 +826,86 @@
       "public_privileges": false
     },
     {
+      "body": "\n    SELECT m.id FROM organization_service.organizations o\n    JOIN organization_service.members m ON m.organization_id=o.id\n    JOIN organization_service.member_roles mr ON mr.member_id=m.id\n    JOIN organization_service.roles r ON r.id=mr.role_id AND r.organization_id=o.id\n    JOIN organization_service.role_permissions rp ON rp.role_id=r.id\n    JOIN organization_service.permissions p ON p.id=rp.permission_id\n    WHERE o.id=requested_organization AND o.status='active' AND m.user_id=requested_actor AND m.status='active'\n      AND p.resource='external-observation' AND p.action='manage'\n    ORDER BY m.id,r.id,p.id FOR SHARE OF o,m,mr,r,rp,p;\n",
+      "kind": "f",
+      "name": "external_observation_lock_administrator",
+      "result": "TABLE(id uuid)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_organization uuid, requested_actor text",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT k.id,k.organization_id,k.scopes,k.scope_type::text,k.deployment_profile_id,\n        k.status::text,k.enabled,k.expires_at,k.updated_at\n    FROM organization_service.api_keys k\n    WHERE k.organization_id=requested_organization AND k.id=ANY(requested_keys)\n    ORDER BY k.id FOR UPDATE OF k;\n",
+      "kind": "f",
+      "name": "external_observation_lock_api_keys",
+      "result": "TABLE(id uuid, organization_id uuid, scopes text[], scope_type text, deployment_profile_id uuid, status text, enabled boolean, expires_at timestamp with time zone, updated_at timestamp with time zone)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_organization uuid, requested_keys uuid[]",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT a.id,a.organization_id,a.applicant_identifier,a.status::text,a.updated_at,a.expires_at\n    FROM issuance_service.applications a\n    WHERE a.id=requested_application AND a.organization_id=requested_organization FOR UPDATE OF a;\n",
+      "kind": "f",
+      "name": "external_observation_lock_application",
+      "result": "TABLE(id text, organization_id text, applicant_identifier text, status text, updated_at timestamp with time zone, expires_at timestamp with time zone)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_application text, requested_organization text",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT o.status::text FROM organization_service.organizations o\n    WHERE o.id=requested_organization FOR SHARE OF o;\n",
+      "kind": "f",
+      "name": "external_observation_lock_organization",
+      "result": "TABLE(status text)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_organization uuid",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
+      "body": "\n    SELECT r.receipt_id,r.organization_id,r.source_id,r.api_key_id,r.envelope\n    FROM issuance_service.external_observation_receipts r\n    WHERE r.organization_id=requested_organization AND r.source_id=requested_source\n      AND r.observation_id=requested_observation FOR SHARE OF r;\n",
+      "kind": "f",
+      "name": "external_observation_lock_receipt",
+      "result": "TABLE(receipt_id uuid, organization_id text, source_id text, api_key_id text, envelope jsonb)",
+      "strict": false,
+      "definer": true,
+      "language": "sql",
+      "settings": [
+        "search_path=pg_catalog"
+      ],
+      "arguments": "requested_organization text, requested_source text, requested_observation text",
+      "volatility": "v",
+      "returns_set": true,
+      "public_privileges": false
+    },
+    {
       "body": "\nBEGIN\n    RAISE EXCEPTION 'external observation membership is immutable; delete and insert instead'\n        USING ERRCODE = '23514';\nEND;\n",
       "kind": "f",
       "name": "reject_external_observation_membership_update",

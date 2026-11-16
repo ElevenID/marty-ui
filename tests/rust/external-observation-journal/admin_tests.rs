@@ -7,15 +7,7 @@ const GRANT: &str = "30000000-0000-4000-8000-000000000001";
 pub(super) async fn setup() -> Fixture {
     let fixture = Fixture::new().await;
     super::authority_tests::seed_authority(&fixture).await;
-    sqlx::raw_sql("CREATE TABLE organization_service.members(id uuid PRIMARY KEY,organization_id uuid,user_id varchar(255),status varchar(50));
-      CREATE TABLE organization_service.roles(id uuid PRIMARY KEY,organization_id uuid);
-      CREATE TABLE organization_service.member_roles(member_id uuid,role_id uuid,PRIMARY KEY(member_id,role_id));
-      CREATE TABLE organization_service.permissions(id uuid PRIMARY KEY,resource varchar(100),action varchar(100));
-      CREATE TABLE organization_service.role_permissions(role_id uuid,permission_id uuid,PRIMARY KEY(role_id,permission_id));
-      CREATE TABLE organization_service.audit_events(id uuid PRIMARY KEY,organization_id uuid,event_type varchar(120),action varchar(120),
-        category varchar(100),resource_type varchar(100),resource_id varchar(255),actor_id varchar(255),actor_type varchar(50),
-        severity varchar(50),message text,changes jsonb,metadata jsonb,created_at timestamptz);
-      INSERT INTO organization_service.members VALUES ('40000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','admin-one','active');
+    sqlx::raw_sql("      INSERT INTO organization_service.members VALUES ('40000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001','admin-one','active');
       INSERT INTO organization_service.roles VALUES ('50000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000001');
       INSERT INTO organization_service.member_roles VALUES ('40000000-0000-4000-8000-000000000001','50000000-0000-4000-8000-000000000001');
       INSERT INTO organization_service.permissions VALUES ('60000000-0000-4000-8000-000000000001','external-observation','manage');

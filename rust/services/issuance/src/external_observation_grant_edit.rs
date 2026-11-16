@@ -15,7 +15,7 @@ pub(crate) async fn eligible_key(
         "SELECT status='active' AND enabled AND scope_type='ORGANIZATION'
          AND deployment_profile_id IS NULL AND COALESCE('evidence:submit'=ANY(scopes),false)
          AND (expires_at IS NULL OR expires_at>clock_timestamp())
-         FROM organization_service.api_keys WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+         FROM issuance_service.external_observation_lock_api_keys($2,ARRAY[$1]::uuid[])",
     )
     .bind(key)
     .bind(organization)

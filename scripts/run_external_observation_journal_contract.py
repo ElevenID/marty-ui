@@ -45,7 +45,8 @@ ADMIN_READ = "rust/services/issuance/src/external_observation_admin_read.rs"
 ADMIN_READ_TEST = "tests/rust/external-observation-journal/admin_read_tests.rs"
 SCHEMA = "rust/services/issuance/src/external_observation_schema.rs"
 SCHEMA_TEST = "tests/rust/external-observation-journal/schema_owner_tests.rs"
-FORMAT_FILES = (SCHEMA, SCHEMA_TEST,ADMIN_READ, ADMIN_READ_TEST,BINDING_EDIT_TEST,BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+ROLE_TEST = "tests/rust/external-observation-journal/runtime_role_tests.rs"
+FORMAT_FILES = (SCHEMA, SCHEMA_TEST,ROLE_TEST,ADMIN_READ, ADMIN_READ_TEST,BINDING_EDIT_TEST,BINDING_ADMIN, BINDING_ADMIN_TEST,MEMBERSHIP, MEMBERSHIP_TEST,GRANT_EDIT, GRANT_EDIT_TEST,LIFECYCLE, LIFECYCLE_TEST,ADMIN_HTTP, ADMIN_HTTP_TEST, ADMIN, ADMIN_TEST, STARTUP, GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -99,6 +100,7 @@ def compile_contract(artifacts):
         # copying the authority adapter or altering production source bytes.
         fixture = directory / "journal_fixture.rs"
         fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / ROLE_TEST))}]\nmod runtime_role_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / SCHEMA_TEST))}]\nmod schema_owner_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / ADMIN_READ_TEST))}]\nmod admin_read_tests;\n"
             f"\n#[path = {json.dumps(str(ROOT / BINDING_EDIT_TEST))}]\nmod binding_edit_tests;\n"
