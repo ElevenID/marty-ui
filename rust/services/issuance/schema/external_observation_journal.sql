@@ -109,6 +109,20 @@ CREATE TRIGGER external_observation_grant_binding_delete
     AFTER DELETE ON issuance_service.external_observation_grant_bindings
     FOR EACH ROW EXECUTE FUNCTION issuance_service.bump_external_observation_grant_membership();
 
+-- Membership replacements must pass through DELETE/INSERT so both affected
+-- grants receive revision fences. In-place updates would bypass those triggers.
+CREATE OR REPLACE FUNCTION issuance_service.reject_external_observation_membership_update()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'external observation membership is immutable; delete and insert instead'
+        USING ERRCODE = '23514';
+END;
+$$;
+
+CREATE TRIGGER external_observation_grant_binding_immutable
+    BEFORE UPDATE ON issuance_service.external_observation_grant_bindings
+    FOR EACH ROW EXECUTE FUNCTION issuance_service.reject_external_observation_membership_update();
+
 CREATE TABLE issuance_service.external_observation_receipts (
     receipt_id uuid PRIMARY KEY,
     organization_id text NOT NULL CHECK (organization_id ~ '^[A-Za-z0-9_-]{1,128}$'),

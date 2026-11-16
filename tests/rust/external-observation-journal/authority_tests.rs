@@ -428,3 +428,58 @@ async fn canonical_key_and_application_expiry_are_checked_at_decision_time() {
     transaction.rollback().await.unwrap();
     fixture.pool.close().await;
 }
+
+#[tokio::test]
+async fn membership_updates_cannot_bypass_grant_revision_fences() {
+    let fixture = Fixture::new().await;
+    seed_authority(&fixture).await;
+    let error = sqlx::query(
+        "UPDATE issuance_service.external_observation_grant_bindings SET binding_id=binding_id",
+    )
+    .execute(&fixture.pool)
+    .await
+    .unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+    let revision: i64 = sqlx::query_scalar(
+        "SELECT revision FROM issuance_service.external_observation_producer_grants",
+    )
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(revision, 2);
+
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM issuance_service.external_observation_producer_grants FOR UPDATE")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM issuance_service.external_observation_grant_bindings WHERE binding_id='binding-one'")
+        .execute(&mut *transaction).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.external_observation_grant_bindings (grant_id,binding_id,organization_id,source_id) VALUES ($1,'binding-one',$2,'source-one')")
+        .bind(Uuid::parse_str(GRANT).unwrap())
+        .bind(Uuid::parse_str(ORGANIZATION).unwrap())
+        .execute(&mut *transaction).await.unwrap();
+    transaction.commit().await.unwrap();
+    let revision: i64 = sqlx::query_scalar(
+        "SELECT revision FROM issuance_service.external_observation_producer_grants",
+    )
+    .fetch_one(&fixture.pool)
+    .await
+    .unwrap();
+    assert_eq!(revision, 4);
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    let authority = PostgresObservationAuthority::default()
+        .lock_current(&mut transaction, &identity(), "binding-one")
+        .await
+        .unwrap();
+    assert_eq!(authority.grant.revision, 4);
+    assert!(authority.grant.bindings.contains("binding-one"));
+    transaction.rollback().await.unwrap();
+    fixture.pool.close().await;
+}
