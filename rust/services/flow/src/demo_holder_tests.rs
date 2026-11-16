@@ -154,7 +154,7 @@ pub(super) fn credential_with_profile(
 ) -> String {
     let signer = IssuerFixture { issuer, holder_key };
     let claims: CredentialClaims = serde_json::from_value(json!({
-        "subject_id":HOLDER, "credential_type":vct, "claims":{"age_over_18":true,"age_over_21":false,"nickname":"do-not-disclose"},
+        "subject_id":HOLDER, "credential_type":vct, "credential_payload_format":"ietf_sd_jwt", "claims":{"age_over_18":true,"age_over_21":false,"nickname":"do-not-disclose"},
         "expiration_seconds":lifetime, "selective_disclosure_claims":["age_over_18","age_over_21","nickname"]
     })).unwrap();
     let prepared = prepare_sd_jwt_with_options(
@@ -399,9 +399,10 @@ async fn signed_example_uses_real_core_nonce_audience_binding_and_minimal_disclo
         Some(nonce.clone()),
     )
     .unwrap();
-    assert_eq!(disclosed["credentialSubject"]["age_over_18"], true);
-    assert!(disclosed["credentialSubject"].get("nickname").is_none());
-    assert!(disclosed["credentialSubject"].get("age_over_21").is_none());
+    assert_eq!(disclosed["age_over_18"], true);
+    assert!(disclosed.get("nickname").is_none());
+    assert!(disclosed.get("age_over_21").is_none());
+    assert!(disclosed.get("credentialSubject").is_none());
     assert!(verify_sd_jwt(
         &compact,
         &jwk(3).to_string(),
@@ -755,7 +756,9 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         .await
         .unwrap();
     let router = crate::flow_read_router(crate::FlowHttpState {
-        service_authenticator: None,
+        service_authenticator: Some(Arc::new(
+            mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
+        )),
         repository: repository.clone(),
         providers: Arc::new(providers),
         public_base_url: "https://demo.example".into(),
@@ -765,7 +768,7 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         },
         application_approval: Default::default(),
     });
-    let preview_response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/flows/public/verification/preview").header("origin","https://demo.example").header("content-type","application/json").body(Body::from(json!({"catalog_revision":catalog.public_view().revision,"scenario_id":"age","choice_id":"over-18"}).to_string())).unwrap()).await.unwrap();
+    let preview_response = router.clone().oneshot(Request::builder().method("POST").uri("/v1/flows/public/verification/preview").header("x-service-token", "s".repeat(32)).header("origin","https://demo.example").header("content-type","application/json").body(Body::from(json!({"catalog_revision":catalog.public_view().revision,"scenario_id":"age","choice_id":"over-18"}).to_string())).unwrap()).await.unwrap();
     assert_eq!(preview_response.status(), StatusCode::OK);
     assert_eq!(preview_response.headers()["cache-control"], "no-store");
     let public_preview: Value =
@@ -791,6 +794,7 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
                 Request::builder()
                     .method("POST")
                     .uri(path)
+                    .header("x-service-token", "s".repeat(32))
                     .header("origin", origin)
                     .header("x-verification-session", key)
                     .header("content-type", "application/json")

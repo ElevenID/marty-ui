@@ -200,16 +200,25 @@ impl PresentationPolicyProvider for Owner {
             oid4vp_transport: input.oid4vp_transport.clone(),
             trusted_internal_context: true,
         };
-        let facts = self
+        let material = self
             .verifier
-            .verify(&self.policy, &request)
+            .verify_material(&self.policy, &request)
             .await
             .map_err(|_| FlowProviderError::InvalidResponse {
                 provider: "presentation_policy",
                 message: "policy verification input rejected".into(),
             })?;
+        let facts = material.policy_facts();
+        if facts["credentials"][0]["signature_verified"] != true {
+            eprintln!(
+                "Fictional demo authentication rejected: {}",
+                facts["credentials"][0]["signature_failure_reason"]
+                    .as_str()
+                    .unwrap_or("unavailable")
+            );
+        }
         let mut result =
-            pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+            pp::evaluate_verified_material_for_policy(material, &self.policy, &request).unwrap();
         // HTTP projection carries tenant identity; the gRPC adapter validates it
         // separately before constructing the internal FrozenPolicyIdentity.
         assert_eq!(
@@ -374,7 +383,7 @@ pub async fn run(
     assert_ne!(issuer.public_jwk.get("x"), holder.public_jwk.get("x"));
     assert_ne!(verifier.public_jwk.get("x"), issuer.public_jwk.get("x"));
     assert_ne!(verifier.public_jwk.get("x"), holder.public_jwk.get("x"));
-    let claims: marty_oid4vci::types::CredentialClaims=serde_json::from_value(json!({"subject_id":HOLDER,"credential_type":VCT,
+    let claims: marty_oid4vci::types::CredentialClaims=serde_json::from_value(json!({"subject_id":HOLDER,"credential_type":VCT,"credential_payload_format":"ietf_sd_jwt",
         "claims":{"age_over_18":true,"age_over_21":false,"nickname":"do-not-disclose"},"expiration_seconds":300,
         "selective_disclosure_claims":["age_over_18","age_over_21","nickname"]})).unwrap();
     let prepared = prepare_sd_jwt_with_options(

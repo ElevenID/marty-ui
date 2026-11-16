@@ -231,16 +231,25 @@ impl crate::PresentationPolicyProvider for ActualPolicy {
             oid4vp_transport: input.oid4vp_transport.clone(),
             trusted_internal_context: true,
         };
-        let facts = self
+        let material = self
             .verifier
-            .verify(&self.policy, &request)
+            .verify_material(&self.policy, &request)
             .await
             .map_err(|_| FlowProviderError::InvalidResponse {
                 provider: "presentation_policy",
                 message: "policy verification input rejected".into(),
             })?;
+        let facts = material.policy_facts();
+        if facts["credentials"][0]["signature_verified"] != true {
+            eprintln!(
+                "Fictional demo authentication rejected: {}",
+                facts["credentials"][0]["signature_failure_reason"]
+                    .as_str()
+                    .unwrap_or("unavailable")
+            );
+        }
         let mut result =
-            pp::evaluate_verified_facts_for_policy(facts, &self.policy, &request).unwrap();
+            pp::evaluate_verified_material_for_policy(material, &self.policy, &request).unwrap();
         // HTTP projection carries tenant identity; the gRPC adapter validates it
         // separately before constructing the internal FrozenPolicyIdentity.
         assert_eq!(
