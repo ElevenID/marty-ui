@@ -648,6 +648,8 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "INTEGRATION_SECRET_MASTER_KEY",
         "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        # Unqualified observation ingress is deliberately not bound by this profile.
+        "MARTY_EXTERNAL_OBSERVATIONS_ENABLED",
         "MARTY_ISSUANCE__",
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE",

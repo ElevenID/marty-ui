@@ -1793,7 +1793,7 @@ mod tests {
                 assert!(matched.route.auth_required);
                 assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
                 assert!(matched.route.rewrite_path.is_none());
-                assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+                assert_eq!(matched.route.methods, BTreeSet::from([HttpMethod::Post]));
                 assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
             }
         }
