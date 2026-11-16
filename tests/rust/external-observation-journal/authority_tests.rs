@@ -191,7 +191,7 @@ async fn canonical_scope_revocation_and_lifecycle_changes_fail_closed() {
         fixture.now,
     )
     .unwrap_err();
-    assert_eq!(denied, Denial::NotAuthorized);
+    assert_eq!(denied, Denial::AuthenticationRequired);
     transaction.rollback().await.unwrap();
 
     sqlx::query("UPDATE organization_service.api_keys SET status='active' WHERE id=$1")
@@ -285,4 +285,146 @@ async fn api_key_revocation_waits_for_admission_authority_lock() {
             .await
             .unwrap();
     assert_eq!(status, "revoked");
+}
+
+// Observe PostgreSQL's actual lock wait, rather than assuming a spawned task
+// reached its UPDATE after a fixed sleep.
+async fn authority_mutation_waits_then_denies(statement: &'static str, expected: Denial) {
+    let fixture = Fixture::new().await;
+    seed_authority(&fixture).await;
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    PostgresObservationAuthority::default()
+        .lock_current(&mut transaction, &identity(), "binding-one")
+        .await
+        .unwrap();
+    let mut writer = fixture.pool.acquire().await.unwrap();
+    let writer_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *writer)
+        .await
+        .unwrap();
+    let mutation = tokio::spawn(async move {
+        sqlx::query(statement).execute(&mut *writer).await.unwrap();
+    });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let blocked: bool = sqlx::query_scalar("SELECT cardinality(pg_blocking_pids($1)) > 0")
+                .bind(writer_pid)
+                .fetch_one(&fixture.pool)
+                .await
+                .unwrap();
+            if blocked {
+                break;
+            }
+            assert!(
+                !mutation.is_finished(),
+                "authority mutation escaped the admission lock"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("writer must reach its PostgreSQL lock wait");
+    transaction.commit().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), mutation)
+        .await
+        .expect("writer must finish after admission releases locks")
+        .unwrap();
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    let locked = PostgresObservationAuthority::default()
+        .lock_current(&mut transaction, &identity(), "binding-one")
+        .await
+        .unwrap();
+    let denied = plan_admission(
+        &locked.principal,
+        &locked.grant,
+        &locked.binding,
+        &locked.application,
+        &fixture.input(),
+        "observation-one",
+        ReplaySnapshot::Missing {
+            current_sequence: 0,
+        },
+        fixture.now,
+    )
+    .unwrap_err();
+    assert_eq!(denied, expected);
+    transaction.rollback().await.unwrap();
+    fixture.pool.close().await;
+}
+
+#[tokio::test]
+async fn grant_revocation_serializes_with_admission_and_denies_next_observation() {
+    authority_mutation_waits_then_denies(
+        "UPDATE issuance_service.external_observation_producer_grants SET active=false",
+        Denial::NotAuthorized,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn binding_modification_serializes_and_invalidates_observation_revision() {
+    authority_mutation_waits_then_denies(
+        "UPDATE issuance_service.external_observation_bindings SET max_age_ms=600000",
+        Denial::BindingChanged,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn application_closure_serializes_and_denies_next_observation() {
+    authority_mutation_waits_then_denies(
+        "UPDATE issuance_service.applications SET status='approved', updated_at=clock_timestamp()",
+        Denial::ApplicationClosed,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn canonical_key_and_application_expiry_are_checked_at_decision_time() {
+    let fixture = Fixture::new().await;
+    seed_authority(&fixture).await;
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    let locked = PostgresObservationAuthority::default()
+        .lock_current(&mut transaction, &identity(), "binding-one")
+        .await
+        .unwrap();
+    // Expiry changes the decision without a database revision change.
+    let denied = plan_admission(
+        &locked.principal,
+        &locked.grant,
+        &locked.binding,
+        &locked.application,
+        &fixture.input(),
+        "observation-one",
+        ReplaySnapshot::Missing {
+            current_sequence: 0,
+        },
+        locked.principal.expires_at_ms,
+    )
+    .unwrap_err();
+    assert_eq!(denied, Denial::AuthenticationRequired);
+    transaction.rollback().await.unwrap();
+    sqlx::query("UPDATE issuance_service.applications SET expires_at=clock_timestamp() - interval '1 second'")
+        .execute(&fixture.pool).await.unwrap();
+    let mut transaction = fixture.pool.begin().await.unwrap();
+    let locked = PostgresObservationAuthority::default()
+        .lock_current(&mut transaction, &identity(), "binding-one")
+        .await
+        .unwrap();
+    let denied = plan_admission(
+        &locked.principal,
+        &locked.grant,
+        &locked.binding,
+        &locked.application,
+        &fixture.input(),
+        "observation-one",
+        ReplaySnapshot::Missing {
+            current_sequence: 0,
+        },
+        locked.application.expires_at_ms,
+    )
+    .unwrap_err();
+    assert_eq!(denied, Denial::ApplicationClosed);
+    transaction.rollback().await.unwrap();
+    fixture.pool.close().await;
 }
