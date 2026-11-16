@@ -4350,6 +4350,7 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "marty-holder-key-reference",
  "marty-key-material-policy",
+ "marty-oid4vp-contract",
  "marty-service-runtime",
  "mmf-platform",
  "prost",

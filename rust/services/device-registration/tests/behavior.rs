@@ -50,7 +50,10 @@ fn contract_retires_device_private_key_challenge() {
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 12);
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 13);
+    assert!(contract["routes"].as_array().unwrap().iter().any(|route| {
+        route["method"] == "GET" && route["path"] == "/v1/devices/wallet-verifier-authority"
+    }));
     assert!(contract["challenge"].is_null());
     assert!(contract["invariants"]
         .as_array()
@@ -148,6 +151,7 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         wallet_issuer_trust: None,
+        wallet_verifier_trust: None,
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
@@ -224,6 +228,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: tickets.clone(),
         wallet_issuer_trust: None,
+        wallet_verifier_trust: None,
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
@@ -260,6 +265,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         memberships: Arc::new(RejectMembership),
         pairing_tickets: tickets,
         wallet_issuer_trust: None,
+        wallet_verifier_trust: None,
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
@@ -282,6 +288,7 @@ async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         wallet_issuer_trust: None,
+        wallet_verifier_trust: None,
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
@@ -325,6 +332,7 @@ async fn mobile_signing_requires_gateway_and_remote_kms_authority() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         wallet_issuer_trust: None,
+        wallet_verifier_trust: None,
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
