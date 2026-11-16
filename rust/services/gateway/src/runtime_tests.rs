@@ -7225,7 +7225,14 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
     assert_eq!(route.route.upstream_service, "issuance");
     assert_eq!(route.route.retries, 0);
     let router = gateway_router(state);
-    for action in ["revoke", "approve", "rotate-api-key"] {
+    for action in [
+        "revoke",
+        "approve",
+        "rotate-api-key",
+        "create",
+        "change-expiry",
+        "replace-bindings",
+    ] {
         for _ in 0..2 {
             let response = router
                 .clone()
@@ -7251,7 +7258,7 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
         let requests = recorder.0.lock().unwrap();
         assert_eq!(
             requests.len(),
-            6,
+            12,
             "each administration attempt must reach canonical authorization"
         );
         for (service, request) in requests.iter() {
@@ -7311,7 +7318,65 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
             .unwrap();
         assert_eq!(response.status(), status);
     }
-    assert_eq!(recorder.0.lock().unwrap().len(), 6);
+    assert_eq!(recorder.0.lock().unwrap().len(), 12);
+}
+
+#[tokio::test]
+async fn binding_admin_gateway_forwards_only_trusted_session_context_and_original_bytes() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let router = gateway_router(state);
+    let bytes = br#"{ "expected_revision":1 }"#;
+    for action in ["create", "activate", "deactivate", "replace-definition"] {
+        let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
+        let request = |session: bool| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("origin", "https://beta.elevenidllc.com")
+                .header("content-type", "application/json")
+                .header("x-user-id", "forged-user")
+                .header("x-api-key-id", "forged-key")
+                .header("x-organization-id", "forged-org");
+            builder = if session {
+                builder.header("cookie", "sessionId=observation-session")
+            } else {
+                builder.header("x-api-key", "observation-admin")
+            };
+            builder.body(Body::from(bytes.as_slice())).unwrap()
+        };
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(true))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let requests = recorder.0.lock().unwrap();
+    assert_eq!(requests.len(), 4);
+    for (service, request) in requests.iter() {
+        assert_eq!(service, "issuance");
+        assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+        assert_eq!(request.header("x-user-id"), Some("user-1"));
+        assert_eq!(request.header("x-api-key-id"), None);
+        assert_eq!(
+            request.header("x-organization-id"),
+            Some("20000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(request.body.as_deref(), Some(bytes.as_slice()));
+    }
 }
 
 #[tokio::test]
@@ -7332,6 +7397,94 @@ async fn malformed_observation_admin_paths_cannot_bypass_origin_or_reach_upstrea
         assert!(recorder.0.lock().unwrap().is_empty(),"malformed path reached upstream: {path}");
     }
     assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn admin_snapshot_gateway_queries_reauthorize_and_preserve_only_trusted_context() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let router = gateway_router(state);
+    for tail in [
+        "external-observation-producers/30000000-0000-4000-8000-000000000001/inspect",
+        "external-observation-producers/30000000-0000-4000-8000-000000000001/audit",
+        "external-observation-bindings/binding-one/inspect",
+        "external-observation-bindings/binding-one/audit",
+        "external-observation-receipts/observation-one/inspect",
+    ] {
+        let path = format!("/v1/organizations/20000000-0000-4000-8000-000000000001/{tail}");
+        for _ in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&path)
+                        .header("cookie", "sessionId=observation-session")
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("content-type", "application/json")
+                        .header("x-user-id", "forged")
+                        .header("x-api-key-id", "forged")
+                        .header("x-organization-id", "forged")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&path)
+                        .header("x-api-key", "observation-admin")
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(&path)
+                        .header("cookie", "sessionId=observation-session")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .unwrap()
+                )
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    let requests = recorder.0.lock().unwrap();
+    assert_eq!(
+        requests.len(),
+        10,
+        "every read attempt reaches current canonical authority rather than cache"
+    );
+    for (service, request) in requests.iter() {
+        assert_eq!(service, "issuance");
+        assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+        assert_eq!(request.header("x-user-id"), Some("user-1"));
+        assert_eq!(request.header("x-api-key-id"), None);
+        assert_eq!(
+            request.header("x-organization-id"),
+            Some("20000000-0000-4000-8000-000000000001")
+        );
+        assert_eq!(request.body.as_deref(), Some(b"{}".as_slice()));
+    }
 }
 
 #[tokio::test]

@@ -263,6 +263,28 @@ pub const APPROVE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/approve";
 pub const ROTATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/rotate-api-key";
+pub const CREATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create";
+pub const EXPIRY_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry";
+pub const BINDINGS_PATH: &str = "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/replace-bindings";
+pub const BINDING_CREATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/create";
+pub const BINDING_ACTIVATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/activate";
+pub const BINDING_DEACTIVATE_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
+pub const BINDING_REPLACE_PATH: &str = "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition";
+pub const GRANT_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/inspect";
+pub const GRANT_AUDIT_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/audit";
+pub const BINDING_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/inspect";
+pub const BINDING_AUDIT_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/audit";
+pub const RECEIPT_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/inspect";
 /// Reserved administrator namespaces must enter the guard even when a path
 /// identifier is malformed. Canonical parsing is authorization, not routing.
 pub fn is_admin_namespace(path: &str) -> bool {
@@ -276,7 +298,11 @@ pub fn is_admin_namespace(path: &str) -> bool {
     }
     matches!(
         parts.next(),
-        Some("external-observation-producers" | "external-observation-bindings")
+        Some(
+            "external-observation-producers"
+                | "external-observation-bindings"
+                | "external-observation-receipts"
+        )
     )
 }
 pub fn admin_organization(path: &str) -> Option<&str> {
@@ -285,14 +311,52 @@ pub fn admin_organization(path: &str) -> Option<&str> {
         || !parts[0].is_empty()
         || parts[1] != "v1"
         || parts[2] != "organizations"
-        || parts[4] != "external-observation-producers"
-        || !matches!(parts[6], "revoke" | "approve" | "rotate-api-key")
         || !canonical_id(Some(parts[3]))
-        || !canonical_id(Some(parts[5]))
     {
         return None;
     }
-    Some(parts[3])
+    let valid = match parts[4] {
+        "external-observation-producers" => {
+            canonical_id(Some(parts[5]))
+                && matches!(
+                    parts[6],
+                    "revoke"
+                        | "approve"
+                        | "rotate-api-key"
+                        | "create"
+                        | "change-expiry"
+                        | "replace-bindings"
+                        | "inspect"
+                        | "audit"
+                )
+        }
+        "external-observation-bindings" => {
+            !parts[5].is_empty()
+                && parts[5].len() <= 128
+                && parts[5]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && matches!(
+                    parts[6],
+                    "create"
+                        | "activate"
+                        | "deactivate"
+                        | "replace-definition"
+                        | "inspect"
+                        | "audit"
+                )
+        }
+        "external-observation-receipts" => {
+            !parts[5].is_empty()
+                && parts[5].len() <= 128
+                && parts[5]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && parts[6] == "inspect"
+        }
+        _ => false,
+    };
+    valid.then_some(parts[3])
 }
 /// Permissions are reloaded and locked by core for every mutation. This guard
 /// requires an authenticated session, canonical active tenant and allowed Origin.
@@ -442,6 +506,213 @@ mod admin_guard_tests {
 }
 
 #[cfg(test)]
+mod grant_edit_guard_tests {
+    use super::*;
+    #[tokio::test]
+    async fn creation_and_expiry_paths_use_the_session_tenant_and_origin_guard() {
+        let org = "20000000-0000-4000-8000-000000000001";
+        for action in ["create", "change-expiry", "replace-bindings"] {
+            let path=format!("/v1/organizations/{org}/external-observation-producers/30000000-0000-4000-8000-000000000001/{action}");
+            assert_eq!(admin_organization(&path), Some(org));
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap()
+            };
+            assert!(admit_admin(request(), true, Some(org), "admin-one", true)
+                .await
+                .is_ok());
+            assert_eq!(
+                admit_admin(request(), false, Some(org), "admin-one", true)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                admit_admin(request(), true, Some(org), "admin-one", false)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                admit_admin(
+                    request(),
+                    true,
+                    Some("20000000-0000-4000-8000-000000000002"),
+                    "admin-one",
+                    true
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::FORBIDDEN
+            );
+        }
+    }
+}
+
+pub fn binding_admin_operation(action: &str) -> serde_json::Value {
+    use serde_json::json;
+    let identifier =
+        json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
+    let label =
+        json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_.:-]+$"});
+    let revision = json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64});
+    let (operation, summary) = match action {
+        "create" => (
+            "create_external_observation_binding",
+            "Create an inactive canonical external observation binding",
+        ),
+        "replace-definition" => (
+            "replace_external_observation_binding_definition",
+            "Replace binding constraints and invalidate linked producer approvals",
+        ),
+        "activate" => (
+            "activate_external_observation_binding",
+            "Activate a canonical binding and invalidate linked grant approvals",
+        ),
+        _ => (
+            "deactivate_external_observation_binding",
+            "Deactivate a canonical binding and invalidate linked grant approvals",
+        ),
+    };
+    let mut properties = json!({"expected_revision":revision});
+    let mut required = vec!["expected_revision"];
+    if matches!(action, "create" | "replace-definition") {
+        let common = json!({"required":{"type":"boolean"},"nullable":{"type":"boolean"}});
+        let rule = |kind: &str, extras: serde_json::Value, names: Vec<&str>| {
+            let mut props = common.clone();
+            props
+                .as_object_mut()
+                .expect("static object")
+                .insert("kind".into(), json!({"const":kind}));
+            props
+                .as_object_mut()
+                .expect("static object")
+                .extend(extras.as_object().expect("static object").clone());
+            let mut required = vec!["kind", "required", "nullable"];
+            required.extend(names);
+            json!({"type":"object","additionalProperties":false,"properties":props,"required":required})
+        };
+        properties = json!({"source_id":identifier,"application_id":identifier,"expected_application_revision":revision,
+          "provider":label,"fact_type":label,
+          "resource_scope":{"type":"object","minProperties":1,"maxProperties":16,"propertyNames":label,"additionalProperties":{"type":"string","minLength":1,"maxLength":512,"description":"Also bounded to512 UTF8 bytes; controls rejected"}},
+          "claim_rules":{"type":"object","minProperties":1,"maxProperties":32,"propertyNames":label,"additionalProperties":{"oneOf":[
+             rule("boolean",json!({}),vec![]),rule("number",json!({"minimum":{"type":"number"},"maximum":{"type":"number"}}),vec!["minimum","maximum"]),
+             rule("text",json!({"max_bytes":{"type":"integer","minimum":1,"maximum":512}}),vec!["max_bytes"]) ]}},
+          "max_age_ms":{"type":"integer","minimum":1,"maximum":900000},"max_clock_skew_ms":{"type":"integer","minimum":0,"maximum":30000}});
+        required = vec![
+            "source_id",
+            "application_id",
+            "expected_application_revision",
+            "provider",
+            "fact_type",
+            "resource_scope",
+            "claim_rules",
+            "max_age_ms",
+            "max_clock_skew_ms",
+        ];
+        if action == "replace-definition" {
+            let props = properties.as_object_mut().expect("static object");
+            for name in ["source_id", "application_id", "provider", "fact_type"] {
+                props.remove(name);
+            }
+            props.insert("expected_revision".into(), revision.clone());
+            required = vec![
+                "expected_revision",
+                "expected_application_revision",
+                "resource_scope",
+                "claim_rules",
+                "max_age_ms",
+                "max_clock_skew_ms",
+            ];
+        }
+    } else if action == "activate" {
+        properties
+            .as_object_mut()
+            .expect("static object")
+            .insert("expected_application_revision".into(), revision);
+        required.push("expected_application_revision");
+    }
+    json!({"operationId":operation,"tags":["evidence"],"summary":summary,
+      "description":"Session-only current canonical administrator, exact active tenant and allowed Origin required. No connector API-key administration. Create derives subject from locked current eligible application at expected_application_revision and starts inactive. Activation revalidates definition, application revision, subject, lifecycle and expiry. Definition replacement changes only resource/claim/freshness constraints and leaves the binding inactive; identity and provenance are immutable through this route. Replacement/activation/deactivation invalidate every linked producer grant approval and deactivate those grants. Deactivation remains available for closed/expired applications. Original JSON is limited to4096bytes; duplicate fields at every map level, unknown fields and reserved authority/secret claim names are rejected. Mutation and audit commit atomically with revision fences; no automatic uncertain-commit retries. No verification, application approval, signing or issuance.",
+      "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
+      "parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+        {"name":"binding_id","in":"path","required":true,"schema":identifier},{"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":properties,"required":required}}}},
+      "responses":{"200":{"description":"Committed revision and audit_id; no-store"},"400":{"description":"Invalid or ambiguous request"},"401":{"description":"Session required"},"403":{"description":"Current canonical authority denied"},"409":{"description":"Revision/state/transaction conflict"},"413":{"description":"Body too large"},"503":{"description":"Unavailable or uncertain commit; reconcile before retry"}}})
+}
+#[cfg(test)]
+mod binding_admin_guard_tests {
+    use super::*;
+    #[tokio::test]
+    async fn binding_paths_require_session_tenant_origin_and_canonical_identifiers() {
+        let org = "20000000-0000-4000-8000-000000000001";
+        for action in ["create", "activate", "deactivate", "replace-definition"] {
+            let path = format!(
+                "/v1/organizations/{org}/external-observation-bindings/binding-one/{action}"
+            );
+            assert_eq!(admin_organization(&path), Some(org));
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap()
+            };
+            assert!(admit_admin(request(), true, Some(org), "admin-one", true)
+                .await
+                .is_ok());
+            assert_eq!(
+                admit_admin(request(), false, Some(org), "admin-one", true)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                admit_admin(request(), true, Some(org), "admin-one", false)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                admit_admin(
+                    request(),
+                    true,
+                    Some("20000000-0000-4000-8000-000000000002"),
+                    "admin-one",
+                    true
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::FORBIDDEN
+            );
+        }
+        assert_eq!(
+            admin_organization(&format!(
+                "/v1/organizations/{org}/external-observation-bindings/bad.name/activate"
+            )),
+            None
+        );
+        assert_eq!(
+            admin_organization(&format!(
+                "/v1/organizations/{org}/external-observation-bindings/binding-one/delete"
+            )),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
 mod reserved_admin_namespace_tests {
     use super::*;
     #[tokio::test]
@@ -457,5 +728,103 @@ mod reserved_admin_namespace_tests {
             assert_eq!(admit_admin(request,true,Some(org),"admin-one",true).await.unwrap_err().0,StatusCode::FORBIDDEN);
         }
         assert!(!is_admin_namespace("/v1/organizations/one/api-keys"));
+    }
+}
+
+pub fn admin_read_operation(kind: &str) -> serde_json::Value {
+    use serde_json::json;
+    let identifier =
+        json!({"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"});
+    let revision = json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64});
+    let audit = matches!(kind, "grant_audit" | "binding_audit");
+    let (operation, resource) = match kind {
+        "grant" => ("inspect_external_observation_producer", "grant_id"),
+        "binding" => ("inspect_external_observation_binding", "binding_id"),
+        "grant_audit" => ("read_external_observation_producer_audit", "grant_id"),
+        "binding_audit" => ("read_external_observation_binding_audit", "binding_id"),
+        _ => ("inspect_external_observation_receipt", "observation_id"),
+    };
+    let (properties, required) = if audit {
+        (
+            json!({"cursor":{"type":"object","additionalProperties":false,"required":["created_at","id"],"properties":{"created_at":{"type":"string","format":"date-time","description":"Use the exact returned PostgreSQL microsecond cursor"},"id":{"type":"string","format":"uuid"}}}}),
+            vec![],
+        )
+    } else if kind == "grant" {
+        (
+            json!({"after_binding_id":identifier,"expected_revision":revision}),
+            vec![],
+        )
+    } else if kind == "receipt" {
+        (json!({"source_id":identifier}), vec!["source_id"])
+    } else {
+        (json!({}), vec![])
+    };
+    json!({"operationId":operation,"tags":["evidence"],"summary":"Read a canonical authorized observation authority or reconciliation snapshot",
+      "description":"POST query with no authority writes. Requires current canonical external-observation:manage, authenticated session tenant and allowed Origin. API keys cannot inspect. Response is no-store and bounded to131072bytes. Grant membership pages contain at most32 IDs; after_binding_id requires expected_revision and stale revisions conflict. Audit pages contain at most8 events and a stable timestamp/UUID cursor, exposing only structured allowed change fields without metadata/secrets. Receipt inspection requires exact tenant/source/observation ID and returns the original unsigned envelope/key reference plus admission-audit/head consistency. Revoked producer keys do not prevent an authorized administrator inspecting historical receipts. No receipt means absent at this snapshot, not proof an in-flight commit cannot occur or permission to regenerate IDs/times/sequences. Reads do not reapprove, verify, issue or retry anything. These snapshots must not be cached as authority; every submission/mutation reauthorizes current records.",
+      "security":[{"sessionCookie":[]},{"bearerAuth":[]}],"parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+        {"name":resource,"in":"path","required":true,"schema":if resource=="grant_id"{json!({"type":"string","format":"uuid"})}else{identifier}},
+        {"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":properties,"required":required}}}},
+      "responses":{"200":{"description":"Consistent authorized snapshot_at_ms and found/record or events/next_cursor; no-store"},"400":{"description":"Invalid or ambiguous query"},"401":{"description":"Session required"},"403":{"description":"Current canonical administrator authority denied"},"409":{"description":"Stale revision/snapshot conflict; inspect again, no blind write retry"},"413":{"description":"Request exceeds4096bytes"},"503":{"description":"Unavailable or inconsistent stored record; never report absence"}}})
+}
+#[cfg(test)]
+mod admin_read_guard_tests {
+    use super::*;
+    #[tokio::test]
+    async fn reads_use_session_tenant_origin_and_reserved_namespace_guards() {
+        let org = "20000000-0000-4000-8000-000000000001";
+        for tail in [
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/inspect",
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/audit",
+            "external-observation-bindings/binding-one/inspect",
+            "external-observation-bindings/binding-one/audit",
+            "external-observation-receipts/observation-one/inspect",
+        ] {
+            let path = format!("/v1/organizations/{org}/{tail}");
+            assert!(is_admin_namespace(&path));
+            assert_eq!(admin_organization(&path), Some(org));
+            let request = || {
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap()
+            };
+            assert!(admit_admin(request(), true, Some(org), "admin-one", true)
+                .await
+                .is_ok());
+            assert_eq!(
+                admit_admin(request(), false, Some(org), "admin-one", true)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::UNAUTHORIZED
+            );
+            assert_eq!(
+                admit_admin(request(), true, Some(org), "admin-one", false)
+                    .await
+                    .unwrap_err()
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+            assert_eq!(
+                admit_admin(
+                    request(),
+                    true,
+                    Some("20000000-0000-4000-8000-000000000002"),
+                    "admin-one",
+                    true
+                )
+                .await
+                .unwrap_err()
+                .0,
+                StatusCode::FORBIDDEN
+            );
+        }
+        let alias =
+            format!("/v1/organizations/{org}/external-observation-receipts/bad.name/inspect");
+        assert!(is_admin_namespace(&alias));
+        assert_eq!(admin_organization(&alias), None);
     }
 }

@@ -270,3 +270,209 @@ read/reconciliation operations remain required. No permission is auto-granted.
 The current method can revoke an expired or inactive key's producer grant, since
 revocation reduces authority and must remain available for cleanup. It does not
 approve evidence, alter application policy or issue credentials.
+
+
+## Producer grant creation and expiry changes
+
+The public Common Gateway also exposes two session administrator POST operations:
+
+- `/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create`
+  accepts only `api_key_id`, `source_id`, and `expires_at_ms`.
+- `/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry`
+  accepts only `expected_revision` and `expires_at_ms`.
+
+These use the same exact active-session tenant, allowed Origin, bounded original
+JSON and current canonical `external-observation:manage` permission checks as
+approval/revocation/rotation. API-key authentication cannot administer grants.
+The create path UUID is selected by the administrator client before the request,
+so an uncertain result has a stable reconciliation identifier. Existing UUID or
+organization/source/key uniqueness conflicts never perform an upsert or silently
+approve a grant. There is no automatic write retry. Receipt/audit read interfaces
+and operator reconciliation are still required before production activation.
+
+Creation writes an inactive grant with null approval metadata and no binding
+membership. Expiry modification preserves key, source and membership, clears
+approval and deactivates the grant, including when changing an already expired
+grant. Both require a current eligible organization-scoped canonical key with the
+exact `evidence:submit` scope. Approval remains a separate explicit operation;
+active without approval metadata is rejected by the candidate schema. Future
+expiry and key eligibility are checked after staged audit insertion, so crossing
+expiry while waiting on a trigger/audit write rolls the entire transaction back.
+Neither action changes an application, verifies evidence, signs or issues a
+credential. Fixed structured audit changes contain revision, expiry and inactive
+state, without API-key secret or observation content.
+
+The candidate schema now allows approval metadata to be null as a pair and
+requires it for active grants. Router preflight requires both approval columns
+nullable, grant INSERT and expiry UPDATE privileges in addition to the previous
+checks. This remains a reviewed candidate schema: registered upgrade migration,
+least-privilege production role qualification, binding/membership administration
+and deployment are unfinished. No startup DDL or automatic privilege grants are
+introduced.
+
+
+## Canonical grant membership replacement
+
+`POST /v1/organizations/{organization_id}/external-observation-producers/{grant_id}/replace-bindings`
+uses the same public session administrator boundary. Its body contains only
+`expected_revision` and `bindings`, an array of at most 32 unique selections with
+`binding_id` and `expected_revision`. Empty explicitly removes all membership.
+The existing 4096-byte original-body limit applies, including duplicate-field
+and unknown-field rejection. Connector API keys cannot invoke this operation.
+
+Core locks current administrator permission, the canonical eligible organization
+key, grant, existing membership rows, and selected binding rows in that order.
+Each binding must already exist under the exact organization/source and match
+the administrator's selected revision. The operation changes membership only;
+it does not create, edit or activate bindings, change application lifecycle or
+subject, change key/source, or approve a grant. Inactive bindings may be staged;
+admission still requires current active binding and eligible application state.
+A successful replacement always deactivates the grant and clears approval,
+including when selecting the same set. Membership revision triggers remain in
+force. Fresh explicit approval is required before submission can be authorized.
+
+Membership writes, revision fencing and the structured administrator audit are
+one SERIALIZABLE transaction. Audit failure, stale binding/grant state, expiry
+crossing during staged writes and concurrent changes roll everything back.
+After audit insertion, core rechecks key/expiry, grant identity/revision/inactive
+state, exact membership set and selected binding revisions before commit. A
+failed COMMIT is unknown and requires reconciliation without an automatic write
+retry. Audit changes include only selected canonical binding IDs/revisions and
+the inactive grant revision, without observation, provider credentials or claims.
+
+Preflight additionally requires membership INSERT/DELETE privileges. Production
+least-privilege role and upgrade migration qualification remain unfinished.
+Administrator audit/read reconciliation remains a separate missing interface; membership selection does not manufacture
+those authorities. The connector continues to own only provider configuration
+and credentials, with Common Gateway as its sole Marty integration.
+
+
+## Binding creation and state administration
+
+Public session administrator POST routes under
+`/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}`
+provide `/create`, `/activate`, and `/deactivate`. They use the same bounded
+original-body, current tenant, allowed Origin and canonical administrator
+permission boundary as producer administration. API-key identities cannot use
+these operations. The shared HTTP body/authentication reader applies to both
+route families. Resource/claim maps reject duplicate keys before normalization;
+claim-rule structs reject duplicate or unknown fields. Provider, fact, resource
+and claim definitions must meet the existing admission validators, including
+reserved authority/secret claim-name exclusions and freshness bounds.
+
+Creation takes a source ID, existing application ID and its exact current
+microsecond `updated_at` revision, provider/fact type, resource scope, claim rules
+and freshness limits. It derives the subject from the locked canonical
+application; caller subject, tenant, active state and approval fields are not
+accepted. The application must belong to the current organization, be pending or
+under review, and be unexpired. Creation starts inactive without membership.
+Duplicate binding IDs conflict rather than overwriting or upserting.
+
+Activation requires both expected binding and application revisions. It validates
+the stored definition, current application subject/lifecycle/expiry and repeats
+application checks after audit insertion. Deactivation requires only the binding
+revision and remains available after application closure/expiry. Both operations
+deactivate every linked producer grant and clear its approval, even when the
+requested binding state is unchanged. Fresh explicit producer approval is
+required; changing binding state never transfers an old approval automatically.
+Linked key rows, grant rows, membership rows, binding, and application are locked
+in that order under SERIALIZABLE. Keys may already be revoked/expired because
+binding deactivation must remain possible. A concurrent membership insertion
+absent from initial discovery is fenced by the serializable transaction. Final
+checks validate the exact linked set, each inactive grant/key/revision, binding
+revision/state and application authority. Audit-trigger changes and expiry during
+staged writes roll the transaction back. Unknown commits have no automatic retry.
+
+Audits contain only binding revision/state and affected grant count; no subject,
+resource values, claim content or credentials. No application state, evidence
+verification, signing or issuance changes. Preflight now requires binding INSERT
+and active/updated_by/revision UPDATE privileges in addition to existing checks.
+Registered migrations, production least-privilege roles and actual Gateway
+runtime qualification remain required. Administrator reads/reconciliation remain unfinished; this is not a deployment
+or production readiness claim.
+
+
+## Binding constraint replacement
+
+`POST /v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition`
+accepts exact binding/application revisions plus complete resource scope, claim
+rules and freshness limits. It rejects organization, source, application,
+subject, provider, fact type and active-state fields. Those identity/provenance
+columns remain unchanged; changing identity requires a distinct canonical
+binding. The same strict nested duplicate/unknown-field decoder, validators,
+4096-byte bound, session tenant/Origin and current administrator permission apply.
+
+Replacement uses the shared binding mutation transaction and canonical
+key/grant/membership/binding/application lock order. It validates the new
+constraints against the current application/subject and writes the binding
+inactive. Every linked producer grant becomes inactive with approval cleared.
+Explicit binding activation and a fresh producer approval are both required
+before new observations can be admitted. The final fence checks immutable
+identity, exact replacement constraints, revisions, linked grants/membership,
+current application and expiry after audit insertion. A concurrent membership
+insertion absent from discovery conflicts under SERIALIZABLE. Audit failure,
+post-write revision/constraint changes or elapsed application expiry roll all
+staged writes back. There is no automatic uncertain-commit retry.
+
+The administrator audit records binding revision/inactive state and affected
+grant count; it does not copy subject, resource values, claim content or secrets.
+Storage preflight additionally requires UPDATE privileges on resource_scope,
+claim_rules, max_age_ms and max_clock_skew_ms. Production role and registered
+migration qualification, administrator reads/reconciliation, actual Gateway and
+Canvas-to-wallet qualification, and cross-repository retirement remain open.
+
+
+## Administrator snapshots and reconciliation reads
+
+Session-only POST queries under the public Common Gateway provide:
+
+- `/external-observation-producers/{grant_id}/inspect`: current grant metadata,
+  canonical key reference and at most 32 membership IDs. Its optional
+  `after_binding_id` requires `expected_revision`; stale revisions conflict.
+- `/external-observation-bindings/{binding_id}/inspect`: current definition,
+  subject and tenant-scoped application revision/lifecycle metadata.
+- `/external-observation-producers/{grant_id}/audit` and
+  `/external-observation-bindings/{binding_id}/audit`: at most eight canonical
+  observation-management events per page, ordered by exact timestamp plus UUID.
+  The next cursor contains those exact two fields. History remains readable
+  after the resource is removed. Metadata and unknown change fields are omitted;
+  allowed structured fields are validated before export.
+- `/external-observation-receipts/{observation_id}/inspect` with `source_id` in
+  the body: original committed unsigned envelope, original API-key reference,
+  receipt identity and current sequence head. The source is a read locator under
+  the authenticated tenant, never observation-admission authority. Receipt,
+  admission-audit timestamp and sequence head must agree; corrupt/incomplete
+  storage is an error, never an absent result.
+
+Every path is prefixed by `/v1/organizations/{organization_id}`. The existing
+strict 4096-byte original JSON reader, current session tenant, allowed Origin,
+trusted Gateway service authentication and canonical `external-observation:manage`
+permission apply. Producer API keys cannot inspect data. No secret-key column or
+raw provider payload is selected. An authorized administrator can inspect an
+original receipt after producer grant/key revocation; that does not restore
+submission authority. The returned normalized claims/subject data are scoped
+administrator data and must not enter logs or public/error responses.
+
+These are no-store, bounded (131072 bytes) snapshots, not authority tokens or
+requeue commands. Each query uses a regular SERIALIZABLE transaction with SELECT
+only and unconditional rollback; PostgreSQL READ ONLY mode cannot accommodate the
+canonical administrator row locks. `snapshot_at_ms` identifies the database
+snapshot acquisition, not a committed write. Permission removal denies later
+queries. No audit, grant, binding, receipt, head, application or sequence is
+changed by inspection.
+
+`found:false` means absent at that snapshot. A late/in-flight commit may become
+visible later under the same observation ID. Never regenerate observation IDs,
+body, times or sequence to hide uncertainty. Compare the original stored envelope
+and original producer key identity; cross-key retries remain subject to current
+canonical admission. Administrative event pages and current state help operator
+reconciliation but do not prove a specific unrecorded client intent after later
+competing mutations. Audit pagination is per-query snapshot data, not a frozen
+whole-history snapshot; new/backdated events require a fresh scan when relevant.
+Ambiguous outcomes remain parked for operator reconciliation. Reads never
+approve, verify, sign, issue or retry a write automatically.
+
+Storage preflight requires the additional grant/binding metadata columns and
+receipt-audit SELECT access. Production least-privilege roles, registered
+migrations, actual Gateway/core deployment, operator workflow and full
+Canvas-to-wallet/network-denial qualification remain open.
