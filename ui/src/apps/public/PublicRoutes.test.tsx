@@ -54,6 +54,8 @@ vi.mock('../../components/InviteAcceptPage', () => ({
   default: () => <div data-testid="invite-accept">Invite accept</div>,
 }));
 
+vi.mock('../../components/pages/PublicVerificationPage', () => ({ default: () => <div data-testid="public-verification">Verification demo</div> }));
+
 vi.mock('../../components/ApplyPage', () => ({
   default: () => <div data-testid="apply-page">Apply page</div>,
 }));
@@ -244,4 +246,11 @@ describe('PublicRoutes', () => {
     expect(screen.getByTestId('api-docs')).toBeInTheDocument();
     expect(screen.queryByTestId('public-root')).not.toBeInTheDocument();
   });
+  it('serves verification directly without login or organization membership', () => {
+    mockUseAuth.mockReturnValue({ isAuthenticated: false, isAdministrator: false, isVendor: false, isApplicant: false, login: vi.fn() });
+    renderWithoutRouter(<MemoryRouter initialEntries={['/verify']}><PublicRoutes /></MemoryRouter>);
+    expect(screen.getByTestId('public-verification')).toBeInTheDocument();
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument();
+  });
+
 });

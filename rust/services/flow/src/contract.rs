@@ -37,6 +37,18 @@ pub const HTTP_ROUTES: &[(&str, &str)] = &[
 pub const PHYSICAL_START_HTTP_ROUTES: &[(&str, &str)] =
     &[("GET", "/v1/flows/physical-start-intents")];
 
+/// Default-disabled website demonstration surface. Visitor capabilities are
+/// separate from the protected organization-management routes above.
+pub const PUBLIC_VERIFICATION_HTTP_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/v1/flows/public/verification/catalog"),
+    ("POST", "/v1/flows/public/verification/sessions"),
+    ("GET", "/v1/flows/public/verification/sessions/{session_id}"),
+    (
+        "POST",
+        "/v1/flows/public/verification/sessions/{session_id}/cancel",
+    ),
+];
+
 pub const GRPC_METHODS: &[&str] = &[
     "CreateFlowDefinition",
     "GetFlowDefinition",

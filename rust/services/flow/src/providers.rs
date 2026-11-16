@@ -451,6 +451,26 @@ pub trait CredentialTemplateProvider: Send + Sync {
 
 #[async_trait]
 pub trait PresentationPolicyProvider: Send + Sync {
+    /// Public consent binds the same owner-produced typed revision as the
+    /// canonical request and evaluator. No separate wire digest is authoritative.
+    async fn configuration_digest(&self, policy_id: &str) -> Result<String, FlowProviderError> {
+        let policy = self.get_policy(policy_id).await?;
+        policy
+            .policy_revision
+            .validate()
+            .map_err(|_| FlowProviderError::InvalidResponse {
+                provider: "presentation_policy",
+                message: "invalid policy revision".into(),
+            })?;
+        if policy.id != policy_id || policy.policy_revision.id != policy_id {
+            return Err(FlowProviderError::InvalidResponse {
+                provider: "presentation_policy",
+                message: "policy revision identity mismatch".into(),
+            });
+        }
+        Ok(policy.policy_revision.content_digest)
+    }
+
     async fn get_policy(
         &self,
         policy_id: &str,

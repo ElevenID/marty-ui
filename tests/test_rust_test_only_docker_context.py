@@ -120,7 +120,7 @@ CANVAS_COMPOSITION_TEST_FILES = (
     "support/runtime_failure_diagnostics.rs",
 )
 FLOW_TEST_ROOT = "rust/crates/flow-acceptance/tests/"
-FLOW_TEST_FILES = (
+FLOW_PUBLISHED_TEST_FILES = (
     "flow_published_schema_contract.rs",
     "support/didcomm_flow_grpc_admission.rs",
     "support/flow_admission.rs",
@@ -130,6 +130,13 @@ FLOW_TEST_FILES = (
     "support/flow_public_startup_peers.rs",
     "support/flow_rendered_selection.rs",
 )
+FLOW_DEMO_TEST_FILES = (
+    "public_demo_signing_live_kms.rs",
+    "support/public_demo_browser.rs",
+    "support/public_demo_canonical.rs",
+    "support/public_demo_gateway.rs",
+)
+FLOW_TEST_FILES = tuple(sorted((*FLOW_PUBLISHED_TEST_FILES, *FLOW_DEMO_TEST_FILES)))
 FLOW_SUPPORT_OWNERS = {
     "didcomm_flow_grpc_admission.rs": "support/flow_admission.rs",
     "flow_admission.rs": "flow_published_schema_contract.rs",
@@ -138,6 +145,9 @@ FLOW_SUPPORT_OWNERS = {
     "flow_public_startup.rs": "support/flow_native_consumer.rs",
     "flow_public_startup_peers.rs": "support/flow_public_startup.rs",
     "flow_rendered_selection.rs": "support/flow_native_consumer.rs",
+    "public_demo_browser.rs": "public_demo_signing_live_kms.rs",
+    "public_demo_canonical.rs": "public_demo_signing_live_kms.rs",
+    "public_demo_gateway.rs": "public_demo_signing_live_kms.rs",
 }
 SELFHOST_TEST_ROOT = "rust/crates/selfhost-acceptance/tests/"
 SELFHOST_TEST_FILES = (
@@ -646,6 +656,10 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
     assert manifest["package"]["autotests"] is False
     assert "build" not in manifest["package"]
     assert manifest["test"] == [
+        {
+            "name": "public_demo_signing_live_kms",
+            "path": "tests/public_demo_signing_live_kms.rs",
+        },
         {
             "name": "flow_published_schema_contract",
             "path": "tests/flow_published_schema_contract.rs",
@@ -1348,6 +1362,14 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
     assert "new/Dockerfile" not in DOCKER_CONTEXTS
 
 
+def test_remote_demo_sources_cannot_select_the_published_flow_shortcut() -> None:
+    for name in FLOW_DEMO_TEST_FILES:
+        changed = (FLOW_TEST_ROOT + name).encode("utf-8") + b"\0"
+        assert _select_acceptance_test_lane(changed) is None
+        published = (FLOW_TEST_ROOT + FLOW_PUBLISHED_TEST_FILES[0]).encode("utf-8")
+        assert _select_acceptance_test_lane(published + b"\0" + changed) is None
+
+
 def _select_acceptance_test_lane(changed: bytes) -> str | None:
     """Accept only a nonempty exact-file diff owned by one proven test lane."""
     if not changed.endswith(b"\0") or not changed[:-1]:
@@ -1368,7 +1390,7 @@ def _select_acceptance_test_lane(changed: bytes) -> str | None:
         (
             "flow",
             FLOW_TEST_ROOT,
-            FLOW_TEST_FILES,
+            FLOW_PUBLISHED_TEST_FILES,
             (test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts,),
         ),
         (
@@ -1446,7 +1468,7 @@ if __name__ == "__main__":
         # An exact-file PR may omit runtime/image work only after this whole
         # source, sole-consumer, and Docker-context proof succeeds.
         test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
-        for name in FLOW_TEST_FILES:
+        for name in FLOW_PUBLISHED_TEST_FILES:
             sys.stdout.buffer.write((FLOW_TEST_ROOT + name).encode("utf-8") + b"\0")
     elif sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
         # The classifier consumes this only after proving exact tracked test

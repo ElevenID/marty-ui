@@ -11,7 +11,7 @@ export const VALUE_PROPOSITION = {
   supportingSubheadline: 'One product for portable credentials, applicant and document verification, and Travel Trust.',
   subheadline: 'Build trust around your workflow.',
   extendedSubheadline: 'Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.',
-  primaryCTA: 'Explore the Developer Docs',
+  primaryCTA: 'Start Verifying',
   secondaryCTA: { label: 'View Verification API', path: '/verifiable-credential-api' },
   concreteExample: 'For example, an organization can issue a workforce credential and evaluate how another verifier checks the issuer, the claims, and its own access policy.',
 };

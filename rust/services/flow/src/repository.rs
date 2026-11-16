@@ -42,6 +42,8 @@ pub enum RepositoryError {
     Storage(String),
     #[error("FLOW.PHYSICAL_START_KEY_CONFLICT")]
     PhysicalStartKeyConflict,
+    #[error("FLOW.PUBLIC_VERIFICATION_CAPACITY_EXCEEDED")]
+    PublicVerificationCapacityExceeded,
     #[error("FLOW.APPLICATION_OFFER_CONFLICT: {0}")]
     ApplicationOfferConflict(String),
     #[error("FLOW.INVALID_REPLAY_DIGEST")]
