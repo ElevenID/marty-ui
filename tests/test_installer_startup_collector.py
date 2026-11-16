@@ -138,4 +138,5 @@ def test_signed_source_closure_includes_browser_supervisor_and_code_bound_runtim
     assert {'scripts/installer_startup_browser.cjs','scripts/installer_startup_browser.py',
         'scripts/installer_startup_process.py','scripts/installer_browser_runtime.py',
         'scripts/installer_browser_runtime_policy.py','scripts/installer_browser_runtime_manifest.json',
-        'scripts/installer_startup_continuation.py','scripts/installer_startup_transport.py'} <= set(startup.HARNESS_FILES)
+        'scripts/installer_startup_continuation.py','scripts/installer_startup_transport.py',
+        'scripts/installer_candidate_rendezvous.py','scripts/release_tag_handoff.py'} <= set(startup.HARNESS_FILES)
