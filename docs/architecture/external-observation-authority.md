@@ -17,20 +17,20 @@ raw API-key secret, or use a remote/stale authorization cache.
 Every admission transaction loads and locks these canonical records in a
 stable order:
 
-1. **Organization API key** â€” `organization_service.api_keys`, selected by
+1. **Organization API key** — `organization_service.api_keys`, selected by
    authenticated API-key ID and organization ID with `FOR UPDATE`. It checks
    active status, enabled state, organization scope type, absence of a
    deployment-profile binding, scopes and expiry. The exact key ID and
    organization come from the Gateway-authenticated identity, not request JSON.
-2. **Producer grant** â€” `issuance_service.external_observation_producer_grants`,
+2. **Producer grant** — `issuance_service.external_observation_producer_grants`,
    selected by exact organization, API-key ID and requested binding membership,
    with `FOR UPDATE`. It must be explicitly approved, active and unexpired.
-3. **Grant membership and evidence binding** â€”
+3. **Grant membership and evidence binding** —
    `external_observation_grant_bindings` membership rows are held `FOR SHARE`;
    the exact `external_observation_bindings` row is held `FOR UPDATE`.
    The binding owns provider, application, subject, fact type, resource scope,
    typed claim rules, freshness and clock-skew limits.
-4. **Application** â€” the canonical `issuance_service.applications` row is held
+4. **Application** — the canonical `issuance_service.applications` row is held
    `FOR UPDATE`. Organization and applicant identifier must match the binding.
    Only `pending` and `under_review` lifecycle states accept new observations;
    application expiry is carried into the admission planner and checked against
