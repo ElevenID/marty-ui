@@ -41,6 +41,7 @@ HARNESS_FILES = (
     'scripts/installer_startup_transport.py','scripts/installer_candidate_receipt_upload.py',
     'scripts/installer_candidate_hosting.py','scripts/installer_candidate_authorize.py',
     'scripts/installer_candidate_controller.py','scripts/installer_candidate_rendezvous.py',
+    'scripts/release_tag_handoff.py',
     'scripts/installer_host_admission.py','scripts/installer_host_probe.py','scripts/installer_live_tls_probe.py',
     'scripts/verify_installer_provenance.py','scripts/stack_tag_gate.py',
     'scripts/installer_browser_runtime.py','scripts/installer_browser_runtime_policy.py',
