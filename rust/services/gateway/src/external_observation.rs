@@ -266,7 +266,7 @@ pub const ROTATE_PATH: &str =
 pub fn admin_organization(path: &str) -> Option<&str> {
     let parts: Vec<_> = path.split('/').collect();
     if parts.len() != 7
-        || parts[0] != ""
+        || !parts[0].is_empty()
         || parts[1] != "v1"
         || parts[2] != "organizations"
         || parts[4] != "external-observation-producers"
