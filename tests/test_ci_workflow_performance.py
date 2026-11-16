@@ -1097,7 +1097,7 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 9
+    assert verified[-1] == b"" and len(verified) == 11
     contract_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert contract_tests == [
         "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
@@ -1106,6 +1106,8 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/tls_openbao_keyless.rs",
+        "rust/crates/service-acceptance/tests/support/holder_issuer_authority.rs",
+        "rust/crates/service-acceptance/tests/support/holder_native_receipt.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
     ]
