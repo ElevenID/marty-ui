@@ -41,6 +41,7 @@ mod verification_receipt;
 mod verification_request;
 mod verification_start;
 mod verification_submission;
+mod wallet_verifier_request;
 
 pub mod credential_template_proto {
     tonic::include_proto!("marty.ui.credential_template.v1");
@@ -93,3 +94,4 @@ pub use verification_receipt::CommittedVerificationFinalization;
 pub use verification_request::*;
 pub use verification_start::*;
 pub use verification_submission::*;
+pub use wallet_verifier_request::*;

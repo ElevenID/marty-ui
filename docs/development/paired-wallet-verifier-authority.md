@@ -35,3 +35,42 @@ The native Redis qualification now exercises explicit verifier-scope serializati
 `scripts/qualify_wallet_verifier_transport.py --test-binary /absolute/path/to/verifier_trust_tls-...` runs the explicitly ignored native transport test against a temporary loopback TLS fixture. It generates a disposable CA and server certificate, checks actual certificate/hostname validation and user/service/tenant binding, and exercises redirect, oversized, duplicate-member, stale, private-key and wrong-scope responses. It also verifies that an unusable proxy environment does not redirect owner traffic. The driver checks its negative response vectors and propagates handler failures instead of treating fixture failures as successful rejection. All fixture responses are synthetic; this is actual TLS transport evidence, not deployed Trust Profile governance, KMS, installed-wallet or official-suite execution. The server and private temporary TLS material are removed on completion.
 
 Complete managed DID/VCT request semantics, mobile/native consent/preparation wiring and installed-wallet acceptance remain required before claiming the paired feature complete.
+
+## Managed Flow producer component
+
+The next component prepares an exact owner-produced DID request for a trusted
+Flow instance. It retains one original signed JWS, with a scope digest covering
+the stored tenant, instance, nonce, frozen policy/query and producer settings.
+Revalidation uses the current signing identity, its canonical DID client/key IDs,
+the actual JWS signature, exact destination/state/query, closed signed fields,
+canonical metadata and bounded times. A900-second request lifetime does not
+shorten the underlying Flow instance. Unsupported query constraints fail closed.
+The ordinary request builder retains its existing behavior; this component has
+a separate paired SD-JWT metadata profile matching accepted Core authentication.
+
+The application function is not yet exposed through an HTTP route. Its caller
+must commit newly produced state with the existing status/time CAS and reread
+current state after asynchronous work even when returning an unchanged cache.
+Public request retrieval must return the same persisted JWS that governance
+attests. Fixed-workload HTTP admission, those persistence/readback rules, managed
+Trust Profile producer/DID/key authority, confirmed-device v2 binding and native
+opaque consent/preparation/completion sessions remain unfinished. No production
+configuration or profile is activated by this producer checkpoint.
+
+Ordinary Flow library/request/retrieval/DID regression execution reports82 passes
+and3 ignores. Two ignored producer cases were then explicitly executed against
+a newly owned TLS OpenBao fixture:2 passed,0 ignored. Its keys are non-exportable,
+export is refused and the signer token is limited to one exact key. No local
+signing-key feature is enabled in the test graph. The fixture checks immutable
+request reuse and correctly signed invalid client, key ID, extra semantics,
+metadata and VCT changes. Exact owned container and temporary material cleanup
+are verified. These are real Transit signatures with an application/provider
+adapter, not deployed Signing Keys/Trust Profile, rootless installation or an
+installed wallet. The portable driver is
+`scripts/qualify_flow_wallet_verifier_request.py --test-binary /absolute/native/executable`.
+
+Full workspace format, focused Flow Clippy with warnings denied and driver lint
+passed. Independent source review identified canonical client/key and query-shape
+compatibility gaps; both were corrected and re-reviewed without remaining
+component findings. Reviewers ran no tests. These results do not qualify the
+unimplemented HTTP/owner/device/native boundaries listed above.
