@@ -847,11 +847,19 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.96"
-    assert integration["commit"] == "b46fbd7bc79135e715efb1d5cfe271778d712313"
+    assert integration["version"] == "1.2.97"
+    assert integration["commit"] == "693bbc8dbe3e3a006658b0753ae03c0c682eaffc"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    official = jobs["official-interoperability"]
+    assert official["uses"] == (
+        "ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@"
+        + integration["commit"]
+    )
+    assert official["with"]["harness_revision"] == integration["commit"]
+    assert jobs["official-gate-evidence"]["env"]["HARNESS_SHA"] == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:3d9d285c9addb885b897ba1d9193912ef46cadca761e7266080309a0ff344d27"
+            "sha256:26a70b18cdb81d697bd32e7a851f9c4d50e98f14084f9843a2ac7244f1ff067d"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -880,7 +888,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.96"
+    assert components["marty-integration-tests"]["version"] == "1.2.97"
 
     # Detailed producer incident history belongs in the incident/runbook owners,
     # rather than being duplicated in the current migration requirements.
