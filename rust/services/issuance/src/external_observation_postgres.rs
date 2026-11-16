@@ -336,8 +336,7 @@ async fn lookup_receipt(
 ) -> Result<Option<StoredReceipt>, JournalError> {
     let row = sqlx::query(
         "SELECT receipt_id, organization_id, source_id, api_key_id, envelope \
-         FROM issuance_service.external_observation_receipts \
-         WHERE organization_id = $1 AND source_id = $2 AND observation_id = $3 FOR SHARE",
+         FROM issuance_service.external_observation_lock_receipt($1,$2,$3)",
     )
     .bind(organization)
     .bind(source)

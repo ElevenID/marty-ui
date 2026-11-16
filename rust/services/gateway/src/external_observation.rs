@@ -285,6 +285,8 @@ pub const BINDING_AUDIT_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/audit";
 pub const RECEIPT_READ_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/inspect";
+pub const MATERIALIZE_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialize";
+pub const MATERIALIZATION_READ_PATH: &str = "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/materialization";
 /// Reserved administrator namespaces must enter the guard even when a path
 /// identifier is malformed. Canonical parsing is authorization, not routing.
 pub fn is_admin_namespace(path: &str) -> bool {
@@ -352,7 +354,7 @@ pub fn admin_organization(path: &str) -> Option<&str> {
                 && parts[5]
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                && parts[6] == "inspect"
+                && matches!(parts[6], "inspect" | "materialize" | "materialization")
         }
         _ => false,
     };
@@ -641,7 +643,7 @@ pub fn binding_admin_operation(action: &str) -> serde_json::Value {
     }
     json!({"operationId":operation,"tags":["evidence"],"summary":summary,
       "description":"Session-only current canonical administrator, exact active tenant and allowed Origin required. No connector API-key administration. Create derives subject from locked current eligible application at expected_application_revision and starts inactive. Activation revalidates definition, application revision, subject, lifecycle and expiry. Definition replacement changes only resource/claim/freshness constraints and leaves the binding inactive; identity and provenance are immutable through this route. Replacement/activation/deactivation invalidate every linked producer grant approval and deactivate those grants. Deactivation remains available for closed/expired applications. Original JSON is limited to4096bytes; duplicate fields at every map level, unknown fields and reserved authority/secret claim names are rejected. Mutation and audit commit atomically with revision fences; no automatic uncertain-commit retries. No verification, application approval, signing or issuance.",
-      "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
+      "security":[{"sessionCookie":[]}],
       "parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
         {"name":"binding_id","in":"path","required":true,"schema":identifier},{"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
       "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":properties,"required":required}}}},
@@ -761,7 +763,7 @@ pub fn admin_read_operation(kind: &str) -> serde_json::Value {
     };
     json!({"operationId":operation,"tags":["evidence"],"summary":"Read a canonical authorized observation authority or reconciliation snapshot",
       "description":"POST query with no authority writes. Requires current canonical external-observation:manage, authenticated session tenant and allowed Origin. API keys cannot inspect. Response is no-store and bounded to131072bytes. Grant membership pages contain at most32 IDs; after_binding_id requires expected_revision and stale revisions conflict. Audit pages contain at most8 events and a stable timestamp/UUID cursor, exposing only structured allowed change fields without metadata/secrets. Receipt inspection requires exact tenant/source/observation ID and returns the original unsigned envelope/key reference plus admission-audit/head consistency. Revoked producer keys do not prevent an authorized administrator inspecting historical receipts. No receipt means absent at this snapshot, not proof an in-flight commit cannot occur or permission to regenerate IDs/times/sequences. Reads do not reapprove, verify, issue or retry anything. These snapshots must not be cached as authority; every submission/mutation reauthorizes current records.",
-      "security":[{"sessionCookie":[]},{"bearerAuth":[]}],"parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+      "security":[{"sessionCookie":[]}],"parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
         {"name":resource,"in":"path","required":true,"schema":if resource=="grant_id"{json!({"type":"string","format":"uuid"})}else{identifier}},
         {"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
       "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"properties":properties,"required":required}}}},
@@ -779,6 +781,8 @@ mod admin_read_guard_tests {
             "external-observation-bindings/binding-one/inspect",
             "external-observation-bindings/binding-one/audit",
             "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
         ] {
             let path = format!("/v1/organizations/{org}/{tail}");
             assert!(is_admin_namespace(&path));
@@ -826,5 +830,45 @@ mod admin_read_guard_tests {
             format!("/v1/organizations/{org}/external-observation-receipts/bad.name/inspect");
         assert!(is_admin_namespace(&alias));
         assert_eq!(admin_organization(&alias), None);
+    }
+}
+
+pub fn materialization_operation(read: bool) -> serde_json::Value {
+    let mut properties = serde_json::json!({"source_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}});
+    let mut required = vec!["source_id"];
+    if !read {
+        properties["expected_application_revision"] =
+            serde_json::json!({"type":"integer","minimum":1,"maximum":9007199254740991u64});
+        required.push("expected_application_revision");
+    }
+    serde_json::json!({"operationId":if read {"inspect_external_observation_materialization"} else {"materialize_external_observation_receipt"},
+      "summary":if read {"Inspect original receipt materialization"} else {"Attach an admitted unsigned observation to application evidence"},
+      "description":"Session, allowed Origin, exact active tenant and current canonical external-observation:manage required. Connector API keys cannot materialize. Core derives every evidence identity from the immutable receipt. First attachment requires current active binding, latest observation head, matching eligible subject/application and expected application revision. The fact is always UNVERIFIED with UNSIGNED_PRODUCER_ATTESTATION; no requirement is satisfied by verification, and no approval, issuance transaction or signing occurs. Fact, head, application revision and actor event commit atomically. Matching retries return the original result without moving old heads. Original expected_application_revision is required on retries. After uncertain COMMIT, inspect the same source/observation; absence is a snapshot, not permission to regenerate identity or blindly retry. Existing attachment remains inspectable after source revocation or application closure. Responses are no-store. Request original JSON is limited to4096bytes.",
+      "security":[{"sessionCookie":[]}],"parameters":[{"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"observation_id","in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"}},{"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+      "requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","additionalProperties":false,"required":required,"properties":properties}}}},
+      "responses":{"200":{"description":"Original materialization or authorized snapshot; no-store"},"400":{"description":"Invalid original request"},"401":{"description":"Session required"},"403":{"description":"Canonical administrator or application authority denied"},"409":{"description":"Current revision/head conflict; inspect before manual reconciliation"},"413":{"description":"Request exceeds4096bytes"},"503":{"description":"Unavailable or uncertain COMMIT; inspect same identity"}}})
+}
+
+#[cfg(test)]
+mod materialization_openapi_tests {
+    use super::*;
+    #[test]
+    fn administrator_operations_declare_session_cookie_and_required_origin() {
+        for operation in [
+            materialization_operation(false),
+            materialization_operation(true),
+            binding_admin_operation("create"),
+            admin_read_operation("receipt"),
+        ] {
+            assert_eq!(
+                operation["security"],
+                serde_json::json!([{"sessionCookie":[]}])
+            );
+            assert!(operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
     }
 }

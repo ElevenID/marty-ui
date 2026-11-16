@@ -218,6 +218,8 @@ impl GatewayContract {
             crate::external_observation::BINDING_READ_PATH,
             crate::external_observation::BINDING_AUDIT_PATH,
             crate::external_observation::RECEIPT_READ_PATH,
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
         ] {
             table.add(RouteConfig {
                 name: format!("external-observation:manage:{path}"),
@@ -600,7 +602,7 @@ impl GatewayContract {
             paths.insert(path.into(),json!({"post":{
                 "operationId":operation_id,"tags":["evidence"],"summary":summary,
                 "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Membership replacement accepts only current same-tenant/source binding IDs at exact revisions, including an empty set, and clears grant approval. It never changes binding definitions or applications. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
-                "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
+                "security":[{"sessionCookie":[]}],
                 "parameters":[
                     {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
                     {"name":"grant_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
@@ -632,6 +634,12 @@ impl GatewayContract {
                 path.into(),
                 json!({"post":crate::external_observation::binding_admin_operation(action)}),
             );
+        }
+        for path in [
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            paths.insert(path.into(),json!({"post":crate::external_observation::materialization_operation(path==crate::external_observation::MATERIALIZATION_READ_PATH)}));
         }
         for (path, kind) in [
             (crate::external_observation::GRANT_READ_PATH, "grant"),
@@ -1310,7 +1318,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1423,7 +1431,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 16
+                + 18
         );
         for operation in [
             "submit_external_observation",
@@ -1442,6 +1450,8 @@ mod tests {
             "inspect_external_observation_binding",
             "read_external_observation_binding_audit",
             "inspect_external_observation_receipt",
+            "materialize_external_observation_receipt",
+            "inspect_external_observation_materialization",
         ] {
             assert!(
                 identifiers.contains(operation),
@@ -1647,7 +1657,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
         );
         assert_eq!(
             contract
@@ -1661,7 +1671,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1673,7 +1683,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 16
+                + 18
                 + 16
         );
         assert_eq!(
@@ -2112,6 +2122,8 @@ mod admin_read_route_tests {
             "external-observation-bindings/binding-one/inspect",
             "external-observation-bindings/binding-one/audit",
             "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
         ] {
             let path = format!("/v1/organizations/20000000-0000-4000-8000-000000000001/{tail}");
             let route = route_for(&table, HttpMethod::Post, &path).unwrap();
@@ -2121,5 +2133,30 @@ mod admin_read_route_tests {
             assert!(requires_issuance_service_auth(&path));
             assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
         }
+    }
+}
+
+#[cfg(test)]
+mod observation_administrator_openapi_security_tests {
+    use super::*;
+    #[test]
+    fn every_observation_administrator_operation_uses_defined_session_only_security() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let mut count = 0;
+        for (path, item) in document["paths"].as_object().unwrap() {
+            if !crate::external_observation::is_admin_namespace(path) {
+                continue;
+            }
+            count += 1;
+            let operation = &item["post"];
+            assert_eq!(operation["security"], json!([{"sessionCookie":[]}]));
+            assert!(document["components"]["securitySchemes"]["sessionCookie"].is_object());
+            assert!(operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
+        assert_eq!(count, 17);
     }
 }

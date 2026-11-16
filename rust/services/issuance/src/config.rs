@@ -238,6 +238,7 @@ pub struct IssuanceServiceConfig {
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub external_observations_enabled: bool,
+    pub external_observation_database_url: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
@@ -337,6 +338,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "external_observations_enabled",
                 &self.external_observations_enabled,
+            )
+            .field(
+                "external_observation_database_configured",
+                &self.external_observation_database_url.is_some(),
             )
             .field("passport_native", &self.passport_native)
             .field("signing_keys_internal_url", &self.signing_keys_internal_url)
@@ -1060,6 +1065,18 @@ impl IssuanceServiceConfig {
             } else {
                 None
             };
+        let external_observations_enabled =
+            environment_flag(&values, "MARTY_EXTERNAL_OBSERVATIONS_ENABLED");
+        let external_observation_database_url = values
+            .get("ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL")
+            .map(|value| validate_observation_database_url(value))
+            .transpose()?;
+        if external_observations_enabled && external_observation_database_url.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "Separate Core observation database credentials are required",
+            ));
+        }
         Ok(Self {
             http_addr,
             grpc_addr,
@@ -1077,10 +1094,8 @@ impl IssuanceServiceConfig {
             database_url,
             token_hmac_key,
             issuance_api_key,
-            external_observations_enabled: environment_flag(
-                &values,
-                "MARTY_EXTERNAL_OBSERVATIONS_ENABLED",
-            ),
+            external_observations_enabled,
+            external_observation_database_url,
             passport_tenant_keys,
             passport_native,
             signing_keys_internal_url,
@@ -1598,6 +1613,26 @@ fn validate_database_url(value: &str) -> Result<String, MmfError> {
         return Err(MmfError::new(
             ErrorCode::Configuration,
             "DATABASE_URL must be a valid PostgreSQL URL",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn validate_observation_database_url(value: &str) -> Result<String, MmfError> {
+    let normalized = value.replacen("postgresql+asyncpg://", "postgresql://", 1);
+    let valid = value == value.trim()
+        && !value.chars().any(char::is_control)
+        && url::Url::parse(&normalized).is_ok_and(|parsed| {
+            matches!(parsed.scheme(), "postgres" | "postgresql")
+                && parsed.host_str().is_some()
+                && !parsed.username().is_empty()
+                && !parsed.path().trim_matches('/').is_empty()
+        });
+    if !valid {
+        // Never include the URL, parse cause or credentials in configuration errors.
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL must be a valid PostgreSQL URL",
         ));
     }
     Ok(normalized)
@@ -3323,12 +3358,34 @@ fn observation_ingress_requires_explicit_activation_configuration() {
             .unwrap()
             .external_observations_enabled
     );
-    assert!(
-        IssuanceServiceConfig::from_values(vec![(
-            "MARTY_EXTERNAL_OBSERVATIONS_ENABLED".into(),
-            "true".into()
-        )])
-        .unwrap()
-        .external_observations_enabled
+    assert!(IssuanceServiceConfig::from_values(vec![(
+        "MARTY_EXTERNAL_OBSERVATIONS_ENABLED".into(),
+        "true".into()
+    )])
+    .is_err());
+    let secret = "synthetic-isolated-role-password";
+    let url = format!("postgresql://observation:{secret}@127.0.0.1:5432/core_database");
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("MARTY_EXTERNAL_OBSERVATIONS_ENABLED".into(), "true".into()),
+        (
+            "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL".into(),
+            url.clone(),
+        ),
+    ])
+    .unwrap();
+    assert!(config.external_observations_enabled);
+    assert_eq!(
+        config.external_observation_database_url.as_deref(),
+        Some(url.as_str())
     );
+    assert!(!format!("{config:?}").contains(secret));
+    for invalid in [
+        "https://user:synthetic-secret@example.test/db",
+        "postgresql://",
+        "postgresql://host/db",
+        "postgresql://user:synthetic-secret@host/",
+    ] {
+        let error = validate_observation_database_url(invalid).unwrap_err();
+        assert!(!format!("{error:?}").contains("synthetic-secret"));
+    }
 }

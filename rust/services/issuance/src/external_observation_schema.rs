@@ -4,9 +4,12 @@
 use serde_json::Value;
 use sqlx::PgConnection;
 
-pub const VERSION: &str = "0014_external_observation_authority";
+pub const JOURNAL_VERSION: &str = "0014_external_observation_authority";
+pub const VERSION: &str = "0015_external_observation_runtime_locks";
 pub const MIGRATION_SQL: &str =
     include_str!("../migrations/0014_external_observation_authority.sql");
+pub const LOCK_MIGRATION_SQL: &str =
+    include_str!("../migrations/0015_external_observation_runtime_locks.sql");
 pub const CATALOG_QUERY: &str = include_str!("../schema/external_observation_catalog_query.sql");
 const CATALOG: &str = include_str!("../schema/external_observation_catalog.json");
 
@@ -24,16 +27,18 @@ pub async fn validate(connection: &mut PgConnection) -> Result<(), sqlx::Error> 
             "Observation schema-owner ledger is missing".into(),
         ));
     }
-    let installed: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM issuance_service.rust_schema_migrations WHERE version=$1)",
-    )
-    .bind(VERSION)
-    .fetch_one(&mut *connection)
-    .await?;
-    if !installed {
-        return Err(sqlx::Error::Protocol(
-            "Registered observation migration is missing".into(),
-        ));
+    for version in [JOURNAL_VERSION, VERSION] {
+        let installed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM issuance_service.rust_schema_migrations WHERE version=$1)",
+        )
+        .bind(version)
+        .fetch_one(&mut *connection)
+        .await?;
+        if !installed {
+            return Err(sqlx::Error::Protocol(
+                "Registered observation migration is missing".into(),
+            ));
+        }
     }
     let expected: Value = serde_json::from_str(CATALOG)
         .map_err(|_| sqlx::Error::Protocol("Invalid embedded observation schema catalog".into()))?;

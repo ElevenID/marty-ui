@@ -94,7 +94,7 @@ async fn change_grant(
     let mut key_ids = vec![previous_key, next_key];
     key_ids.sort();
     key_ids.dedup();
-    let keys=sqlx::query("SELECT id,(status='active' AND enabled AND scope_type='ORGANIZATION' AND deployment_profile_id IS NULL AND COALESCE('evidence:submit'=ANY(scopes),false) AND (expires_at IS NULL OR expires_at>clock_timestamp())) AS eligible FROM organization_service.api_keys WHERE organization_id=$1 AND id=ANY($2) ORDER BY id FOR UPDATE")
+    let keys=sqlx::query("SELECT id,(status='active' AND enabled AND scope_type='ORGANIZATION' AND deployment_profile_id IS NULL AND COALESCE('evidence:submit'=ANY(scopes),false) AND (expires_at IS NULL OR expires_at>clock_timestamp())) AS eligible FROM issuance_service.external_observation_lock_api_keys($1,$2) ORDER BY id")
         .bind(organization_id).bind(&key_ids).fetch_all(&mut *tx).await.map_err(database_error)?;
     if keys.len() != key_ids.len() {
         return Err(AdminError::NotAuthorized);
@@ -146,7 +146,7 @@ async fn change_grant(
         .execute(&mut *tx).await.map_err(database_error)?;
     // Clock time can advance while locks/audit writes wait. Revalidate time
     // after all staged writes; a newly expired key/grant rolls everything back.
-    let still_eligible:bool=sqlx::query_scalar("SELECT count(*)=1 FROM issuance_service.external_observation_producer_grants g JOIN organization_service.api_keys k ON k.id=g.api_key_id AND k.organization_id=g.organization_id WHERE g.id=$1 AND g.organization_id=$2 AND g.expires_at>clock_timestamp() AND k.status='active' AND k.enabled AND k.scope_type='ORGANIZATION' AND k.deployment_profile_id IS NULL AND COALESCE('evidence:submit'=ANY(k.scopes),false) AND (k.expires_at IS NULL OR k.expires_at>clock_timestamp())")
+    let still_eligible:bool=sqlx::query_scalar("SELECT count(*)=1 FROM issuance_service.external_observation_producer_grants g JOIN LATERAL issuance_service.external_observation_lock_api_keys(g.organization_id,ARRAY[g.api_key_id]::uuid[]) k ON k.id=g.api_key_id AND k.organization_id=g.organization_id WHERE g.id=$1 AND g.organization_id=$2 AND g.expires_at>clock_timestamp() AND k.status='active' AND k.enabled AND k.scope_type='ORGANIZATION' AND k.deployment_profile_id IS NULL AND COALESCE('evidence:submit'=ANY(k.scopes),false) AND (k.expires_at IS NULL OR k.expires_at>clock_timestamp())")
         .bind(grant_id).bind(organization_id).fetch_one(&mut *tx).await.map_err(database_error)?;
     if !still_eligible {
         return Err(AdminError::NotAuthorized);

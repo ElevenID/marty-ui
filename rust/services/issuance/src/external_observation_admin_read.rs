@@ -237,18 +237,7 @@ async fn receipt_snapshot(
     };
     let envelope: Option<Value> = row.try_get("envelope").map_err(database_error)?;
     let envelope = envelope.ok_or(AdminError::Unavailable)?;
-    let bytes = serde_json::to_vec(&envelope).map_err(|_| AdminError::Unavailable)?;
-    let mut headers = http::HeaderMap::new();
-    headers.insert(
-        "content-type",
-        http::HeaderValue::from_static("application/json"),
-    );
-    headers.insert(
-        "idempotency-key",
-        http::HeaderValue::from_str(observation).map_err(|_| AdminError::Unavailable)?,
-    );
-    let decoded = crate::external_observation_wire::decode_submission(&headers, &bytes)
-        .map_err(|_| AdminError::Unavailable)?;
+    let decoded = decode_receipt(&envelope, observation)?;
     let receipt: Uuid = row.try_get("receipt_id").map_err(database_error)?;
     let key: String = row.try_get("api_key_id").map_err(database_error)?;
     let binding: String = row.try_get("binding_id").map_err(database_error)?;
@@ -364,4 +353,23 @@ async fn audit_page(
         events.push(json!({"id":event,"event_type":event_type,"action":action,"actor_id":actor,"created_at":created,"changes":changes}));
     }
     Ok(json!({"events":events,"next_cursor":if more{next}else{Value::Null}}))
+}
+
+/// Reuse the strict original protocol constraints for immutable stored envelopes.
+pub(crate) fn decode_receipt(
+    envelope: &Value,
+    observation: &str,
+) -> Result<crate::external_observation_admission::Observation, AdminError> {
+    let bytes = serde_json::to_vec(envelope).map_err(|_| AdminError::Unavailable)?;
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        "content-type",
+        http::HeaderValue::from_static("application/json"),
+    );
+    headers.insert(
+        "idempotency-key",
+        http::HeaderValue::from_str(observation).map_err(|_| AdminError::Unavailable)?,
+    );
+    crate::external_observation_wire::decode_submission(&headers, &bytes)
+        .map_err(|_| AdminError::Unavailable)
 }

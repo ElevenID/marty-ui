@@ -489,7 +489,7 @@ version and validates its catalog; drift is rejected rather than repaired silent
 A manually installed candidate without the owner ledger is not accepted as a
 registered deployment. Existing data is never dropped to claim a fresh installation.
 
-The SQL has one source in `migrations/0014_external_observation_authority.sql`.
+The journal SQL has one source in `migrations/0014_external_observation_authority.sql`.
 The former `schema/external_observation_journal.sql` copy is removed.
 Installation explicitly revokes PUBLIC table and trigger-function privileges,
 including privileges inherited from permissive owner defaults. Named runtime
@@ -528,3 +528,50 @@ network-denial qualification. Prior sections' references to migration work descr
 the earlier implementation stages; protected registration is implemented here,
 while upgrade and deployment qualification remain open. The Common Gateway remains
 the sole connector-to-Marty integration point; connector database access is absent.
+
+### Separate Core observation runtime role
+
+The production mount uses `ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL` for a
+separate authenticated Core database role. Enabling observations requires this
+setting and the Gateway service credential. There is no fallback to `DATABASE_URL`.
+The two pools must report different authenticated roles and the same database and
+non-null backend address/port. Unix-socket and proxy arrangements that cannot prove
+this identity fail closed. Configuration diagnostics report only whether the
+observation URL is configured; they never include the URL or database credentials.
+This setting belongs to Core and must never reach the connector process.
+
+Owner migration `0015_external_observation_runtime_locks.sql` adds five pinned
+read/row-lock helpers for organization, API-key metadata, application,
+administrator authority and immutable receipt replay. PostgreSQL requires UPDATE
+privileges for row locks. The helpers preserve the original transaction's locks
+without giving the observation role canonical UPDATE rights. They use
+`SECURITY DEFINER`, `search_path=pg_catalog`, explicitly qualified relations and
+explicit PUBLIC EXECUTE revocation. Their outputs exclude API-key secrets. Owner
+installation and catalog verification require both migrations 0014 and 0015;
+startup performs no DDL, role creation or privilege grants.
+
+The observation role needs schema USAGE, the exact journal and organization-audit
+read/write privileges checked by startup, application metadata SELECT, and EXECUTE
+on the five helpers. Grant/binding/head mutations remain confined to observation
+tables. Membership row locking uses a narrow UPDATE column privilege; the pinned
+immutable-membership trigger still rejects every actual UPDATE. Receipts and audit
+records have no UPDATE or DELETE privilege. Owner identity, helper execution and
+canonical lock privileges must be qualified separately by the deployment owner.
+
+Startup examines every reachable role, including membership usable through
+`SET ROLE` with NOINHERIT. It rejects predefined `pg_` role membership, elevated
+role attributes, explicit parameter SET/ALTER SYSTEM privileges, non-origin
+replication mode, database/schema CREATE, canonical mutation privileges, ownership
+of observation/audit objects, helper-owner membership and immutable-record mutation
+rights. The helper bodies and catalog are checked exactly before routes mount.
+These startup checks qualify the selected role at that time; they do not authorize
+later privilege changes or replace deployment qualification.
+
+Disposable PostgreSQL tests authenticate the named restricted role and exercise
+admission, exact replay, canonical administrator revocation and production mounting.
+They reject canonical writes, receipt/audit mutation, owner escalation, predefined
+server-program role membership, NOINHERIT authority membership, added column UPDATE
+rights, missing credentials and reuse of the canonical role. PostgreSQL 15 and 16
+catalog captures agree. Production role provisioning, TLS/deployment qualification,
+the full owner command, real Gateway end-to-end behavior and network denial remain
+activation gates; observations remain disabled by default.

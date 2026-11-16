@@ -115,6 +115,9 @@ pub mod external_observation_grant_edit;
 pub mod external_observation_grant_lifecycle;
 pub mod external_observation_http;
 pub mod external_observation_ingress;
+pub mod external_observation_materialization;
+#[cfg(test)]
+mod external_observation_materialization_policy_tests;
 pub mod external_observation_membership_admin;
 pub mod external_observation_postgres;
 pub mod external_observation_schema;

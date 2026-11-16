@@ -120,7 +120,7 @@ async fn application(
     let row = sqlx::query(
         "SELECT applicant_identifier,(extract(epoch FROM updated_at)*1000000)::bigint AS revision,
       (status IN ('pending','under_review') AND expires_at>clock_timestamp()) AS eligible
-      FROM issuance_service.applications WHERE id=$1 AND organization_id=$2 FOR UPDATE",
+      FROM issuance_service.external_observation_lock_application($1,$2)",
     )
     .bind(application_id)
     .bind(organization.to_string())
@@ -316,8 +316,14 @@ async fn change_binding(
     }
     let key_ids: Vec<Uuid> = keys.into_iter().collect();
     let grant_ids: Vec<Uuid> = grants.keys().copied().collect();
-    let locked_keys:Vec<Uuid>=sqlx::query_scalar("SELECT id FROM organization_service.api_keys WHERE organization_id=$1 AND id=ANY($2) ORDER BY id FOR UPDATE")
-      .bind(organization).bind(&key_ids).fetch_all(&mut *tx).await.map_err(database_error)?;
+    let locked_keys: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM issuance_service.external_observation_lock_api_keys($1,$2) ORDER BY id",
+    )
+    .bind(organization)
+    .bind(&key_ids)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(database_error)?;
     if locked_keys.len() != key_ids.len() {
         return Err(AdminError::Conflict);
     }

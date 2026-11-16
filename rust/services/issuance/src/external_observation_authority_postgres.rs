@@ -139,7 +139,7 @@ impl ObservationAuthority for PostgresObservationAuthority {
         // Organization suspension serializes with all observation decisions.
         // Use the same organization-first order as canonical administration.
         let organization_status: Option<String> = sqlx::query_scalar(
-            "SELECT status FROM organization_service.organizations WHERE id=$1 FOR SHARE",
+            "SELECT status FROM issuance_service.external_observation_lock_organization($1)",
         )
         .bind(organization_id)
         .fetch_optional(&mut *connection)
@@ -156,9 +156,7 @@ impl ObservationAuthority for PostgresObservationAuthority {
         let key = sqlx::query(
             "SELECT id, organization_id, scopes, scope_type, deployment_profile_id,
                     status, enabled, expires_at, updated_at
-             FROM organization_service.api_keys
-             WHERE id = $1 AND organization_id = $2
-             FOR UPDATE",
+             FROM issuance_service.external_observation_lock_api_keys($2,ARRAY[$1]::uuid[])",
         )
         .bind(key_id)
         .bind(organization_id)
@@ -278,9 +276,7 @@ impl ObservationAuthority for PostgresObservationAuthority {
         // Lock 4: the canonical application and its subject/lifecycle owner.
         let application = sqlx::query(
             "SELECT id, organization_id, applicant_identifier, status, updated_at, expires_at
-             FROM issuance_service.applications
-             WHERE id = $1 AND organization_id = $2
-             FOR UPDATE",
+             FROM issuance_service.external_observation_lock_application($1,$2)",
         )
         .bind(&binding_application_id)
         .bind(organization_id.to_string())

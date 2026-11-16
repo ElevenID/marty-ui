@@ -60,8 +60,12 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         include_str!("../migrations/0013_explicit_jwt_vc_profile.sql"),
     ),
     (
-        crate::external_observation_schema::VERSION,
+        crate::external_observation_schema::JOURNAL_VERSION,
         crate::external_observation_schema::MIGRATION_SQL,
+    ),
+    (
+        crate::external_observation_schema::VERSION,
+        crate::external_observation_schema::LOCK_MIGRATION_SQL,
     ),
 ];
 const BASE_TABLES: &[&str] = &[

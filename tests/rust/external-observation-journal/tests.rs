@@ -189,7 +189,20 @@ impl Fixture {
                 status varchar NOT NULL, updated_at timestamptz NOT NULL, expires_at timestamptz NOT NULL
             );")
             .execute(&pool).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE organization_service.members(id uuid PRIMARY KEY,organization_id uuid,user_id varchar(255),status varchar(50));
+      CREATE TABLE organization_service.roles(id uuid PRIMARY KEY,organization_id uuid);
+      CREATE TABLE organization_service.member_roles(member_id uuid,role_id uuid,PRIMARY KEY(member_id,role_id));
+      CREATE TABLE organization_service.permissions(id uuid PRIMARY KEY,resource varchar(100),action varchar(100));
+      CREATE TABLE organization_service.role_permissions(role_id uuid,permission_id uuid,PRIMARY KEY(role_id,permission_id));
+      CREATE TABLE organization_service.audit_events(id uuid PRIMARY KEY,organization_id uuid,event_type varchar(120),action varchar(120),
+        category varchar(100),resource_type varchar(100),resource_id varchar(255),actor_id varchar(255),actor_type varchar(50),
+        severity varchar(50),message text,changes jsonb,metadata jsonb,created_at timestamptz);")
+            .execute(&pool).await.unwrap();
         sqlx::raw_sql(OBSERVATION_SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(crate::external_observation_schema::LOCK_MIGRATION_SQL)
             .execute(&pool)
             .await
             .unwrap();
@@ -201,11 +214,16 @@ impl Fixture {
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO issuance_service.rust_schema_migrations(version) VALUES ($1)")
-            .bind(crate::external_observation_schema::VERSION)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for version in [
+            crate::external_observation_schema::JOURNAL_VERSION,
+            crate::external_observation_schema::VERSION,
+        ] {
+            sqlx::query("INSERT INTO issuance_service.rust_schema_migrations(version) VALUES ($1)")
+                .bind(version)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
         sqlx::raw_sql("CREATE SCHEMA observation_test; CREATE TABLE observation_test.authority (
             binding_id text PRIMARY KEY, organization_id text NOT NULL, key_id text NOT NULL, source_id text NOT NULL,
             application_id text NOT NULL, subject_id text NOT NULL, key_revision bigint NOT NULL DEFAULT 1,
