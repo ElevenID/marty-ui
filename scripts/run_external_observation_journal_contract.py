@@ -145,6 +145,9 @@ def compile_contract(artifacts):
 
 
 def require_format(artifacts):
+    # Check root module ordering without recursively formatting unrelated files.
+    subprocess.run(["rustfmt", "--edition", "2021", "--config", "skip_children=true", "--check",
+                    str(ROOT / "rust/services/issuance/src/lib.rs")], check=True)
     original = {name: (ROOT / name).read_bytes() for name in FORMAT_FILES}
     try:
         subprocess.run(["rustfmt", "--edition", "2021", *(str(ROOT / name) for name in original)], check=True)
