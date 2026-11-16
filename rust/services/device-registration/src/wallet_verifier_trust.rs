@@ -67,7 +67,7 @@ impl WalletVerifierTrustClient {
         organization: &str,
         user: &str,
     ) -> Result<(), DeviceError> {
-        self.read(profile, organization, user, None).await?;
+        self.read(profile, organization, user, None, None).await?;
         Ok(())
     }
 
@@ -78,7 +78,20 @@ impl WalletVerifierTrustClient {
         user: &str,
         client: &str,
     ) -> Result<Value, DeviceError> {
-        self.read(profile, organization, user, Some(client)).await
+        self.read(profile, organization, user, Some(client), None)
+            .await
+    }
+
+    pub async fn fetch_managed(
+        &self,
+        profile: &str,
+        organization: &str,
+        user: &str,
+        client: &str,
+        request_uri: &str,
+    ) -> Result<Value, DeviceError> {
+        self.read(profile, organization, user, Some(client), Some(request_uri))
+            .await
     }
 
     async fn read(
@@ -87,17 +100,26 @@ impl WalletVerifierTrustClient {
         organization: &str,
         user: &str,
         client: Option<&str>,
+        request_uri: Option<&str>,
     ) -> Result<Value, DeviceError> {
         let id = Uuid::parse_str(profile).map_err(|_| invalid())?;
         if id.is_nil()
             || id.to_string() != profile
             || !text(organization)
             || !text(user)
-            || client.is_some_and(|value| !text(value) || value.contains(':'))
+            || client
+                .is_some_and(|value| !text(value) || (request_uri.is_none() && value.contains(':')))
+            || request_uri.is_some_and(|uri| {
+                !text(uri)
+                    || client
+                        .is_none_or(|value| !value.starts_with("decentralized_identifier:did:"))
+            })
         {
             return Err(invalid());
         }
-        let endpoint = if client.is_some() {
+        let endpoint = if request_uri.is_some() {
+            "wallet-managed-verifier-authority"
+        } else if client.is_some() {
             "wallet-verifier-authority"
         } else {
             "wallet-verifier-profile-admission"
@@ -110,6 +132,9 @@ impl WalletVerifierTrustClient {
             .append_pair("organization_id", organization);
         if let Some(client) = client {
             url.query_pairs_mut().append_pair("client_id", client);
+        }
+        if let Some(uri) = request_uri {
+            url.query_pairs_mut().append_pair("request_uri", uri);
         }
         // user is derived from the confirmed pairing, never from mobile headers.
         let mut response = self
@@ -131,6 +156,17 @@ impl WalletVerifierTrustClient {
         if response.status() != reqwest::StatusCode::OK {
             return Err(invalid());
         }
+        if response.headers().get_all("content-type").iter().count() != 1
+            || response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(';').next())
+                .map(str::trim)
+                != Some("application/json")
+        {
+            return Err(invalid());
+        }
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(|_| invalid())? {
             if bytes.len().saturating_add(chunk.len()) > MAX_BYTES {
@@ -139,7 +175,18 @@ impl WalletVerifierTrustClient {
             bytes.extend_from_slice(&chunk);
         }
         let value = decode(&bytes)?;
-        validate(&value, profile, organization, client, Utc::now())?;
+        if let Some(uri) = request_uri {
+            validate_managed(
+                &value,
+                profile,
+                organization,
+                client.ok_or_else(invalid)?,
+                uri,
+                Utc::now(),
+            )?;
+        } else {
+            validate(&value, profile, organization, client, Utc::now())?;
+        }
         Ok(value)
     }
 }
@@ -282,7 +329,10 @@ fn validate(
         || snapshot.observed_at > now
         || snapshot.expires_at <= now
         || snapshot.expires_at <= snapshot.observed_at
-        || snapshot.expires_at > snapshot.observed_at + ChronoDuration::seconds(60)
+        || snapshot
+            .observed_at
+            .checked_add_signed(ChronoDuration::seconds(60))
+            .is_none_or(|end| snapshot.expires_at > end)
     {
         return Err(invalid());
     }
@@ -346,6 +396,128 @@ fn validate(
         {
             return Err(invalid());
         }
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedSnapshot {
+    contract: String,
+    organization_id: String,
+    trust_profile_id: String,
+    observed_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    authority: Authority,
+    request: ManagedRequest,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedRequest {
+    producer_id: String,
+    instance_id: String,
+    request_uri: String,
+    response_uri: String,
+    nonce: String,
+    compact_request_jws: String,
+    request_jws_sha256: String,
+    request_issued_at: DateTime<Utc>,
+    request_expires_at: DateTime<Utc>,
+}
+
+fn validate_managed(
+    value: &Value,
+    profile: &str,
+    organization: &str,
+    client: &str,
+    locator: &str,
+    now: DateTime<Utc>,
+) -> Result<(), DeviceError> {
+    use sha2::{Digest, Sha256};
+    if contains_private_key(value) {
+        return Err(invalid());
+    }
+    let snapshot: ManagedSnapshot = serde_json::from_value(value.clone()).map_err(|_| invalid())?;
+    if snapshot.contract != "marty.wallet/verifier-authority/v2"
+        || snapshot.organization_id != organization
+        || snapshot.trust_profile_id != profile
+        || snapshot.observed_at > now
+        || snapshot.expires_at <= now
+        || snapshot.expires_at <= snapshot.observed_at
+        || snapshot
+            .observed_at
+            .checked_add_signed(ChronoDuration::seconds(60))
+            .is_none_or(|end| snapshot.expires_at > end)
+        || !client
+            .strip_prefix("decentralized_identifier:")
+            .is_some_and(|did| {
+                ["did:web:", "did:key:", "did:jwk:"].iter().any(|prefix| {
+                    did.strip_prefix(prefix)
+                        .is_some_and(|suffix| !suffix.is_empty())
+                })
+            })
+    {
+        return Err(invalid());
+    }
+    // Reuse the same closed public key/policy/freshness checks as v1 without
+    // changing that contract's registered-client transport selection.
+    let mut ordinary = value.clone();
+    ordinary
+        .as_object_mut()
+        .ok_or_else(invalid)?
+        .remove("request");
+    ordinary["contract"] = serde_json::json!("marty.wallet/verifier-authority/v1");
+    validate(&ordinary, profile, organization, Some(client), now)?;
+    let request = &snapshot.request;
+    let id = Uuid::parse_str(&request.instance_id).map_err(|_| invalid())?;
+    let parsed = Url::parse(locator).map_err(|_| invalid())?;
+    let suffix = format!("/v1/flows/instances/{}/request", request.instance_id);
+    let base = locator.strip_suffix(&suffix).ok_or_else(invalid)?;
+    let response = format!("{base}/v1/flows/instances/{}/submit", request.instance_id);
+    let did = client
+        .strip_prefix("decentralized_identifier:")
+        .ok_or_else(invalid)?;
+    if id.is_nil()
+        || id.to_string() != request.instance_id
+        || request.request_uri != locator
+        || parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || request.response_uri != response
+        || snapshot.authority.registration.response_uris != [response]
+        || snapshot
+            .authority
+            .registration
+            .request_key_id
+            .strip_prefix(&format!("{did}#"))
+            .is_none_or(str::is_empty)
+        || !text(&request.producer_id)
+        || !text(&request.nonce)
+        || request.compact_request_jws.is_empty()
+        || request.compact_request_jws.len() > MAX_BYTES
+        || request.request_jws_sha256
+            != format!(
+                "{:x}",
+                Sha256::digest(request.compact_request_jws.as_bytes())
+            )
+        || request.request_issued_at > now + ChronoDuration::seconds(30)
+        || request.request_issued_at < snapshot.authority.registration.valid_from
+        || request.request_expires_at > snapshot.authority.registration.valid_until
+        || request.request_expires_at <= now
+        || request.request_expires_at <= request.request_issued_at
+        || request.request_expires_at < snapshot.expires_at
+        || request
+            .request_issued_at
+            .checked_add_signed(ChronoDuration::seconds(900))
+            .is_none_or(|end| request.request_expires_at > end)
+        || request.request_issued_at.timestamp_subsec_nanos() != 0
+        || request.request_expires_at.timestamp_subsec_nanos() != 0
+    {
+        return Err(invalid());
     }
     Ok(())
 }
@@ -474,5 +646,76 @@ mod tests {
         let mut null_authority = admission;
         null_authority["authority"] = Value::Null;
         assert!(validate(&null_authority, PROFILE, "org-a", None, now).is_err());
+    }
+
+    #[test]
+    fn managed_evidence_keeps_exact_request_callback_and_original_bytes() {
+        use sha2::{Digest, Sha256};
+        let now = DateTime::from_timestamp(1_795_000_000, 0).unwrap();
+        let mut value = snapshot(now);
+        let client = "decentralized_identifier:did:web:verifier.example";
+        let id = "11111111-2222-4333-8444-555555555555";
+        let locator = format!("https://verifier.example/v1/flows/instances/{id}/request");
+        let recipient = format!("https://verifier.example/v1/flows/instances/{id}/submit");
+        value["contract"] = json!("marty.wallet/verifier-authority/v2");
+        value["authority"]["registration"]["client_id"] = json!(client);
+        value["authority"]["registration"]["request_key_id"] =
+            json!("did:web:verifier.example#key-1");
+        value["authority"]["registration"]["response_uris"] = json!([recipient]);
+        // Device checks the owner transport/envelope. This synthetic string is
+        // deliberately not JWS authentication evidence; Core must verify that.
+        value["request"] = json!({"producer_id":"flow-primary","instance_id":id,"request_uri":locator,
+            "response_uri":recipient,"nonce":"fixture-nonce","compact_request_jws":"synthetic.not.authenticated",
+            "request_jws_sha256":format!("{:x}",Sha256::digest(b"synthetic.not.authenticated")),
+            "request_issued_at":now,"request_expires_at":now+ChronoDuration::seconds(120)});
+        assert!(validate_managed(&value, PROFILE, "org-a", client, &locator, now).is_ok());
+        for (pointer, replacement) in [
+            (
+                "/request/instance_id",
+                json!("11111111-2222-4333-8444-555555555556"),
+            ),
+            (
+                "/request/request_uri",
+                json!(format!("{locator}?next=attacker")),
+            ),
+            (
+                "/request/response_uri",
+                json!(format!("{recipient}/suffix")),
+            ),
+            ("/request/compact_request_jws", json!("replacement.bytes")),
+            ("/request/request_jws_sha256", json!("0".repeat(64))),
+            ("/request/request_expires_at", json!(now)),
+            (
+                "/authority/registration/request_key_id",
+                json!("did:web:attacker.example#key-1"),
+            ),
+            (
+                "/authority/registration/response_uris",
+                json!([format!("{recipient}/*")]),
+            ),
+            ("/request/unknown_grant", json!(true)),
+        ] {
+            let mut changed = value.clone();
+            if pointer.ends_with("unknown_grant") {
+                changed["request"]["unknown_grant"] = replacement;
+            } else {
+                *changed.pointer_mut(pointer).unwrap() = replacement;
+            }
+            assert!(
+                validate_managed(&changed, PROFILE, "org-a", client, &locator, now).is_err(),
+                "{pointer}"
+            );
+        }
+        assert!(validate_managed(&value, PROFILE, "other-org", client, &locator, now).is_err());
+        assert!(validate_managed(
+            &value,
+            PROFILE,
+            "org-a",
+            client,
+            &format!("{locator}#fragment"),
+            now
+        )
+        .is_err());
+        assert!(validate(&value, PROFILE, "org-a", Some(client), now).is_err());
     }
 }

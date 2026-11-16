@@ -6,6 +6,7 @@ pub mod credential_authority;
 pub mod domain;
 pub mod http_service;
 pub mod issuer_keys;
+pub mod managed_flow_verifier;
 pub mod migration;
 pub mod persistence;
 pub mod policy;

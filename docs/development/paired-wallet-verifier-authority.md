@@ -35,3 +35,205 @@ The native Redis qualification now exercises explicit verifier-scope serializati
 `scripts/qualify_wallet_verifier_transport.py --test-binary /absolute/path/to/verifier_trust_tls-...` runs the explicitly ignored native transport test against a temporary loopback TLS fixture. It generates a disposable CA and server certificate, checks actual certificate/hostname validation and user/service/tenant binding, and exercises redirect, oversized, duplicate-member, stale, private-key and wrong-scope responses. It also verifies that an unusable proxy environment does not redirect owner traffic. The driver checks its negative response vectors and propagates handler failures instead of treating fixture failures as successful rejection. All fixture responses are synthetic; this is actual TLS transport evidence, not deployed Trust Profile governance, KMS, installed-wallet or official-suite execution. The server and private temporary TLS material are removed on completion.
 
 Complete managed DID/VCT request semantics, mobile/native consent/preparation wiring and installed-wallet acceptance remain required before claiming the paired feature complete.
+
+## Managed Flow producer component
+
+The next component prepares an exact owner-produced DID request for a trusted
+Flow instance. It retains one original signed JWS, with a scope digest covering
+the stored tenant, instance, nonce, frozen policy/query and producer settings.
+Revalidation uses the current signing identity, its canonical DID client/key IDs,
+the actual JWS signature, exact destination/state/query, closed signed fields,
+canonical metadata and bounded times. A900-second request lifetime does not
+shorten the underlying Flow instance. Unsupported query constraints fail closed.
+The ordinary request builder retains its existing behavior; this component has
+a separate paired SD-JWT metadata profile matching accepted Core authentication.
+
+`POST /internal/v1/wallet-verifier-requests/{instance_id}` requires a configured
+workload authenticator and exactly one valid service-token header. It derives
+the tenant from the stored instance, ignoring caller tenant headers. Both new
+and cached owner responses use the existing status/time compare-and-swap after
+asynchronous signing-identity resolution. A competing cancellation or snapshot
+change prevents exposure. The projection is checked for freshness after the CAS
+and returned with no-store headers.
+
+Once this canonical cache exists, public request GET revalidates and returns its
+exact persisted JWS. POST, DC API, Lissi and wallet-nonce retrieval changes fail
+closed. Uncached ordinary request retrieval retains its existing behavior. No
+production configuration or profile is activated by this component.
+
+The guarded qualification driver explicitly executes three native cases against
+fresh owned PostgreSQL and TLS OpenBao fixtures. It checks exact test discovery
+before allocating bounded local containers; the HTTP case refuses a nonempty
+database before migration. Actual remote Transit signatures retain non-exportable
+key custody and one-key signer tokens. The HTTP case verifies persisted/public
+JWS equality, repeated reads without resigning, forged tenant header rejection,
+transport downgrade rejection and real repository cancellation races during
+awaited identity resolution, for both cached public and first owner requests.
+The other two cases check immutable reuse and correctly signed invalid client,
+key ID, extra semantics, metadata and VCT changes. Exact owned containers and
+temporary material are removed. No local signing-key feature is enabled.
+
+This establishes PostgreSQL HTTP/CAS and TLS signing with an application/provider
+adapter. It does not establish deployed Signing Keys or Trust Profile governance,
+rootless installation, installed-wallet acceptance or official-suite execution.
+The managed Trust Profile component below supplies the next owner boundary.
+Confirmed-device v2 binding and native opaque consent/preparation/completion
+sessions remain unfinished.
+
+Run `scripts/qualify_flow_wallet_verifier_request.py --test-binary /absolute/native/executable`
+after building the native library test binary. Full workspace formatting, focused
+Flow Clippy with warnings denied and driver lint are required. Independent
+source review caught permissive unconfigured authentication and duplicate-token
+ambiguity; both were fixed with rejection coverage. Reviewers ran no tests.
+
+## Managed producer trust authority
+
+`MANAGED_FLOW_VERIFIER` is a distinct, public-only source for the explicit
+`PRESENTATION_VERIFIER` purpose. It pins a producer ID, canonical HTTPS public
+base, supported Flow DID (web, jwk or key), exact signing key ID, public ES256 JWK
+and whole-second key-validity interval. Writes preserve source IDs and default
+new sources to disabled; profiles remain draft. Issuer relationships, registered
+plain clients and machine identity sources never supply this authority.
+
+The producer ID selects one fixed operator-configured HTTPS owner transport.
+`WALLET_FLOW_PRODUCER_ID` and `WALLET_FLOW_OWNER_URL` must be configured together
+with the existing workload token; optional `WALLET_FLOW_OWNER_CA_FILE` contains
+public trust roots. The transport refuses plaintext, credentials, non-root
+origins, redirects, proxies, ambiguous JSON, private material and responses over
+64 KiB. Caller request locators never select its host. These settings default to
+absent; this source change activates no deployment configuration.
+
+`GET /internal/v1/trust-profiles/{id}/wallet-managed-verifier-authority` requires
+workload authentication and a server-derived user with current profile-view
+permission. Its organization, client and request URI select only a governed
+source and exact canonical Flow instance. The owner POST supplies the persisted
+original JWS. After that await, Trust Profile repeats permission/profile reads
+and requires the original source ID and complete registration to remain equal.
+It verifies the signature against the pinned key and matches exact signed
+client, key, tenant/instance evidence, nonce, times and response URI. The v2
+snapshot binds that one request and one exact callback, with at most 60-second
+freshness. A producer base is an identity check, not a callback-prefix grant.
+The native wallet must still resolve/bind the actual DID and authenticate all
+supported request semantics through Core; this producer does not replace that
+consumer boundary or credential-issuer trust.
+
+Flow has an optional owner-only managed HTTPS listener using the existing
+`MANAGED_AUTHORITY_HTTPS_ADDR` and remote TLS identity settings. Partial settings,
+a missing workload token or listener collisions fail closed. The listener uses
+the shared non-exportable TLS signer, binds before readiness and shares graceful
+shutdown. Public administration/callback routes are absent from that router.
+No listener was activated in an existing installation.
+
+Final ordinary execution reports 89 Trust Profile passes with one guarded
+ignore, and 105 focused Flow passes with four ignores. The extended driver,
+using `--trust-profile-test-binary`, then explicitly executes three Flow cases
+and one Trust Profile case: four passed, zero ignored. It carries a real signed
+Flow HTTP proof from fresh PostgreSQL/TLS non-exportable OpenBao into a synthetic
+HTTPS owner and in-process Trust Profile HTTP handler. It checks CA/hostname,
+token, proxy exclusion, redirect, size, escaped duplicate names, private/unknown
+fields and media handling. Deterministic paused-owner races reject producer
+replacement, source disabling and membership loss without returning the JWS.
+Exact owned containers, TLS server and private temporary material are removed.
+
+Full workspace format, both services' all-target Clippy with warnings denied and
+driver lint passed. The contracts CI step selects exact library executables
+from Cargo compiler artifacts and invokes this guarded driver through the
+existing positive-execution/timing policy. That exact shell step was executed
+locally and returned `status: ok`; this is not a hosted-check claim. Independent
+source review found the producer-channel race; it was fixed and reviewed with no
+remaining actionable finding. Reviewers executed no tests.
+
+These results do not qualify the deployed keyless listener, real control plane,
+rootless installation, device v2, native wallet sessions, installed-wallet
+acceptance or official-suite interoperability. Those remain separate gates.
+
+## Confirmed device v2 projection
+
+The paired device endpoint accepts an optional `request_uri` alongside the client
+ID to select managed v2 evidence from the fixed Trust Profile owner. Those inputs
+select a request; they supply no user, organization, profile or holder authority.
+One PostgreSQL statement binds the live digest-only bearer, acknowledged pairing,
+active registration and both current unrevoked holder key rows. The public scope
+includes credential/registration/pairing/device/user/organization/profile IDs,
+credential expiry, and each holder key's ledger ID, algorithm, version, public
+JWK and RFC 7638 thumbprint. It excludes bearer values and custody references.
+
+Membership is checked before and after the owner lookup, and the full database
+scope is read again and compared before returning the bounded no-store
+`marty.wallet/device-verifier-governance/v2` envelope. Credential rotation,
+deactivation, scope substitution and key/version changes invalidate that
+snapshot. The envelope's expiry cannot exceed the credential or verifier
+snapshot expiry. The existing v1 registered endpoint remains distinct.
+
+Focused native execution reports 16 unit and eight HTTP behavior passes; guarded
+PostgreSQL, Redis and synthetic TLS cases are then explicitly executed with no
+ignores. The PostgreSQL case reads actual joined key JSON and exercises device
+substitution, key version changes, credential rotation, missing verifier scope
+and key revocation. TLS qualification executes the managed-v2 transport with
+synthetic response evidence, preserving the existing CA/hostname/token/redirect/
+duplicate/size controls. Both recorded CI phase receipts are successful, and
+owned containers/server/material are removed. Formatting, all-target device
+Clippy with warnings denied and transport-driver lint pass.
+
+At the initial v2 checkpoint these checks did not exercise a device HTTP response
+paused across authority revocation. The following qualification covers that
+boundary. Deployed governance and installed-wallet acceptance remain separate;
+the consumer must authenticate the original JWS/DID, request semantics, issuer
+evidence and holder binding before consent and again at completion.
+
+## Device HTTP scope changes during a paused authority response
+
+The guarded `verifier_governance_http` integration case executes the actual
+in-process Device HTTP router with real PostgreSQL credentials, confirmed
+pairing and holder rows, plus a controlled TLS authority response and membership
+authorizer. It observes the remote request arrival and confirms that the HTTP
+task remains pending before changing state, then releases the authority reply.
+The unchanged case returns an exact no-store v2 scope. Thirteen changed-state
+cases return403 without scope/evidence: device/user/organization/active state,
+issuer/verifier profile, pairing cancellation, both holder-key revocations,
+key version, bearer rotation, credential revocation and membership loss. Two
+membership checks are required. Forged caller identity headers cannot replace
+bearer-derived authority; bearer and custody-reference values are not returned.
+
+The transport driver explicitly executes both its existing TLS case and this
+new HTTP/SQL case: two passes, zero ignores,14 controlled pause scenarios. Fresh
+owned PostgreSQL, TLS server and private material are removed. CI selects the
+actual compiler-recorded executable and runs through the positive-execution and
+timing guard; the local phase reports success. Default tests separately report
+16unit/8behavior passes and three fixture-only ignores. Formatting, all-target
+device Clippy with warnings denied and driver lint pass. Independent source
+review found no actionable issue and executed no tests. Redaction receives only
+fixture values, preserving readable libtest pass/ignore counts.
+
+This proves the device handler's post-await scope/authorization boundary with
+controlled authority/membership adapters. It does not execute a deployed Trust
+Profile/PDP chain, actual Flow keyless owner listener, Core wallet consumer,
+installed wallet, rootless installer or official interoperability suite.
+
+## Actual keyless owner listener qualification
+
+The Flow driver now explicitly executes four Flow cases plus the Trust Profile
+proof case: five passes, zero ignores. The new case uses the production owner
+router and `BoundKeylessHttpsServer` with actual remote TLS signing. A separate
+fresh database and distinct non-exportable request/TLS keys share the driver's
+bounded disposable PostgreSQL and OpenBao fixtures. No existing installation is
+changed. The listener accepts the explicitly trusted CA and correct workload
+token, rejects untrusted CA, wrong hostname, plaintext HTTP, missing/wrong/duplicate
+tokens, and excludes public/admin/callback routes. It serves identical original
+JWS bytes across pinned v1 and matching rotated v2 TLS identities; a mismatched
+certificate/key version fails before readiness. The original request signs once.
+
+The initial run failed because the test used a single-thread Tokio runtime,
+where the synchronous remote signer intentionally refuses signing. The corrected
+test uses two workers, matching the service's multithread runtime, and passes.
+Independent source review found no actionable findings and executed no tests.
+The local positive-execution/timing receipt reports success; owned fixtures and
+temporary material are removed. This covers an isolated production listener path,
+not deployed configuration, the live PDP chain or installed-wallet acceptance.
+
+On this combined qualification source, ordinary execution reports 89 Trust
+Profile passes/one fixture ignore and 125 focused Flow passes/seven fixture
+ignores. The explicit driver above executes its four guarded Flow cases and one
+Trust Profile case separately. CI workflow/compile-scope/Docker-context Python
+checks report 266 passes and 12 platform skips. These counts have separate scopes;
+default fixture ignores are not counted as executed acceptance.

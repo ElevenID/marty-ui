@@ -1,6 +1,6 @@
 use crate::http_read::FlowRequestState;
 use axum::{
-    extract::{Form, Path, Query},
+    extract::{Form, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -29,6 +29,19 @@ use crate::{
 const DC_API_PROTOCOL: &str = "openid4vp-v1-signed";
 const DC_API_RESPONSE_MODE: &str = "dc_api.jwt";
 const NONCE_TTL_SECONDS: u64 = 900;
+
+/// Only the workload request owner is exposed on the optional managed HTTPS
+/// listener. It does not expose public Flow administration or callback routes.
+pub fn flow_wallet_authority_router(state: FlowHttpState) -> Router {
+    wallet_verifier_owner_routes().with_state(state)
+}
+
+fn wallet_verifier_owner_routes() -> Router<FlowHttpState> {
+    Router::new().route(
+        "/internal/v1/wallet-verifier-requests/{instance_id}",
+        post(wallet_verifier_request_owner),
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowHttpVerificationOptions {
@@ -88,6 +101,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
         .route("/v1/flows/siop", post(start_siop))
         .route("/v1/flows/siop/submit", post(submit_siop))
         .route("/oid4vp/did.json", get(oid4vp_did_document))
+        .merge(wallet_verifier_owner_routes())
         .route(
             "/v1/flows/instances/{instance_id}/request",
             get(get_request_object).post(post_request_object),
@@ -322,6 +336,11 @@ async fn retrieve_request_object(
         compatibility: parse_compatibility(query.compat.as_deref())?,
         wallet_nonce,
     };
+    if crate::has_wallet_verifier_request(&current) {
+        require_canonical_wallet_retrieval(&options)?;
+        let projection = commit_wallet_verifier_request(state, current).await?;
+        return request_object_response(projection.compact_request_jws().to_owned());
+    }
     match prepare_verification_request(
         &state.providers,
         current,
@@ -345,6 +364,81 @@ async fn retrieve_request_object(
             ))
         }
     }
+}
+
+fn wallet_request_unavailable() -> FlowHttpError {
+    FlowHttpError::new(
+        StatusCode::CONFLICT,
+        "wallet_verifier_request_unavailable",
+        "Canonical wallet verification request is unavailable",
+    )
+}
+
+fn require_canonical_wallet_retrieval(
+    options: &VerificationRequestRetrievalOptions,
+) -> Result<(), FlowHttpError> {
+    if options.method != VerificationRequestMethod::Get
+        || options.transport != VerificationRequestTransport::RequestUri
+        || options.compatibility != RequestObjectCompatibility::Standard
+        || options.wallet_nonce.is_some()
+    {
+        return Err(wallet_request_unavailable());
+    }
+    Ok(())
+}
+
+async fn wallet_verifier_request_owner(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(instance_id): Path<String>,
+) -> Result<Response, FlowHttpError> {
+    // Unlike the optional API-key extractor, this boundary always requires an
+    // authenticated workload, even when no gateway principal headers exist.
+    crate::http_read::authenticate_gateway_service(&state, &headers)?;
+    let current = required_instance(&state, &instance_id).await?;
+    let projection = commit_wallet_verifier_request(&state, current).await?;
+    let mut response = Json(projection).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+async fn commit_wallet_verifier_request(
+    state: &FlowHttpState,
+    current: crate::FlowInstanceRecord,
+) -> Result<crate::WalletVerifierRequestProjection, FlowHttpError> {
+    let expected_status = current.status;
+    let expected_updated_at = current.updated_at;
+    let organization_id = current.organization_id.clone();
+    let mut prepared = crate::prepare_wallet_verifier_request(
+        &state.providers,
+        current,
+        &organization_id,
+        &state.public_base_url,
+        &state.verification.request_object,
+        Utc::now(),
+    )
+    .await
+    .map_err(|_| wallet_request_unavailable())?;
+    // Perform CAS on cached reads too. A cancellation, tenant/policy change or
+    // competing request writer during signing/key resolution must win over this
+    // stale snapshot. Never expose a newly signed but uncommitted request.
+    prepared.instance.updated_at = Utc::now().max(expected_updated_at + Duration::microseconds(1));
+    commit_request_snapshot(
+        state,
+        &prepared.instance,
+        expected_status,
+        expected_updated_at,
+    )
+    .await?;
+    if !prepared.projection.is_current(Utc::now()) {
+        return Err(wallet_request_unavailable());
+    }
+    Ok(prepared.projection)
 }
 
 async fn commit_request_snapshot(
@@ -1168,6 +1262,32 @@ impl From<FlowSiopSubmissionError> for FlowHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_wallet_request_cannot_switch_transport_or_accept_wallet_nonce() {
+        let standard = VerificationRequestRetrievalOptions::default();
+        assert!(require_canonical_wallet_retrieval(&standard).is_ok());
+        for changed in [
+            VerificationRequestRetrievalOptions {
+                method: VerificationRequestMethod::Post,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                transport: VerificationRequestTransport::DigitalCredentialsApi,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                compatibility: RequestObjectCompatibility::Lissi,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                wallet_nonce: Some(String::new()),
+                ..standard.clone()
+            },
+        ] {
+            assert!(require_canonical_wallet_retrieval(&changed).is_err());
+        }
+    }
 
     #[test]
     fn wallet_decline_shape_rejects_mixed_success_and_unknown_errors() {
