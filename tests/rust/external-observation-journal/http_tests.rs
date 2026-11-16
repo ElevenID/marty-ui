@@ -147,3 +147,36 @@ async fn http_rejects_untrusted_identity_oversize_and_duplicate_original_bytes_w
     assert_eq!(count, 0);
     fixture.pool.close().await;
 }
+
+#[tokio::test]
+async fn observation_startup_is_explicit_and_requires_current_storage() {
+    use crate::external_observation_startup::prepare_observation_router;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
+        .unwrap();
+    assert!(prepare_observation_router(&pool, false, None)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(prepare_observation_router(&pool, true, None).await.is_err());
+    let fixture = Fixture::new().await;
+    assert!(prepare_observation_router(&fixture.pool, true, Some(KEY))
+        .await
+        .unwrap()
+        .is_some());
+    sqlx::query("ALTER TABLE issuance_service.external_observation_bindings DISABLE TRIGGER external_observation_bindings_revision")
+        .execute(&fixture.pool).await.unwrap();
+    assert!(prepare_observation_router(&fixture.pool, true, Some(KEY))
+        .await
+        .is_err());
+    sqlx::query("ALTER TABLE issuance_service.external_observation_bindings ENABLE TRIGGER external_observation_bindings_revision")
+        .execute(&fixture.pool).await.unwrap();
+    sqlx::query("ALTER TABLE issuance_service.external_observation_audit RENAME TO external_observation_audit_unavailable")
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+    assert!(prepare_observation_router(&fixture.pool, true, Some(KEY))
+        .await
+        .is_err());
+    fixture.pool.close().await;
+}

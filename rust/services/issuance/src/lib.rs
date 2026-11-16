@@ -110,6 +110,7 @@ pub mod external_observation_authority_postgres;
 pub mod external_observation_http;
 pub mod external_observation_ingress;
 pub mod external_observation_postgres;
+pub mod external_observation_startup;
 pub mod external_observation_wire;
 mod grpc_client_channel;
 pub mod http;

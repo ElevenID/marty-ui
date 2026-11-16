@@ -191,3 +191,22 @@ Issuance bootstrap mounting, reviewed migration/role/admin activation and deploy
 network isolation remain incomplete. Registering the Gateway candidate route does
 not qualify a deployed public endpoint or authorize connector access to issuance
 or PostgreSQL. Do not activate this candidate before those integration gates pass.
+
+## Explicit issuance startup mounting
+
+The issuance bootstrap now composes the observation router when
+`MARTY_EXTERNAL_OBSERVATIONS_ENABLED=true` is explicitly configured. It is off
+by default. Enabled startup requires the explicit Gateway service credential
+and canonical storage preflight before provider/background-worker construction.
+Preflight validates required table/column access, authority row-lock privileges,
+receipt/audit/head write permissions and enabled revision/membership triggers.
+Missing storage or disabled revision triggers stop startup with a fixed error.
+Disabled startup performs no observation database access or route mounting.
+No migration or privilege is created automatically by this preflight.
+
+This structural/permission preflight is not a schema provenance attestation,
+least-privilege grant approval, migration registration or deployment qualification.
+Reviewed migration/roles, administrator grants/bindings and full public Gateway
+runtime/network-denial tests must pass before enabling it. The startup test uses
+canonical-shaped disposable tables, not a production installation. Configuration
+and full issuance bootstrap compilation remain part of the full CI gate.
