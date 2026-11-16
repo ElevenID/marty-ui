@@ -579,7 +579,6 @@ mod installer_actor_tests {
     }
 }
 
-
 #[cfg(test)]
 mod external_evidence_scope_tests {
     use super::*;
@@ -613,6 +612,9 @@ mod external_evidence_scope_tests {
         let mut value = command(ApiKeyScopeType::Organization);
         value.scopes = Some(vec!["integrations:write".into()]);
         assert!(validate_create_api_key(&value).is_ok());
-        assert!(!value.scopes.unwrap().contains(&"evidence:submit".to_owned()));
+        assert!(!value
+            .scopes
+            .unwrap()
+            .contains(&"evidence:submit".to_owned()));
     }
 }

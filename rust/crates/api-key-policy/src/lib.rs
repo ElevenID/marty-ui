@@ -303,14 +303,16 @@ mod gateway_actor_tests {
     }
 }
 
-
 #[cfg(test)]
 mod external_evidence_scope_tests {
     use super::api_key_allowed;
 
     #[test]
     fn external_evidence_submission_requires_the_exact_dedicated_scope() {
-        assert!(api_key_allowed("evidence:submit", &["evidence:submit".into()]));
+        assert!(api_key_allowed(
+            "evidence:submit",
+            &["evidence:submit".into()]
+        ));
         for scope in [
             "integrations:write",
             "applications:approve",
