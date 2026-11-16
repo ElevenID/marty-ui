@@ -57,6 +57,115 @@ def test_keeps_candidate_immutable_while_application_and_version_advance(reposit
     assert MODULE.require_compatible_source(source, executable, main, repository=root) == expected
 
 
+@pytest.fixture
+def ci_repository(repository):
+    root, _ = repository
+    # Canonical Git content uses LF even on the Windows development host.
+    data = (SOURCE.parents[1] / MODULE.CI_TEST_LEAF).read_text(encoding="utf-8").encode()
+    write(root, MODULE.CI_TEST_LEAF, data)
+    return root, commit(root, "Admit future policy and existing CI tests"), data
+
+
+def add_ci_test(data: bytes, name: str) -> bytes:
+    commands = [line for line in data.splitlines(keepends=True)
+                if line.startswith(b"        run: node --test ")]
+    assert len(commands) == 1
+    anchor = commands[0]
+    result = data.replace(anchor, anchor[:-1] + b" tests/scripts/" + name.encode() + b"\n")
+    trigger = b"      - 'contracts/gateway-routes.json'\n"
+    assert result.count(trigger) == 1
+    return result.replace(trigger, b"      - 'tests/scripts/" + name.encode() + b"'\n" + trigger)
+
+
+def test_future_policy_allows_only_additive_ci_tests_and_their_triggers(ci_repository):
+    root, source, original = ci_repository
+    expected = MODULE.require_compatible_source(source, source, source, repository=root)
+    first = add_ci_test(original, "first-extra.test.cjs")
+    write(root, MODULE.CI_TEST_LEAF, first)
+    executable = commit(root, "Add independent CI test")
+    write(root, MODULE.CI_TEST_LEAF, add_ci_test(first, "second-extra.test.cjs"))
+    main = commit(root, "Add another CI test")
+    assert MODULE.require_compatible_source(source, executable, main, repository=root) == expected
+
+
+@pytest.mark.parametrize("part", ["test", "trigger"])
+def test_candidate_ci_tests_and_triggers_cannot_be_removed(ci_repository, part):
+    root, source, original = ci_repository
+    if part == "test":
+        changed = original.replace(b" tests/scripts/run-external-oidc-login.test.cjs", b"")
+    else:
+        changed = original.replace(b"      - 'tests/scripts/run-external-oidc-login*.cjs'\n", b"")
+    assert changed != original
+    write(root, MODULE.CI_TEST_LEAF, changed)
+    main = commit(root, "Remove an admitted check")
+    with pytest.raises(MODULE.SourceAuthorityError, match="candidate CI tests or triggers were removed"):
+        MODULE.require_compatible_source(source, source, main, repository=root)
+
+
+def test_intervening_ci_check_removal_and_restoration_cannot_be_hidden(ci_repository):
+    root, source, original = ci_repository
+    added = add_ci_test(original, "extra.test.cjs")
+    write(root, MODULE.CI_TEST_LEAF, added)
+    commit(root, "Add CI check")
+    write(root, MODULE.CI_TEST_LEAF, original)
+    commit(root, "Remove later CI check")
+    write(root, MODULE.CI_TEST_LEAF, added)
+    main = commit(root, "Restore check")
+    with pytest.raises(MODULE.SourceAuthorityError, match="intervening CI tests or triggers were removed"):
+        MODULE.require_compatible_source(source, source, main, repository=root)
+
+
+@pytest.mark.parametrize(("before", "after"), [
+    (b"  contents: read", b"  contents: write"),
+    (b"    types: [checks_requested]", b"    types: [other]"),
+    (b"    timeout-minutes: 20", b"    timeout-minutes: 21"),
+    (b"persist-credentials: false", b"persist-credentials: true"),
+    (b"actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", b"actions/checkout@main"),
+    (b"      - 'contracts/gateway-routes.json'\n", b""),
+])
+def test_ci_leaf_preserves_permissions_events_actions_and_other_steps(ci_repository, before, after):
+    root, source, original = ci_repository
+    assert before in original
+    write(root, MODULE.CI_TEST_LEAF, original.replace(before, after))
+    main = commit(root, "Change non-test CI authority")
+    with pytest.raises(MODULE.SourceAuthorityError, match="program or policy changed"):
+        MODULE.require_compatible_source(source, source, main, repository=root)
+
+
+@pytest.mark.parametrize("argument", [
+    b"tests/scripts/not-a-test.cjs", b"tests/scripts/../escape.test.cjs",
+    b"/tmp/escape.test.cjs", b"--test-name-pattern=skip",
+    b"tests/scripts/a.test.cjs;echo changed", b"$(echo changed)",
+    b"tests/scripts/run-external-oidc-login.test.cjs",
+])
+def test_additive_ci_slot_rejects_arbitrary_commands_options_and_duplicates(ci_repository, argument):
+    root, source, original = ci_repository
+    anchor = b"tests/scripts/run-external-oidc-login.test.cjs\n"
+    write(root, MODULE.CI_TEST_LEAF, original.replace(anchor, anchor[:-1] + b" " + argument + b"\n"))
+    main = commit(root, "Unsupported test command")
+    with pytest.raises(MODULE.SourceAuthorityError, match="arguments are unsupported or duplicated"):
+        MODULE.require_compatible_source(source, source, main, repository=root)
+
+
+def test_whole_ci_workflow_is_not_excluded_from_authority(repository):
+    root, source = repository
+    write(root, MODULE.CI_TEST_LEAF,
+          (SOURCE.parents[1] / MODULE.CI_TEST_LEAF).read_text(encoding="utf-8").encode())
+    main = commit(root, "Add a previously absent CI authority surface")
+    with pytest.raises(MODULE.SourceAuthorityError, match="program or policy changed"):
+        MODULE.require_compatible_source(source, source, main, repository=root)
+
+
+def test_v1_sources_never_gain_v2_additive_authority(ci_repository):
+    root, _, _ = ci_repository
+    old_policy = {"schema": "marty.immutable-source-authority/v1", "repository": "ElevenID/marty-ui",
+                  "scope": "release-program-and-policy/v1", "history_limit": 128}
+    write(root, MODULE.POLICY_PATH, (MODULE.json.dumps(old_policy, indent=2) + "\n").encode())
+    old = commit(root, "Historical v1 policy source")
+    with pytest.raises(MODULE.SourceAuthorityError, match="unsupported source policy"):
+        MODULE.require_compatible_source(old, old, old, repository=root)
+
+
 @pytest.mark.parametrize("name", ["scripts/imported_policy.py", ".github/workflows/publisher.yml",
                                   "release/revocation.json", "requirements-services.txt", ".gitattributes",
                                   "rust/Cargo.lock", "rust/Cargo.toml", "rust/.cargo/config.toml",
