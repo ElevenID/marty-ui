@@ -23,11 +23,14 @@ import urllib.request
 
 import probe_signing_keys_openbao_policy as fixtures
 import flow_wallet_owner_tls_fixture
+from selfhost_openbao_client import Bao
+from with_disposable_policy_owner_kms import owner_environment
 
 CASES = {
     "wallet_verifier_request::tests::immutable_owner_request_is_revalidated_without_resigning_or_shortening_instance",
     "wallet_verifier_request::tests::persisted_scope_and_original_jws_cannot_be_replaced_by_a_sibling_or_tampering",
     "wallet_verifier_request::tests::http_owner_persists_exact_request_and_cancellation_wins_async_reads",
+    "wallet_verifier_request::tests::keyless_owner_https_serves_original_request_and_excludes_other_routes",
 }
 OWNER = "flow-wallet-verifier-request-qualification"
 TRUST_CASE = "managed_flow_verifier::tests::actual_flow_signed_proof_projects_only_exact_fresh_request_authority"
@@ -61,7 +64,7 @@ def qualify(binary: Path, trust_binary: Path | None = None):
     require(discovery.returncode == 0 and {
         line.removesuffix(": test") for line in discovery.stdout.splitlines()
         if line.endswith(": test")
-    } == CASES, "exact three ignored native cases must exist before fixture allocation")
+    } == CASES, "exact four ignored native cases must exist before fixture allocation")
     if trust_binary is not None:
         trust_binary = trust_binary.resolve(strict=True)
         require(trust_binary.is_file() and os.access(trust_binary, os.X_OK), "native Trust Profile executable required")
@@ -97,6 +100,9 @@ def qualify(binary: Path, trust_binary: Path | None = None):
                 time.sleep(0.25)
             else:
                 raise RuntimeError("owned PostgreSQL did not become ready")
+            tls_database = "wallet_owner_tls_" + nonce[:12]
+            fixtures.require_docker("exec", pg_cid, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", database,
+                "-c", f"CREATE DATABASE {tls_database}")
             cid = fixtures.require_docker("run", "--rm", "-d", "--name", name,
                 "--label", f"codex.purpose={OWNER}", "--label", "marty.disposable=flow-wallet-request",
                 "--memory", "256m", "--memory-swap", "256m", "--tmpfs", "/tmp/bao-tls:rw,mode=1777",
@@ -136,7 +142,15 @@ def qualify(binary: Path, trust_binary: Path | None = None):
                 time.sleep(0.25)
             else:
                 raise RuntimeError("owned TLS OpenBao did not become ready")
-            require(call("POST", "sys/mounts/transit", {"type": "transit"})[0] in (200, 204), "owned Transit mount failed")
+            # Reuse this same fresh Bao for a distinct non-exportable TLS key.
+            # The established PKI fixture checks export flags and cross-key
+            # denial, issues public leaves and pins v1 while latest becomes v2.
+            (private / "vault-ca.pem").write_bytes(ca.read_bytes())
+            owner_tls = owner_environment(Bao(base.removesuffix("/v1"), ca, root_token), private, base.removesuffix("/v1"))
+            owner_tls_token = Path(owner_tls["MARTY_TEST_POLICY_OWNER_TLS_KMS_TOKEN_FILE"]).read_text().strip()
+            tls_key = owner_tls["MARTY_TEST_POLICY_OWNER_TLS_KMS_KEY_NAME"]
+            require(tls_key != key, "TLS and request custody must be distinct")
+            require(call("GET", f"transit/export/signing-key/{tls_key}")[0] >= 400, "owner TLS key export was not refused")
             require(call("POST", f"transit/keys/{key}", {"type": "ecdsa-p256", "exportable": False,
                 "allow_plaintext_backup": False})[0] in (200, 204), "non-exportable fixture key creation failed")
             status, metadata = call("GET", f"transit/keys/{key}")
@@ -169,17 +183,21 @@ def qualify(binary: Path, trust_binary: Path | None = None):
                 MARTY_TEST_WALLET_REQUEST_SIGN_URL=f"{base}/transit/sign/{key}",
                 MARTY_TEST_WALLET_REQUEST_CA=str(ca), MARTY_TEST_WALLET_REQUEST_TOKEN_FILE=str(token_file),
                 MARTY_TEST_WALLET_REQUEST_PUBLIC_JWK=json.dumps(jwk))
+            environment.update(owner_tls)
+            environment["MARTY_TEST_WALLET_OWNER_TLS_DATABASE_URL"] = f"postgresql://postgres:{pg_password}@127.0.0.1:{pg_port}/{tls_database}"
+            environment.update(HTTPS_PROXY="http://127.0.0.1:9", https_proxy="http://127.0.0.1:9",
+                HTTP_PROXY="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9")
             if trust_binary is not None:
                 environment["MARTY_TEST_WALLET_REQUEST_PROOF_FILE"] = str(private / f"flow-owner-{nonce}.json")
             result = subprocess.run([str(binary), "wallet_verifier_request::tests::", "--ignored", "--nocapture"],
                 env=environment, capture_output=True, text=True, timeout=90, check=False)
-            output = (result.stdout + result.stderr).replace(root_token, "<redacted>").replace(signer_token, "<redacted>").replace(pg_password, "<redacted>")
+            output = (result.stdout + result.stderr).replace(root_token, "<redacted>").replace(signer_token, "<redacted>").replace(pg_password, "<redacted>").replace(owner_tls_token, "<redacted>")
             if path := os.environ.get("MARTY_FLOW_OWNER_DIAGNOSTIC"):
                 Path(path).write_text(output)
-            if result.returncode or not re.search(r"test result: ok\. 3 passed; 0 failed; 0 ignored;", result.stdout):
+            if result.returncode or not re.search(rf"test result: ok\. {len(CASES)} passed; 0 failed; 0 ignored;", result.stdout):
                 print(output[-6000:], file=sys.stderr)
                 raise RuntimeError("owned Flow request native cases failed; no pass claimed")
-            print(result.stdout)
+            print(output, end="")
             if trust_binary is not None:
                 flow_token = secrets.token_urlsafe(32)
                 proof = json.loads(Path(environment["MARTY_TEST_WALLET_REQUEST_PROOF_FILE"]).read_text())
@@ -208,7 +226,8 @@ def qualify(binary: Path, trust_binary: Path | None = None):
             finally:
                 if pg_cid:
                     remove_owned(pg_name, pg_cid)
-    print(json.dumps({"passed": 3 + int(trust_binary is not None), "ignored": 0, "nonExportableKey": True, "tlsVerified": True,
+    print(json.dumps({"passed": len(CASES) + int(trust_binary is not None), "ignored": 0, "nonExportableKey": True, "tlsVerified": True,
+        "actualFlowOwnerKeylessHttps": True,
         "postgresqlHttpPersistenceAndCancellation": True,
         "trustProfileActualSignedProofProjection": trust_binary is not None,
         "syntheticFlowOwnerHttpsAndAuthorityRaces": trust_binary is not None,

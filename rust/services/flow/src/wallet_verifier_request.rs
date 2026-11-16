@@ -854,6 +854,253 @@ mod tests {
         pool.close().await;
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires newly owned PostgreSQL and independent non-exportable owner TLS/request keys"]
+    async fn keyless_owner_https_serves_original_request_and_excludes_other_routes() {
+        use marty_service_runtime::{
+            https::{BoundKeylessHttpsServer, ManagedAuthorityHttpsConfig},
+            RemoteTlsIdentityFiles, TlsIdentityNames,
+        };
+        use tokio::sync::watch;
+        let values: BTreeMap<String, String> = std::env::vars().collect();
+        let nonce = values
+            .get("MARTY_TEST_WALLET_REQUEST_FIXTURE_NONCE")
+            .unwrap();
+        let database = values
+            .get("MARTY_TEST_WALLET_OWNER_TLS_DATABASE_URL")
+            .unwrap();
+        let url = url::Url::parse(database).unwrap();
+        assert_eq!(url.scheme(), "postgresql");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert!(
+            url.port().is_some()
+                && url.path() == format!("/wallet_owner_tls_{}", &nonce[..12])
+                && url.query().is_none()
+                && url.fragment().is_none()
+        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(database)
+            .await
+            .unwrap();
+        let empty: bool = sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg_%') AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid WHERE n.nspname='public')")
+            .fetch_one(&pool).await.unwrap();
+        assert!(
+            empty,
+            "keyless owner fixture must start with an empty database"
+        );
+        crate::migrate_flow_schema(&pool).await.unwrap();
+        let repository = crate::PostgresFlowRepository::new(pool.clone());
+        let source = instance_with_id(Utc::now(), "11111111-2222-4333-8444-555555555559");
+        assert!(repository.save_instance(&source).await.unwrap());
+        let signer = Arc::new(FixtureSigner::from_owned_fixture());
+        let token = uuid::Uuid::new_v4().to_string();
+        let app = crate::flow_wallet_authority_router(crate::FlowHttpState {
+            service_authenticator: Some(Arc::new(
+                mmf_security::ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+            )),
+            repository: repository.clone(),
+            providers: Arc::new(providers(signer.clone())),
+            public_base_url: "https://verifier.example".into(),
+            verification: crate::FlowHttpVerificationOptions::default(),
+            application_approval: crate::FlowHttpApplicationApprovalOptions::default(),
+        });
+        let ca = std::fs::read(values.get("MARTY_TEST_POLICY_OWNER_CA_CERT").unwrap()).unwrap();
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(std::time::Duration::from_secs(8))
+            .pool_max_idle_per_host(0)
+            .add_root_certificate(reqwest::Certificate::from_pem(&ca).unwrap())
+            .build()
+            .unwrap();
+        let untrusted = reqwest::Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(8))
+            .pool_max_idle_per_host(0)
+            .build()
+            .unwrap();
+        let mut original = None;
+        for variant in ["pinned-v1", "wrong-dns", "rotated-v2"] {
+            let mut selected = values.clone();
+            if variant == "wrong-dns" {
+                selected.insert(
+                    "MARTY_TEST_POLICY_OWNER_TLS_CERT_FILE".into(),
+                    values["MARTY_TEST_POLICY_OWNER_TLS_ALT_CERT_FILE"].clone(),
+                );
+            } else if variant == "rotated-v2" {
+                selected.insert(
+                    "MARTY_TEST_POLICY_OWNER_TLS_CERT_FILE".into(),
+                    values["MARTY_TEST_POLICY_OWNER_TLS_ROTATED_CERT_FILE"].clone(),
+                );
+                selected.insert(
+                    "MARTY_TEST_POLICY_OWNER_TLS_KMS_KEY_VERSION".into(),
+                    values["MARTY_TEST_POLICY_OWNER_TLS_ROTATED_KEY_VERSION"].clone(),
+                );
+            }
+            let identity = RemoteTlsIdentityFiles::from_values(
+                |name| selected.get(name).map(String::as_str),
+                TlsIdentityNames::files("MARTY_TEST_POLICY_OWNER_TLS"),
+                std::time::Duration::from_secs(5),
+                16,
+            )
+            .unwrap()
+            .unwrap();
+            let server = BoundKeylessHttpsServer::bind(
+                &ManagedAuthorityHttpsConfig {
+                    address: "127.0.0.1:0".parse().unwrap(),
+                    identity,
+                },
+                app.clone(),
+            )
+            .await
+            .unwrap();
+            let origin = format!("https://{}", server.local_addr().unwrap());
+            let owner = format!(
+                "{origin}/internal/v1/wallet-verifier-requests/{}",
+                source.id
+            );
+            let (shutdown, receiver) = watch::channel(false);
+            let task = tokio::spawn(server.serve(receiver));
+            if variant == "wrong-dns" {
+                assert!(
+                    client
+                        .post(&owner)
+                        .header("x-service-token", &token)
+                        .send()
+                        .await
+                        .is_err(),
+                    "trusted CA must not waive hostname verification"
+                );
+            } else {
+                assert!(
+                    untrusted
+                        .post(&owner)
+                        .header("x-service-token", &token)
+                        .send()
+                        .await
+                        .is_err(),
+                    "owner CA must be explicitly trusted"
+                );
+                let plain = reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(std::time::Duration::from_secs(5))
+                    .pool_max_idle_per_host(0)
+                    .build()
+                    .unwrap();
+                assert!(
+                    plain
+                        .get(format!(
+                            "{}/health",
+                            origin.replacen("https://", "http://", 1)
+                        ))
+                        .send()
+                        .await
+                        .is_err(),
+                    "listener must refuse actual plaintext HTTP"
+                );
+                for supplied in [None, Some("wrong-token")] {
+                    let mut request = client.post(&owner);
+                    if let Some(value) = supplied {
+                        request = request.header("x-service-token", value);
+                    }
+                    assert_eq!(
+                        request.send().await.unwrap().status(),
+                        reqwest::StatusCode::UNAUTHORIZED
+                    );
+                }
+                let mut duplicate = client
+                    .post(&owner)
+                    .header("x-service-token", &token)
+                    .build()
+                    .unwrap();
+                duplicate
+                    .headers_mut()
+                    .append("x-service-token", token.parse().unwrap());
+                assert_eq!(
+                    client.execute(duplicate).await.unwrap().status(),
+                    reqwest::StatusCode::UNAUTHORIZED
+                );
+                let response = client
+                    .post(&owner)
+                    .header("x-service-token", &token)
+                    .header("x-organization-id", "forged-tenant")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), reqwest::StatusCode::OK);
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                let projection: Value = response.json().await.unwrap();
+                assert_eq!(projection["organization_id"], "org-1");
+                let jws = projection["compact_request_jws"].as_str().unwrap();
+                marty_oid4vci::jose::verify_compact_jwt_with_public_jwk(
+                    jws,
+                    &serde_json::to_string(&signer.public_jwk).unwrap(),
+                    "ES256",
+                )
+                .unwrap();
+                match &original {
+                    Some(expected) => assert_eq!(jws, expected),
+                    None => original = Some(jws.to_owned()),
+                }
+                assert_eq!(
+                    signer.signs.load(Ordering::SeqCst),
+                    1,
+                    "TLS identity rotation must not resign the original request"
+                );
+                for path in [
+                    "/v1/flows/instances/unknown/request",
+                    "/v1/flows/instances/unknown/submit",
+                    "/v1/flows",
+                    "/health",
+                ] {
+                    assert_eq!(
+                        client
+                            .get(format!("{origin}{path}"))
+                            .header("x-service-token", &token)
+                            .send()
+                            .await
+                            .unwrap()
+                            .status(),
+                        reqwest::StatusCode::NOT_FOUND
+                    );
+                }
+            }
+            shutdown.send(true).unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(20), task)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        }
+        // Wrong version/leaf pairs must fail construction before listener readiness.
+        let mut wrong = values.clone();
+        wrong.insert(
+            "MARTY_TEST_POLICY_OWNER_TLS_KMS_KEY_VERSION".into(),
+            values["MARTY_TEST_POLICY_OWNER_TLS_ROTATED_KEY_VERSION"].clone(),
+        );
+        let identity = RemoteTlsIdentityFiles::from_values(
+            |name| wrong.get(name).map(String::as_str),
+            TlsIdentityNames::files("MARTY_TEST_POLICY_OWNER_TLS"),
+            std::time::Duration::from_secs(5),
+            16,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(BoundKeylessHttpsServer::bind(
+            &ManagedAuthorityHttpsConfig {
+                address: "127.0.0.1:0".parse().unwrap(),
+                identity
+            },
+            app
+        )
+        .await
+        .is_err());
+        pool.close().await;
+    }
+
     #[test]
     fn paired_query_preserves_vct_and_refuses_unsupported_security_constraints() {
         let base = load_frozen_flow_presentation_request(&instance(Utc::now()))

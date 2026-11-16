@@ -175,7 +175,65 @@ duplicate/size controls. Both recorded CI phase receipts are successful, and
 owned containers/server/material are removed. Formatting, all-target device
 Clippy with warnings denied and transport-driver lint pass.
 
-These checks do not yet exercise a device HTTP response paused across authority
-revocation, deployed governance, native Core authentication or an installed
-wallet. The consumer must verify the original JWS/DID, exact request semantics,
-issuer evidence and holder binding before consent and again at completion.
+At the initial v2 checkpoint these checks did not exercise a device HTTP response
+paused across authority revocation. The following qualification covers that
+boundary. Deployed governance and installed-wallet acceptance remain separate;
+the consumer must authenticate the original JWS/DID, request semantics, issuer
+evidence and holder binding before consent and again at completion.
+
+## Device HTTP scope changes during a paused authority response
+
+The guarded `verifier_governance_http` integration case executes the actual
+in-process Device HTTP router with real PostgreSQL credentials, confirmed
+pairing and holder rows, plus a controlled TLS authority response and membership
+authorizer. It observes the remote request arrival and confirms that the HTTP
+task remains pending before changing state, then releases the authority reply.
+The unchanged case returns an exact no-store v2 scope. Thirteen changed-state
+cases return403 without scope/evidence: device/user/organization/active state,
+issuer/verifier profile, pairing cancellation, both holder-key revocations,
+key version, bearer rotation, credential revocation and membership loss. Two
+membership checks are required. Forged caller identity headers cannot replace
+bearer-derived authority; bearer and custody-reference values are not returned.
+
+The transport driver explicitly executes both its existing TLS case and this
+new HTTP/SQL case: two passes, zero ignores,14 controlled pause scenarios. Fresh
+owned PostgreSQL, TLS server and private material are removed. CI selects the
+actual compiler-recorded executable and runs through the positive-execution and
+timing guard; the local phase reports success. Default tests separately report
+16unit/8behavior passes and three fixture-only ignores. Formatting, all-target
+device Clippy with warnings denied and driver lint pass. Independent source
+review found no actionable issue and executed no tests. Redaction receives only
+fixture values, preserving readable libtest pass/ignore counts.
+
+This proves the device handler's post-await scope/authorization boundary with
+controlled authority/membership adapters. It does not execute a deployed Trust
+Profile/PDP chain, actual Flow keyless owner listener, Core wallet consumer,
+installed wallet, rootless installer or official interoperability suite.
+
+## Actual keyless owner listener qualification
+
+The Flow driver now explicitly executes four Flow cases plus the Trust Profile
+proof case: five passes, zero ignores. The new case uses the production owner
+router and `BoundKeylessHttpsServer` with actual remote TLS signing. A separate
+fresh database and distinct non-exportable request/TLS keys share the driver's
+bounded disposable PostgreSQL and OpenBao fixtures. No existing installation is
+changed. The listener accepts the explicitly trusted CA and correct workload
+token, rejects untrusted CA, wrong hostname, plaintext HTTP, missing/wrong/duplicate
+tokens, and excludes public/admin/callback routes. It serves identical original
+JWS bytes across pinned v1 and matching rotated v2 TLS identities; a mismatched
+certificate/key version fails before readiness. The original request signs once.
+
+The initial run failed because the test used a single-thread Tokio runtime,
+where the synchronous remote signer intentionally refuses signing. The corrected
+test uses two workers, matching the service's multithread runtime, and passes.
+Independent source review found no actionable findings and executed no tests.
+The local positive-execution/timing receipt reports success; owned fixtures and
+temporary material are removed. This covers an isolated production listener path,
+not deployed configuration, the live PDP chain or installed-wallet acceptance.
+
+On this combined qualification source, ordinary execution reports 89 Trust
+Profile passes/one fixture ignore and 125 focused Flow passes/seven fixture
+ignores. The explicit driver above executes its four guarded Flow cases and one
+Trust Profile case separately. CI workflow/compile-scope/Docker-context Python
+checks report 266 passes and 12 platform skips. These counts have separate scopes;
+default fixture ignores are not counted as executed acceptance.
