@@ -88,6 +88,7 @@ impl PairingEnrollment {
             .take(&input.pairing_code)
             .await?
             .ok_or_else(|| DeviceError::Forbidden(INVALID_TICKET.into()))?;
+        self.confirmations.validate_issued_scope(&scope).await?;
         self.memberships
             .require_active(&scope.user_id, &scope.organization_id)
             .await?;

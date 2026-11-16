@@ -33,6 +33,7 @@
     ["POST", "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority"],
+    ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-profile-admission"],
     ["GET", "/internal/v1/resource-owners/trust-profiles/{profile_id}"],
     ["GET", "/internal/v1/resource-owners/issuer-entities/{issuer_entity_id}"],
     ["GET", "/v1/trust-frameworks"],
