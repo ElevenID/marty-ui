@@ -96,6 +96,8 @@ rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs
 rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
 rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs
 rust/crates/service-acceptance/tests/holder_remote_live_kms.rs
+rust/crates/service-acceptance/tests/support/holder_issuer_authority.rs
+rust/crates/service-acceptance/tests/support/holder_native_receipt.rs
 rust/crates/service-acceptance/tests/csca_capability_contract.rs
 rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
 rust/services/signing-keys/tests/csca_lifecycle_behavior.rs

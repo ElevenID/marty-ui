@@ -17,7 +17,10 @@ import subprocess
 import time
 from urllib.parse import urlsplit
 
-import probe_signing_keys_openbao_policy as fixtures
+if __package__:
+    from . import probe_signing_keys_openbao_policy as fixtures
+else:
+    import probe_signing_keys_openbao_policy as fixtures
 
 POSTGRES_CASE = "additive_verifier_migration_preserves_legacy_pairing_and_rejects_scope_substitution"
 REDIS_CASE = "pairing_token_is_not_stored_and_redeems_once_under_race"
@@ -127,19 +130,29 @@ def execute(binary: Path, case: str, environment: dict[str, str]):
     return detail
 
 
-def qualify(postgres_binary: Path, redis_binary: Path) -> dict:
+def qualify(postgres_binary: Path, redis_binary: Path, trust_profile_binary: Path | None = None) -> dict:
     postgres_binary = discover(postgres_binary, "verifier_pairing_postgres", POSTGRES_CASE)
     redis_binary = discover(redis_binary, "pairing_ticket_redis", REDIS_CASE)
+    trust_case = "native_migration_is_additive_idempotent_and_scrubs_private_custody_metadata"
+    if trust_profile_binary is not None:
+        trust_profile_binary = discover(trust_profile_binary, "migration_contract", trust_case)
     with disposable_postgres() as (environment, postgres_receipt):
         postgres_detail = execute(postgres_binary, POSTGRES_CASE, environment)
     with disposable_redis() as (environment, redis_receipt):
         redis_detail = execute(redis_binary, REDIS_CASE, environment)
+    trust_detail, trust_receipt = "", None
+    if trust_profile_binary is not None:
+        with disposable_postgres() as (environment, trust_receipt):
+            environment["TEST_POSTGRES_URL"] = environment["DEVICE_REGISTRATION_POSTGRES_TEST_URL"]
+            trust_detail = execute(trust_profile_binary, trust_case, environment)
     # Preserve actual sanitized libtest receipts for the shared CI execution
     # guard; a driver's JSON declaration alone is not a native test summary.
     print(postgres_detail, end="")
     print(redis_detail, end="")
+    print(trust_detail, end="")
     return {"postgresPassed": 1, "redisPassed": 1, "ignored": 0,
         **postgres_receipt, **redis_receipt,
+        "trustProfilePassed": int(trust_profile_binary is not None), "trustProfilePostgres": trust_receipt,
         "scope": "actual fresh PostgreSQL migration/scope and Redis atomic persistence; not installed-wallet, KMS, rootless or official-suite acceptance"}
 
 
@@ -147,5 +160,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--postgres-test-binary", required=True, type=Path)
     parser.add_argument("--redis-test-binary", required=True, type=Path)
+    parser.add_argument("--trust-profile-test-binary", type=Path)
     args = parser.parse_args()
-    print(json.dumps(qualify(args.postgres_test_binary, args.redis_test_binary)))
+    print(json.dumps(qualify(args.postgres_test_binary, args.redis_test_binary, args.trust_profile_test_binary)))

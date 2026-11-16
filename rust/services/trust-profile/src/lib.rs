@@ -17,6 +17,7 @@ pub mod registry_sync;
 pub mod repository;
 pub mod runtime;
 pub mod surface;
+pub mod wallet_issuer_authority;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");

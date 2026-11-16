@@ -330,7 +330,7 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         "trust_profile_migration": (
             "marty-trust-profile",
             "migration_contract",
-            ("TEST_POSTGRES_URL",),
+            ("TEST_POSTGRES_URL", "MARTY_TEST_POSTGRES_DISPOSABLE_NONCE"),
         ),
         "organization_migration": (
             "marty-organization",

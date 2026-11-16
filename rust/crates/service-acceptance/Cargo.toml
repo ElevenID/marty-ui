@@ -27,6 +27,8 @@ marty-issuance-service = { path = "../../services/issuance" }
 marty-passport-auth = { path = "../passport-auth" }
 marty-signing-grant = { path = "../signing-grant" }
 marty-signing-keys = { path = "../../services/signing-keys" }
+marty-service-runtime = { path = "../service-runtime" }
+marty-trust-profile = { path = "../../services/trust-profile" }
 marty-verification.workspace = true
 mmf-platform.workspace = true
 mmf-security.workspace = true
@@ -39,7 +41,7 @@ serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 tokio-stream.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true

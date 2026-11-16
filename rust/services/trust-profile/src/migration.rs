@@ -6,6 +6,7 @@ use crate::{sanitize_private_custody_metadata, TRUST_PROFILE_MIGRATION};
 
 const MIGRATION_VERSION: &str = "trust-profile-rust-v1";
 const CREDENTIAL_AUTHORITY_MIGRATION_VERSION: &str = "trust-profile-credential-authority-v1";
+const WALLET_ISSUER_AUTHORITY_MIGRATION_VERSION: &str = "trust-profile-wallet-issuer-authority-v2";
 const ADVISORY_LOCK_ID: i64 = 800_420_260_821;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -93,6 +94,8 @@ pub async fn run_migrations(
     .bind(CREDENTIAL_AUTHORITY_MIGRATION_VERSION)
     .execute(&mut *transaction)
     .await?;
+    sqlx::query("INSERT INTO trust_profile_service.native_migrations(version) VALUES($1) ON CONFLICT(version) DO NOTHING")
+        .bind(WALLET_ISSUER_AUTHORITY_MIGRATION_VERSION).execute(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(summary)
 }

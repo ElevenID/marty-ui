@@ -134,11 +134,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
-    let wallet_issuer_trust = match token.as_ref() {
-        Some(token) => Some(Arc::new(WalletIssuerTrustClient::new(
-            &env_value("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004"),
-            token.clone(),
-        )?)),
+    let wallet_issuer_trust = match env::var("WALLET_ISSUER_TRUST_OWNER_URL").ok() {
+        Some(origin) => {
+            let ca = env::var("WALLET_ISSUER_TRUST_OWNER_CA")
+                .ok()
+                .map(fs::read)
+                .transpose()?;
+            Some(Arc::new(WalletIssuerTrustClient::new(
+                &origin,
+                token
+                    .as_deref()
+                    .ok_or("issuer owner workload token is required")?,
+                ca.as_deref(),
+            )?))
+        }
         None => None,
     };
     let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));

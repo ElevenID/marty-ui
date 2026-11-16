@@ -1489,9 +1489,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_trust_profile_migration_test marty_revocation_migration_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test marty_mdoc_rejection_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
+          # createdb above must succeed: never mark an existing installation.
+          trust_profile_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+          printf '::add-mask::%s\n' "$trust_profile_nonce"
+          docker exec "$MARTY_RUST_CI_POSTGRES_ID" psql -X -v ON_ERROR_STOP=1 -U postgres \
+            -d marty_trust_profile_migration_test -c \
+            "CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL); INSERT INTO public.marty_disposable_guard VALUES ('$trust_profile_nonce');"
+          printf 'MARTY_TRUST_PROFILE_MIGRATION_NONCE=%s\n' "$trust_profile_nonce" >> "$GITHUB_ENV"
           # Use the real upstream Rust schema owners. The former hand-made
           # fixture used a text Organization ID and hid a UUID/text mismatch
           # in Issuance's fresh application-template seed.
@@ -1760,9 +1767,11 @@ jobs:
           redis_binary="$(resolve_recorded_contract_executable marty-device-registration pairing_ticket_redis)"
           tls_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_trust_tls)"
           http_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_governance_http)"
-          test -x "$postgres_binary" && test -x "$redis_binary" && test -x "$tls_binary" && test -x "$http_binary"
+          trust_binary="$(resolve_recorded_contract_executable marty-trust-profile migration_contract)"
+          test -x "$postgres_binary" && test -x "$redis_binary" && test -x "$tls_binary" && test -x "$http_binary" && test -x "$trust_binary"
           run_timed wallet_verifier_pairing python3 scripts/qualify_wallet_verifier_pairing.py \
-            --postgres-test-binary "$postgres_binary" --redis-test-binary "$redis_binary"
+            --postgres-test-binary "$postgres_binary" --redis-test-binary "$redis_binary" \
+            --trust-profile-test-binary "$trust_binary"
           run_timed wallet_verifier_tls python3 scripts/qualify_wallet_verifier_transport.py \
             --test-binary "$tls_binary" --device-http-test-binary "$http_binary"
       - name: Qualify canonical Flow request and managed verifier authority

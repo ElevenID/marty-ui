@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from pathlib import Path
@@ -320,11 +320,65 @@ def remove_owned_demo_grant_backend(name, container_id):
     ensure(not require_docker("ps", "-aq", "--filter", f"id={container_id}"), "demo fixture removal")
 
 
+def remove_owned_holder_backend(name, cid):
+    ensure(isinstance(cid, str) and re.fullmatch(r"[a-f0-9]{64}", cid), "owned holder container identity required")
+    if not require_docker("ps", "-aq", "--filter", f"id={cid}"):
+        return
+    actual = json.loads(require_docker("inspect", cid))[0]
+    labels = actual["Config"].get("Labels") or {}
+    ensure(actual["Id"] == cid and actual["Name"] == f"/{name}"
+        and labels.get("marty.disposable") == "kms-signing-policy"
+        and labels.get("codex.purpose") == "holder-lifecycle-fixture", "refuse unowned holder fixture cleanup")
+    require_docker("rm", "-f", "-v", cid)
+    ensure(not require_docker("ps", "-aq", "--filter", f"id={cid}"), "holder fixture cleanup not verified")
+
+
+@contextmanager
+def holder_issuer_tls(nonce, endpoint, ca_file, root_token):
+    parsed = urllib.parse.urlsplit(endpoint)
+    ensure(parsed.scheme == "https" and parsed.hostname == "127.0.0.1" and parsed.port
+           and parsed.path in ("", "/v1") and not parsed.query and not parsed.fragment
+           and not parsed.username and not parsed.password, "owned TLS OpenBao origin required")
+    ensure(re.fullmatch(r"[a-f0-9]{32,64}", nonce), "owned fixture nonce required")
+    if __package__:
+        from .selfhost_openbao_client import Bao
+        from .with_disposable_policy_owner_kms import owner_environment
+    else:
+        from selfhost_openbao_client import Bao
+        from with_disposable_policy_owner_kms import owner_environment
+    origin = endpoint.removesuffix("/v1")
+    bao = Bao(origin, ca_file, root_token)
+    ensure(bao.request("GET", "secret/data/marty-test-disposable-guard")["data"]["data"]["nonce"] == nonce,
+           "refuse unmarked owner TLS provisioning")
+    with tempfile.TemporaryDirectory(prefix="marty-holder-real-owner-") as directory:
+        private = Path(directory)
+        os.chmod(private, 0o700)
+        (private / "vault-ca.pem").write_bytes(Path(ca_file).read_bytes())
+        # A new fixture PKI mount leaves the initialized service CA untouched.
+        yield owner_environment(bao, private, origin, reuse_transit=True,
+                                pki_mount="holder-owner-pki-" + uuid.uuid4().hex[:16])
+
+
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             managed_mdoc: bool = False, mdoc_runner=subprocess.run,
             public_demo_grant: bool = False, grant_runner=subprocess.run,
-            public_demo_browser: bool = False) -> dict | None:
-    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser)) <= 1, "select one Rust adapter mode")
+            public_demo_browser: bool = False, holder_test_binary: Path | None = None,
+            native_wallet_test_binary: Path | None = None) -> dict | None:
+    holder_lifecycle = holder_test_binary is not None
+    ensure(native_wallet_test_binary is None or holder_lifecycle, "native wallet qualification requires the holder artifact")
+    ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser, holder_lifecycle)) <= 1, "select one Rust adapter mode")
+    if holder_lifecycle:
+        if __package__:
+            from .qualify_wallet_verifier_pairing import discover
+        else:
+            from qualify_wallet_verifier_pairing import discover
+        holder_case = ("native_receipt_uses_real_owner_device_and_remote_holder" if native_wallet_test_binary is not None
+                       else "registration_provision_sign_and_deactivate_delete_remote_key")
+        holder_test_binary = discover(holder_test_binary, "holder_remote_live_kms", holder_case)
+        if native_wallet_test_binary is not None:
+            native_wallet_test_binary = discover(native_wallet_test_binary, "marty_authenticator_bridge",
+                "operations::verified_issuance::joined_device_tests::actual_device_authority_and_remote_holder_qualify_receipt")
+    rust_adapter = rust_adapter or holder_lifecycle
     public_demo_grant = public_demo_grant or public_demo_browser
     if public_demo_browser:
         browser_check=grant_runner(["node",str(ROOT / "ui/scripts/public-verification-browser.mjs"),"--check"],
@@ -358,7 +412,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
     ca_file = Path(ca_directory.name) / "openbao-public-ca.pem"
     init_script = ROOT / "docker/openbao-init.sh"
     started = False
-    primary_id = None
+    primary_id = redis_id = postgres_id = None
     redis_started = False
     postgres_started = False
     public_demo_result = None
@@ -373,6 +427,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                "--memory", "512m", "--memory-swap", "512m"] if managed_mdoc else []),
             "--label",
             "marty.disposable=kms-signing-policy",
+            *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "256m", "--memory-swap", "256m"] if holder_lifecycle else []),
             *(["--label", "codex.purpose=public-demo-grant-fixture", "--memory", "512m", "--memory-swap", "512m"] if public_demo_grant else []),
             "--tmpfs",
             "/tmp/bao-tls:rw,mode=1777",
@@ -804,7 +859,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     detail = detail.replace(token, "[mint]")
                 raise RuntimeError(f"Rust live managed passport chain failed:\n{detail[-2000:]}")
         if rust_adapter:
-            require_docker(
+            redis_id = require_docker(
                 "run",
                 "--rm",
                 "-d",
@@ -812,6 +867,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 redis_name,
                 "--label",
                 "marty.disposable=kms-signing-policy",
+                *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "64m", "--memory-swap", "64m"] if holder_lifecycle else []),
                 "-p",
                 "127.0.0.1::6379",
                 REDIS_IMAGE,
@@ -840,9 +896,10 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 "marty:tests:disposable-guard",
                 redis_nonce,
             )
-            require_docker(
+            postgres_id = require_docker(
                 "run", "--rm", "-d", "--name", postgres_name,
                 "--label", "marty.disposable=kms-signing-policy",
+                *(["--label", "codex.purpose=holder-lifecycle-fixture", "--memory", "256m", "--memory-swap", "256m"] if holder_lifecycle else []),
                 "-e", f"POSTGRES_PASSWORD={postgres_password}",
                 "-e", "POSTGRES_DB=marty_holder_test",
                 "-p", "127.0.0.1::5432", POSTGRES_IMAGE,
@@ -854,7 +911,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             )
             for _ in range(80):
                 ready = docker(
-                    "exec", postgres_name, "pg_isready", "-U", "postgres",
+                    "exec", postgres_name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres",
                     "-d", "marty_holder_test",
                 )
                 if ready.returncode == 0:
@@ -863,6 +920,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             else:
                 raise RuntimeError("Disposable holder PostgreSQL did not become healthy")
             nonce = uuid.uuid4().hex
+            require_docker("exec", postgres_id, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "marty_holder_test",
+                "-c", f"CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL); INSERT INTO public.marty_disposable_guard VALUES ('{nonce}')")
             status, _ = call(
                 "POST",
                 "secret/data/marty-test-disposable-guard",
@@ -891,6 +950,35 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                     ),
                 }
             )
+            if holder_lifecycle:
+                with ExitStack() as joined_context:
+                    trust_environment = joined_context.enter_context(holder_issuer_tls(nonce, endpoint, ca_file, root_token))
+                    if native_wallet_test_binary is not None:
+                        if __package__:
+                            from .holder_native_receipt_fixture import serve
+                            from .selfhost_openbao_client import Bao
+                        else:
+                            from holder_native_receipt_fixture import serve
+                            from selfhost_openbao_client import Bao
+                        native_environment = joined_context.enter_context(serve(Bao(endpoint.removesuffix("/v1"), ca_file, root_token), nonce))
+                        trust_environment.update(native_environment,
+                            MARTY_TEST_JOINED_NATIVE_BINARY=str(native_wallet_test_binary))
+                    holder = subprocess.run([str(holder_test_binary),
+                        holder_case, "--ignored", "--exact", "--nocapture"],
+                        cwd=ROOT / "rust", env=dict(environment, **trust_environment),
+                        capture_output=True, text=True, timeout=150, check=False)
+                    detail = holder.stdout + holder.stderr
+                    for secret in (root_token, managed, postgres_password, nonce):
+                        detail = detail.replace(secret, "[fixture-private]")
+                    if not rust_test_succeeded(holder) or "1 passed; 0 failed; 0 ignored;" not in holder.stdout:
+                        raise RuntimeError("Owned holder lifecycle failed:\n" + detail[-6000:])
+                    if native_wallet_test_binary is not None:
+                        ensure("joined_native_consumer=1_passed_0_ignored" in holder.stdout,
+                               "actual native consumer success receipt missing")
+                print(detail, end="")
+                return {"holderLifecyclePassed": 1, "ignored": 0, "issuerOwner": "actual PostgreSQL Trust Profile over production keyless HTTPS and Device HTTP",
+                    "nativeConsumerPassed": int(native_wallet_test_binary is not None),
+                    "scope": "actual holder provision/sign/rotate/revoke and issuer owner/Device chain with owned PostgreSQL/Redis/TLS OpenBao; controlled PDP/public issuer metadata, not installed wallet or deployed control plane"}
             migration_transport = subprocess.run(
                 ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
                  "--lib", "--locked", "--offline", "-j2",
@@ -1078,16 +1166,17 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
-            result = subprocess.run(
-                [
-                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
-                    "--test", "holder_remote_live_kms", "--locked", "--offline",
-                    "-j2", "registration_provision_sign_and_deactivate_delete_remote_key",
-                    "--", "--ignored", "--exact", "--nocapture",
-                ],
-                cwd=ROOT / "rust", env=environment,
-                capture_output=True, text=True, timeout=600, check=False,
-            )
+            with holder_issuer_tls(nonce, endpoint, ca_file, root_token) as trust_environment:
+                result = subprocess.run(
+                    [
+                        "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                        "--test", "holder_remote_live_kms", "--locked", "--offline",
+                        "-j2", "registration_provision_sign_and_deactivate_delete_remote_key",
+                        "--", "--ignored", "--exact", "--nocapture",
+                    ],
+                    cwd=ROOT / "rust", env=dict(environment, **trust_environment),
+                    capture_output=True, text=True, timeout=600, check=False,
+                )
             if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
@@ -1398,20 +1487,33 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
         if grant_verifier:
             print("Rust grant verifier, Signing Keys public CSR route, and managed passport CSCA/DSC/SOD chain passed with scoped grants and disposable Redis")
     finally:
-        if postgres_started:
-            docker("rm", "-f", postgres_name, timeout=30)
-        if redis_started:
-            docker("rm", "-f", redis_name, timeout=30)
-        if started:
-            if public_demo_grant:
-                remove_owned_demo_grant_backend(name, primary_id)
-                if public_demo_result is not None:
-                    public_demo_result["openbaoRemoved"] = True
-            elif managed_mdoc:
-                remove_owned_mdoc_backend(name, primary_id)
-            else:
-                docker("rm", "-f", name, timeout=30)
-        ca_directory.cleanup()
+        if holder_lifecycle:
+            cleanup_errors = []
+            for active, backend_name, cid in ((postgres_started, postgres_name, postgres_id),
+                    (redis_started, redis_name, redis_id), (started, name, primary_id)):
+                if active:
+                    try:
+                        remove_owned_holder_backend(backend_name, cid)
+                    except Exception as error:
+                        cleanup_errors.append(type(error).__name__)
+            ca_directory.cleanup()
+            if cleanup_errors:
+                raise RuntimeError("Owned holder cleanup incomplete: " + ",".join(cleanup_errors))
+        else:
+            if postgres_started:
+                docker("rm", "-f", postgres_name, timeout=30)
+            if redis_started:
+                docker("rm", "-f", redis_name, timeout=30)
+            if started:
+                if public_demo_grant:
+                    remove_owned_demo_grant_backend(name, primary_id)
+                    if public_demo_result is not None:
+                        public_demo_result["openbaoRemoved"] = True
+                elif managed_mdoc:
+                    remove_owned_mdoc_backend(name, primary_id)
+                else:
+                    docker("rm", "-f", name, timeout=30)
+            ca_directory.cleanup()
 
 
 if __name__ == "__main__":
@@ -1421,7 +1523,9 @@ if __name__ == "__main__":
     parser.add_argument("--public-demo-grant", action="store_true", help="Only isolated demo-holder MAC, policy and native one-use grant qualification; no deployment")
     parser.add_argument("--public-demo-browser", action="store_true", help="Owned loopback application/Chromium plus canonical remote example fixture; no deployment")
     parser.add_argument("--managed-mdoc", action="store_true", help="Run only the isolated real managed MDOC certificate-chain case; no CRL/wallet qualification")
+    parser.add_argument("--holder-test-binary", type=Path, help="Execute only the discovered holder lifecycle on bounded owned fixtures")
+    parser.add_argument("--native-wallet-test-binary", type=Path, help="Join the exact native Authenticator consumer artifact to the real owner/Device/holder chain")
     args = parser.parse_args()
-    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser)
+    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser, holder_test_binary=args.holder_test_binary, native_wallet_test_binary=args.native_wallet_test_binary)
     if result is not None:
         print(json.dumps(result, sort_keys=True))

@@ -1,4 +1,13 @@
-//! Guarded cross-service holder-key proof with disposable OpenBao and PostgreSQL.
+//! Guarded holder-key lifecycle and real Trust Profile→keyless HTTPS→Device authority.
+//! Membership/PDP decisions and public issuer metadata remain controlled fixtures.
+
+#[path = "support/holder_issuer_authority.rs"]
+mod holder_issuer_authority;
+
+#[path = "support/holder_native_receipt.rs"]
+mod holder_native_receipt;
+
+use marty_trust_profile::TrustProfileRepository;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -56,9 +65,19 @@ impl MembershipAuthorizer for SwitchMembership {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires guarded disposable OpenBao and fresh PostgreSQL"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires guarded disposable OpenBao, fresh PostgreSQL and non-exportable owner TLS"]
 async fn registration_provision_sign_and_deactivate_delete_remote_key() {
+    holder_lifecycle(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires exact native artifact and marked fresh SQL/Bao/keyless owner/Device/issuer fixtures"]
+async fn native_receipt_uses_real_owner_device_and_remote_holder() {
+    holder_lifecycle(true).await;
+}
+
+async fn holder_lifecycle(joined: bool) {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("OpenBao URL syntax");
     assert_eq!(parsed.scheme(), "https");
@@ -87,6 +106,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(marker.status().is_success());
     let marker: serde_json::Value = marker.json().await.expect("sentinel JSON");
     assert_eq!(marker["data"]["data"]["nonce"], nonce);
+    let joined_fixture: Option<serde_json::Value> = if joined {
+        let path =
+            std::path::PathBuf::from(std::env::var("MARTY_TEST_JOINED_WALLET_CONFIG").unwrap());
+        assert!(path.is_absolute() && path.file_name().unwrap() == "joined-fixture.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(value["nonce"].as_str() == Some(&nonce));
+        let issuer = reqwest::Url::parse(value["issuer_origin"].as_str().unwrap()).unwrap();
+        assert!(
+            issuer.scheme() == "https"
+                && issuer.host_str() == Some("127.0.0.1")
+                && issuer.port().is_some()
+                && issuer.path() == "/"
+                && issuer.query().is_none()
+        );
+        Some(value)
+    } else {
+        None
+    };
 
     let database_url =
         std::env::var("DEVICE_REGISTRATION_POSTGRES_TEST_URL").expect("disposable PostgreSQL URL");
@@ -97,6 +135,17 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .connect(&database_url)
         .await
         .expect("disposable PostgreSQL");
+    let guard: String = sqlx::query_scalar("SELECT nonce FROM public.marty_disposable_guard")
+        .fetch_one(&pool)
+        .await
+        .expect("owned SQL marker");
+    assert_eq!(guard, nonce);
+    let fresh: bool = sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg_%') AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid WHERE n.nspname='public' AND c.relname<>'marty_disposable_guard')")
+        .fetch_one(&pool).await.unwrap();
+    assert!(
+        fresh,
+        "holder/issuer fixture requires fresh owned schemas before any migration"
+    );
     migrate(&pool).await.expect("fresh Rust schema");
 
     let devices: Arc<dyn DeviceRepository> = Arc::new(PostgresDeviceRepository::new(pool.clone()));
@@ -144,34 +193,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         credentials.clone(),
         confirmations.clone(),
     ));
-    let trust_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("disposable Trust Profile listener");
-    let trust_origin = format!("http://{}", trust_listener.local_addr().unwrap());
-    let trust_organization_id = organization_id.clone();
-    let trust_app = axum::Router::new().route(
-        "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
-        axum::routing::get(move |axum::extract::Path(profile_id): axum::extract::Path<String>| {
-            let organization_id = trust_organization_id.clone();
-            async move {
-                let now = chrono::Utc::now();
-                axum::Json(json!({
-                    "organization_id": organization_id,
-                    "trust_profile_id": profile_id,
-                    "generated_at": now,
-                    "expires_at": now + chrono::Duration::seconds(30),
-                    "issuer_keys": [{"issuer":"did:example:issuer","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"Ed25519","x":"public"}}]
-                }))
-            }
-        }),
-    );
-    let trust_server = tokio::spawn(async move { axum::serve(trust_listener, trust_app).await });
+    let mut issuer_owner = holder_issuer_authority::Owner::start(
+        &pool,
+        Uuid::parse_str(&bound_profile_id).unwrap(),
+        &user_id,
+        &organization_id,
+        &nonce,
+        joined_fixture.as_ref(),
+    )
+    .await;
     let trust_client = Arc::new(
-        WalletIssuerTrustClient::new(
-            &trust_origin,
-            "disposable-service-token-32-bytes-or-longer".into(),
-        )
-        .unwrap(),
+        WalletIssuerTrustClient::new(&issuer_owner.origin, &nonce, Some(&issuer_owner.ca)).unwrap(),
+    );
+    assert!(
+        WalletIssuerTrustClient::new(&issuer_owner.origin, &nonce, None)
+            .unwrap()
+            .fetch(&bound_profile_id, &organization_id, &user_id)
+            .await
+            .is_err(),
+        "owner HTTPS requires its trusted CA"
     );
     let gateway_key = "disposable-gateway-device-registration-key-32-chars";
     let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -195,6 +235,11 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         build_revision: "disposable".into(),
         gateway_key: gateway_key.into(),
     });
+    let native_device_https = if joined {
+        Some(holder_issuer_authority::DeviceHttps::start(app.clone()).await)
+    } else {
+        None
+    };
     let device_server = tokio::spawn(async move { axum::serve(device_listener, app).await });
     let pairing_body = json!({
         "pairing_code": ticket.token,
@@ -327,8 +372,144 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(snapshot.status().is_success());
     assert_eq!(snapshot.headers()["cache-control"], "no-store");
     let snapshot: serde_json::Value = snapshot.json().await.unwrap();
-    assert_eq!(snapshot["organization_id"], organization_id);
-    assert_eq!(snapshot["trust_profile_id"], bound_profile_id);
+    assert_eq!(snapshot["issuer"]["organization_id"], organization_id);
+    assert_eq!(snapshot["issuer"]["trust_profile_id"], bound_profile_id);
+    assert_eq!(
+        snapshot["contract"],
+        "marty.wallet/device-issuer-governance/v2"
+    );
+    assert_eq!(
+        snapshot["scope"]["verifier_trust_profile_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(snapshot["scope"]["pairing_id"], pairing_id);
+    assert_eq!(snapshot["scope"]["registration_id"], registration.id);
+    assert_eq!(
+        snapshot["issuer"]["issuer_keys"][0]["credential_authorizations"],
+        issuer_owner.relationship.metadata["marty_credential_authorizations_v1"]
+    );
+    assert_eq!(
+        snapshot["issuer"]["issuer_keys"][0]["issuance_authorizations"],
+        issuer_owner.relationship.metadata["marty_wallet_issuance_authorizations_v1"]
+    );
+    let persisted = issuer_owner
+        .repository
+        .wallet_issuer_authority_snapshot(
+            &organization_id,
+            Uuid::parse_str(&bound_profile_id).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        snapshot["issuer"]["revision"],
+        serde_json::to_value(persisted.revision).unwrap()
+    );
+    let observed: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(snapshot["observed_at"].clone()).unwrap();
+    let expires: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(snapshot["expires_at"].clone()).unwrap();
+    assert!(expires > observed && expires <= observed + chrono::Duration::seconds(60));
+    let encoded = snapshot.to_string();
+    for forbidden in [
+        &enrolled.device_credential,
+        "provider_reference",
+        "KMS_TOKEN",
+        "private_key",
+    ] {
+        assert!(
+            !encoded.contains(forbidden),
+            "public issuer evidence leaked a custody capability"
+        );
+    }
+    if let (Some(fixture), Some(device_https)) = (&joined_fixture, &native_device_https) {
+        holder_native_receipt::run(
+            &mut issuer_owner,
+            &device_https.origin,
+            gateway_key,
+            &enrolled,
+            &nonce,
+            fixture,
+        )
+        .await;
+    }
+    // Persist a service-only edit. The actual owner must allocate a new wallet
+    // revision; Device must return that edit rather than a cached projection.
+    issuer_owner.relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]
+        ["credential_configuration_id"] = json!("identity-v2");
+    issuer_owner
+        .repository
+        .save_profile_issuer(&issuer_owner.relationship)
+        .await
+        .unwrap();
+    let next = http
+        .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(next.status(), reqwest::StatusCode::OK);
+    assert_eq!(next.headers()["cache-control"], "no-store");
+    let next: serde_json::Value = next.json().await.unwrap();
+    assert_eq!(
+        next["issuer"]["issuer_keys"][0]["issuance_authorizations"][0]
+            ["credential_configuration_id"],
+        "identity-v2"
+    );
+    assert!(
+        next["issuer"]["revision"]["version"].as_u64().unwrap()
+            > snapshot["issuer"]["revision"]["version"].as_u64().unwrap()
+    );
+    assert_ne!(
+        next["issuer"]["revision"]["content_digest"],
+        snapshot["issuer"]["revision"]["content_digest"]
+    );
+    for denial in ["relationship", "canonical_vct", "pdp"] {
+        let original = issuer_owner.relationship.clone();
+        match denial {
+            "relationship" => {
+                issuer_owner.relationship.relationship_status =
+                    marty_trust_profile::TrustRelationshipStatus::Denied
+            }
+            "canonical_vct" => {
+                issuer_owner.relationship.metadata["marty_credential_authorizations_v1"] = json!([])
+            }
+            _ => issuer_owner.pdp.allowed.store(false, Ordering::SeqCst),
+        }
+        issuer_owner
+            .repository
+            .save_profile_issuer(&issuer_owner.relationship)
+            .await
+            .unwrap();
+        let denied = http
+            .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+            .header("x-service-token", gateway_key)
+            .bearer_auth(&enrolled.device_credential)
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            !denied.status().is_success(),
+            "{denial} must deny public issuer evidence"
+        );
+        let denied: serde_json::Value = denied.json().await.unwrap();
+        assert!(denied.get("issuer").is_none() && denied.get("issuer_keys").is_none());
+        issuer_owner.relationship = original;
+        issuer_owner
+            .repository
+            .save_profile_issuer(&issuer_owner.relationship)
+            .await
+            .unwrap();
+        issuer_owner.pdp.allowed.store(true, Ordering::SeqCst);
+    }
+    assert!(
+        confirmations
+            .governance_for_bearer(&enrolled.device_credential)
+            .await
+            .is_err(),
+        "issuer-only enrollment must not acquire verifier authority"
+    );
     assert!(signer
         .sign(
             "invalid",
@@ -610,10 +791,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .send()
         .await
         .expect("cross-organization profile denial");
-    assert_eq!(
-        wrong_organization.status(),
-        reqwest::StatusCode::SERVICE_UNAVAILABLE
-    );
+    assert_eq!(wrong_organization.status(), reqwest::StatusCode::FORBIDDEN);
     let orphan_ticket = http
         .post(format!("{device_origin}/v1/devices/pairing-tickets"))
         .header("x-service-token", gateway_key)
@@ -661,7 +839,10 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         cleanup.run_once().await.expect("orphan key cleanup"),
         (2, 0)
     );
-    trust_server.abort();
     device_server.abort();
     server.abort();
+    if let Some(https) = native_device_https {
+        https.stop().await;
+    }
+    issuer_owner.stop().await;
 }

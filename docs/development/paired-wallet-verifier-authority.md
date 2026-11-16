@@ -237,3 +237,164 @@ ignores. The explicit driver above executes its four guarded Flow cases and one
 Trust Profile case separately. CI workflow/compile-scope/Docker-context Python
 checks report 266 passes and 12 platform skips. These counts have separate scopes;
 default fixture ignores are not counted as executed acceptance.
+
+## Canonical issuer authority migration
+
+The managed owner now offers a distinct `wallet-issuer-authority` operation with
+the `marty.wallet/issuer-authority/v2` contract. It uses the canonical repository
+snapshot and existing per-key/VCT decision, including explicit relationship
+grants, current issuer status, key usage and supported owner controls. Generic
+issuer trust grants no credential types implicitly. The projection carries the
+canonical profile revision, the `require_not_before` control, and only accepted
+public keys with their exact credential-type grants. Its expiry cannot exceed
+any projected issuer's validity. It mints no credential-verification receipt.
+
+The operation requires configured workload authentication and a user authorized
+by the current PDP. It repeats authorization after the snapshot read, rereads
+the canonical owner snapshot and rejects any intervening revision/basis change.
+In-process HTTP/memory-repository tests exercise grants, revision changes,
+unsupported policy, key usage, revocation, expiry, missing authentication,
+organization mismatch, membership loss and policy mutation during the second
+authorization. Full Trust Profile execution reports 90 passes and one guarded
+fixture ignore; formatting and all-target Clippy with warnings denied pass.
+Independent source review found no actionable findings and ran no tests.
+
+This owner operation was the first migration checkpoint. At that point the fixed HTTPS Device
+transport, complete pairing-scope reread, native VCT/time-control enforcement,
+consent revision binding and actual combined/native qualification still needed to
+consume this v2 contract. The legacy key-list operation remains distinct and
+does not establish that this migration or retained wallet acceptance is finished.
+
+The next Device checkpoint replaces the plaintext-capable issuer client with a
+fixed HTTPS-only owner selected explicitly by `WALLET_ISSUER_TRUST_OWNER_URL`
+and optional `WALLET_ISSUER_TRUST_OWNER_CA`. Without that URL the feature is
+unavailable; no default plaintext origin is used. The client disables proxies
+and redirects, bounds connection/body time and size, requires JSON media and
+strict unique-member/schema validation, and sends only the configured workload
+token plus the authenticated pairing's user. It rejects legacy contracts,
+missing revisions/controls, private keys, invalid/ambiguous key identities and
+empty/duplicate credential grants.
+
+The existing public issuer read now returns
+`marty.wallet/device-issuer-governance/v2`: the full current credential, pairing,
+device and holder-key scope plus canonical issuer authority. Membership is
+checked twice and the complete SQL scope is compared after the owner await.
+The envelope expires no later than the authority or bearer credential. A separate
+issuer scope read preserves issuer-only pairings with an explicitly null verifier
+profile; verifier reads still require that profile and never infer it from issuer
+trust. If supplied, a verifier profile must be valid and distinct before ticket
+admission.
+
+Actual local qualification executes one combined TLS case and one HTTP/SQL case,
+both passing with zero ignores. The TLS case covers issuer CA/hostname/token/user/
+tenant refusals, redirect, size, escaped duplicate members, unknown/private fields,
+missing grants and media type. The HTTP/SQL case covers 29 paused scenarios across
+both trust paths, including successful issuer-only retrieval and 26 scope/key/
+bearer/revocation/membership mutations that disclose no authority. Fresh
+PostgreSQL migration/scope and Redis atomic-ticket cases also each pass with zero
+ignores. Owned fixtures and temporary material are removed. The first expanded
+HTTP run hit a duplicate synthetic device ID; the fixture now creates a unique
+changed ID per registration, and all scenarios execute successfully. Independent
+review caught the issuer-only admission mismatch; the separate issuer scope path
+resolves it, and final source review found no actionable findings. Reviewers ran
+no tests.
+
+The native consumer still needs the v2 envelope, exact VCT/not-before enforcement
+and frozen issuer revision/scope binding. The issuance service/configuration must
+also be explicitly bound to permitted credential issuers; a VCT/key projection
+alone does not establish that relationship. These remain draft acceptance gates.
+
+## Issuance service/configuration grants and wallet revisions
+
+An issuer relationship can now own the bounded, versioned metadata list
+`marty_wallet_issuance_authorizations_v1`. Each entry explicitly binds an exact
+HTTPS `credential_issuer` service identifier, `credential_configuration_id`, wire
+format and VCT to that relationship's permitted signed credential issuer. The
+service URL is not a credential DID. Wildcards, credentials, ambiguous/duplicate
+entries and malformed formats/types are rejected on relationship writes and
+persisted reads. Delegated authorization requires both an explicit authorization
+server and its exact token endpoint. Missing grants authorize no issuance service.
+
+Wallet authority observes the canonical credential-trust basis and these grants
+in one coherent graph. A separate `wallet_issuer_authority_revisions` ledger binds
+both under the wallet v2 digest. Its PostgreSQL reader locks that revision row
+before the single graph query; concurrent first observers reuse one revision.
+Wallet observation does not rewrite the generic credential-authority v1 ledger
+or change its wire contract. Ordinary graph changes still affect that existing
+authority according to its existing inputs. The new additive migration is source
+only outside disposable qualification; no existing installation was migrated.
+
+The owner projects service grants only through keys with an accepted canonical
+format/VCT grant. A service grant for an ungranted VCT is filtered; Device rejects
+injected unmatched grants. Valid relationship writes, invalid wildcard writes,
+wallet revision changes and independent v1 observation are executed through HTTP
+and repository tests. The language-neutral route/table catalog and native surface
+now account for both managed wallet owner routes and the new revision table.
+
+The Trust Profile migration case is explicitly ignored in ordinary execution
+instead of silently succeeding without PostgreSQL. Its driver admits a fresh
+loopback database only after a nonce sentinel and absent service schema check.
+Actual guarded qualification reports three passes/zero ignores: Device SQL,
+Redis atomic tickets and Trust Profile migration/revision behavior. The latter
+executes concurrent first observation, service-only revision invalidation,
+blocked-reader observation after a committed grant change, independent v1
+revisions and cascade cleanup. Actual TLS/Device HTTP qualification also passes
+its two cases/29 controlled pause scenarios. Ordinary checks report89 Trust
+Profile passes/two guarded ignores and54 contract tests including doctests;
+Device16unit/eight behavior passes are separate from its database execution.
+The full Device default run reports three additional legacy environment-gated
+no-op cases; those are not counted as SQL qualification. Formatting, all-target
+Clippy with warnings denied and Python lint pass. CI source/compile-scope/context
+checks report266 passes/12platform skips. Ownership/discovery and existing shared
+fixture regressions report29 passes plus four subtests.
+
+The holder KMS acceptance caller was reconciled with the HTTPS issuer client and
+new device envelope. Its guarded case explicitly passed using owned bounded
+PostgreSQL, Redis and real TLS/non-exportable OpenBao holder keys, with a controlled
+HTTPS issuer response adapter. A discovered compiler artifact is required before
+fixture allocation. The focused runner verifies exact container IDs/names/labels
+and removes all owned backends even if another cleanup fails. Independent review
+caught misplaced PostgreSQL bounds/labels before allocation; fixed source and
+actual qualification pass. Reviewers executed no tests. Synthetic issuer/PDP
+responses remain distinct from real holder custody and database execution.
+
+At this historical checkpoint native receipt migration remained required: consume these explicit grants before
+token exchange/proof signing, freeze selected metadata/endpoints/configuration,
+issuer identities, scope and revision, recheck before submission, and obtain fresh
+authority after the credential response before returning anything for storage.
+The new field is not yet consumed by published native268e; strict decoding rejects
+that newer projection. The producer and retained wallet PRs remained draft pending
+this migration and combined/deployed/artifact/installed acceptance.
+
+## Current joined native qualification
+
+The compatible consumer is now Authenticator PR57 at
+`1b6ae35f7e2c62ff60313911982aa99e3f0e1984`. It consumes v2 service grants before
+token exchange/proof preparation, freezes selection/scope/revision, checks fresh
+authority before the credential request and requires fresh authority after the
+response before returning a verified receipt for storage.
+
+The holder driver accepts `--native-wallet-test-binary` alongside its UI artifact.
+Both exact compiled cases are discovered before fixture allocation. The joined
+case executes actual PostgreSQL Trust Profile state through the production
+keyless HTTPS owner, typed Device client, confirmed issuer-only pairing and
+Device HTTPS into the separately compiled native consumer. Holder and controlled
+issuer signatures use non-exportable Transit keys. The consumer verifies one
+receipt, then rejects finalization after a committed service-grant change
+following the second credential response. Replays fail. Both cases explicitly
+passed with zero ignored. Private child output stays in the owned temporary
+directory; only closed milestones/error categories leave the child.
+
+Protected prerequisite PR1976 merged as
+`5a478506d024b9cdc2a93630711d0c874a0ce2b1`; PR1978 was reconciled normally and
+retargeted to main. Independent source review verified its paired-feature source
+unchanged by reconciliation. Build and target Clippy passed. The first joined
+attempt after reconciliation failed its initial issuer-snapshot status before
+the native child; its failure log is retained separately. A fresh explicit run
+passed UI1/native1 with zero ignored and no product retry or verification fallback.
+
+These tests use controlled issuer transport/metadata and PDP decisions. They
+qualify the producer/native boundary. Deployed Issuance/gateway, regenerated
+public WASM, browser storage/migration, installed Android/iOS and independent
+interoperability remain separate wallet acceptance. No production activation or
+migration of an existing installation is implied.
