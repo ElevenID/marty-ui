@@ -6,7 +6,7 @@ use crate::external_observation_grant_lifecycle::GrantMutation;
 use sqlx::{PgConnection, PgPool, Row};
 use uuid::Uuid;
 
-async fn eligible_key(
+pub(crate) async fn eligible_key(
     connection: &mut PgConnection,
     organization: Uuid,
     key: Uuid,

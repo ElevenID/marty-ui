@@ -309,3 +309,40 @@ checks. This remains a reviewed candidate schema: registered upgrade migration,
 least-privilege production role qualification, binding/membership administration
 and deployment are unfinished. No startup DDL or automatic privilege grants are
 introduced.
+
+
+## Canonical grant membership replacement
+
+`POST /v1/organizations/{organization_id}/external-observation-producers/{grant_id}/replace-bindings`
+uses the same public session administrator boundary. Its body contains only
+`expected_revision` and `bindings`, an array of at most 32 unique selections with
+`binding_id` and `expected_revision`. Empty explicitly removes all membership.
+The existing 4096-byte original-body limit applies, including duplicate-field
+and unknown-field rejection. Connector API keys cannot invoke this operation.
+
+Core locks current administrator permission, the canonical eligible organization
+key, grant, existing membership rows, and selected binding rows in that order.
+Each binding must already exist under the exact organization/source and match
+the administrator's selected revision. The operation changes membership only;
+it does not create, edit or activate bindings, change application lifecycle or
+subject, change key/source, or approve a grant. Inactive bindings may be staged;
+admission still requires current active binding and eligible application state.
+A successful replacement always deactivates the grant and clears approval,
+including when selecting the same set. Membership revision triggers remain in
+force. Fresh explicit approval is required before submission can be authorized.
+
+Membership writes, revision fencing and the structured administrator audit are
+one SERIALIZABLE transaction. Audit failure, stale binding/grant state, expiry
+crossing during staged writes and concurrent changes roll everything back.
+After audit insertion, core rechecks key/expiry, grant identity/revision/inactive
+state, exact membership set and selected binding revisions before commit. A
+failed COMMIT is unknown and requires reconciliation without an automatic write
+retry. Audit changes include only selected canonical binding IDs/revisions and
+the inactive grant revision, without observation, provider credentials or claims.
+
+Preflight additionally requires membership INSERT/DELETE privileges. Production
+least-privilege role and upgrade migration qualification remain unfinished.
+Binding creation/editing/activation and administrator audit/read reconciliation
+remain separate missing interfaces; membership selection does not manufacture
+those authorities. The connector continues to own only provider configuration
+and credentials, with Common Gateway as its sole Marty integration.

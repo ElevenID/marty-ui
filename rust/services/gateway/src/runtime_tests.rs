@@ -7198,6 +7198,7 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
         "rotate-api-key",
         "create",
         "change-expiry",
+        "replace-bindings",
     ] {
         for _ in 0..2 {
             let response = router
@@ -7224,7 +7225,7 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
         let requests = recorder.0.lock().unwrap();
         assert_eq!(
             requests.len(),
-            10,
+            12,
             "each administration attempt must reach canonical authorization"
         );
         for (service, request) in requests.iter() {
@@ -7284,5 +7285,5 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
             .unwrap();
         assert_eq!(response.status(), status);
     }
-    assert_eq!(recorder.0.lock().unwrap().len(), 10);
+    assert_eq!(recorder.0.lock().unwrap().len(), 12);
 }

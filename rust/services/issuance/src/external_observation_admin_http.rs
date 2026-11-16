@@ -4,6 +4,9 @@ use crate::{
     external_observation_grant_edit::{change_grant_expiry, create_grant},
     external_observation_grant_lifecycle::{approve_grant, rotate_grant_api_key},
     external_observation_http::{gateway_service_authenticated, one_header},
+    external_observation_membership_admin::{
+        replace_grant_bindings, valid_selection, BindingSelection,
+    },
 };
 use axum::{
     body::to_bytes,
@@ -29,8 +32,10 @@ pub const CREATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/create";
 pub const EXPIRY_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/change-expiry";
+pub const BINDINGS_PATH: &str = "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/replace-bindings";
 #[derive(Clone, Copy)]
 enum Action {
+    Bindings,
     Create,
     Expiry,
     Revoke,
@@ -53,6 +58,7 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         .route(ROTATE_PATH, post(mutate))
         .route(CREATE_PATH, post(mutate))
         .route(EXPIRY_PATH, post(mutate))
+        .route(BINDINGS_PATH, post(mutate))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -82,6 +88,12 @@ struct ExpiryRequest {
     expected_revision: i64,
     expires_at_ms: i64,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BindingsRequest {
+    expected_revision: i64,
+    bindings: Vec<BindingSelection>,
+}
 fn failure(status: StatusCode, code: &'static str) -> Response {
     (
         status,
@@ -96,6 +108,7 @@ async fn mutate(
     request: Request,
 ) -> Response {
     let action = match request.uri().path().rsplit('/').next() {
+        Some("replace-bindings") => Action::Bindings,
         Some("create") => Action::Create,
         Some("change-expiry") => Action::Expiry,
         Some("approve") => Action::Approve,
@@ -179,6 +192,30 @@ async fn mutate(
     if expected_length.is_some_and(|length| length != bytes.len()) {
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
+    if matches!(action, Action::Bindings) {
+        let value = match serde_json::from_slice::<BindingsRequest>(&bytes) {
+            Ok(value)
+                if !grant.is_nil()
+                    && (1..=9007199254740991).contains(&value.expected_revision)
+                    && valid_selection(&value.bindings) =>
+            {
+                value
+            }
+            _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+        };
+        return mutation_response(
+            replace_grant_bindings(
+                &state.pool,
+                org,
+                &actor,
+                grant,
+                value.expected_revision,
+                &value.bindings,
+            )
+            .await
+            .map(|r| (r.revision, r.audit_id)),
+        );
+    }
     if matches!(action, Action::Create | Action::Expiry) {
         let result = if matches!(action, Action::Create) {
             let value = match serde_json::from_slice::<CreateRequest>(&bytes) {
@@ -246,7 +283,7 @@ async fn mutate(
         return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
     }
     let result = match action {
-        Action::Create | Action::Expiry => unreachable!("handled above"),
+        Action::Create | Action::Expiry | Action::Bindings => unreachable!("handled above"),
         Action::Revoke => revoke_grant(&state.pool, org, &actor, grant, expected_revision)
             .await
             .map(|r| (r.revision, r.audit_id)),

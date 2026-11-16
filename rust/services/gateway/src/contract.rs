@@ -208,6 +208,7 @@ impl GatewayContract {
             crate::external_observation::ROTATE_PATH,
             crate::external_observation::CREATE_PATH,
             crate::external_observation::EXPIRY_PATH,
+            crate::external_observation::BINDINGS_PATH,
         ] {
             table.add(RouteConfig {
                 name: format!("external-observation:manage:{path}"),
@@ -540,6 +541,7 @@ impl GatewayContract {
             (crate::external_observation::ROTATE_PATH,"rotate_external_observation_producer_key","Replace the canonical producer key and deactivate its grant pending fresh approval"),
             (crate::external_observation::CREATE_PATH,"create_external_observation_producer","Create an inactive external observation producer grant"),
             (crate::external_observation::EXPIRY_PATH,"change_external_observation_producer_expiry","Change producer grant expiry and require fresh approval"),
+            (crate::external_observation::BINDINGS_PATH,"replace_external_observation_producer_bindings","Replace canonical producer binding membership and require fresh approval"),
         ] {
             let mut properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
             let mut required=vec!["expected_revision"];
@@ -556,9 +558,17 @@ impl GatewayContract {
                 properties.as_object_mut().expect("static schema object").insert("expires_at_ms".into(),json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64}));
                 required.push("expires_at_ms");
             }
+            if path==crate::external_observation::BINDINGS_PATH {
+                properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64},
+                  "bindings":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,
+                    "required":["binding_id","expected_revision"],"properties":{
+                      "binding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},
+                      "expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}}}}});
+                required=vec!["expected_revision","bindings"];
+            }
             paths.insert(path.into(),json!({"post":{
                 "operationId":operation_id,"tags":["evidence"],"summary":summary,
-                "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
+                "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Membership replacement accepts only current same-tenant/source binding IDs at exact revisions, including an empty set, and clears grant approval. It never changes binding definitions or applications. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
                 "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
                 "parameters":[
                     {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
@@ -1231,7 +1241,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 6
+                + 7
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1311,7 +1321,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 6
+                + 7
         );
         for operation in [
             "submit_external_observation",
@@ -1320,6 +1330,7 @@ mod tests {
             "rotate_external_observation_producer_key",
             "create_external_observation_producer",
             "change_external_observation_producer_expiry",
+            "replace_external_observation_producer_bindings",
         ] {
             assert!(
                 identifiers.contains(operation),
@@ -1524,7 +1535,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 6
+                + 7
         );
         assert_eq!(
             contract
@@ -1537,7 +1548,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 6
+                + 7
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1548,7 +1559,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 6
+                + 7
                 + 16
         );
         assert_eq!(
@@ -1943,6 +1954,7 @@ mod observation_admin_contract_tests {
             "rotate-api-key",
             "create",
             "change-expiry",
+            "replace-bindings",
         ] {
             let path = path.replace("/revoke", &format!("/{action}"));
             let route = route_for(&table, HttpMethod::Post, &path).unwrap();
