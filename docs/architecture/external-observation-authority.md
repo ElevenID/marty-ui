@@ -170,3 +170,24 @@ activation and administrator authority management remain required before
 activation. A service-side router test cannot establish those public Gateway
 or deployed network boundaries. Receipts still confer no evidence verification,
 application approval or credential issuance authority.
+
+## Gateway observation route
+
+The Gateway now registers POST `/v1/evidence/observations` as an explicit public
+extension routed to issuance with zero transport retries. Its observation guard
+runs after actual authentication but before shared content/tenant/body middleware.
+It requires an API-key identity with canonical key/organization IDs and the exact
+evidence:submit scope; session, admin:full and wildcard permissions do not qualify.
+It bounds original bytes to 65,536, validates unique representation/framing and
+idempotency headers, rejects query authority, and retains original JSON bytes.
+Generic tenant/body and response-cache paths are bypassed only for this guarded
+route, so every retry reaches the core journal's canonical authority checks.
+The proxy strips caller identity and supplies trusted organization/key IDs plus
+the existing issuance service credential. OpenAPI documents unsigned receipt
+semantics and the strict envelope. The guard has focused executable tests; full
+Gateway runtime integration tests and protected CI still require confirmation.
+
+Issuance bootstrap mounting, reviewed migration/role/admin activation and deployed
+network isolation remain incomplete. Registering the Gateway candidate route does
+not qualify a deployed public endpoint or authorize connector access to issuance
+or PostgreSQL. Do not activate this candidate before those integration gates pass.

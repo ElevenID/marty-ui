@@ -306,6 +306,17 @@ impl GatewayIdentityProvider for RuntimeProvider {
 
     async fn validate_api_key(&self, key: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
         Ok(match key {
+            "observation-key" | "observation-admin" => Some(ApiKeyIdentity {
+                api_key_id: "10000000-0000-4000-8000-000000000001".into(),
+                organization_id: Some("20000000-0000-4000-8000-000000000001".into()),
+                key_prefix: None,
+                scopes: vec![if key == "observation-key" {
+                    "evidence:submit"
+                } else {
+                    "admin:full"
+                }
+                .into()],
+            }),
             "verification-complete"
             | "verification-alternative"
             | "verification-admin"
@@ -7094,4 +7105,76 @@ fn applicant_evidence_identity_is_exact_and_fail_closed() {
         "org-1",
         "app-1"
     ));
+}
+
+#[tokio::test]
+async fn observation_gateway_retries_reach_upstream_with_only_trusted_identity() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let route = state
+        .routes
+        .find(&GatewayRequest::new(
+            HttpMethod::Post,
+            crate::external_observation::PATH,
+            0,
+        ))
+        .unwrap();
+    assert_eq!(route.route.retries, 0);
+    let router = gateway_router(state);
+    let bytes = br#"{ "binding_id":"one", "claims":{"completed":false} }"#;
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(crate::external_observation::PATH)
+                    .header("x-api-key", "observation-key")
+                    .header("content-type", "application/json")
+                    .header("idempotency-key", "observation-one")
+                    .header("x-api-key-id", "forged-key")
+                    .header("x-organization-id", "forged-org")
+                    .body(Body::from(bytes.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    {
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "journal retries must bypass the response cache"
+        );
+        for (service, request) in requests.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(
+                request.header("x-api-key-id"),
+                Some("10000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(request.body.as_deref(), Some(bytes.as_slice()));
+        }
+    }
+    let denied = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(crate::external_observation::PATH)
+                .header("x-api-key", "observation-admin")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "observation-one")
+                .body(Body::from(bytes.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
 }

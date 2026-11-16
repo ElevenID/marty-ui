@@ -26,7 +26,8 @@ INGRESS = "rust/services/issuance/src/external_observation_ingress.rs"
 INGRESS_TEST = "tests/rust/external-observation-journal/ingress_tests.rs"
 HTTP = "rust/services/issuance/src/external_observation_http.rs"
 HTTP_TEST = "tests/rust/external-observation-journal/http_tests.rs"
-FORMAT_FILES = (HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+GATEWAY = "rust/services/gateway/src/external_observation.rs"
+FORMAT_FILES = (GATEWAY, HTTP, HTTP_TEST, STORE, AUTHORITY, TEST, AUTHORITY_TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
 
 
 def toml_value(value):
@@ -84,7 +85,7 @@ def compile_contract(artifacts):
             f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
             f"#[path = {json.dumps(str(ROOT / AUTHORITY_TEST))}]\nmod authority_tests;\n"
         ).encode())
-        modules = [("external_observation_http", ROOT / HTTP),
+        modules = [("gateway_observation", ROOT / GATEWAY), ("external_observation_http", ROOT / HTTP),
             ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
             ("external_observation_postgres", ROOT / STORE),
             ("external_observation_authority_postgres", ROOT / AUTHORITY),

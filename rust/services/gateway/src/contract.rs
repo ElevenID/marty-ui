@@ -186,6 +186,22 @@ impl GatewayContract {
                 }]),
             })?;
         }
+        table.add(RouteConfig {
+            name: "external-observation:submit".into(),
+            pattern: crate::external_observation::PATH.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "issuance".into(),
+            methods: BTreeSet::from([HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 30_000,
+            retries: 0,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority(crate::external_observation::PATH),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
         for path in MDOC_CERTIFICATE_PATHS {
             table.add(RouteConfig {
@@ -488,6 +504,12 @@ impl GatewayContract {
             );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
+        paths.insert(
+            crate::external_observation::PATH.into(),
+            json!({
+                "post": crate::external_observation::openapi_operation()
+            }),
+        );
         json!({
             "openapi": "3.1.0",
             "info": {
@@ -611,6 +633,9 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 }
 
 fn special_service(path: &str) -> Option<&'static str> {
+    if path == crate::external_observation::PATH {
+        return Some("issuance");
+    }
     if STATUS_PUBLIC.is_match(path) {
         return Some("revocation-profiles");
     }
@@ -1142,6 +1167,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 1
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1420,6 +1446,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 1
         );
         assert_eq!(
             contract
@@ -1432,6 +1459,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 1
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1442,6 +1470,7 @@ mod tests {
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 1
                 + 16
         );
         assert_eq!(

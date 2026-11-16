@@ -452,6 +452,7 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
             Arc::clone(&state),
             content_type_middleware,
         ))
+        .layer(middleware::from_fn(observation_middleware))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             authentication_middleware,
@@ -643,6 +644,33 @@ async fn authentication_middleware(
     next.run(request).await
 }
 
+async fn observation_middleware(request: Request, next: Next) -> Response {
+    if request.uri().path() != crate::external_observation::PATH {
+        return next.run(request).await;
+    }
+    let identity = request.extensions().get::<GatewayIdentity>().cloned();
+    let Some(identity) = identity else {
+        return detail_response(401, "observation_authentication_required");
+    };
+    match crate::external_observation::admit(
+        request,
+        identity.source == AuthenticationSource::ApiKey,
+        identity.api_key_id.as_deref(),
+        identity.session_organization_id.as_deref(),
+        &identity.api_key_scopes,
+    )
+    .await
+    {
+        Ok(mut request) => {
+            let mut trusted = base_trusted_identity(&identity);
+            trusted.required_permission = Some("evidence:submit".into());
+            request.extensions_mut().insert(trusted);
+            next.run(request).await
+        }
+        Err((status, code)) => detail_response(status.as_u16(), code),
+    }
+}
+
 async fn content_type_middleware(
     State(state): State<Arc<GatewayRuntimeState>>,
     request: Request,
@@ -730,6 +758,11 @@ async fn tenant_authorization_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // Original observation bytes and retries belong to the canonical journal.
+    if request.uri().path() == crate::external_observation::PATH {
+        return next.run(request).await;
+    }
+
     let (parts, body) = request.into_parts();
     let body = match to_bytes(body, state.maximum_body_bytes).await {
         Ok(body) => body,
@@ -967,6 +1000,11 @@ async fn idempotency_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // Original observation bytes and retries belong to the canonical journal.
+    if request.uri().path() == crate::external_observation::PATH {
+        return next.run(request).await;
+    }
+
     // Validate before IdempotencyBegin::Replay, not just before proxying.
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         if let Err(detail) = issuance_idempotency_key(request.headers()) {
