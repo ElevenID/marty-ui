@@ -694,4 +694,3 @@ async fn binding_revision_does_not_reset_sequence_history() {
     assert_eq!(head, 2);
     f.pool.close().await;
 }
-

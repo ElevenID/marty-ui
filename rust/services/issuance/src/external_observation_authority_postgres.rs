@@ -15,8 +15,8 @@ use sqlx::{PgConnection, Row};
 use uuid::Uuid;
 
 use crate::external_observation_admission::{
-    ApplicationSnapshot, AuthenticatedApiKey, ClaimKind, ClaimRule, EvidenceBinding,
-    ProducerGrant, MAX_SAFE_INTEGER,
+    ApplicationSnapshot, AuthenticatedApiKey, ClaimKind, ClaimRule, EvidenceBinding, ProducerGrant,
+    MAX_SAFE_INTEGER,
 };
 use crate::external_observation_postgres::{
     JournalError, LockedAuthority, ObservationAuthority, ProducerIdentity,
@@ -73,13 +73,17 @@ fn positive_i64(value: i64) -> Result<u64, JournalError> {
     Ok(result)
 }
 
-fn parse_claim_rules(value: serde_json::Value) -> Result<BTreeMap<String, ClaimRule>, JournalError> {
+fn parse_claim_rules(
+    value: serde_json::Value,
+) -> Result<BTreeMap<String, ClaimRule>, JournalError> {
     let stored: BTreeMap<String, StoredClaimRule> =
         serde_json::from_value(value).map_err(|_| JournalError::InvalidStoredState)?;
     let mut rules = BTreeMap::new();
     for (name, rule) in stored {
         let kind = match rule.kind.as_str() {
-            "boolean" if rule.minimum.is_none() && rule.maximum.is_none() && rule.max_bytes.is_none() => {
+            "boolean"
+                if rule.minimum.is_none() && rule.maximum.is_none() && rule.max_bytes.is_none() =>
+            {
                 ClaimKind::Boolean
             }
             "number" if rule.max_bytes.is_none() => {
@@ -99,18 +103,20 @@ fn parse_claim_rules(value: serde_json::Value) -> Result<BTreeMap<String, ClaimR
             }
             _ => return Err(JournalError::InvalidStoredState),
         };
-        rules.insert(name, ClaimRule {
-            kind,
-            required: rule.required,
-            nullable: rule.nullable,
-        });
+        rules.insert(
+            name,
+            ClaimRule {
+                kind,
+                required: rule.required,
+                nullable: rule.nullable,
+            },
+        );
     }
     if rules.is_empty() || rules.len() > 32 {
         return Err(JournalError::InvalidStoredState);
     }
     Ok(rules)
 }
-
 
 #[derive(Default)]
 pub struct PostgresObservationAuthority;
@@ -123,10 +129,12 @@ impl ObservationAuthority for PostgresObservationAuthority {
         identity: &ProducerIdentity,
         binding_id: &str,
     ) -> Result<LockedAuthority, JournalError> {
-        let key_id = Uuid::parse_str(&identity.api_key_id)
-            .map_err(|_| JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
-        let organization_id = Uuid::parse_str(&identity.organization_id)
-            .map_err(|_| JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
+        let key_id = Uuid::parse_str(&identity.api_key_id).map_err(|_| {
+            JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized)
+        })?;
+        let organization_id = Uuid::parse_str(&identity.organization_id).map_err(|_| {
+            JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized)
+        })?;
 
         // Lock 1: canonical API key. Organization service revocation uses the
         // same row lock in this database, so revoke and admission are ordered.
@@ -142,17 +150,19 @@ impl ObservationAuthority for PostgresObservationAuthority {
         .fetch_optional(&mut *connection)
         .await
         .map_err(database_error)?
-        .ok_or(JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
+        .ok_or(JournalError::Denied(
+            crate::external_observation_admission::Denial::NotAuthorized,
+        ))?;
 
         let key_scope_type: String = key.try_get("scope_type").map_err(database_error)?;
-        let deployment_profile_id: Option<Uuid> =
-            key.try_get("deployment_profile_id").map_err(database_error)?;
+        let deployment_profile_id: Option<Uuid> = key
+            .try_get("deployment_profile_id")
+            .map_err(database_error)?;
         let key_status: String = key.try_get("status").map_err(database_error)?;
         let key_enabled: bool = key.try_get("enabled").map_err(database_error)?;
         let key_expires_at: Option<DateTime<Utc>> =
             key.try_get("expires_at").map_err(database_error)?;
-        let key_updated_at: DateTime<Utc> =
-            key.try_get("updated_at").map_err(database_error)?;
+        let key_updated_at: DateTime<Utc> = key.try_get("updated_at").map_err(database_error)?;
         let key_scopes: Vec<String> = key
             .try_get::<Option<Vec<String>>, _>("scopes")
             .map_err(database_error)?
@@ -185,7 +195,9 @@ impl ObservationAuthority for PostgresObservationAuthority {
         .fetch_optional(&mut *connection)
         .await
         .map_err(database_error)?
-        .ok_or(JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
+        .ok_or(JournalError::Denied(
+            crate::external_observation_admission::Denial::NotAuthorized,
+        ))?;
 
         let grant_id: Uuid = grant.try_get("id").map_err(database_error)?;
         let grant_organization: Uuid = grant.try_get("organization_id").map_err(database_error)?;
@@ -227,12 +239,13 @@ impl ObservationAuthority for PostgresObservationAuthority {
         .fetch_optional(&mut *connection)
         .await
         .map_err(database_error)?
-        .ok_or(JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
+        .ok_or(JournalError::Denied(
+            crate::external_observation_admission::Denial::NotAuthorized,
+        ))?;
 
         let binding_application_id: String =
             binding.try_get("application_id").map_err(database_error)?;
-        let binding_subject_id: String =
-            binding.try_get("subject_id").map_err(database_error)?;
+        let binding_subject_id: String = binding.try_get("subject_id").map_err(database_error)?;
         let binding_resource_scope: serde_json::Value =
             binding.try_get("resource_scope").map_err(database_error)?;
         let binding_claim_rules: serde_json::Value =
@@ -243,8 +256,9 @@ impl ObservationAuthority for PostgresObservationAuthority {
         let claims = parse_claim_rules(binding_claim_rules)?;
         let binding_revision: i64 = binding.try_get("revision").map_err(database_error)?;
         let max_age_ms: i64 = binding.try_get("max_age_ms").map_err(database_error)?;
-        let max_clock_skew_ms: i64 =
-            binding.try_get("max_clock_skew_ms").map_err(database_error)?;
+        let max_clock_skew_ms: i64 = binding
+            .try_get("max_clock_skew_ms")
+            .map_err(database_error)?;
 
         // Lock 4: the canonical application and its subject/lifecycle owner.
         let application = sqlx::query(
@@ -258,13 +272,17 @@ impl ObservationAuthority for PostgresObservationAuthority {
         .fetch_optional(&mut *connection)
         .await
         .map_err(database_error)?
-        .ok_or(JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized))?;
+        .ok_or(JournalError::Denied(
+            crate::external_observation_admission::Denial::NotAuthorized,
+        ))?;
 
         let application_id: String = application.try_get("id").map_err(database_error)?;
-        let application_organization: String =
-            application.try_get("organization_id").map_err(database_error)?;
-        let application_subject: String =
-            application.try_get("applicant_identifier").map_err(database_error)?;
+        let application_organization: String = application
+            .try_get("organization_id")
+            .map_err(database_error)?;
+        let application_subject: String = application
+            .try_get("applicant_identifier")
+            .map_err(database_error)?;
         let application_status: String = application.try_get("status").map_err(database_error)?;
         let application_updated_at: DateTime<Utc> =
             application.try_get("updated_at").map_err(database_error)?;
@@ -272,10 +290,13 @@ impl ObservationAuthority for PostgresObservationAuthority {
             application.try_get("expires_at").map_err(database_error)?;
         let application_expiry_ms = expiry_ms(Some(application_expires_at))?;
 
-        if grant_organization != organization_id || grant_key_id != key_id
+        if grant_organization != organization_id
+            || grant_key_id != key_id
             || application_organization != organization_id.to_string()
         {
-            return Err(JournalError::Denied(crate::external_observation_admission::Denial::NotAuthorized));
+            return Err(JournalError::Denied(
+                crate::external_observation_admission::Denial::NotAuthorized,
+            ));
         }
 
         let key_scopes = key_scopes.into_iter().collect::<BTreeSet<_>>();
@@ -301,8 +322,10 @@ impl ObservationAuthority for PostgresObservationAuthority {
                 id: binding.try_get("id").map_err(database_error)?,
                 revision: positive_i64(binding_revision)?,
                 active: binding.try_get("active").map_err(database_error)?,
-                organization_id: binding.try_get::<Uuid, _>("organization_id")
-                    .map_err(database_error)?.to_string(),
+                organization_id: binding
+                    .try_get::<Uuid, _>("organization_id")
+                    .map_err(database_error)?
+                    .to_string(),
                 source_id: binding.try_get("source_id").map_err(database_error)?,
                 provider: binding.try_get("provider").map_err(database_error)?,
                 application_id: binding_application_id,
@@ -314,7 +337,9 @@ impl ObservationAuthority for PostgresObservationAuthority {
                 max_clock_skew_ms: {
                     let value = u64::try_from(max_clock_skew_ms)
                         .map_err(|_| JournalError::InvalidStoredState)?;
-                    if value > 30_000 { return Err(JournalError::InvalidStoredState); }
+                    if value > 30_000 {
+                        return Err(JournalError::InvalidStoredState);
+                    }
                     value
                 },
             },
@@ -324,7 +349,10 @@ impl ObservationAuthority for PostgresObservationAuthority {
                 subject_id: application_subject,
                 revision: revision(application_updated_at)?,
                 expires_at_ms: application_expiry_ms,
-                accepts_observations: matches!(application_status.as_str(), "pending" | "under_review"),
+                accepts_observations: matches!(
+                    application_status.as_str(),
+                    "pending" | "under_review"
+                ),
             },
         })
     }
