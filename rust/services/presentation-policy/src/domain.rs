@@ -410,6 +410,16 @@ pub fn normalize_credential_format(value: &str) -> String {
     marty_verification::policy::canonical_credential_format(value)
 }
 
+/// Includes rule values, binding/status requirements, referenced authorities,
+/// version and display/consent metadata; callers must treat this as opaque.
+pub fn policy_configuration_digest(
+    policy: &PresentationPolicy,
+) -> Result<String, PolicyDomainError> {
+    crate::policy_revision(policy)
+        .map(|revision| revision.content_digest)
+        .map_err(|error| PolicyDomainError::Native(error.to_string()))
+}
+
 pub fn evaluate_verified_facts_json(request_json: &str) -> Result<String, PolicyDomainError> {
     if request_json.len() > 1_000_000 {
         return Err(PolicyDomainError::Native(

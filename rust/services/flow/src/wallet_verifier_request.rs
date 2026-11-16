@@ -196,6 +196,9 @@ pub async fn prepare_wallet_verifier_request(
     now: DateTime<Utc>,
 ) -> Result<PreparedWalletVerifierRequest, WalletVerifierRequestError> {
     let invalid = || WalletVerifierRequestError::Unavailable;
+    // Sample-bound public sessions are server specimen journeys. Managed
+    // authority must not turn them into an external-wallet request channel.
+    crate::public_verification_session::require_wallet_session(&instance).map_err(|_| invalid())?;
     let base = public_base_url.trim_end_matches('/');
     let parsed_base = url::Url::parse(base).map_err(|_| invalid())?;
     if organization_id.is_empty()
@@ -701,6 +704,14 @@ mod tests {
             application_approval: crate::FlowHttpApplicationApprovalOptions::default(),
         });
         let source = instance(Utc::now());
+        let mut specimen=instance_with_id(Utc::now(),"11111111-2222-4333-8444-555555555557");
+        specimen.context[crate::public_verification_session::PUBLIC_SESSION]=json!({"example_id":"synthetic-server-specimen"});
+        assert!(repository.save_instance(&specimen).await.unwrap());
+        let denied=app.clone().oneshot(Request::post(format!("/internal/v1/wallet-verifier-requests/{}",specimen.id))
+            .header("x-service-token",&token).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(denied.status(),409);
+        assert_eq!(signer.signs.load(Ordering::SeqCst),0);
+        assert!(!has_wallet_verifier_request(&repository.instance(&specimen.id).await.unwrap().unwrap()));
         assert!(repository.save_instance(&source).await.unwrap());
         let owner_uri = format!("/internal/v1/wallet-verifier-requests/{}", source.id);
         let public_uri = format!("/v1/flows/instances/{}/request", source.id);
@@ -964,11 +975,13 @@ mod tests {
             "frozen",
             "post",
             "haip",
+            "public-specimen",
         ] {
             let mut source = instance(now);
             match mutation {
                 "tenant" => source.organization_id = "other-org".into(),
                 "cancelled" => source.status = FlowInstanceStatus::Completed,
+                "public-specimen" => source.context[crate::public_verification_session::PUBLIC_SESSION]=json!({"example_id":"synthetic-server-specimen"}),
                 "instance" => source.id = "../sibling".into(),
                 "nonce" => source.context["nonce"] = json!("replaced"),
                 "frozen" => {

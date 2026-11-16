@@ -7128,3 +7128,175 @@ fn applicant_evidence_identity_is_exact_and_fail_closed() {
         "app-1"
     ));
 }
+
+#[tokio::test]
+async fn public_verification_forwards_capability_without_browser_authority_or_cache_reuse() {
+    let (router, recorder) = actor_test_router();
+    let id = "54cfd66e-b7ed-8926-9f8b-18e63fa83797";
+    for (method, path) in [
+        ("GET", "/v1/flows/public/verification/catalog".into()),
+        ("POST", "/v1/flows/public/verification/sessions".into()),
+        (
+            "GET",
+            format!("/v1/flows/public/verification/sessions/{id}"),
+        ),
+        (
+            "POST",
+            format!("/v1/flows/public/verification/sessions/{id}/cancel"),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(&path)
+            .header("content-type", "application/json")
+            .header("origin", "https://site.example")
+            .header("x-verification-session", "opaque-visitor-capability")
+            .header("x-user-id", "forged")
+            .header("x-organization-id", "forged")
+            .header("x-api-key-id", "forged")
+            .header("x-api-key-scopes", "*")
+            .header("x-service-token", "forged")
+            .header("x-authenticated-user-id", "forged")
+            .header("authorization", "Bearer irrelevant")
+            .header("cookie", "sessionId=actor-session")
+            .header("if-none-match", "*")
+            .header("idempotency-key", "shared-key")
+            .body(Body::from(if method == "POST" { "{}" } else { "" }))
+            .unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert!(response.headers().get("etag").is_none());
+    }
+    {
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 4);
+        for (service, request) in calls.iter() {
+            assert_eq!(service, "flows");
+            assert_eq!(request.header("origin"), Some("https://site.example"));
+            assert_eq!(
+                request.header("x-verification-session"),
+                Some("opaque-visitor-capability")
+            );
+            for name in [
+                "x-user-id",
+                "x-organization-id",
+                "x-api-key-id",
+                "x-api-key-scopes",
+                "x-authenticated-user-id",
+                "authorization",
+                "cookie",
+                "idempotency-key",
+            ] {
+                assert_eq!(request.header(name), None, "{name}");
+            }
+            assert_eq!(
+                request.header("x-service-token"),
+                Some("s".repeat(32).as_str())
+            );
+        }
+    }
+    for path in [
+        "/v1/flows/definitions",
+        "/v1/flows/instances",
+        "/v1/flows/instances/flow-1/result",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .header("x-verification-session", "opaque-visitor-capability")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+    assert_eq!(recorder.0.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn public_verification_rejects_header_ambiguity_and_oversized_requests_before_forwarding() {
+    let (router, recorder) = actor_test_router();
+    for name in ["origin", "x-verification-session"] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/v1/flows/public/verification/sessions")
+            .header("content-type", "application/json")
+            .header(name, "first")
+            .body(Body::from("{}"))
+            .unwrap();
+        request
+            .headers_mut()
+            .append(name, HeaderValue::from_static("second"));
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/flows/public/verification/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from("x".repeat(4_097)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(recorder.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn public_verification_keeps_anonymous_request_limits_and_ignores_capability_for_gateway_cache_identity(
+) {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let mut state = Arc::into_inner(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ))
+    .unwrap();
+    state.rate_limiter =
+        Arc::new(GatewayRateLimiter::new(Arc::new(InMemoryRateLimiter::default()), 2).unwrap());
+    let router = gateway_router(Arc::new(state.with_client_ip_observation(false)));
+    for index in 0..3 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/flows/public/verification/sessions")
+                    .header("content-type", "application/json")
+                    .header("x-verification-session", format!("capability-{index}"))
+                    .header("idempotency-key", "same-key")
+                    .header("x-forwarded-for", format!("203.0.113.{index}"))
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if index < 2 {
+                StatusCode::OK
+            } else {
+                StatusCode::TOO_MANY_REQUESTS
+            }
+        );
+        assert_eq!(response.headers()["cache-control"], "no-store");
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0].1.header("x-verification-session"),
+        Some("capability-0")
+    );
+    assert_eq!(
+        calls[1].1.header("x-verification-session"),
+        Some("capability-1")
+    );
+}

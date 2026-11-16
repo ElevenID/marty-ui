@@ -1595,6 +1595,44 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Test public verification finalization and retention on fresh PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          # This job owns the disposable Compose PostgreSQL container. Each
+          # contract requires its own fresh database with this exact name.
+          for test_name in \
+            demo_holder::tests::public_example_http_uses_capability_cas_and_canonical_nonce_finalization \
+            demo_holder::retention_tests::public_retention_postgres_erases_payloads_preserves_quota_and_replay_receipts; do
+            docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres marty_public_verification_test
+            export FLOW_PUBLIC_VERIFICATION_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_public_verification_test
+            cargo test --locked -p marty-flow --lib -- --list | grep -Fx "$test_name: test"
+            run_timed public_verification_postgres cargo test --locked -p marty-flow --lib \
+              "$test_name" -- --ignored --exact --nocapture \
+              | tee "$RUNNER_TEMP/public-verification-postgres-${test_name##*::}.log"
+            grep -Eq 'test result: ok\. 1 passed; 0 failed;' \
+              "$RUNNER_TEMP/public-verification-postgres-${test_name##*::}.log"
+            docker exec "$MARTY_RUST_CI_POSTGRES_ID" dropdb -U postgres marty_public_verification_test
+          done
+      - name: Test public HTTP retry quota and cancellation races on fresh PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres marty_public_verification_test
+          export FLOW_PUBLIC_VERIFICATION_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_public_verification_test
+          test_name=public_session::public_http_postgres_retry_quota_and_cancel_races
+          cargo test --locked -p marty-flow --test verification_start_behavior -- --list | grep -Fx "$test_name: test"
+          run_timed public_verification_http_postgres cargo test --locked -p marty-flow \
+            --test verification_start_behavior "$test_name" -- --ignored --exact --nocapture \
+            | tee "$RUNNER_TEMP/public-verification-http-postgres.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/public-verification-http-postgres.log"
+          docker exec "$MARTY_RUST_CI_POSTGRES_ID" dropdb -U postgres marty_public_verification_test
       - name: Require public protocol vector test execution
         if: matrix.lane == 'contracts'
         shell: bash
@@ -1755,6 +1793,44 @@ jobs:
       - name: Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao
         if: matrix.lane == 'contracts'
         run: python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier
+      - name: Check capacity and Docker context before public browser qualification
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker context show
+          docker info --format '{{json .SecurityOptions}}'
+          available_kib="$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ && "$available_kib" -ge 4194304 ]]
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        if: matrix.lane == 'contracts'
+        with:
+          node-version-file: .node-version
+      - name: Install locked public browser dependencies
+        if: matrix.lane == 'contracts'
+        working-directory: ui
+        shell: bash
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: 'true'
+          MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL: chrome
+        run: |
+          set -euo pipefail
+          # Keep npm's checked-in dependency resolutions and integrity checks.
+          # Use the runner's regular Chrome installation, whose Ubuntu package
+          # has a usable sandbox policy. Do not disable Chrome/AppArmor sandboxing
+          # or install a privileged helper for the downloaded testing browser.
+          unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH
+          npm ci
+          node scripts/public-verification-browser.mjs --check
+      - name: Qualify production-built public UI against isolated Gateway and managed KMS
+        if: matrix.lane == 'contracts'
+        shell: bash
+        env:
+          MARTY_TEST_PUBLIC_DEMO_BROWSER_CHANNEL: chrome
+        run: |
+          set -euo pipefail
+          unset PUPPETEER_CACHE_DIR PUPPETEER_EXECUTABLE_PATH
+          python3 scripts/probe_signing_keys_openbao_policy.py --public-demo-browser
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite

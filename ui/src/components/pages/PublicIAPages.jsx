@@ -94,7 +94,7 @@ function Section({ title, subtitle, children }) {
 }
 
 const defaultActions = [
-  { label: 'Start Verifying Credentials', path: '/developers', startIcon: <VerifiedUserIcon /> },
+  { label: 'Start Verifying Credentials', path: '/verify', startIcon: <VerifiedUserIcon /> },
   { label: 'View Verification API', path: '/verifiable-credential-api', variant: 'outlined', endIcon: <ArrowForwardIcon /> },
 ];
 

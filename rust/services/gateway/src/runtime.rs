@@ -464,6 +464,7 @@ pub fn gateway_router(state: Arc<GatewayRuntimeState>) -> Router {
             Arc::clone(&state),
             mip_version_middleware,
         ))
+        .layer(middleware::from_fn(crate::public_verification::no_store))
         .with_state(state)
 }
 
@@ -613,7 +614,32 @@ async fn authentication_middleware(
             MipError::new("method_not_allowed", "Method not allowed"),
         );
     };
-    let route_request = GatewayRequest::new(method, request.uri().path(), now_ms());
+    // The public catalog has explicit GET/POST routes, so a browser preflight
+    // otherwise fails lookup before the existing innermost CORS stage. Resolve
+    // only its declared target; retain OPTIONS through the middleware chain.
+    let lookup_method = if method == HttpMethod::Options
+        && request
+            .headers()
+            .get(header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|origin| state.cors_origins.contains(origin))
+    {
+        crate::public_verification::preflight_method(request.uri().path(), request.headers())
+            .filter(|target| {
+                state
+                    .routes
+                    .find(&GatewayRequest::new(
+                        *target,
+                        request.uri().path(),
+                        now_ms(),
+                    ))
+                    .is_ok_and(|found| !found.route.auth_required)
+            })
+            .unwrap_or(method)
+    } else {
+        method
+    };
+    let route_request = GatewayRequest::new(lookup_method, request.uri().path(), now_ms());
     let required = match state.routes.find(&route_request) {
         Ok(found) => found.route.auth_required,
         Err(_) => {
@@ -673,7 +699,9 @@ async fn entity_tag_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() == "/v1/notifications/events/push" {
+    if request.uri().path() == "/v1/notifications/events/push"
+        || crate::public_verification::is_public_path(request.uri().path())
+    {
         return next.run(request).await;
     }
     let method = request.method().as_str().to_owned();
@@ -731,7 +759,12 @@ async fn tenant_authorization_middleware(
     next: Next,
 ) -> Response {
     let (parts, body) = request.into_parts();
-    let body = match to_bytes(body, state.maximum_body_bytes).await {
+    let maximum_body_bytes = if crate::public_verification::is_public_path(parts.uri.path()) {
+        4_096.min(state.maximum_body_bytes)
+    } else {
+        state.maximum_body_bytes
+    };
+    let body = match to_bytes(body, maximum_body_bytes).await {
         Ok(body) => body,
         Err(_) => {
             return error_response(
@@ -967,6 +1000,11 @@ async fn idempotency_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // The capability, admitted selection and stored nonce form the public
+    // launch identity. A general body/Idempotency-Key cache cannot replace it.
+    if crate::public_verification::is_public_path(request.uri().path()) {
+        return next.run(request).await;
+    }
     // Validate before IdempotencyBegin::Replay, not just before proxying.
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         if let Err(detail) = issuance_idempotency_key(request.headers()) {
@@ -1298,6 +1336,14 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
+    if crate::public_verification::is_public_path(&public_path)
+        && !crate::public_verification::unambiguous_headers(&parts.headers)
+    {
+        return detail_response(
+            400,
+            "Origin and verification session capability must occur once",
+        );
+    }
     if invalid_passport_cancellation_key(
         parts.method.as_str(),
         &public_path,
@@ -1362,6 +1408,9 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
+    if crate::public_verification::is_public_path(&public_path) {
+        crate::public_verification::restrict_headers(&mut gateway_request.headers);
+    }
     // Only the authorized Gateway producer may attach this proof. A public
     // caller's header must never be forwarded to Signing Keys.
     gateway_request
