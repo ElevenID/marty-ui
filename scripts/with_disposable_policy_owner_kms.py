@@ -47,8 +47,12 @@ import tempfile
 import time
 from urllib.error import HTTPError
 
-from selfhost_openbao_client import Bao
-from with_disposable_event_stream_kms import provision_server_identity
+if __package__:
+    from .selfhost_openbao_client import Bao
+    from .with_disposable_event_stream_kms import provision_server_identity
+else:
+    from selfhost_openbao_client import Bao
+    from with_disposable_event_stream_kms import provision_server_identity
 
 
 TLS_PREFIX = "MARTY_TEST_POLICY_OWNER_TLS_"
@@ -102,6 +106,7 @@ def public_certificate(
     common_name: str,
     ip_sans: str | None = None,
     uri_sans: str | None = None,
+    *, pki_mount: str = "pki",
 ) -> str:
     csr = bao.request(
         "POST", f"transit/keys/{key_name}/csr", {"version": key_version}
@@ -111,16 +116,17 @@ def public_certificate(
         request["ip_sans"] = ip_sans
     if uri_sans is not None:
         request["uri_sans"] = uri_sans
-    signed = bao.request("POST", f"pki/sign/{role}", request)["data"]
+    signed = bao.request("POST", f"{pki_mount}/sign/{role}", request)["data"]
     if "private_key" in signed:
         raise RuntimeError("PKI returned private key material")
     return signed["certificate"]
 
 
-def owner_environment(bao: Bao, root: Path, address: str) -> dict[str, str]:
+def owner_environment(bao: Bao, root: Path, address: str, *, reuse_transit: bool = False,
+                      pki_mount: str = "pki") -> dict[str, str]:
     # Reuse the established fixture's non-exportable Transit key, internal PKI
     # CA, narrowly scoped token, and explicit denial of signing with another key.
-    identity = provision_server_identity(bao, root, "signing-keys")
+    identity = provision_server_identity(bao, root, "signing-keys", reuse_transit=reuse_transit, pki_mount=pki_mount)
     key_name = identity["key_name"]
     role = {
         "allow_any_name": True,
@@ -135,20 +141,20 @@ def owner_environment(bao: Bao, root: Path, address: str) -> dict[str, str]:
         # Transit CSRs have no SANs. Use the explicit certificate request names.
         "use_csr_sans": False,
     }
-    bao.request("POST", "pki/roles/signing-keys", role)
+    bao.request("POST", f"{pki_mount}/roles/signing-keys", role)
     Path(identity["cert"]).write_text(
         public_certificate(
-            bao, key_name, 1, "signing-keys", "localhost", "127.0.0.1"
+            bao, key_name, 1, "signing-keys", "localhost", "127.0.0.1", pki_mount=pki_mount
         ),
         encoding="ascii",
     )
 
     # This leaf uses the same owner CA and original key but has the wrong name.
     # Rejection therefore proves name verification independently of CA trust.
-    bao.request("POST", "pki/roles/w05-wrong-dns", role)
+    bao.request("POST", f"{pki_mount}/roles/w05-wrong-dns", role)
     alternate_certificate = root / "wrong-dns-public.pem"
     alternate_certificate.write_text(
-        public_certificate(bao, key_name, 1, "w05-wrong-dns", "other.example"),
+        public_certificate(bao, key_name, 1, "w05-wrong-dns", "other.example", pki_mount=pki_mount),
         encoding="ascii",
     )
 
@@ -164,7 +170,7 @@ def owner_environment(bao: Bao, root: Path, address: str) -> dict[str, str]:
     rotated_certificate = root / "rotated-public.pem"
     rotated_certificate.write_text(
         public_certificate(
-            bao, key_name, 2, "signing-keys", "localhost", "127.0.0.1"
+            bao, key_name, 2, "signing-keys", "localhost", "127.0.0.1", pki_mount=pki_mount
         ),
         encoding="ascii",
     )

@@ -334,13 +334,29 @@ def remove_owned_holder_backend(name, cid):
 
 
 @contextmanager
-def holder_issuer_tls(nonce):
+def holder_issuer_tls(nonce, endpoint, ca_file, root_token):
+    parsed = urllib.parse.urlsplit(endpoint)
+    ensure(parsed.scheme == "https" and parsed.hostname == "127.0.0.1" and parsed.port
+           and parsed.path in ("", "/v1") and not parsed.query and not parsed.fragment
+           and not parsed.username and not parsed.password, "owned TLS OpenBao origin required")
+    ensure(re.fullmatch(r"[a-f0-9]{32,64}", nonce), "owned fixture nonce required")
     if __package__:
-        from .holder_issuer_tls_fixture import serve
+        from .selfhost_openbao_client import Bao
+        from .with_disposable_policy_owner_kms import owner_environment
     else:
-        from holder_issuer_tls_fixture import serve
-    with serve(nonce) as environment:
-        yield environment
+        from selfhost_openbao_client import Bao
+        from with_disposable_policy_owner_kms import owner_environment
+    origin = endpoint.removesuffix("/v1")
+    bao = Bao(origin, ca_file, root_token)
+    ensure(bao.request("GET", "secret/data/marty-test-disposable-guard")["data"]["data"]["nonce"] == nonce,
+           "refuse unmarked owner TLS provisioning")
+    with tempfile.TemporaryDirectory(prefix="marty-holder-real-owner-") as directory:
+        private = Path(directory)
+        os.chmod(private, 0o700)
+        (private / "vault-ca.pem").write_bytes(Path(ca_file).read_bytes())
+        # A new fixture PKI mount leaves the initialized service CA untouched.
+        yield owner_environment(bao, private, origin, reuse_transit=True,
+                                pki_mount="holder-owner-pki-" + uuid.uuid4().hex[:16])
 
 
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
@@ -888,7 +904,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             )
             for _ in range(80):
                 ready = docker(
-                    "exec", postgres_name, "pg_isready", "-U", "postgres",
+                    "exec", postgres_name, "pg_isready", "-h", "127.0.0.1", "-U", "postgres",
                     "-d", "marty_holder_test",
                 )
                 if ready.returncode == 0:
@@ -897,6 +913,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             else:
                 raise RuntimeError("Disposable holder PostgreSQL did not become healthy")
             nonce = uuid.uuid4().hex
+            require_docker("exec", postgres_id, "psql", "-X", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "marty_holder_test",
+                "-c", f"CREATE TABLE public.marty_disposable_guard(nonce text NOT NULL); INSERT INTO public.marty_disposable_guard VALUES ('{nonce}')")
             status, _ = call(
                 "POST",
                 "secret/data/marty-test-disposable-guard",
@@ -926,7 +944,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 }
             )
             if holder_lifecycle:
-                with holder_issuer_tls(nonce) as trust_environment:
+                with holder_issuer_tls(nonce, endpoint, ca_file, root_token) as trust_environment:
                     holder = subprocess.run([str(holder_test_binary),
                         "registration_provision_sign_and_deactivate_delete_remote_key", "--ignored", "--exact", "--nocapture"],
                         cwd=ROOT / "rust", env=dict(environment, **trust_environment),
@@ -937,8 +955,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 if not rust_test_succeeded(holder) or "1 passed; 0 failed; 0 ignored;" not in holder.stdout:
                     raise RuntimeError("Owned holder lifecycle failed:\n" + detail[-6000:])
                 print(detail, end="")
-                return {"holderLifecyclePassed": 1, "ignored": 0, "issuerOwner": "controlled TLS adapter",
-                    "scope": "actual holder provision/sign/rotate/revoke with owned PostgreSQL/Redis/TLS OpenBao; not installed wallet or live PDP"}
+                return {"holderLifecyclePassed": 1, "ignored": 0, "issuerOwner": "actual PostgreSQL Trust Profile over production keyless HTTPS and Device HTTP",
+                    "scope": "actual holder provision/sign/rotate/revoke and issuer owner/Device chain with owned PostgreSQL/Redis/TLS OpenBao; controlled PDP/public issuer metadata, not installed wallet or deployed control plane"}
             migration_transport = subprocess.run(
                 ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
                  "--lib", "--locked", "--offline", "-j2",
@@ -1126,7 +1144,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
-            with holder_issuer_tls(nonce) as trust_environment:
+            with holder_issuer_tls(nonce, endpoint, ca_file, root_token) as trust_environment:
                 result = subprocess.run(
                     [
                         "cargo", "+1.95", "test", "-p", "marty-service-acceptance",

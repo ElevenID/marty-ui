@@ -19,9 +19,14 @@ import subprocess
 import tempfile
 import time
 from urllib.error import HTTPError, URLError
-from pinned_openbao_image import require_pinned_openbao
-from selfhost_openbao_client import Bao, public_key_der
-from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
+if __package__:
+    from .pinned_openbao_image import require_pinned_openbao
+    from .selfhost_openbao_client import Bao, public_key_der
+    from .provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
+else:
+    from pinned_openbao_image import require_pinned_openbao
+    from selfhost_openbao_client import Bao, public_key_der
+    from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
 
 
 IMAGE = re.compile(r"quay\.io/openbao/openbao@sha256:[0-9a-f]{64}\Z")
@@ -225,10 +230,18 @@ def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> 
                     raise RuntimeError("disposable signer crossed key scope")
 
 
-def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]:
+def provision_server_identity(bao: Bao, root: Path, role: str, *, reuse_transit: bool = False,
+                              pki_mount: str = "pki") -> dict[str, str]:
     if role not in {"event-stream", "signing-keys", "signing-keys-image", "passport-edge", "oidf-edge"}:
         raise RuntimeError("unknown disposable server TLS role")
-    bao.request("POST", "sys/mounts/transit", {"type": "transit"})
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", pki_mount) or pki_mount == "transit":
+        raise RuntimeError("invalid disposable PKI mount")
+    if reuse_transit:
+        mounts = bao.request("GET", "sys/mounts").get("data", {})
+        if mounts.get("transit/", {}).get("type") != "transit":
+            raise RuntimeError("owned existing Transit mount type mismatch")
+    else:
+        bao.request("POST", "sys/mounts/transit", {"type": "transit"})
     key_name = role + "-tls-" + secrets.token_hex(8)
     bao.request("POST", f"transit/keys/{key_name}", {
         "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
@@ -237,8 +250,8 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
     if (metadata["type"] != "ecdsa-p256" or metadata["exportable"] is not False
             or metadata["allow_plaintext_backup"] is not False):
         raise RuntimeError("disposable server signer is not non-exportable")
-    bao.request("POST", "sys/mounts/pki", {"type": "pki"})
-    ca = bao.request("POST", "pki/root/generate/internal", {
+    bao.request("POST", f"sys/mounts/{pki_mount}", {"type": "pki"})
+    ca = bao.request("POST", f"{pki_mount}/root/generate/internal", {
         "common_name": f"Disposable {role} CA", "ttl": "48h",
         "key_type": "ec", "key_bits": 256,
     })
@@ -253,7 +266,7 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
         # This fixture needs the Docker DNS alias as a certificate SAN. Other
         # established profiles retain their existing CSR SAN behavior.
         role_config["use_csr_sans"] = False
-    bao.request("POST", f"pki/roles/{role}", role_config)
+    bao.request("POST", f"{pki_mount}/roles/{role}", role_config)
     csr = bao.request("POST", f"transit/keys/{key_name}/csr", {"version": 1})
     common_name = "synthetic-secret-service" if role == "signing-keys-image" else "localhost"
     sign_request = {"csr": csr["data"]["csr"], "common_name": common_name, "ttl": "1h"}
@@ -261,7 +274,7 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
         sign_request["ip_sans"] = "127.0.0.1"
     if role == "signing-keys-image":
         sign_request["alt_names"] = "localhost"
-    signed = bao.request("POST", f"pki/sign/{role}", sign_request)
+    signed = bao.request("POST", f"{pki_mount}/sign/{role}", sign_request)
     if "private_key" in signed.get("data", {}):
         raise RuntimeError("OpenBao PKI returned a leaf private key")
     cert = root / f"{role}-public.pem"

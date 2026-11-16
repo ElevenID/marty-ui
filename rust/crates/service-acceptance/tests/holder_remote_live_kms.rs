@@ -1,4 +1,10 @@
-//! Guarded cross-service holder-key proof with disposable OpenBao and PostgreSQL.
+//! Guarded holder-key lifecycle and real Trust Profile→keyless HTTPS→Device authority.
+//! Membership/PDP decisions and public issuer metadata remain controlled fixtures.
+
+#[path = "support/holder_issuer_authority.rs"]
+mod holder_issuer_authority;
+
+use marty_trust_profile::TrustProfileRepository;
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -56,8 +62,8 @@ impl MembershipAuthorizer for SwitchMembership {
     }
 }
 
-#[tokio::test]
-#[ignore = "requires guarded disposable OpenBao and fresh PostgreSQL"]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires guarded disposable OpenBao, fresh PostgreSQL and non-exportable owner TLS"]
 async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("OpenBao URL syntax");
@@ -97,6 +103,17 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .connect(&database_url)
         .await
         .expect("disposable PostgreSQL");
+    let guard: String = sqlx::query_scalar("SELECT nonce FROM public.marty_disposable_guard")
+        .fetch_one(&pool)
+        .await
+        .expect("owned SQL marker");
+    assert_eq!(guard, nonce);
+    let fresh: bool = sqlx::query_scalar("SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg_%') AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid WHERE n.nspname='public' AND c.relname<>'marty_disposable_guard')")
+        .fetch_one(&pool).await.unwrap();
+    assert!(
+        fresh,
+        "holder/issuer fixture requires fresh owned schemas before any migration"
+    );
     migrate(&pool).await.expect("fresh Rust schema");
 
     let devices: Arc<dyn DeviceRepository> = Arc::new(PostgresDeviceRepository::new(pool.clone()));
@@ -144,34 +161,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         credentials.clone(),
         confirmations.clone(),
     ));
-    let trust_origin =
-        std::env::var("MARTY_TEST_HOLDER_TRUST_ORIGIN").expect("owned issuer TLS origin");
-    let trust_url = reqwest::Url::parse(&trust_origin).unwrap();
-    assert_eq!(trust_url.scheme(), "https");
-    assert_eq!(trust_url.host_str(), Some("127.0.0.1"));
-    let trust_ca = std::fs::read(std::env::var("MARTY_TEST_HOLDER_TRUST_CA").unwrap()).unwrap();
-    let control = reqwest::Client::builder()
-        .https_only(true)
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(5))
-        .add_root_certificate(reqwest::Certificate::from_pem(&trust_ca).unwrap())
-        .build()
-        .unwrap();
-    let bound_fixture = control
-        .get(format!("{trust_origin}fixture-bind/{nonce}"))
-        .header("x-service-token", &nonce)
-        .query(&[("organization_id", &organization_id), ("user_id", &user_id)])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(bound_fixture.status(), reqwest::StatusCode::OK);
-    assert_eq!(
-        bound_fixture.json::<serde_json::Value>().await.unwrap()["nonce"],
-        nonce
+    let mut issuer_owner = holder_issuer_authority::Owner::start(
+        &pool,
+        Uuid::parse_str(&bound_profile_id).unwrap(),
+        &user_id,
+        &organization_id,
+        &nonce,
+    )
+    .await;
+    let trust_client = Arc::new(
+        WalletIssuerTrustClient::new(&issuer_owner.origin, &nonce, Some(&issuer_owner.ca)).unwrap(),
     );
-    let trust_client =
-        Arc::new(WalletIssuerTrustClient::new(&trust_origin, &nonce, Some(&trust_ca)).unwrap());
+    assert!(
+        WalletIssuerTrustClient::new(&issuer_owner.origin, &nonce, None)
+            .unwrap()
+            .fetch(&bound_profile_id, &organization_id, &user_id)
+            .await
+            .is_err(),
+        "owner HTTPS requires its trusted CA"
+    );
     let gateway_key = "disposable-gateway-device-registration-key-32-chars";
     let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -328,6 +336,131 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let snapshot: serde_json::Value = snapshot.json().await.unwrap();
     assert_eq!(snapshot["issuer"]["organization_id"], organization_id);
     assert_eq!(snapshot["issuer"]["trust_profile_id"], bound_profile_id);
+    assert_eq!(
+        snapshot["contract"],
+        "marty.wallet/device-issuer-governance/v2"
+    );
+    assert_eq!(
+        snapshot["scope"]["verifier_trust_profile_id"],
+        serde_json::Value::Null
+    );
+    assert_eq!(snapshot["scope"]["pairing_id"], pairing_id);
+    assert_eq!(snapshot["scope"]["registration_id"], registration.id);
+    assert_eq!(
+        snapshot["issuer"]["issuer_keys"][0]["credential_authorizations"],
+        issuer_owner.relationship.metadata["marty_credential_authorizations_v1"]
+    );
+    assert_eq!(
+        snapshot["issuer"]["issuer_keys"][0]["issuance_authorizations"],
+        issuer_owner.relationship.metadata["marty_wallet_issuance_authorizations_v1"]
+    );
+    let persisted = issuer_owner
+        .repository
+        .wallet_issuer_authority_snapshot(
+            &organization_id,
+            Uuid::parse_str(&bound_profile_id).unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        snapshot["issuer"]["revision"],
+        serde_json::to_value(persisted.revision).unwrap()
+    );
+    let observed: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(snapshot["observed_at"].clone()).unwrap();
+    let expires: chrono::DateTime<chrono::Utc> =
+        serde_json::from_value(snapshot["expires_at"].clone()).unwrap();
+    assert!(expires > observed && expires <= observed + chrono::Duration::seconds(60));
+    let encoded = snapshot.to_string();
+    for forbidden in [
+        &enrolled.device_credential,
+        "provider_reference",
+        "KMS_TOKEN",
+        "private_key",
+    ] {
+        assert!(
+            !encoded.contains(forbidden),
+            "public issuer evidence leaked a custody capability"
+        );
+    }
+    // Persist a service-only edit. The actual owner must allocate a new wallet
+    // revision; Device must return that edit rather than a cached projection.
+    issuer_owner.relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]
+        ["credential_configuration_id"] = json!("identity-v2");
+    issuer_owner
+        .repository
+        .save_profile_issuer(&issuer_owner.relationship)
+        .await
+        .unwrap();
+    let next = http
+        .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(next.status(), reqwest::StatusCode::OK);
+    assert_eq!(next.headers()["cache-control"], "no-store");
+    let next: serde_json::Value = next.json().await.unwrap();
+    assert_eq!(
+        next["issuer"]["issuer_keys"][0]["issuance_authorizations"][0]
+            ["credential_configuration_id"],
+        "identity-v2"
+    );
+    assert!(
+        next["issuer"]["revision"]["version"].as_u64().unwrap()
+            > snapshot["issuer"]["revision"]["version"].as_u64().unwrap()
+    );
+    assert_ne!(
+        next["issuer"]["revision"]["content_digest"],
+        snapshot["issuer"]["revision"]["content_digest"]
+    );
+    for denial in ["relationship", "canonical_vct", "pdp"] {
+        let original = issuer_owner.relationship.clone();
+        match denial {
+            "relationship" => {
+                issuer_owner.relationship.relationship_status =
+                    marty_trust_profile::TrustRelationshipStatus::Denied
+            }
+            "canonical_vct" => {
+                issuer_owner.relationship.metadata["marty_credential_authorizations_v1"] = json!([])
+            }
+            _ => issuer_owner.pdp.allowed.store(false, Ordering::SeqCst),
+        }
+        issuer_owner
+            .repository
+            .save_profile_issuer(&issuer_owner.relationship)
+            .await
+            .unwrap();
+        let denied = http
+            .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+            .header("x-service-token", gateway_key)
+            .bearer_auth(&enrolled.device_credential)
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            !denied.status().is_success(),
+            "{denial} must deny public issuer evidence"
+        );
+        let denied: serde_json::Value = denied.json().await.unwrap();
+        assert!(denied.get("issuer").is_none() && denied.get("issuer_keys").is_none());
+        issuer_owner.relationship = original;
+        issuer_owner
+            .repository
+            .save_profile_issuer(&issuer_owner.relationship)
+            .await
+            .unwrap();
+        issuer_owner.pdp.allowed.store(true, Ordering::SeqCst);
+    }
+    assert!(
+        confirmations
+            .governance_for_bearer(&enrolled.device_credential)
+            .await
+            .is_err(),
+        "issuer-only enrollment must not acquire verifier authority"
+    );
     assert!(signer
         .sign(
             "invalid",
@@ -659,4 +792,5 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     );
     device_server.abort();
     server.abort();
+    issuer_owner.stop().await;
 }

@@ -27,6 +27,8 @@ marty-issuance-service = { path = "../../services/issuance" }
 marty-passport-auth = { path = "../passport-auth" }
 marty-signing-grant = { path = "../signing-grant" }
 marty-signing-keys = { path = "../../services/signing-keys" }
+marty-service-runtime = { path = "../service-runtime" }
+marty-trust-profile = { path = "../../services/trust-profile" }
 marty-verification.workspace = true
 mmf-platform.workspace = true
 mmf-security.workspace = true
