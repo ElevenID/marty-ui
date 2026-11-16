@@ -1109,8 +1109,18 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
     {
         return Err(TrustProfileApplicationError::Invalid("allowed_algorithms"));
     }
+    let mut registered_clients = BTreeSet::new();
     for source in &profile.trust_sources {
         validate_trust_source(source)?;
+        if source.source_type == crate::TrustSourceType::RegisteredVerifier {
+            crate::registered_verifier::validate_profile_policy(profile)?;
+            let registration = crate::registered_verifier::registration(source)?;
+            if !registered_clients.insert(registration.client_id) {
+                return Err(TrustProfileApplicationError::Invalid(
+                    "registered_verifier_duplicate_client",
+                ));
+            }
+        }
         if source.purposes.as_ref().is_some_and(|purposes| {
             purposes.iter().any(|purpose| {
                 profile.trust_purposes.as_ref().map_or(
@@ -1128,6 +1138,9 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
 }
 
 fn validate_trust_source(source: &TrustSource) -> Result<(), TrustProfileApplicationError> {
+    if source.source_type == crate::TrustSourceType::RegisteredVerifier {
+        return crate::registered_verifier::registration(source).map(|_| ());
+    }
     if source.purposes.as_ref().is_some_and(|purposes| {
         purposes.is_empty()
             || purposes.iter().copied().collect::<BTreeSet<_>>().len() != purposes.len()

@@ -49,6 +49,10 @@ pub const TRUST_PROFILE_HTTP_OPERATIONS: &[HttpOperation] = &[
     ),
     operation(
         "GET",
+        "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority",
+    ),
+    operation(
+        "GET",
         "/internal/v1/resource-owners/trust-profiles/{profile_id}",
     ),
     operation(

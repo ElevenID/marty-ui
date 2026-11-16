@@ -18,6 +18,62 @@ use uuid::Uuid;
 
 struct AllowAll;
 
+#[tokio::test]
+async fn registered_verifier_writes_require_explicit_purpose_and_unique_clients() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll));
+    let source: TrustSource =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    let mut candidate = profile();
+    candidate.trust_sources = vec![source.clone()];
+    assert!(matches!(
+        application
+            .create_profile(
+                "user",
+                CreateProfileInput {
+                    profile: candidate.clone(),
+                    allowed_issuers_was_provided: false
+                }
+            )
+            .await,
+        Err(TrustProfileApplicationError::Invalid(
+            "trust_source_purposes"
+        ))
+    ));
+    candidate.trust_purposes = Some(vec![TrustPurpose::PresentationVerifier]);
+    candidate.supported_formats.clear();
+    let created = application
+        .create_profile(
+            "user",
+            CreateProfileInput {
+                profile: candidate.clone(),
+                allowed_issuers_was_provided: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status, TrustProfileStatus::Draft);
+    assert!(!created.trust_sources[0].enabled);
+    let mut duplicate = source;
+    duplicate.id = Uuid::new_v4();
+    candidate.id = Uuid::new_v4();
+    candidate.trust_sources.push(duplicate);
+    assert!(matches!(
+        application
+            .create_profile(
+                "user",
+                CreateProfileInput {
+                    profile: candidate,
+                    allowed_issuers_was_provided: false
+                }
+            )
+            .await,
+        Err(TrustProfileApplicationError::Invalid(
+            "registered_verifier_duplicate_client"
+        ))
+    ));
+}
+
 #[async_trait]
 impl TrustProfileControlPlane for AllowAll {
     async fn require_permission(
