@@ -350,7 +350,7 @@ pub async fn run(
         nonce,
         std::env::var("MARTY_TEST_POSTGRES_DISPOSABLE_NONCE").unwrap()
     );
-    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles(id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles(id text PRIMARY KEY, organization_id text NOT NULL, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
     migrate_flow_schema(&pool).await.unwrap();
     let repository = PostgresFlowRepository::new(pool.clone());
     let client = reqwest::Client::builder().no_proxy().build().unwrap();

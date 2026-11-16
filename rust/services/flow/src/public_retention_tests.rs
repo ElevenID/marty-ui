@@ -18,7 +18,7 @@ async fn public_retention_postgres_erases_payloads_preserves_quota_and_replay_re
         Some("marty_public_verification_test")
     );
     let pool = sqlx::PgPool::connect_with(options.clone()).await.unwrap();
-    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, organization_id text NOT NULL, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
     sqlx::query("CREATE ROLE marty NOLOGIN")
         .execute(&pool)
         .await
@@ -172,7 +172,9 @@ async fn public_retention_postgres_erases_payloads_preserves_quota_and_replay_re
         crate::PublicVerificationCatalog::from_json(&configuration["catalog"].to_string(), false)
             .unwrap();
     let router = crate::flow_read_router(crate::FlowHttpState {
-        service_authenticator: None,
+        service_authenticator: Some(Arc::new(
+            mmf_security::ServiceTokenAuthenticator::new(Some("s".repeat(32)), true).unwrap(),
+        )),
         repository: repository.clone(),
         providers: Arc::new(crate::FlowProviderRegistry::default()),
         public_base_url: "https://demo.example".into(),
@@ -185,7 +187,7 @@ async fn public_retention_postgres_erases_payloads_preserves_quota_and_replay_re
         },
         application_approval: Default::default(),
     });
-    let response=router.oneshot(Request::builder().method("POST").uri("/v1/flows/public/verification/sessions").header("origin","https://demo.example").header("x-verification-session",URL_SAFE_NO_PAD.encode([2;32])).header("content-type","application/json").body(Body::from(json!({"catalog_revision":catalog.public_view().revision,"scenario_id":"age","choice_id":"over-18","consent":true}).to_string())).unwrap()).await.unwrap();
+    let response=router.oneshot(Request::builder().method("POST").uri("/v1/flows/public/verification/sessions").header("x-service-token", "s".repeat(32)).header("origin","https://demo.example").header("x-verification-session",URL_SAFE_NO_PAD.encode([2;32])).header("content-type","application/json").body(Body::from(json!({"catalog_revision":catalog.public_view().revision,"scenario_id":"age","choice_id":"over-18","consent":true}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     // Age the expired minimal receipts to their own fixed 30-day deadline.
     sqlx::query("UPDATE flow_service.public_verification_receipts SET created_at=created_at-INTERVAL '720 hours',payload_delete_after=payload_delete_after-INTERVAL '720 hours',receipt_delete_after=receipt_delete_after-INTERVAL '720 hours' WHERE instance_id IN ($1,$2)").bind(&instances[1].id).bind(&instances[2].id).execute(&pool).await.unwrap();

@@ -56,7 +56,7 @@ function publicCatalog(value) {
 
 function publicPreview(value, selection) {
   if (!value || value.catalog_revision !== selection.catalog_revision || value.scenario_id !== selection.scenario_id
-    || value.choice_id !== selection.choice_id || !/^[0-9a-f]{64}$/.test(value.request_digest)
+    || value.choice_id !== selection.choice_id || !revision.test(value.request_digest)
     || !Array.isArray(value.claims) || value.claims.length < 1 || value.claims.length > 16) throw invalidResponse();
   const names = new Set();
   const scalar = value => typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || text(value, 160);
@@ -147,7 +147,7 @@ export const publicVerificationApi = {
       choice_id: selection.choice_id, consent: selection.consent === true,
       ...(selection.example_id !== undefined ? { example_id: selection.example_id } : {}),
       ...(selection.request_digest !== undefined ? { request_digest: selection.request_digest } : {}) };
-    if (body.request_digest !== undefined && !/^[0-9a-f]{64}$/.test(body.request_digest)) throw new Error('Invalid request preview');
+    if (body.request_digest !== undefined && !revision.test(body.request_digest)) throw new Error('Invalid request preview');
     if (body.example_id !== undefined && !validSlug(body.example_id)) throw new Error('Invalid example selection');
     const session = publicSession(await client.post(`${prefix}/sessions`, body, capabilityOptions(key, options)));
     if (session.catalog_revision !== body.catalog_revision || session.scenario_id !== body.scenario_id

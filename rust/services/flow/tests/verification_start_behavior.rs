@@ -699,7 +699,7 @@ mod public_session {
         let pool = sqlx::PgPool::connect_with(options).await.unwrap();
         // This fixture requires a fresh, task-owned database. No schema drop or
         // reset is performed, and it refuses every shared runtime database name.
-        sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)")
+        sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, organization_id text NOT NULL, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)")
             .execute(&pool).await.unwrap();
         marty_flow::migrate_flow_schema(&pool).await.unwrap();
         let repository = marty_flow::PostgresFlowRepository::new(pool.clone());

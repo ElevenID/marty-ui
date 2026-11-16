@@ -90,7 +90,7 @@ describe('public verification transport', () => {
   });
 
   it('loads a bounded canonical claim preview without session authority and binds its fingerprint at launch', async () => {
-    const preview = { catalog_revision: revision, scenario_id: 'age', choice_id: 'over-18', request_digest: 'b'.repeat(64), claims: [{ name: 'age_over_18', display_name: 'Age 18 or older', required: true, purpose: 'Demonstrate age eligibility', intent_to_retain: null, constraints: [{ kind: 'equals', value: true }], private: 'sensitive' }], policy_id: 'sensitive' };
+    const preview = { catalog_revision: revision, scenario_id: 'age', choice_id: 'over-18', request_digest: 'sha256:' + 'b'.repeat(64), claims: [{ name: 'age_over_18', display_name: 'Age 18 or older', required: true, purpose: 'Demonstrate age eligibility', intent_to_retain: null, constraints: [{ kind: 'equals', value: true }], private: 'sensitive' }], policy_id: 'sensitive' };
     const fetch = respond(preview);
     const value = await publicVerificationApi.preview(selection);
     expect(value.claims[0].name).toBe('age_over_18');
@@ -100,9 +100,10 @@ describe('public verification transport', () => {
     const launched = respond(session);
     await publicVerificationApi.launch({ ...selection, request_digest: value.request_digest }, key);
     expect(JSON.parse(launched.mock.calls[0][1].body).request_digest).toBe(value.request_digest);
-    for (const changed of [{ ...preview, choice_id: 'over-21' }, { ...preview, request_digest: 'invalid' }, { ...preview, claims: [{ ...preview.claims[0], constraints: [{ kind: 'custom', value: 'unsafe' }] }] }]) {
+    for (const changed of [{ ...preview, choice_id: 'over-21' }, { ...preview, request_digest: 'invalid' }, { ...preview, request_digest: 'b'.repeat(64) }, { ...preview, claims: [{ ...preview.claims[0], constraints: [{ kind: 'custom', value: 'unsafe' }] }] }]) {
       respond(changed); await expect(publicVerificationApi.preview(selection)).rejects.toThrow();
     }
+    await expect(publicVerificationApi.launch({ ...selection, request_digest: 'b'.repeat(64) }, key)).rejects.toThrow('Invalid request preview');
   });
 
   it('requires an explicit supported operational retention policy', async () => {

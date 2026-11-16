@@ -9,7 +9,6 @@ use marty_verification::flow::{FlowInstanceStatus, TransitionOutcome};
 use mmf_push::WebhookDestinationRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
@@ -122,23 +121,34 @@ pub(crate) fn verification_request_digest(
         .as_object_mut()
         .ok_or(DefinedVerificationError::InvalidSnapshot)?
         .remove("id");
-    let bytes =
-        serde_json::to_vec(&value).map_err(|_| DefinedVerificationError::InvalidSnapshot)?;
-    Ok(hex::encode(Sha256::digest(bytes)))
+    // JSONB may reorder object keys. Bind semantic JSON through the pinned
+    // canonical contract rather than the serializer's insertion order.
+    marty_oid4vp_contract::digest_domain_json("marty.flow/defined-verification-request/v2", &value)
+        .map_err(|_| DefinedVerificationError::InvalidSnapshot)
 }
 
 pub(crate) fn validate_defined_request(
     instance: &FlowInstanceRecord,
     artifacts: &PresentationRequestArtifacts,
 ) -> Result<(), DefinedVerificationError> {
-    if instance.context.get(SNAPSHOT).is_some()
-        && instance
+    if instance.context.get(SNAPSHOT).is_some() {
+        let stored = instance
             .context
             .get(REQUEST_DIGEST)
-            .and_then(serde_json::Value::as_str)
-            != Some(verification_request_digest(artifacts)?.as_str())
-    {
-        return Err(DefinedVerificationError::InvalidSnapshot);
+            .and_then(serde_json::Value::as_str);
+        // Old insertion-order fingerprints cannot be safely reconstructed from
+        // persisted JSON. Do not adopt/rewrite their binding or try a fallback.
+        if stored.is_some_and(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }) {
+            return Err(DefinedVerificationError::ConfigurationChanged);
+        }
+        if stored != Some(verification_request_digest(artifacts)?.as_str()) {
+            return Err(DefinedVerificationError::InvalidSnapshot);
+        }
     }
     Ok(())
 }

@@ -10,7 +10,7 @@ const session = () => { const now = Date.now(); return ({ session_id: id, scenar
 function response(body: unknown) { return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }); }
 function installFetch(fetch: ReturnType<typeof vi.fn>) {
   vi.stubGlobal('fetch', (url: string, options: RequestInit = {}) => {
-    if (String(url).endsWith('/preview')) { const selected = JSON.parse(String(options.body)); return Promise.resolve(response({ ...selected, request_digest: 'a'.repeat(64), claims: [{ name: selected.choice_id === 'over-21' ? 'age_over_21' : 'age_over_18', display_name: 'Age threshold', required: true, purpose: 'Demonstrate an age requirement', intent_to_retain: null, constraints: [{ kind: 'equals', value: true }] }] })); }
+    if (String(url).endsWith('/preview')) { const selected = JSON.parse(String(options.body)); return Promise.resolve(response({ ...selected, request_digest: 'sha256:' + 'a'.repeat(64), claims: [{ name: selected.choice_id === 'over-21' ? 'age_over_21' : 'age_over_18', display_name: 'Age threshold', required: true, purpose: 'Demonstrate an age requirement', intent_to_retain: null, constraints: [{ kind: 'equals', value: true }] }] })); }
     return fetch(url, options);
   });
 }

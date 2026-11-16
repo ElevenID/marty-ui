@@ -423,6 +423,63 @@ async fn signed_example_uses_real_core_nonce_audience_binding_and_minimal_disclo
 }
 
 #[tokio::test]
+async fn defined_request_digest_survives_object_reordering_and_rejects_legacy_bindings() {
+    use crate::defined_verification::{
+        validate_defined_request, verification_request_digest, REQUEST_DIGEST,
+    };
+    fn reordered(value: Value) -> Value {
+        match value {
+            Value::Object(map) => Value::Object(
+                map.into_iter()
+                    .rev()
+                    .map(|(k, v)| (k, reordered(v)))
+                    .collect(),
+            ),
+            Value::Array(items) => Value::Array(items.into_iter().map(reordered).collect()),
+            other => other,
+        }
+    }
+    let (providers, mut instance, _, _, _) = setup(Arc::new(OpaqueSigner::new())).await;
+    let artifacts = crate::build_flow_presentation_request(&providers, POLICY_ID, ORG)
+        .await
+        .unwrap();
+    let digest = verification_request_digest(&artifacts).unwrap();
+    assert!(crate::defined_verification::valid_policy_digest(&digest));
+    let mut value = reordered(serde_json::to_value(&artifacts).unwrap());
+    value["presentation_definition"]["id"] = json!("fresh-builder-id");
+    let roundtrip = marty_oid4vci::presentation_request::PresentationRequestArtifacts {
+        presentation_definition: value["presentation_definition"].clone(),
+        dcql_query: value["dcql_query"].clone(),
+    };
+    assert_eq!(digest, verification_request_digest(&roundtrip).unwrap());
+    validate_defined_request(&instance, &roundtrip).unwrap();
+    value["dcql_query"] = json!({"credentials": [{"id": "different", "format": "mso_mdoc"}]});
+    let changed = marty_oid4vci::presentation_request::PresentationRequestArtifacts {
+        presentation_definition: value["presentation_definition"].clone(),
+        dcql_query: value["dcql_query"].clone(),
+    };
+    assert!(matches!(
+        validate_defined_request(&instance, &changed),
+        Err(crate::DefinedVerificationError::InvalidSnapshot)
+    ));
+    for invalid in [
+        "sha256:bad".to_string(),
+        format!("sha256:{}", "0".repeat(64)),
+    ] {
+        instance.context[REQUEST_DIGEST] = json!(invalid);
+        assert!(matches!(
+            validate_defined_request(&instance, &roundtrip),
+            Err(crate::DefinedVerificationError::InvalidSnapshot)
+        ));
+    }
+    instance.context[REQUEST_DIGEST] = json!("a".repeat(64));
+    assert!(matches!(
+        validate_defined_request(&instance, &roundtrip),
+        Err(crate::DefinedVerificationError::ConfigurationChanged)
+    ));
+}
+
+#[tokio::test]
 async fn wrong_issuer_holder_profile_and_configuration_fail_before_holder_signing() {
     let signer = Arc::new(OpaqueSigner::new());
     let (providers, instance, holder, profile, changed) = setup(signer.clone()).await;
@@ -688,7 +745,7 @@ async fn public_example_http_uses_capability_cas_and_canonical_nonce_finalizatio
         Some("marty_public_verification_test")
     );
     let pool = sqlx::PgPool::connect_with(options).await.unwrap();
-    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
+    sqlx::raw_sql("CREATE SCHEMA deployment_profile_service; CREATE TABLE deployment_profile_service.deployment_profiles (id text PRIMARY KEY, organization_id text NOT NULL, enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb)").execute(&pool).await.unwrap();
     crate::migrate_flow_schema(&pool).await.unwrap();
     let repository = crate::PostgresFlowRepository::new(pool.clone());
     let signer = Arc::new(OpaqueSigner::new());
