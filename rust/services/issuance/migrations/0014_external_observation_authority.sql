@@ -1,6 +1,6 @@
 -- SPDX-License-Identifier: AGPL-3.0-only
--- Candidate core-owned journal. NOT a startup migration or connector database.
--- Activate only with a qualified canonical authority adapter and role grants.
+-- Registered core-owned journal, installed only by the protected schema-owner command.
+-- Runtime never installs this schema; activation also requires qualified role grants.
 CREATE SCHEMA IF NOT EXISTS issuance_service;
 
 -- Producer authorization is core-owned. The key foreign key points at the
@@ -189,3 +189,11 @@ ALTER TABLE issuance_service.external_observation_receipts
 REVOKE ALL ON issuance_service.external_observation_receipts FROM PUBLIC;
 REVOKE ALL ON issuance_service.external_observation_heads FROM PUBLIC;
 REVOKE ALL ON issuance_service.external_observation_audit FROM PUBLIC;
+
+-- Never inherit broad PUBLIC defaults for newly installed authority objects.
+REVOKE ALL ON issuance_service.external_observation_producer_grants FROM PUBLIC;
+REVOKE ALL ON issuance_service.external_observation_bindings FROM PUBLIC;
+REVOKE ALL ON issuance_service.external_observation_grant_bindings FROM PUBLIC;
+REVOKE ALL ON FUNCTION issuance_service.bump_external_observation_revision() FROM PUBLIC;
+REVOKE ALL ON FUNCTION issuance_service.bump_external_observation_grant_membership() FROM PUBLIC;
+REVOKE ALL ON FUNCTION issuance_service.reject_external_observation_membership_update() FROM PUBLIC;

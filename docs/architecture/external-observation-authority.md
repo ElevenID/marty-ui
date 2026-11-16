@@ -84,8 +84,8 @@ or widen its own grant. API-key rotation requires an explicit administrator oper
 revision and canonical replacement key ID. Rotation deactivates the grant; fresh
 approval is required before the replacement key can submit. The old key loses
 its grant immediately, including receipt replay authorization. Binding membership,
-source and expiry are not silently widened. No key secret enters this interface. The schema is still a candidate contract and is
-not registered in startup migrations.
+source and expiry are not silently widened. No key secret enters this interface. The schema is registered as protected owner migration
+`0014_external_observation_authority`; ordinary runtime startup never installs it.
 
 ## Claim-rule encoding
 
@@ -238,8 +238,8 @@ Missing storage or disabled revision triggers stop startup with a fixed error.
 Disabled startup performs no observation database access or route mounting.
 No migration or privilege is created automatically by this preflight.
 
-This structural/permission preflight is not a schema provenance attestation,
-least-privilege grant approval, migration registration or deployment qualification.
+This preflight also requires the registered owner ledger and the embedded observation
+catalog described below. It does not approve named role grants or qualify deployment.
 Reviewed migration/roles, administrator grants/bindings and full public Gateway
 runtime/network-denial tests must pass before enabling it. The startup test uses
 canonical-shaped disposable tables, not a production installation. Configuration
@@ -476,3 +476,55 @@ Storage preflight requires the additional grant/binding metadata columns and
 receipt-audit SELECT access. Production least-privilege roles, registered
 migrations, actual Gateway/core deployment, operator workflow and full
 Canvas-to-wallet/network-denial qualification remain open.
+
+
+## Protected schema owner and activation verification
+
+`marty-issuance-service migrate` registers
+`0014_external_observation_authority` in the existing protected Rust owner ledger.
+It installs the six observation tables, constraints, indexes and revision/membership
+triggers in the same transaction as the ledger entry. Canonical organization and
+API-key schemas must already exist. Repeated owner migration skips the installed
+version and validates its catalog; drift is rejected rather than repaired silently.
+A manually installed candidate without the owner ledger is not accepted as a
+registered deployment. Existing data is never dropped to claim a fresh installation.
+
+The SQL has one source in `migrations/0014_external_observation_authority.sql`.
+The former `schema/external_observation_journal.sql` copy is removed.
+Installation explicitly revokes PUBLIC table and trigger-function privileges,
+including privileges inherited from permissive owner defaults. Named runtime
+roles still need separate least-privilege qualification before activation.
+
+Both `verify-owned-schema` and observation route preflight require the registered
+version and compare an embedded catalog. The comparison covers column types,
+nullability/defaults, constraints and validation/deferral flags, index definitions
+and validity, function bodies/configuration, application and internal foreign-key
+triggers including enabled state, rewrite rules, persistence/RLS flags and unexpected
+objects under the observation prefix. It rejects PUBLIC privileges on tables,
+columns and observation functions. Trigger names generated from database OIDs are
+represented by stable constraint/function/type metadata. Function CRLF line endings
+are normalized. PostgreSQL 15 and 16 reference captures must agree.
+
+Validation reads metadata and the owner ledger; it performs no schema creation,
+repair, role creation or privilege grant. It runs successfully in a READ ONLY
+transaction, and a metadata-only role needs no observation-table access. That
+metadata role test does not qualify the runtime role, which must lock canonical
+organization, key, administrator, application and observation authority records.
+Object ownership, named-role membership/privileges and schema CREATE permissions
+remain part of that separate qualification. The feature remains disabled by default.
+
+Focused disposable PostgreSQL tests exercise missing ledger/version, altered
+columns, disabled application and internal triggers, removed receipt/audit
+constraints and indexes, changed function bodies, unexpected objects, rewrite
+rules, PUBLIC table/column/function grants and permissive installation defaults.
+They test the actual observation migration and validator. The full owner integration
+test additionally invokes the actual owner twice and verifies its complete ledger;
+its protected CI execution is required. Local focused tests do not establish that
+full command's qualification or authorize a production migration.
+
+Remaining activation gates are production role qualification, exact full owner
+and Gateway CI, deployment/operator workflow, and actual Canvas-to-wallet and
+network-denial qualification. Prior sections' references to migration work describe
+the earlier implementation stages; protected registration is implemented here,
+while upgrade and deployment qualification remain open. The Common Gateway remains
+the sole connector-to-Marty integration point; connector database access is absent.
