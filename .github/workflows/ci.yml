@@ -1712,6 +1712,20 @@ jobs:
           done
           run_timed document_storage_private_material cargo test --locked -p marty-signing-keys --lib \
             document_storage_refuses_private_material_on_read_and_write -- --ignored
+      - name: Qualify paired verifier scope and fixed-owner TLS transport
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/ci/rust_contract_execution.sh
+          postgres_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_pairing_postgres)"
+          redis_binary="$(resolve_recorded_contract_executable marty-device-registration pairing_ticket_redis)"
+          tls_binary="$(resolve_recorded_contract_executable marty-device-registration verifier_trust_tls)"
+          test -x "$postgres_binary" && test -x "$redis_binary" && test -x "$tls_binary"
+          run_timed wallet_verifier_pairing python3 scripts/qualify_wallet_verifier_pairing.py \
+            --postgres-test-binary "$postgres_binary" --redis-test-binary "$redis_binary"
+          run_timed wallet_verifier_tls python3 scripts/qualify_wallet_verifier_transport.py \
+            --test-binary "$tls_binary"
       - name: Qualify scoped provider callback verification against disposable OpenBao
         if: matrix.lane == 'contracts'
         run: python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter

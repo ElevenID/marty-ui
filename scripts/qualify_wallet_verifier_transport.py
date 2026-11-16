@@ -27,6 +27,10 @@ def qualify(binary: Path) -> dict:
     binary = binary.resolve(strict=True)
     if not binary.is_file() or not binary.name.startswith("verifier_trust_tls-"):
         raise ValueError("expected the compiled verifier_trust_tls test executable")
+    discovery = subprocess.run([str(binary), CASE, "--ignored", "--exact", "--list"],
+        capture_output=True, text=True, timeout=30, check=False)
+    if discovery.returncode != 0 or [line for line in discovery.stdout.splitlines() if line.endswith(": test")] != [f"{CASE}: test"]:
+        raise RuntimeError("exact verifier TLS test discovery failed before fixture allocation")
     fixture = Path(__file__).resolve().parents[1] / "rust/services/trust-profile/tests/fixtures/registered-verifier-source.json"
     registration = json.loads(fixture.read_text())["registered_verifier"]
     token, nonce = secrets.token_hex(32), secrets.token_hex(32)
@@ -185,6 +189,9 @@ def qualify(binary: Path) -> dict:
             worker.join(timeout=5)
         if worker.is_alive():
             raise RuntimeError("owned TLS fixture did not stop")
+    # Let the shared CI positive-execution guard inspect the real sanitized
+    # libtest summary, after the fixture teardown also succeeded.
+    print(detail, end="")
     return {"test": CASE, "passed": 1, "ignored": 0, "tlsFixtureStopped": True,
             "temporaryTlsMaterialRemoved": not root.exists(), "redirectFollowed": False,
             "scope": "actual fixed-owner TLS transport against synthetic owner responses; not deployed owner, KMS, rootless installation or wallet acceptance"}
