@@ -48,29 +48,39 @@ shorten the underlying Flow instance. Unsupported query constraints fail closed.
 The ordinary request builder retains its existing behavior; this component has
 a separate paired SD-JWT metadata profile matching accepted Core authentication.
 
-The application function is not yet exposed through an HTTP route. Its caller
-must commit newly produced state with the existing status/time CAS and reread
-current state after asynchronous work even when returning an unchanged cache.
-Public request retrieval must return the same persisted JWS that governance
-attests. Fixed-workload HTTP admission, those persistence/readback rules, managed
-Trust Profile producer/DID/key authority, confirmed-device v2 binding and native
-opaque consent/preparation/completion sessions remain unfinished. No production
-configuration or profile is activated by this producer checkpoint.
+`POST /internal/v1/wallet-verifier-requests/{instance_id}` requires a configured
+workload authenticator and exactly one valid service-token header. It derives
+the tenant from the stored instance, ignoring caller tenant headers. Both new
+and cached owner responses use the existing status/time compare-and-swap after
+asynchronous signing-identity resolution. A competing cancellation or snapshot
+change prevents exposure. The projection is checked for freshness after the CAS
+and returned with no-store headers.
 
-Ordinary Flow library/request/retrieval/DID regression execution reports82 passes
-and3 ignores. Two ignored producer cases were then explicitly executed against
-a newly owned TLS OpenBao fixture:2 passed,0 ignored. Its keys are non-exportable,
-export is refused and the signer token is limited to one exact key. No local
-signing-key feature is enabled in the test graph. The fixture checks immutable
-request reuse and correctly signed invalid client, key ID, extra semantics,
-metadata and VCT changes. Exact owned container and temporary material cleanup
-are verified. These are real Transit signatures with an application/provider
-adapter, not deployed Signing Keys/Trust Profile, rootless installation or an
-installed wallet. The portable driver is
-`scripts/qualify_flow_wallet_verifier_request.py --test-binary /absolute/native/executable`.
+Once this canonical cache exists, public request GET revalidates and returns its
+exact persisted JWS. POST, DC API, Lissi and wallet-nonce retrieval changes fail
+closed. Uncached ordinary request retrieval retains its existing behavior. No
+production configuration or profile is activated by this component.
 
-Full workspace format, focused Flow Clippy with warnings denied and driver lint
-passed. Independent source review identified canonical client/key and query-shape
-compatibility gaps; both were corrected and re-reviewed without remaining
-component findings. Reviewers ran no tests. These results do not qualify the
-unimplemented HTTP/owner/device/native boundaries listed above.
+The guarded qualification driver explicitly executes three native cases against
+fresh owned PostgreSQL and TLS OpenBao fixtures. It checks exact test discovery
+before allocating bounded local containers; the HTTP case refuses a nonempty
+database before migration. Actual remote Transit signatures retain non-exportable
+key custody and one-key signer tokens. The HTTP case verifies persisted/public
+JWS equality, repeated reads without resigning, forged tenant header rejection,
+transport downgrade rejection and real repository cancellation races during
+awaited identity resolution, for both cached public and first owner requests.
+The other two cases check immutable reuse and correctly signed invalid client,
+key ID, extra semantics, metadata and VCT changes. Exact owned containers and
+temporary material are removed. No local signing-key feature is enabled.
+
+This establishes PostgreSQL HTTP/CAS and TLS signing with an application/provider
+adapter. It does not establish deployed Signing Keys or Trust Profile governance,
+rootless installation, installed-wallet acceptance or official-suite execution.
+Managed Trust Profile producer/DID/key authority, confirmed-device v2 binding
+and native opaque consent/preparation/completion sessions remain unfinished.
+
+Run `scripts/qualify_flow_wallet_verifier_request.py --test-binary /absolute/native/executable`
+after building the native library test binary. Full workspace formatting, focused
+Flow Clippy with warnings denied and driver lint are required. Independent
+source review caught permissive unconfigured authentication and duplicate-token
+ambiguity; both were fixed with rejection coverage. Reviewers ran no tests.

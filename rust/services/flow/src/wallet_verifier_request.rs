@@ -56,6 +56,20 @@ pub struct WalletVerifierRequestProjection {
     expires_at: DateTime<Utc>,
 }
 
+impl WalletVerifierRequestProjection {
+    pub(crate) fn compact_request_jws(&self) -> &str {
+        &self.compact_request_jws
+    }
+
+    pub(crate) fn is_current(&self, now: DateTime<Utc>) -> bool {
+        self.observed_at <= now && now < self.expires_at && now < self.request_expires_at
+    }
+}
+
+pub(crate) fn has_wallet_verifier_request(instance: &FlowInstanceRecord) -> bool {
+    instance.context.get(STORED_REQUEST).is_some()
+}
+
 pub struct PreparedWalletVerifierRequest {
     /// The caller must persist this preimage with its existing status/time CAS
     /// before returning a newly produced projection. Never return an uncommitted
@@ -444,7 +458,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
     };
@@ -456,6 +470,9 @@ mod tests {
         public_jwk: BTreeMap<String, Value>,
         remote: Option<(reqwest::Client, String, String)>,
         signs: AtomicUsize,
+        pause_resolve: AtomicBool,
+        resolve_started: tokio::sync::Notify,
+        resume_resolve: tokio::sync::Notify,
     }
 
     impl FixtureSigner {
@@ -475,6 +492,9 @@ mod tests {
                 ]),
                 remote: None,
                 signs: AtomicUsize::new(0),
+                pause_resolve: AtomicBool::new(false),
+                resolve_started: tokio::sync::Notify::new(),
+                resume_resolve: tokio::sync::Notify::new(),
             }
         }
 
@@ -519,6 +539,9 @@ mod tests {
                 public_jwk,
                 remote: Some((client, endpoint, token)),
                 signs: AtomicUsize::new(0),
+                pause_resolve: AtomicBool::new(false),
+                resolve_started: tokio::sync::Notify::new(),
+                resume_resolve: tokio::sync::Notify::new(),
             }
         }
     }
@@ -533,6 +556,10 @@ mod tests {
             credential_format: &str,
             algorithm: Option<&str>,
         ) -> Result<SigningIdentity, FlowProviderError> {
+            if self.pause_resolve.swap(false, Ordering::SeqCst) {
+                self.resolve_started.notify_one();
+                self.resume_resolve.notified().await;
+            }
             assert_eq!(algorithm, Some("ES256"));
             Ok(SigningIdentity {
                 organization_id: organization_id.into(),
@@ -584,8 +611,12 @@ mod tests {
     }
 
     fn instance(now: DateTime<Utc>) -> FlowInstanceRecord {
+        instance_with_id(now, "11111111-2222-4333-8444-555555555555")
+    }
+
+    fn instance_with_id(now: DateTime<Utc>, id: &str) -> FlowInstanceRecord {
         let mut instance = FlowInstanceRecord {
-            id: "11111111-2222-4333-8444-555555555555".into(),
+            id: id.into(),
             flow_definition_id: "definition-1".into(),
             organization_id: "org-1".into(),
             status: FlowInstanceStatus::AwaitingWallet,
@@ -622,6 +653,154 @@ mod tests {
             signing_identity: Some(signer),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires newly owned PostgreSQL and TLS OpenBao fixtures"]
+    async fn http_owner_persists_exact_request_and_cancellation_wins_async_reads() {
+        use axum::{
+            body::{to_bytes, Body},
+            http::Request,
+        };
+        use tower::ServiceExt;
+        let nonce = std::env::var("MARTY_TEST_WALLET_REQUEST_FIXTURE_NONCE").unwrap();
+        let database_url = std::env::var("MARTY_TEST_WALLET_REQUEST_DATABASE_URL").unwrap();
+        let url = url::Url::parse(&database_url).unwrap();
+        assert_eq!(url.scheme(), "postgresql");
+        assert_eq!(url.host_str(), Some("127.0.0.1"));
+        assert!(url.port().is_some());
+        assert_eq!(url.path(), format!("/wallet_request_{}", &nonce[..12]));
+        assert!(url.query().is_none() && url.fragment().is_none());
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(std::time::Duration::from_secs(5))
+            .connect(&database_url)
+            .await
+            .unwrap();
+        // The driver creates this nonce-named empty database in its own exact
+        // labelled container. Never reset or connect to an existing install.
+        let empty: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT IN ('public','information_schema') AND nspname NOT LIKE 'pg_%') AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid WHERE n.nspname='public')",
+        ).fetch_one(&pool).await.unwrap();
+        assert!(
+            empty,
+            "owned HTTP fixture must start with an empty database"
+        );
+        crate::migrate_flow_schema(&pool).await.unwrap();
+        let repository = crate::PostgresFlowRepository::new(pool.clone());
+        let signer = Arc::new(FixtureSigner::from_owned_fixture());
+        let token = uuid::Uuid::new_v4().to_string();
+        let app = crate::flow_read_router(crate::FlowHttpState {
+            service_authenticator: Some(Arc::new(
+                mmf_security::ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+            )),
+            repository: repository.clone(),
+            providers: Arc::new(providers(signer.clone())),
+            public_base_url: "https://verifier.example".into(),
+            verification: crate::FlowHttpVerificationOptions::default(),
+            application_approval: crate::FlowHttpApplicationApprovalOptions::default(),
+        });
+        let source = instance(Utc::now());
+        assert!(repository.save_instance(&source).await.unwrap());
+        let owner_uri = format!("/internal/v1/wallet-verifier-requests/{}", source.id);
+        let public_uri = format!("/v1/flows/instances/{}/request", source.id);
+        let owner = app
+            .clone()
+            .oneshot(
+                Request::post(&owner_uri)
+                    .header("x-service-token", &token)
+                    .header("x-organization-id", "attacker-tenant")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(owner.status(), 200);
+        assert_eq!(owner.headers()["cache-control"], "no-store");
+        let projection: Value =
+            serde_json::from_slice(&to_bytes(owner.into_body(), MAXIMUM_BYTES).await.unwrap())
+                .unwrap();
+        assert_eq!(projection["organization_id"], "org-1");
+        let original = projection["compact_request_jws"].as_str().unwrap();
+        let persisted = repository.instance(&source.id).await.unwrap().unwrap();
+        assert_eq!(
+            persisted.context[STORED_REQUEST]["compact_request_jws"],
+            original
+        );
+        for uri in [&public_uri, &public_uri] {
+            let response = app
+                .clone()
+                .oneshot(Request::get(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(
+                to_bytes(response.into_body(), MAXIMUM_BYTES)
+                    .await
+                    .unwrap()
+                    .as_ref(),
+                original.as_bytes()
+            );
+        }
+        for request in [
+            Request::post(&public_uri).header("content-type", "application/x-www-form-urlencoded"),
+            Request::get(format!("{public_uri}?transport=dc_api")),
+            Request::get(format!("{public_uri}?compat=lissi")),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap()
+                    .status(),
+                409
+            );
+        }
+        assert_eq!(signer.signs.load(Ordering::SeqCst), 1);
+        // Exercise both cached-public and first-owner races at the actual async
+        // provider boundary, using the real repository CAS, not a mock result.
+        for first_owner in [false, true] {
+            let id = if first_owner {
+                "11111111-2222-4333-8444-555555555556"
+            } else {
+                &source.id
+            };
+            if first_owner {
+                assert!(repository
+                    .save_instance(&instance_with_id(Utc::now(), id))
+                    .await
+                    .unwrap());
+            }
+            signer.pause_resolve.store(true, Ordering::SeqCst);
+            let request = if first_owner {
+                Request::post(format!("/internal/v1/wallet-verifier-requests/{id}"))
+                    .header("x-service-token", &token)
+            } else {
+                Request::get(&public_uri)
+            };
+            let pending = tokio::spawn(app.clone().oneshot(request.body(Body::empty()).unwrap()));
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                signer.resolve_started.notified(),
+            )
+            .await
+            .unwrap();
+            sqlx::query("UPDATE flow_service.flow_instances SET status='cancelled', updated_at=clock_timestamp() WHERE id=$1")
+                .bind(id).execute(&pool).await.unwrap();
+            signer.resume_resolve.notify_one();
+            let response = tokio::time::timeout(std::time::Duration::from_secs(20), pending)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(response.status(), 409);
+            let bytes = to_bytes(response.into_body(), MAXIMUM_BYTES).await.unwrap();
+            assert!(!String::from_utf8_lossy(&bytes).contains(original));
+            let cancelled = repository.instance(id).await.unwrap().unwrap();
+            assert_eq!(cancelled.status, FlowInstanceStatus::Cancelled);
+            assert_eq!(has_wallet_verifier_request(&cancelled), !first_owner);
+        }
+        pool.close().await;
     }
 
     #[test]
