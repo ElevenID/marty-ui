@@ -214,20 +214,7 @@ pub(crate) fn registration(
     {
         return Err(invalid());
     }
-    let jwk = registration.public_jwk.as_object().ok_or_else(invalid)?;
-    if jwk.keys().any(|key| {
-        !["kty", "crv", "x", "y", "kid", "alg", "use", "key_ops"].contains(&key.as_str())
-    }) || jwk
-        .get("kid")
-        .is_some_and(|kid| kid.as_str() != Some(registration.request_key_id.as_str()))
-        || marty_oid4vp_contract::trust_authority::issuer_public_key_algorithm(
-            &registration.public_jwk,
-        )
-        .map_err(|_| invalid())?
-            != "ES256"
-    {
-        return Err(invalid());
-    }
+    validate_public_request_key(&registration.public_jwk, &registration.request_key_id)?;
     let mut recipients = BTreeSet::new();
     for uri in &registration.response_uris {
         let url = url::Url::parse(uri).map_err(|_| invalid())?;
@@ -243,6 +230,29 @@ pub(crate) fn registration(
         }
     }
     Ok(registration)
+}
+
+pub(crate) fn validate_public_request_key(
+    public_jwk: &Value,
+    request_key_id: &str,
+) -> Result<(), TrustProfileApplicationError> {
+    crate::reject_private_custody_metadata(public_jwk)?;
+    if serde_json::to_vec(public_jwk).map_err(|_| invalid())?.len() > 2048 {
+        return Err(invalid());
+    }
+    let jwk = public_jwk.as_object().ok_or_else(invalid)?;
+    if jwk.keys().any(|key| {
+        !["kty", "crv", "x", "y", "kid", "alg", "use", "key_ops"].contains(&key.as_str())
+    }) || jwk
+        .get("kid")
+        .is_some_and(|kid| kid.as_str() != Some(request_key_id))
+        || marty_oid4vp_contract::trust_authority::issuer_public_key_algorithm(public_jwk)
+            .map_err(|_| invalid())?
+            != "ES256"
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

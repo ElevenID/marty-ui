@@ -1121,6 +1121,18 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
                 ));
             }
         }
+        if source.source_type == crate::TrustSourceType::ManagedFlowVerifier {
+            crate::registered_verifier::validate_profile_policy(profile)?;
+            let registration = crate::managed_flow_verifier::registration(source)?;
+            if !registered_clients.insert(format!(
+                "decentralized_identifier:{}",
+                registration.verifier_did
+            )) {
+                return Err(TrustProfileApplicationError::Invalid(
+                    "managed_flow_verifier_duplicate_client",
+                ));
+            }
+        }
         if source.purposes.as_ref().is_some_and(|purposes| {
             purposes.iter().any(|purpose| {
                 profile.trust_purposes.as_ref().map_or(
@@ -1138,6 +1150,9 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
 }
 
 fn validate_trust_source(source: &TrustSource) -> Result<(), TrustProfileApplicationError> {
+    if source.source_type == crate::TrustSourceType::ManagedFlowVerifier {
+        return crate::managed_flow_verifier::registration(source).map(|_| ());
+    }
     if source.source_type == crate::TrustSourceType::RegisteredVerifier {
         return crate::registered_verifier::registration(source).map(|_| ());
     }

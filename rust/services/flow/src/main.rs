@@ -71,6 +71,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         grpc_application,
     );
 
+    let authority_server = match &config.managed_authority_https {
+        Some(https) => Some(
+            marty_service_runtime::https::BoundKeylessHttpsServer::bind(
+                https,
+                marty_flow::flow_wallet_authority_router(http_state.clone()),
+            )
+            .await?,
+        ),
+        None => None,
+    };
+
     let http_listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_healthy(FlowDependency::HttpListener)?;
     let grpc_listener = TcpListener::bind(config.grpc_addr).await?;
@@ -99,6 +110,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let flow_server = FlowServiceServer::new(grpc_service);
     let tls_acceptor = grpc_security.server_tls_acceptor().await?;
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
+    let authority = marty_service_runtime::https::serve_optional(
+        authority_server,
+        listener_shutdown_rx.clone(),
+    );
     let mut http_shutdown = listener_shutdown_rx.clone();
     let mut grpc_shutdown = listener_shutdown_rx;
     let http = http.with_graceful_shutdown(async move {
@@ -136,6 +151,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let servers = async {
         tokio::try_join!(
+            async {
+                authority
+                    .await
+                    .map_err(|error| Box::new(error) as Box<dyn Error>)
+            },
             async {
                 http.await
                     .map_err(|error| Box::new(error) as Box<dyn Error>)

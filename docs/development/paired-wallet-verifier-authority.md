@@ -76,11 +76,73 @@ temporary material are removed. No local signing-key feature is enabled.
 This establishes PostgreSQL HTTP/CAS and TLS signing with an application/provider
 adapter. It does not establish deployed Signing Keys or Trust Profile governance,
 rootless installation, installed-wallet acceptance or official-suite execution.
-Managed Trust Profile producer/DID/key authority, confirmed-device v2 binding
-and native opaque consent/preparation/completion sessions remain unfinished.
+The managed Trust Profile component below supplies the next owner boundary.
+Confirmed-device v2 binding and native opaque consent/preparation/completion
+sessions remain unfinished.
 
 Run `scripts/qualify_flow_wallet_verifier_request.py --test-binary /absolute/native/executable`
 after building the native library test binary. Full workspace formatting, focused
 Flow Clippy with warnings denied and driver lint are required. Independent
 source review caught permissive unconfigured authentication and duplicate-token
 ambiguity; both were fixed with rejection coverage. Reviewers ran no tests.
+
+## Managed producer trust authority
+
+`MANAGED_FLOW_VERIFIER` is a distinct, public-only source for the explicit
+`PRESENTATION_VERIFIER` purpose. It pins a producer ID, canonical HTTPS public
+base, supported Flow DID (web, jwk or key), exact signing key ID, public ES256 JWK
+and whole-second key-validity interval. Writes preserve source IDs and default
+new sources to disabled; profiles remain draft. Issuer relationships, registered
+plain clients and machine identity sources never supply this authority.
+
+The producer ID selects one fixed operator-configured HTTPS owner transport.
+`WALLET_FLOW_PRODUCER_ID` and `WALLET_FLOW_OWNER_URL` must be configured together
+with the existing workload token; optional `WALLET_FLOW_OWNER_CA_FILE` contains
+public trust roots. The transport refuses plaintext, credentials, non-root
+origins, redirects, proxies, ambiguous JSON, private material and responses over
+64 KiB. Caller request locators never select its host. These settings default to
+absent; this source change activates no deployment configuration.
+
+`GET /internal/v1/trust-profiles/{id}/wallet-managed-verifier-authority` requires
+workload authentication and a server-derived user with current profile-view
+permission. Its organization, client and request URI select only a governed
+source and exact canonical Flow instance. The owner POST supplies the persisted
+original JWS. After that await, Trust Profile repeats permission/profile reads
+and requires the original source ID and complete registration to remain equal.
+It verifies the signature against the pinned key and matches exact signed
+client, key, tenant/instance evidence, nonce, times and response URI. The v2
+snapshot binds that one request and one exact callback, with at most 60-second
+freshness. A producer base is an identity check, not a callback-prefix grant.
+The native wallet must still resolve/bind the actual DID and authenticate all
+supported request semantics through Core; this producer does not replace that
+consumer boundary or credential-issuer trust.
+
+Flow has an optional owner-only managed HTTPS listener using the existing
+`MANAGED_AUTHORITY_HTTPS_ADDR` and remote TLS identity settings. Partial settings,
+a missing workload token or listener collisions fail closed. The listener uses
+the shared non-exportable TLS signer, binds before readiness and shares graceful
+shutdown. Public administration/callback routes are absent from that router.
+No listener was activated in an existing installation.
+
+Final ordinary execution reports 89 Trust Profile passes with one guarded
+ignore, and 105 focused Flow passes with four ignores. The extended driver,
+using `--trust-profile-test-binary`, then explicitly executes three Flow cases
+and one Trust Profile case: four passed, zero ignored. It carries a real signed
+Flow HTTP proof from fresh PostgreSQL/TLS non-exportable OpenBao into a synthetic
+HTTPS owner and in-process Trust Profile HTTP handler. It checks CA/hostname,
+token, proxy exclusion, redirect, size, escaped duplicate names, private/unknown
+fields and media handling. Deterministic paused-owner races reject producer
+replacement, source disabling and membership loss without returning the JWS.
+Exact owned containers, TLS server and private temporary material are removed.
+
+Full workspace format, both services' all-target Clippy with warnings denied and
+driver lint passed. The contracts CI step selects exact library executables
+from Cargo compiler artifacts and invokes this guarded driver through the
+existing positive-execution/timing policy. That exact shell step was executed
+locally and returned `status: ok`; this is not a hosted-check claim. Independent
+source review found the producer-channel race; it was fixed and reviewed with no
+remaining actionable finding. Reviewers executed no tests.
+
+These results do not qualify the deployed keyless listener, real control plane,
+rootless installation, device v2, native wallet sessions, installed-wallet
+acceptance or official-suite interoperability. Those remain separate gates.

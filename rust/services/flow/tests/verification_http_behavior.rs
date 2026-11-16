@@ -30,6 +30,51 @@ fn router_with_auth(
 }
 
 #[tokio::test]
+async fn managed_https_router_exposes_only_the_workload_owner_operation() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgresql://localhost/flow")
+        .unwrap();
+    let app = marty_flow::flow_wallet_authority_router(FlowHttpState {
+        service_authenticator: None,
+        repository: PostgresFlowRepository::new(pool),
+        providers: Arc::new(FlowProviderRegistry::default()),
+        public_base_url: "https://verifier.example".into(),
+        verification: FlowHttpVerificationOptions::default(),
+        application_approval: marty_flow::FlowHttpApplicationApprovalOptions::default(),
+    });
+    for path in [
+        "/v1/flows/definitions",
+        "/v1/flows/instances/instance-1/request",
+        "/oid4vp/did.json",
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    let path = "/internal/v1/wallet-verifier-requests/00000000-0000-4000-8000-000000000001";
+    assert_eq!(
+        app.clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        405
+    );
+    assert_eq!(
+        app.oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+}
+
+#[tokio::test]
 async fn wallet_request_owner_requires_workload_auth_before_storage_or_signing() {
     for gateway_headers in [false, true] {
         let mut request = Request::post(

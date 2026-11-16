@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 marty-service-contracts = { path = "../../crates/service-contracts" }
-marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity"] }
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity", "https"] }
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true

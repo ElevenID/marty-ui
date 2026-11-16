@@ -30,6 +30,19 @@ const DC_API_PROTOCOL: &str = "openid4vp-v1-signed";
 const DC_API_RESPONSE_MODE: &str = "dc_api.jwt";
 const NONCE_TTL_SECONDS: u64 = 900;
 
+/// Only the workload request owner is exposed on the optional managed HTTPS
+/// listener. It does not expose public Flow administration or callback routes.
+pub fn flow_wallet_authority_router(state: FlowHttpState) -> Router {
+    wallet_verifier_owner_routes().with_state(state)
+}
+
+fn wallet_verifier_owner_routes() -> Router<FlowHttpState> {
+    Router::new().route(
+        "/internal/v1/wallet-verifier-requests/{instance_id}",
+        post(wallet_verifier_request_owner),
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowHttpVerificationOptions {
     pub callback_destinations: WebhookDestinationRegistry,
@@ -85,10 +98,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
         .route("/v1/flows/siop", post(start_siop))
         .route("/v1/flows/siop/submit", post(submit_siop))
         .route("/oid4vp/did.json", get(oid4vp_did_document))
-        .route(
-            "/internal/v1/wallet-verifier-requests/{instance_id}",
-            post(wallet_verifier_request_owner),
-        )
+        .merge(wallet_verifier_owner_routes())
         .route(
             "/v1/flows/instances/{instance_id}/request",
             get(get_request_object).post(post_request_object),

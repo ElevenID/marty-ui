@@ -721,6 +721,32 @@ mod tests {
             serde_json::from_slice(&to_bytes(owner.into_body(), MAXIMUM_BYTES).await.unwrap())
                 .unwrap();
         assert_eq!(projection["organization_id"], "org-1");
+        if let Ok(path) = std::env::var("MARTY_TEST_WALLET_REQUEST_PROOF_FILE") {
+            use std::io::Write;
+            let path = std::path::PathBuf::from(path);
+            let parent = path.parent().unwrap().canonicalize().unwrap();
+            let temporary = std::env::temp_dir().canonicalize().unwrap();
+            assert_eq!(parent.parent(), Some(temporary.as_path()));
+            assert!(parent
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("marty-flow-request-"));
+            assert_eq!(
+                path.file_name().unwrap().to_str().unwrap(),
+                format!("flow-owner-{nonce}.json")
+            );
+            let mut file = std::fs::File::create_new(path).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))
+                    .unwrap();
+            }
+            file.write_all(&serde_json::to_vec(&projection).unwrap())
+                .unwrap();
+        }
         let original = projection["compact_request_jws"].as_str().unwrap();
         let persisted = repository.instance(&source.id).await.unwrap().unwrap();
         assert_eq!(

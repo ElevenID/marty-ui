@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 
 import probe_signing_keys_openbao_policy as fixtures
+import flow_wallet_owner_tls_fixture
 
 CASES = {
     "wallet_verifier_request::tests::immutable_owner_request_is_revalidated_without_resigning_or_shortening_instance",
@@ -29,6 +30,7 @@ CASES = {
     "wallet_verifier_request::tests::http_owner_persists_exact_request_and_cancellation_wins_async_reads",
 }
 OWNER = "flow-wallet-verifier-request-qualification"
+TRUST_CASE = "managed_flow_verifier::tests::actual_flow_signed_proof_projects_only_exact_fresh_request_authority"
 
 
 def require(condition, message):
@@ -51,7 +53,7 @@ def remove_owned(name, cid):
             "owned Flow fixture removal not verified")
 
 
-def qualify(binary: Path):
+def qualify(binary: Path, trust_binary: Path | None = None):
     binary = binary.resolve(strict=True)
     require(binary.is_file() and os.access(binary, os.X_OK), "native executable required")
     discovery = subprocess.run([str(binary), "wallet_verifier_request::tests::", "--ignored", "--list"],
@@ -60,6 +62,13 @@ def qualify(binary: Path):
         line.removesuffix(": test") for line in discovery.stdout.splitlines()
         if line.endswith(": test")
     } == CASES, "exact three ignored native cases must exist before fixture allocation")
+    if trust_binary is not None:
+        trust_binary = trust_binary.resolve(strict=True)
+        require(trust_binary.is_file() and os.access(trust_binary, os.X_OK), "native Trust Profile executable required")
+        found = subprocess.run([str(trust_binary), TRUST_CASE, "--ignored", "--exact", "--list"],
+                               capture_output=True, text=True, timeout=30, check=False)
+        require(found.returncode == 0 and [line.removesuffix(": test") for line in found.stdout.splitlines()
+                if line.endswith(": test")] == [TRUST_CASE], "exact native Trust Profile proof case required before allocation")
     fixtures.pull_pinned_openbao()
     nonce, root_token = secrets.token_hex(32), secrets.token_urlsafe(32)
     name, key = "wallet-flow-request-" + nonce[:12], "wallet-request-" + nonce
@@ -160,6 +169,8 @@ def qualify(binary: Path):
                 MARTY_TEST_WALLET_REQUEST_SIGN_URL=f"{base}/transit/sign/{key}",
                 MARTY_TEST_WALLET_REQUEST_CA=str(ca), MARTY_TEST_WALLET_REQUEST_TOKEN_FILE=str(token_file),
                 MARTY_TEST_WALLET_REQUEST_PUBLIC_JWK=json.dumps(jwk))
+            if trust_binary is not None:
+                environment["MARTY_TEST_WALLET_REQUEST_PROOF_FILE"] = str(private / f"flow-owner-{nonce}.json")
             result = subprocess.run([str(binary), "wallet_verifier_request::tests::", "--ignored", "--nocapture"],
                 env=environment, capture_output=True, text=True, timeout=90, check=False)
             output = (result.stdout + result.stderr).replace(root_token, "<redacted>").replace(signer_token, "<redacted>").replace(pg_password, "<redacted>")
@@ -169,6 +180,27 @@ def qualify(binary: Path):
                 print(output[-6000:], file=sys.stderr)
                 raise RuntimeError("owned Flow request native cases failed; no pass claimed")
             print(result.stdout)
+            if trust_binary is not None:
+                flow_token = secrets.token_urlsafe(32)
+                proof = json.loads(Path(environment["MARTY_TEST_WALLET_REQUEST_PROOF_FILE"]).read_text())
+                with flow_wallet_owner_tls_fixture.serve(private, nonce, proof, flow_token) as tls_environment:
+                    environment.update(tls_environment)
+                    trust = subprocess.run([str(trust_binary), TRUST_CASE, "--ignored", "--exact", "--nocapture"],
+                        env=environment, capture_output=True, text=True, timeout=90, check=False)
+                    if trust.returncode:
+                        detail = (trust.stdout + trust.stderr)
+                        for secret in (root_token, signer_token, pg_password, flow_token):
+                            detail = detail.replace(secret, "<redacted>")
+                        print(detail[-6000:], file=sys.stderr)
+                        raise RuntimeError("native Trust Profile proof/TLS case failed; no pass claimed")
+                trust_output = (trust.stdout + trust.stderr).replace(root_token, "<redacted>").replace(signer_token, "<redacted>").replace(pg_password, "<redacted>").replace(flow_token, "<redacted>")
+                if path := os.environ.get("MARTY_FLOW_OWNER_DIAGNOSTIC"):
+                    with Path(path).open("a") as log:
+                        log.write(trust_output)
+                if trust.returncode or not re.search(r"test result: ok\. 1 passed; 0 failed; 0 ignored;", trust.stdout):
+                    print(trust_output[-6000:], file=sys.stderr)
+                    raise RuntimeError("native Trust Profile proof case failed; no pass claimed")
+                print(trust.stdout)
         finally:
             try:
                 if cid:
@@ -176,8 +208,10 @@ def qualify(binary: Path):
             finally:
                 if pg_cid:
                     remove_owned(pg_name, pg_cid)
-    print(json.dumps({"passed": 3, "ignored": 0, "nonExportableKey": True, "tlsVerified": True,
+    print(json.dumps({"passed": 3 + int(trust_binary is not None), "ignored": 0, "nonExportableKey": True, "tlsVerified": True,
         "postgresqlHttpPersistenceAndCancellation": True,
+        "trustProfileActualSignedProofProjection": trust_binary is not None,
+        "syntheticFlowOwnerHttpsAndAuthorityRaces": trust_binary is not None,
         "ownedContainerRemoved": True, "temporaryMaterialRemoved": True,
         "scope": "actual PostgreSQL HTTP persistence/CAS and TLS Transit signatures with application/provider adapter; not deployed owner, rootless installation or installed-wallet acceptance"}))
 
@@ -185,4 +219,6 @@ def qualify(binary: Path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-binary", type=Path, required=True)
-    qualify(parser.parse_args().test_binary)
+    parser.add_argument("--trust-profile-test-binary", type=Path)
+    arguments = parser.parse_args()
+    qualify(arguments.test_binary, arguments.trust_profile_test_binary)
