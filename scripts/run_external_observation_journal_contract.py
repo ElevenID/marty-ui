@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""Compile the exact core journal against disposable PostgreSQL, without core forks.
+
+Dependencies are selected from the production workspace and seeded by its lock.
+The resolved registry versions/checksums must already exist in that lock before
+compilation. No fixture credentials or network routes are production defaults.
+"""
+import argparse
+import difflib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import tomllib
+
+ROOT = Path(__file__).resolve().parents[1]
+STORE = "rust/services/issuance/src/external_observation_postgres.rs"
+TEST = "tests/rust/external-observation-journal/tests.rs"
+WIRE = "rust/services/issuance/src/external_observation_wire.rs"
+WIRE_TEST = "rust/services/issuance/src/external_observation_wire_tests.rs"
+INGRESS = "rust/services/issuance/src/external_observation_ingress.rs"
+INGRESS_TEST = "tests/rust/external-observation-journal/ingress_tests.rs"
+FORMAT_FILES = (STORE, TEST, WIRE, WIRE_TEST, INGRESS, INGRESS_TEST)
+
+
+def toml_value(value):
+    if isinstance(value, str):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, list):
+        return "[" + ", ".join(toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{key} = {toml_value(item)}" for key, item in value.items()) + " }"
+    raise ValueError("unsupported workspace dependency declaration")
+
+
+def run(command, *, cwd, log, environment):
+    result = subprocess.run(command, cwd=cwd, env=environment, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    log.write(result.stdout)
+    log.flush()
+    print(result.stdout, end="", flush=True)
+    if result.returncode:
+        raise RuntimeError(f"{command[0]} failed with exit code {result.returncode}")
+
+
+def compile_contract(artifacts):
+    workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text())
+    service = tomllib.loads((ROOT / "rust/services/issuance/Cargo.toml").read_text())
+    names = ("async-trait", "http", "serde", "serde_json", "sqlx", "tokio", "uuid")
+    declarations = []
+    for name in names:
+        value = workspace["workspace"]["dependencies"][name]
+        if isinstance(value, str):
+            value = {"version": value}
+        else:
+            value = dict(value)
+        if set(value) - {"version", "features", "default-features", "package"}:
+            raise ValueError("journal harness accepts registry dependencies only")
+        override = service["dependencies"].get(name, {})
+        if isinstance(override, dict):
+            value["features"] = sorted(set(value.get("features", [])) | set(override.get("features", [])))
+        declarations.append(f"{name} = {toml_value(value)}")
+    with tempfile.TemporaryDirectory(prefix="observation-journal-") as temporary:
+        directory = Path(temporary)
+        manifest = ('[package]\nname = "external-observation-journal-contract"\nversion = "0.0.0"\n'
+                    'edition = "2021"\npublish = false\n[workspace]\n[lib]\npath = "lib.rs"\n'
+                    '[dependencies]\n' + "\n".join(declarations) + "\n")
+        (directory / "Cargo.toml").write_text(manifest)
+        shutil.copyfile(ROOT / "rust/Cargo.lock", directory / "Cargo.lock")
+        # Reuse the unchanged journal fixture and all baseline tests. Appending
+        # a child test module gives it access to that private fixture without
+        # copying the authority adapter or altering production source bytes.
+        fixture = directory / "journal_fixture.rs"
+        fixture.write_bytes((ROOT / TEST).read_bytes() + (
+            f"\n#[path = {json.dumps(str(ROOT / INGRESS_TEST))}]\nmod ingress_tests;\n"
+        ).encode())
+        modules = [
+            ("external_observation_admission", ROOT / "rust/services/issuance/src/external_observation_admission.rs"),
+            ("external_observation_postgres", ROOT / STORE),
+            ("external_observation_wire", ROOT / WIRE),
+            ("external_observation_ingress", ROOT / INGRESS),
+            ("postgres_contract", fixture),
+        ]
+        (directory / "lib.rs").write_text("\n".join(
+            f"#[path = {json.dumps(str(path))}]\npub mod {name};" for name, path in modules
+        ) + "\n")
+        environment = dict(os.environ)
+        environment["CARGO_TARGET_DIR"] = str(directory / "target")
+        environment["RUSTFLAGS"] = "-D warnings"
+        metadata = subprocess.run(["cargo", "metadata", "--format-version", "1"], cwd=directory,
+                                  env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                  text=True, check=False)
+        if metadata.returncode:
+            raise RuntimeError("isolated dependency resolution failed: " + metadata.stderr)
+        baseline = tomllib.loads((ROOT / "rust/Cargo.lock").read_text())
+        resolved = tomllib.loads((directory / "Cargo.lock").read_text())
+        allowed = {(p["name"], p["version"], p.get("source"), p.get("checksum")) for p in baseline["package"]}
+        for package in resolved["package"]:
+            if "source" not in package:
+                continue
+            identity = (package["name"], package["version"], package.get("source"), package.get("checksum"))
+            if not package["source"].startswith("registry+") or identity not in allowed:
+                raise RuntimeError(f"dependency is not in the production lock: {package['name']} {package['version']}")
+        shutil.copyfile(directory / "Cargo.lock", artifacts / "journal-contract.Cargo.lock")
+        (artifacts / "journal-contract.Cargo.toml").write_text(manifest)
+        with (artifacts / "journal-contract-tests.log").open("w") as log:
+            run(["cargo", "test", "--locked", "--lib", "--", "--test-threads=1"],
+                cwd=directory, log=log, environment=environment)
+
+
+def require_format(artifacts):
+    original = {name: (ROOT / name).read_bytes() for name in FORMAT_FILES}
+    try:
+        subprocess.run(["rustfmt", "--edition", "2021", *(str(ROOT / name) for name in original)], check=True)
+        patch = "".join("".join(difflib.unified_diff(
+            data.decode().splitlines(keepends=True), (ROOT / name).read_text().splitlines(keepends=True),
+            fromfile="a/" + name, tofile="b/" + name,
+        )) for name, data in original.items())
+        (artifacts / "journal-format.patch").write_text(patch)
+        if patch:
+            raise RuntimeError("checked-in formatting differs; apply the journal-format.patch artifact")
+    finally:
+        for name, data in original.items():
+            (ROOT / name).write_bytes(data)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--artifacts", required=True, type=Path)
+    args = parser.parse_args()
+    args.artifacts.mkdir(parents=True, exist_ok=True)
+    try:
+        compile_contract(args.artifacts)
+    finally:
+        require_format(args.artifacts)
+
+
+if __name__ == "__main__":
+    main()
