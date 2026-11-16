@@ -23,9 +23,11 @@ from datetime import datetime
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 POLICY_PATH = "release/source-authority-policy.json"
-POLICY = {"schema": "marty.immutable-source-authority/v1",
+CI_TEST_LEAF = ".github/workflows/kubernetes-chart.yml"
+POLICY = {"schema": "marty.immutable-source-authority/v2",
           "repository": "ElevenID/marty-ui",
-          "scope": "release-program-and-policy/v1",
+          "scope": "release-program-and-policy/v2-additive-ci-tests",
+          "additive_ci_test_leaf": CI_TEST_LEAF,
           "history_limit": 128}
 # Include transitive local Python imports, workflow/action/verifier pins and all
 # policy definitions. The candidate's own stack lock remains independently bound
@@ -53,6 +55,43 @@ def require(condition: bool, message: str) -> None:
         raise SourceAuthorityError(message)
 
 
+def ci_test_leaf(raw: bytes) -> tuple[bytes, frozenset[bytes], frozenset[bytes]]:
+    """Project only two narrow additive slots; all other workflow bytes bind.
+
+    This is deliberately not a YAML interpreter or a whole-workflow exclusion.
+    Unsupported formatting/commands fail closed. Candidate tests/triggers and
+    every intervening addition must remain present throughout later history.
+    """
+    start = b"on:\n  pull_request:\n    paths:\n"
+    end = b"  merge_group:\n"
+    header = b"      - name: Check Kubernetes acceptance against the public API contract\n"
+    require(raw.count(start) == raw.count(end) == raw.count(header) == 1,
+            "CI test authority shape is unsupported")
+    before, _, tail = raw.partition(start)
+    paths, separator, after = tail.partition(end)
+    require(separator and paths.endswith(b"\n"), "CI trigger authority shape is unsupported")
+    triggers = []
+    retained = []
+    for line in paths.splitlines(keepends=True):
+        match = re.fullmatch(rb"      - '(tests/scripts/[A-Za-z0-9_.-]+\*?\.cjs)'\n", line)
+        if match:
+            triggers.append(match[1])
+        else:
+            retained.append(line)
+    require(len(triggers) == len(set(triggers)), "CI test triggers are duplicated")
+    skeleton = before + start + b"".join(retained) + separator + after
+    before, _, tail = skeleton.partition(header)
+    command, separator, after = tail.partition(b"\n")
+    match = re.fullmatch(rb"        run: node --test (.+)", command)
+    require(separator and match is not None, "CI test command authority shape is unsupported")
+    tests = match[1].split(b" ")
+    require(tests and len(tests) == len(set(tests)) and all(
+        re.fullmatch(rb"tests/scripts/[A-Za-z0-9_-]+\.test\.cjs", test) for test in tests),
+        "CI test arguments are unsupported or duplicated")
+    skeleton = before + header + b"        run: node --test <additive-ci-tests>\n" + after
+    return skeleton, frozenset(tests), frozenset(triggers)
+
+
 class History:
     def __init__(self, repository: Path, timeout_seconds: float) -> None:
         require(type(timeout_seconds) in (int, float) and math.isfinite(timeout_seconds)
@@ -62,6 +101,7 @@ class History:
         self.environment = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "WINDIR") if key in os.environ}
         self.environment.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1",
                                 GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, LANG="C")
+        self.ci_cache: dict[str, tuple[bytes, frozenset[bytes], frozenset[bytes]] | None] = {}
 
     def git(self, *arguments: str) -> bytes:
         remaining = self.deadline - time.monotonic()
@@ -148,6 +188,41 @@ class History:
             {"files": observed, "stack_lock_policy": self.lock_policy(source)},
             sort_keys=True, separators=(",", ":")).encode("ascii")).hexdigest()
 
+    def authority_inventory(self, source: str, inventory: dict[str, tuple[str, str, int]]) -> dict:
+        result = dict(inventory)
+        if CI_TEST_LEAF not in inventory:
+            self.ci_cache[source] = None
+            return result
+        raw = self.git("cat-file", "blob", f"{source}:{CI_TEST_LEAF}")
+        mode, oid, size = inventory[CI_TEST_LEAF]
+        require(len(raw) == size and hashlib.sha1(f"blob {size}\0".encode("ascii") + raw).hexdigest() == oid,
+                "CI workflow differs from its Git inventory")
+        projected = ci_test_leaf(raw)
+        self.ci_cache[source] = projected
+        skeleton = projected[0]
+        result[CI_TEST_LEAF] = (mode, hashlib.sha256(skeleton).hexdigest(), len(skeleton))
+        return result
+
+    def additive_ci_history(self, source: str, commit: str) -> None:
+        original, current = self.ci_cache[source], self.ci_cache[commit]
+        if original is None:
+            require(current is None, "CI workflow namespace changed")
+            return
+        require(current is not None and original[1] <= current[1] and original[2] <= current[2],
+                "candidate CI tests or triggers were removed")
+        if commit == source:
+            return
+        parents = self.git("rev-list", "--parents", "-n", "1", commit).decode("ascii").split()
+        require(parents and parents[0] == commit and len(parents) >= 2,
+                "CI test history has no authenticated parent")
+        for parent in parents[1:]:
+            require(SHA.fullmatch(parent) is not None, "CI test parent is malformed")
+            if parent not in self.ci_cache:
+                self.authority_inventory(parent, self.inventory(parent))
+            previous = self.ci_cache[parent]
+            require(previous is not None and previous[1] <= current[1] and previous[2] <= current[2],
+                    "intervening CI tests or triggers were removed")
+
     def lock_policy(self, source: str) -> tuple[str, str]:
         """Permit a later version field while retaining eligibility and pins."""
         entry = self.git("ls-tree", "-z", source, "--", "release/stack-lock.json")
@@ -197,15 +272,18 @@ def require_compatible_source(source: str, executable: str, protected_main: str,
         history.git("merge-base", "--is-ancestor", ancestor, protected_main)
     history.git("merge-base", "--is-ancestor", source, executable)
     expected = history.inventory(source)
+    expected_authority = history.authority_inventory(source, expected)
     lock_policy = history.lock_policy(source)
     fingerprint = history.fingerprint(source, expected)
     commits = history.git("rev-list", f"--max-count={POLICY['history_limit'] + 1}",
                           f"{source}..{protected_main}").splitlines()
     require(len(commits) <= POLICY["history_limit"], "source history exceeds its complete bound")
     for commit in {executable, protected_main, *(row.decode("ascii") for row in commits)}:
-        require(SHA.fullmatch(commit) is not None and history.inventory(commit) == expected
+        require(SHA.fullmatch(commit) is not None
+                and history.authority_inventory(commit, history.inventory(commit)) == expected_authority
                 and history.lock_policy(commit) == lock_policy,
                 "release program or policy changed after candidate admission")
+        history.additive_ci_history(source, commit)
     return fingerprint
 
 

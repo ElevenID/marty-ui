@@ -51,6 +51,22 @@ main. Only the version field is excluded from the lock's policy projection;
 eligibility, component pins and all other lock fields must remain unchanged.
 Changes within the release-policy scope require a fresh candidate.
 
+The future `marty.immutable-source-authority/v2` marker permits one narrow
+exception: `.github/workflows/kubernetes-chart.yml` may add single-line
+`tests/scripts/*.test.cjs` arguments to its existing public API acceptance test
+command and add matching script-path triggers to its pull-request path list.
+The reader uses a strict byte projection, not general YAML normalization. Every
+candidate test and trigger, and every addition in intervening history, must
+remain present. Removing then restoring a check is rejected. Options, shell
+commands, duplicate arguments and unsupported formatting are rejected.
+
+Every other workflow byte, including permissions, events, action pins, existing
+steps and non-test path triggers, remains bound. The original Git inventory and
+archive still authenticate the complete unprojected workflow. This exception
+does not cover other workflows or changes to release scripts or policy. It
+applies only to newly admitted sources carrying the exact v2 marker; historical
+v1 candidates and failed original runs cannot be revived by this policy change.
+
 This policy requires the exact future source-authority marker at S and binds
 the clean program's paths, modes and bytes in the publication policy digest.
 Historical candidates cannot gain this authority. Original successful CI/CD,
