@@ -189,7 +189,20 @@ impl Fixture {
                 status varchar NOT NULL, updated_at timestamptz NOT NULL, expires_at timestamptz NOT NULL
             );")
             .execute(&pool).await.unwrap();
-        sqlx::raw_sql(CANDIDATE_SCHEMA)
+        sqlx::raw_sql(OBSERVATION_SCHEMA)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // Synthetic registered-schema fixture, not qualification of the entire
+        // protected owner CLI. Real owner-command integration is tested separately.
+        sqlx::query(
+            "CREATE TABLE issuance_service.rust_schema_migrations(version text PRIMARY KEY)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO issuance_service.rust_schema_migrations(version) VALUES ($1)")
+            .bind(crate::external_observation_schema::VERSION)
             .execute(&pool)
             .await
             .unwrap();
