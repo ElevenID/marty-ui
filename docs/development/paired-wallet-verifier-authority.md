@@ -146,3 +146,36 @@ remaining actionable finding. Reviewers executed no tests.
 These results do not qualify the deployed keyless listener, real control plane,
 rootless installation, device v2, native wallet sessions, installed-wallet
 acceptance or official-suite interoperability. Those remain separate gates.
+
+## Confirmed device v2 projection
+
+The paired device endpoint accepts an optional `request_uri` alongside the client
+ID to select managed v2 evidence from the fixed Trust Profile owner. Those inputs
+select a request; they supply no user, organization, profile or holder authority.
+One PostgreSQL statement binds the live digest-only bearer, acknowledged pairing,
+active registration and both current unrevoked holder key rows. The public scope
+includes credential/registration/pairing/device/user/organization/profile IDs,
+credential expiry, and each holder key's ledger ID, algorithm, version, public
+JWK and RFC 7638 thumbprint. It excludes bearer values and custody references.
+
+Membership is checked before and after the owner lookup, and the full database
+scope is read again and compared before returning the bounded no-store
+`marty.wallet/device-verifier-governance/v2` envelope. Credential rotation,
+deactivation, scope substitution and key/version changes invalidate that
+snapshot. The envelope's expiry cannot exceed the credential or verifier
+snapshot expiry. The existing v1 registered endpoint remains distinct.
+
+Focused native execution reports 16 unit and eight HTTP behavior passes; guarded
+PostgreSQL, Redis and synthetic TLS cases are then explicitly executed with no
+ignores. The PostgreSQL case reads actual joined key JSON and exercises device
+substitution, key version changes, credential rotation, missing verifier scope
+and key revocation. TLS qualification executes the managed-v2 transport with
+synthetic response evidence, preserving the existing CA/hostname/token/redirect/
+duplicate/size controls. Both recorded CI phase receipts are successful, and
+owned containers/server/material are removed. Formatting, all-target device
+Clippy with warnings denied and transport-driver lint pass.
+
+These checks do not yet exercise a device HTTP response paused across authority
+revocation, deployed governance, native Core authentication or an installed
+wallet. The consumer must verify the original JWS/DID, exact request semantics,
+issuer evidence and holder binding before consent and again at completion.

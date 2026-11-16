@@ -1,6 +1,8 @@
 //! Durable, ticket-scoped browser confirmation; no bearer or key is persisted.
 
 use chrono::{Duration, Utc};
+use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use std::{sync::Arc, time::Duration as StdDuration};
@@ -28,6 +30,72 @@ pub struct BoundWalletTrustProfile {
     pub verifier_trust_profile_id: Option<String>,
 }
 
+/// Public identity only. Bearers and provider custody references are not
+/// projected; the credential ID changes when the bearer rotates.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct BoundWalletGovernanceScope {
+    pub credential_id: String,
+    pub registration_id: String,
+    pub pairing_id: String,
+    pub device_id: String,
+    pub user_id: String,
+    pub organization_id: String,
+    pub issuer_trust_profile_id: String,
+    pub verifier_trust_profile_id: String,
+    pub credential_expires_at: chrono::DateTime<Utc>,
+    pub holder_binding_key: WalletGovernanceKey,
+    pub presentation_signing_key: WalletGovernanceKey,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct WalletGovernanceKey {
+    pub key_id: String,
+    pub algorithm: String,
+    pub version: i64,
+    pub public_jwk: Value,
+    pub jwk_thumbprint: String,
+}
+
+fn governance_key(
+    key: &crate::holder_key::HolderKeyRecord,
+    device: &crate::DeviceRegistration,
+    purpose: &str,
+) -> Result<WalletGovernanceKey, DeviceError> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    if !key.valid_for(device) || key.purpose != purpose || key.created_at > Utc::now() {
+        return Err(DeviceError::Forbidden(INVALID.into()));
+    }
+    let jwk = key.public_jwk();
+    let canonical = if key.algorithm == "ES256" {
+        format!(
+            "{{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"{}\",\"y\":\"{}\"}}",
+            key.public_x,
+            key.public_y
+                .as_deref()
+                .ok_or_else(|| DeviceError::Forbidden(INVALID.into()))?
+        )
+    } else {
+        format!(
+            "{{\"crv\":\"Ed25519\",\"kty\":\"OKP\",\"x\":\"{}\"}}",
+            key.public_x
+        )
+    };
+    // The remote provider reference remains private ledger metadata. A public
+    // JWK thumbprint and ledger ID identify the exact current key/version.
+    let mut public = jwk;
+    public
+        .as_object_mut()
+        .ok_or_else(|| DeviceError::Forbidden(INVALID.into()))?
+        .remove("kid");
+    Ok(WalletGovernanceKey {
+        key_id: key.id.clone(),
+        algorithm: key.algorithm.clone(),
+        version: key.remote_version,
+        public_jwk: public,
+        jwk_thumbprint: URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes())),
+    })
+}
+
 #[derive(Clone)]
 pub struct PostgresPairingConfirmations {
     pool: PgPool,
@@ -36,6 +104,48 @@ pub struct PostgresPairingConfirmations {
 impl PostgresPairingConfirmations {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    /// One statement snapshot binds the current bearer, acknowledged pairing,
+    /// active registration and both live holder keys. No mobile scope is used.
+    pub async fn governance_for_bearer(
+        &self,
+        bearer: &str,
+    ) -> Result<BoundWalletGovernanceScope, DeviceError> {
+        if !canonical_bearer(bearer) {
+            return Err(DeviceError::Forbidden(INVALID.into()));
+        }
+        let digest: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
+        let row=sqlx::query("SELECT c.id AS credential_id,c.expires_at AS credential_expires_at,p.pairing_id,p.trust_profile_id,p.verifier_trust_profile_id,d.*,row_to_json(b) AS binding_key,row_to_json(s) AS signing_key FROM device_registration_service.device_holder_credentials c JOIN device_registration_service.device_pairing_confirmations p ON p.registration_id=c.registration_id JOIN device_registration_service.device_registrations d ON d.id=c.registration_id JOIN device_registration_service.device_holder_keys b ON b.registration_id=d.id AND b.purpose='holder_binding' AND b.revoked_at IS NULL JOIN device_registration_service.device_holder_keys s ON s.registration_id=d.id AND s.purpose='presentation_signing' AND s.revoked_at IS NULL WHERE c.token_sha256=$1 AND c.revoked_at IS NULL AND c.issued_at<=clock_timestamp() AND c.expires_at>clock_timestamp() AND p.confirmed_at IS NOT NULL AND p.expired_at IS NULL AND p.verifier_trust_profile_id IS NOT NULL AND c.user_id=p.user_id AND c.organization_id=p.organization_id AND d.user_id=p.user_id AND d.organization_id=p.organization_id AND d.is_active=true")
+            .bind(digest.as_slice()).fetch_optional(&self.pool).await.map_err(persistence)?
+            .ok_or_else(||DeviceError::Forbidden(INVALID.into()))?;
+        let device = crate::postgres::registration(&row)?;
+        let parse_key = |name: &str| -> Result<crate::holder_key::HolderKeyRecord, DeviceError> {
+            let value: Value = row.try_get(name).map_err(persistence)?;
+            serde_json::from_value(value).map_err(|_| DeviceError::Forbidden(INVALID.into()))
+        };
+        let binding = governance_key(&parse_key("binding_key")?, &device, "holder_binding")?;
+        let signing = governance_key(&parse_key("signing_key")?, &device, "presentation_signing")?;
+        if binding.algorithm != "EdDSA" || signing.algorithm != "ES256" {
+            return Err(DeviceError::Forbidden(INVALID.into()));
+        }
+        Ok(BoundWalletGovernanceScope {
+            credential_id: row.try_get("credential_id").map_err(persistence)?,
+            registration_id: device.id,
+            pairing_id: row.try_get("pairing_id").map_err(persistence)?,
+            device_id: device.device_id,
+            user_id: device.user_id,
+            organization_id: device
+                .organization_id
+                .ok_or_else(|| DeviceError::Forbidden(INVALID.into()))?,
+            issuer_trust_profile_id: row.try_get("trust_profile_id").map_err(persistence)?,
+            verifier_trust_profile_id: row
+                .try_get("verifier_trust_profile_id")
+                .map_err(persistence)?,
+            credential_expires_at: row.try_get("credential_expires_at").map_err(persistence)?,
+            holder_binding_key: binding,
+            presentation_signing_key: signing,
+        })
     }
 
     /// Profile selection is fixed by the browser ticket, not a mobile query parameter.

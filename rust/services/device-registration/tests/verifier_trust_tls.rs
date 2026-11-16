@@ -47,6 +47,30 @@ async fn fixed_owner_tls_authentication_and_closed_response_controls() {
         snapshot["authority"]["registration"]["client_id"],
         "registered-client"
     );
+    let locator =
+        "https://verifier.example/v1/flows/instances/11111111-2222-4333-8444-555555555555/request";
+    let managed = client
+        .fetch_managed(
+            PROFILE,
+            "org-a",
+            "browser-user",
+            "decentralized_identifier:did:web:verifier.example",
+            locator,
+        )
+        .await
+        .unwrap();
+    assert_eq!(managed["contract"], "marty.wallet/verifier-authority/v2");
+    assert_eq!(managed["request"]["request_uri"], locator);
+    assert!(client
+        .fetch_managed(
+            PROFILE,
+            "org-a",
+            "browser-user",
+            "decentralized_identifier:did:web:verifier.example",
+            "https://attacker.example/request"
+        )
+        .await
+        .is_err());
     assert!(client.admit(PROFILE, "org-a", "other-user").await.is_err());
     assert!(client
         .fetch(PROFILE, "other-org", "browser-user", "registered-client")

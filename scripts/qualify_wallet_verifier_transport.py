@@ -107,6 +107,30 @@ def qualify(binary: Path) -> dict:
                             "observed_at": now.isoformat(), "expires_at": (now + timedelta(seconds=30)).isoformat()}
                 if url.path.endswith("/wallet-verifier-profile-admission"):
                     snapshot["contract"] = "marty.wallet/verifier-profile-admission/v1"
+                elif url.path.endswith("/wallet-managed-verifier-authority"):
+                    import hashlib
+                    client_id = query.get("client_id", [""])[0]
+                    locator = query.get("request_uri", [""])[0]
+                    instance = "11111111-2222-4333-8444-555555555555"
+                    expected = f"https://verifier.example/v1/flows/instances/{instance}/request"
+                    if client_id != "decentralized_identifier:did:web:verifier.example" or locator != expected:
+                        self.respond(403, b"{}")
+                        return
+                    response_cases.add("managed-client")
+                    recipient = expected.removesuffix("/request") + "/submit"
+                    selected = dict(registration, client_id=client_id,
+                        request_key_id="did:web:verifier.example#key-1", response_uris=[recipient],
+                        valid_from=(now-timedelta(seconds=60)).isoformat(), valid_until=(now+timedelta(seconds=600)).isoformat())
+                    original = "synthetic.not.authenticated"
+                    snapshot.update(contract="marty.wallet/verifier-authority/v2", authority={
+                        "authority_id": f"{PROFILE}/00000000-0000-4000-8000-000000000001",
+                        "revision": "fixture-managed-revision", "key_purpose": "oid4vp_request_signing",
+                        "algorithm": "ES256", "request_clock_skew_seconds": 30,
+                        "max_request_lifetime_seconds": 900, "registration": selected},
+                        request={"producer_id": "flow-primary", "instance_id": instance, "request_uri": expected,
+                            "response_uri": recipient, "nonce": "synthetic-nonce", "compact_request_jws": original,
+                            "request_jws_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                            "request_issued_at": now.isoformat(), "request_expires_at": (now+timedelta(seconds=120)).isoformat()})
                 elif url.path.endswith("/wallet-verifier-authority"):
                     client_id = query.get("client_id", [""])[0]
                     response_cases.add(client_id)
@@ -179,7 +203,7 @@ def qualify(binary: Path) -> dict:
                 raise RuntimeError("owned TLS transport qualification failed:\n" + detail[-6000:])
             if fixture_errors:
                 raise RuntimeError("TLS fixture handler failed: " + ",".join(fixture_errors))
-            if response_cases != {"registered-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"}:
+            if response_cases != {"registered-client", "managed-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"}:
                 raise RuntimeError("TLS fixture did not execute every required response case")
             if "/redirect-target" in requests:
                 raise RuntimeError("owner redirect was followed")
