@@ -167,28 +167,32 @@ async fn issue_pairing_ticket(
     if uuid::Uuid::parse_str(&body.trust_profile_id).is_err() {
         return Err(DeviceError::BadRequest("trust_profile_id is required".into()).into());
     }
-    let trust = state
-        .wallet_issuer_trust
-        .as_ref()
-        .ok_or(DeviceError::AuthorizationUnavailable)?;
-    trust.fetch(&body.trust_profile_id, organization_id).await?;
-    if let Some(profile) = body.verifier_trust_profile_id.as_deref() {
-        let id = uuid::Uuid::parse_str(profile)
+    if let Some(verifier_profile) = body.verifier_trust_profile_id.as_deref() {
+        let verifier_id = uuid::Uuid::parse_str(verifier_profile)
             .map_err(|_| DeviceError::BadRequest("verifier_trust_profile_id is invalid".into()))?;
-        if id.is_nil()
-            || id.to_string() != profile
-            || Some(id) == uuid::Uuid::parse_str(&body.trust_profile_id).ok()
+        if verifier_id.is_nil()
+            || verifier_id.to_string() != verifier_profile
+            || Some(verifier_id) == uuid::Uuid::parse_str(&body.trust_profile_id).ok()
         {
             return Err(DeviceError::BadRequest(
                 "a distinct verifier trust profile is required".into(),
             )
             .into());
         }
+    }
+    let trust = state
+        .wallet_issuer_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    trust
+        .fetch(&body.trust_profile_id, organization_id, &user_id)
+        .await?;
+    if let Some(verifier_profile) = body.verifier_trust_profile_id.as_deref() {
         state
             .wallet_verifier_trust
             .as_ref()
             .ok_or(DeviceError::AuthorizationUnavailable)?
-            .admit(profile, organization_id, &user_id)
+            .admit(verifier_profile, organization_id, &user_id)
             .await?;
     }
     state
@@ -357,7 +361,10 @@ async fn wallet_verifier_authority(
             .await?;
         let snapshot = trust
             .fetch_managed(
-                &scope.verifier_trust_profile_id,
+                scope
+                    .verifier_trust_profile_id
+                    .as_deref()
+                    .ok_or(DeviceError::AuthorizationUnavailable)?,
                 &scope.organization_id,
                 &scope.user_id,
                 &query.client_id,
@@ -440,21 +447,46 @@ async fn wallet_issuer_keys(
         .wallet_issuer_trust
         .as_ref()
         .ok_or(DeviceError::AuthorizationUnavailable)?;
-    let profile = confirmations.profile_for_bearer(bearer).await?;
+    let profile = confirmations.issuer_governance_for_bearer(bearer).await?;
     state
         .memberships
         .require_active(&profile.user_id, &profile.organization_id)
         .await?;
     let snapshot = trust
-        .fetch(&profile.trust_profile_id, &profile.organization_id)
+        .fetch(
+            &profile.issuer_trust_profile_id,
+            &profile.organization_id,
+            &profile.user_id,
+        )
+        .await?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
         .await?;
     // Recheck after the remote read so rotation or deactivation during that read fails closed.
-    if confirmations.profile_for_bearer(bearer).await? != profile {
+    if confirmations.issuer_governance_for_bearer(bearer).await? != profile {
         return Err(
             DeviceError::Forbidden("wallet issuer trust authorization changed".into()).into(),
         );
     }
-    let mut response = Json(snapshot).into_response();
+    let now = chrono::Utc::now();
+    let expires =
+        serde_json::from_value::<chrono::DateTime<chrono::Utc>>(snapshot["expires_at"].clone())
+            .map_err(|_| DeviceError::AuthorizationUnavailable)?
+            .min(profile.credential_expires_at);
+    if expires <= now {
+        return Err(DeviceError::AuthorizationUnavailable.into());
+    }
+    let envelope = json!({"contract":"marty.wallet/device-issuer-governance/v2","scope":profile,
+        "observed_at":now,"expires_at":expires,"issuer":snapshot});
+    if serde_json::to_vec(&envelope)
+        .map_err(|_| DeviceError::AuthorizationUnavailable)?
+        .len()
+        > 256 * 1024
+    {
+        return Err(DeviceError::AuthorizationUnavailable.into());
+    }
+    let mut response = Json(envelope).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

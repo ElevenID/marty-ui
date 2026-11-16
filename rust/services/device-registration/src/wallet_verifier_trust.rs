@@ -196,7 +196,11 @@ fn invalid() -> DeviceError {
 }
 
 fn decode(bytes: &[u8]) -> Result<Value, DeviceError> {
-    if bytes.len() > MAX_BYTES {
+    decode_unique_json(bytes, MAX_BYTES)
+}
+
+pub(crate) fn decode_unique_json(bytes: &[u8], maximum: usize) -> Result<Value, DeviceError> {
+    if bytes.len() > maximum {
         return Err(invalid());
     }
     serde_json::from_slice::<UniqueValue>(bytes)

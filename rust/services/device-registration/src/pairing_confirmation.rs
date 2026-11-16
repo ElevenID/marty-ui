@@ -41,7 +41,7 @@ pub struct BoundWalletGovernanceScope {
     pub user_id: String,
     pub organization_id: String,
     pub issuer_trust_profile_id: String,
-    pub verifier_trust_profile_id: String,
+    pub verifier_trust_profile_id: Option<String>,
     pub credential_expires_at: chrono::DateTime<Utc>,
     pub holder_binding_key: WalletGovernanceKey,
     pub presentation_signing_key: WalletGovernanceKey,
@@ -112,11 +112,24 @@ impl PostgresPairingConfirmations {
         &self,
         bearer: &str,
     ) -> Result<BoundWalletGovernanceScope, DeviceError> {
+        let scope = self.issuer_governance_for_bearer(bearer).await?;
+        if scope.verifier_trust_profile_id.is_none() {
+            return Err(DeviceError::Forbidden(INVALID.into()));
+        }
+        Ok(scope)
+    }
+
+    /// Issuer-only pairings retain their complete live key/credential scope.
+    /// An absent verifier profile grants no verifier authority.
+    pub async fn issuer_governance_for_bearer(
+        &self,
+        bearer: &str,
+    ) -> Result<BoundWalletGovernanceScope, DeviceError> {
         if !canonical_bearer(bearer) {
             return Err(DeviceError::Forbidden(INVALID.into()));
         }
         let digest: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
-        let row=sqlx::query("SELECT c.id AS credential_id,c.expires_at AS credential_expires_at,p.pairing_id,p.trust_profile_id,p.verifier_trust_profile_id,d.*,row_to_json(b) AS binding_key,row_to_json(s) AS signing_key FROM device_registration_service.device_holder_credentials c JOIN device_registration_service.device_pairing_confirmations p ON p.registration_id=c.registration_id JOIN device_registration_service.device_registrations d ON d.id=c.registration_id JOIN device_registration_service.device_holder_keys b ON b.registration_id=d.id AND b.purpose='holder_binding' AND b.revoked_at IS NULL JOIN device_registration_service.device_holder_keys s ON s.registration_id=d.id AND s.purpose='presentation_signing' AND s.revoked_at IS NULL WHERE c.token_sha256=$1 AND c.revoked_at IS NULL AND c.issued_at<=clock_timestamp() AND c.expires_at>clock_timestamp() AND p.confirmed_at IS NOT NULL AND p.expired_at IS NULL AND p.verifier_trust_profile_id IS NOT NULL AND c.user_id=p.user_id AND c.organization_id=p.organization_id AND d.user_id=p.user_id AND d.organization_id=p.organization_id AND d.is_active=true")
+        let row=sqlx::query("SELECT c.id AS credential_id,c.expires_at AS credential_expires_at,p.pairing_id,p.trust_profile_id,p.verifier_trust_profile_id,d.*,row_to_json(b) AS binding_key,row_to_json(s) AS signing_key FROM device_registration_service.device_holder_credentials c JOIN device_registration_service.device_pairing_confirmations p ON p.registration_id=c.registration_id JOIN device_registration_service.device_registrations d ON d.id=c.registration_id JOIN device_registration_service.device_holder_keys b ON b.registration_id=d.id AND b.purpose='holder_binding' AND b.revoked_at IS NULL JOIN device_registration_service.device_holder_keys s ON s.registration_id=d.id AND s.purpose='presentation_signing' AND s.revoked_at IS NULL WHERE c.token_sha256=$1 AND c.revoked_at IS NULL AND c.issued_at<=clock_timestamp() AND c.expires_at>clock_timestamp() AND p.confirmed_at IS NOT NULL AND p.expired_at IS NULL AND c.user_id=p.user_id AND c.organization_id=p.organization_id AND d.user_id=p.user_id AND d.organization_id=p.organization_id AND d.is_active=true")
             .bind(digest.as_slice()).fetch_optional(&self.pool).await.map_err(persistence)?
             .ok_or_else(||DeviceError::Forbidden(INVALID.into()))?;
         let device = crate::postgres::registration(&row)?;

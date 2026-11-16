@@ -22,6 +22,8 @@ from urllib.parse import parse_qs, urlsplit
 import qualify_wallet_verifier_pairing as pairing
 
 PROFILE = "00000000-0000-4000-8000-000000000002"
+ISSUER_PROFILE = "00000000-0000-4000-8000-000000000003"
+ISSUER_CASES = {"ok", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key", "unknown", "no-grants", "wrong-media"}
 CASE = "fixed_owner_tls_authentication_and_closed_response_controls"
 HTTP_CASE = "device_http_governance_rereads_scope_after_paused_managed_authority"
 HTTP_ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -81,9 +83,9 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
             def log_message(self, *_args):
                 pass
 
-            def respond(self, status, body, location=None):
+            def respond(self, status, body, location=None, media="application/json"):
                 self.send_response(status)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", media)
                 self.send_header("Content-Length", str(len(body)))
                 if location:
                     self.send_header("Location", location)
@@ -111,7 +113,8 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                         self.respond(401, b"{}")
                         return
                     parts = url.path.removeprefix(prefix).split("/")
-                    if len(parts) != 2 or parts[1] not in PAUSED_CASES or url.query:
+                    all_paused_cases = PAUSED_CASES | {"issuer_" + case for case in PAUSED_CASES} | {"issuer_issuer_only"}
+                    if len(parts) != 2 or parts[1] not in all_paused_cases or url.query:
                         self.respond(400, b"{}")
                         return
                     action, case = parts
@@ -149,13 +152,18 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                     raise RuntimeError("wallet bearer forwarded to authority fixture")
                 organizations = {"org-a", HTTP_ORG} if device_http_binary is not None else {"org-a"}
                 organization = query.get("organization_id", [""])[0]
-                if self.headers.get("x-user-id") != "browser-user" or organization not in organizations:
+                is_issuer = url.path.endswith("/wallet-issuer-authority")
+                user = self.headers.get("x-user-id", "")
+                issuer_case = user.removeprefix("issuer-case-") if user.startswith("issuer-case-") else "ok"
+                allowed_user = user == "browser-user" or (is_issuer and user.startswith("issuer-case-") and issuer_case in ISSUER_CASES)
+                if not allowed_user or organization not in organizations:
                     self.respond(403, b"{}")
                     return
-                if not url.path.startswith(f"/internal/v1/trust-profiles/{PROFILE}/"):
+                selected_profile = ISSUER_PROFILE if is_issuer else PROFILE
+                if not url.path.startswith(f"/internal/v1/trust-profiles/{selected_profile}/"):
                     self.respond(404, b"{}")
                     return
-                if url.path.endswith("/wallet-managed-verifier-authority"):
+                if url.path.endswith("/wallet-managed-verifier-authority") or is_issuer:
                     with pause_lock:
                         active = pause["case"]
                     if active is not None:
@@ -165,6 +173,38 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 snapshot = {"organization_id": organization, "trust_profile_id": PROFILE,
                             "observed_at": now.isoformat(), "expires_at": (now + timedelta(seconds=30)).isoformat()}
+                if is_issuer:
+                    response_cases.add("issuer:" + issuer_case)
+                    if issuer_case == "redirect":
+                        self.respond(302, b"{}", "/redirect-target")
+                        return
+                    if issuer_case == "oversized":
+                        self.respond(200, b" " * (256 * 1024 + 1))
+                        return
+                    public_key = dict(registration["public_jwk"], kid="issuer-key", use="sig")
+                    snapshot = {"contract": "marty.wallet/issuer-authority/v2", "organization_id": organization,
+                        "trust_profile_id": ISSUER_PROFILE,
+                        "revision": {"id": ISSUER_PROFILE, "version": 1, "content_digest": "sha256:" + "a" * 64},
+                        "generated_at": now.isoformat(), "expires_at": (now + timedelta(seconds=30)).isoformat(),
+                        "require_not_before": True, "issuer_keys": [{"issuer": "did:web:issuer.example", "key_id": "issuer-key",
+                            "algorithm": "ES256", "public_jwk": public_key,
+                            "credential_authorizations": [{"format": "SD_JWT_VC", "vct": "https://credentials.example/identity"}]}]}
+                    if issuer_case == "wrong-scope":
+                        snapshot["organization_id"] = "other-org"
+                    elif issuer_case == "expired":
+                        snapshot["expires_at"] = (now - timedelta(seconds=1)).isoformat()
+                    elif issuer_case == "private-key":
+                        public_key["d"] = "forbidden-fixture-field"
+                    elif issuer_case == "unknown":
+                        snapshot["unknown"] = True
+                    elif issuer_case == "no-grants":
+                        snapshot["issuer_keys"][0]["credential_authorizations"] = []
+                    elif issuer_case == "duplicate":
+                        encoded = json.dumps(snapshot).replace('"version": 1', '"version":2,"ver\\u0073ion":1')
+                        self.respond(200, encoded.encode())
+                        return
+                    self.respond(200, json.dumps(snapshot).encode(), media="text/plain" if issuer_case == "wrong-media" else "application/json")
+                    return
                 if url.path.endswith("/wallet-verifier-profile-admission"):
                     snapshot["contract"] = "marty.wallet/verifier-profile-admission/v1"
                 elif url.path.endswith("/wallet-managed-verifier-authority"):
@@ -282,11 +322,11 @@ def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
                         "HTTPS_PROXY", "https_proxy")}
                     http_detail = pairing.execute(device_http_binary, HTTP_CASE,
                         dict(fixture_environment, **database_environment))
-                if paused_cases != PAUSED_CASES:
+                if paused_cases != PAUSED_CASES | {"issuer_" + case for case in PAUSED_CASES} | {"issuer_issuer_only"}:
                     raise RuntimeError("Device HTTP did not execute all controlled scope races")
             if fixture_errors:
                 raise RuntimeError("TLS fixture handler failed: " + ",".join(fixture_errors))
-            if response_cases != {"registered-client", "managed-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"}:
+            if response_cases != {"registered-client", "managed-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"} | {"issuer:" + case for case in ISSUER_CASES}:
                 raise RuntimeError("TLS fixture did not execute every required response case")
             if "/redirect-target" in requests:
                 raise RuntimeError("owner redirect was followed")

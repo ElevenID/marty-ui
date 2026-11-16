@@ -259,8 +259,47 @@ authorization. Full Trust Profile execution reports 90 passes and one guarded
 fixture ignore; formatting and all-target Clippy with warnings denied pass.
 Independent source review found no actionable findings and ran no tests.
 
-This owner operation is the first migration checkpoint. The fixed HTTPS Device
+This owner operation was the first migration checkpoint. At that point the fixed HTTPS Device
 transport, complete pairing-scope reread, native VCT/time-control enforcement,
-consent revision binding and actual combined/native qualification still need to
+consent revision binding and actual combined/native qualification still needed to
 consume this v2 contract. The legacy key-list operation remains distinct and
 does not establish that this migration or retained wallet acceptance is finished.
+
+The next Device checkpoint replaces the plaintext-capable issuer client with a
+fixed HTTPS-only owner selected explicitly by `WALLET_ISSUER_TRUST_OWNER_URL`
+and optional `WALLET_ISSUER_TRUST_OWNER_CA`. Without that URL the feature is
+unavailable; no default plaintext origin is used. The client disables proxies
+and redirects, bounds connection/body time and size, requires JSON media and
+strict unique-member/schema validation, and sends only the configured workload
+token plus the authenticated pairing's user. It rejects legacy contracts,
+missing revisions/controls, private keys, invalid/ambiguous key identities and
+empty/duplicate credential grants.
+
+The existing public issuer read now returns
+`marty.wallet/device-issuer-governance/v2`: the full current credential, pairing,
+device and holder-key scope plus canonical issuer authority. Membership is
+checked twice and the complete SQL scope is compared after the owner await.
+The envelope expires no later than the authority or bearer credential. A separate
+issuer scope read preserves issuer-only pairings with an explicitly null verifier
+profile; verifier reads still require that profile and never infer it from issuer
+trust. If supplied, a verifier profile must be valid and distinct before ticket
+admission.
+
+Actual local qualification executes one combined TLS case and one HTTP/SQL case,
+both passing with zero ignores. The TLS case covers issuer CA/hostname/token/user/
+tenant refusals, redirect, size, escaped duplicate members, unknown/private fields,
+missing grants and media type. The HTTP/SQL case covers 29 paused scenarios across
+both trust paths, including successful issuer-only retrieval and 26 scope/key/
+bearer/revocation/membership mutations that disclose no authority. Fresh
+PostgreSQL migration/scope and Redis atomic-ticket cases also each pass with zero
+ignores. Owned fixtures and temporary material are removed. The first expanded
+HTTP run hit a duplicate synthetic device ID; the fixture now creates a unique
+changed ID per registration, and all scenarios execute successfully. Independent
+review caught the issuer-only admission mismatch; the separate issuer scope path
+resolves it, and final source review found no actionable findings. Reviewers ran
+no tests.
+
+The native consumer still needs the v2 envelope, exact VCT/not-before enforcement
+and frozen issuer revision/scope binding. The issuance service/configuration must
+also be explicitly bound to permitted credential issuers; a VCT/key projection
+alone does not establish that relationship. These remain draft acceptance gates.

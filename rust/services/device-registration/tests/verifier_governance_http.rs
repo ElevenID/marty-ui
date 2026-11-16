@@ -18,6 +18,7 @@ use marty_device_registration::{
     pairing_confirmation::PostgresPairingConfirmations,
     pairing_ticket::MemoryPairingTickets,
     postgres::PostgresDeviceRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
     wallet_verifier_trust::WalletVerifierTrustClient,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceRepository, DeviceService, Platform,
 };
@@ -105,7 +106,7 @@ async fn seed(
         .unwrap();
     let pairing = Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO device_registration_service.device_pairing_confirmations (pairing_id,user_id,organization_id,trust_profile_id,verifier_trust_profile_id,registration_id,issued_at,expires_at,confirmed_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7)")
-        .bind(&pairing).bind(&device.user_id).bind(ORG).bind(Uuid::new_v4().to_string()).bind(PROFILE).bind(&device.id)
+        .bind(&pairing).bind(&device.user_id).bind(ORG).bind("00000000-0000-4000-8000-000000000003").bind(PROFILE).bind(&device.id)
         .bind(now).bind(now+Duration::minutes(10)).execute(pool).await.unwrap();
     for (purpose, algorithm, x, y) in [
         (
@@ -137,7 +138,7 @@ async fn change(
     membership: &Membership,
 ) {
     match case {
-        "unchanged" => (),
+        "unchanged" | "issuer_only" => (),
         "membership_revoked" => membership.revoked.store(true, Ordering::SeqCst),
         "bearer_rotated" => {
             let next = holder_credential::issue(device, Utc::now(), Duration::hours(1)).unwrap();
@@ -178,7 +179,7 @@ async fn change(
         }
         "device_id" | "user_id" | "organization_id" | "inactive" => {
             let sql = match case {
-                "device_id" => "UPDATE device_registration_service.device_registrations SET device_id='substituted-device' WHERE id=$1",
+                "device_id" => "UPDATE device_registration_service.device_registrations SET device_id='substituted-' || id WHERE id=$1",
                 "user_id" => "UPDATE device_registration_service.device_registrations SET user_id='substituted-user' WHERE id=$1",
                 "organization_id" => "UPDATE device_registration_service.device_registrations SET organization_id='bbbbbbbb-cccc-4ddd-8eee-ffffffffffff' WHERE id=$1",
                 _ => "UPDATE device_registration_service.device_registrations SET is_active=false WHERE id=$1",
@@ -242,11 +243,26 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
     assert_eq!(verified.status(), StatusCode::OK);
     assert_eq!(verified.text().await.unwrap(), nonce);
     let trust = Arc::new(WalletVerifierTrustClient::new(&origin, &token, Some(&ca)).unwrap());
-    for case in CASES {
+    let issuer_trust = Arc::new(WalletIssuerTrustClient::new(&origin, &token, Some(&ca)).unwrap());
+    let issuer_only = "issuer_only";
+    for (issuer, case) in [false, true]
+        .into_iter()
+        .flat_map(|issuer| CASES.iter().map(move |case| (issuer, case)))
+        .chain(std::iter::once((true, &issuer_only)))
+    {
+        let controlled_case = if issuer {
+            format!("issuer_{case}")
+        } else {
+            (*case).to_owned()
+        };
         let (device, credential, pairing) = seed(&pool).await;
+        if *case == "issuer_only" {
+            sqlx::query("UPDATE device_registration_service.device_pairing_confirmations SET verifier_trust_profile_id=NULL WHERE pairing_id=$1")
+                .bind(&pairing).execute(&pool).await.unwrap();
+        }
         let confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
         let expected = confirmations
-            .governance_for_bearer(&credential.bearer)
+            .issuer_governance_for_bearer(&credential.bearer)
             .await
             .unwrap();
         let membership = Arc::new(Membership::default());
@@ -257,7 +273,7 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
             )))),
             memberships: membership.clone(),
             pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
-            wallet_issuer_trust: None,
+            wallet_issuer_trust: Some(issuer_trust.clone()),
             wallet_verifier_trust: Some(trust.clone()),
             pairing_confirmations: Some(confirmations),
             pairing_enrollment: None,
@@ -268,7 +284,9 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
             gateway_key: gateway.clone(),
         });
         let armed = control
-            .get(format!("{origin}fixture-control/{nonce}/arm/{case}"))
+            .get(format!(
+                "{origin}fixture-control/{nonce}/arm/{controlled_case}"
+            ))
             .header("x-service-token", &token)
             .send()
             .await
@@ -281,7 +299,12 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
             .query_pairs_mut()
             .append_pair("client_id", CLIENT)
             .append_pair("request_uri", LOCATOR);
-        let request = Request::get(format!("{}?{}", query.path(), query.query().unwrap()))
+        let request_uri = if issuer {
+            "/v1/devices/wallet-issuer-keys".to_owned()
+        } else {
+            format!("{}?{}", query.path(), query.query().unwrap())
+        };
+        let request = Request::get(request_uri)
             .header("x-service-token", &gateway)
             .header("authorization", format!("Bearer {}", credential.bearer))
             .header("x-user-id", "forged-caller")
@@ -292,7 +315,9 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
         let mut arrived = false;
         for _ in 0..100 {
             let response = control
-                .get(format!("{origin}fixture-control/{nonce}/arrived/{case}"))
+                .get(format!(
+                    "{origin}fixture-control/{nonce}/arrived/{controlled_case}"
+                ))
                 .header("x-service-token", &token)
                 .send()
                 .await
@@ -314,7 +339,9 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
         );
         change(&pool, case, &device, &credential, &pairing, &membership).await;
         let released = control
-            .get(format!("{origin}fixture-control/{nonce}/release/{case}"))
+            .get(format!(
+                "{origin}fixture-control/{nonce}/release/{controlled_case}"
+            ))
             .header("x-service-token", &token)
             .send()
             .await
@@ -335,22 +362,44 @@ async fn device_http_governance_rereads_scope_after_paused_managed_authority() {
         let body: Value = serde_json::from_slice(&bytes).unwrap();
         let text = std::str::from_utf8(&bytes).unwrap();
         assert!(!text.contains(&credential.bearer) && !text.contains("cred-presenter-"));
-        if *case == "unchanged" {
+        if *case == "unchanged" || *case == "issuer_only" {
             assert_eq!(status, StatusCode::OK);
             assert_eq!(no_store.unwrap(), "no-store");
             assert_eq!(
                 body["contract"],
-                "marty.wallet/device-verifier-governance/v2"
+                if issuer {
+                    "marty.wallet/device-issuer-governance/v2"
+                } else {
+                    "marty.wallet/device-verifier-governance/v2"
+                }
             );
-            assert_eq!(body["scope"], serde_json::to_value(expected).unwrap());
-            assert_eq!(body["verifier"]["request"]["request_uri"], LOCATOR);
+            assert_eq!(body["scope"], serde_json::to_value(&expected).unwrap());
+            if issuer {
+                if *case == "issuer_only" {
+                    assert!(body["scope"]["verifier_trust_profile_id"].is_null());
+                }
+                assert_eq!(
+                    body["issuer"]["contract"],
+                    "marty.wallet/issuer-authority/v2"
+                );
+                assert_eq!(
+                    body["issuer"]["trust_profile_id"],
+                    expected.issuer_trust_profile_id
+                );
+            } else {
+                assert_eq!(body["verifier"]["request"]["request_uri"], LOCATOR);
+            }
         } else {
             assert_eq!(
                 status,
                 StatusCode::FORBIDDEN,
                 "paused mutation {case} must defeat read"
             );
-            assert!(body.get("scope").is_none() && body.get("verifier").is_none());
+            assert!(
+                body.get("scope").is_none()
+                    && body.get("verifier").is_none()
+                    && body.get("issuer").is_none()
+            );
         }
     }
     pool.close().await;

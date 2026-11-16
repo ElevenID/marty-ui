@@ -248,12 +248,31 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         }
         builder
             .body(Body::from(
-                json!({"organization_id": organization_id, "trust_profile_id": "11111111-2222-4333-8444-555555555555"}).to_string(),
+                json!({"organization_id": organization_id, "trust_profile_id": "11111111-2222-4333-8444-555555555555",
+                    "verifier_trust_profile_id":"21111111-2222-4333-8444-555555555555"}).to_string(),
             ))
             .unwrap()
     };
     let unauthenticated = app.clone().oneshot(request(None, "org-1")).await.unwrap();
     assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    for verifier in [
+        Some("11111111-2222-4333-8444-555555555555"),
+        Some("not-a-profile"),
+    ] {
+        let mut incomplete = request(Some(&gateway_key), "org-1");
+        *incomplete.body_mut() = Body::from(
+            json!({"organization_id":"org-1",
+            "trust_profile_id":"11111111-2222-4333-8444-555555555555",
+            "verifier_trust_profile_id":verifier})
+            .to_string(),
+        );
+        let rejected = app.clone().oneshot(incomplete).await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        let bytes = to_bytes(rejected.into_body(), 65536).await.unwrap();
+        assert!(!std::str::from_utf8(&bytes)
+            .unwrap()
+            .contains("pairing_code"));
+    }
     let response = app
         .oneshot(request(Some(&gateway_key), "org-1"))
         .await

@@ -1,4 +1,5 @@
 //! Real TLS transport to an owned loopback owner-response fixture, not a deployed owner.
+use marty_device_registration::wallet_issuer_trust::WalletIssuerTrustClient;
 use marty_device_registration::wallet_verifier_trust::WalletVerifierTrustClient;
 
 const PROFILE: &str = "00000000-0000-4000-8000-000000000002";
@@ -108,6 +109,62 @@ async fn fixed_owner_tls_authentication_and_closed_response_controls() {
     let wrong_name = WalletVerifierTrustClient::new(&wrong_name, &token, Some(&ca)).unwrap();
     assert!(wrong_name
         .admit(PROFILE, "org-a", "browser-user")
+        .await
+        .is_err());
+    let issuer_profile = "00000000-0000-4000-8000-000000000003";
+    let issuer = WalletIssuerTrustClient::new(&origin, &token, Some(&ca)).unwrap();
+    let snapshot = issuer
+        .fetch(issuer_profile, "org-a", "browser-user")
+        .await
+        .unwrap();
+    assert_eq!(snapshot["contract"], "marty.wallet/issuer-authority/v2");
+    assert_eq!(snapshot["require_not_before"], true);
+    assert_eq!(
+        snapshot["issuer_keys"][0]["credential_authorizations"][0]["vct"],
+        "https://credentials.example/identity"
+    );
+    for case in [
+        "redirect",
+        "oversized",
+        "duplicate",
+        "wrong-scope",
+        "expired",
+        "private-key",
+        "unknown",
+        "no-grants",
+        "wrong-media",
+    ] {
+        assert!(
+            issuer
+                .fetch(issuer_profile, "org-a", &format!("issuer-case-{case}"))
+                .await
+                .is_err(),
+            "{case}"
+        );
+    }
+    assert!(issuer
+        .fetch(issuer_profile, "other-org", "browser-user")
+        .await
+        .is_err());
+    assert!(issuer
+        .fetch(issuer_profile, "org-a", "other-user")
+        .await
+        .is_err());
+    let wrong_token = WalletIssuerTrustClient::new(&origin, &"x".repeat(40), Some(&ca)).unwrap();
+    assert!(wrong_token
+        .fetch(issuer_profile, "org-a", "browser-user")
+        .await
+        .is_err());
+    let untrusted = WalletIssuerTrustClient::new(&origin, &token, None).unwrap();
+    assert!(untrusted
+        .fetch(issuer_profile, "org-a", "browser-user")
+        .await
+        .is_err());
+    let wrong_name =
+        WalletIssuerTrustClient::new(&origin.replace("127.0.0.1", "localhost"), &token, Some(&ca))
+            .unwrap();
+    assert!(wrong_name
+        .fetch(issuer_profile, "org-a", "browser-user")
         .await
         .is_err());
 }
