@@ -779,6 +779,36 @@ impl PublishedDatabase {
         Self::start_probe(None).await
     }
 
+    /// The pinned producer remains the source of the disposable baseline.
+    /// Current repository consumers also need the real native profile migration
+    /// before they seed rows. Apply it only to this owned database, after the
+    /// immutable published base has been captured, so historical oracle and
+    /// worker cases retain their exact published schema.
+    pub async fn start_for_current_issuance() -> Result<Self, String> {
+        let owned = Self::start().await?;
+        let migration = async {
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .acquire_timeout(Duration::from_secs(5))
+                .connect(&owned.url)
+                .await
+                .map_err(|_| "Current issuance fixture database is unavailable".to_owned())?;
+            let result = marty_issuance_service::migration::migrate_jwt_vc_profile(&pool)
+                .await
+                .map_err(|_| "Current issuance fixture profile migration failed".to_owned());
+            pool.close().await;
+            result
+        }
+        .await;
+        if let Err(error) = migration {
+            return match owned.close_verified() {
+                Ok(()) => Err(error),
+                Err(cleanup) => Err(format!("{error}; owned cleanup failed: {cleanup}")),
+            };
+        }
+        Ok(owned)
+    }
+
     async fn start_from_published_base(base: &[u8]) -> Result<Self, String> {
         Self::start_from_published_base_with_scope(Uuid::new_v4(), base).await
     }

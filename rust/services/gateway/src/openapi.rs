@@ -13,6 +13,24 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 
 pub fn schemas() -> Value {
     let mut schemas = BUNDLE["schemas"].clone();
+    // Create/update already reference this exact response requirement shape.
+    // Keep the pinned bundle intact and extend only the explicit type-only path.
+    let requirement = &mut schemas["schemas__presentation_policy"]["properties"]
+        ["credential_requirements"]["items"];
+    requirement["properties"]["expected_securing_profile"] = json!({
+        "type":"string", "enum":["marty_nested_vc2_jwt_v1", "w3c_vc2_jose_2026_v1"],
+        "description":"Explicit securing profile for one required whole credential with cryptographic holder binding. Omit for existing claim-based policies."
+    });
+    requirement["properties"]["requested_claims"]["minItems"] = json!(0);
+    requirement["allOf"] = json!([
+        {"if":{"required":["expected_securing_profile"]},
+         "then":{"required":["credential_payload_format"],"properties":{"required":{"const":true},"requested_claims":{"maxItems":0}}},
+         "else":{"properties":{"requested_claims":{"minItems":1}}}},
+        {"if":{"required":["expected_securing_profile"],"properties":{"expected_securing_profile":{"const":"w3c_vc2_jose_2026_v1"}}},
+         "then":{"properties":{"credential_payload_format":{"const":"VC_JWT_DIRECT_V1"}}}},
+        {"if":{"required":["expected_securing_profile"],"properties":{"expected_securing_profile":{"const":"marty_nested_vc2_jwt_v1"}}},
+         "then":{"properties":{"credential_payload_format":{"const":"VC_JWT"}}}}
+    ]);
     // The native owner and gateway omit absent optional membership fields.
     // Keep the protocol pin intact while reconciling this public readback.
     let membership = &mut schemas["schemas__organization"]["properties"]["membership"]["oneOf"][0];
@@ -110,6 +128,26 @@ pub fn schemas() -> Value {
         .as_object_mut()
         .expect("schemas")
         .extend(api_keys.as_object().expect("API-key schemas").clone());
+    let organization_defaults: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/organization-defaults-http-schemas.json"
+    ))
+    .expect("native organization defaults HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        organization_defaults
+            .as_object()
+            .expect("organization defaults schemas")
+            .clone(),
+    );
+    let organization_membership: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/organization-membership-http-schemas.json"
+    ))
+    .expect("native organization membership HTTP schemas");
+    schemas.as_object_mut().expect("schemas").extend(
+        organization_membership
+            .as_object()
+            .expect("organization membership schemas")
+            .clone(),
+    );
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -127,6 +165,63 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Post && path == "/v1/issuance" {
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.push(json!({
+            "name":"Idempotency-Key", "in":"header", "required":false,
+            "description":"Optional client event key, forwarded unchanged to durable organization-scoped issuance deduplication. Send exactly one value; whitespace and duplicate headers are rejected before cache replay. Reuse the key only for the same request.",
+            "schema":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9._:-]{1,128}$"}
+        }));
+        operation["parameters"] = json!(parameters);
+        operation["responses"]["409"] = json!({"description":"The idempotency key is already in progress or was used for a different request."});
+        operation["responses"]["422"] =
+            json!({"description":"Invalid issuance input or malformed/duplicate Idempotency-Key."});
+    }
+    if (method == Get && path == "/v1/organizations/{org_id}/members")
+        || (method == Post && path == "/v1/organizations/{org_id}/members/{member_id}/approve")
+    {
+        describe_membership_review(operation, method, status);
+        return;
+    }
+    if path == "/v1/organizations/{org_id}/defaults" {
+        operation["summary"] = json!(if method == Patch {
+            "Update organization resource defaults"
+        } else {
+            "Read organization resource defaults"
+        });
+        operation["description"] = json!(if method == Patch {
+            "Requires organization:edit. Each non-null reference must be active, belong to this organization, and be readable by the caller. Omitted fields are preserved; null clears a default. Changes are saved only after all supplied references pass validation."
+        } else {
+            "Requires organization:view and active membership. Returns all three saved defaults, using null for unset values. Creation forms must recheck saved resources before applying them because their availability can change."
+        });
+        if method == Patch {
+            operation["requestBody"] = json!({
+                "required": true,
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/runtime__organization_defaults_patch"}}}
+            });
+        }
+        operation["responses"][status.to_string()]["content"] = json!({
+            "application/json": {"schema": {"$ref": "#/components/schemas/runtime__organization_defaults"}}
+        });
+        for (code, description) in [
+            (401, "Authentication required."),
+            (403, "Organization or referenced resource access denied."),
+            (404, "Organization or referenced resource not found."),
+            (422, "Invalid defaults patch or inactive resource."),
+            (
+                502,
+                "Required service is unavailable or returned invalid data.",
+            ),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description": description});
+        }
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if path == "/v1/api-keys" || path == "/v1/api-keys/{key_id}" {
         describe_api_keys(operation, method, status);
         return;
@@ -396,6 +491,60 @@ pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str,
         describe_organization_collection(operation, path, status);
     }
     describe_trust_readback(operation, method, path, status);
+}
+
+fn describe_membership_review(operation: &mut Value, method: HttpMethod, status: u16) {
+    let member = json!({"$ref":"#/components/schemas/runtime__organization_member"});
+    let response = if method == HttpMethod::Get {
+        operation["summary"] = json!("List organization members");
+        operation["description"] = json!(
+            "Requires team:view. Optional status is applied before limit and offset. Returns a stable created_at/id ordered array without a total count. Pending means a join request awaiting approval; invited is a separate invitation state."
+        );
+        let mut parameters = operation["parameters"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        parameters.extend([
+            json!({"name":"status","in":"query","required":false,"schema":{"type":"string","enum":["active","pending","invited","deactivated"]}}),
+            json!({"name":"limit","in":"query","required":false,"description":"Page size; zero is accepted and values above 500 are rejected.","schema":{"type":"integer","minimum":0,"maximum":500,"default":100}}),
+            json!({"name":"offset","in":"query","required":false,"schema":{"type":"integer","minimum":0,"maximum":u32::MAX,"default":0}}),
+        ]);
+        operation["parameters"] = json!(parameters);
+        json!({"type":"array","items":member})
+    } else {
+        operation["summary"] = json!("Approve a pending organization membership");
+        operation["description"] = json!(
+            "Requires team:manage in the selected organization. No request body or role assignment is accepted. Only a persisted pending membership can become active. Existing user, email and roles are preserved; joined_at records activation. The decision, reviewer-attributed audit and outbox event commit atomically. Repeated or non-pending approvals return 409 without another decision event. Invited and deactivated memberships cannot be activated through this operation."
+        );
+        operation
+            .as_object_mut()
+            .expect("operation")
+            .remove("requestBody");
+        operation["responses"]["409"] = json!({"description":"ORGANIZATION.MEMBERSHIP_NOT_PENDING: the membership is no longer pending."});
+        json!({"allOf":[member,{"type":"object","required":["joined_at"],"properties":{"status":{"const":"active"}}}]})
+    };
+    operation["responses"][status.to_string()]["content"] =
+        json!({"application/json":{"schema":response}});
+    for (code, description) in [
+        (400, if method == HttpMethod::Get { "Invalid member status or pagination parameter." } else { "Approval request body must be empty." }),
+        (401, "Authentication required."),
+        (
+            403,
+            "Selected organization membership or required team permission is not authorized.",
+        ),
+        (
+            404,
+            "Membership does not exist in the selected organization.",
+        ),
+        (
+            503,
+            "Organization storage or transactional audit/outbox is unavailable, or membership review is temporarily busy. Retry after contention clears.",
+        ),
+    ] {
+        operation["responses"][code.to_string()] = json!({"description":description});
+    }
+    operation["x-marty-request-schema-documented"] = json!(true);
+    operation["x-marty-response-schema-documented"] = json!(true);
 }
 
 fn describe_organization_collection(operation: &mut Value, path: &str, status: u16) {
@@ -768,6 +917,9 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
         did["schema"]["pattern"] = json!("^did:");
         parameters.push(did);
     } else {
+        operation["description"] = json!(
+            "Verifies a signed credential or presentation by evaluating an existing presentation policy. API keys require both verification:execute (credentials:read or flows:execute) and presentation-policy:view (trust:read or trust:write). The least-privilege scope pair is credentials:read plus trust:read. Organization ownership and policy authorization are enforced independently by the policy service."
+        );
         parameters.push(query_parameter(
             "presentation_policy_id",
             "Authorized presentation policy governing credential verification.",
@@ -796,6 +948,9 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
         json!({"application/json":{"schema":success}});
     operation["responses"]["401"] = json!({"description":"Authentication is required."});
     operation["responses"]["403"] = json!({"description":"The caller is not authorized for the selected organization or resource."});
+    if !issue {
+        operation["responses"]["403"] = json!({"description":"The organization or policy is not authorized, or the API key lacks verification:execute or presentation-policy:view. Use credentials:read plus trust:read for the least-privilege scope pair."});
+    }
     operation["responses"]["413"] =
         json!({"description":"Request body exceeds the configured limit."});
     operation["responses"]["422"] = if issue {
@@ -813,6 +968,60 @@ fn describe_vc_api(operation: &mut Value, path: &str, status: u16) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_jwt_vc_policy_schema_covers_write_and_readback_without_defaulting_legacy() {
+        use serde_json::json;
+        let document = crate::contract::GatewayContract::load()
+            .unwrap()
+            .openapi_document("test");
+        let schemas = &document["components"]["schemas"];
+        let requirement = &schemas["schemas__presentation_policy"]["properties"]
+            ["credential_requirements"]["items"];
+        assert_eq!(
+            requirement["properties"]["expected_securing_profile"]["type"],
+            "string"
+        );
+        assert_eq!(
+            requirement["properties"]["expected_securing_profile"]["enum"],
+            json!(["marty_nested_vc2_jwt_v1", "w3c_vc2_jose_2026_v1"])
+        );
+        assert!(requirement["properties"]["expected_securing_profile"]
+            .get("default")
+            .is_none());
+        assert!(!requirement["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|field| field == "expected_securing_profile"));
+        assert_eq!(
+            requirement["allOf"][0]["then"]["properties"]["requested_claims"]["maxItems"],
+            0
+        );
+        assert_eq!(
+            requirement["allOf"][0]["else"]["properties"]["requested_claims"]["minItems"],
+            1
+        );
+        assert_eq!(
+            requirement["allOf"][1]["then"]["properties"]["credential_payload_format"]["const"],
+            "VC_JWT_DIRECT_V1"
+        );
+        assert_eq!(
+            requirement["allOf"][2]["then"]["properties"]["credential_payload_format"]["const"],
+            "VC_JWT"
+        );
+        let shared="#/components/schemas/schemas__presentation_policy/properties/credential_requirements/items";
+        assert_eq!(
+            schemas["schemas__presentation_policy_create_request"]["properties"]
+                ["credential_requirements"]["items"]["$ref"],
+            shared
+        );
+        assert_eq!(
+            schemas["schemas__presentation_policy_update_request"]["properties"]
+                ["credential_requirements"]["oneOf"][0]["items"]["$ref"],
+            shared
+        );
+    }
+
     #[test]
     fn api_key_operations_document_scoped_management_and_one_time_secret() {
         let document = crate::contract::GatewayContract::load()
@@ -856,6 +1065,74 @@ mod tests {
         );
     }
     use super::*;
+
+    #[test]
+    fn membership_review_documents_pending_filter_and_scoped_transition() {
+        let mut list = json!({"parameters":[{"name":"org_id","in":"path"}]});
+        describe_operation(
+            &mut list,
+            HttpMethod::Get,
+            "/v1/organizations/{org_id}/members",
+            200,
+        );
+        assert_eq!(list["x-marty-response-schema-documented"], true);
+        assert_eq!(
+            list["responses"]["200"]["content"]["application/json"]["schema"]["type"],
+            "array"
+        );
+        assert_eq!(list["parameters"][0]["name"], "org_id");
+        assert_eq!(
+            list["parameters"][1]["schema"]["enum"],
+            json!(["active", "pending", "invited", "deactivated"])
+        );
+        assert_eq!(list["parameters"][2]["schema"]["maximum"], 500);
+        assert!(list["description"].as_str().unwrap().contains("team:view"));
+        assert!(list["description"]
+            .as_str()
+            .unwrap()
+            .contains("before limit and offset"));
+
+        let mut approve = json!({"requestBody":{"content":{}}});
+        describe_operation(
+            &mut approve,
+            HttpMethod::Post,
+            "/v1/organizations/{org_id}/members/{member_id}/approve",
+            200,
+        );
+        assert!(approve.get("requestBody").is_none());
+        assert_eq!(approve["x-marty-request-schema-documented"], true);
+        assert_eq!(approve["x-marty-response-schema-documented"], true);
+        assert!(approve["description"]
+            .as_str()
+            .unwrap()
+            .contains("team:manage"));
+        assert!(approve["responses"]["409"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("MEMBERSHIP_NOT_PENDING"));
+        assert_eq!(
+            approve["responses"]["200"]["content"]["application/json"]["schema"]["allOf"][1]
+                ["properties"]["status"]["const"],
+            "active"
+        );
+        let schema = schemas();
+        let member = &schema["runtime__organization_member"];
+        assert_eq!(member["additionalProperties"], false);
+        for field in [
+            "id",
+            "organization_id",
+            "roles",
+            "status",
+            "permissions",
+            "has_org_console_access",
+            "is_owner",
+        ] {
+            assert!(member["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(field)));
+        }
+    }
     #[test]
     fn organization_collections_document_native_arrays_and_query_boundaries() {
         let document = crate::contract::GatewayContract::load()
@@ -929,6 +1206,34 @@ mod tests {
     #[test]
     fn template_readback_schema_covers_native_response_operations() {
         let schemas = schemas();
+        let profile_ref = "#/components/schemas/runtime__credential_template_jwt_vc_profile";
+        assert_eq!(
+            schemas["schemas__credential_template"]["properties"]["jwt_vc_profile"]["$ref"],
+            profile_ref
+        );
+        for name in [
+            "runtime__credential_template_create_request",
+            "runtime__credential_template_update_request",
+        ] {
+            assert_eq!(
+                schemas[name]["properties"]["jwt_vc_profile"]["$ref"],
+                profile_ref
+            );
+        }
+        let profile = &schemas["runtime__credential_template_jwt_vc_profile"];
+        assert_eq!(profile["additionalProperties"], false);
+        assert_eq!(
+            profile["properties"]["securing_profile"]["const"],
+            "w3c_vc2_jose_2026_v1"
+        );
+        assert_eq!(
+            profile["properties"]["signature_lifetime_seconds"]["minimum"],
+            1
+        );
+        assert_eq!(
+            profile["properties"]["signature_lifetime_seconds"]["maximum"],
+            marty_jwt_vc_issuance::MAX_SIGNATURE_LIFETIME_SECONDS
+        );
         assert!(schemas["schemas__credential_template"]["properties"]["display_style"].is_object());
         assert!(schemas["schemas__credential_template"]["x-marty-runtime-extension"].is_string());
         for (method, path) in [

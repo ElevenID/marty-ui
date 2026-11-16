@@ -15,6 +15,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StartCredentialVerification {
     pub presentation_policy_id: String,
+    pub trust_profile_id: Option<String>,
     pub organization_id: String,
     pub issuer_did: String,
     pub callback_url: String,
@@ -51,6 +52,7 @@ pub trait CredentialLoginPageRenderer: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialLoginStartConfig {
     pub presentation_policy_id: String,
+    pub trust_profile_id: Option<String>,
     pub organization_id: String,
     pub issuer_did: String,
     pub auth_service_internal_url: String,
@@ -187,6 +189,7 @@ impl CredentialLoginHttpApplication {
             .flow
             .start(&StartCredentialVerification {
                 presentation_policy_id: self.config.presentation_policy_id.clone(),
+                trust_profile_id: self.config.trust_profile_id.clone(),
                 organization_id: self.config.organization_id.clone(),
                 issuer_did: self.config.issuer_did.clone(),
                 callback_url: self.config.callback_url(&nonce),

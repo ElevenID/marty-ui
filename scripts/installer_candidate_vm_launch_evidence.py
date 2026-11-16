@@ -7,12 +7,15 @@ guest readiness checks before any candidate approval or dispatch.
 from __future__ import annotations
 
 import installer_release as release
-from installer_candidate_vm_seed import (ROOTLESS_FIXTURE_PACKAGES,
-                                         ROOTLESS_FIXTURE_PROFILE)
 import re
 import uuid
+from installer_candidate_vm_policy import (
+    memory_mib, seed_profile, seed_extra_fields, launch_schema,
+)
 
 LAUNCH_SCHEMA = "elevenid.installer-vm-launch/v1"
+ROOTLESS_LAUNCH_SCHEMA = "elevenid.installer-vm-launch/v2"
+FIXTURE_LAUNCH_SCHEMA = "elevenid.installer-vm-launch/v3"
 PID_SCHEMA = "elevenid.installer-vm-pid/v2"
 CREATION_INTENT_FIELDS = {
     "schema", "phase", "vm_id", "image", "vm_dir", "disk_path",
@@ -62,6 +65,19 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         and str(uuid.UUID(boot_id)) == boot_id,
         "VM launch identity invalid",
     )
+    rootless = intent.get("schema") in (ROOTLESS_LAUNCH_SCHEMA, FIXTURE_LAUNCH_SCHEMA)
+    resource_profile = None
+    if rootless:
+        seed = release.decode(seed_raw)
+        release.require(release.encode(seed) == seed_raw,
+                        "VM rootless seed encoding is not canonical")
+        resource_profile = seed_profile(seed)
+        release.require(resource_profile is not None
+                        and intent.get("schema") == launch_schema(resource_profile)
+                        and intent.get("resource_profile") == resource_profile
+                        and type(intent.get("memory_mib")) is int
+                        and intent["memory_mib"] == memory_mib(resource_profile),
+                        "VM rootless launch profile differs from seed")
     release.exact(intent, {
         "schema", "phase", "vm_id", "seed_receipt_sha256", "runtime_dir",
         "control_dir", "runtime_dir_device", "runtime_dir_inode",
@@ -70,7 +86,7 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         "kvm_gid", "ssh_port", "memory_mib", "cpus", "args",
         "qemu_sha256", "controller_boot_id", "started_at", "qualified",
         "dispatch_authorized",
-    }, "VM launch intent")
+    } | ({"resource_profile"} if rootless else set()), "VM launch intent")
     release.exact(spawned, {
         "schema", "phase", "vm_id", "intent_sha256", "pid",
         "start_ticks", "controller_boot_id", "spawned_at",
@@ -80,7 +96,8 @@ def bind_exact_launch(intent_raw: bytes, pid_raw: bytes, receipt_raw: bytes,
         "observation_route", "pid_authentication", "observed_at",
     }, "VM launch receipt")
     release.require(
-        intent["schema"] == receipt["schema"] == LAUNCH_SCHEMA
+        intent["schema"] == receipt["schema"]
+        == launch_schema(resource_profile)
         and spawned["schema"] == PID_SCHEMA
         and intent["phase"] == "intent"
         and spawned["phase"] == "spawned"
@@ -148,11 +165,13 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
     ri, rr = records["runtime_intent"], records["runtime_receipt"]
     si, sr = records["seed_intent"], records["seed_receipt"]
     li = records["launch_intent"]
+    resource_profile = seed_profile(si)
+    release.require(seed_profile(sr) == resource_profile
+                    and li["schema"] == launch_schema(resource_profile)
+                    and li.get("resource_profile") == resource_profile,
+                    "VM provisioned runtime profile differs")
+    seed_fields = SEED_FIELDS | seed_extra_fields(resource_profile)
     vm_id = li["vm_id"]
-    profile = si.get("fixture_profile")
-    release.require(profile in (None, ROOTLESS_FIXTURE_PROFILE),
-                    "VM seed profile unsupported")
-    seed_fields = SEED_FIELDS | ({"fixture_profile"} if profile is not None else set())
     for record, fields, label in (
         (ci, CREATION_INTENT_FIELDS, "creation intent"),
         (cr, CREATION_RECEIPT_FIELDS, "creation receipt"),
@@ -178,7 +197,7 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         all(record["vm_id"] == vm_id for record in (ci, cr, ri, rr, si, sr))
         and ci["schema"] == cr["schema"] == "elevenid.installer-vm-overlay-creation/v2"
         and ri["schema"] == rr["schema"] == "elevenid.installer-vm-runtime-transfer/v1"
-        and si["schema"] == sr["schema"] == "elevenid.installer-vm-seed/v1"
+        and si["schema"] == sr["schema"]
         and (ci["phase"], cr["phase"], ri["phase"], rr["phase"],
              si["phase"], sr["phase"])
         == ("intent", "created", "intent", "transferred", "intent", "seeded")
@@ -191,9 +210,6 @@ def bind_provisioned_launch(*, creation_intent: bytes, creation_receipt: bytes,
         and rr["intent_sha256"] == release.digest(runtime_intent)
         and si["runtime_receipt_sha256"] == release.digest(runtime_receipt)
         and sr["intent_sha256"] == release.digest(seed_intent)
-        and (profile is None or (sr["fixture_profile"] == profile
-                                 and si["packages"] == ROOTLESS_FIXTURE_PACKAGES
-                                 and li["memory_mib"] == 2048))
         and li["seed_receipt_sha256"] == release.digest(seed_receipt)
         and (cr["disk_device"], cr["disk_inode"])
         == (ri["disk_device"], ri["disk_inode"])

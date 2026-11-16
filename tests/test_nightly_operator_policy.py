@@ -29,7 +29,7 @@ class NightlyOperatorPolicy(unittest.TestCase):
             result = self.shell('source "$POLICY_SCRIPT"; printf "%s\\n" "${NIGHTLY_RELEASE_ASSETS[@]}"', directory)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(set(result.stdout.splitlines()), expected)
-            self.assertEqual(len(result.stdout.splitlines()), 44)
+            self.assertEqual(len(result.stdout.splitlines()), len(expected))
             response = dict(prerelease=True, draft=False,
                             assets=[dict(name=name, state="uploaded", size=1) for name in sorted(expected)])
             (root / "release.json").write_text(json.dumps(response))

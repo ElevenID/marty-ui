@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, render } from '@test/utils'
 import NotificationBell from './NotificationBell'
+import { publishNotificationChange } from '../../services/notificationEvents'
 
 const { mockGetUnreadCount, mockMarkAllAsRead, context, permission, can } = vi.hoisted(() => ({
   mockGetUnreadCount: vi.fn(),
@@ -61,6 +62,22 @@ describe('NotificationBell', () => {
     await act(async () => { release({ count: 99 }); await Promise.resolve() })
     expect(container.querySelector('.MuiBadge-badge')?.textContent).toBe('2')
     expect(mockGetUnreadCount.mock.calls).toEqual([['org-a', 'user-a'], ['org-b', 'user-a']])
+  })
+
+  it('refreshes only for matching organization and recipient changes and removes its listener on unmount', async () => {
+    const { unmount } = render(<NotificationBell />)
+    await act(async () => { await Promise.resolve() })
+    expect(mockGetUnreadCount).toHaveBeenCalledTimes(1)
+    await act(async () => {
+      publishNotificationChange({ organizationId: 'org-b', recipientId: 'user-a' })
+      publishNotificationChange({ organizationId: 'org-a', recipientId: 'user-b' })
+    })
+    expect(mockGetUnreadCount).toHaveBeenCalledTimes(1)
+    await act(async () => { publishNotificationChange({ organizationId: 'org-a', recipientId: 'user-a' }) })
+    expect(mockGetUnreadCount).toHaveBeenCalledTimes(2)
+    unmount()
+    await act(async () => { publishNotificationChange({ organizationId: 'org-a', recipientId: 'user-a' }) })
+    expect(mockGetUnreadCount).toHaveBeenCalledTimes(2)
   })
 
   it('keeps the last unread count through a polling failure and recovers on the next poll', async () => {

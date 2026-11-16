@@ -51,7 +51,7 @@
                                class="${properties.kcInputClass!}" 
                                name="email"
                                value="${(register.formData.email!'')}" 
-                               autocomplete="email"
+                               autocomplete="<#if realm.registrationEmailAsUsername>username<#else>email</#if>"
                                aria-invalid="<#if messagesPerField.existsError('email')>true</#if>"
                         />
                         <#if messagesPerField.existsError('email')>
@@ -118,7 +118,7 @@
                                     'req-digit':   function (v) { return /[0-9]/.test(v); },
                                     'req-special': function (v) { return /[^A-Za-z0-9]/.test(v); }
                                 };
-                                pwdInput.addEventListener('input', function () {
+                                function updateRequirements() {
                                     var val = pwdInput.value;
                                     var hasTyped = val.length > 0;
                                     Object.keys(rules).forEach(function (id) {
@@ -130,7 +130,11 @@
                                         li.classList.toggle('unmet-active', !ok && hasTyped);
                                         if (icon) icon.textContent = ok ? '✓' : '✗';
                                     });
-                                });
+                                }
+                                pwdInput.addEventListener('input', updateRequirements);
+                                pwdInput.addEventListener('change', updateRequirements);
+                                window.addEventListener('pageshow', updateRequirements);
+                                updateRequirements();
                             })();
                             </script>
                         </div>
@@ -142,6 +146,7 @@
                                    data-testid="password-confirm-input"
                                    class="${properties.kcInputClass!}" 
                                    name="password-confirm"
+                                   autocomplete="new-password"
                                    aria-invalid="<#if messagesPerField.existsError('password-confirm')>true</#if>"
                             />
                             <#if messagesPerField.existsError('password-confirm')>
@@ -187,7 +192,6 @@
                             />
                         </div>
                     </div>
-            </div>
                 </form>
             </div>
         </div>

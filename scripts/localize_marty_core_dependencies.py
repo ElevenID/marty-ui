@@ -59,6 +59,34 @@ def _manifests(root_manifest: Path) -> dict[Path, dict]:
     return documents
 
 
+def validate_workspace_dependencies(root_manifest: Path) -> None:
+    """Check inherited dependency keys using source TOML only, without Cargo/fetch."""
+    documents = _manifests(root_manifest)
+    workspaces = {path: document["workspace"] for path, document in documents.items()
+                  if "workspace" in document}
+    for manifest, document in documents.items():
+        for location, entries in _dependency_tables(document):
+            if location[0] in {"workspace", "patch"}:
+                continue
+            inherited = [alias for alias, specification in entries.items()
+                         if isinstance(specification, dict) and specification.get("workspace") is True]
+            if not inherited:
+                continue
+            explicit = document.get("package", {}).get("workspace")
+            if explicit is not None:
+                owner = (manifest.parent / explicit / "Cargo.toml").resolve()
+            else:
+                ancestors = [path for path in workspaces if manifest.is_relative_to(path.parent)]
+                owner = max(ancestors, key=lambda path: len(path.parts), default=None)
+            if owner not in workspaces:
+                raise ValueError(f"Inherited Cargo dependency has no workspace owner: {manifest}")
+            declared = workspaces[owner].get("dependencies", {})
+            for alias in inherited:
+                if alias not in declared:
+                    table = ".".join(location)
+                    raise ValueError(f"Missing workspace dependency {alias}: {manifest} [{table}]")
+
+
 def _core_packages(core_root: Path) -> dict[str, Path]:
     packages = {}
     for manifest, document in _manifests(core_root / "Cargo.toml").items():

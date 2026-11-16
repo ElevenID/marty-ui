@@ -38,6 +38,8 @@ pub enum OrganizationStartupError {
 pub async fn reconcile_organization_startup(
     store: &PostgresOrganizationStore,
     marty_organization_id: Uuid,
+    marty_organization_name: &str,
+    marty_organization_slug: &str,
     admin_email: Option<&str>,
     reviewer_email: Option<&str>,
     now: DateTime<Utc>,
@@ -48,14 +50,14 @@ pub async fn reconcile_organization_startup(
         .await?
         .is_none()
     {
-        if let Some(existing) = store.organization_by_slug(MARTY_ORGANIZATION_SLUG).await? {
+        if let Some(existing) = store.organization_by_slug(marty_organization_slug).await? {
             return Err(OrganizationStartupError::DefaultOrganizationConflict {
                 field: "slug",
                 existing_id: existing.id,
             });
         }
         if let Some(existing) = store
-            .organization_by_name_case_insensitive(MARTY_ORGANIZATION_NAME)
+            .organization_by_name_case_insensitive(marty_organization_name)
             .await?
         {
             return Err(OrganizationStartupError::DefaultOrganizationConflict {
@@ -64,7 +66,12 @@ pub async fn reconcile_organization_startup(
             });
         }
         store
-            .save_organization(&default_marty_organization(marty_organization_id, now))
+            .save_organization(&configured_bootstrap_organization(
+                marty_organization_id,
+                marty_organization_name,
+                marty_organization_slug,
+                now,
+            ))
             .await?;
         report.default_organization_created = true;
     }
@@ -92,6 +99,24 @@ pub async fn reconcile_organization_startup(
         }
     }
     Ok(report)
+}
+
+fn configured_bootstrap_organization(
+    id: Uuid,
+    name: &str,
+    slug: &str,
+    now: DateTime<Utc>,
+) -> Organization {
+    let mut organization = default_marty_organization(id, now);
+    if name != MARTY_ORGANIZATION_NAME || slug != MARTY_ORGANIZATION_SLUG {
+        organization.name = name.into();
+        organization.slug = slug.into();
+        organization.display_name = Some(name.into());
+        organization.description = None;
+        organization.contact_email = None;
+        organization.website = None;
+    }
+    organization
 }
 
 #[must_use]
@@ -216,6 +241,28 @@ mod tests {
             bootstrap_role_ids(&[viewer.clone(), admin.clone()], &admin),
             [viewer.id, admin.id]
         );
+    }
+
+    #[test]
+    fn customer_bootstrap_uses_configured_identity_without_marty_contact_details() {
+        let id = Uuid::parse_str("750e8400-e29b-41d4-a716-446655440001").unwrap();
+        let now = Utc::now();
+        let organization =
+            configured_bootstrap_organization(id, "Canyon Skills Academy", "canyon-skills", now);
+        assert_eq!(organization.id, id);
+        assert_eq!(organization.name, "Canyon Skills Academy");
+        assert_eq!(
+            organization.display_name.as_deref(),
+            Some("Canyon Skills Academy")
+        );
+        assert_eq!(organization.slug, "canyon-skills");
+        assert!(organization.description.is_none());
+        assert!(organization.contact_email.is_none());
+        assert!(organization.website.is_none());
+        assert_eq!(organization.status, OrganizationStatus::Active);
+        assert_eq!(organization.join_mechanism, JoinMechanism::Invite);
+        assert_eq!(organization.visibility, "PRIVATE");
+        assert!(!organization.is_discoverable);
     }
 
     #[test]

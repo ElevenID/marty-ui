@@ -1,0 +1,41 @@
+name: External observation admission
+on:
+  pull_request:
+    paths:
+      - 'rust/services/issuance/src/external_observation_admission*.rs'
+      - 'contracts/external-observation-v1.schema.json'
+      - '.github/workflows/external-observation-admission.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'rust/services/issuance/src/external_observation_admission*.rs'
+      - 'contracts/external-observation-v1.schema.json'
+      - '.github/workflows/external-observation-admission.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: external-observation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  admission:
+    name: Core observation admission policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Compile and run exact policy source without workspace dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          rustc --edition=2021 --deny warnings --test \
+            rust/services/issuance/src/external_observation_admission.rs \
+            -o "$RUNNER_TEMP/external-observation-admission-tests"
+          "$RUNNER_TEMP/external-observation-admission-tests"
+      - name: Check candidate schema parses
+        run: python3 -m json.tool contracts/external-observation-v1.schema.json > /dev/null
+      - name: Require checked-in formatting
+        run: rustfmt --edition 2021 --check rust/services/issuance/src/external_observation_admission.rs

@@ -19,9 +19,12 @@ use uuid::Uuid;
 
 use crate::domain::{key_purposes, service_capabilities, service_type, service_types};
 use crate::flow_envelope::OpenBaoEnvelopeProvider;
-use crate::integration_secret_envelope::{self, DecryptRequest, EncryptRequest};
+use crate::integration_secret_envelope::{
+    self, DecryptRequest, EncryptRequest, IntegrationSecretProvider,
+};
 use crate::kms;
 use crate::profiles::ProfileStore;
+use marty_signing_grant::didcomm::DidcommOperationBinding;
 
 const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 pub(crate) const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
@@ -235,6 +238,8 @@ pub enum RegistryError {
     Invalid(String),
     #[error("signing registry storage is unavailable: {0}")]
     Storage(String),
+    #[error("The configured KMS cannot encrypt this service credential.")]
+    SecretCapabilityUnavailable,
     #[error("stored signing registry is malformed: {0}")]
     Corrupt(String),
     #[error("signing registry update is in progress for this tenant")]
@@ -267,7 +272,7 @@ pub struct RegistryStore {
     connection: ConnectionManager,
     managed_openbao_endpoint: Option<String>,
     managed_inventory: ManagedInventoryCache,
-    auth_envelopes: Option<OpenBaoEnvelopeProvider>,
+    auth_envelopes: Option<IntegrationSecretProvider>,
 }
 
 const AUTH_ENVELOPE_FIELD: &str = "auth_reference_envelope";
@@ -283,6 +288,145 @@ pub(crate) const AUTH_CONNECTION_FIELDS: [&str; 9] = [
     "namespace",
     "ca_cert_file",
 ];
+
+const DID_OPERATION_BINDINGS: &str = "did_operation_bindings";
+
+pub(crate) fn didcomm_service_config_sha256(service: &Value) -> String {
+    let fields = std::iter::once("id").chain(AUTH_CONNECTION_FIELDS);
+    let binding: Vec<_> = fields
+        .map(|name| service.get(name).cloned().unwrap_or(Value::Null))
+        .collect();
+    format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&binding).expect("JSON values serialize"))
+    )
+}
+
+fn normalized_operation_bindings(value: Option<&Value>) -> Result<Value, RegistryError> {
+    let Some(value) = value else {
+        return Ok(json!({}));
+    };
+    let issuers = value
+        .as_object()
+        .filter(|issuers| issuers.len() <= 1000)
+        .ok_or_else(|| RegistryError::Invalid("DID operation bindings are malformed.".into()))?;
+    let mut normalized = Map::new();
+    for (did, operations) in issuers {
+        let operations = operations
+            .as_object()
+            .filter(|operations| operations.len() == 1)
+            .ok_or_else(|| {
+                RegistryError::Invalid("DID operation bindings are malformed.".into())
+            })?;
+        let binding: DidcommOperationBinding = serde_json::from_value(
+            operations
+                .get("didcomm_authcrypt")
+                .cloned()
+                .ok_or_else(|| RegistryError::Invalid("DID operation is unsupported.".into()))?,
+        )
+        .map_err(|_| RegistryError::Invalid("DID operation binding is malformed.".into()))?;
+        let reference =
+            marty_signing_grant::didcomm::DidcommKeyReference::parse(&binding.key_reference)
+                .map_err(|_| {
+                    RegistryError::Invalid("DID operation key reference is malformed.".into())
+                })?;
+        binding
+            .validate(reference.tenant(), did)
+            .map_err(|_| RegistryError::Invalid("DID operation binding is malformed.".into()))?;
+        normalized.insert(did.clone(), json!({"didcomm_authcrypt": binding}));
+    }
+    Ok(Value::Object(normalized))
+}
+
+fn include_operation_bindings(registry: &mut Value, source: &Value) -> Result<(), RegistryError> {
+    let bindings = normalized_operation_bindings(source.get(DID_OPERATION_BINDINGS))?;
+    if bindings
+        .as_object()
+        .is_some_and(|bindings| !bindings.is_empty())
+    {
+        registry[DID_OPERATION_BINDINGS] = bindings;
+    }
+    Ok(())
+}
+
+pub(crate) fn didcomm_binding(
+    registry: &Value,
+    organization_id: &str,
+    issuer_did: &str,
+) -> Result<Option<DidcommOperationBinding>, RegistryError> {
+    let Some(value) = registry
+        .get(DID_OPERATION_BINDINGS)
+        .and_then(|bindings| bindings.get(issuer_did))
+        .and_then(|operations| operations.get("didcomm_authcrypt"))
+    else {
+        return Ok(None);
+    };
+    let binding: DidcommOperationBinding = serde_json::from_value(value.clone())
+        .map_err(|_| RegistryError::Corrupt("DID operation binding is malformed".into()))?;
+    binding
+        .validate(organization_id, issuer_did)
+        .map_err(|_| RegistryError::Corrupt("DID operation binding is malformed".into()))?;
+    Ok(Some(binding))
+}
+
+fn preserve_operation_bindings(
+    requested: &Value,
+    merged: &mut Value,
+    current: &Value,
+) -> Result<(), RegistryError> {
+    if requested
+        .get(DID_OPERATION_BINDINGS)
+        .is_some_and(|value| Some(value) != current.get(DID_OPERATION_BINDINGS))
+    {
+        return Err(RegistryError::Invalid(
+            "DID operation bindings can only change through issuer key-agreement registration."
+                .into(),
+        ));
+    }
+    let bindings = normalized_operation_bindings(current.get(DID_OPERATION_BINDINGS))?;
+    for operations in bindings.as_object().expect("normalized map").values() {
+        let service_id = operations["didcomm_authcrypt"]["service_id"]
+            .as_str()
+            .expect("normalized service ID");
+        let find = |registry: &Value| {
+            registry
+                .get("services")
+                .and_then(Value::as_array)
+                .and_then(|services| {
+                    services.iter().find(|service| {
+                        service.get("id").and_then(Value::as_str) == Some(service_id)
+                    })
+                })
+                .cloned()
+        };
+        let current_service = find(current).ok_or(RegistryError::Conflict)?;
+        let next_service = if service_id == MANAGED_OPENBAO_SERVICE_ID {
+            find(requested).unwrap_or_else(|| current_service.clone())
+        } else {
+            find(merged).ok_or_else(|| {
+                RegistryError::Invalid(
+                    "Unbind the DID operation before removing its KMS service.".into(),
+                )
+            })?
+        };
+        if AUTH_CONNECTION_FIELDS
+            .iter()
+            .chain(std::iter::once(&"auth_reference"))
+            .any(|name| current_service.get(*name) != next_service.get(*name))
+        {
+            return Err(RegistryError::Invalid(
+                "Unbind the DID operation before changing its KMS connection or authentication."
+                    .into(),
+            ));
+        }
+    }
+    if !bindings.as_object().expect("normalized map").is_empty() {
+        merged[DID_OPERATION_BINDINGS] = bindings;
+    } else if let Some(object) = merged.as_object_mut() {
+        object.remove(DID_OPERATION_BINDINGS);
+    }
+    Ok(())
+}
 
 fn auth_secret_id(service: &Value) -> Result<String, RegistryError> {
     let id = service
@@ -309,7 +453,7 @@ fn auth_secret_id(service: &Value) -> Result<String, RegistryError> {
 async fn seal_auth_references(
     registry: &Value,
     organization_id: &str,
-    provider: Option<&OpenBaoEnvelopeProvider>,
+    provider: Option<&IntegrationSecretProvider>,
 ) -> Result<Value, RegistryError> {
     let mut sealed = registry.clone();
     let Some(services) = sealed.get_mut("services").and_then(Value::as_array_mut) else {
@@ -343,17 +487,28 @@ async fn seal_auth_references(
             },
         )
         .await
-        .map_err(|_| RegistryError::Storage("KMS credential encryption failed".into()))?;
+        .map_err(auth_encryption_error)?;
         service["auth_reference"] = Value::String(String::new());
         service[AUTH_ENVELOPE_FIELD] = envelope;
     }
     Ok(sealed)
 }
 
+fn auth_encryption_error(
+    error: integration_secret_envelope::IntegrationSecretEnvelopeError,
+) -> RegistryError {
+    match error {
+        integration_secret_envelope::IntegrationSecretEnvelopeError::CapabilityUnavailable(_) => {
+            RegistryError::SecretCapabilityUnavailable
+        }
+        _ => RegistryError::Storage("KMS credential encryption failed".into()),
+    }
+}
+
 async fn unseal_auth_references(
     registry: &Value,
     organization_id: &str,
-    provider: Option<&OpenBaoEnvelopeProvider>,
+    provider: Option<&IntegrationSecretProvider>,
 ) -> Result<Value, RegistryError> {
     let mut unsealed = registry.clone();
     let Some(services) = unsealed.get_mut("services").and_then(Value::as_array_mut) else {
@@ -631,7 +786,15 @@ impl RegistryStore {
     }
 
     #[must_use]
-    pub fn with_auth_envelopes(mut self, provider: Option<OpenBaoEnvelopeProvider>) -> Self {
+    pub fn with_auth_envelopes(self, provider: Option<OpenBaoEnvelopeProvider>) -> Self {
+        self.with_auth_envelope_provider(provider.map(IntegrationSecretProvider::OpenBao))
+    }
+
+    #[must_use]
+    pub fn with_auth_envelope_provider(
+        mut self,
+        provider: Option<IntegrationSecretProvider>,
+    ) -> Self {
         self.auth_envelopes = provider;
         self
     }
@@ -950,6 +1113,7 @@ impl RegistryStore {
     ) -> Result<(Value, String), RegistryError> {
         let mut merged = normalize_requested_registry(requested)?;
         preserve_rotation_fields(&mut merged, existing);
+        preserve_operation_bindings(requested, &mut merged, existing)?;
         self.save_with_rotation_lease_and_revision(organization_id, &merged, lease, None)
             .await
     }
@@ -963,6 +1127,7 @@ impl RegistryStore {
     ) -> Result<(Value, String), RegistryError> {
         let mut merged = normalize_requested_registry(requested)?;
         preserve_rotation_fields(&mut merged, &snapshot.registry);
+        preserve_operation_bindings(requested, &mut merged, &snapshot.registry)?;
         self.save_with_rotation_lease_and_revision(organization_id, &merged, lease, Some(snapshot))
             .await
     }
@@ -976,6 +1141,38 @@ impl RegistryStore {
         self.save_with_rotation_lease_and_revision(organization_id, registry, lease, None)
             .await
             .map(|(registry, _)| registry)
+    }
+
+    pub(crate) async fn set_didcomm_binding_with_lease(
+        &self,
+        organization_id: &str,
+        issuer_did: &str,
+        binding: Option<&DidcommOperationBinding>,
+        snapshot: &RegistryRevisionSnapshot,
+        lease: &RotationLease,
+    ) -> Result<String, RegistryError> {
+        let mut registry = snapshot.registry.clone();
+        let mut bindings = normalized_operation_bindings(registry.get(DID_OPERATION_BINDINGS))?;
+        if let Some(binding) = binding {
+            binding
+                .validate(organization_id, issuer_did)
+                .map_err(|_| RegistryError::Invalid("DID operation binding is invalid.".into()))?;
+            bindings[issuer_did] = json!({"didcomm_authcrypt": binding});
+        } else {
+            bindings
+                .as_object_mut()
+                .expect("normalized map")
+                .remove(issuer_did);
+        }
+        registry[DID_OPERATION_BINDINGS] = bindings;
+        self.save_with_rotation_lease_and_revision(
+            organization_id,
+            &registry,
+            lease,
+            Some(snapshot),
+        )
+        .await
+        .map(|(_, revision)| revision)
     }
 
     async fn save_with_rotation_lease_and_revision(
@@ -1333,17 +1530,12 @@ pub(crate) fn managed_key_reference_for_fields(
     credential_format: &str,
     algorithm: &str,
 ) -> String {
-    let tuple =
-        format!("{organization_id}|{issuer_did}|{key_purpose}|{credential_format}|{algorithm}");
-    let token = Uuid::new_v5(&Uuid::NAMESPACE_URL, tuple.as_bytes())
-        .simple()
-        .to_string();
-    let prefix =
-        crate::domain::managed_key_prefix_for_purpose(key_purpose).unwrap_or("cred-issuer-");
-    format!(
-        "{prefix}{}-{}",
-        &token[..20],
-        algorithm.to_ascii_lowercase()
+    marty_managed_key_reference::issuer_identity_reference(
+        organization_id,
+        issuer_did,
+        key_purpose,
+        credential_format,
+        algorithm,
     )
 }
 
@@ -1667,6 +1859,20 @@ pub fn resolve(request: ResolveRequest) -> Result<ResolveResponse, RegistryError
             request.algorithm.as_deref(),
         )
     });
+    let service = service.filter(|service| {
+        request.credential_format.as_deref().is_none_or(|format| {
+            crate::domain::explicit_format_allowed(service.get("credential_formats"), format)
+                && request.algorithm.as_deref().is_none_or(|algorithm| {
+                    crate::domain::explicit_algorithm_allowed(format, algorithm)
+                })
+                && (crate::profiles::protocol_wire_format(format).as_deref()
+                    != Some("application/vc+jwt")
+                    || request
+                        .key_purpose
+                        .as_deref()
+                        .is_none_or(|purpose| purpose == "vc_jwt_issuer"))
+        })
+    });
     let key_reference = service.as_ref().and_then(|service| {
         resolve_key_reference(
             &request.registry,
@@ -1789,7 +1995,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
     });
     kms::validate_service_auth_config(&auth_config)
         .map_err(|error| RegistryError::Invalid(error.to_string()))?;
-    let provider = nonblank_string(service.get("provider")).unwrap_or(definition.provider);
+    let provider = definition.provider;
     let provider_label = nonblank_string(service.get("provider_label")).unwrap_or(definition.label);
     let created_at = service
         .get("created_at")
@@ -1852,7 +2058,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         "service_type": definition.id,
         "provider": provider,
         "provider_label": provider_label,
-        "protocol": nonblank_string(service.get("protocol")).unwrap_or(definition.protocol),
+        "protocol": definition.protocol,
         "category": definition.category,
         "endpoint": string_or(service.get("endpoint"), ""),
         "region": string_or(service.get("region"), ""),
@@ -1919,6 +2125,7 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
         let bindings = normalize_bindings(body.get("key_reference_purposes"));
         validate_lti_bindings(&bindings)?;
         registry["key_reference_purposes"] = json!(bindings);
+        include_operation_bindings(&mut registry, value)?;
         return Ok(registry);
     };
     let mut services = Vec::new();
@@ -1938,13 +2145,15 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
     }
     let bindings = normalize_bindings(body.get("key_reference_purposes"));
     validate_lti_bindings(&bindings)?;
-    Ok(json!({
+    let mut registry = json!({
         "services": services,
         "default_service_id": optional_string(body.get("default_service_id")),
         "format_defaults": string_map(body.get("format_defaults")),
         "type_defaults": string_map(body.get("type_defaults")),
         "key_reference_purposes": bindings,
-    }))
+    });
+    include_operation_bindings(&mut registry, value)?;
+    Ok(registry)
 }
 
 fn normalize_stored_registry(value: &Value) -> Result<Value, RegistryError> {
@@ -1960,13 +2169,15 @@ fn normalize_stored_registry(value: &Value) -> Result<Value, RegistryError> {
             }
         }
     }
-    Ok(json!({
+    let mut registry = json!({
         "services": services,
         "default_service_id": optional_string(body.get("default_service_id")),
         "format_defaults": string_map(body.get("format_defaults")),
         "type_defaults": string_map(body.get("type_defaults")),
         "key_reference_purposes": normalize_bindings(body.get("key_reference_purposes")),
-    }))
+    });
+    include_operation_bindings(&mut registry, value)?;
+    Ok(registry)
 }
 
 fn reject_legacy_registry_fields(body: &Map<String, Value>) -> Result<(), RegistryError> {
@@ -2256,6 +2467,10 @@ fn formats_for_purposes(purposes: &[String]) -> Vec<String> {
     for purpose in purposes {
         if let Some(definition) = definitions.iter().find(|value| value.id == purpose) {
             for format in definition.credential_formats {
+                // Historical services do not acquire a new capability by default.
+                if *format == "application/vc+jwt" {
+                    continue;
+                }
                 if !formats.iter().any(|existing| existing == format) {
                     formats.push((*format).to_string());
                 }
@@ -2432,7 +2647,9 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let provider = OpenBaoEnvelopeProvider::new(endpoint, "fixture-token").unwrap();
+        let provider = IntegrationSecretProvider::OpenBao(
+            OpenBaoEnvelopeProvider::new(endpoint, "fixture-token").unwrap(),
+        );
         let plain = json!({"services": [{
             "id": "service-1", "service_type": "openbao-transit",
             "provider": "openbao", "protocol": "vault-transit",
@@ -2467,6 +2684,80 @@ mod tests {
             .is_err());
         assert!(seal_auth_references(&plain, "org-1", None).await.is_err());
         server.abort();
+    }
+
+    #[test]
+    fn service_credential_capability_failure_remains_nontransient_and_redacted() {
+        use integration_secret_envelope::IntegrationSecretEnvelopeError;
+        assert_eq!(
+            auth_encryption_error(IntegrationSecretEnvelopeError::CapabilityUnavailable(
+                "untrusted provider detail",
+            )),
+            RegistryError::SecretCapabilityUnavailable,
+        );
+        assert!(!RegistryError::SecretCapabilityUnavailable
+            .to_string()
+            .contains("untrusted"));
+        assert!(matches!(
+            auth_encryption_error(IntegrationSecretEnvelopeError::Unavailable),
+            RegistryError::Storage(_),
+        ));
+    }
+
+    #[test]
+    fn did_operation_bindings_survive_defaults_and_reject_connection_or_private_map_edits() {
+        let service = json!({
+            "id":"extension-a", "service_type":"openbao-transit", "provider":"openbao",
+            "protocol":"vault-transit", "endpoint":"https://bao.example", "region":"",
+            "auth_mode":"token", "auth_reference":"fixture-token", "mount":"transit",
+            "namespace":"", "ca_cert_file":"",
+        });
+        let binding = DidcommOperationBinding {
+            service_id: "extension-a".into(),
+            service_config_sha256: didcomm_service_config_sha256(&service),
+            key_reference: format!("didcomm/keys/org-a/sender/versions/{}", "a".repeat(32)),
+            sender_key_id: "did:example:issuer#opaque".into(),
+            public_key: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([7_u8; 32]),
+        };
+        let current = json!({"services":[service.clone()], "default_service_id":"extension-a",
+            "did_operation_bindings":{"did:example:issuer":{"didcomm_authcrypt":binding}}});
+        let requested = json!({"services":[service.clone()], "default_service_id":"aws-a"});
+        let mut merged = requested.clone();
+        preserve_operation_bindings(&requested, &mut merged, &current).unwrap();
+        assert_eq!(
+            merged["did_operation_bindings"],
+            current["did_operation_bindings"]
+        );
+        assert_eq!(merged["default_service_id"], "aws-a");
+        assert_eq!(
+            didcomm_binding(&merged, "org-a", "did:example:issuer").unwrap(),
+            Some(binding)
+        );
+        assert!(didcomm_binding(&merged, "org-b", "did:example:issuer").is_err());
+        for field in AUTH_CONNECTION_FIELDS.into_iter().chain(["auth_reference"]) {
+            let mut changed = requested.clone();
+            changed["services"][0][field] = json!("changed");
+            assert!(
+                preserve_operation_bindings(&changed, &mut changed.clone(), &current).is_err(),
+                "{field}"
+            );
+        }
+        let removed = json!({"services":[]});
+        assert!(preserve_operation_bindings(&removed, &mut removed.clone(), &current).is_err());
+        for forged in [
+            json!({}),
+            json!({"did:example:other":{"didcomm_authcrypt":true}}),
+        ] {
+            let mut changed = requested.clone();
+            changed["did_operation_bindings"] = forged;
+            assert!(preserve_operation_bindings(&changed, &mut changed.clone(), &current).is_err());
+        }
+        let mut normalized = json!({});
+        include_operation_bindings(&mut normalized, &current).unwrap();
+        assert_eq!(
+            normalized["did_operation_bindings"],
+            current["did_operation_bindings"]
+        );
     }
 
     #[test]
@@ -3208,5 +3499,80 @@ mod tests {
             24
         );
         let _: () = connection.del(&key).await.unwrap();
+    }
+    #[test]
+    fn explicit_jwt_vc_capability_is_never_inferred_and_public_resolution_requires_it() {
+        let baseline = json!({"id":"external-profile", "service_type":"custom-transit-compatible", "endpoint":"https://kms.example", "auth_mode":"token", "auth_reference":"synthetic-public-test-token", "key_reference":"issuer-key", "key_purposes":["vc_jwt_issuer"], "algorithms":["ES256"]});
+        let inferred = normalize_service(NormalizeServiceRequest {
+            service: baseline.clone(),
+        })
+        .unwrap()
+        .service
+        .unwrap();
+        assert!(!inferred["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("application/vc+jwt")));
+        assert!(inferred["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("jwt_vc_json")));
+        let managed = managed_openbao_service("org-a", "http://openbao:8200", &[], true);
+        assert!(!managed["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("application/vc+jwt")));
+        for formats in [
+            None,
+            Some(json!([])),
+            Some(json!(["jwt_vc_json"])),
+            Some(json!(["application/vc+jwt"])),
+        ] {
+            let allowed = formats
+                .as_ref()
+                .is_some_and(|v| v == &json!(["application/vc+jwt"]));
+            let mut service = baseline.clone();
+            if let Some(formats) = formats {
+                service["credential_formats"] = formats;
+            }
+            if allowed {
+                service = normalize_service(NormalizeServiceRequest { service })
+                    .unwrap()
+                    .service
+                    .unwrap();
+                assert_eq!(service["credential_formats"], json!(["application/vc+jwt"]));
+            }
+            for (explicit_service, requested_format) in
+                [false, true].into_iter().flat_map(|explicit| {
+                    [
+                        "application/vc+jwt",
+                        "VC_JWT_DIRECT_V1",
+                        " vc-jwt-direct-v1 ",
+                    ]
+                    .map(|format| (explicit, format))
+                })
+            {
+                let resolved = resolve(ResolveRequest {
+                    registry: json!({"services":[service],"default_service_id":"external-profile","key_reference_purposes":{"external-profile":{"issuer-key":["vc_jwt_issuer"]}}}),
+                    service: explicit_service.then(|| service.clone()), keys: vec![],
+                    credential_format: Some(requested_format.into()), key_purpose: Some("vc_jwt_issuer".into()), algorithm: Some("ES256".into()),
+                }).unwrap();
+                assert_eq!(resolved.service.is_some(), allowed);
+                if allowed {
+                    // The provider's broader capability cannot make an
+                    // unsupported direct-profile algorithm usable.
+                    let mut unsupported = service.clone();
+                    unsupported["algorithms"] = json!(["ES512"]);
+                    let resolved = resolve(ResolveRequest {
+                        registry: json!({"services":[unsupported],"default_service_id":"external-profile"}),
+                        service: explicit_service.then(|| unsupported.clone()), keys: vec![],
+                        credential_format: Some(requested_format.into()),
+                        key_purpose: Some("vc_jwt_issuer".into()), algorithm: Some("ES512".into()),
+                    }).unwrap();
+                    assert!(resolved.service.is_none());
+                    assert!(resolved.key_reference.is_none());
+                }
+            }
+        }
     }
 }

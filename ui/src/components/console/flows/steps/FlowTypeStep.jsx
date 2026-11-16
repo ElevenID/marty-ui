@@ -38,7 +38,7 @@ const FlowTypeStep = ({ capabilities, selectedType, onSelectType, onOpenCustomBu
 
   return (
     <Box>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" gap={2} sx={{ mb: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ justifyContent: "space-between", gap: 2, mb: 3 }}>
         <Box>
           <Typography variant="h6">Choose a flow</Typography>
           <Typography variant="body2" color="text.secondary">
@@ -61,7 +61,7 @@ const FlowTypeStep = ({ capabilities, selectedType, onSelectType, onOpenCustomBu
           const Icon = type.icon;
           const disabled = type.value === 'physical_document_issuance' && physicalCapability?.supported === false;
           return (
-            <Grid item xs={12} sm={6} md={4} key={type.value}>
+            <Grid key={type.value} size={{ xs: 12, sm: 6, md: 4 }}>
               <Card
                 variant="outlined"
                 sx={{
@@ -78,7 +78,7 @@ const FlowTypeStep = ({ capabilities, selectedType, onSelectType, onOpenCustomBu
                   sx={{ height: '100%' }}
                 >
                   <CardContent sx={{ p: 2 }}>
-                    <Stack direction="row" alignItems="center" gap={1.5}>
+                    <Stack direction="row" sx={{ alignItems: "center", gap: 1.5 }}>
                       <Icon color={disabled ? 'disabled' : 'primary'} />
                       <Box sx={{ minWidth: 0 }}>
                         <Typography variant="subtitle2">{type.name}</Typography>

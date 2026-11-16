@@ -1,3 +1,4 @@
+use marty_service_contracts::flow_context::is_private_context_key;
 use std::collections::BTreeSet;
 
 use regex::Regex;
@@ -26,31 +27,6 @@ const FLOW_TYPES: &[&str] = &[
     "physical_document_issuance",
     "combined",
     "custom",
-];
-const PRIVATE_CONTEXT_KEYS: &[&str] = &[
-    "issuer_profile_id",
-    "issuer_key_id",
-    "issuer_algorithm",
-    "key_access_mode",
-    "verification_method_id",
-    "signing_service_id",
-    "signing_key_reference",
-    "key_reference",
-    "kms_provider",
-    "provider",
-    "key_name",
-    "key_version",
-    "transit_mount",
-    "pre_auth_code",
-    "pre_authorized_code",
-    "pre-authorized-code",
-    "access_token",
-    "refresh_token",
-    "client_secret",
-    "private_key",
-    "private_key_jwk",
-    "session_token",
-    "api_key",
 ];
 
 pub fn canonicalize_definition(body: &[u8], update: bool) -> Result<Value, FlowContractError> {
@@ -669,7 +645,11 @@ fn canonical_extension(value: Value) -> Result<Value, FlowContractError> {
 fn contains_private_context(value: &Value) -> bool {
     match value {
         Value::Object(entries) => entries.iter().any(|(key, value)| {
-            PRIVATE_CONTEXT_KEYS.contains(&key.to_lowercase().as_str())
+            // Preserve the edge's existing Unicode lowercase aliases while
+            // adding the shared reserved-prefix rule. The Flow domain keeps
+            // its existing ASCII-case policy.
+            is_private_context_key(key)
+                || is_private_context_key(&key.to_lowercase())
                 || contains_private_context(value)
         }),
         Value::Array(entries) => entries.iter().any(contains_private_context),
@@ -838,6 +818,73 @@ mod tests {
             }))
             .is_err());
         }
+    }
+
+    #[test]
+    fn reserved_context_is_rejected_recursively_at_request_and_response_boundaries() {
+        let contract: Contract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-flow-behavior.json"
+        ))
+        .unwrap();
+        for key in [
+            "_marty_state",
+            "_MaRtY_\u{e9}",
+            "AcCeSs_ToKeN",
+            "api_\u{212a}ey",
+        ] {
+            for private_value in [Value::Null, json!(""), json!({})] {
+                let context = json!({"items": [{key: private_value, "public": true}]});
+                let mut request = contract.instance_create_input.clone();
+                request["initial_context"] = context.clone();
+                assert!(
+                    canonicalize_instance(&serde_json::to_vec(&request).unwrap()).is_err(),
+                    "{key}"
+                );
+                for field in ["context_data", "metadata", "step_results"] {
+                    let mut response = contract.internal_instance.clone();
+                    response[field] = if field == "step_results" {
+                        json!({"prepare": context.clone()})
+                    } else {
+                        context.clone()
+                    };
+                    assert!(
+                        project_response(response, FlowResponseKind::Instance).is_err(),
+                        "{field}: {key}"
+                    );
+                }
+                let mut response = contract.internal_instance.clone();
+                response["state_history"] = json!([context]);
+                assert!(project_response(response, FlowResponseKind::Instance).is_err());
+            }
+        }
+        let context =
+            json!({"items": [{"application_id": "public", "_marty": null, "\u{e9}": true}]});
+        for field in ["context_data", "metadata", "step_results"] {
+            let mut response = contract.internal_instance.clone();
+            let value = if field == "step_results" {
+                json!({"prepare": context.clone()})
+            } else {
+                context.clone()
+            };
+            response[field] = value.clone();
+            assert_eq!(
+                project_response(response, FlowResponseKind::Instance).unwrap()[field],
+                value
+            );
+        }
+        let mut response = contract.internal_instance;
+        response["state_history"] = json!([context.clone()]);
+        assert_eq!(
+            project_response(response, FlowResponseKind::Instance).unwrap()["state_history"],
+            json!([context.clone()])
+        );
+        let mut request = contract.instance_create_input;
+        request["initial_context"] = context.clone();
+        assert_eq!(
+            canonicalize_instance(&serde_json::to_vec(&request).unwrap()).unwrap()
+                ["initial_context"],
+            context
+        );
     }
 
     #[derive(Deserialize)]

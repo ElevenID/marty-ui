@@ -24,6 +24,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
 const {readBoundedSecretFile}=require('./canvas-secret-files');
+const {walletExpectationForTemplate, requireWalletReceiptBinding,
+  requireSignedCredentialBinding}=require('./canvas-credential-identity');
 const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
@@ -346,7 +348,7 @@ function requireComposeExecutionBoundary() {
   requireCondition(/^sha256:[0-9a-f]{64}$/.test(imageId), 'contract_image_id_invalid', 'Contract image ID is not immutable.');
   requireCondition(/^[0-9a-f]{40}$/.test(sourceSha), 'contract_source_invalid', 'Contract driver source SHA is invalid.');
   requireCondition(
-    /^mcr\.microsoft\.com\/playwright:v1\.63\.0-noble@sha256:[0-9a-f]{64}$/.test(baseImage),
+    /^mcr\.microsoft\.com\/playwright:v1\.64\.1-noble@sha256:[0-9a-f]{64}$/.test(baseImage),
     'playwright_base_unpinned',
     'Playwright base image is not the locked immutable reference.',
   );
@@ -1012,12 +1014,27 @@ async function selectProductionBadgeTemplates(marty, organizationId, selectors =
     const type = String(credential.credential_type || '').replace(/[^a-z]/gi, '').toLowerCase();
     const claims = new Set((credential.claims || []).map(claim => claim.name));
     return ['openbadge', 'openbadgecredential'].includes(type)
+      && credential.credential_payload_format === 'SD_JWT_VC'
       && ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
-        .every(name => claims.has(name));
+        .every(name => claims.has(name))
+      && Boolean(credential.compliance_profile_id);
   });
   requireCondition(candidates.length === 1, 'badge_template_selection_ambiguous', 'Exactly one active Open Badge application/template pair must be selected for the portability lane.');
   const application = candidates[0];
   const credential = credentialById.get(String(application.credential_template_id));
+  const complianceId = String(credential.compliance_profile_id);
+  const compliance = await marty.get(`/v1/compliance-profiles/${encodeURIComponent(complianceId)}`);
+  requireCondition(
+    String(compliance?.id) === complianceId
+      && (String(compliance?.organization_id || '') === organizationId
+        || (compliance?.is_system === true && compliance?.organization_id == null))
+      && String(compliance?.status || '').toUpperCase() === 'ACTIVE'
+      && compliance?.discoverable === true
+      && compliance?.credential_format === 'SD_JWT_VC'
+      && compliance?.issuance_protocol === 'OID4VCI_PRE_AUTH',
+    'badge_compliance_profile_invalid',
+    'Selected Open Badge compliance profile must be active and compatible with governed SD-JWT issuance.',
+  );
   return { application, credential };
 }
 
@@ -1063,6 +1080,18 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
   const release = await responseJson(releaseResponse, 'beta_health_failed', 'Beta release marker request failed');
   requireCondition(release.marty_ui_sha === runtime.source_id, 'beta_release_drift', 'Beta release marker drifted from the captured runtime context.');
   ledger.pass('beta_release_bound_and_healthy', 'The healthy beta release marker matches the reviewed runtime source snapshot.');
+
+  markActive('standard_lti_13_install');
+  const toolJwksResponse = await fetchWithTimeout(`${martyOrigin}/v1/integrations/canvas/lti/jwks`, { headers: { Accept: 'application/json' } });
+  requireCondition(toolJwksResponse.status === 200, 'canvas_lti_tool_signer_unavailable', 'The Canvas LTI tool signing identity is not ready.');
+  const toolJwks = await responseJson(toolJwksResponse, 'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS is unavailable');
+  requireCondition(Array.isArray(toolJwks?.keys)
+    && toolJwks.keys.every((key) => key && !['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'].some((field) => Object.hasOwn(key, field)))
+    && toolJwks.keys.some((key) => key.kty === 'RSA' && key.alg === 'RS256' && key.retired_at == null
+      && typeof key.kid === 'string' && /^did:web:[^#]+#[^#]+$/.test(key.kid)
+      && typeof key.n === 'string' && key.n.length > 0
+      && typeof key.e === 'string' && key.e.length > 0),
+  'canvas_lti_tool_jwks_invalid', 'The Canvas LTI public JWKS has no active public RSA signing key.');
 
   markActive('canvas_public_https_reachable');
   const canvasResponse = await fetchWithTimeout(`${canvasOrigin}/login/canvas`, { headers: { Accept: 'text/html' } });
@@ -1303,9 +1332,106 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas
   const ltiFrame = await waitFor(() => page.frames().find((frame) => {
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
-  await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  await page.getByRole('dialog', { name: /^link resource from external tool$/i })
-    .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  const deepLinkResponsePath = '/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response';
+  const isDeepLinkRequest = (request) => {
+    try {
+      const url = new URL(request.url());
+      return request.method() === 'POST' && url.origin === martyOrigin && url.pathname === deepLinkResponsePath;
+    }
+    catch { return false; }
+  };
+  const apiStatuses = [];
+  let apiRequestFailed = false;
+  let canvasReturnNavigated = false;
+  const onResponse = (response) => {
+    if (isDeepLinkRequest(response.request()) && apiStatuses.length < 3) apiStatuses.push(response.status());
+  };
+  const onRequestFailed = (request) => { if (isDeepLinkRequest(request)) apiRequestFailed = true; };
+  const onFrameNavigated = (frame) => {
+    if (frame !== ltiFrame) return;
+    try { if (new URL(frame.url()).origin === new URL(adminCanvas.origin).origin) canvasReturnNavigated = true; }
+    catch { /* Opaque frame navigation is not a Canvas return. */ }
+  };
+  page.on('response', onResponse);
+  page.on('requestfailed', onRequestFailed);
+  page.on('framenavigated', onFrameNavigated);
+  try {
+    await ltiFrame.evaluate(() => {
+      window.__martyCanvasDeepLinkProbe = { cspDirective: null };
+      window.addEventListener('securitypolicyviolation', (event) => {
+        if (['form-action', 'navigate-to', 'connect-src'].includes(event.effectiveDirective)) {
+          window.__martyCanvasDeepLinkProbe.cspDirective = event.effectiveDirective;
+        }
+      });
+    }).catch(() => { /* Diagnostic listener cannot alter the functional path. */ });
+    await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
+    try {
+      await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+        .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+    } catch {
+      const responseUrl = ltiFrame.url();
+      let returnPage = 'other';
+      try {
+        const parsed = new URL(responseUrl);
+        if (parsed.origin === new URL(adminCanvas.origin).origin
+          && parsed.pathname.includes('/deep_linking_response')) returnPage = 'canvas_deep_link_response';
+        else if (parsed.origin === martyOrigin) returnPage = 'marty_frame';
+      } catch { /* An opaque frame URL is diagnostic only. */ }
+      const rejectedContent = await ltiFrame.getByRole('button', { name: /i understand, continue/i })
+        .isVisible().catch(() => false);
+      // Stock Canvas's rejection table has Field in its third column. Never
+      // retain its title, message, or unchecked field text from an LTI response.
+      const rejectedFields = rejectedContent
+        ? await ltiFrame.getByRole('table', { name: /content items with errors/i })
+          .locator('tbody tr').evaluateAll((rows) => [...new Set(rows.slice(0, 10)
+            .map((row) => {
+              const field = row.cells[2]?.textContent?.trim() || '';
+              if (field.startsWith('lineItem.')) return 'lineItem';
+              if (['url', 'custom', 'title', 'type'].includes(field)) return field;
+              return 'other';
+            }))]).catch(() => [])
+        : [];
+      const diagnostic = {
+        returnPage,
+        rejectedContent,
+        rejectedFields,
+        deepLinkApiStatuses: apiStatuses,
+        deepLinkApiRequestFailed: apiRequestFailed,
+        canvasReturnNavigated,
+        martyErrorAlertVisible: await ltiFrame.locator('[role="alert"].MuiAlert-colorError, [role="alert"].MuiAlert-standardError')
+          .first().isVisible().catch(() => false),
+        returningButtonVisible: await ltiFrame.getByRole('button', { name: /returning to canvas/i })
+          .isVisible().catch(() => false),
+        returnForm: await ltiFrame.evaluate((canvasOrigin) => {
+          const form = document.querySelector('form[method="post"][target="_self"]');
+          let actionCanvasOrigin = false;
+          try { actionCanvasOrigin = Boolean(form) && new URL(form.action).origin === canvasOrigin; } catch { /* No action URL. */ }
+          return { present: Boolean(form), actionCanvasOrigin,
+            jwtFieldPresent: Boolean(form?.querySelector('input[name="JWT"]')?.value) };
+        }, new URL(adminCanvas.origin).origin).catch(() => ({ present: false, actionCanvasOrigin: false, jwtFieldPresent: false })),
+        cspDirective: await ltiFrame.evaluate(() => window.__martyCanvasDeepLinkProbe?.cspDirective || null)
+          .catch(() => null),
+        resourceDialogVisible: await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+          .isVisible().catch(() => false),
+        chooserHasMartyUrl: await chooser.locator('#external_tool_create_url').inputValue()
+          .then((value) => {
+            try { return new URL(value).origin === martyOrigin; } catch { return false; }
+          }).catch(() => false),
+      };
+      const failure = new ContractFailure(
+        rejectedContent ? 'canvas_deep_link_content_rejected' : 'canvas_deep_link_return_unhandled',
+        rejectedContent
+          ? 'Stock Canvas rejected the returned Deep Linking content item.'
+          : 'Stock Canvas did not close the Deep Linking return dialog.',
+      );
+      failure.canvasResourceDiagnostic = diagnostic;
+      throw failure;
+    }
+  } finally {
+    page.off('response', onResponse);
+    page.off('requestfailed', onRequestFailed);
+    page.off('framenavigated', onFrameNavigated);
+  }
   await waitFor(async () => {
     const value = await chooser.locator('#external_tool_create_url').inputValue();
     try { return new URL(value).origin === martyOrigin; } catch { return false; }
@@ -1362,6 +1488,19 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   const documents = [];
   const reads = [];
   let presentation;
+  const linkNavigation = { exactNameCount: 0, firstHrefCategory: 'NOT_OBSERVED', afterClickPageCategory: 'NOT_OBSERVED' };
+  const expectedAssignmentPath = `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`;
+  const classifyCanvasAssignmentLocation = raw => {
+    try {
+      const url = new URL(raw, canvas.origin);
+      if (url.origin !== canvas.origin) return 'OTHER_ORIGIN';
+      if (url.pathname === expectedAssignmentPath) return 'TARGET_ASSIGNMENT';
+      if (url.pathname === '/login' || url.pathname.startsWith('/login/')) return 'CANVAS_LOGIN';
+      if (url.pathname.startsWith(`/courses/${fixtures.course.id}/assignments/`)) return 'OTHER_COURSE_ASSIGNMENT';
+      if (url.pathname === `/courses/${fixtures.course.id}/assignments`) return 'ASSIGNMENT_INDEX';
+      return 'OTHER_CANVAS_PATH';
+    } catch { return 'INVALID_URL'; }
+  };
   const observeDocument = response => {
     const request = response.request();
     if ((!request.isNavigationRequest() && response.status() < 400) || documents.length >= 40) return;
@@ -1370,7 +1509,10 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
       : url.origin === canvas.origin ? 'canvas' : 'other',
     kind: url.pathname.startsWith('/v1/auth/canvas-lti/') ? 'canvas_auth_api'
       : url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
-      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui' : 'other',
+      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui'
+      : url.origin === canvas.origin && url.pathname === expectedAssignmentPath ? 'canvas_assignment_target'
+      : url.origin === canvas.origin && url.pathname.startsWith(`/courses/${fixtures.course.id}/assignments/`) ? 'canvas_assignment_other'
+      : 'other',
     json: (response.headers()['content-type'] || '').includes('application/json') };
     documents.push(item);
     if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
@@ -1384,9 +1526,22 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   });
   const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
   requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment requires a visible name.');
-  await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
+  const assignmentLinks = page.getByRole('link', { name: assignmentName, exact: true });
+  linkNavigation.exactNameCount = Math.min(10, await assignmentLinks.count());
+  if (linkNavigation.exactNameCount > 0) {
+    linkNavigation.firstHrefCategory = await assignmentLinks.first().evaluate((node, expected) => {
+      try {
+        const url = new URL(node.getAttribute('href') || '', location.origin);
+        if (url.origin !== expected.origin) return 'OTHER_ORIGIN';
+        return url.pathname === expected.path ? 'TARGET_ASSIGNMENT'
+          : url.pathname.startsWith(expected.coursePrefix) ? 'OTHER_COURSE_ASSIGNMENT' : 'OTHER_CANVAS_PATH';
+      } catch { return 'INVALID_URL'; }
+    }, { origin: canvas.origin, path: expectedAssignmentPath,
+      coursePrefix: `/courses/${fixtures.course.id}/assignments/` });
+  }
+  await assignmentLinks.first().click();
   await page.waitForURL(url => url.origin === canvas.origin
-    && url.pathname === `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`,
+    && url.pathname === expectedAssignmentPath,
   { timeout: DEFAULT_TIMEOUT_MS });
   const launchControl = page.getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
     .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i })).first();
@@ -1435,7 +1590,8 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
       document.alerts = canvasLaunchErrorSummary({ details: document.alerts.map(message => ({ message })) });
       delete document.errorBody;
     }
-    error.canvasResourceDiagnostic = { documents, document };
+    linkNavigation.afterClickPageCategory = classifyCanvasAssignmentLocation(page.url());
+    error.canvasResourceDiagnostic = { documents, document, linkNavigation };
     throw error;
   } finally {
     page.off('response', observeDocument);
@@ -1507,7 +1663,7 @@ function validateAuthoritativeEvidenceHeads(facts, requirements) {
   return heads;
 }
 
-async function validateAndActivateBinding(marty, bindingId) {
+async function validateAndActivateBinding(marty, bindingId, beforeActivation = () => {}) {
   const deadline = Date.now() + READINESS_TIMEOUT_MS;
   let validation = null;
   while (Date.now() < deadline) {
@@ -1524,6 +1680,7 @@ async function validateAndActivateBinding(marty, bindingId) {
     fail('binding_readiness_blocked', `Canvas binding readiness is blocked by: ${codes || 'unknown'}.`);
   }
   validateReadinessSnapshot(validation);
+  await beforeActivation();
   const activation = await marty.post(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(bindingId)}/activate`, {}, [200]);
   validateReadinessSnapshot(activation, { requireActive: true });
   requireCondition(activation.config_version === validation.config_version, 'binding_readiness_version_changed', 'Canvas binding configuration changed between validation and activation.');
@@ -1959,14 +2116,15 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
     'credential_template_vct_missing',
     'Credential verification requires the selected template\'s exact VCT before claiming its offer.',
   );
+  const walletExpectation = walletExpectationForTemplate(expectedTemplate);
   if(ownedEngineering){
     const {ownedWalletContext,recorderRepository,signal,walletPage}=ownedEngineering;
     const owned=require(path.join(recorderRepository,'src','ownedWalletRuntime.js'));
     owned.requireOwnedWalletContext(ownedWalletContext);
     await owned.requireOwnedCanvasHolderSigning(ownedWalletContext,signal);
-    const received=await require('./audit-beta-credential-lifecycle').receiveCredential(walletPage,offerUri,expectedTemplate.vct);
-    requireCondition(received.ok===true&&received.receipt?.vct===expectedTemplate.vct,
-      'owned_wallet_receipt_failed','The real Rust wallet did not store the expected credential.');
+    const received=await require('./audit-beta-credential-lifecycle').receiveCredential(walletPage,offerUri,walletExpectation);
+    requireCondition(received.ok===true,'owned_wallet_receipt_failed','The real Rust wallet did not store the expected credential.');
+    requireWalletReceiptBinding(received.receipt,walletExpectation);
     return {ownedReceipt:received.receipt,payload:null};
   }
   const offer = parseCredentialOfferUri(offerUri);
@@ -2024,11 +2182,11 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
   requireCondition(didDocument?.id === predecoded.payload.iss, 'issuer_did_document_mismatch', 'The resolved DID document does not match the credential issuer.');
   const method = verificationMethodFromDidDocument(didDocument, predecoded.header.kid);
   const verified = verifyCompactJws(issuerJws, method.publicKeyJwk);
-  requireCondition(
-    verified.payload.vct === expectedTemplate.vct,
-    'open_badge_type_mismatch',
-    'The KMS-signed credential does not match the selected Open Badge template.',
-  );
+  try {
+    requireSignedCredentialBinding(verified.payload, expectedTemplate);
+  } catch {
+    fail('open_badge_type_mismatch', 'The KMS-signed credential does not match the selected Open Badge template.');
+  }
   const cnf = verified.payload.cnf?.jwk || {};
   const holderJwkMatches = ['kty', 'crv', 'x', 'y'].every((key) => cnf[key] === holderJwk[key]);
   const holderBound = verified.payload.sub === proof.did || holderJwkMatches;
@@ -2213,6 +2371,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
     state.custody?.retain('canvasLearnerSession',JSON.stringify(await learnerContext.cookies(canvasOrigin)));
     const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`, id => remember('learnerAccessToken', id));
+    await learnerSetupPage.close();
     const learnerCanvas = new CanvasClient(canvasOrigin, learnerBearer);
     state.learnerCanvas = learnerCanvas;
     const activityResults = await completeLearnerCanvasWork(learnerCanvas, adminCanvas, fixtures, markActive);
@@ -2265,7 +2424,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
-    state.binding=binding;owned.martyBindingId=String(binding.id);persistOwned();
+    state.binding=binding;owned.martyBindingId=String(binding.id);
+    owned.martyBindingActivationAttempted=false;persistOwned();
 
     markActive('instructor_deep_linking');
     const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
@@ -2284,7 +2444,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('standard_lti_13_install');
     const activationJobBaseline = await rosterJobBaseline(marty, organizationId, binding.id);
     state.bindingActivationPossible=true;owned.martyBindingActivationPossible=true;persistOwned();
-    const {activation}=await validateAndActivateBinding(marty, binding.id);
+    const {activation}=await validateAndActivateBinding(marty, binding.id,()=>{
+      owned.martyBindingActivationAttempted=true;persistOwned();
+    });
     const activationAt=await activatedRosterJobTimestamp(marty, organizationId, platformId,
       binding.id, activation.config_version);
     pass('standard_lti_13_install', `Stock Canvas installed LTI 1.3 and all ${BLOCKING_READINESS_CHECK_CODES.length} production blocking readiness checks passed.`);
@@ -2302,6 +2464,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     markActive('course_completion');
     await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     pass('course_completion', 'Canvas CourseProgress reported all non-empty module requirements completed.');
+    await adminPage.close();
 
   return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
     adminContext, learnerContext, adminCanvas, learnerCanvas, fixtures, templates,
@@ -2319,9 +2482,14 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   if (!state.owned || Object.keys(state.owned.resources).length === 0) {
     return { scope: 'OWNED_CANVAS_FIXTURE_RETIREMENT', complete: true, resources: [] };
   }
-  const { adminPage, canvasOrigin, accountId } = state;
+  const { canvasOrigin, accountId } = state;
+  let adminPage = state.adminPage;
   const findKey = key => findCanvasDeveloperKey(state, key);
   const selectKey = async key => {
+    if (!adminPage || adminPage.isClosed()) {
+      adminPage = await state.adminContext.newPage();
+      state.adminPage = adminPage;
+    }
     // Recovery sessions have not created the token that normally selects English.
     // Pin only this browser session before using English accessible action names.
     await adminPage.goto(canvasDeveloperKeysUrl(canvasOrigin, accountId), {
@@ -2391,6 +2559,7 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
     const next=journal+'.next';write(next,JSON.stringify({runSuffix,state,roles:[...files]}),true);fs.renameSync(next,journal);
   };
   return {
+    hasRetained(role) {return files.has(role);},
     retain(role,value) {
       requireCondition(['canvasAdminSession','canvasLearnerSession','canvasOwnedClientSecret','betaAdminSession'].includes(role)
         && typeof value==='string' && value.length>0 && Buffer.byteLength(value)<=131072,
@@ -2406,6 +2575,16 @@ function createCanvasCaptureCustody(runSuffix, directory = process.env.DEMO_CANV
         secretFiles.set(filename,secretFiles.get(next));secretFiles.delete(next);
       } else {files.add(role);checkpoint('OPEN');write(filename,value,true,true);}
       checkpoint('OPEN');
+    },
+    readRetained(role) {
+      requireCondition(files.has(role)&&['canvasAdminSession','canvasLearnerSession'].includes(role),
+        'canvas_session_custody_missing','Owned Canvas session is not retained.');
+      const filename=path.join(directory,runSuffix+'-'+role+'.json');
+      const expected=secretFiles.get(filename),actual=fs.lstatSync(filename);
+      requireCondition(expected&&actual.isFile()&&!actual.isSymbolicLink()
+        &&actual.dev===expected.dev&&actual.ino===expected.ino&&actual.size>0&&actual.size<=131072,
+      'canvas_private_custody_changed','Owned Canvas session custody changed.');
+      return fs.readFileSync(filename,'utf8');
     },
     retire() {
       for(const [filename,expected] of secretFiles) {
@@ -2443,18 +2622,15 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
     && ownedBinding.platform_id===state.platformId
     && ownedBinding.display_name===`Portable Canvas badge ${state.runSuffix}`,
   'canvas_background_application_uncertain','Canvas binding ownership changed before retirement.');
-  if (ownedBinding.enabled || ownedBinding.activated_at) {
-    await state.marty.post(`${bindingPath}/deactivate`, {}, [200]);
-  }
-  const disabledBinding=await state.marty.get(bindingPath);
-  requireCondition(disabledBinding.id===bindingId && disabledBinding.organization_id===organizationId
-    && disabledBinding.platform_id===state.platformId
-    && disabledBinding.enabled===false && disabledBinding.activated_at==null,
-  'canvas_background_application_uncertain','Owned Canvas binding remains active after deactivation.');
+  await deactivateAndConfirmCanvasBinding(state, ownedBinding, 'canvas_background_application_uncertain');
   const prefix=`?organization_id=${encodeURIComponent(organizationId)}&binding_id=${encodeURIComponent(bindingId)}&limit=100`;
   const jobs=await completeBindingJobInventory(state.marty,organizationId,bindingId);
   const candidates=await state.marty.get(`/v1/integrations/canvas/canvas-award-candidates${prefix}`);
-  requireCondition(jobs.length>0 && Array.isArray(candidates) && candidates.length<100,
+  const noActivationAndNoJobs=state.owned?.martyBindingActivationAttempted===false
+    && Object.hasOwn(ownedBinding,'activated_at') && ownedBinding.activated_at===null
+    && jobs.length===0 && Array.isArray(candidates) && candidates.length===0;
+  requireCondition((jobs.length>0||noActivationAndNoJobs)
+    && Array.isArray(candidates) && candidates.length<100,
     'canvas_background_application_uncertain','Owned Canvas background inventory is incomplete.');
   requireCondition(jobs.every(job=>job.organization_id===organizationId&&job.binding_id===bindingId
     && job.platform_id===state.platformId&&job.target_type==='background_roster'
@@ -2462,8 +2638,17 @@ async function reconcileCanvasPrelaunchApplicationAbsence(state) {
   'canvas_background_application_uncertain','Owned Canvas jobs are pending or reference an application.');
   requireCondition(candidates.every(candidate=>candidate.organization_id===organizationId
     && candidate.binding_id===bindingId&&candidate.application_id==null
-    && candidate.status==='identity_link_required'),
+    && ['identity_link_required','pending_claim'].includes(candidate.status)),
   'canvas_background_application_uncertain','Owned Canvas candidates reference an application or claim.');
+  if(candidates.some(candidate=>candidate.status==='pending_claim')) {
+    const inventory=await state.marty.get(`${bindingPath}/applications`);
+    requireCondition(inventory?.organization_id===organizationId
+      && inventory.binding_id===bindingId && inventory.platform_id===state.platformId
+      && inventory.binding_disabled===true && inventory.complete===true
+      && Array.isArray(inventory.applications) && inventory.applications.length===0,
+    'canvas_background_application_uncertain',
+    'A pending roster claim requires complete, fenced application absence.');
+  }
   state.prelaunchAbsenceConfirmed=true;
 }
 
@@ -2499,26 +2684,59 @@ async function retireCanvasOwnedReferences(state) {
   }
 }
 
+async function createOriginalCookieSessionContext(requestFactory,cookies) {
+  const original=cookies.map(cookie=>cookie.name+'='+cookie.value).join('; ');
+  const isolated=await requestFactory.newContext({storageState:{cookies:[],origins:[]},ignoreHTTPSErrors:false});
+  const send=(method,url,options={})=>isolated[method](url,{...options,
+    headers:{...options.headers,Cookie:original}});
+  return {isolated,session:{cookies:async()=>cookies.map(cookie=>({...cookie})),addCookies:async()=>{},
+    request:{get:(url,options)=>send('get',url,options),post:(url,options)=>send('post',url,options),delete:(url,options)=>send('delete',url,options)}}};
+}
+
 async function retireCanvasCaptureSessions(state, observe = () => {}) {
   const {retireCanvasSession}=require('./audit-beta-canvas-invalid-secret');
   const evidence={},failures=[];
   const emit=()=>{try {observe(JSON.parse(JSON.stringify(evidence)));} catch(error) {failures.push(error);}};
   for(const [role,context] of [['canvasLearnerSession',state.learnerContext],['canvasAdminSession',state.adminContext]]) {
-    if(!context) continue;
+    if(!context&&!state.custody?.hasRetained?.(role)) continue;
+    let isolated;
     try {
-    const cookies=await context.cookies(state.canvasOrigin);
+    let session=context;
+    if(typeof state.custody?.readRetained==='function') {
+      requireCondition(state.canvasOrigin==='https://canvas-test.elevenidllc.com',
+        'canvas_session_origin_changed','Owned Canvas session origin changed.');
+      const cookies=JSON.parse(state.custody.readRetained(role));
+      const host=new URL(state.canvasOrigin).hostname;
+      requireCondition(Array.isArray(cookies)&&cookies.length>0&&cookies.every(cookie=>
+        cookie?.domain===host&&cookie.path==='/'&&cookie.secure===true
+        &&typeof cookie.name==='string'&&/^[A-Za-z0-9_-]{1,128}$/.test(cookie.name)
+        &&typeof cookie.value==='string'&&cookie.value.length>0&&!/[\r\n;]/.test(cookie.value))
+        &&new Set(cookies.map(cookie=>cookie.name)).size===cookies.length,
+      'canvas_session_custody_invalid','Owned Canvas session cookies are invalid.');
+      ({isolated,session}=await createOriginalCookieSessionContext(
+        state.sessionRequestFactory||require('@playwright/test').request,cookies));
+    }
+    const cookies=await session.cookies(state.canvasOrigin);
     requireCondition(cookies.length>0,'canvas_session_custody_missing','Owned Canvas session acquisition requires reconciliation.');
-    const response=await context.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+    const response=await session.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
       {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
-    if([401,403].includes(response.status())) evidence[role]={alreadyDenied:true,status:response.status()};
+    if(response.status()===401) evidence[role]={alreadyDenied:true,status:401};
     else {
       assert.equal(response.status(),200);
-      await context.addCookies(cookies.map(cookie=>({...cookie})));
-      await retireCanvasSession(context,(_,value)=>state.custody.retain(role,value),
+      await session.addCookies(cookies.map(cookie=>({...cookie})));
+      await retireCanvasSession(session,(_,value)=>state.custody.retain(role,value),
         {observe:value=>{evidence[role]=value;emit()}});
+      if(isolated) {
+        const final=await session.request.get(state.canvasOrigin+'/api/v1/users/self/profile',
+          {maxRedirects:0,timeout:15000,headers:{Accept:'application/json'}});
+        requireCondition(final.status()===401,'canvas_session_denial_unconfirmed',
+          'The original Canvas cookie has not returned the required denial.');
+        evidence[role].finalOriginalCookieStatus=401;
+      }
     }
     emit();
     } catch(error) {failures.push(error);evidence[role]={retired:false,failureType:'OWNED_SESSION_RETIREMENT_FAILED'};emit();}
+    finally {if(isolated)try {await isolated.dispose();} catch(error) {failures.push(error);}}
   }
   requireCondition(failures.length===0,'canvas_capture_sessions_incomplete','Owned Canvas sessions require reconciliation.');
   return evidence;
@@ -2540,12 +2758,34 @@ async function retireCanvasBetaSession(context, custody) {
   return {logoutStatus:response.status(),oldCookieAuthenticated:false};
 }
 
+async function deactivateAndConfirmCanvasBinding(state, ownedBinding, failureCode) {
+  const target=`/v1/integrations/canvas/program-bindings/${encodeURIComponent(ownedBinding.id)}`;
+  if (ownedBinding.enabled || ownedBinding.activated_at) await state.marty.post(`${target}/deactivate`, {}, [200]);
+  const current=await state.marty.get(target);
+  requireCondition(current.id===ownedBinding.id && current.organization_id===state.organizationId
+    && current.platform_id===state.platformId && current.enabled===false && current.activated_at==null,
+    failureCode, 'Owned Canvas binding remains active after deactivation.');
+}
+
+async function fenceOwnedCanvasBinding(state) {
+  if (!state.marty || !state.binding?.id) return;
+  const id=state.binding.id;
+  const owned=await state.marty.get(`/v1/integrations/canvas/program-bindings/${encodeURIComponent(id)}`);
+  requireCondition(owned.id===id && owned.organization_id===state.organizationId
+    && owned.platform_id===state.platformId && state.owned?.martyBindingId===id
+    && state.owned?.martyPlatformId===state.platformId
+    && owned.display_name===`Portable Canvas badge ${state.runSuffix}`,
+    'canvas_owned_binding_identity_mismatch', 'Owned Canvas binding changed before retirement.');
+  await deactivateAndConfirmCanvasBinding(state, owned, 'canvas_owned_binding_not_fenced');
+}
+
 async function retireCanvasEngineeringSetup(state, observeSessions = () => {}) {
   let retired={scope:'OWNED_CANVAS_FIXTURE_RETIREMENT',complete:false,resources:[]};
   const failures=[];
   try {
       await reconcileCanvasPrelaunchApplicationAbsence(state);
       requireCanvasSetupMutationReconciliation(state);
+      await fenceOwnedCanvasBinding(state);
       const issuanceRetirement = await retireCanvasApplication({ marty:state.marty, organizationId: state.organizationId,
         applicationId: state.applicationId, credentialTemplateId: state.templates?.credential?.id,
         bindingId: state.binding?.id,
@@ -2624,6 +2864,16 @@ async function main(options = {}) {
   const preparationState = {};
   const markActive = (id) => { activeCase = id; };
   const pass = (id, evidence) => { ledger.pass(id, evidence); };
+  const markRecordedStage = (stage) => {
+    const file = path.join(path.dirname(args.observations), `recorded-prelaunch-${stage.toLowerCase()}.json`);
+    const fd = fs.openSync(file, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({state: stage, at: new Date().toISOString()}) + '\n');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  };
 
   try {
     const setup = await prepareCanvasCaptureFixtures({
@@ -2654,14 +2904,24 @@ async function main(options = {}) {
       if(preparationState.custody)preparationState.custody.retain('betaAdminSession',
         JSON.stringify(await betaAdminContext.cookies(martyOrigin)));
     }
+    markRecordedStage('CONTEXT_CREATE_BEGIN');
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       ...(!args.functionalRerun ? {recordVideo:{dir:path.dirname(args.video),size:{width:1440,height:900}}} : {}),
     });
+    markRecordedStage('CONTEXT_CREATE_COMPLETE');
+    markRecordedStage('COOKIE_COPY_BEGIN');
     await copyCookies(learnerContext, recordedContext);
+    markRecordedStage('COOKIE_COPY_COMPLETE');
+    markRecordedStage('PAGE_CREATE_BEGIN');
     recordedPage = await recordedContext.newPage();
+    markRecordedStage('PAGE_CREATE_COMPLETE');
+    markRecordedStage('GRADES_NAVIGATION_BEGIN');
     await recordedPage.goto(`${canvasOrigin}/courses/${fixtures.course.id}/grades`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
+    markRecordedStage('GRADES_NAVIGATION_COMPLETE');
+    markRecordedStage('OVERLAY_BEGIN');
     await showVideoStep(recordedPage, 'Canvas evidence is complete', 'The learner completed a native assignment, a Classic Quiz, and the module in stock Canvas.');
+    markRecordedStage('OVERLAY_COMPLETE');
 
     markActive('learner_resource_launch');
     preparationState.owned.martyLearnerLaunchIntent=true;preparationState.persistOwned();
@@ -2956,10 +3216,12 @@ module.exports = {
   createOauthDeveloperKey,
   createCanvasCaptureCustody,
   requireCanvasSetupMutationReconciliation,
+  fenceOwnedCanvasBinding,
   reconcileCanvasPrelaunchApplicationAbsence,
   retireCanvasOAuthAuthority,
   retireCanvasOwnedReferences,
   retireCanvasCaptureSessions,
+  createOriginalCookieSessionContext,
   retireCanvasBetaSession,
   retireCanvasEngineeringSetup,
   createLtiDeveloperKey,

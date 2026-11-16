@@ -1,0 +1,168 @@
+# Official OpenBao Helm chart 0.30.6; no chart fork or injector is required.
+# Apply the separate authenticated openbao-images.json AFTER this profile.
+fullnameOverride: openbao
+global:
+  enabled: true
+  tlsDisable: false
+  imagePullSecrets: []
+injector:
+  enabled: false
+csi:
+  enabled: false
+ui:
+  enabled: false
+server:
+  enabled: true
+  image:
+    registry: ghcr.io
+    repository: elevenid/marty-ui-oss/openbao-didcomm
+    # Deliberately unusable until prepare_kubernetes_helm_values.py supplies
+    # 2.5.5@sha256:<authenticated digest>. Both containers use this same image.
+    tag: REQUIRED-VERIFIED-DIGEST
+    pullPolicy: IfNotPresent
+  updateStrategyType: OnDelete
+  affinity: ""
+  configAnnotation: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 750m
+      memory: 512Mi
+  authDelegator:
+    enabled: false
+  serviceAccount:
+    create: false
+    name: openbao
+    serviceDiscovery:
+      enabled: false
+  service:
+    active:
+      enabled: false
+    standby:
+      enabled: false
+    publishNotReadyAddresses: true
+  dataStorage:
+    enabled: true
+    size: 4Gi
+    mountPath: /bao/data
+    # Null selects the cluster's default StorageClass (local-path on K3s).
+    storageClass: null
+    accessMode: ReadWriteOnce
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  standalone:
+    enabled: false
+  ha:
+    enabled: true
+    replicas: 1
+    apiAddr: https://openbao:8200
+    clusterAddr: https://openbao:8201
+    disruptionBudget:
+      enabled: false
+    raft:
+      enabled: true
+      setNodeId: true
+      config: |
+        ui = false
+        disable_mlock = true
+        plugin_directory = "/plugins"
+        seal "static" {
+          current_key_id = "marty-kubernetes-dev-v1"
+          current_key = "file:///bao/seal/static.key"
+        }
+        listener "tcp" {
+          address = "0.0.0.0:8200"
+          cluster_address = "0.0.0.0:8201"
+          tls_cert_file = "/bao/data/tls/server.pem"
+          tls_key_file = "/bao/data/tls/server.pem"
+          tls_min_version = "tls12"
+        }
+        storage "raft" {
+          path = "/bao/data"
+        }
+  extraEnvironmentVars:
+    BAO_CACERT: /bao/data/tls/ca.crt
+  volumes:
+    - name: seal
+      secret:
+        secretName: marty-openbao-seal
+        defaultMode: 0440
+        items:
+          - key: static.key
+            path: static.key
+    - name: tmp
+      emptyDir:
+        medium: Memory
+        sizeLimit: 64Mi
+  volumeMounts:
+    - name: seal
+      mountPath: /bao/seal
+      readOnly: true
+    - name: tmp
+      mountPath: /tmp
+  statefulSet:
+    securityContext:
+      pod:
+        runAsNonRoot: true
+        runAsUser: 100
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      container:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+  extraInitContainers:
+    - name: listener-tls
+      image: '{{ .Values.server.image.registry }}/{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}'
+      imagePullPolicy: IfNotPresent
+      command: [/usr/local/bin/selfhost-tls-init]
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: [ALL]
+          add: [CHOWN, FOWNER, DAC_OVERRIDE]
+      resources:
+        requests:
+          cpu: 25m
+          memory: 32Mi
+        limits:
+          cpu: 250m
+          memory: 128Mi
+      volumeMounts:
+        - name: data
+          mountPath: /bao/data
+  readinessProbe:
+    enabled: true
+    path: /v1/sys/health?standbyok=true
+    port: 8200
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 6
+  livenessProbe:
+    enabled: true
+    # Initialization/sealing is operator state, not a reason to restart Bao.
+    path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+    port: 8200
+    initialDelaySeconds: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+extraObjects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: openbao
+      namespace: '{{ .Release.Namespace }}'
+    automountServiceAccountToken: false

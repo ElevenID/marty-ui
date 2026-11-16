@@ -78,10 +78,16 @@ struct Http {
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
     // Reviewed policy transport, credential-template schema, additive auth_time,
     // PolicyEvaluationResponse authentication_diagnostic_json field 14, and
-    // optional per-offer lifetime at InitiateIssuanceRequest field 13.
+    // optional per-offer lifetime at InitiateIssuanceRequest field 13, and the
+    // additive saved-policy revision and managed prerequisite authority fields,
+    // direct jwt_vc_profile_json template fields (create 28/update 24/response 34),
+    // PolicyResponse holder_binding_required bool field 16, and
+    // PolicyEvaluationResponse evaluation_validity_json string field 16,
+    // managed_policy_evidence_json string field 17, and
+    // FlowResultResponse canonical_evidence_digest string field 8.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "f3f6a0c03d724bff696cb39948cabfa5f181099315f2a314ca504b0c7bc73611"
+        "87cbb781472d86bfbcdf7df242b275ad21bd44fff8ab8b9a7b988da284c7c43a"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
@@ -212,4 +218,93 @@ fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_sibli
             );
         }
     }
+}
+
+#[test]
+fn managed_prerequisite_fields_are_additive_and_keep_explicit_update_presence() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.name == "presentation_policy_service.proto")
+        .unwrap();
+    for (message, field, number, optional) in [
+        (
+            "CreatePolicyRequest",
+            "prerequisite_evidence_profile",
+            10,
+            false,
+        ),
+        ("CreatePolicyRequest", "trust_profile_id", 11, false),
+        ("CreatePolicyRequest", "holder_binding_json", 12, false),
+        ("CreatePolicyRequest", "freshness_json", 13, false),
+        (
+            "UpdatePolicyRequest",
+            "prerequisite_evidence_profile",
+            5,
+            true,
+        ),
+        ("PolicyResponse", "prerequisite_evidence_profile", 14, false),
+        (
+            "PolicyResponse",
+            "credential_authority_snapshot_json",
+            15,
+            false,
+        ),
+        (
+            "PolicyEvaluationResponse",
+            "evaluation_validity_json",
+            16,
+            false,
+        ),
+        (
+            "PolicyEvaluationResponse",
+            "managed_policy_evidence_json",
+            17,
+            false,
+        ),
+        (
+            "Oid4vpEvaluationTransport",
+            "credential_authority_snapshot_json",
+            8,
+            false,
+        ),
+    ] {
+        let definition = file
+            .messages
+            .iter()
+            .find(|value| value.name == message)
+            .unwrap();
+        let field = definition
+            .fields
+            .iter()
+            .find(|value| value.name == field)
+            .unwrap();
+        assert_eq!(field.number, number);
+        assert_eq!(field.kind, 9);
+        assert_eq!(field.proto3_optional, optional);
+    }
+}
+
+#[test]
+fn managed_evidence_result_digest_is_an_additive_string_field() {
+    let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
+    let file = set
+        .files
+        .iter()
+        .find(|file| file.package == "marty.ui.flow.v1")
+        .unwrap();
+    let message = file
+        .messages
+        .iter()
+        .find(|message| message.name == "FlowResultResponse")
+        .unwrap();
+    let field = message
+        .fields
+        .iter()
+        .find(|field| field.name == "canonical_evidence_digest")
+        .unwrap();
+    assert_eq!(field.number, 8);
+    assert_eq!(field.kind, 9);
+    assert!(!field.proto3_optional);
 }

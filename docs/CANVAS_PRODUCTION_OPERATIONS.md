@@ -85,6 +85,22 @@ The same KMS service may contain other keys with credential purposes, but the LT
 profile's reference may have no second purpose. Signing, issuer-profile creation/update,
 and issuer resolution all fail closed if this binding is absent or conflicts.
 
+An organization created after service bootstrap needs its own LTI signing identity.
+Using an authenticated organization Admin session, read the signing configuration
+with its strong revision. Route only `type_defaults.lti_tool_signing` and
+`format_defaults.lti_tool_jwt` to the existing managed OpenBao service with a
+conditional config update; retain the global default, VC defaults, existing
+service configuration, and all purpose bindings. Then use the issuer-identity
+creation API with a fresh revision and the configured tool DID,
+`key_purpose=lti_tool_signing`, `credential_format=VC_JWT`, and `algorithm=RS256`.
+The API derives the key reference and publishes the DID verification method.
+Confirm one active LTI identity and a public-only RSA/RS256 key at
+`/v1/integrations/canvas/lti/jwks` whose `kid` belongs to that DID before
+installing the LTI tool. Keep each mutation intent and readback so an unknown
+outcome can be reconciled without repeating key creation. A 409 from identity
+creation can mean the default service was selected because the LTI-specific
+route is missing; inspect the registry before retrying.
+
 Enabling the global flag is insufficient by itself. The organization must also
 be in `CANVAS_PILOT_ORGANIZATION_IDS`, the Canvas platform and binding must be
 enabled and ready, and the binding's deployment-profile snapshot must permit

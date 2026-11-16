@@ -27,6 +27,7 @@ async function selectIssuer(user: ReturnType<typeof renderWithRouter>['user'], v
 beforeEach(() => {
   scope.activeOrgId = 'org-a';
   server.use(
+    http.get('*/v1/organizations/:organizationId/defaults', () => HttpResponse.json({})),
     http.get('*/v1/trust-profiles', ({ request }) => HttpResponse.json([{ id: 'trust-1', organization_id: new URL(request.url).searchParams.get('organization_id'), name: 'Trust One', status: 'active' }])),
     http.get('*/v1/compliance-profiles', () => HttpResponse.json([
       { id: 'compliance-sd', name: 'SD Profile', is_system: true, status: 'ACTIVE', credential_format: 'SD_JWT_VC', discoverable: true },
@@ -47,9 +48,18 @@ describe('TrustComplianceStep uses public API contracts', () => {
     await selectIssuer(user, 'did:example:org-a-sd');
     await waitFor(() => expect(screen.getByTestId('ready')).toHaveTextContent('true'));
     expect(screen.getByTestId('state')).toHaveTextContent('SD_JWT_VC');
+    expect(screen.getByText('1 compatible issuer DID available.')).toBeInTheDocument();
+    expect(screen.getByText('2 active compliance profiles available.')).toBeInTheDocument();
     await user.click(screen.getByRole('combobox', { name: 'Compliance Profile' }));
     expect(screen.queryByRole('option', { name: 'Inactive System Profile' })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Other Tenant Profile' })).not.toBeInTheDocument();
+  });
+  it('uses plural issuer wording when two compatible identities are available', async () => {
+    const result = options();
+    result.identities.push({ ...result.identities[0], issuer_did: 'did:example:second' });
+    server.use(http.post('*/v1/credential-templates/issuer-options', () => HttpResponse.json(result)));
+    renderWithRouter(<Stateful />);
+    expect(await screen.findByText('2 compatible issuer DIDs available.')).toBeInTheDocument();
   });
   it('clears an old DID and derives doctype requirements when the profile changes', async () => {
     const { user } = renderWithRouter(<Stateful />);

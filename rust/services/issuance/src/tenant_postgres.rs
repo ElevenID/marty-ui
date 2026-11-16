@@ -9,7 +9,11 @@ use serde_json::Value;
 use sqlx::{postgres::PgRow, PgPool, Row};
 use tracing::error;
 
-use crate::tenant_discovery::{TenantDiscoveryError, TenantDiscoveryRepository};
+use crate::legacy_json_compat::json_truthy as python_truthy;
+
+use crate::tenant_discovery::{
+    ProfiledTenantTemplate, TenantDiscoveryError, TenantDiscoveryRepository,
+};
 
 #[derive(Clone)]
 pub struct PostgresTenantDiscoveryRepository {
@@ -50,6 +54,58 @@ struct TemplateRow {
 
 #[async_trait]
 impl TenantDiscoveryRepository for PostgresTenantDiscoveryRepository {
+    async fn profiled_templates(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<ProfiledTenantTemplate>, TenantDiscoveryError> {
+        let rows = sqlx::query("SELECT id, version, credential_type, name, description, claims, display_style, vct, issuer_did, supported_formats, jwt_vc_profile, validity_rules
+            FROM credential_template_service.credential_templates WHERE organization_id=$1
+            AND status='jose1_active' AND credential_payload_format='VC_JWT_DIRECT_V1' ORDER BY id")
+            .bind(organization_id).fetch_all(&self.pool).await.map_err(row_error)?;
+        let mut profiles = Vec::new();
+        for row in rows {
+            let policy: marty_jwt_vc_issuance::JwtVcTemplatePolicy = serde_json::from_value(
+                row.try_get::<Value, _>("jwt_vc_profile")
+                    .map_err(row_error)?,
+            )
+            .map_err(|_| TenantDiscoveryError::RepositoryUnavailable)?;
+            let id: String = row.try_get("id").map_err(row_error)?;
+            let version: i32 = row.try_get("version").map_err(row_error)?;
+            let validity: Value = row.try_get("validity_rules").map_err(row_error)?;
+            let mut projection = template_row(row)?;
+            if projection.supported_formats.as_ref()
+                != Some(&serde_json::json!([
+                    marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT
+                ]))
+                || projection
+                    .issuer_did
+                    .as_deref()
+                    .is_none_or(|id| !id.starts_with("did:"))
+            {
+                return Err(TenantDiscoveryError::RepositoryUnavailable);
+            }
+            marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                policy.clone(),
+                &projection.credential_type,
+                &id,
+                version,
+                validity["default_validity_days"]
+                    .as_i64()
+                    .and_then(|days| days.checked_mul(86_400))
+                    .ok_or(TenantDiscoveryError::RepositoryUnavailable)?,
+                validity["not_before_offset_seconds"]
+                    .as_i64()
+                    .ok_or(TenantDiscoveryError::RepositoryUnavailable)?,
+            )
+            .map_err(|_| TenantDiscoveryError::RepositoryUnavailable)?;
+            projection.supported_formats = Some(serde_json::json!(["jwt_vc_json"]));
+            let template = project_rows(vec![projection])
+                .pop()
+                .ok_or(TenantDiscoveryError::IncompletePlan)?;
+            profiles.push(ProfiledTenantTemplate { policy, template });
+        }
+        Ok(profiles)
+    }
     async fn templates(
         &self,
         organization_id: &str,
@@ -206,17 +262,6 @@ fn truthy_string(value: Option<&Value>) -> Option<String> {
         Value::Bool(value) => Some(if *value { "True" } else { "False" }.to_owned()),
         Value::Number(value) => Some(value.to_string()),
         _ => None,
-    }
-}
-
-fn python_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 

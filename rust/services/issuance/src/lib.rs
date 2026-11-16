@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub use marty_response_compat::{lossless_json, lossless_json_tree, owned_json_value, python_text};
+mod legacy_json_compat;
 mod python_datetime;
 mod python_format;
 mod python_json_diagnostic;
@@ -70,7 +71,7 @@ pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
 mod canvas_response_text;
-pub mod didcomm_remote_kms;
+pub mod didcomm_kms;
 mod signing_error_detail;
 mod signing_http_response;
 pub use signing_http_response::SigningResponseFailure;
@@ -104,6 +105,7 @@ pub mod credential_renewal;
 pub mod dependency_probe;
 pub mod dpop;
 pub mod ephemeral_postgres;
+pub mod external_observation_admission;
 mod grpc_client_channel;
 pub mod http;
 pub mod initiation;
@@ -116,6 +118,7 @@ pub mod integration_secret;
 pub mod integration_secret_kms;
 pub mod internal_application_approval;
 mod internal_application_diagnostics;
+pub mod managed_status;
 pub mod offer_lifetime;
 #[cfg(feature = "feature-regression-observer")]
 pub use internal_application_diagnostics::observe_internal_application_diagnostics;

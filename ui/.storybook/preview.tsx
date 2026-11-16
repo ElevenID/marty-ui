@@ -1,16 +1,12 @@
 import type { Preview } from '@storybook/react'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import CssBaseline from '@mui/material/CssBaseline'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter } from 'react-router'
 import { I18nextProvider } from 'react-i18next'
-import { initialize, mswLoader } from 'msw-storybook-addon'
+import { setupWorker } from 'msw/browser'
+import { mswLoader } from 'msw-storybook-addon/csf3'
 import { handlers } from '../src/test/mocks/handlers'
 import i18n from '../src/test/i18nTestSetup'
-
-// Initialize MSW for Storybook
-initialize({
-  onUnhandledRequest: 'bypass',
-})
 
 // Create MUI theme (match your app's theme)
 const theme = createTheme({
@@ -51,7 +47,11 @@ const preview: Preview = {
       </I18nextProvider>
     ),
   ],
-  loaders: [mswLoader],
+  loaders: [mswLoader(async () => {
+    const worker = setupWorker()
+    await worker.start({ onUnhandledFrame: 'bypass' })
+    return worker
+  })],
 }
 
 export default preview

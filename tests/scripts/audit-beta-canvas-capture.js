@@ -11,6 +11,29 @@ const { runCanvasCapture, requireCaptureMutationReconciliation, requireCaptureWi
 const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
+const BROWSER_CREATION_TIMEOUT_MS = 60_000;
+
+function createBoundedBrowserResource({ stage, create, retire, setStage, timeoutMs = BROWSER_CREATION_TIMEOUT_MS }) {
+  assert.match(stage, /^(?:learner|admin|wallet)-(?:context|page)-create$/);
+  assert.ok(Number.isInteger(timeoutMs) && timeoutMs > 0);
+  setStage(stage);
+  let timedOut = false;
+  let timer;
+  const created = Promise.resolve().then(create);
+  // Playwright creation has no cancellation signal. The normal finalizer closes
+  // the browser, and this closes a resource that resolves after the deadline.
+  created.then(resource => {
+    if (timedOut) Promise.resolve().then(() => retire(resource)).catch(() => {});
+  }, () => {});
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      reject(new stock.ContractFailure('canvas_browser_resource_create_timeout',
+        'Owned browser resource creation exceeded its deadline.'));
+    }, timeoutMs);
+  });
+  return Promise.race([created, deadline]).finally(() => clearTimeout(timer));
+}
 
 function localOverlayBinding(env = process.env) {
   const filename = env.DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT;
@@ -51,6 +74,22 @@ function requireCurrentEngineeringRuntime(summary, runtime) {
     'Stock Canvas engineering profile differs from the functional run');
   assert.equal(summary.functional_runtime_observation_sha256,runtime.receiptSha256,
     'Stock Canvas engineering observation differs from the functional run');
+}
+
+async function retireCaptureIssuance(state, report, applicationId, operations = stock) {
+  await operations.reconcileCanvasPrelaunchApplicationAbsence(state);
+  operations.requireCanvasSetupMutationReconciliation(state);
+  // The live Issuance transaction guard fences old LTI sessions only after the
+  // exact owned binding has been disabled and read back.
+  await operations.fenceOwnedCanvasBinding(state);
+  const receipt = await operations.retireCanvasApplication({
+    marty: state.marty, applicationId, organizationId: state.organizationId,
+    credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+    bindingId: state.binding?.id,
+    reconcile: () => requireCaptureMutationReconciliation(report),
+  });
+  report.issuanceRetirement = receipt;
+  return receipt;
 }
 
 async function main() {
@@ -94,11 +133,18 @@ async function main() {
   const contexts = [], videos = new Map();
   let browser, setup, session, adminPage, complete = false, applicationId, phase = 'deployment';
   const save = (file, value) => fs.writeFileSync(path.join(dir, file), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
-  async function recordContext() {
-    const context = await browser.newContext({ viewport: VIDEO_SIZE,
-      ...(recording ? { recordVideo: { dir, size: VIDEO_SIZE } } : {}) });
+  async function recordContext(role) {
+    const context = await createBoundedBrowserResource({ stage: `${role}-context-create`,
+      create: () => browser.newContext({ viewport: VIDEO_SIZE,
+        ...(recording ? { recordVideo: { dir, size: VIDEO_SIZE } } : {}) }),
+      retire: value => value.close(), setStage: value => { phase = value; } });
     contexts.push(context);
     return context;
+  }
+  async function recordPage(context, role) {
+    return createBoundedBrowserResource({ stage: `${role}-page-create`,
+      create: () => context.newPage(), retire: value => value.close(),
+      setStage: value => { phase = value; } });
   }
   async function deployment() {
     const response = await fetch('https://beta.elevenidllc.com/.well-known/marty-release',
@@ -166,9 +212,10 @@ async function main() {
     await evidence.seal();
     report.fixtures = bound;
 
-    const learner = await recordContext();
+    const learner = await recordContext('learner');
+    phase = 'learner-cookie-copy';
     await learner.addCookies(await setup.learnerContext.cookies());
-    const canvasPage = await learner.newPage();
+    const canvasPage = await recordPage(learner, 'learner');
     evidence.bindPage(canvasPage);
     if (recording) videos.set(`${scenario}-canvas.webm`, canvasPage.video());
     const popups = [];
@@ -182,8 +229,8 @@ async function main() {
           : `${scenario}-repeat-launch.webm`, page.video());
       }
     });
-    const admin = await recordContext();
-    adminPage = await admin.newPage();
+    const admin = await recordContext('admin');
+    adminPage = await recordPage(admin, 'admin');
     evidence.bindPage(adminPage);
     if (recording) videos.set(`${scenario}-admin.webm`, adminPage.video());
     phase = 'admin-login';
@@ -196,11 +243,12 @@ async function main() {
     assert.equal(adminSelection.activeOrgId, process.env.CANVAS_OSS_ORGANIZATION_ID,
       'Canvas admin must select the capture organization');
     phase = 'wallet-session';
-    const walletContext = await recordContext();
+    const walletContext = await recordContext('wallet');
+    phase = 'wallet-session';
     session = await acquireWalletSession(walletContext, { origin: nativeFunctional
       ? evidence.ownedWalletBinding.origin : 'http://127.0.0.1:8787', runId: actual.runId });
     report.walletSession = session.evidence;
-    const walletPage = await walletContext.newPage();
+    const walletPage = await recordPage(walletContext, 'wallet');
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
@@ -253,15 +301,8 @@ async function main() {
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    const retired = await cleanup('owned-issuance-retirement', async () => {
-      stock.requireCanvasSetupMutationReconciliation(state);
-      report.issuanceRetirement = await stock.retireCanvasApplication({
-        marty: state.marty, applicationId, organizationId: state.organizationId,
-        credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
-        bindingId: state.binding?.id,
-        reconcile: () => requireCaptureMutationReconciliation(report),
-      });
-    });
+    const retired = await cleanup('owned-issuance-retirement',
+      () => retireCaptureIssuance(state, report, applicationId));
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && (state.oauthConnected||state.oauthMayExist)) disconnected = await cleanup('oauth-disconnect', async () => {
@@ -302,4 +343,5 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding, requireCurrentEngineeringRuntime };
+module.exports = { main, localOverlayBinding, localFunctionalRuntimeBinding, requireCurrentEngineeringRuntime,
+  retireCaptureIssuance, createBoundedBrowserResource };

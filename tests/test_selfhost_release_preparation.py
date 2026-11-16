@@ -31,6 +31,7 @@ def test_official_dispatch_requires_selfhost_inputs_without_optional_bypass() ->
         "resolve-transaction", "validate-stack", "build-ui",
         "build-services", "build-openbao-didcomm", "build-keycloak",
         "qualify-release", "build-operator-catalog", "prepare-official-candidate", "prepare-installer-inputs",
+        "publish-cloudflare-addon",
     ]
 
 
@@ -45,9 +46,9 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     assert preflight < first_build
     assert "to_entries | map(select" in steps[preflight]["run"]
     images = [step for step in steps if step.get("uses", "").startswith("docker/build-push-action@")]
-    assert len(images) == 2
+    assert len(images) == 1
     assert {step["with"]["file"] for step in images} == {
-        "docker/ui.Dockerfile", "docker/cloudflared-wrapper.Dockerfile",
+        "docker/ui.Dockerfile",
     }
     for step in images:
         assert "push-by-digest=true" in step["with"]["outputs"]
@@ -60,7 +61,7 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     assert "SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}" in ui["with"]["build-args"]
     assert "NGINX_CONFIG=nginx.spa.conf" in ui["with"]["build-args"]
     assert len([step for step in steps if step.get("uses", "").startswith(
-        "actions/attest-build-provenance@")]) == 2
+        "actions/attest-build-provenance@")]) == 1
     assert any("cosign sign" in step.get("run", "") for step in steps)
     assert all("imagetools create" not in step.get("run", "") for step in steps)
 
@@ -93,7 +94,8 @@ def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() 
     assert "git rev-parse 'HEAD^{commit}'" in source
     assert "refs/remotes/origin/main" in source
     assert "scripts/release_transaction.py validate" in source
-    assert ".gates | length == 5" in source
+    assert "scripts/release_transaction.py validate --require-qualified" in source
+    assert ".gates | length" not in source
     assert "docker compose --profile '*'" in source
     assert "scripts/build_selfhost_image_lock.py" in source
     assert "--source-repo ." in source
@@ -132,7 +134,8 @@ def test_prepared_consumer_is_separate_and_cannot_qualify_or_publish() -> None:
     assert "scripts/release_transaction.py validate" in source
     assert '--stack-lock release/stack-lock.json' in source
     assert '--source-sha "$GITHUB_SHA"' in source
-    assert '.gates | length == 5' in source
+    assert "scripts/release_transaction.py validate --require-qualified" in source
+    assert ".gates | length" not in source
     assert "docker compose up" not in source
 
 

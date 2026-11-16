@@ -47,7 +47,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
   const { walletIds: preferredWallets } = useWalletPreferences(user?.user_id);
   const hasRegisteredWallet = preferredWallets.length > 0;
   const [dialogState, setDialogState] = useState(() => createWalletOfferDialogState());
-  const { offerData, loading, error } = dialogState;
+  const { offerData, loading, error, requiresIssuerHelp } = dialogState;
 
   const fetchOffer = useCallback(async () => {
     if (!applicationId) return;
@@ -89,7 +89,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
       onClose={handleClose}
       maxWidth="xs"
       fullWidth
-      PaperProps={{ sx: { borderRadius: 2 } }}
+      slotProps={{ paper: { sx: { borderRadius: 2 } } }}
     >
       <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, pr: 6 }}>
         <AccountBalanceWalletIcon color="primary" />
@@ -98,7 +98,7 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
             Add to Wallet
           </Typography>
           {credentialName && (
-            <Typography variant="caption" display="block" color="text.secondary">
+            <Typography variant="caption" sx={{ display: 'block' }} color="text.secondary">
               {credentialName}
             </Typography>
           )}
@@ -149,14 +149,14 @@ export default function WalletOfferDialog({ open, onClose, applicationId, creden
         )}
 
         {hasRegisteredWallet && !loading && !offerData && !error && (
-          <Typography variant="body2" color="text.secondary" textAlign="center" py={2}>
+          <Typography variant="body2" color="text.secondary" sx={{ textAlign: 'center', py: 2 }}>
             Generating your wallet offer…
           </Typography>
         )}
       </DialogContent>
 
       <DialogActions sx={{ px: 3, pb: 2, gap: 1 }}>
-        {hasRegisteredWallet && error && (
+        {hasRegisteredWallet && error && !requiresIssuerHelp && (
           <Button
             startIcon={<RefreshIcon />}
             onClick={fetchOffer}

@@ -271,31 +271,112 @@ def inside() -> None:
                       "targetHardlinksToSource": False}))
 
 
+VOLUME_FIELDS = ("Name", "Driver", "Scope", "CreatedAt", "Labels", "Mountpoint")
+ORIGIN_SEED_SHA256 = "ddf14deedebffa7b5472a41c8c231e80bedbfb372f3eeeb860b00e9b48207779"
+PRIOR_BUILD_SHA256 = "31553731ff50c7b0083bdcff4b08f14c273ee4a046bb521e97fc7dc152e2a5d0"
+ORIGIN_SEED = (Path.home() / ".codex/private/oid4vc-current-source-20261028/"
+               "source-export-8f88585b3/target-seed-8f88585b3.post-timeout-admitted.json")
+PRIOR_BUILD = (Path.home() / ".codex/private/oid4vc-current-source-20261028/"
+               "source-export-9303964b0/build-receipt.authoritative.json")
+
+
+def observe_target(volume_proof: dict, output_directory: Path) -> dict:
+    """One owned 256MiB RO probe; reuse the original manifest implementation."""
+    output_directory = output_directory.resolve(strict=True)
+    require(output_directory.is_relative_to((Path.home() / ".codex/private").resolve())
+            and output_directory.is_dir() and not output_directory.is_symlink(), "OWNED_PROBE_OUTPUT_REQUIRED")
+    client = transport()
+    rows = json.loads(docker_output(client, "volume", "inspect", VOLUME))
+    require(len(rows) == 1 and rows[0]["Name"] == VOLUME
+            and rows[0]["Labels"].get("io.elevenid.demo-audit.owner") == OWNER
+            and {key: rows[0][key] for key in VOLUME_FIELDS} == volume_proof,
+            "OWNED_TARGET_VOLUME_CHANGED")
+    require(not docker_output(client, "ps", "-q", "--filter", "volume=" + VOLUME),
+            "TARGET_VOLUME_HAS_LIVE_CONSUMER")
+    writer_census(client)
+    name = "oid4vc-seed-" + str(uuid.uuid4())
+    terminal = owned_helper(client, name, "--inside-inspect",
+                            [(VOLUME, "/target", True), *operator_mounts()],
+                            "256m", output_directory / (name + ".intent.json"), 600)
+    actual = json.loads(terminal["stdout"])
+    require(re.fullmatch(r"[a-f0-9]{64}", actual["manifestSha256"])
+            and type(actual["fileCount"]) is int and actual["fileCount"] >= 0
+            and type(actual["bytes"]) is int and actual["bytes"] >= 0,
+            "TARGET_MANIFEST_MALFORMED")
+    retire_helper(client, terminal)
+    require(not docker_output(client, "ps", "-q", "--filter", "volume=" + VOLUME),
+            "TARGET_VOLUME_HAS_NEW_LIVE_CONSUMER")
+    writer_census(client)
+    return actual
+
+
 def inspect_target(receipt_path: Path) -> dict:
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     require(receipt["state"] == "COPIED_AND_READBACK_MATCHED"
             and receipt["targetVolume"] == VOLUME
             and receipt["operatorSha256"] == sha(Path(__file__)),
             "SEED_RECEIPT_OR_OPERATOR_CHANGED")
-    client = transport()
-    rows = json.loads(docker_output(client, "volume", "inspect", VOLUME))
-    require(len(rows) == 1 and rows[0]["Name"] == VOLUME
-            and rows[0]["Labels"].get("io.elevenid.demo-audit.owner") == OWNER
-            and {key: rows[0][key] for key in ("Name", "Driver", "Scope", "CreatedAt", "Labels", "Mountpoint")}
-            == receipt["volumeProof"],
-            "OWNED_TARGET_VOLUME_CHANGED")
-    require(not docker_output(client, "ps", "-q", "--filter", "volume=" + VOLUME),
-            "TARGET_VOLUME_HAS_LIVE_CONSUMER")
-    name = "oid4vc-seed-" + str(uuid.uuid4())
-    terminal = owned_helper(client, name, "--inside-inspect",
-                            [(VOLUME, "/target", True), *operator_mounts()],
-                            "256m", receipt_path.with_name(name + ".intent.json"), 600)
-    actual = json.loads(terminal["stdout"])
+    actual = observe_target(receipt["volumeProof"], receipt_path.parent)
     require(actual["manifestSha256"] == receipt["targetManifestSha256"]
-            and actual["fileCount"] == receipt["fileCount"]
-            and actual["bytes"] == receipt["bytes"],
+            and actual["fileCount"] == receipt["fileCount"] and actual["bytes"] == receipt["bytes"],
             "TARGET_SEED_CHANGED")
-    retire_helper(client, terminal)
+    return actual
+
+
+def validate_cache_reuse(receipt: dict) -> None:
+    """Pure fixed-origin/volume continuity; no old content-equality claim."""
+    from scoped_native_runtime import read_ref
+    require(receipt.get("schema") == "marty.local-native-target-cache-reuse/v1"
+            and receipt.get("state") == "MUTABLE_CACHE_REUSE_ONLY"
+            and receipt.get("targetVolume") == VOLUME
+            and receipt.get("operatorSha256") == sha(Path(__file__)), "CACHE_REUSE_RECEIPT_CHANGED")
+    require(receipt.get("originSeedReceipt", {}).get("sha256") == ORIGIN_SEED_SHA256
+            and receipt.get("priorBuildReceipt", {}).get("sha256") == PRIOR_BUILD_SHA256,
+            "EXACT_CACHE_ORIGINS_REQUIRED")
+    origin = json.loads(read_ref(receipt["originSeedReceipt"]).read_bytes())
+    prior = json.loads(read_ref(receipt["priorBuildReceipt"]).read_bytes())
+    require(origin.get("state") == "COPIED_AND_READBACK_MATCHED" and origin.get("targetVolume") == VOLUME
+            and origin.get("volumeProof") == receipt.get("volumeProof"), "ORIGINAL_VOLUME_CONTINUITY_REQUIRED")
+    require(prior.get("state") == "PASSED" and type(prior.get("exitCode")) is int and prior["exitCode"] == 0
+            and prior.get("oomKilled") is False and prior.get("canonicalAllServices") is True
+            and prior.get("buildProfile") == "oid4vc-all-services"
+            and prior.get("source") == prior.get("uiRevision") == "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"
+            and prior.get("coreRevision") == "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+            and prior.get("preparationSha256") == "c9b77a332139e5d7eb0e2684b5b54514ecad262531873e2f4c36dcd599da4c1a"
+            and len(prior.get("binaries", {})) == 29, "EXACT_PRIOR_TERMINAL_BUILD_REQUIRED")
+    require(receipt.get("cacheMountedReadOnly") is True and receipt.get("targetCopyPerformed") is False
+            and receipt.get("binariesQualified") is False and receipt.get("releaseQualified") is False,
+            "CACHE_REUSE_CANNOT_QUALIFY_BINARIES")
+    require(re.fullmatch(r"[a-f0-9]{64}", receipt.get("targetManifestSha256", ""))
+            and type(receipt.get("fileCount")) is int and receipt["fileCount"] > 0
+            and type(receipt.get("bytes")) is int and receipt["bytes"] > 0, "CURRENT_CACHE_MANIFEST_REQUIRED")
+
+
+def create_reuse_receipt(output_directory: Path) -> dict:
+    """Explicit cache-only read; never copies, compiles or qualifies products."""
+    from scoped_native_runtime import read_ref, ref
+    origin_ref, prior_ref = ref(ORIGIN_SEED), ref(PRIOR_BUILD)
+    require(origin_ref["sha256"] == ORIGIN_SEED_SHA256 and prior_ref["sha256"] == PRIOR_BUILD_SHA256,
+            "EXACT_CACHE_ORIGINS_REQUIRED")
+    origin = json.loads(read_ref(origin_ref).read_bytes())
+    actual = observe_target(origin["volumeProof"], output_directory)
+    receipt = {"schema": "marty.local-native-target-cache-reuse/v1", "state": "MUTABLE_CACHE_REUSE_ONLY",
+        "targetVolume": VOLUME, "volumeProof": origin["volumeProof"], "originSeedReceipt": origin_ref,
+        "priorBuildReceipt": prior_ref, "operatorSha256": sha(Path(__file__)),
+        "targetManifestSha256": actual["manifestSha256"], "fileCount": actual["fileCount"], "bytes": actual["bytes"],
+        "cacheMountedReadOnly": True, "targetCopyPerformed": False, "binariesQualified": False,
+        "releaseQualified": False}
+    validate_cache_reuse(receipt)
+    save_exclusive(output_directory / "target-cache-reuse.json", receipt)
+    return receipt
+
+
+def inspect_reuse_target(receipt_path: Path) -> dict:
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    validate_cache_reuse(receipt)
+    actual = observe_target(receipt["volumeProof"], receipt_path.parent)
+    require((actual["manifestSha256"], actual["fileCount"], actual["bytes"]) ==
+            (receipt["targetManifestSha256"], receipt["fileCount"], receipt["bytes"]), "TARGET_CACHE_CHANGED_AFTER_SNAPSHOT")
     return actual
 
 

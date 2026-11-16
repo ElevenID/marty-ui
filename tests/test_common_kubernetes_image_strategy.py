@@ -206,12 +206,18 @@ def test_registry_build_script_publishes_selfhost_image_variants():
     assert '"cloudflared-wrapper"' in text
 
 
-def test_ui_docker_builds_use_only_verified_public_release_dependencies():
-    dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
-    registry_build_script = (
-        REPO_ROOT / "scripts" / "build-push-registry.sh"
-    ).read_text(encoding="utf-8")
+UI_PRODUCTION_COMMERCE_METADATA = (
+    '      bun -e \'const p="dist-final/marty-ui-release.json"; '
+    'const m=await Bun.file(p).json(); m.production_pages="full"; '
+    'm.commerce_extension={repository:"ElevenID/marty-'
+    'subscriptions",source_sha:process.env.MARTY_COMMERCE_SOURCE_SHA}; '
+    'await Bun.write(p,JSON.stringify(m)+"\\n");\'; \\'
+)
 
+
+def _assert_ui_public_release_dependencies(
+    dockerfile: str, registry_build_script: str,
+) -> None:
     assert (
         "dependencies.@elevenid/marty-api-core=file:/tmp/marty-api-core.tgz"
         in dockerfile
@@ -219,11 +225,51 @@ def test_ui_docker_builds_use_only_verified_public_release_dependencies():
     assert "dependencies.@elevenid/marty-blog=file:/tmp/marty-blog.tgz" in dockerfile
     assert "MARTY_API_CORE_DIGEST#sha256:" in dockerfile
     assert "MARTY_BLOG_DIGEST#sha256:" in dockerfile
-    assert "marty-subscriptions" not in dockerfile
+    lines = dockerfile.splitlines()
+    assert lines.count(UI_PRODUCTION_COMMERCE_METADATA) == 1, (
+        "expected exactly one reviewed commerce metadata statement"
+    )
+    remaining = "\n".join(
+        line for line in lines if line != UI_PRODUCTION_COMMERCE_METADATA
+    )
+    for marker in ("marty-" "subscriptions", "@marty/" "subscriptions"):
+        assert marker not in remaining, "private commerce dependency outside metadata"
+        assert marker not in registry_build_script, "private commerce dependency in public builder"
     assert "COPY ../" not in dockerfile
     assert "--build-context" not in registry_build_script
     assert "MARTY_API_CORE_URI" in registry_build_script
     assert "MARTY_API_CORE_DIGEST" in registry_build_script
     assert "MARTY_BLOG_URI" in registry_build_script
     assert "MARTY_BLOG_DIGEST" in registry_build_script
-    assert "marty-subscriptions" not in registry_build_script
+
+
+def test_ui_docker_builds_use_only_verified_public_release_dependencies():
+    dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
+    registry_build_script = (
+        REPO_ROOT / "scripts" / "build-push-registry.sh"
+    ).read_text(encoding="utf-8")
+
+    _assert_ui_public_release_dependencies(dockerfile, registry_build_script)
+
+
+@pytest.mark.parametrize("mutation", ["checkout", "package", "extend", "repeat"])
+def test_ui_metadata_exception_does_not_allow_private_source_dependencies(mutation):
+    dockerfile = (REPO_ROOT / "docker" / "ui.Dockerfile").read_text(encoding="utf-8")
+    registry_build_script = (
+        REPO_ROOT / "scripts" / "build-push-registry.sh"
+    ).read_text(encoding="utf-8")
+    if mutation == "checkout":
+        dockerfile += "\nRUN git clone https://github.com/ElevenID/marty-" "subscriptions\n"
+    elif mutation == "package":
+        dockerfile += "\nRUN bun add @marty/" "subscriptions\n"
+    elif mutation == "extend":
+        dockerfile = dockerfile.replace(
+            UI_PRODUCTION_COMMERCE_METADATA,
+            UI_PRODUCTION_COMMERCE_METADATA + " fetch_private_source()",
+            1,
+        )
+    else:
+        dockerfile += "\n" + UI_PRODUCTION_COMMERCE_METADATA + "\n"
+
+    with pytest.raises(AssertionError, match="commerce"):
+        _assert_ui_public_release_dependencies(dockerfile, registry_build_script)

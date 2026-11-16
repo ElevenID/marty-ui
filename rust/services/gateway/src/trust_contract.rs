@@ -1,3 +1,7 @@
+use marty_service_contracts::trust_profile::{
+    CREATE_FIELDS as TRUST_PROFILE_FIELDS, ISSUER_UPDATE_FIELDS, RELATIONSHIP_UPDATE_FIELDS,
+    UPDATE_FIELDS as TRUST_PROFILE_UPDATE_FIELDS,
+};
 use std::collections::BTreeSet;
 
 use serde_json::{json, Map, Value};
@@ -53,74 +57,7 @@ const ISSUER_CREATE_FIELDS: &[&str] = &[
     "trust_anchor_id",
     "metadata",
 ];
-const TRUST_PROFILE_FIELDS: &[&str] = &[
-    "organization_id",
-    "name",
-    "description",
-    "profile_type",
-    "compliance_status",
-    "trust_purposes",
-    "trust_sources",
-    "validation_rules",
-    "allowed_algorithms",
-    "min_key_size_rsa",
-    "min_key_size_ec",
-    "require_key_usage",
-    "max_chain_depth",
-    "allow_self_signed",
-    "revocation_policy",
-    "revocation_profile_id",
-    "time_policy",
-    "supported_formats",
-    "trusted_assertion_formats",
-    "allowed_issuers",
-    "denied_issuers",
-    "system_issuer_overrides",
-    "compatible_compliance_codes",
-    "verification_policy_set_id",
-    "auto_generated",
-];
-const TRUST_PROFILE_UPDATE_FIELDS: &[&str] = &[
-    "name",
-    "description",
-    "profile_type",
-    "compliance_status",
-    "trust_purposes",
-    "trust_sources",
-    "validation_rules",
-    "allowed_algorithms",
-    "min_key_size_rsa",
-    "min_key_size_ec",
-    "require_key_usage",
-    "max_chain_depth",
-    "allow_self_signed",
-    "revocation_policy",
-    "revocation_profile_id",
-    "time_policy",
-    "supported_formats",
-    "trusted_assertion_formats",
-    "allowed_issuers",
-    "denied_issuers",
-    "system_issuer_overrides",
-    "compatible_compliance_codes",
-    "verification_policy_set_id",
-    "auto_generated",
-];
-const ISSUER_UPDATE_FIELDS: &[&str] = &[
-    "organization_id",
-    "display_name",
-    "description",
-    "issuer_type",
-    "compliance_status",
-    "accreditation_body",
-    "accreditations",
-    "accreditation_date",
-    "valid_from",
-    "valid_until",
-    "trust_anchor_id",
-    "metadata",
-    "revocation_reason",
-];
+
 const RELATIONSHIP_FIELDS: &[&str] = &[
     "issuer_id",
     "trust_level",
@@ -128,12 +65,7 @@ const RELATIONSHIP_FIELDS: &[&str] = &[
     "cascade_revocation_policy",
     "metadata",
 ];
-const RELATIONSHIP_UPDATE_FIELDS: &[&str] = &[
-    "trust_level",
-    "relationship_status",
-    "cascade_revocation_policy",
-    "metadata",
-];
+
 const PRIVATE_CUSTODY_FIELDS: &[&str] = &[
     "issuer_algorithm",
     "issuer_profile_id",
@@ -1350,6 +1282,68 @@ fn uuid_shape(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_issuer_and_relationship_fields_preserve_patch_and_lifecycle_rules() {
+        for patch in [
+            json!({"organization_id":"org-1","description":null}),
+            json!({"organization_id":"org-1","display_name":"Renamed"}),
+        ] {
+            assert_eq!(canonicalize_issuer_update(patch.clone()).unwrap(), patch);
+        }
+        for invalid in [
+            json!({}),
+            json!({"description":null}),
+            json!({"organization_id":"org-1"}),
+            json!({"organization_id":"org-1","unknown":null}),
+            json!({"organization_id":"org-1","compliance_status":"REVOKED"}),
+        ] {
+            assert!(canonicalize_issuer_update(invalid).is_err());
+        }
+        assert!(canonicalize_issuer_update(json!({"organization_id":"org-1","compliance_status":"REVOKED","revocation_reason":"withdrawn"})).is_ok());
+        let patch = json!({"trust_level":50,"metadata":{"public":true}});
+        assert_eq!(
+            canonicalize_relationship_update(patch.clone()).unwrap(),
+            patch
+        );
+        // Gateway preserves nullable patches; native validation remains authoritative.
+        let nullable = json!({"trust_level":null});
+        assert_eq!(
+            canonicalize_relationship_update(nullable.clone()).unwrap(),
+            nullable
+        );
+        for invalid in [
+            json!({}),
+            json!({"organization_id":"other"}),
+            json!({"trust_level":101}),
+        ] {
+            assert!(canonicalize_relationship_update(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn shared_profile_fields_preserve_patch_null_omission_and_organization_binding() {
+        let patch = json!({"description": null, "name": "Renamed"});
+        assert_eq!(
+            canonicalize_trust_profile(patch.clone(), true).unwrap(),
+            patch
+        );
+        assert_eq!(
+            canonicalize_trust_profile(json!({"name": "Renamed"}), true).unwrap(),
+            json!({"name": "Renamed"})
+        );
+        for invalid in [
+            json!({"organization_id": "other"}),
+            json!({"unexpected": null}),
+        ] {
+            assert!(canonicalize_trust_profile(invalid, true).is_err());
+        }
+        assert!(canonicalize_trust_profile(
+            json!({"organization_id": "org-1", "name": "Created"}),
+            false
+        )
+        .is_ok());
+    }
+
     #[test]
     fn did_trust_controls_are_preserved_and_invalid_nested_fields_fail_closed() {
         let source = serde_json::json!({

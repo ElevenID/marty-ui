@@ -3,11 +3,12 @@ import {
   ANY_OID4VCI_WALLET_ID,
   MARTY_AUTHENTICATOR_WALLET_ID,
   DEFAULT_WALLET_OFFER_ERROR,
-  MISSING_ISSUANCE_FLOW_ERROR,
+  WALLET_OFFER_UNAVAILABLE_ERROR,
   MISSING_WALLET_OFFER_ERROR,
   buildClaimWalletOptions,
   createWalletOfferDialogState,
   getWalletOfferDialogError,
+  getWalletOfferDialogFailure,
   loadWalletOfferDialog,
   resetWalletOfferDialogState,
   enrichWalletOfferForRouting,
@@ -60,12 +61,31 @@ describe('walletOfferDialogUseCases', () => {
     expect(getWalletOfferDialogError(null)).toBe(DEFAULT_WALLET_OFFER_ERROR)
   })
 
-  it('turns missing issuer flow setup into applicant-friendly guidance', () => {
-    expect(getWalletOfferDialogError({
-      response: {
-        error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.',
-      },
-    })).toBe(MISSING_ISSUANCE_FLOW_ERROR)
+  it.each([
+    { detail: 'no active issuance flow' },
+    { response: { detail: 'no active issuance flow' } },
+    { response: { error_description: 'No active issuance flow produced an offer for this application. Configure and activate an OID4VCI flow for the credential template.' } },
+    { response: { data: { detail: 'provider unavailable: flow offer preparation failed' } } },
+    { detail: 'provider unavailable: flow issuance response contains no offer' },
+    { detail: 'provider unavailable: flow issuance response is invalid' },
+  ])('explains a known offer-preparation failure without inferring a missing flow', (error) => {
+    expect(getWalletOfferDialogError(error)).toBe(WALLET_OFFER_UNAVAILABLE_ERROR)
+    expect(getWalletOfferDialogFailure(error)).toEqual({ message: WALLET_OFFER_UNAVAILABLE_ERROR, requiresIssuerHelp: true })
+  })
+
+  it('preserves unrelated errors and the option to retry them', () => {
+    expect(getWalletOfferDialogFailure(new Error('Network connection interrupted'))).toEqual({
+      message: 'Network connection interrupted', requiresIssuerHelp: false,
+    })
+    expect(getWalletOfferDialogFailure({ detail: 'provider unavailable: a different reason' })).toEqual({
+      message: 'provider unavailable: a different reason', requiresIssuerHelp: false,
+    })
+  })
+
+  it('keeps an issuer preparation failure distinct from a retryable transport error', async () => {
+    await expect(loadWalletOfferDialog({ applicationId: 'app-1',
+      generateIssuanceOffer: vi.fn().mockRejectedValue({ detail: 'no active issuance flow' }),
+    })).resolves.toEqual({ offerData: null, loading: false, error: WALLET_OFFER_UNAVAILABLE_ERROR, requiresIssuerHelp: true })
   })
 
   it('loads wallet offers through the injected service', async () => {

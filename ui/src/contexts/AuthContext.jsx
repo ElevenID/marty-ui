@@ -5,10 +5,13 @@
  * Handles user session, capability detection, organization membership, and auth status.
  */
 
-import { createContext, useState, useEffect, useCallback, useMemo } from 'react';
+import { createContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getCurrentUser, initiateLogin, initiateRegister, initiateLogout } from '../services/authApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import i18n from '../i18n';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
+import { exchangeAuthCallbackCode } from '../application/routing/authCallback';
+import { LOGOUT_STARTED_EVENT } from '../services/authEvents';
 import {
   createEnrichedUser,
   getAuthFlags,
@@ -37,6 +40,7 @@ import {
  * @property {User|null} user - Current authenticated user
  * @property {boolean} isAuthenticated - Whether user is authenticated
  * @property {boolean} isLoading - Whether auth state is loading
+ * @property {Error|null} authError - Session check failure; never an anonymous authentication decision
  * @property {boolean} isAdministrator - Whether user is a super-administrator
  * @property {boolean} isVendor - Whether user has organization console capabilities
  * @property {boolean} isApplicant - Always true for authenticated users
@@ -49,12 +53,14 @@ import {
  * @property {function} register - Initiate registration flow
  * @property {function} logout - Initiate logout flow
  * @property {function} refreshUser - Refresh user info from server
+ * @property {function} completeLoginCallback - Share the current callback exchange and session refresh across console remounts
  */
 
 const defaultContextValue = {
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  authError: null,
   isAdministrator: false,
   isVendor: false,
   isApplicant: false,
@@ -69,6 +75,7 @@ const defaultContextValue = {
   register: () => {},
   logout: () => {},
   refreshUser: async () => {},
+  completeLoginCallback: async () => { throw new Error('Authentication provider is unavailable.'); },
 };
 
 const AuthContext = createContext(defaultContextValue);
@@ -79,6 +86,34 @@ function logAuthContextError(message, error) {
   }
 }
 
+function principalId(user) {
+  return user?.user_id || user?.sub || user?.id;
+}
+
+// Compare confirmed server authority with the prior raw response, not with
+// capabilities/organizations added by createEnrichedUser. Display-only changes
+// such as a new photo must not restart the console, while changed grants must.
+function authoritySnapshot(user) {
+  return JSON.stringify({
+    principal: principalId(user),
+    roles: user.roles,
+    capabilities: user.capabilities,
+    userType: user.user_type,
+    applicantId: user.applicant_id,
+    organization: user.organization,
+    organizations: user.organizations,
+    organizationId: user.organization_id,
+    defaultOrganizationId: user.default_organization_id,
+    impersonation: user.impersonation,
+  });
+}
+
+function obsoleteAuthRequest() {
+  const error = new Error('The authentication request changed.');
+  error.name = 'AbortError';
+  return error;
+}
+
 /**
  * Authentication Provider Component
  *
@@ -86,41 +121,124 @@ function logAuthContextError(message, error) {
  */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !getPublicEntryCanonicalOrigin());
+  const [authError, setAuthError] = useState(null);
+  const authRequestGeneration = useRef(0);
+  const callbackAttempt = useRef(null);
+  const currentUser = useRef(null);
+  const confirmedAuthority = useRef(null);
+  const identityRefreshPending = useRef(isLoading);
+  const mounted = useRef(true);
+  const logoutStarted = useRef(false);
 
   // Fetch current user on mount
-  const fetchUser = useCallback(async () => {
+  const fetchUser = useCallback(async function loadUser({ background = false } = {}) {
+    if (!mounted.current || logoutStarted.current) return undefined;
+    const generation = ++authRequestGeneration.current;
+    const applies = () => mounted.current && authRequestGeneration.current === generation;
+    const previousUser = currentUser.current;
+    let canRetainUser = background && Boolean(principalId(previousUser)) && !identityRefreshPending.current;
+    const updateUser = (nextUser) => {
+      currentUser.current = nextUser;
+      if (!nextUser) confirmedAuthority.current = null;
+      setUser(nextUser);
+    };
+    if (getPublicEntryCanonicalOrigin()) {
+      updateUser(null);
+      setAuthError(null);
+      identityRefreshPending.current = false;
+      setIsLoading(false);
+      return null;
+    }
     try {
-      setIsLoading(true);
+      // Photo readback can keep the current account mounted. Initial checks,
+      // explicit identity refreshes, and callback proof still invalidate grants.
+      if (!canRetainUser) {
+        identityRefreshPending.current = true;
+        setIsLoading(true);
+      }
       const result = await getCurrentUser();
+      if (!applies()) return undefined;
 
       if (result.authenticated && result.user) {
         const rawUser = result.user;
+        const nextAuthority = authoritySnapshot(rawUser);
+        if (canRetainUser && nextAuthority !== confirmedAuthority.current) {
+          // A background read can discover an account or authority change. Drop
+          // the old console before awaiting the newly confirmed account's data.
+          canRetainUser = false;
+          identityRefreshPending.current = true;
+          updateUser(null);
+          setIsLoading(true);
+        }
         let userOrganizations = [];
 
         try {
           userOrganizations = await getMyOrganizations();
         } catch (orgError) {
+          if (!applies()) return undefined;
           logAuthContextError('Error fetching user organizations:', orgError);
+          if (canRetainUser) {
+            // An unavailable read is not an empty membership response. Denied
+            // access must still invalidate grants, even if raw claims match.
+            if (orgError?.status === 401 || orgError?.status === 403) return loadUser();
+            throw orgError;
+          }
         }
+        if (!applies()) return undefined;
 
         const storedOrgId = window.localStorage.getItem('activeOrgId');
         const enrichedUser = createEnrichedUser(rawUser, userOrganizations, storedOrgId);
+        if (canRetainUser) {
+          if (JSON.stringify(enrichedUser.organizations) !== JSON.stringify(previousUser.organizations)) {
+            // A changed membership can change permissions too. Restart through
+            // strict identity loading so old grants are invalidated first. The
+            // default request cannot recurse and supersedes this generation.
+            return loadUser();
+          }
+          enrichedUser.organizations = previousUser.organizations;
+        }
 
-        setUser(enrichedUser);
+        confirmedAuthority.current = nextAuthority;
+        updateUser(enrichedUser);
+        setAuthError(null);
+        return enrichedUser;
       } else {
-        setUser(null);
+        updateUser(null);
+        setAuthError(null);
+        return null;
       }
     } catch (error) {
+      if (!applies()) return undefined;
       logAuthContextError('Error fetching user:', error);
-      setUser(null);
+      // Retain display state only for an explicitly requested readback of the
+      // same validated account. Never return it as fresh callback identity proof.
+      if (canRetainUser) throw error;
+      updateUser(null);
+      setAuthError(error);
+      return null;
     } finally {
-      setIsLoading(false);
+      if (applies()) {
+        identityRefreshPending.current = false;
+        setIsLoading(false);
+      }
     }
   }, []);
 
   useEffect(() => {
+    mounted.current = true;
+    const stopForLogout = () => {
+      logoutStarted.current = true;
+      authRequestGeneration.current += 1;
+      callbackAttempt.current = null;
+    };
+    window.addEventListener(LOGOUT_STARTED_EVENT, stopForLogout);
     fetchUser();
+    return () => {
+      mounted.current = false;
+      authRequestGeneration.current += 1;
+      window.removeEventListener(LOGOUT_STARTED_EVENT, stopForLogout);
+    };
   }, [fetchUser]);
 
   // Login handler - accepts optional redirect URI string
@@ -148,8 +266,40 @@ export function AuthProvider({ children }) {
   }, []);
 
   // Refresh user info
-  const refreshUser = useCallback(async () => {
-    await fetchUser();
+  const refreshUser = useCallback(async (options) => {
+    const refreshedUser = await fetchUser(options);
+    if (options?.background && refreshedUser === undefined) throw obsoleteAuthRequest();
+  }, [fetchUser]);
+
+  // The console subtree remounts when authentication changes. Keep the one-use
+  // code exchange and its refresh here so replacement callback pages can await
+  // the same operation. Retain only the latest callback route, code and state.
+  const completeLoginCallback = useCallback(({ code, state, routeKey }) => {
+    const key = JSON.stringify([routeKey, code, state]);
+    if (callbackAttempt.current?.key === key) return callbackAttempt.current.promise;
+
+    const attempt = { key, promise: null };
+    callbackAttempt.current = attempt;
+    const assertCurrent = () => {
+      if (!mounted.current || logoutStarted.current || callbackAttempt.current !== attempt) {
+        const error = new Error('The authentication callback changed.');
+        error.name = 'AbortError';
+        throw error;
+      }
+    };
+    attempt.promise = (async () => {
+      await exchangeAuthCallbackCode({ code, state });
+      assertCurrent();
+      const refreshedUser = await fetchUser();
+      assertCurrent();
+      if (refreshedUser === undefined) {
+        throw obsoleteAuthRequest();
+      }
+      const principalId = refreshedUser?.user_id || refreshedUser?.sub || refreshedUser?.id;
+      if (!principalId) throw new Error('Authentication could not be confirmed. Please sign in again.');
+      return { principalId };
+    })();
+    return attempt.promise;
   }, [fetchUser]);
 
   // Computed values - derive role booleans and organization info
@@ -161,6 +311,7 @@ export function AuthProvider({ children }) {
       user,
       isAuthenticated: !!user,
       isLoading,
+      authError,
       isAdministrator,
       isVendor,
       isApplicant,
@@ -177,8 +328,9 @@ export function AuthProvider({ children }) {
       register,
       logout,
       refreshUser,
+      completeLoginCallback,
     };
-  }, [user, isLoading, login, register, logout, refreshUser]);
+  }, [user, isLoading, authError, login, register, logout, refreshUser, completeLoginCallback]);
 
   return (
     <AuthContext.Provider value={contextValue}>

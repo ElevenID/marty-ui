@@ -370,7 +370,7 @@ def bound_fixture(*, source: Path, registry: Path, vm_parent: Path,
                         == launch.ROOTLESS_FIXTURE_MEMORY_MIB
                         and launch_intent["args"] == launch._arguments(
                             runtime_parent / vm_id, vm_id, seeded["ssh_port"],
-                            launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+                            seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
                         and all(value is False for value in
                                 (intent["qualified"], intent["launch_authorized"],
                                  intent["product_dispatch_authorized"],

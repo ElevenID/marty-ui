@@ -33,6 +33,7 @@ pub(crate) const PROTOCOL_FORMATS: &[&str] = &[
     "MDOC",
     "SD_JWT_VC",
     "VC_JWT",
+    "VC_JWT_DIRECT_V1",
     "JSON_LD",
     "ZK_MDOC",
     "ICAO_EMRTD",
@@ -321,6 +322,63 @@ mod managed_reference_tests {
     use super::*;
 
     #[test]
+    fn explicit_jwt_vc_profiles_reject_unusable_algorithms_before_public_selection() {
+        for (format, algorithm, accepted) in [
+            ("VC_JWT_DIRECT_V1", "ES256", true),
+            ("VC_JWT_DIRECT_V1", "ES384", true),
+            ("VC_JWT_DIRECT_V1", "EdDSA", true),
+            ("VC_JWT_DIRECT_V1", "RS256", true),
+            ("VC_JWT_DIRECT_V1", "ES512", false),
+            ("VC_JWT_DIRECT_V1", "", false),
+            ("VC_JWT", "ES512", true),
+        ] {
+            let body = json!({
+                "id": "public-test-profile", "organization_id": "org-example",
+                "status": "active", "issuer_did": "did:example:issuer",
+                "signing_service_id": "external-service", "signing_key_reference": "issuer-key",
+                "credential_format": format, "key_purpose": "vc_jwt_issuer", "algorithm": algorithm
+            });
+            assert_eq!(
+                normalize_profile(
+                    "org-example",
+                    NormalizeProfileRequest {
+                        body: body.clone(),
+                        existing: None,
+                        now: None,
+                        profile_id: None,
+                    }
+                )
+                .is_ok(),
+                accepted,
+                "normalization: {format}/{algorithm}",
+            );
+            assert_eq!(
+                validate_binding(&ValidateBindingRequest {
+                    profile: body.clone(),
+                    service: json!({"id": "external-service", "credential_formats": ["application/vc+jwt", "jwt_vc_json"], "algorithms": [algorithm]}),
+                    registry: json!({}),
+                }).is_ok(),
+                accepted,
+                "binding: {format}/{algorithm}",
+            );
+            assert_eq!(
+                find_profiles(
+                    &[body],
+                    "org-example",
+                    &FindProfilesRequest {
+                        active_only: true,
+                        require_public_identity: true,
+                        ..FindProfilesRequest::default()
+                    }
+                )
+                .len(),
+                usize::from(accepted),
+                "public selection: {format}/{algorithm}",
+            );
+        }
+    }
+
+    #[test]
     fn profile_storage_rejects_nested_private_material_on_write_and_read() {
         let public = json!({
             "id": "profile-1", "organization_id": "org-1",
@@ -533,6 +591,18 @@ pub fn normalize_profile(
             PROTOCOL_FORMATS,
         )?;
     }
+    if protocol_wire_format(&credential_format).as_deref() == Some("application/vc+jwt")
+        && key_purpose != "vc_jwt_issuer"
+    {
+        return Err(ProfileError::Invalid(
+            "Explicit JWT-VC requires vc_jwt_issuer.".into(),
+        ));
+    }
+    if !crate::domain::explicit_algorithm_allowed(&credential_format, &algorithm) {
+        return Err(ProfileError::Invalid(
+            "Explicit JWT-VC requires ES256, ES384, EdDSA, or RS256.".into(),
+        ));
+    }
     if key_purpose == "mdoc_iaca" && (credential_format != "MDOC" || algorithm != "ES256") {
         return Err(ProfileError::Invalid(
             "Managed mdoc IACA requires MDOC and ES256.".into(),
@@ -571,8 +641,37 @@ pub fn validate_binding(request: &ValidateBindingRequest) -> Result<(), ProfileE
     let profile = object(&request.profile, "profile must be an object")?;
     let service = object(&request.service, "service must be an object")?;
     let service_id = string(service, "id").unwrap_or_default();
+    let explicit_direct = profile
+        .get("credential_format")
+        .and_then(Value::as_str)
+        .is_some_and(|format| {
+            protocol_wire_format(format).as_deref() == Some("application/vc+jwt")
+        });
+    if explicit_direct
+        && !crate::domain::explicit_format_allowed(
+            service.get("credential_formats"),
+            "application/vc+jwt",
+        )
+    {
+        return Err(ProfileError::Invalid(
+            "Signing service lacks the explicit application/vc+jwt capability.".into(),
+        ));
+    }
     let purpose = string(profile, "key_purpose").unwrap_or_else(|| "vc_jwt_issuer".to_string());
+    if explicit_direct && purpose != "vc_jwt_issuer" {
+        return Err(ProfileError::Invalid(
+            "Explicit JWT-VC requires vc_jwt_issuer.".into(),
+        ));
+    }
     let algorithm = string(profile, "algorithm").unwrap_or_default();
+    if !crate::domain::explicit_algorithm_allowed(
+        &string(profile, "credential_format").unwrap_or_default(),
+        &algorithm,
+    ) {
+        return Err(ProfileError::Invalid(
+            "Explicit JWT-VC requires ES256, ES384, EdDSA, or RS256.".into(),
+        ));
+    }
     let service_purposes = strings(service.get("key_purposes"));
     if !service_purposes.is_empty() && !service_purposes.contains(&purpose) {
         return Err(ProfileError::Invalid(format!(
@@ -770,6 +869,10 @@ pub fn find_profiles(
                 return false;
             };
             string(profile, "organization_id").as_deref() == Some(organization_id)
+                && crate::domain::explicit_algorithm_allowed(
+                    &string(profile, "credential_format").unwrap_or_default(),
+                    &string(profile, "algorithm").unwrap_or_default(),
+                )
                 && (!request.active_only
                     || string(profile, "status")
                         .is_some_and(|status| status.eq_ignore_ascii_case("active")))
@@ -819,6 +922,13 @@ pub fn custody_format(
     {
         return Err(ProfileError::Invalid(
             "Managed mdoc IACA requires the MDOC certificate family.".into(),
+        ));
+    }
+    if protocol_wire_format(&request.credential_format).as_deref() == Some("application/vc+jwt")
+        && request.key_purpose != "vc_jwt_issuer"
+    {
+        return Err(ProfileError::Invalid(
+            "Explicit JWT-VC requires vc_jwt_issuer.".into(),
         ));
     }
     let purpose_format = match request.key_purpose.as_str() {
@@ -889,6 +999,7 @@ pub(crate) fn protocol_wire_format(protocol_format: &str) -> Option<String> {
         "mdoc" | "mso_mdoc" => Some("mso_mdoc".to_string()),
         "sd_jwt_vc" | "dc+sd_jwt" | "vc+sd_jwt" => Some("dc+sd-jwt".to_string()),
         "vc_jwt" | "jwt_vc" | "jwt_vc_json" => Some("jwt_vc_json".to_string()),
+        "vc_jwt_direct_v1" | "application/vc+jwt" => Some("application/vc+jwt".to_string()),
         "json_ld" | "ldp_vc" => Some("ldp_vc".to_string()),
         "zk_mdoc" => Some("zk_mdoc".to_string()),
         "icao_emrtd" => Some("icao_emrtd".to_string()),

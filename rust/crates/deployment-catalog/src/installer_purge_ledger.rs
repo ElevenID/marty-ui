@@ -16,6 +16,8 @@ use std::{
 };
 use uuid::{Variant, Version};
 
+use crate::installer_state::LockedDirectory;
+
 type Result<T> = std::result::Result<T, String>;
 const REFUSED: &str = "purge ledger refused; retain installation and recovery evidence";
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
@@ -197,17 +199,14 @@ fn write_exact(parent: &File, entry: &str, bytes: &[u8], limit: usize) -> Result
         .map_err(|_| REFUSED)?;
     let pending_name = name(&pending)?;
     let final_name = name(entry)?;
-    let status = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            parent.as_raw_fd(),
-            pending_name.as_ptr(),
-            parent.as_raw_fd(),
-            final_name.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    require(status == 0)?;
+    crate::installer_host_fs::rename_at(
+        parent,
+        &pending_name,
+        parent,
+        &final_name,
+        crate::installer_host_fs::RenameMode::NoReplace,
+    )
+    .map_err(|_| REFUSED)?;
     parent.sync_all().map_err(|_| REFUSED)?;
     require(read_record(parent, entry, limit)?.as_deref() == Some(bytes))?;
     Ok(true)
@@ -221,13 +220,13 @@ fn write_or_verify(parent: &File, entry: &str, bytes: &[u8], limit: usize) -> Re
         None => write_exact(parent, entry, bytes, limit),
     }
 }
-fn lock(directory: &File) -> Result<()> {
-    let status = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+fn lock(directory: File) -> Result<LockedDirectory> {
+    let result = crate::installer_state::lock(directory);
     #[cfg(test)]
-    if status != 0 {
+    if result.is_err() {
         tests::record_lock_refusal(std::io::Error::last_os_error().raw_os_error());
     }
-    require(status == 0)
+    result.map_err(|_| REFUSED.into())
 }
 fn directory_name(id: uuid::Uuid) -> String {
     format!("marty-purge-{}", id.simple())
@@ -268,7 +267,7 @@ fn entries(directory: &File) -> Result<Vec<String>> {
 
 pub(crate) struct PurgeLedger {
     parent: File,
-    directory: File,
+    directory: LockedDirectory,
     quarantine: File,
     installation_id: uuid::Uuid,
     plan_sha256: String,
@@ -389,7 +388,11 @@ fn empty_directory(directory: &File) -> Result<()> {
     require(observed.next().is_none())
 }
 impl PurgeLedger {
-    fn open_directory(parent: &File, id: uuid::Uuid, create: bool) -> Result<(File, bool)> {
+    fn open_directory(
+        parent: &File,
+        id: uuid::Uuid,
+        create: bool,
+    ) -> Result<(LockedDirectory, bool)> {
         require(valid_id(id) && parent.metadata().map_err(|_| REFUSED)?.is_dir())?;
         let entry = directory_name(id);
         let created = create && mkdir_at(parent, &entry)?;
@@ -397,7 +400,7 @@ impl PurgeLedger {
             open_at(parent, &entry, libc::O_RDONLY | libc::O_DIRECTORY, 0)?.ok_or(REFUSED)?;
         private(&directory, true)?;
         require(mount_id(parent)? == mount_id(&directory)?)?;
-        lock(&directory)?;
+        let directory = lock(directory)?;
         Ok((directory, created))
     }
     fn open_quarantine(directory: &File, create: bool) -> Result<File> {
@@ -1085,6 +1088,20 @@ mod tests {
         assert!(PurgeLedger::create_or_resume(&parent, id, b"different", &hash).is_err());
     }
     #[test]
+    fn retained_duplicate_does_not_extend_or_release_owner_lock() {
+        let (_root, parent, id, plan, hash) = fixture();
+        let owner = PurgeLedger::create_or_resume(&parent, id, &plan, &hash).unwrap();
+        let inherited = owner.directory.try_clone().unwrap();
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        drop(owner);
+        let (successor, stored) = PurgeLedger::open_existing(&parent, id, &hash).unwrap();
+        assert_eq!(stored, plan);
+        drop(inherited);
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_err());
+        drop(successor);
+        assert!(PurgeLedger::open_existing(&parent, id, &hash).is_ok());
+    }
+    #[test]
     fn recorded_result_rejects_mismatched_and_ambiguous_records() {
         for field in [
             "schema",
@@ -1340,7 +1357,7 @@ mod tests {
     fn execution_q_create_and_complete_pair_survive_separate_parent_resume() {
         // A concurrent test's fork can briefly inherit this locked open-file
         // description until exec closes CLOEXEC descriptors. Keep this positive
-        // release/resume fixture isolated; the production LOCK_NB guard stays exact.
+        // owner-release/resume fixture isolated; LOCK_NB still blocks contenders.
         const CHILD: &str = "MARTY_LEDGER_RESUME_TEST_CHILD";
         const MARKER: &str = "MARTY_LEDGER_RESUME_CHILD_OK";
         if std::env::var_os(CHILD).as_deref() != Some(std::ffi::OsStr::new("1")) {
@@ -1361,7 +1378,7 @@ mod tests {
             );
             let stdout = std::str::from_utf8(&output.stdout).unwrap();
             assert!(stdout.contains(MARKER));
-            assert!(stdout.contains("MARTY_LEDGER_RETAINED_DESCRIPTION_REFUSED"));
+            assert!(stdout.contains("MARTY_LEDGER_OWNER_RELEASED_WITH_RETAINED_DESCRIPTION"));
             assert!(stdout.contains("1 passed; 0 failed"));
             return;
         }
@@ -1403,15 +1420,15 @@ mod tests {
         let retained_description = ledger.directory.try_clone().unwrap();
         drop(q);
         drop(ledger);
+        let (resumed, _) = observed_resume(&ledger_parent, id, &hash).unwrap();
+        assert_eq!(LAST_LOCK_ERRNO.with(|value| value.get()), None);
+        drop(retained_description);
         assert!(observed_resume(&ledger_parent, id, &hash).is_err());
         assert_eq!(
             LAST_LOCK_ERRNO.with(|value| value.get()),
             Some(libc::EWOULDBLOCK)
         );
-        println!("MARTY_LEDGER_RETAINED_DESCRIPTION_REFUSED");
-        drop(retained_description);
-        let (resumed, _) = observed_resume(&ledger_parent, id, &hash).unwrap();
-        assert_eq!(LAST_LOCK_ERRNO.with(|value| value.get()), None);
+        println!("MARTY_LEDGER_OWNER_RELEASED_WITH_RETAINED_DESCRIPTION");
         assert!(
             resumed
                 .open_execution_quarantine(&installation_parent, &leaf, &root, &expected)

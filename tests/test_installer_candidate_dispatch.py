@@ -1,5 +1,6 @@
 """Controller orchestration with mocked crypto/SSH, never guest execution proof."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -107,6 +108,44 @@ def test_full_dispatch_verifies_seven_and_transfers_only_exact_inputs(staged):
     with pytest.raises(FileExistsError):
         d.dispatch(**options)
     assert len(calls) == 6
+
+
+@pytest.mark.parametrize('case_index', [0, 1, 2])
+def test_versioned_dispatch_transfers_only_bound_fixed_hosting_and_staging_files(staged, case_index):
+    options, calls, proofs = staged
+    cases = json.loads((Path(__file__).resolve().parents[1] / 'rust/crates/deployment-catalog/tests/fixtures/installer-candidate-hosting-v2.json').read_text())
+    case = cases[case_index]
+    path = options['grants'] / 'candidate-authorization.json'
+    auth = r.decode(path.read_bytes())
+    raw = case['hosting_input'].encode()
+    roots = None if case['staging_roots'] is None else case['staging_roots'].encode()
+    auth.update(schema=r.CANDIDATE_SCHEMA_V2, hosting=r.candidate_hosting.from_bytes(raw, staging_roots=roots))
+    auth_bytes = r.encode(auth); context = r.candidate_context(auth)
+    path.write_bytes(auth_bytes)
+    target = r.decode(options['target_file'].read_bytes())
+    receipt = r.encode(r.controller_consumption(auth_bytes,
+        (options['assets'] / 'installer-inventory.json').read_bytes(), expected=context,
+        **target, consumed_at=100001, now=100001))
+    (options['grants'] / 'controller-consumption.json').write_bytes(receipt)
+    options['ledger'].write_bytes(receipt); options['context_file'].write_bytes(r.encode(context))
+    for name, value in [(r.candidate_hosting.NAME,raw),(r.candidate_hosting.ROOTS_NAME,roots)]:
+        if value is not None:
+            file=options['grants']/name;file.write_bytes(value);file.chmod(0o600)
+    public_startup = auth['hosting']['certificate_source']=='acme' and auth['hosting']['acme_environment']=='production'
+    if public_startup:
+        # The fixture's empty exit-zero stdout is insufficient for the new
+        # typed signed startup completion. Transfer remains independently tested.
+        with pytest.raises(ValueError):d.dispatch(**options)
+        result=None
+    else:result = d.dispatch(**options)
+    grant_transfer = calls[2][0]
+    assert str(options['grants']/r.candidate_hosting.NAME) in grant_transfer
+    assert (str(options['grants']/r.candidate_hosting.ROOTS_NAME) in grant_transfer) is (roots is not None)
+    assert '--hosting-file' not in calls[-1][0][-1]  # No arbitrary guest override.
+    assert '/usr/bin/setpriv --no-new-privs --' in calls[-1][0][-1]
+    assert len(proofs) == 7
+    if result is not None:assert result['installation_ready'] is False
+    else:assert not Path(str(options['ledger'])+'.dispatch-result.json').exists()
 
 
 def test_dispatch_can_borrow_held_controller_lease(staged):

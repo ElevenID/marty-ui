@@ -1,5 +1,29 @@
 use serde::Serialize;
 
+/// Direct JWT-VC issuance is opt-in even where historical capabilities use a wildcard.
+pub(crate) fn explicit_format_allowed(
+    formats: Option<&serde_json::Value>,
+    requested: &str,
+) -> bool {
+    crate::profiles::protocol_wire_format(requested).as_deref() != Some("application/vc+jwt")
+        || formats
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| {
+                values
+                    .iter()
+                    .any(|value| value.as_str() == Some("application/vc+jwt"))
+            })
+}
+
+/// The explicit profile must be usable by Core's signing and authentication path.
+/// Historical profiles retain their existing algorithm admission rules.
+pub(crate) fn explicit_algorithm_allowed(format: &str, algorithm: &str) -> bool {
+    crate::profiles::protocol_wire_format(format).as_deref() != Some("application/vc+jwt")
+        || PURPOSE_ALL_ALGORITHMS
+            .iter()
+            .any(|supported| supported.eq_ignore_ascii_case(algorithm.trim()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ServiceType {
     pub id: &'static str,
@@ -150,7 +174,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
         KeyPurpose {
             id: "vc_jwt_issuer",
             allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
-            credential_formats: &["jwt_vc_json", "dc+sd-jwt", "ldp_vc"],
+            credential_formats: &["jwt_vc_json", "application/vc+jwt", "dc+sd-jwt", "ldp_vc"],
         },
         KeyPurpose {
             id: "mdoc_iaca",
@@ -208,17 +232,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
 pub use marty_managed_key_reference::MANAGED_KEY_PREFIXES;
 
 pub fn managed_key_prefix_for_purpose(purpose: &str) -> Option<&'static str> {
-    match purpose {
-        "vc_jwt_issuer" | "jwks_signing" => Some("cred-issuer-"),
-        "mdoc_iaca" | "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => {
-            Some("cred-dsc-")
-        }
-        "lti_tool_signing" => Some("lti-tool-"),
-        "oid4vp_request_signing" => Some("oid4vp-verifier-"),
-        "holder_binding" => Some("cred-holder-"),
-        "presentation_signing" => Some("cred-presenter-"),
-        _ => None,
-    }
+    marty_managed_key_reference::managed_key_prefix_for_purpose(purpose)
 }
 
 pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
@@ -248,21 +262,23 @@ pub fn managed_key_purposes(reference: &str) -> &'static [&'static str] {
 fn capabilities(
     algorithms: &'static [&'static str],
     signature_encoding: &'static str,
-    hardware_attestation: bool,
-    key_import: bool,
-    key_delete: bool,
+    key_create: bool,
     key_list: bool,
+    rotation: bool,
 ) -> ProviderCapabilities {
+    // These describe operations implemented by Marty, not every feature sold
+    // by the upstream provider. Key custody/import and attestation evidence are
+    // not implied by successful provider registration.
     ProviderCapabilities {
         supported_algorithms: algorithms,
         signature_encoding,
         public_key_export: true,
-        hardware_attestation,
-        key_import,
-        key_create: true,
-        key_delete,
+        hardware_attestation: false,
+        key_import: false,
+        key_create,
+        key_delete: false,
         key_list,
-        rotation: true,
+        rotation,
     }
 }
 
@@ -274,8 +290,7 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 P521_PROVIDER_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                false,
-                false,
+                true,
                 true,
                 true,
             ),
@@ -287,7 +302,6 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
                 P521_PROVIDER_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
                 false,
-                false,
                 true,
                 true,
             ),
@@ -298,8 +312,7 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 CLOUD_RSA_EC,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
+                false,
                 false,
                 false,
             ),
@@ -310,10 +323,9 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 CLOUD_RSA_EC,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
-                true,
-                true,
+                false,
+                false,
+                false,
             ),
         },
         ServiceCapability {
@@ -322,10 +334,9 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
             capabilities: capabilities(
                 GCP_ALGORITHMS,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
-                true,
-                true,
                 false,
-                true,
+                false,
+                false,
             ),
         },
         ServiceCapability {
@@ -375,6 +386,25 @@ mod tests {
                 provider.capabilities.signature_encoding,
                 ALGORITHM_DEPENDENT_SIGNATURE_ENCODING
             );
+        }
+    }
+
+    #[test]
+    fn cloud_registration_does_not_advertise_unimplemented_key_lifecycle() {
+        for provider in service_capabilities().into_iter().filter(|provider| {
+            matches!(
+                provider.service_type_id,
+                "aws-kms" | "azure-key-vault" | "gcp-cloud-kms"
+            )
+        }) {
+            let capabilities = provider.capabilities;
+            assert!(capabilities.public_key_export);
+            assert!(!capabilities.key_create);
+            assert!(!capabilities.key_import);
+            assert!(!capabilities.key_delete);
+            assert!(!capabilities.key_list);
+            assert!(!capabilities.rotation);
+            assert!(!capabilities.hardware_attestation);
         }
     }
 

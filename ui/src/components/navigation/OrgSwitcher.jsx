@@ -23,12 +23,14 @@ import BusinessIcon from '@mui/icons-material/Business';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { useConsole } from '../../contexts/ConsoleContext';
 
 /**
  * Organization Switcher Component
  */
 export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
+  const beginAction = useAsyncActionScope();
   const { isAdministrator } = useAuth();
   const { activeOrgId, memberships, setActiveOrgId } = useConsole();
 
@@ -36,9 +38,15 @@ export function OrgSwitcher({ collapsed, variant = 'sidebar' }) {
   const activeOrg = memberships.find(org => org.id === activeOrgId);
   const organizationName = activeOrg?.display_name || activeOrg?.name || '';
 
-  const handleChange = (event) => {
+  const handleChange = async (event) => {
     const newOrgId = event.target.value;
-    setActiveOrgId(newOrgId);
+    const action = beginAction();
+    try {
+      await action.run(setActiveOrgId, newOrgId);
+    } catch (error) {
+      if (!action.isCurrent() || error?.name === 'AbortError') return;
+      console.error('[OrgSwitcher] Failed to switch organization:', error);
+    }
   };
 
   // Header variant: compact dropdown

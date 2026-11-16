@@ -239,9 +239,9 @@ function ServiceCard({
 
   return (
     <Paper variant="outlined" sx={{ p: 2.5 }}>
-      <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" spacing={2}>
+      <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
         <Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mb: 1 }}>
+          <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', mb: 1 }}>
             <Typography variant="h6">{toBrandDisplay(service.name)}</Typography>
             {isDefault && <Chip size="small" color="primary" label="Default signer" />}
             {service.managed && <Chip size="small" color="success" label="Managed by stack" />}
@@ -294,7 +294,7 @@ function ServiceCard({
           </Typography>
         </Box>
 
-        <Stack direction={{ xs: 'row', md: 'column' }} spacing={1} alignItems={{ md: 'flex-end' }} flexWrap="wrap">
+        <Stack direction={{ xs: 'row', md: 'column' }} spacing={1} sx={{ alignItems: { md: 'flex-end' }, flexWrap: 'wrap' }}>
           {!isDefault && canManage && (
             <Button variant="outlined" onClick={() => onMakeDefault(service.id)}>
               Make default
@@ -624,7 +624,7 @@ export default function SigningKeysPage() {
             {safeKeys.map((key) => (
               <TableRow key={key.id}>
                 <TableCell>
-                  <Typography variant="body2" fontFamily="monospace" sx={{ wordBreak: 'break-word' }}>
+                  <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-word' }}>
                     {key.provider_key_name || key.id}
                   </Typography>
                 </TableCell>
@@ -707,7 +707,7 @@ export default function SigningKeysPage() {
 
         {/* === PRIMARY: Remote KMS Services === */}
         <Paper variant="outlined" sx={{ p: { xs: 2.5, md: 3 } }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'flex-start' }} spacing={2} sx={{ mb: 2 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { sm: 'flex-start' }, mb: 2 }}>
             <Box>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
                 Signing services
@@ -745,7 +745,7 @@ export default function SigningKeysPage() {
 
         {/* === SECONDARY: Discovered Keys === */}
         <Paper variant="outlined" sx={{ p: { xs: 2.5, md: 3 } }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'flex-start' }} spacing={2} sx={{ mb: 2 }}>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between', alignItems: { sm: 'flex-start' }, mb: 2 }}>
             <Box>
               <Typography variant="overline" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
                 Discovered keys
@@ -810,7 +810,7 @@ export default function SigningKeysPage() {
                       <TextField
                         fullWidth
                         label="Subject country (two-letter ISO code)"
-                        inputProps={{ maxLength: 2 }}
+                        slotProps={{ htmlInput: { maxLength: 2 } }}
                         value={certData.country || ''}
                         onChange={(e) => setCertData((prev) => ({ ...prev, country: e.target.value.toUpperCase() }))}
                       />

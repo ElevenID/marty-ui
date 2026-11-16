@@ -52,13 +52,27 @@ async function sessionIsolation({a,b,requestUri,readAuth}){
   emptyHolderPresentationStatus:denied.status(),denialAuthenticated:false,
   supportedOperations:SUPPORTED,keyBoundary:'SHARED_CONFIGURED_SIGNER_SESSION_ISOLATION_ONLY'};
 }
-async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,beforeCancel}){
+async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,beforeCancel,origin}){
  const before=await readBoundLoginFlow(binding,readInstance);
  assert(['PENDING','IN_PROGRESS','AWAITING_WALLET'].includes(String(before.status).toUpperCase()),'CANCEL_FLOW_NOT_PENDING');
  assert.equal((await readAuth()).authenticated,false,'CANCEL_REQUIRES_SIGNED_OUT_CONTEXT');
  await beforeCancel();const acknowledgement=await cancel();assert.equal(acknowledgement.ok,true,'FLOW_CANCEL_NOT_ACKNOWLEDGED');
  const after=await readBoundLoginFlow(binding,readInstance);assert.equal(String(after.status).toUpperCase(),'CANCELLED');
- const result=await finalize();assert(!result.setCookie&&![301,302,303,307,308].includes(result.status),'CANCEL_FINALIZED_LOGIN');
+ const result=await finalize();assert(!result.setCookie,'CANCEL_FINALIZED_LOGIN');
+ if(result.status===302){
+  assert.equal(typeof result.location,'string','CANCEL_FAILURE_REDIRECT_REQUIRED');
+  let destination;try{destination=new URL(result.location);}catch{assert.fail('CANCEL_FAILURE_REDIRECT_INVALID');}
+  assert.ok(destination.origin===origin,'CANCEL_FAILURE_REDIRECT_ORIGIN_CHANGED');
+  assert.ok(destination.pathname==='/','CANCEL_FAILURE_REDIRECT_PATH_CHANGED');
+  assert.ok(destination.hash===''&&destination.username===''&&destination.password==='',
+   'CANCEL_FAILURE_REDIRECT_INVALID');
+  const keys=[...destination.searchParams.keys()];
+  assert(keys.every(key=>['auth_error','auth_error_code','auth_error_detail'].includes(key)),
+   'CANCEL_FAILURE_REDIRECT_INVALID');
+  assert(keys.every(key=>destination.searchParams.getAll(key).length===1),'CANCEL_FAILURE_REDIRECT_INVALID');
+  assert.equal(destination.searchParams.getAll('auth_error').length,1,'CANCEL_FAILURE_REDIRECT_REQUIRED');
+  assert.ok(destination.searchParams.get('auth_error')?.trim(),'CANCEL_FAILURE_REDIRECT_REQUIRED');
+ }else assert.equal(result.status,400,'CANCEL_FINALIZED_LOGIN');
  assert.equal((await readAuth()).authenticated,false,'CANCEL_CREATED_LOGIN');
  return {kind:'HARNESS_CANCELS_OWNED_FLOW',harness_cancel_no_login:true,flowInstanceId:binding.instanceId,
   nonceSha256:binding.nonceSha256,terminalStatus:'CANCELLED',holderClickCancel:'N/A'};
@@ -66,8 +80,16 @@ async function cancelOwnedLogin({binding,readInstance,cancel,finalize,readAuth,b
 async function readBoundLoginFlow(binding,readInstance){
  const before=await readInstance();
  assert.equal(before.id,binding.instanceId);assert.equal(before.organization_id,binding.organizationId);
- assert.equal(before.context_data?.presentation_policy_id,binding.presentationPolicyId);
- assert.equal(before.context_data?.trust_profile_id,binding.trustProfileId);
+ if(Object.hasOwn(binding,'contextPolicyPresent'))
+  assert.equal(Object.hasOwn(before.context_data||{},'presentation_policy_id'),binding.contextPolicyPresent);
+ assert.equal(before.context_data?.presentation_policy_id,
+  Object.hasOwn(binding,'contextPolicyId')
+    ?binding.contextPolicyPresent===false?undefined:binding.contextPolicyId:binding.presentationPolicyId);
+ if(Object.hasOwn(binding,'contextTrustProfilePresent'))
+  assert.equal(Object.hasOwn(before.context_data||{},'trust_profile_id'),binding.contextTrustProfilePresent);
+ assert.equal(before.context_data?.trust_profile_id,
+  Object.hasOwn(binding,'contextTrustProfileId')
+    ?binding.contextTrustProfilePresent===false?undefined:binding.contextTrustProfileId:binding.trustProfileId);
  return before;
 }
 async function retireLoginFlow({binding,readInstance,cancel,beforeCancel}){
@@ -83,6 +105,18 @@ function freshLoginRecovery(cancelled,recovered){
  assert.notEqual(recovered.binding.nonceSha256,cancelled.nonceSha256,'RECOVERY_REUSED_NONCE');
  assert(recovered.authenticated===true&&recovered.browserFinalizeVerified===true,'FRESH_LOGIN_NOT_VERIFIED');
  return true;
+}
+function safeAssertionSite(error){
+ if(error?.name!=='AssertionError'||typeof error.stack!=='string')return null;
+ const allowed=new Set(['audit-beta-membership-support','beta-membership-support-contract',
+  'dev-test-wallet-contract','audit-beta-first-party-dev-test-wallet']);
+ for(const frame of error.stack.split('\n').slice(1)){
+  if(!/^\s*at\s/.test(frame))continue;
+  const match=frame.match(/(?:^|[\\/])([a-z-]+)\.js:(\d+):\d+\)?\s*$/);
+  const line=match?Number(match[2]):null;
+  if(match&&allowed.has(match[1])&&Number.isSafeInteger(line)&&line>0&&line<=10000)return `${match[1]}.js:${line}`;
+ }
+ return null;
 }
 async function expiredOffer({issuance,prerequisite,readOffer,exchangeCachedCode,receiveExpired,
  inventoryAfter,noIssuedCredential,now=Date.now,delay}){
@@ -116,4 +150,4 @@ function coreAssertions(report){
 function assertions(report){
  return Object.fromEntries(REQUIRED.map(key=>[key,report.checks?.[key]===true]));
 }
-module.exports={coreAssertions,REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow};
+module.exports={coreAssertions,REQUIRED,SUPPORTED,assertions,cancelOwnedLogin,expiredOffer,freshLoginRecovery,inventory,inventoryIds,sessionIsolation,retireLoginFlow,safeAssertionSite};

@@ -1,7 +1,9 @@
 //! Atomic Canvas association scope only. Real application rows and repository,
 //! explicitly historical source credentials; no signing/readiness/delivery proof.
 use super::*;
-use marty_issuance_service::credential::CredentialRepository;
+use hmac::{Hmac, Mac};
+use marty_issuance_service::credential::{CredentialRepository, CredentialSigningAuthorization};
+use sha2::Sha256;
 
 async fn ordinary_blank_link_finalization(fixture: &Fixture) {
     let mut historical_transaction = fixture.transaction();
@@ -19,15 +21,39 @@ async fn ordinary_blank_link_finalization(fixture: &Fixture) {
     ] {
         let mut transaction = fixture.transaction();
         transaction.status = CredentialTransactionStatus::Authorized;
+        transaction.expires_at =
+            chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap()
+                + chrono::Duration::minutes(5);
         transaction.renewal_of_credential_id = stored.map(str::to_owned);
         fixture.reserve(&transaction).await;
+        // This finalizer fixture supplies an explicit live synthetic grant;
+        // the repository must still enforce the normal signing authority gate.
+        let access_token = format!("synthetic-renewal-grant-{}", transaction.id);
+        let mut hmac = Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY).unwrap();
+        hmac.update(access_token.as_bytes());
+        let token_digest = hex::encode(hmac.finalize().into_bytes());
+        sqlx::query(
+            "UPDATE issuance_service.issuance_transactions \
+             SET access_token=$2, access_token_expires_at=$3 WHERE id=$1",
+        )
+        .bind(&transaction.id)
+        .bind(token_digest)
+        .bind(transaction.expires_at)
+        .execute(&fixture.pool)
+        .await
+        .unwrap();
+        let authorization = CredentialSigningAuthorization {
+            transaction: &transaction,
+            authorization_session: None,
+            access_token: &access_token,
+        };
         let mut credential = historical.clone();
         credential.id = Uuid::new_v4().to_string();
         credential.transaction_id.clone_from(&transaction.id);
         credential.renewed_from_credential_id = projected.map(str::to_owned);
         let claimed = fixture
             .repository
-            .claim_for_signing(&transaction, &credential.id)
+            .claim_for_signing(&transaction, &credential.id, &authorization)
             .await
             .unwrap()
             .unwrap();

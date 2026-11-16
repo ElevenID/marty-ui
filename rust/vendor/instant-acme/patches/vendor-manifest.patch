@@ -1,0 +1,55 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -0,0 +1,3 @@
++# Local vendoring: unused example/network-test targets and dev-dependencies removed.
++# Runtime metadata, dependencies and feature declarations retain upstream values.
++# See UPSTREAM.json and patches/vendor-manifest.patch for exact provenance.
+@@ -94,17 +96,0 @@
+-[[example]]
+-name = "certgen"
+-path = "examples/certgen.rs"
+-
+-[[example]]
+-name = "provision"
+-path = "examples/provision.rs"
+-required-features = [
+-    "hyper-rustls",
+-    "rcgen",
+-]
+-
+-[[test]]
+-name = "pebble"
+-path = "tests/pebble.rs"
+-required-features = ["hyper-rustls"]
+-
+@@ -214,30 +199,0 @@
+-
+-[dev-dependencies.anyhow]
+-version = "1.0.66"
+-
+-[dev-dependencies.clap]
+-version = "4.0.29"
+-features = ["derive"]
+-
+-[dev-dependencies.rustls]
+-version = "0.23"
+-default-features = false
+-
+-[dev-dependencies.tempfile]
+-version = "3"
+-
+-[dev-dependencies.tokio]
+-version = "1.22.0"
+-features = [
+-    "macros",
+-    "rt",
+-    "rt-multi-thread",
+-    "time",
+-]
+-
+-[dev-dependencies.tracing]
+-version = "0.1.37"
+-
+-[dev-dependencies.tracing-subscriber]
+-version = "0.3.16"
+-features = ["env-filter"]

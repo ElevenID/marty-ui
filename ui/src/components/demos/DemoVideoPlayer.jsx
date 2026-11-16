@@ -1,3 +1,4 @@
+import { staticAssetHref } from '../../utils/staticAssetHref';
 import { useMemo, useState } from 'react';
 import PropTypes from 'prop-types';
 import { Box, Button, Stack, Typography } from '@mui/material';
@@ -75,7 +76,7 @@ function DemoVideoPlayback({ scenario, startSeconds = 0 }) {
         <>
           <Box
             component="img"
-            src={scenario.poster.src}
+            src={staticAssetHref(scenario.poster.src)}
             alt={scenario.poster.alt}
             loading="eager"
             sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: 0.68 }}

@@ -51,7 +51,7 @@ def stage(secret_root: Path, install_root: Path, env_file: Path, project: str) -
         raise ValueError("optional secret root is not operator-owned and private")
     model = render_model(install_root, env_file, project)
     allowed = disabled_optional_secrets(model)
-    if allowed != OPTIONAL_LOCAL_SECRET_NAMES or len(allowed) != 6:
+    if allowed != OPTIONAL_LOCAL_SECRET_NAMES or len(allowed) != 9:
         raise ValueError("not all optional integrations are proven disabled")
     if any((secret_root / name).exists() or (secret_root / name).is_symlink()
            for name in allowed):

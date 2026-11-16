@@ -21,17 +21,24 @@ import SecurityIcon from '@mui/icons-material/Security';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import { useTranslation } from 'react-i18next';
 import { ReviewSectionCard, ReviewToggleOption, ReviewField } from '../../../common';
+import { credentialTemplateValidity } from '../credentialTemplateValidity';
 
-const ReviewStep = ({ data, onChange, onEdit }) => {
+const ReviewStep = ({ data, onChange, onEdit, organizationId, profileDisplay = {} }) => {
   const { t } = useTranslation('console');
-  const secondsToDays = (seconds) => Math.floor(seconds / 86400);
+  const { values } = credentialTemplateValidity(data.validity_rules);
+  const profileName = (kind, id) => {
+    const profile = profileDisplay[kind];
+    return profile?.organizationId === organizationId && profile?.id === id
+      && typeof profile?.name === 'string' && profile.name.trim() ? profile.name : id;
+  };
+  const editSectionLabel = (section) => t('wizards.credentialTemplate.reviewStep.actions.editSection', { section });
 
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
         {t('wizards.credentialTemplate.reviewStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.credentialTemplate.reviewStep.description')}
       </Typography>
 
@@ -42,9 +49,10 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         icon={<CheckCircleIcon color="primary" />}
         onEdit={() => onEdit(0)}
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
+        editAriaLabel={editSectionLabel(t('wizards.credentialTemplate.reviewStep.sections.basicInformation'))}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12}>
+            <Grid size={12}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.templateName')}
                 value={data.name}
@@ -53,23 +61,24 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.credentialType')}
                 value={data.credential_type}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.vct')}
                 value={data.vct}
+                placeholder={t('wizards.credentialTemplate.reviewStep.values.notConfigured')}
                 valueSx={{ fontFamily: 'monospace', fontSize: '0.875rem' }}
               />
             </Grid>
 
             {data.description && (
-              <Grid item xs={12}>
+              <Grid size={12}>
                 <ReviewField
                   label={t('wizards.credentialTemplate.reviewStep.fields.description')}
                   value={data.description}
@@ -88,6 +97,7 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         icon={<DescriptionIcon color="primary" />}
         onEdit={() => onEdit(1)}
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
+        editAriaLabel={editSectionLabel(t('wizards.credentialTemplate.steps.claims'))}
       >
           {data.claims && data.claims.length > 0 ? (
             <List dense>
@@ -126,27 +136,26 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         icon={<SecurityIcon color="primary" />}
         onEdit={() => onEdit(2)}
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
+        editAriaLabel={editSectionLabel(t('wizards.credentialTemplate.reviewStep.sections.trustCompliance'))}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.trustProfile')}
-                value={data.trust_profile_id
-                  ? t('wizards.credentialTemplate.reviewStep.values.trustProfileId', { id: data.trust_profile_id })
-                  : undefined}
+                value={profileName('trust', data.trust_profile_id)}
                 placeholder={t('wizards.credentialTemplate.reviewStep.values.notSelected')}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.complianceProfile')}
-                value={data.compliance_profile_id}
+                value={profileName('compliance', data.compliance_profile_id)}
                 placeholder={t('wizards.credentialTemplate.reviewStep.values.none')}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label="Issuer DID"
                 value={data.issuer_did || undefined}
@@ -163,26 +172,34 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
         icon={<VpnKeyIcon color="primary" />}
         onEdit={() => onEdit(3)}
         editLabel={t('wizards.credentialTemplate.reviewStep.actions.edit')}
+        editAriaLabel={editSectionLabel(t('wizards.credentialTemplate.reviewStep.sections.cryptoValidity'))}
       >
           <Grid container spacing={2}>
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.defaultValidity')}
-                value={`${secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
+                value={t('wizards.credentialTemplate.reviewStep.values.validityDays', { count: Number(values.default_validity_days) })}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.maximumValidity')}
-                value={`${secondsToDays(data.validity_rules?.max_validity_seconds || 63072000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
+                value={t('wizards.credentialTemplate.reviewStep.values.validityDays', { count: Number(values.max_validity_days) })}
               />
             </Grid>
 
-            <Grid item xs={12} md={6}>
+            <Grid size={{ xs: 12, md: 6 }}>
+              <ReviewField
+                label={t('wizards.credentialTemplate.cryptoValidityStep.validity.notBeforeOffset')}
+                value={String(values.not_before_offset_seconds)}
+              />
+            </Grid>
+
+            <Grid size={{ xs: 12, md: 6 }}>
               <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.revocation')}
-                value={data.revocation_profile_id}
+                value={profileName('revocation', data.revocation_profile_id)}
                 placeholder={t('wizards.credentialTemplate.reviewStep.values.none')}
               />
             </Grid>

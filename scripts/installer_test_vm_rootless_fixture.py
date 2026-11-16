@@ -113,8 +113,9 @@ def prepare_fixture(*, source: Path, registry: Path, vm_parent: Path,
                                   vm_id=vm_id, uid=runtime_uid, gid=runtime_gid)
     seeded = seed.prepare(source, registry, vm_parent, runtime_parent, vm_id=vm_id,
                           ssh_port=ssh_port,
-                          profile=seed.ROOTLESS_FIXTURE_PROFILE)
+                          resource_profile=seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
     release.require(seeded["guest_user"] == "installer"
+                    and seed.seed_profile(seeded) == seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE
                     and seeded["packages"] == seed.ROOTLESS_FIXTURE_PACKAGES
                     and seeded["fixture_profile"] == seed.ROOTLESS_FIXTURE_PROFILE,
                     "fixture seed policy changed")
@@ -218,4 +219,7 @@ def launch_fixture(*, source: Path, registry: Path, vm_parent: Path,
                                     vm_id=vm_id)
     release.require(verified_seed == seeded,
                     "fixture seed changed before launch")
-    return launch.launch(source, registry, vm_parent, runtime_parent, vm_id=vm_id)
+    release.require(seed.seed_profile(verified_seed) == seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE,
+                    "fixture resource selection changed before launch")
+    return launch.launch(source, registry, vm_parent, runtime_parent, vm_id=vm_id,
+                         resource_profile=seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE)

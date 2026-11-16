@@ -1,7 +1,9 @@
-use std::{collections::BTreeMap, net::SocketAddr, path::PathBuf, time::Duration};
+use marty_service_runtime::config;
+use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeEnvironment {
@@ -18,16 +20,7 @@ impl RuntimeEnvironment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkloadTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeploymentServiceConfig {
@@ -35,6 +28,7 @@ pub struct DeploymentServiceConfig {
     pub http_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
+    pub marty_organization_id: Uuid,
     pub organization_grpc_target: String,
     pub service_token: Option<String>,
     pub workload_tls: Option<WorkloadTlsFiles>,
@@ -97,6 +91,10 @@ impl DeploymentServiceConfig {
                 .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
                 .unwrap_or("organization:9002"),
         )?;
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .parse()
+            .map_err(|_| invalid("MARTY_ORG_ID"))?;
         let service_token = value(&values, "GRPC_SERVICE_TOKEN").map(str::to_owned);
         if environment.is_deployed() && service_token.as_ref().is_none_or(|v| v.len() < 32) {
             return Err(DeploymentConfigError::Missing {
@@ -122,6 +120,7 @@ impl DeploymentServiceConfig {
             http_addr,
             database_url,
             database_max_connections,
+            marty_organization_id,
             organization_grpc_target,
             service_token,
             workload_tls,
@@ -138,46 +137,27 @@ fn workload_tls(
     values: &BTreeMap<String, String>,
     environment: RuntimeEnvironment,
 ) -> Result<Option<WorkloadTlsFiles>, DeploymentConfigError> {
-    let names = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
-    ];
-    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
-        return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
-    }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
-    }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            DeploymentConfigError::Missing { name: names[0] }
-        } else {
-            invalid(names[0])
-        });
-    }
-    Ok(Some(WorkloadTlsFiles {
-        certificate: value(values, names[0]).unwrap_or_default().into(),
-        ca_certificate: value(values, names[1]).unwrap_or_default().into(),
-        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
-        kms_ca_certificate: value(values, names[3]).unwrap_or_default().into(),
-        kms_token_file: value(values, names[4]).unwrap_or_default().into(),
-        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
-        kms_key_version: value(values, names[6])
-            .unwrap_or_default()
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or_else(|| invalid(names[6]))?,
-    }))
+    WorkloadTlsFiles::from_client_values(
+        |name| values.get(name).map(String::as_str),
+        environment.is_deployed(),
+        Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        use marty_service_runtime::TlsConfigErrorKind;
+        match (error.field.as_str(), error.kind) {
+            ("GRPC_WORKLOAD_TLS_CLIENT_KEY", _) => invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION", TlsConfigErrorKind::Invalid) => {
+                invalid("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION")
+            }
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT", TlsConfigErrorKind::AbsentIdentity) => {
+                DeploymentConfigError::Missing {
+                    name: "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+                }
+            }
+            _ => invalid("GRPC_WORKLOAD_TLS_CLIENT_CERT"),
+        }
+    })
 }
 
 fn boolean(
@@ -185,10 +165,8 @@ fn boolean(
     name: &'static str,
     default: bool,
 ) -> Result<bool, DeploymentConfigError> {
-    value(values, name).map_or(Ok(default), |raw| match raw.to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" => Ok(true),
-        "false" | "0" | "no" => Ok(false),
-        _ => Err(invalid(name)),
+    value(values, name).map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive).map_err(|_| invalid(name))
     })
 }
 
@@ -213,19 +191,11 @@ fn required(
 }
 
 fn number(raw: &str, name: &'static str, min: u64, max: u64) -> Result<u64, DeploymentConfigError> {
-    let parsed = raw.parse().map_err(|_| invalid(name))?;
-    (min..=max)
-        .contains(&parsed)
-        .then_some(parsed)
-        .ok_or_else(|| invalid(name))
+    config::bounded_number(raw, min..=max).map_err(|_| invalid(name))
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 const fn invalid(name: &'static str) -> DeploymentConfigError {
@@ -247,11 +217,82 @@ mod tests {
     }
 
     #[test]
+    fn shared_client_tls_preserves_missing_invalid_and_version_error_precedence() {
+        let mut values = base("development");
+        values.insert(
+            "GRPC_WORKLOAD_TLS_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        );
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values.clone()),
+            Err(DeploymentConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_CERT"
+            })
+        );
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into());
+        for (name, value) in [
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "peer.pem"),
+            ("GRPC_WORKLOAD_TLS_KMS_CA_CERT", "bao.pem"),
+            ("GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE", "token"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_NAME", "client"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+        // Missing version retains the service's certificate error; invalid versions
+        // retain the more precise version error, including single-line rejection.
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values.clone()),
+            Err(DeploymentConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_CERT"
+            })
+        );
+        for version in ["0", "invalid", "4294967296", "1\n"] {
+            values.insert("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION".into(), version.into());
+            assert_eq!(
+                DeploymentServiceConfig::from_values(values.clone()),
+                Err(DeploymentConfigError::Invalid {
+                    name: "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION"
+                })
+            );
+        }
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), String::new());
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values),
+            Err(DeploymentConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_KEY"
+            })
+        );
+    }
+
+    #[test]
     fn normalizes_legacy_database_and_compose_grpc_urls() {
         let config = DeploymentServiceConfig::from_values(base("development")).unwrap();
         assert_eq!(config.http_addr.port(), 8010);
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert!(config.database_url.starts_with("postgresql://"));
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "00000000-0000-0000-0000-000000000001"
+        );
+    }
+
+    #[test]
+    fn customer_organization_id_is_parsed_for_default_deployment_seeding() {
+        let mut values = base("development");
+        values.insert(
+            "MARTY_ORG_ID".into(),
+            "750e8400-e29b-41d4-a716-446655440001".into(),
+        );
+        let config = DeploymentServiceConfig::from_values(values.clone()).unwrap();
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "750e8400-e29b-41d4-a716-446655440001"
+        );
+        values.insert("MARTY_ORG_ID".into(), "invalid".into());
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values),
+            Err(invalid("MARTY_ORG_ID")),
+        );
     }
 
     #[test]
@@ -300,14 +341,14 @@ mod tests {
             })
         );
         values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
-        assert_eq!(
-            DeploymentServiceConfig::from_values(values.clone())
-                .unwrap()
-                .workload_tls
-                .unwrap()
-                .kms_key_version,
-            1
-        );
+        let tls = DeploymentServiceConfig::from_values(values.clone())
+            .unwrap()
+            .workload_tls
+            .unwrap();
+        let marty_service_runtime::RemoteTlsIdentityFiles::OpenBao(identity) = tls.identity else {
+            panic!("omitted provider must preserve OpenBao");
+        };
+        assert_eq!(identity.kms_key_version, 1);
         values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "legacy.pem".into());
         assert_eq!(
             DeploymentServiceConfig::from_values(values),

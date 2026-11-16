@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
@@ -24,6 +25,7 @@ pub struct CredentialTemplateServiceConfig {
     pub trust_profile_service_url: String,
     pub public_api_origin: Url,
     pub marty_organization_id: Uuid,
+    pub marty_issuer_did: String,
     pub migration_profile: String,
     pub dependency_timeout: Duration,
     pub release_version: String,
@@ -103,6 +105,25 @@ impl CredentialTemplateServiceConfig {
             )?;
         }
         let public_api_origin = public_origin(&values, environment)?;
+        let authority = match public_api_origin.port() {
+            Some(port) => format!(
+                "{}:{port}",
+                public_api_origin.host_str().unwrap_or_default()
+            ),
+            None => public_api_origin.host_str().unwrap_or_default().to_owned(),
+        };
+        let authority =
+            config::configured_authority(value(&values, "PUBLIC_DOMAIN"), &[], &authority);
+        let slug =
+            config::canonical_slug(value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"), "marty");
+        let marty_issuer_did = config::configured_did_web(
+            value(&values, "MARTY_ISSUER_DID"),
+            &authority,
+            &["orgs", &slug],
+        );
+        if !marty_issuer_did.starts_with("did:") {
+            return Err(invalid("MARTY_ISSUER_DID"));
+        }
         let organization_grpc_target = target(&values, "ORG_GRPC_TARGET", "organization:9002")?;
         let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
         let revocation_grpc_target = target(&values, "RP_GRPC_TARGET", "revocation-profile:9013")?;
@@ -172,6 +193,7 @@ impl CredentialTemplateServiceConfig {
             )?,
             public_api_origin,
             marty_organization_id,
+            marty_issuer_did,
             migration_profile,
             dependency_timeout: Duration::from_secs(number(
                 &values,
@@ -207,42 +229,24 @@ fn grpc_server_tls(
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
-    let present = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if present == 0 {
-        return Ok(None);
-    }
-    if present != NAMES.len() {
-        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
-    }
-    let endpoint = value(values, NAMES[1]).unwrap_or_default();
-    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid(NAMES[1]));
-    }
-    let version = value(values, NAMES[5])
-        .unwrap_or_default()
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid(NAMES[5]))?;
-    Ok(Some(CredentialTemplateGrpcServerTls {
-        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
-        kms_endpoint: endpoint.into(),
-        kms_ca_certificate: PathBuf::from(value(values, NAMES[2]).unwrap_or_default()),
-        kms_token_file: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
-        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
-        kms_key_version: version,
-    }))
+    CredentialTemplateGrpcServerTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        let name = if error.ends_with("is required") {
+            NAMES[0]
+        } else {
+            NAMES
+                .iter()
+                .copied()
+                .find(|name| error.starts_with(name))
+                .unwrap_or(NAMES[0])
+        };
+        invalid(name)
+    })
 }
 
 const fn environment_is_deployed(environment: RuntimeEnvironment) -> bool {
@@ -277,11 +281,7 @@ fn parse_environment(value: &str) -> Result<RuntimeEnvironment, CredentialTempla
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn listener(
@@ -363,7 +363,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name).map_or(Ok(default), |raw| raw.parse().map_err(|_| invalid(name)))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn load_secret(
@@ -559,6 +559,32 @@ mod tests {
             Err(CredentialTemplateConfigError::Invalid {
                 name: "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR"
             })
+        );
+    }
+
+    #[test]
+    fn seed_issuer_uses_configured_identity_without_legacy_slug_substitution() {
+        let mut input = values("development");
+        input.insert(
+            "PUBLIC_DOMAIN".into(),
+            "https://beta.example.test/path".into(),
+        );
+        input.insert("MARTY_ORG_SLUG".into(), "marty-identity-platform".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input.clone())
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:beta.example.test:orgs:marty-identity-platform"
+        );
+        input.insert(
+            "MARTY_ISSUER_DID".into(),
+            "did:web:owned.example:orgs:reviewed".into(),
+        );
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(input)
+                .unwrap()
+                .marty_issuer_did,
+            "did:web:owned.example:orgs:reviewed"
         );
     }
 

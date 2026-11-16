@@ -98,10 +98,10 @@ def launch_copy(*, source: Path, registry: Path, runtime_parent: Path,
         kvm_gid = launch._kvm_group()
         qemu_sha = launch._trusted_tool(launch.QEMU)
         setpriv_sha = launch._trusted_tool(launch.SETPRIV)
-        launch._host_headroom(launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+        launch._host_headroom(seed_module.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
         args = launch._arguments(runtime_dir, copy_vm_id,
                                  before["copy_port"],
-                                 launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+                                 seed_module.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
         # The source snapshot path never appears in these fixed QEMU arguments.
         release.require(str(disk_path) in args[args.index("-drive") + 1]
                         and all("rootless-stopped-snapshot" not in arg
@@ -165,7 +165,7 @@ def launch_copy(*, source: Path, registry: Path, runtime_parent: Path,
                                 and launch._trusted_tool(launch.QEMU) == qemu_sha
                                 and launch._trusted_tool(launch.SETPRIV) == setpriv_sha,
                                 "fixture rollback launch inputs changed")
-                launch._host_headroom(launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+                launch._host_headroom(seed_module.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
                 command = [str(launch.SETPRIV), "--reuid", str(uid),
                            "--regid", str(gid), "--groups", str(kvm_gid),
                            "--bounding-set=-all", "--inh-caps=-all",
@@ -330,7 +330,7 @@ def bound_live_copy(*, source: Path, registry: Path, runtime_parent: Path,
         runtime_dir = runtime_parent / copy_vm_id
         args = launch._arguments(runtime_dir, copy_vm_id,
                                  intent["ssh_port"],
-                                 launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+                                 seed_module.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
         release.require(intent["args"] == args,
                         "fixture rollback QEMU arguments differ")
         parent_fd = runtime._runtime_parent(runtime_parent)

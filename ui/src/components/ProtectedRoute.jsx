@@ -10,6 +10,8 @@ import { CircularProgress, Box, Typography } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
 import OrgConsoleUnavailable from './console/OrgConsoleUnavailable';
+import AuthUnavailable from './AuthUnavailable';
+import { getConsoleEligibleOrganizations } from '../application/session/authSession';
 import {
   evaluateApplicantConsolePolicy,
   evaluateOrgConsolePolicy,
@@ -19,11 +21,13 @@ import {
 function GuardLoadingState({ message }) {
   return (
     <Box
-      display="flex"
-      flexDirection="column"
-      alignItems="center"
-      justifyContent="center"
-      minHeight="50vh"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+      }}
     >
       <CircularProgress size={48} />
       <Typography variant="body1" color="textSecondary" sx={{ mt: 2 }}>
@@ -62,7 +66,7 @@ function ProtectedRoute({
   redirectTo = '/login',
   unauthorizedRedirect = '/',
 }) {
-  const { isAuthenticated, isLoading, user, hasCapability } = useAuth();
+  const { isAuthenticated, isLoading, authError, refreshUser, user, hasCapability } = useAuth();
   const location = useLocation();
   const decision = evaluateProtectedRoutePolicy({
     isLoading,
@@ -74,6 +78,10 @@ function ProtectedRoute({
     redirectTo,
     unauthorizedRedirect,
   });
+
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={isLoading} />;
+  }
 
   // Show loading spinner while checking auth
   if (decision.kind === 'loading') {
@@ -124,6 +132,7 @@ export function ApplicantRoute({ children, ...props }) {
  * Applicant console should remain accessible even without org memberships.
  */
 export function ApplicantConsoleRoute({ children, ...props }) {
+  const { authError, refreshUser, isLoading: authLoading } = useAuth();
   const {
     isLoading: consoleLoading,
     membershipLoadError,
@@ -131,6 +140,10 @@ export function ApplicantConsoleRoute({ children, ...props }) {
     reloadConsoleState,
   } = useConsole();
   const decision = evaluateApplicantConsolePolicy({ consoleLoading });
+
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={authLoading} />;
+  }
 
   if (decision.kind === 'loading') {
     return <GuardLoadingState message="Loading console..." />;
@@ -161,24 +174,39 @@ export function VendorRoute({ children, ...props }) {
 
 /**
  * Organization console route with org selection guard
- * Requires org:view capability AND an active organization to be selected.
- * Redirects to /console/org/setup if no org is selected.
+ * Requires a current console-eligible membership for the selected organization.
+ * Redirects to /console/org/setup if that membership is not available.
  */
 export function OrgConsoleRoute({ children, ...props }) {
+  const { isAuthenticated, authError, refreshUser, isLoading: authLoading } = useAuth();
   const {
     mode,
     activeOrgId,
+    memberships,
+    membershipsLoaded,
     isLoading: consoleLoading,
     membershipLoadError,
     isOrgBootstrapRequired,
     reloadConsoleState,
   } = useConsole();
   const location = useLocation();
+  const hasSelectedMembership = membershipsLoaded && getConsoleEligibleOrganizations(memberships)
+    .some((organization) => organization.id === activeOrgId);
   const decision = evaluateOrgConsolePolicy({
     consoleLoading,
     mode,
-    activeOrgId,
+    activeOrgId: hasSelectedMembership ? activeOrgId : null,
   });
+
+  if (authError) {
+    return <AuthUnavailable error={authError} onRetry={refreshUser} isRetrying={authLoading} />;
+  }
+
+  // Authenticate before choosing an organization. A signed-out deep link must
+  // keep its own destination, rather than becoming an org-setup login request.
+  if (authLoading || !isAuthenticated) {
+    return <ProtectedRoute {...props}>{children}</ProtectedRoute>;
+  }
 
   // Show loading while console context initializes
   if (decision.kind === 'loading') {
@@ -194,9 +222,11 @@ export function OrgConsoleRoute({ children, ...props }) {
     return <Navigate to={decision.destination} state={{ from: location }} replace />;
   }
 
-  // Otherwise, apply standard protected route check with org:view capability
+  // Newly created/joined memberships can precede the auth snapshot's org:view
+  // capability. Use the current membership here and keep the applicant identity
+  // unchanged; page actions still load their grants from the native RBAC API.
   return (
-    <ProtectedRoute requiredCapabilities={['org:view']} unauthorizedRedirect="/console/applicant/catalog" {...props}>
+    <ProtectedRoute {...props}>
       {children}
     </ProtectedRoute>
   );

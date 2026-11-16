@@ -12,28 +12,36 @@ import {
 } from './flowManager';
 
 describe('flowManager helpers', () => {
-  it('builds draft status presentation', () => {
-    expect(getFlowStatusPresentation('DRAFT', { DRAFT: 'DRAFT', PUBLISHED: 'PUBLISHED' })).toEqual({
-      status: 'DRAFT',
-      label: 'Draft',
-      color: 'default',
-      icon: 'warning',
-      isDraft: true,
-      isPublished: false,
-      isDisabled: false,
-      hasApplicantEntry: false,
+  it.each([
+    ['DRAFT', 'Draft', 'default', true, false],
+    ['ACTIVE', 'Active', 'success', false, true],
+    ['PAUSED', 'Paused', 'warning', false, false],
+    ['ARCHIVED', 'Archived', 'default', false, false],
+    [' active ', 'Active', 'success', false, true],
+  ])('shows native lifecycle status %s without inferring publication', (status, label, color, isDraft, isActive) => {
+    const presentation = getFlowStatusPresentation(status);
+    expect(presentation).toMatchObject({ label, color, isDraft, isActive });
+    expect(presentation).not.toHaveProperty('isPublished');
+    expect(presentation).not.toHaveProperty('hasApplicantEntry');
+  });
+
+  it.each([undefined, null, '', 'PUBLISHED', 'unexpected'])('does not invent a lifecycle state for %s', (status) => {
+    expect(getFlowStatusPresentation(status)).toMatchObject({
+      label: 'Unknown', color: 'default', isDraft: false, isActive: false,
     });
   });
 
-  it('builds published approval presentation', () => {
-    expect(getApprovalStrategyPresentation('auto')).toEqual({
-      label: 'Auto',
-      color: 'success',
-    });
-    expect(getApprovalStrategyPresentation('manual')).toEqual({
-      label: 'Manual',
-      color: 'warning',
-    });
+  it.each([
+    ['AUTO', 'Auto', 'success'],
+    ['MANUAL', 'Manual', 'warning'],
+    ['RULES_BASED', 'Rules based', 'info'],
+    ['EXTERNAL', 'External', 'info'],
+    [' auto ', 'Auto', 'success'],
+    ['manual', 'Manual', 'warning'],
+    [undefined, 'Unknown', 'default'],
+    ['unexpected', 'Unknown', 'default'],
+  ])('shows authoritative approval mode %s', (strategy, label, color) => {
+    expect(getApprovalStrategyPresentation(strategy)).toEqual({ label, color });
   });
 
   it('filters pending executions', () => {

@@ -2,6 +2,7 @@ package dev.marty.keycloak.kms;
 
 import java.util.Set;
 import org.keycloak.common.VerificationException;
+import org.keycloak.crypto.KeyType;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.crypto.SignatureException;
@@ -62,6 +63,13 @@ public final class RemoteHs512SignatureProviderFactory implements SignatureProvi
 
             @Override
             public SignatureVerifierContext verifier(KeyWrapper key) throws VerificationException {
+                // A stale cookie is invalid input, not a signing-service failure.
+                // Use Keycloak's checked verification contract so native login
+                // rejects it normally instead of returning an internal error.
+                if (key == null) {
+                    throw new VerificationException("Remote HS512 verification key not found");
+                }
+                SignatureProvider.checkKeyForVerification(key, "HS512", KeyType.OCT);
                 TransitKey transit = bound(key);
                 return new SignatureVerifierContext() {
                     @Override public String getKid() { return key.getKid(); }

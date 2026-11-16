@@ -151,7 +151,7 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
   };
 
   const header = !hideHeader ? (
-    <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
+    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
       <Box>
         <Typography variant="h4">{t('deploymentProfiles.title')}</Typography>
         <Typography variant="body2" color="text.secondary">
@@ -176,7 +176,7 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
         {header}
         <Grid container spacing={3}>
           {Array.from({ length: 3 }).map((_, index) => (
-            <Grid item xs={12} md={6} lg={4} key={index}>
+            <Grid size={{ xs: 12, md: 6, lg: 4 }} key={index}>
               <CardSkeleton showHeader={true} showActions={true} lines={4} />
             </Grid>
           ))}
@@ -214,23 +214,23 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
       ) : (
         <Grid container spacing={3}>
             {profiles.map((profile) => (
-              <Grid item xs={12} md={6} lg={4} key={profile.id}>
+              <Grid size={{ xs: 12, md: 6, lg: 4 }} key={profile.id}>
                 <Card>
                   <CardContent>
-                    <Box display="flex" alignItems="center" mb={1}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
                       <SettingsIcon sx={{ mr: 1 }} color="primary" />
                       <Typography variant="h6">{profile.name}</Typography>
                     </Box>
-                    <Typography variant="body2" color="text.secondary" mb={2}>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
                       {profile.description}
                     </Typography>
-                    <Box display="flex" gap={1} mb={1}>
+                    <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
                       {NETWORK_MODES.find(m => m.value === profile.network_mode)?.icon}
                       <Typography variant="body2">
                         {NETWORK_MODES.find(m => m.value === profile.network_mode)?.label}
                       </Typography>
                     </Box>
-                    <Box display="flex" gap={1} flexWrap="wrap">
+                    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                       <Chip label={t('deploymentProfiles.card.templates', { count: profile.enabled_credential_template_ids?.length || 0 })} size="small" />
                       <Chip label={t('deploymentProfiles.card.policies', { count: profile.enabled_presentation_policy_ids?.length || 0 })} size="small" />
                     </Box>
@@ -285,7 +285,7 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
               >
                 {NETWORK_MODES.map((mode) => (
                   <MenuItem key={mode.value} value={mode.value}>
-                    <Box display="flex" alignItems="center" gap={1}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       {mode.icon}
                       {mode.label} - {mode.description}
                     </Box>
@@ -300,7 +300,7 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
               </AccordionSummary>
               <AccordionDetails>
                 <Grid container spacing={2}>
-                  <Grid item xs={6}>
+                  <Grid size={{ xs: 6 }}>
                     <FormControl fullWidth>
                       <InputLabel>{t('deploymentProfiles.dialog.uxThemeLabel')}</InputLabel>
                       <Select
@@ -320,7 +320,7 @@ const DeploymentProfileManager = ({ hideHeader = false }) => {
                       </Select>
                     </FormControl>
                   </Grid>
-                  <Grid item xs={6}>
+                  <Grid size={{ xs: 6 }}>
                     <FormControl fullWidth>
                       <InputLabel>{t('deploymentProfiles.dialog.languageLabel')}</InputLabel>
                       <Select

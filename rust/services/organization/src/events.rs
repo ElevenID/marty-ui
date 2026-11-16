@@ -22,6 +22,7 @@ pub enum OrganizationEventKind {
     OrganizationUpdated,
     MemberInvited,
     MemberAdded,
+    MemberApproved,
     MemberRemoved,
     ApiKeyCreated,
     ApiKeyRevoked,
@@ -40,6 +41,7 @@ impl OrganizationEventKind {
             Self::OrganizationUpdated => "organization.updated.event",
             Self::MemberInvited => "member.invited.event",
             Self::MemberAdded => "member.added.event",
+            Self::MemberApproved => "member.approved.event",
             Self::MemberRemoved => "member.removed.event",
             Self::ApiKeyCreated => "api.key.created.event",
             Self::ApiKeyRevoked => "api.key.revoked.event",
@@ -57,6 +59,13 @@ impl OrganizationEventKind {
             Self::OrganizationUpdated => &["updated_fields"],
             Self::MemberInvited => &["member_id", "email", "invited_by"],
             Self::MemberAdded => &["member_id", "user_id", "roles"],
+            Self::MemberApproved => &[
+                "member_id",
+                "user_id",
+                "roles",
+                "approved_by",
+                "approved_by_type",
+            ],
             Self::MemberRemoved => &["member_id", "user_id"],
             Self::ApiKeyCreated => &["api_key_id", "name", "created_by"],
             Self::ApiKeyRevoked => &["api_key_id", "revoked_by"],
@@ -77,6 +86,10 @@ pub enum OrganizationEventError {
     MissingField(&'static str),
     #[error("ORGANIZATION.EVENT_INVALID: timestamp precedes Unix epoch")]
     InvalidTimestamp,
+    #[error("ORGANIZATION.EVENT_INVALID: installer API-key actor is invalid")]
+    InvalidInstallerActor,
+    #[error("ORGANIZATION.EVENT_INVALID: membership approval actor type is invalid")]
+    InvalidApprovalActor,
 }
 
 #[derive(Debug, Error)]
@@ -313,6 +326,26 @@ impl OrganizationEvent {
                 "info",
                 "Member added to organization".into(),
             ),
+            OrganizationEventKind::MemberApproved => {
+                let actor_type = match self.text("approved_by_type")? {
+                    "user" => "user",
+                    "api_key" => "api_key",
+                    _ => return Err(OrganizationEventError::InvalidApprovalActor),
+                };
+                let mut descriptor = AuditDescriptor::new(
+                    "team.member.approved",
+                    "team",
+                    "member",
+                    Some(self.text("member_id")?.into()),
+                    Some(self.text("user_id")?.into()),
+                    Some(self.text("approved_by")?.into()),
+                    actor_type,
+                    "info",
+                    "Pending membership approved".into(),
+                );
+                descriptor.changes = Some(json!({"status": {"from": "pending", "to": "active"}}));
+                descriptor
+            }
             OrganizationEventKind::MemberRemoved => AuditDescriptor::new(
                 "team.member.removed",
                 "team",
@@ -331,7 +364,7 @@ impl OrganizationEvent {
                 Some(self.text("api_key_id")?.into()),
                 Some(self.text("name")?.into()),
                 Some(self.text("created_by")?.into()),
-                "user",
+                self.api_key_actor_type("created_by")?,
                 "info",
                 format!("API key {} created", self.text("name")?),
             ),
@@ -342,7 +375,7 @@ impl OrganizationEvent {
                 Some(self.text("api_key_id")?.into()),
                 None,
                 Some(self.text("revoked_by")?.into()),
-                "user",
+                self.api_key_actor_type("revoked_by")?,
                 "warning",
                 "API key revoked".into(),
             ),
@@ -363,6 +396,27 @@ impl OrganizationEvent {
             }
         };
         Ok(descriptor)
+    }
+
+    fn api_key_actor_type(
+        &self,
+        actor_field: &'static str,
+    ) -> Result<&'static str, OrganizationEventError> {
+        let Some(installation) = self.data.get("installer_bootstrap_installation_id") else {
+            return Ok("user");
+        };
+        let installation = installation
+            .as_str()
+            .ok_or(OrganizationEventError::InvalidInstallerActor)?;
+        let id = Uuid::parse_str(installation)
+            .map_err(|_| OrganizationEventError::InvalidInstallerActor)?;
+        if id.get_version_num() != 4
+            || id.to_string() != installation
+            || self.text(actor_field)? != format!("installer:{id}")
+        {
+            return Err(OrganizationEventError::InvalidInstallerActor);
+        }
+        Ok("system")
     }
 
     fn role_descriptor(

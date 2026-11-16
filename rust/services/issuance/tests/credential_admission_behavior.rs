@@ -8,9 +8,9 @@ use marty_issuance_service::{
         AllocatedCredentialStatus, BuiltCredential, CredentialAccessTokenGrant,
         CredentialAuthorizationSession, CredentialBuildRequest, CredentialBuilder,
         CredentialIssuanceError, CredentialIssuanceService, CredentialLifecycle, CredentialPorts,
-        CredentialProofVerifier, CredentialRepository, CredentialTransaction,
-        CredentialTransactionStatus, ExistingCredential, IssuedCredential, IssuerContext,
-        IssuerContextResolver, NotificationIdGenerator, VerifiedCredentialProof,
+        CredentialProofVerifier, CredentialRepository, CredentialSigningAuthorization,
+        CredentialTransaction, CredentialTransactionStatus, ExistingCredential, IssuedCredential,
+        IssuerContext, IssuerContextResolver, NotificationIdGenerator, VerifiedCredentialProof,
     },
     http::router_with_credential_issuance,
     proof_nonce::{ProofNonceError, ProofNonceRepository},
@@ -55,6 +55,9 @@ impl ContractRepository {
                 setup: setup.to_owned(),
                 notification_id: inputs["notification_id"].as_str().unwrap().to_owned(),
                 transaction: CredentialTransaction {
+                    jwt_vc_profile: None,
+                    jwt_vc_signing_timing: None,
+
                     id: inputs["transaction_id"].as_str().unwrap().to_owned(),
                     organization_id: inputs["organization_id"].as_str().unwrap().to_owned(),
                     credential_template_id: "template-credential".to_owned(),
@@ -180,6 +183,7 @@ impl CredentialRepository for ContractRepository {
         &self,
         _transaction: &CredentialTransaction,
         _credential_id: &str,
+        _authorization: &CredentialSigningAuthorization<'_>,
     ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
         unreachable!("admission contract stops before a signing claim")
     }

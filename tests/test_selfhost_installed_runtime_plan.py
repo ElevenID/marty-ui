@@ -33,7 +33,7 @@ PREFLIGHT = {
     "release": "v1.2.3",
     "source_sha": "b" * 40,
     "run_id": "123",
-    "service_count": 32,
+    "service_count": 29,
 }
 
 
@@ -79,7 +79,7 @@ def model() -> dict:
             "configs": {}}
 
 
-def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
+def test_plan_is_exact_artifact_bound_and_excludes_optional_connectors() -> None:
     assert "integration_secret_master_key" not in EXPECTED_SECRET_NAMES
     assert {"sign_grant_verify_token", "signing_keys_openbao_token"} <= (
         EXPECTED_ROLE_SECRETS["signing-keys"]
@@ -90,13 +90,16 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
-    assert result["service_count"] == 32
-    assert result["default_service_count"] == 29
-    assert result["beta_tunnel_service_count"] == 2
+    assert result["service_count"] == 29
+    assert result["default_service_count"] == 28
+    assert result["beta_tunnel_service_count"] == 0
     assert result["kms_init_service_count"] == 1
     assert result["dependency_count"] == sum(map(len, EXPECTED_DEPENDENCIES.values()))
     layers = result["startup_layers"]
-    assert sum(map(len, layers)) == 32
+    assert sum(map(len, layers)) == 29
+    assert "edge" in layers[0]
+    assert not {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"} & EXPECTED_SERVICES
+    assert not {"cloudflare_tunnel_token", "cloudflare_beta_tunnel_token"} & EXPECTED_SECRET_NAMES
     assert next(i for i, layer in enumerate(layers) if "db-migrate" in layer) < next(
         i for i, layer in enumerate(layers) if "signing-keys" in layer)
 
@@ -117,6 +120,13 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     lambda m: m["services"]["redis"].update({"healthcheck": {"test": []}}),
     lambda m: m["services"]["db-migrate"].update({"restart": "always"}),
     lambda m: m["services"]["gateway"]["depends_on"].pop("auth"),
+    lambda m: m["services"]["auth"]["depends_on"].pop("applicant"),
+    lambda m: m["services"]["auth"]["depends_on"].pop("keycloak-configurator"),
+    lambda m: m["services"]["db-migrate"]["depends_on"].pop("postgres"),
+    lambda m: m["services"]["kms-initialize"]["depends_on"].pop("db-migrate"),
+    lambda m: m["services"]["issuance-native"]["depends_on"].pop("issuance-migrations"),
+    lambda m: m["services"]["flow"]["depends_on"].pop("trust-profile"),
+    lambda m: m["services"]["flow"]["depends_on"].pop("deployment-profile"),
     lambda m: m["services"]["signing-keys"].update({"secrets": [{"source": "undeclared"}]}),
     lambda m: m["services"]["gateway"]["secrets"].pop(),
     lambda m: m["secrets"].pop("issuance_api_key"),
@@ -142,9 +152,19 @@ def test_plan_rejects_dag_and_declaration_drift(change) -> None:
         plan(changed, PREFLIGHT, SECRET_ROOT)
 
 
+@pytest.mark.parametrize("peer", ["ui", "gateway", "flow", "keycloak"])
+def test_plan_rejects_reintroduced_edge_startup_dependencies(peer: str) -> None:
+    changed = model()
+    changed["services"]["edge"]["depends_on"][peer] = {
+        "condition": "service_healthy", "required": True,
+    }
+    with pytest.raises(ValueError, match="service edge changed dependency edges"):
+        plan(changed, PREFLIGHT, SECRET_ROOT)
+
+
 def test_plan_rejects_unbound_preflight() -> None:
     changed = copy.deepcopy(PREFLIGHT)
-    changed["service_count"] = 29
+    changed["service_count"] = 32
     with pytest.raises(ValueError, match="preflight"):
         plan(model(), changed, SECRET_ROOT)
 
@@ -160,6 +180,16 @@ def test_plan_rejects_missing_issuance_integration_secret_key() -> None:
         plan(changed, PREFLIGHT, SECRET_ROOT)
 
 
+def test_plan_rejects_applicant_without_issuance_management_credential() -> None:
+    changed = model()
+    changed["services"]["applicant"]["secrets"] = [
+        secret for secret in changed["services"]["applicant"]["secrets"]
+        if secret["source"] != "issuance_api_key"
+    ]
+    with pytest.raises(ValueError, match="applicant changed required secrets"):
+        plan(changed, PREFLIGHT, SECRET_ROOT)
+
+
 def test_source_compose_has_reviewed_full_dag() -> None:
     env = {**os.environ, "SELFHOST_STATE_DIR": str(ROOT / "_test_state"),
            "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets"),
@@ -170,9 +200,15 @@ def test_source_compose_has_reviewed_full_dag() -> None:
          "-f", "docker-compose.selfhost.bundle.override.yml", "config", "--format", "json"],
         cwd=ROOT, env=env, check=True, capture_output=True, text=True,
     )
-    result = plan(json.loads(completed.stdout), PREFLIGHT, SECRET_ROOT)
-    assert result["service_count"] == 32
+    rendered = json.loads(completed.stdout)
+    assert "depends_on" not in rendered["services"]["edge"]
+    result = plan(rendered, PREFLIGHT, SECRET_ROOT)
+    assert result["service_count"] == 29
     assert result["dependency_count"] > 30
+    assert "edge" in result["startup_layers"][0]
+    from run_selfhost_business_journey import disabled_optional_secrets
+    assert {"canvas_credentials_api_token", "passport_tenant_api_keys",
+            "personalization_bureau_api_key"} <= disabled_optional_secrets(rendered)
 
 
 def test_default_selfhost_compose_never_mounts_bootstrap_root() -> None:
@@ -216,9 +252,10 @@ def test_api_only_overlay_excludes_only_console_and_preserves_backend_dependenci
     actual = render([*profiles, "-f", "docker-compose.selfhost.api-only.yml"])
     assert "ui" in original
     assert "ui" not in actual
+    assert "depends_on" not in original["edge"]
+    assert "depends_on" not in actual["edge"]
     expected = copy.deepcopy(original)
     expected.pop("ui")
-    expected["edge"]["depends_on"].pop("ui")
     expected["edge"]["environment"]["SELFHOST_CONSOLE_ENABLED"] = "false"
     assert actual == expected
     assert "canvas-sync-worker" in actual

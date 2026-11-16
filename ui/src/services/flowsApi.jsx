@@ -65,18 +65,20 @@ function requireDirectArray(value, resourceName) {
  * @param {string} flowData.deployment_profile_id - Optional deployment profile
  * @param {string} flowData.approval_strategy - AUTO, MANUAL, RULES_BASED, EXTERNAL
  * @param {Object} flowData.steps - Flow step configuration
+ * @param {Object} [options] - Optional caller ownership
+ * @param {Function} [options.isCurrent] - Whether the initiating action is still current
  * @returns {Promise<Object>} Created flow
  */
-export const createFlow = async (flowData) => {
+export const createFlow = async (flowData, { isCurrent } = {}) => {
   try {
     const organizationId = requireOrganizationId(flowData?.organization_id);
     const payload = {
       ...flowData,
       organization_id: organizationId,
     };
-    return await postWithIdempotency(FLOW_DEFINITIONS_PATH, payload);
+    return await postWithIdempotency(FLOW_DEFINITIONS_PATH, payload, { isCurrent });
   } catch (error) {
-    if (error?.operationStatusUnknown) {
+    if (error?.operationStatusUnknown || error?.name === 'AbortError') {
       throw error;
     }
     throw handleApiError(error);

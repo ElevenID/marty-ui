@@ -22,13 +22,15 @@ const RETENTION_TAG: &str = "retention";
 const NATIVE_EXTENSION_TAG: &str = "native-extension";
 // Base public extensions are always registered; passport adds its separate,
 // explicitly opt-in observation and administrative operations.
-pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 3;
+pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 4;
 pub(crate) const PASSPORT_NATIVE_EXTENSION_ROUTE_COUNT: usize = 2;
 const PASSPORT_READ_PATH: &str = "/v1/passport/applications/{application_id}";
 const PASSPORT_CANCEL_PATH: &str = "/v1/passport/applications/{application_id}/cancel";
 const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
 const CANVAS_REVIEW_RECOVERY_PATH: &str =
     "/v1/integrations/canvas/evidence-policy-reviews/{id}/reconcile-revocation";
+const CANVAS_BINDING_APPLICATIONS_PATH: &str =
+    "/v1/integrations/canvas/program-bindings/{binding_id}/applications";
 
 const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
     "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -83,6 +85,11 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
                 "reconcile_canvas_review_revocation",
                 "rust/services/issuance/src/canvas_review_resolution.rs",
                 "rust/services/issuance/tests/canvas_award_candidate_postgres_contract.rs",
+            ),
+            (HttpMethod::Get, CANVAS_BINDING_APPLICATIONS_PATH) => (
+                "read_disabled_canvas_binding_applications",
+                "rust/services/issuance/src/canvas_operations.rs",
+                "rust/services/issuance/tests/canvas_management_postgres_contract.rs",
             ),
             (HttpMethod::Get, PASSPORT_READ_PATH) => (
                 "read_passport_application",

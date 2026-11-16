@@ -13,6 +13,7 @@ async-trait.workspace = true
 base64.workspace = true
 chrono.workspace = true
 marty-openbao-http = { path = "../openbao-http" }
+mmf-aws-kms.workspace = true
 reqwest.workspace = true
 redis.workspace = true
 serde.workspace = true

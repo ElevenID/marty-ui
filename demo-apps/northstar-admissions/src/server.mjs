@@ -126,7 +126,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
       application: { id: applicationId, status: state.applicationStatus },
       integration: {
         webhookId,
-        runtimeKeyPrefix: String(config.runtimeKeyPrefix || 'mk_live_â€¢â€¢â€¢â€¢'),
+        runtimeKeyPrefix: String(config.runtimeKeyPrefix || 'mk_live_••••'),
         runtimeScopes: ['applications:read', 'applications:approve'],
         readOnlyScopes: ['applications:read'],
         callbackUrl,
@@ -454,4 +454,31 @@ export function startServer(config = process.env, { fetchImpl = fetch } = {}) {
   return { app, server };
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) startServer();
+export function installGracefulShutdown(server, signalTarget = process, onClosed = () => {}) {
+  let closing = false;
+  const shutdown = () => {
+    if (closing) return;
+    closing = true;
+    // Stop accepting requests, drain current responses, then let Node finish
+    // its event loop and finalizers. Never re-raise a default signal as PID1.
+    server.close((error) => {
+      if (error) signalTarget.exitCode = 1;
+      else if (signalTarget.exitCode === undefined) signalTarget.exitCode = 0;
+      onClosed(error);
+    });
+    server.closeIdleConnections?.();
+  };
+  signalTarget.on('SIGTERM', shutdown);
+  signalTarget.on('SIGINT', shutdown);
+  return () => {
+    signalTarget.off('SIGTERM', shutdown);
+    signalTarget.off('SIGINT', shutdown);
+  };
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const { server } = startServer();
+  installGracefulShutdown(server, process, (error) => {
+    process.stdout.write(JSON.stringify({ event: 'northstar.shutdown', status: error ? 'failed' : 'complete' }) + '\n');
+  });
+}

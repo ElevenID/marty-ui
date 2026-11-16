@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-service-runtime = { path = "../service-runtime" }
 mmf-platform.workspace = true
 rustls.workspace = true
 tokio = { workspace = true, features = ["io-util"] }

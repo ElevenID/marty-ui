@@ -33,6 +33,10 @@ pub enum PostgresPolicyStoreError {
     Record(#[from] PolicyRecordError),
     #[error("PRESENTATION_POLICY.SCHEMA: {0}")]
     Schema(String),
+    #[error(
+        "PRESENTATION_POLICY.ORGANIZATION_CONFLICT: policy belongs to a different organization"
+    )]
+    OrganizationConflict,
 }
 
 #[derive(Clone, Debug)]
@@ -51,14 +55,13 @@ impl PostgresPolicyStore {
         policy: &PresentationPolicy,
     ) -> Result<(), PostgresPolicyStoreError> {
         let record = PolicyRecord::from_policy(policy)?;
-        sqlx::query(
+        let result = sqlx::query(
             "INSERT INTO presentation_policy_service.presentation_policies (
                 id, organization_id, name, description, status, display_metadata,
                 credential_requirements, alternative_requirements, compliance_profile_id,
                 version, created_at, updated_at, policy_document
              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
              ON CONFLICT (id) DO UPDATE SET
-                organization_id=EXCLUDED.organization_id,
                 name=EXCLUDED.name,
                 description=EXCLUDED.description,
                 status=EXCLUDED.status,
@@ -68,7 +71,8 @@ impl PostgresPolicyStore {
                 compliance_profile_id=EXCLUDED.compliance_profile_id,
                 version=EXCLUDED.version,
                 updated_at=EXCLUDED.updated_at,
-                policy_document=EXCLUDED.policy_document",
+                policy_document=EXCLUDED.policy_document
+             WHERE presentation_policy_service.presentation_policies.organization_id=EXCLUDED.organization_id",
         )
         .bind(record.id)
         .bind(record.organization_id)
@@ -85,6 +89,9 @@ impl PostgresPolicyStore {
         .bind(record.policy_document)
         .execute(&self.pool)
         .await?;
+        if result.rows_affected() != 1 {
+            return Err(PostgresPolicyStoreError::OrganizationConflict);
+        }
         Ok(())
     }
 

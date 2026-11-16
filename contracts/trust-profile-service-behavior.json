@@ -29,6 +29,8 @@
     ["PATCH", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
     ["DELETE", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}"],
+    ["POST", "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot"],
+    ["POST", "/internal/v1/trust-profiles/{profile_id}/credential-trust-evaluations"],
     ["GET", "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys"],
     ["GET", "/internal/v1/resource-owners/trust-profiles/{profile_id}"],
     ["GET", "/internal/v1/resource-owners/issuer-entities/{issuer_entity_id}"],
@@ -74,7 +76,8 @@
     "issuer_entities",
     "trust_registry_sources",
     "trust_registry_issuers",
-    "trust_profile_issuers"
+    "trust_profile_issuers",
+    "credential_authority_revisions"
   ],
   "migration_chain": [
     ["33f047612e9b", null],

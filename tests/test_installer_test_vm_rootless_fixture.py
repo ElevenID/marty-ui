@@ -24,7 +24,8 @@ class FixtureTests(unittest.TestCase):
     def test_rootless_seed_has_no_sudo_docker_group_or_daemon_start(self):
         key = "ssh-ed25519 " + "A" * 44
         host = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "A" * 120 + "\n-----END OPENSSH PRIVATE KEY-----\n"
-        raw = seed._cloud_config(key, key, host, seed.ROOTLESS_FIXTURE_PROFILE)
+        raw = seed._cloud_config(key, key, host,
+                                 resource_profile=seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
         self.assertIn(b"sudo: false", raw)
         self.assertIn(b"groups: installer", raw)
         self.assertIn(b"openssh-server", raw)
@@ -49,7 +50,7 @@ class FixtureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "user-data"
             path.write_bytes(seed._cloud_config(key, key, host,
-                                                seed.ROOTLESS_FIXTURE_PROFILE))
+                                                resource_profile=seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE))
             result = subprocess.run([tool, "schema", "--config-file", str(path)],
                                     capture_output=True, timeout=20, check=False)
             self.assertEqual(result.returncode, 0, result.stderr[:1024])
@@ -69,7 +70,7 @@ class FixtureTests(unittest.TestCase):
                                     self.VM_ID, 22024)
             new = launch._arguments(Path("/tmp/fixture") / self.VM_ID,
                                     self.VM_ID, 22024,
-                                    launch.ROOTLESS_FIXTURE_MEMORY_MIB)
+                                    seed.ROOTLESS_FIXTURE_RESOURCE_PROFILE)
         position = old.index("-m") + 1
         self.assertEqual(old[position], "4096")
         self.assertEqual(new[position], "2048")

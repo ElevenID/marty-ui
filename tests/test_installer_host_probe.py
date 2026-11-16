@@ -12,7 +12,9 @@ import installer_host_probe as probe
 
 class Files:
     def socket(self):
-        pass
+        return {"profile": "rootless", "uid": 1000,
+                "docker_host": "unix:///run/user/1000/docker.sock",
+                "socket_device": 1, "socket_inode": 7}
 
     def executable(self, path):
         assert path == Path("/usr/bin/docker")
@@ -24,7 +26,7 @@ class Files:
         return 32 * 1024**3
 
     def disk(self, path):
-        assert path == "/var/lib/docker"
+        assert path == "/home/installer/.local/share/docker"
         return {"device": 99, "free_bytes": 20 * 1024**3}
 
     def credential_files(self):
@@ -37,8 +39,9 @@ class Files:
 class Docker:
     def __init__(self):
         self.info = dict(ID="engine-1", OSType="linux", Architecture="x86_64",
-                         SecurityOptions=["name=seccomp,profile=builtin"],
-                         MemTotal=32 * 1024**3, DockerRootDir="/var/lib/docker", ServerVersion="29.1.3")
+                         SecurityOptions=["name=seccomp,profile=builtin", "name=rootless"],
+                         CgroupVersion="2", CgroupDriver="systemd", MemoryLimit=True,
+                         MemTotal=32 * 1024**3, DockerRootDir="/home/installer/.local/share/docker", ServerVersion="29.1.3")
         self.networks = [dict(Id=str(i) * 64, Name=name, Driver=driver, Containers={})
                          for i, (name, driver) in enumerate((('bridge', 'bridge'), ('host', 'host'), ('none', 'null')), 1)]
         self.resources = {"ps": b"", "image": b"", "volume": b""}
@@ -46,7 +49,7 @@ class Docker:
         self.drift = False
 
     def __call__(self, argv, *, env):
-        assert argv[:5] == [str(Path("/usr/bin/docker")), "--host", "unix:///var/run/docker.sock", "--config", str(Path("/private/empty"))]
+        assert argv[:5] == [str(Path("/usr/bin/docker")), "--host", "unix:///run/user/1000/docker.sock", "--config", str(Path("/private/empty"))]
         assert env == {"PATH": probe.SAFE_PATH, "HOME": str(Path("/private/empty")), "LANG": "C", "LC_ALL": "C"}
         args = argv[5:]
         self.calls.append(args)
@@ -77,6 +80,8 @@ def observe(docker=None, files=None):
 def test_readonly_observations_separate_predicates_and_limitations():
     docker = Docker()
     result = observe(docker)
+    assert result["schema"] == "elevenid.installer-host-observation/v2"
+    assert result["runtime"] == Files().socket()
     assert result["predicates"] == {"capacity": True, "initial_docker_clean": True}
     assert result["acceptance"] is False
     assert result["credential_file_presence"]["docker_config"] is True
@@ -98,7 +103,12 @@ def test_dirty_resources_and_capacity_do_not_become_acceptance():
     assert result["resource_counts"]["containers"] == 1
 
 
-@pytest.mark.parametrize("key,value", [("SecurityOptions", ["name=rootless"]), ("SecurityOptions", ["name=userns"]),
+@pytest.mark.parametrize("key,value", [("SecurityOptions", []), ("SecurityOptions", ["name=userns"]),
+                                       ("SecurityOptions", ["name=rootless", "name=rootless"]),
+                                       ("SecurityOptions", ["name=rootless", "name=userns"]),
+                                       ("SecurityOptions", ["name=rootless,unreviewed=true"]),
+                                       ("CgroupVersion", "1"), ("CgroupDriver", "cgroupfs"),
+                                       ("MemoryLimit", False),
                                        ("OSType", "windows"), ("Architecture", "arm64"), ("MemTotal", True),
                                        ("ID", "secret\nunsafe"), ("ServerVersion", "bad")])
 def test_daemon_policy_refusal(key, value):
@@ -118,6 +128,20 @@ def test_identity_drift_and_filesystem_failure_refuse():
             raise PermissionError("cannot inspect Docker filesystem")
     with pytest.raises(PermissionError):
         observe(files=Unavailable())
+
+
+def test_replaced_rootless_socket_is_refused_after_observation():
+    class Replaced(Files):
+        count = 0
+
+        def socket(self):
+            result = super().socket()
+            self.count += 1
+            result["socket_inode"] += self.count
+            return result
+
+    with pytest.raises(ValueError):
+        observe(files=Replaced())
 
 
 def test_resource_duplicates_extra_network_and_unbounded_output():

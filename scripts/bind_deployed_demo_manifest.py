@@ -35,7 +35,10 @@ def bind_manifest(
     )
     release_version = source_manifest.get("release_version")
     source_marker = source_manifest.get("marty_ui_sha")
-    _require(isinstance(release_version, str) and release_version, "Source release marker is missing")
+    _require(
+        isinstance(release_version, str) and release_version,
+        "Source release marker is missing",
+    )
     _require(
         isinstance(source_marker, str)
         and len(source_marker) == 40
@@ -45,29 +48,71 @@ def bind_manifest(
 
     components = source_manifest.get("component_revisions")
     repositories = source_manifest.get("repositories")
-    _require(isinstance(components, list) and components, "Source component revisions are missing")
-    _require(isinstance(repositories, dict) and repositories, "Source repositories are missing")
+    _require(
+        isinstance(components, list) and components,
+        "Source component revisions are missing",
+    )
+    _require(
+        isinstance(repositories, dict) and repositories,
+        "Source repositories are missing",
+    )
     component_by_name: dict[str, dict[str, Any]] = {}
     for component in components:
         _require(isinstance(component, dict), "Source component revision is invalid")
         name = component.get("component")
         _require(isinstance(name, str) and name, "Source component name is invalid")
-        _require(name not in component_by_name, f"Source component revision is duplicated: {name}")
+        _require(
+            name not in component_by_name,
+            f"Source component revision is duplicated: {name}",
+        )
         component_by_name[name] = copy.deepcopy(component)
     _require(
         set(component_by_name) == set(repositories),
         "Source component revisions do not cover the exact repository set",
     )
     _require("marty-ui" in component_by_name, "Source manifest omits marty-ui")
-    _require(
-        "marty-demo-recorder" in component_by_name,
-        "Source manifest omits marty-demo-recorder",
+    functional_nightly = (
+        source_manifest.get("source_kind") == "signed-nightly-deployment"
     )
+    if functional_nightly:
+        _require(
+            source_manifest.get("scope") == "FUNCTIONAL_ONLY"
+            and source_manifest.get("promotion_eligible") is False
+            and source_manifest.get("release_ready") is False,
+            "Signed nightly demo binding must remain functional-only",
+        )
+        _require(
+            "marty-demo-recorder" not in component_by_name,
+            "Capture recorder must not be claimed as a deployed component",
+        )
+        recorder_revision = source_manifest.get("capture_recorder_revision")
+        _require(
+            isinstance(recorder_revision, str)
+            and len(recorder_revision) == 40
+            and all(c in "0123456789abcdef" for c in recorder_revision),
+            "Exact capture recorder revision is required",
+        )
+        _require(
+            component_by_name["marty-ui"]["revision"] == source_marker,
+            "Deployed UI source and marker differ",
+        )
+    else:
+        _require(
+            "marty-demo-recorder" in component_by_name,
+            "Source manifest omits marty-demo-recorder",
+        )
+        recorder_revision = component_by_name["marty-demo-recorder"]["revision"]
 
-    _require(isinstance(image_digests, dict) and image_digests, "Deployment image digests are missing")
+    _require(
+        isinstance(image_digests, dict) and image_digests,
+        "Deployment image digests are missing",
+    )
     images: list[dict[str, str]] = []
     for component, digest in sorted(image_digests.items()):
-        _require(isinstance(component, str) and component, "Deployment image component is invalid")
+        _require(
+            isinstance(component, str) and component,
+            "Deployment image component is invalid",
+        )
         _require(
             isinstance(digest, str)
             and len(digest) == 71
@@ -82,10 +127,12 @@ def bind_manifest(
     bound["deployment_release_marker"] = release_version
     bound["recorder_revision"] = {
         "kind": "git",
-        "value": component_by_name["marty-demo-recorder"]["revision"],
+        "value": recorder_revision,
     }
     bound["demo_application_revision"] = component_by_name["marty-ui"]["revision"]
-    bound["component_revisions"] = [component_by_name[name] for name in sorted(component_by_name)]
+    bound["component_revisions"] = [
+        component_by_name[name] for name in sorted(component_by_name)
+    ]
     bound["image_digests"] = images
     bound["release_evidence"] = {
         "environment": "beta",
@@ -137,7 +184,9 @@ def main() -> int:
     except (OSError, RuntimeError, ValueError) as exc:
         print(f"Demo deployment binding failed: {exc}")
         return 1
-    print(json.dumps({"manifest": str(output), "binding_state": bound["binding_state"]}))
+    print(
+        json.dumps({"manifest": str(output), "binding_state": bound["binding_state"]})
+    )
     return 0
 
 

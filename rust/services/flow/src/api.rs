@@ -128,6 +128,12 @@ impl FlowExtensionRequest {
                 "must be a standard flow type",
             ));
         }
+        if self.extends_flow_type == FlowType::PassportDigitalHandoff {
+            return Err(invalid(
+                "extension.extends_flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
+        }
         absolute_uri(&self.extension_uri, "extension.extension_uri")?;
         bounded_required(&self.extension_version, 64, "extension.extension_version")?;
         for (index, step) in self.steps.iter().enumerate() {
@@ -242,6 +248,12 @@ impl ValidateRequest for CreateFlowDefinitionRequest {
     fn validate(&self) -> Result<(), FlowApiError> {
         bounded_required(&self.organization_id, 255, "organization_id")?;
         bounded_required(&self.name, 255, "name")?;
+        if self.flow_type == FlowType::PassportDigitalHandoff {
+            return Err(invalid(
+                "flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
+        }
         optional_max(&self.description, 2_000, "description")?;
         optional_max(&self.credential_template_id, 255, "credential_template_id")?;
         optional_max(
@@ -388,6 +400,15 @@ impl ValidateRequest for UpdateFlowDefinitionRequest {
                 return Err(invalid(field, "cannot be null"));
             }
         }
+        if matches!(
+            self.flow_type,
+            Patch::Value(FlowType::PassportDigitalHandoff)
+        ) {
+            return Err(invalid(
+                "flow_type",
+                "requires the pinned MIP 0.6.0-beta.1 candidate",
+            ));
+        }
         if let Patch::Value(hooks) = &self.hooks {
             let flow_type = match &self.flow_type {
                 Patch::Value(flow_type) => *flow_type,
@@ -449,6 +470,7 @@ impl ValidateRequest for StartFlowRequest {
         max_length(&self.subject_type, 50, "subject_type")?;
         optional_max(&self.external_reference, 500, "external_reference")?;
         require_object(&self.initial_context, "initial_context")?;
+        reject_supplied_receipt(&self.initial_context, "initial_context")?;
         reject_private_context(&self.initial_context).map_err(|error| {
             api_error("FLOW.PRIVATE_CONTEXT", "initial_context", error.to_string())
         })
@@ -468,6 +490,7 @@ impl ValidateRequest for AdvanceFlowRequest {
     fn validate(&self) -> Result<(), FlowApiError> {
         max_length(&self.step_result, 50, "step_result")?;
         require_object(&self.data, "data")?;
+        reject_supplied_receipt(&self.data, "data")?;
         if self.data.get("physical_document_route_trace").is_some() {
             return Err(api_error(
                 "FLOW.INVALID_REQUEST",
@@ -478,6 +501,17 @@ impl ValidateRequest for AdvanceFlowRequest {
         reject_private_context(&self.data)
             .map_err(|error| api_error("FLOW.PRIVATE_CONTEXT", "data", error.to_string()))
     }
+}
+
+fn reject_supplied_receipt(value: &Value, field: &str) -> Result<(), FlowApiError> {
+    if crate::verification_receipt::reject_supplied_receipt(value, None).is_err() {
+        return Err(api_error(
+            "FLOW.INVALID_REQUEST",
+            field,
+            "verification receipt is produced by Flow finalization",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -704,7 +738,10 @@ impl ValidateRequest for ApplicationApprovedWebhook {
 fn validate_flow_references(request: &CreateFlowDefinitionRequest) -> Result<(), FlowApiError> {
     if request.credential_template_id.is_some()
         && request.application_template_id.is_some()
-        && request.flow_type != FlowType::PhysicalDocumentIssuance
+        && !matches!(
+            request.flow_type,
+            FlowType::PhysicalDocumentIssuance | FlowType::PassportDigitalHandoff
+        )
     {
         return Err(invalid(
             "body",
@@ -775,6 +812,7 @@ fn validate_hooks(
                 "submit_to_personalization",
                 "quality_verify",
             ][..],
+            FlowType::PassportDigitalHandoff => &["approval_decision"][..],
             FlowType::Custom => &[][..],
             _ => &[][..],
         };

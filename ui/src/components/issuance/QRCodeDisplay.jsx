@@ -346,7 +346,7 @@ const QRCodeDisplay = ({
                   gap: 1,
                 }}
               >
-                <Typography variant="h5" color="error" fontWeight="bold">
+                <Typography variant="h5" color="error" sx={{ fontWeight: 'bold' }}>
                   EXPIRED
                 </Typography>
                 {onRefresh && (
@@ -370,7 +370,7 @@ const QRCodeDisplay = ({
                 <Typography variant="caption" color="text.secondary">
                   Time Remaining
                 </Typography>
-                <Typography variant="caption" fontWeight="medium">
+                <Typography variant="caption" sx={{ fontWeight: 'medium' }}>
                   {timeRemaining}
                 </Typography>
               </Box>
@@ -384,7 +384,7 @@ const QRCodeDisplay = ({
           )}
 
           {/* Actions */}
-          <Stack direction="row" spacing={1} justifyContent="center">
+          <Stack direction="row" spacing={1} sx={{ justifyContent: 'center' }}>
             {showCopyLink && (
               <Tooltip title={copied ? 'Copied!' : 'Copy Link'}>
                 <Button

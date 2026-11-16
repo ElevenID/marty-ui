@@ -1,6 +1,7 @@
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { SELFHOST_EXCLUDED_STATIC_PATHS } from './selfhost-build-contract.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -12,13 +13,21 @@ const removeIfPresent = (targetPath) => {
   }
 };
 
-removeIfPresent(path.join(distDir, 'blog'));
-removeIfPresent(path.join(distDir, 'authors'));
-removeIfPresent(path.join(distDir, 'llms.txt'));
-removeIfPresent(path.join(distDir, 'robots.txt'));
-removeIfPresent(path.join(distDir, 'sitemap.xml'));
-removeIfPresent(path.join(distDir, 'sitemap-index.xml'));
-removeIfPresent(path.join(distDir, 'sitemap-0.xml'));
+export function pruneSelfhostDist(directory) {
+  for (const relativePath of SELFHOST_EXCLUDED_STATIC_PATHS) {
+    removeIfPresent(path.join(directory, relativePath));
+  }
+  for (const entry of readdirSync(directory)) {
+    if (/^sitemap-\d+\.xml$/.test(entry)) removeIfPresent(path.join(directory, entry));
+  }
+  const localesDirectory = path.join(directory, 'locales');
+  if (existsSync(localesDirectory)) {
+    for (const locale of readdirSync(localesDirectory, { withFileTypes: true })) {
+      if (locale.isDirectory()) removeIfPresent(path.join(localesDirectory, locale.name, 'marketing.json'));
+    }
+  }
+}
 
-// Home and product pages still use the marketing namespace in both self-host
-// profiles. Keep its translations aligned with the routes that remain enabled.
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+  pruneSelfhostDist(distDir);
+}

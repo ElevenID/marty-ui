@@ -1,10 +1,13 @@
-//! Native install entry point. Runtime completion is deliberately fail-closed
-//! until every application/TLS/readiness stage is implemented and qualified.
+//! Native install entry point. Admitted completion remains held; the exact
+//! rootless nightly candidate can report an observational trial outcome.
 #![cfg(target_os = "linux")]
 
 use crate::{
     installer_release as release,
-    installer_state::{CandidateTestScope, Identity, InstallerState, Phase, RuntimeBinding},
+    installer_state::{
+        CandidateTestScope, ExecutionScope, Identity, InstallerState, Phase, RuntimeBinding,
+        RuntimeProfile,
+    },
     installer_verify::{self, VerificationTools},
 };
 use std::{
@@ -23,17 +26,83 @@ struct Options {
     host: String,
     engine: String,
     directory: Option<PathBuf>,
+    foundation_file: Option<PathBuf>,
+    external_oidc_file: Option<PathBuf>,
+    hosting_file: Option<PathBuf>,
+    settings_file: Option<PathBuf>,
+    acme_staging_roots: Option<PathBuf>,
     channel: Option<(String, PathBuf)>,
+    profile: RuntimeProfile,
     yes: bool,
+    check_compatibility: bool,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstallMode {
     Admitted,
     CandidateTest,
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeCompletion {
+    HoldIncomplete,
+    CandidateTrialObserved,
+    SignedStartupObserved,
+}
+pub(crate) struct RuntimeInvocation<'a> {
+    pub(crate) operator_sha: &'a str,
+    pub(crate) completion: RuntimeCompletion,
+}
+pub(crate) const STAGING_ROOTS: &str = "staging-acme-roots.pem";
+
+fn initial_staging_roots(
+    hosting: &crate::installer_hosting::Prepared,
+    path: Option<&Path>,
+) -> Result<Option<Vec<u8>>> {
+    use crate::installer_acme_configuration::AcmeEnvironment;
+    let staging = hosting
+        .acme_parameters()
+        .is_some_and(|parameters| parameters.environment() == AcmeEnvironment::Staging);
+    if staging != path.is_some() {
+        return Err("ACME staging requires explicit --acme-staging-roots; production and other certificate sources refuse that override".into());
+    }
+    path.map(|path| {
+        let bytes = installer_verify::read_private_bytes(path, 65536)?;
+        crate::installer_acme_certificates::validate_staging_roots(&bytes)?;
+        Ok(bytes)
+    })
+    .transpose()
+}
+
+fn retained_staging_roots(
+    view: &crate::installer_state::LockedInspection,
+) -> Result<Option<Vec<u8>>> {
+    use crate::installer_acme_configuration::AcmeEnvironment;
+    let configuration =
+        crate::installer_acme_configuration::BoundAcmeConfiguration::from_selection(view)?;
+    let bytes = view.diagnostic_record(STAGING_ROOTS, true)?;
+    if (configuration.parameters().environment() == AcmeEnvironment::Staging) != bytes.is_some() {
+        return Err("retained ACME environment and staging anchors differ".into());
+    }
+    if let Some(bytes) = &bytes {
+        crate::installer_acme_certificates::validate_staging_roots(bytes)?;
+    }
+    Ok(bytes)
+}
+fn report_host_impact(hosting: &crate::installer_hosting::Prepared) {
+    eprintln!(
+        "Marty host impact: this experimental installation uses a pre-existing user-owned rootless Docker daemon. It may pull images; create private probe containers, workload containers, a network and a Redis volume; bind the selected ingress listener and private loopback service ports; and write private credentials and retained state under the selected installation path. It does not invoke sudo, package installation, daemon setup, or a rootful Docker socket. Ordinary uninstall retains data, credentials, images and the Redis volume; purge is unsupported. Use a disposable VM snapshot."
+    );
+    eprintln!(
+        "Marty hosting selection: {}. DNS, frontend certificates and firewall configuration remain with their selected owners.",
+        hosting.host_impact()
+    );
+    eprintln!(
+        "Marty trial feedback: retain the printed installation path and first failing stage; reply to your inviter with redacted facts or comment at https://github.com/ElevenID/marty-ui/issues/1350. No failed state is automatically purged."
+    );
+}
 fn options(args: &[String]) -> Result<Options> {
     let mut values = BTreeMap::new();
     let mut yes = false;
+    let mut check_compatibility = false;
     let mut index = 0;
     while index < args.len() {
         let key = args[index].as_str();
@@ -42,6 +111,14 @@ fn options(args: &[String]) -> Result<Options> {
                 return Err("repeated --yes".into());
             }
             yes = true;
+            index += 1;
+            continue;
+        }
+        if key == "--check-compatibility" {
+            if check_compatibility {
+                return Err("repeated --check-compatibility".into());
+            }
+            check_compatibility = true;
             index += 1;
             continue;
         }
@@ -56,6 +133,12 @@ fn options(args: &[String]) -> Result<Options> {
             "--install-dir",
             "--channel",
             "--verified-channel",
+            "--runtime-profile",
+            "--foundation-file",
+            "--external-oidc-file",
+            "--hosting-file",
+            "--settings-file",
+            "--acme-staging-roots",
         ]
         .contains(&key)
         {
@@ -83,7 +166,35 @@ fn options(args: &[String]) -> Result<Options> {
     let docker = PathBuf::from(take("--docker-bin")?);
     let host = take("--docker-host")?;
     let engine = take("--docker-engine-id")?;
+    let profile = match values.remove("--runtime-profile").as_deref() {
+        Some("rootless") => RuntimeProfile::Rootless,
+        _ => return Err("new installation requires the explicit rootless runtime profile".into()),
+    };
     let directory = values.remove("--install-dir").map(PathBuf::from);
+    let foundation_file = values.remove("--foundation-file").map(PathBuf::from);
+    let external_oidc_file = values.remove("--external-oidc-file").map(PathBuf::from);
+    if foundation_file.is_some() && external_oidc_file.is_some() {
+        return Err(
+            "--external-oidc-file and --foundation-file select conflicting OIDC owners".into(),
+        );
+    }
+    let hosting_file = values.remove("--hosting-file").map(PathBuf::from);
+    let settings_file = values.remove("--settings-file").map(PathBuf::from);
+    let acme_staging_roots = values.remove("--acme-staging-roots").map(PathBuf::from);
+    if check_compatibility
+        && (yes
+            || directory.is_some()
+            || foundation_file.is_some()
+            || external_oidc_file.is_some()
+            || hosting_file.is_some()
+            || settings_file.is_some()
+            || acme_staging_roots.is_some())
+    {
+        return Err(
+            "compatibility checking cannot be combined with --yes or installation input paths"
+                .into(),
+        );
+    }
     let channel = match (
         values.remove("--channel"),
         values.remove("--verified-channel"),
@@ -98,6 +209,15 @@ fn options(args: &[String]) -> Result<Options> {
         .iter()
         .any(|p| !p.is_absolute())
         || directory.as_ref().is_some_and(|p| !p.is_absolute())
+        || foundation_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || external_oidc_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        || hosting_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || settings_file.as_ref().is_some_and(|p| !p.is_absolute())
+        || acme_staging_roots
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
         || channel.as_ref().is_some_and(|(_, p)| !p.is_absolute())
     {
         return Err("installer paths must be absolute".into());
@@ -106,7 +226,7 @@ fn options(args: &[String]) -> Result<Options> {
         docker_host: host.clone(),
         engine_id: engine.clone(),
         openbao_port: 18200,
-        profile: crate::installer_state::RuntimeProfile::Rootful,
+        profile,
     }
     .validate()?;
     Ok(Options {
@@ -118,8 +238,15 @@ fn options(args: &[String]) -> Result<Options> {
         host,
         engine,
         directory,
+        foundation_file,
+        external_oidc_file,
+        hosting_file,
+        settings_file,
+        acme_staging_roots,
         channel,
+        profile,
         yes,
+        check_compatibility,
     })
 }
 fn candidate_test_options(args: &[String]) -> Result<Options> {
@@ -151,8 +278,8 @@ fn confirm(directory: &Path) -> Result<()> {
         .map_err(|_| "installation confirmation requires a terminal; use --yes to accept the documented defaults")?;
     writeln!(
         tty,
-        "Create an isolated Marty installation at {}? [y/N]",
-        directory.display()
+        "Continue with a user-owned rootless Docker installation at {:?}? [y/N]",
+        directory
     )
     .map_err(|_| "cannot request confirmation")?;
     tty.flush().map_err(|_| "cannot request confirmation")?;
@@ -190,11 +317,54 @@ pub fn install(args: &[String], build_identity: &str) -> Result<()> {
 pub fn candidate_test(args: &[String], build_identity: &str) -> Result<()> {
     install_inner(args, build_identity, InstallMode::CandidateTest)
 }
+pub(crate) fn require_rootless_process() -> Result<()> {
+    let mut real_uid = 0;
+    let mut effective_uid = 0;
+    let mut saved_uid = 0;
+    let mut real_gid = 0;
+    let mut effective_gid = 0;
+    let mut saved_gid = 0;
+    if unsafe { libc::getresuid(&mut real_uid, &mut effective_uid, &mut saved_uid) } != 0
+        || unsafe { libc::getresgid(&mut real_gid, &mut effective_gid, &mut saved_gid) } != 0
+        || real_uid == 0
+        || real_gid == 0
+        || real_uid != effective_uid
+        || real_uid != saved_uid
+        || real_gid != effective_gid
+        || real_gid != saved_gid
+        || unsafe { libc::prctl(libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) } != 1
+    {
+        return Err(
+            "rootless trial requires an unprivileged process with no-new-privileges".into(),
+        );
+    }
+    let mut status = String::new();
+    std::fs::File::open("/proc/self/status")
+        .map_err(|_| "rootless process capability state unavailable")?
+        .take(16 * 1024 + 1)
+        .read_to_string(&mut status)
+        .map_err(|_| "rootless process capability state unavailable")?;
+    if status.len() > 16 * 1024 {
+        return Err("rootless process capability state unavailable".into());
+    }
+    for key in ["CapEff", "CapPrm", "CapAmb"] {
+        let mut values = status
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .filter(|(name, _)| *name == key)
+            .map(|(_, value)| value.trim());
+        if values.next() != Some("0000000000000000") || values.next().is_some() {
+            return Err("rootless process has capabilities".into());
+        }
+    }
+    Ok(())
+}
 fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Result<()> {
     let o = match mode {
         InstallMode::Admitted => options(args)?,
         InstallMode::CandidateTest => candidate_test_options(args)?,
     };
+    require_rootless_process()?;
     if unsafe { libc::geteuid() } == 0 || !cfg!(target_arch = "x86_64") {
         return Err("installer requires a regular Docker-enabled Linux amd64 user".into());
     }
@@ -209,6 +379,21 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     {
         return Err("installer requires an exact release-built operator".into());
     }
+    let external_oidc = crate::installer_oidc::prepare(
+        o.external_oidc_file.as_deref(),
+        o.foundation_file.is_some(),
+    )?;
+    let foundation_origin = o
+        .foundation_file
+        .as_deref()
+        .map(crate::installer_foundation::preflight_origin)
+        .transpose()?;
+    let hosting = crate::installer_hosting::prepare(o.hosting_file.as_deref(), foundation_origin)?;
+    let settings = crate::installer_settings::prepare(
+        o.settings_file.as_deref(),
+        o.foundation_file.is_none() && o.external_oidc_file.is_none(),
+    )?;
+    let staging_roots = initial_staging_roots(&hosting, o.acme_staging_roots.as_deref())?;
     let tools = VerificationTools::new(&o.tools, &o.gh)?;
     let operator_sha = installer_verify::current_operator_digest()?;
     let admitted = if mode == InstallMode::Admitted {
@@ -251,17 +436,43 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     } else {
         None
     };
+    // Use the same isolated, custody-checked runtime path for both the check
+    // and installation. The catalog remains the sole Compose version policy.
+    let docker = o.docker.as_path();
+    let observed = crate::installer_runtime::DockerRunner::new_for_profile(
+        docker, &o.host, &o.engine, &o.tools, o.profile,
+    )?
+    .preflight()?;
+    crate::installer_compose::require_version(&observed.compose_version)?;
+    if o.check_compatibility {
+        println!(
+            "{}",
+            serde_json::json!({
+                "scope":"installation-host-compatibility",
+                "source_sha":source,
+                "release_tag":version,
+                "docker":observed,
+                "required_compose_version":crate::installer_compose::COMPOSE_VERSION,
+                "compatibility_checks_passed":true,
+                "installation_created":false,
+                "docker_mutated":false,
+                "installation_ready":false,
+                "not_checked":["resources", "release_payloads", "images", "application_readiness"],
+            })
+        );
+        return Ok(());
+    }
     let directory = o.directory.unwrap_or_else(|| {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(format!(".marty-install-{}", uuid::Uuid::new_v4().simple()))
     });
-    if !directory.is_absolute() || directory.starts_with(&o.tools) {
+    if !directory.is_absolute()
+        || directory.as_os_str().as_encoded_bytes().len() > 4096
+        || directory.starts_with(&o.tools)
+    {
         return Err(
             "installation must use persistent absolute storage outside bootstrap staging".into(),
         );
-    }
-    if !o.yes {
-        confirm(&directory)?;
     }
     let port_reservation = std::net::TcpListener::bind(("127.0.0.1", 0))
         .map_err(|_| "cannot select local OpenBao port")?;
@@ -272,16 +483,12 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
             .local_addr()
             .map_err(|_| "cannot inspect local port")?
             .port(),
-        profile: crate::installer_state::RuntimeProfile::Rootful,
+        profile: o.profile,
     };
-    let docker = o.docker.as_path();
-    let observed = crate::installer_runtime::DockerRunner::new(
-        docker,
-        &runtime.docker_host,
-        &runtime.engine_id,
-        &o.tools,
-    )?
-    .preflight()?;
+    report_host_impact(&hosting);
+    if !o.yes {
+        confirm(&directory)?;
+    }
     let inventory_sha = if let Some((_, record)) = &admitted {
         record.inventory_sha256.clone()
     } else {
@@ -306,7 +513,7 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
     } else {
         InstallerState::create_with_runtime(&directory, identity, runtime)?
     };
-    eprintln!("Marty installation state: {}", directory.display());
+    eprintln!("Marty installation state: {:?}", directory);
     state.create_private_directory("evidence")?;
     state.create_private_directory("downloads")?;
     if testing.is_none() {
@@ -390,13 +597,43 @@ fn install_inner(args: &[String], build_identity: &str, mode: InstallMode) -> Re
         &serde_json::to_vec(&bundle).map_err(|_| "cannot encode bundle validation")?,
     )?;
     state.advance(Phase::Verified)?;
+    if let Some(path) = &o.foundation_file {
+        crate::installer_foundation::select(path, &directory, &mut state)?;
+    }
+    crate::installer_oidc::select(external_oidc, &mut state)?;
+    crate::installer_hosting::select(hosting, &mut state)?;
+    crate::installer_settings::select(settings, &mut state)?;
+    if let Some(roots) = &staging_roots {
+        state.write_evidence(STAGING_ROOTS, roots)?;
+    }
+    executor.block_on(crate::installer_hosting_addon::prepare(
+        &directory,
+        &mut state,
+        &prepared.inventory,
+        &tools,
+    ))?;
+    eprintln!("Marty runtime stage: rootless storage canary");
+    crate::installer_rootless_storage_canary::qualify_installation(
+        docker,
+        &directory,
+        &mut state,
+        &prepared.inventory,
+        &operator_sha,
+    )?;
     provision_runtime(
         docker,
         &directory,
         &prepared.bundle,
         &prepared.inventory,
         &mut state,
-        &operator_sha,
+        RuntimeInvocation {
+            operator_sha: &operator_sha,
+            completion: if mode == InstallMode::CandidateTest {
+                RuntimeCompletion::CandidateTrialObserved
+            } else {
+                RuntimeCompletion::HoldIncomplete
+            },
+        },
         port_reservation,
     )
 }
@@ -413,41 +650,97 @@ pub(crate) fn provision_runtime(
     bundle: &Path,
     inventory: &release::Inventory,
     state: &mut InstallerState,
-    operator_sha: &str,
+    invocation: RuntimeInvocation<'_>,
     port_reservation: std::net::TcpListener,
 ) -> Result<()> {
     state.require_live_phase(Phase::Verified)?;
-    let realm_path = bundle.join("config/keycloak/11id-realm.json");
-    let realm: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
-    )
-    .map_err(|_| "packaged Keycloak realm invalid")?;
+    let hosting = state.with_inspection(crate::installer_hosting::resolve)?;
+    // Other independently authenticated fresh entry points share these same
+    // defaults. Bind them before provisioning instead of leaving an implicit
+    // unrecorded application policy in candidate qualification runs.
+    if state
+        .with_inspection(crate::installer_settings::load)?
+        .is_none()
+    {
+        let managed = state
+            .with_inspection(crate::installer_oidc::external)?
+            .is_none();
+        crate::installer_settings::select(
+            crate::installer_settings::prepare(None, managed)?,
+            state,
+        )?;
+    }
+    if state
+        .with_inspection(crate::installer_oidc::external)?
+        .is_some()
+    {
+        crate::installer_oidc_command::before_provisioning(
+            installation,
+            docker,
+            inventory
+                .images
+                .get("auth")
+                .ok_or("admitted Auth image missing")?,
+            state,
+        )?;
+    }
+    if let Some(foundation) = state.with_inspection(crate::installer_foundation::load)? {
+        state.advance(Phase::Provisioning)?;
+        eprintln!("Marty runtime stage: local credentials and preprovisioned AWS inputs");
+        state.generate_external_auth_credentials()?;
+        state.persist_credential_creation_receipt(installation)?;
+        foundation.import_inputs(state)?;
+        hosting.import_connector(state)?;
+        drop(port_reservation);
+        let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+        let bootstrap = crate::installer_application::bootstrap_inputs(
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            &nonce,
+        )?;
+        eprintln!("Marty runtime stage: native Compose application startup");
+        crate::installer_application::start_aws(
+            docker,
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            &bootstrap,
+        )?;
+        return validate_and_complete(docker, installation, bundle, state, inventory, invocation);
+    }
+    let external_oidc = state.with_inspection(crate::installer_oidc::load)?;
+    let realm = if external_oidc.is_none() {
+        eprintln!("Marty runtime stage: packaged realm");
+        let realm_path = bundle.join("config/keycloak/11id-realm.json");
+        Some(
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(realm_path).map_err(|_| "packaged Keycloak realm unavailable")?,
+            )
+            .map_err(|_| "packaged Keycloak realm invalid")?,
+        )
+    } else {
+        None
+    };
     state.advance(Phase::Provisioning)?;
-    state.generate_local_credentials(&realm)?;
+    eprintln!("Marty runtime stage: local credentials");
+    if external_oidc.is_some() {
+        state.generate_external_auth_credentials()?;
+    } else {
+        state.generate_local_credentials(realm.as_ref().ok_or("packaged realm absent")?)?;
+    }
     state.persist_credential_creation_receipt(installation)?;
+    if let Some(selection) = &external_oidc {
+        selection.import_inputs(state)?;
+    }
+    hosting.import_connector(state)?;
     drop(port_reservation);
     let plugin = inventory
         .images
         .get("openbao_didcomm_image")
         .ok_or("admitted OpenBao image missing")?;
-    let infrastructure =
-        crate::installer_openbao::start_openbao(docker, installation, bundle, state, plugin)?;
-    state.write_evidence(
-        "openbao-observation.json",
-        &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
-    )?;
-    let keycloak = crate::installer_keycloak::provision(
-        docker,
-        installation,
-        bundle,
-        state,
-        &infrastructure,
-        operator_sha,
-    )?;
-    state.write_evidence(
-        "keycloak-observation.json",
-        &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
-    )?;
     let services_image = inventory
         .images
         .get("gateway")
@@ -457,83 +750,619 @@ pub(crate) fn provision_runtime(
             "TLS bootstrap requires identical admitted gateway and signing-keys images".into(),
         );
     }
-    let tls = crate::installer_tls::provision(
+    let nonce = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+    let bootstrap = crate::installer_application::bootstrap_inputs(
+        installation,
+        bundle,
+        state,
+        &inventory.images,
+        &nonce,
+    )?;
+    eprintln!("Marty runtime stage: OpenBao through Compose");
+    let (infrastructure, mut receipt) = crate::installer_openbao::start_openbao(
+        docker,
+        installation,
+        state,
+        plugin,
+        bootstrap.clone(),
+    )?;
+    state.write_evidence(
+        "openbao-observation.json",
+        &serde_json::to_vec(&infrastructure).map_err(|_| "cannot encode OpenBao observation")?,
+    )?;
+    eprintln!(
+        "Marty runtime stage: {}",
+        if external_oidc.is_some() {
+            "OpenBao compatibility custody inputs through Compose (no Keycloak server)"
+        } else {
+            "Keycloak inputs through Compose"
+        }
+    );
+    let (next, keycloak) = crate::installer_keycloak::provision(
+        docker,
+        installation,
+        bundle,
+        state,
+        &infrastructure,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-keycloak"),
+        &nonce,
+        invocation.operator_sha,
+    )?;
+    receipt = next;
+    state.write_evidence(
+        "keycloak-observation.json",
+        &serde_json::to_vec(&keycloak).map_err(|_| "cannot encode Keycloak observation")?,
+    )?;
+    eprintln!("Marty runtime stage: workload TLS through Compose");
+    let (next, tls) = crate::installer_tls::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-tls"),
+        invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "tls-observation.json",
         &serde_json::to_vec(&tls).map_err(|_| "cannot encode TLS observation")?,
     )?;
-    let ingress = crate::installer_ingress::provision(
+    eprintln!("Marty runtime stage: ingress inputs through Compose");
+    let (next, ingress) = crate::installer_ingress::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        crate::installer_application::job_inputs(
+            &bootstrap,
+            receipt,
+            "installer-ingress-provision",
+        ),
+        invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "ingress-observation.json",
         &serde_json::to_vec(&ingress).map_err(|_| "cannot encode ingress observation")?,
     )?;
-    let renewal = crate::installer_renewal::provision(
+    if hosting.certificate_source() == crate::installer_hosting::CertificateSource::Acme {
+        eprintln!("Marty runtime stage: durable application and renewal preparation before ACME");
+        crate::installer_acme_preparation::prepare(state, installation)?;
+        let authority = state.with_inspection(|view| {
+            crate::installer_public_ingress::PublicRenewalAuthorityPlan::from_initial(
+                view,
+                installation,
+            )
+        })?;
+        let bootstrap = crate::installer_application::public_renewal_inputs(
+            installation,
+            bundle,
+            state,
+            &bootstrap,
+            &authority,
+        )?;
+        let (next, renewal) = crate::installer_renewal::provision_public(
+            docker,
+            installation,
+            bundle,
+            state,
+            &infrastructure,
+            services_image,
+            crate::installer_application::job_inputs(&bootstrap, receipt, "installer-renewal"),
+            invocation.operator_sha,
+            &authority,
+        )?;
+        receipt = next;
+        state.write_evidence(
+            "renewal-observation.json",
+            &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
+        )?;
+        let roots = state.with_inspection(retained_staging_roots)?;
+        eprintln!("Marty runtime stage: bounded public certificate enrollment");
+        let outcome = crate::installer_acme_host::provision(
+            &crate::installer_acme_host::HostInputs {
+                docker,
+                installation,
+                bundle,
+                infrastructure: &infrastructure,
+                services_image,
+                operator_sha256: invocation.operator_sha,
+            },
+            state,
+            &bootstrap,
+            receipt,
+            roots.as_deref(),
+        )?;
+        return finish_acme_installation(
+            docker,
+            installation,
+            bundle,
+            state,
+            inventory,
+            invocation,
+            &infrastructure,
+            outcome,
+        );
+    }
+    eprintln!("Marty runtime stage: renewal inputs through Compose");
+    let (next, renewal) = crate::installer_renewal::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-renewal"),
+        invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "renewal-observation.json",
         &serde_json::to_vec(&renewal).map_err(|_| "cannot encode renewal observation")?,
     )?;
-    let generation = crate::installer_generation_host::provision(
+    eprintln!("Marty runtime stage: immutable credential generation through Compose");
+    let (next, generation) = crate::installer_generation_host::provision(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         services_image,
-        operator_sha,
+        crate::installer_application::job_inputs(&bootstrap, receipt, "installer-generation"),
+        invocation.operator_sha,
     )?;
+    receipt = next;
     state.write_evidence(
         "generation-observation.json",
         &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
     )?;
-    let application = crate::installer_application::prepare_with_generation(
+    eprintln!("Marty runtime stage: native Compose application startup");
+    crate::installer_application::start(
         docker,
         installation,
         bundle,
         state,
         &infrastructure,
         &inventory.images,
+        &bootstrap,
+        receipt,
     )?;
-    crate::installer_application_start::start(
+    validate_and_complete(docker, installation, bundle, state, inventory, invocation)
+}
+
+fn acme_continuation_command(installation: &Path, docker: &Path) -> Vec<PathBuf> {
+    // A command copied from the initial installer is a new process. It does
+    // not inherit that installer's no-new-privileges setting from the tester's
+    // interactive shell, so keep the boundary in the returned literal argv.
+    vec![
+        PathBuf::from("/usr/bin/setpriv"),
+        PathBuf::from("--no-new-privs"),
+        PathBuf::from("--"),
+        installation.join("marty-deploy"),
+        PathBuf::from("acme"),
+        PathBuf::from("continue"),
+        PathBuf::from("--install-dir"),
+        installation.to_path_buf(),
+        PathBuf::from("--docker-bin"),
+        docker.to_path_buf(),
+    ]
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The authenticated runtime and separate admitted candidate remain explicit at the first activation boundary."
+)]
+fn finish_acme_installation(
+    docker: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    inventory: &release::Inventory,
+    invocation: RuntimeInvocation<'_>,
+    infrastructure: &crate::installer_openbao::OpenBaoInventory,
+    outcome: crate::installer_acme_host::AcmeHostOutcome,
+) -> Result<()> {
+    let Some(candidate) = outcome.enrolment.candidate else {
+        let pending = &outcome.enrolment.report;
+        let disposition = if pending["candidate_replacement_reason"].is_string() {
+            "certificate_replacement_pending"
+        } else if pending["stage"] == "order_pending" {
+            "order_reconciliation_required"
+        } else if pending["stage"] == "terminal" {
+            "enrollment_requires_review"
+        } else {
+            "enrollment_pending"
+        };
+        let report = serde_json::json!({
+            "schema":"elevenid.installer-acme-installation/v1",
+            "installation_id":state.journal().installation_id(),
+            "outcome":disposition, "enrollment":outcome.enrolment.report,
+            "application_started":false, "installation_ready":false,
+            "continuation":acme_continuation_command(installation, docker)
+        });
+        println!(
+            "{}",
+            serde_json::to_string(&report).map_err(|_| "cannot encode ACME continuation")?
+        );
+        eprintln!(
+            "ACME enrollment has not started the application. Preserve this installation and inspect the reported outcome and polling deadline before using its continuation command; do not run a new installation to resume an order."
+        );
+        return Ok(());
+    };
+    if candidate.environment() == crate::installer_acme_configuration::AcmeEnvironment::Staging {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema":"elevenid.installer-acme-installation/v1",
+                "installation_id":state.journal().installation_id(),
+                "outcome":"staging_candidate_observed", "enrollment":outcome.enrolment.report,
+                "certificate_admission":candidate.metadata(),
+                "application_started":false,"installation_ready":false,
+                "production_selection_permitted":false
+            })
+        );
+        return Ok(());
+    }
+    let plan = state.with_inspection(|view| {
+        crate::installer_public_ingress::PublicIngressPlan::from_candidate(
+            view,
+            &candidate,
+            &outcome.ingress_key,
+        )
+    })?;
+    let bootstrap = crate::installer_application::public_ingress_inputs(
+        installation,
+        state,
+        &outcome.compose_inputs,
+        &plan,
+    )?;
+    eprintln!("Marty runtime stage: immutable public TLS and workload credential generation");
+    let (receipt, generation) = crate::installer_generation_host::provision_public(
         docker,
         installation,
         bundle,
         state,
-        &infrastructure,
-        application,
+        infrastructure,
+        inventory
+            .images
+            .get("gateway")
+            .ok_or("admitted gateway image missing")?,
+        crate::installer_application::job_inputs(
+            &bootstrap,
+            outcome.compose_receipt,
+            "installer-generation",
+        ),
+        invocation.operator_sha,
+        &plan,
     )?;
-    state.with_inspection(|inspection| {
-        crate::installer_validation::run_locked(installation, docker, inspection, false)
+    state.write_evidence(
+        "generation-observation.json",
+        &serde_json::to_vec(&generation).map_err(|_| "cannot encode generation observation")?,
+    )?;
+    crate::installer_application::start(
+        docker,
+        installation,
+        bundle,
+        state,
+        infrastructure,
+        &inventory.images,
+        &bootstrap,
+        receipt,
+    )?;
+    validate_and_complete(docker, installation, bundle, state, inventory, invocation)
+}
+
+/// The retained operator resumes only a completely prepared ACME order. Neither
+/// an alternate binary nor new install flags can replay initial setup here.
+pub fn acme(args: &[String], build_identity: &str) -> Result<()> {
+    let action = args.first().map(String::as_str);
+    if !matches!(action, Some("status" | "continue")) || !(args.len() - 1).is_multiple_of(2) {
+        return Err("usage: marty-deploy acme status|continue --install-dir ABSOLUTE_PATH [--docker-bin ABSOLUTE_PATH]".into());
+    }
+    let mut values = BTreeMap::new();
+    for pair in args[1..].chunks_exact(2) {
+        if !["--install-dir", "--docker-bin"].contains(&pair[0].as_str())
+            || values.insert(pair[0].as_str(), pair[1].as_str()).is_some()
+        {
+            return Err("unknown or repeated ACME command option".into());
+        }
+    }
+    let installation = Path::new(
+        values
+            .get("--install-dir")
+            .copied()
+            .ok_or("ACME installation path required")?,
+    );
+    let docker = Path::new(
+        values
+            .get("--docker-bin")
+            .copied()
+            .unwrap_or("/usr/bin/docker"),
+    );
+    if !installation.is_absolute()
+        || !docker.is_absolute()
+        || (action == Some("status") && values.contains_key("--docker-bin"))
+    {
+        return Err("ACME command paths must be absolute; status does not use Docker".into());
+    }
+    let view = crate::installer_state::LockedInspection::open(installation)?;
+    if action == Some("status") {
+        let report = crate::installer_acme::status(&view)?;
+        view.require_unchanged()?;
+        println!("{report}");
+        return Ok(());
+    }
+    require_rootless_process()?;
+    let retained = crate::installer_acme_host::continuation_context(&view)?;
+    let identity = view.journal().identity().clone();
+    let operator_sha = installer_verify::current_operator_digest()?;
+    if build_identity != format!("{}:{}", identity.source_sha, identity.release_tag)
+        || operator_sha != retained.operator_sha256
+    {
+        return Err("ACME continuation requires the exact retained release operator".into());
+    }
+    let bytes = view.read_evidence("installer-inventory.json")?;
+    if format!("sha256:{}", release::sha256(&bytes)) != identity.inventory_sha256 {
+        return Err("retained installer inventory differs".into());
+    }
+    let inventory = release::parse_inventory(&bytes)?;
+    if inventory.source_sha != identity.source_sha
+        || inventory.release_tag != identity.release_tag
+        || inventory.artifact("marty-deploy-linux-amd64")?.sha256 != operator_sha
+        || inventory.images.get("gateway") != Some(&retained.services_image)
+        || inventory
+            .images
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>()
+            != retained.compose_inputs.approved_images
+    {
+        return Err("retained ACME release, operator or images differ".into());
+    }
+    let image_lock = installer_verify::read_private_record(
+        &installation.join("downloads/prepared-selfhost-images.json"),
+    )?;
+    let bundle =
+        crate::installer_bundle::validate_bundle(&retained.bundle, &inventory, &image_lock)?;
+    if serde_json::to_value(bundle).map_err(|_| "cannot encode bundle observation")?
+        != crate::installer_json::decode(&view.read_evidence("bundle-validation.json")?)
+            .map_err(|_| "retained bundle validation is malformed")?
+    {
+        return Err("retained ACME bundle differs".into());
+    }
+    let completion = if matches!(
+        view.journal().execution_scope(),
+        ExecutionScope::CandidateTest(_)
+    ) {
+        RuntimeCompletion::CandidateTrialObserved
+    } else if crate::installer_startup_observation::retained_signed_startup(&view, &operator_sha)? {
+        RuntimeCompletion::SignedStartupObserved
+    } else {
+        RuntimeCompletion::HoldIncomplete
+    };
+    let roots = retained_staging_roots(&view)?;
+    let mut state = InstallerState::continue_acme_enrolment(view, installation, &identity)?;
+    let outcome = crate::installer_acme_host::resume(
+        &crate::installer_acme_host::HostInputs {
+            docker,
+            installation,
+            bundle: &retained.bundle,
+            infrastructure: &retained.infrastructure,
+            services_image: &retained.services_image,
+            operator_sha256: &operator_sha,
+        },
+        &mut state,
+        roots.as_deref(),
+    )?;
+    finish_acme_installation(
+        docker,
+        installation,
+        &retained.bundle,
+        &mut state,
+        &inventory,
+        RuntimeInvocation {
+            operator_sha: &operator_sha,
+            completion,
+        },
+        &retained.infrastructure,
+        outcome,
+    )
+}
+
+fn validate_and_complete(
+    docker: &Path,
+    installation: &Path,
+    bundle: &Path,
+    state: &mut InstallerState,
+    inventory: &release::Inventory,
+    invocation: RuntimeInvocation<'_>,
+) -> Result<()> {
+    if state
+        .with_inspection(crate::installer_foundation::load)?
+        .is_some()
+    {
+        eprintln!("Marty runtime stage: organization-scoped KMS registration");
+        crate::installer_foundation_registration::run(
+            docker,
+            installation,
+            bundle,
+            state,
+            &inventory.images,
+            invocation.operator_sha,
+        )?;
+    }
+    eprintln!("Marty runtime stage: read-only deployment validation");
+    let startup = if invocation.completion == RuntimeCompletion::SignedStartupObserved {
+        Some(state.with_inspection(|inspection| {
+            crate::installer_startup_observation::observe_locked(
+                inspection,
+                installation,
+                docker,
+                crate::installer_startup_observation::StartupObservationRequest::fresh(),
+            )
+        })?)
+    } else {
+        state.with_inspection(|inspection| {
+            crate::installer_validation::run_locked(installation, docker, inspection, false)
+        })?;
+        None
+    };
+    let lifecycle = state.with_maintenance(|maintenance| {
+        crate::installer_lifecycle::install_locked(maintenance, installation, docker)
     })?;
-    Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
+    if let Some(startup) = startup {
+        state.require_live_phase(Phase::Provisioning)?;
+        // The private native result can only be constructed by the real signed
+        // observer. Exit zero is observation-only, never admitted completion.
+        println!(
+            "{}",
+            std::str::from_utf8(&startup.bytes()?)
+                .map_err(|_| "cannot encode signed startup observation")?
+        );
+        eprintln!(
+            "SIGNED STARTUP OBSERVED: journal remains Provisioning; Ready, functional/recovery qualification and load characterization are false."
+        );
+        return Ok(());
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&lifecycle)
+            .map_err(|_| "cannot encode customer lifecycle commands")?
+    );
+    completion_after_validation(state, invocation.completion, installation)
+}
+
+fn completion_after_validation(
+    state: &InstallerState,
+    completion: RuntimeCompletion,
+    installation: &Path,
+) -> Result<()> {
+    state.require_live_phase(Phase::Provisioning)?;
+    if completion == RuntimeCompletion::CandidateTrialObserved {
+        if !matches!(
+            state.journal().execution_scope(),
+            ExecutionScope::CandidateTest(_)
+        ) {
+            return Err("candidate trial completion requires candidate-test scope".into());
+        }
+        eprintln!(
+            "CANDIDATE TRIAL OBSERVED: application startup and required read-only validation passed. This experimental rootless stack is not production ready; the journal remains Provisioning, installation_ready is false, and installed-journey qualification was not performed."
+        );
+        eprintln!("Retained Marty trial state: {:?}", installation);
+        eprintln!(
+            "Report feedback and the first failing stage to https://github.com/ElevenID/marty-ui/issues/1350"
+        );
+        Ok(())
+    } else {
+        Err("Owned application startup observations recorded. Explicit local CA trust onboarding and installed journey qualification remain incomplete; preserve the reported state for recovery. Installation is not ready.".into())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn acme_continuation_preserves_no_new_privileges_and_literal_paths() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().unwrap();
+        let installation = root.path().join("trial with $' literal characters");
+        std::fs::create_dir(&installation).unwrap();
+        let operator = installation.join("marty-deploy");
+        // This harmless stand-in observes the process boundary and received
+        // arguments; it cannot touch Docker, credentials or an installation.
+        std::fs::write(
+            &operator,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\"\nwhile read -r key value; do\n  if [ \"$key\" = 'NoNewPrivs:' ]; then printf 'NoNewPrivs=%s\\n' \"$value\"; fi\ndone < /proc/self/status\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&operator, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let docker = root.path().join("docker path with $' literal characters");
+        let command = acme_continuation_command(&installation, &docker);
+        let output = std::process::Command::new(&command[0])
+            .args(&command[1..])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{:?}", output.stderr);
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!(
+                "acme\ncontinue\n--install-dir\n{}\n--docker-bin\n{}\nNoNewPrivs=1\n",
+                installation.display(),
+                docker.display(),
+            )
+        );
+    }
+
+    #[test]
+    fn candidate_completion_keeps_provisioning_and_cannot_claim_ready() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let directory = root.path().join("trial");
+        let uid = unsafe { libc::geteuid() };
+        let mut state = InstallerState::create_test_with_runtime(
+            &directory,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.1.263-nightly.20261027.42".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+            RuntimeBinding {
+                docker_host: format!("unix:///run/user/{uid}/docker.sock"),
+                engine_id: "01234567-89ab-cdef".into(),
+                openbao_port: 18200,
+                profile: RuntimeProfile::Rootless,
+            },
+            CandidateTestScope {
+                inventory_sha256: "b".repeat(64),
+                build_run_id: 42,
+                build_run_attempt: 1,
+            },
+        )
+        .unwrap();
+        state.advance(Phase::Verified).unwrap();
+        state.advance(Phase::Provisioning).unwrap();
+        let before = std::fs::read(directory.join("installation.json")).unwrap();
+        assert!(completion_after_validation(
+            &state,
+            RuntimeCompletion::CandidateTrialObserved,
+            &directory
+        )
+        .is_ok());
+        assert_eq!(state.journal().phase(), Phase::Provisioning);
+        assert_eq!(
+            std::fs::read(directory.join("installation.json")).unwrap(),
+            before
+        );
+        assert!(
+            completion_after_validation(&state, RuntimeCompletion::HoldIncomplete, &directory)
+                .is_err()
+        );
+        assert!(state.advance(Phase::Ready).is_err());
+        let admitted_path = root.path().join("admitted");
+        let mut admitted = InstallerState::create(
+            &admitted_path,
+            Identity {
+                source_sha: "a".repeat(40),
+                release_tag: "v1.1.263-nightly.20261027.42".into(),
+                inventory_sha256: format!("sha256:{}", "b".repeat(64)),
+            },
+        )
+        .unwrap();
+        admitted.advance(Phase::Verified).unwrap();
+        admitted.advance(Phase::Provisioning).unwrap();
+        assert!(completion_after_validation(
+            &admitted,
+            RuntimeCompletion::CandidateTrialObserved,
+            &admitted_path,
+        )
+        .is_err());
+    }
     #[test]
     fn shared_runtime_refuses_unverified_state_before_reading_bundle_or_running_docker() {
         use std::os::unix::fs::PermissionsExt;
@@ -562,7 +1391,10 @@ mod tests {
             &directory.join("nonexistent-bundle"),
             &inventory,
             &mut state,
-            &"a".repeat(64),
+            RuntimeInvocation {
+                operator_sha: &"a".repeat(64),
+                completion: RuntimeCompletion::HoldIncomplete,
+            },
             std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap(),
         );
         assert!(result.is_err());
@@ -578,6 +1410,7 @@ mod tests {
         for args in [
             vec!["--skip-verification"],
             vec!["--yes", "--yes"],
+            vec!["--check-compatibility", "--check-compatibility"],
             vec!["--version"],
             vec!["--version", "../../bad"],
         ] {
@@ -595,12 +1428,100 @@ mod tests {
             ("--docker-host", "unix:///var/run/docker.sock"),
             ("--docker-engine-id", "exact-engine"),
             ("--docker-bin", "/usr/bin/docker"),
+            ("--runtime-profile", "rootless"),
         ]
         .into_iter()
         .flat_map(|(key, value)| [key.to_owned(), value.to_owned()])
         .collect::<Vec<_>>();
+        let host = args
+            .iter()
+            .position(|value| value == "--docker-host")
+            .unwrap()
+            + 1;
+        args[host] = format!("unix:///run/user/{}/docker.sock", unsafe {
+            libc::geteuid()
+        });
         assert!(candidate_test_options(&args).is_ok());
         assert!(options(&args).is_err());
+        let mut compatibility_args = args.clone();
+        compatibility_args.push("--check-compatibility".into());
+        assert!(
+            candidate_test_options(&compatibility_args)
+                .unwrap()
+                .check_compatibility
+        );
+        let mut admitted_compatibility_args = compatibility_args.clone();
+        admitted_compatibility_args[2] = "--verified-admission".into();
+        assert!(
+            options(&admitted_compatibility_args)
+                .unwrap()
+                .check_compatibility
+        );
+        for extra in [
+            vec!["--yes"],
+            vec!["--check-compatibility"],
+            vec!["--install-dir", "/private/installation"],
+            vec!["--foundation-file", "/private/foundation.json"],
+            vec!["--external-oidc-file", "/private/oidc.json"],
+            vec!["--hosting-file", "/private/hosting.json"],
+            vec!["--settings-file", "/private/settings.json"],
+            vec!["--acme-staging-roots", "/private/roots.pem"],
+        ] {
+            let mut invalid = compatibility_args.clone();
+            invalid.extend(extra.into_iter().map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
+        let mut oidc_args = args.clone();
+        oidc_args.extend(["--external-oidc-file".into(), "/private/oidc.json".into()]);
+        assert_eq!(
+            candidate_test_options(&oidc_args)
+                .unwrap()
+                .external_oidc_file,
+            Some(PathBuf::from("/private/oidc.json"))
+        );
+        let mut admitted_oidc = oidc_args.clone();
+        admitted_oidc[2] = "--verified-admission".into();
+        assert!(options(&admitted_oidc).is_ok());
+        *oidc_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&oidc_args).is_err());
+        *oidc_args.last_mut().unwrap() = "/private/oidc.json".into();
+        for extra in [
+            ["--external-oidc-file", "/private/second.json"],
+            ["--foundation-file", "/private/foundation.json"],
+        ] {
+            let mut invalid = oidc_args.clone();
+            invalid.extend(extra.map(str::to_owned));
+            assert!(candidate_test_options(&invalid).is_err());
+        }
+        let mut hosting_args = args.clone();
+        hosting_args.extend(["--hosting-file".into(), "/private/hosting.json".into()]);
+        assert_eq!(
+            candidate_test_options(&hosting_args).unwrap().hosting_file,
+            Some(PathBuf::from("/private/hosting.json"))
+        );
+        *hosting_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&hosting_args).is_err());
+        *hosting_args.last_mut().unwrap() = "/private/hosting.json".into();
+        hosting_args.extend(["--hosting-file".into(), "/private/second.json".into()]);
+        assert!(candidate_test_options(&hosting_args).is_err());
+        let mut settings_args = args.clone();
+        settings_args.extend(["--settings-file".into(), "/private/application.json".into()]);
+        assert_eq!(
+            candidate_test_options(&settings_args)
+                .unwrap()
+                .settings_file,
+            Some(PathBuf::from("/private/application.json"))
+        );
+        *settings_args.last_mut().unwrap() = "relative.json".into();
+        assert!(candidate_test_options(&settings_args).is_err());
+        *settings_args.last_mut().unwrap() = "/private/application.json".into();
+        settings_args.extend(["--settings-file".into(), "/private/other.json".into()]);
+        assert!(candidate_test_options(&settings_args).is_err());
+        args.truncate(args.len() - 2);
+        assert!(candidate_test_options(&args).is_err());
+        args.extend(["--runtime-profile".into(), "rootful".into()]);
+        assert!(candidate_test_options(&args).is_err());
+        *args.last_mut().unwrap() = "rootless".into();
         args[1] = "v1.1.263".into();
         assert!(candidate_test_options(&args).is_err());
         args[1] = "v1.1.263-nightly.20261027.42".into();

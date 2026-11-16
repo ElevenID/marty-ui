@@ -235,6 +235,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "aws-config"
+version = "1.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b180a3c8b55960db3426d8964b8745e652466a1a49fe1a2eda828046d30b5e4"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sdk-sts",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 1.5.0",
+ "time",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "aws-credential-types"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e93964ffdaf57857f544be3666a5f57570bb699e934700f11b49708f61bb556e"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "zeroize",
+]
+
+[[package]]
 name = "aws-lc-rs"
 version = "1.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -258,6 +296,314 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-runtime"
+version = "1.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9007227e10b5fed2f3e0a2beff489211e2b5604c400b7a9d5d81ca9d64c24bb"
+dependencies = [
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "bytes-utils",
+ "fastrand",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "percent-encoding",
+ "pin-project-lite",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "aws-sdk-kms"
+version = "1.114.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0b7d906608ee41e7ddea9983577ba82200435644d567d63dc34e822e088b453"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sdk-sts"
+version = "1.110.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd8b14781dfbff48984017d57167b6ea0b6471c6920ec52b44a2677c7feb3c13"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "regex-lite",
+ "tracing",
+]
+
+[[package]]
+name = "aws-sigv4"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "723c2234ad7511ceef63eab016b7ba6ff7c55590fefb96fa8467af014a07309f"
+dependencies = [
+ "aws-credential-types",
+ "aws-smithy-http",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "bytes",
+ "form_urlencoded",
+ "hex",
+ "hmac 0.13.0",
+ "http 0.2.12",
+ "http 1.5.0",
+ "percent-encoding",
+ "sha2 0.11.1",
+ "time",
+ "tracing",
+]
+
+[[package]]
+name = "aws-smithy-async"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f02e407fb3b54891734224b9ffac8a71fdd35f542500fa1af95754a6b2beb316"
+dependencies = [
+ "futures-util",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
+name = "aws-smithy-http"
+version = "0.64.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37843d9add67c3aff5856f409c6dc315d3cdff60f9c0cb5b670dab1e9920306d"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "bytes",
+ "bytes-utils",
+ "futures-core",
+ "futures-util",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "http-body-util",
+ "percent-encoding",
+ "pin-project-lite",
+ "pin-utils",
+ "tracing",
+]
+
+[[package]]
+name = "aws-smithy-http-client"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c1c8a04cb31ba74d0115af5a890bb8c0d48fba64b52812fa13929a6ef0cc83c"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "h2",
+ "http 1.5.0",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tracing",
+]
+
+[[package]]
+name = "aws-smithy-json"
+version = "0.63.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dc65a121adb4b33729919fcfa14fa36fb33c1555a8f06bb0e2188dbfdc1d9ef"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+]
+
+[[package]]
+name = "aws-smithy-observability"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e86338c869539a581bf161247762a6e87f92c5c075060057b5ed6d06632ed0c"
+dependencies = [
+ "aws-smithy-runtime-api",
+]
+
+[[package]]
+name = "aws-smithy-query"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "512346c7212ab7436df2d77a16d976a468ae44a418835511d2a69269810aaf62"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "urlencoding",
+]
+
+[[package]]
+name = "aws-smithy-runtime"
+version = "1.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "483b858ff67522011c4786310c5cd8fd88d0be7ea3d5f1a48328446300c4269e"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-http-client",
+ "aws-smithy-observability",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "bytes",
+ "fastrand",
+ "http 0.2.12",
+ "http 1.5.0",
+ "http-body 0.4.6",
+ "http-body 1.1.0",
+ "http-body-util",
+ "pin-project-lite",
+ "pin-utils",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "aws-smithy-runtime-api"
+version = "1.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b98f2e1fd67ec06618f9c291e5e495a468e60519e44c9c1979cd0521f3affdb"
+dependencies = [
+ "aws-smithy-async",
+ "aws-smithy-runtime-api-macros",
+ "aws-smithy-types",
+ "bytes",
+ "http 0.2.12",
+ "http 1.5.0",
+ "pin-project-lite",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
+name = "aws-smithy-runtime-api-macros"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "221eaa237ddf1ca79b60d1372aad77e47f9c0ea5b3ce5099da8c61d027dc77b3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "aws-smithy-schema"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56e0a4e53127a632224e43633b0fe045fa9e1e3cfc68b9830f1115e103f910"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "http 1.5.0",
+]
+
+[[package]]
+name = "aws-smithy-types"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fce83ce9abbb198d25bc7131e468d0f9fe1257125e58c39f3f9fc9f5098c9647"
+dependencies = [
+ "base64-simd",
+ "bytes",
+ "bytes-utils",
+ "futures-core",
+ "http 0.2.12",
+ "http 1.5.0",
+ "http-body 0.4.6",
+ "http-body 1.1.0",
+ "http-body-util",
+ "itoa",
+ "num-integer",
+ "pin-project-lite",
+ "pin-utils",
+ "ryu",
+ "serde",
+ "time",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "aws-smithy-xml"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce84f71c72fee2cbbadde6e7d082f5fb466e3a84733855295fa7aafd1b31b7d8"
+dependencies = [
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "xmlparser",
+]
+
+[[package]]
+name = "aws-types"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eec1cd5469f328c782dc3e33d4153cf118a54e33cbb3356d60d16f89883e1f94"
+dependencies = [
+ "aws-credential-types",
+ "aws-smithy-async",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "rustc_version",
+ "tracing",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -267,8 +613,8 @@ dependencies = [
  "bytes",
  "form_urlencoded",
  "futures-util",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -298,8 +644,8 @@ checksum = "08c78f31d7b1291f7ee735c1c6780ccde7785daae9a9206026862dab7d8792d1"
 dependencies = [
  "bytes",
  "futures-core",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "http-body-util",
  "mime",
  "pin-project-lite",
@@ -307,6 +653,28 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "axum-server"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1df331683d982a0b9492b38127151e6453639cd34926eb9c07d4cd8c6d22bfc"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "either",
+ "fs-err",
+ "http 1.5.0",
+ "http-body 1.1.0",
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tower-service",
 ]
 
 [[package]]
@@ -354,12 +722,6 @@ checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
 name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
-
-[[package]]
-name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
@@ -369,6 +731,16 @@ name = "base64"
 version = "0.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
+name = "base64-simd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339abbe78e73178762e23bea9dfd08e697eb3f3301cd4be981c0f78ba5859195"
+dependencies = [
+ "outref",
+ "vsimd",
+]
 
 [[package]]
 name = "base64ct"
@@ -569,6 +941,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "bytes-utils"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7dafe3a8757b027e2be6e4e5601ed563c55989fcf1546e933c66c8eb3a058d35"
+dependencies = [
+ "bytes",
+ "either",
+]
+
+[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -600,9 +982,9 @@ dependencies = [
 
 [[package]]
 name = "cedar-policy"
-version = "4.12.0"
+version = "4.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f73547a0114dff845fcb8d4877548a665fb8ff949a30cb0963444d6c30ffd962"
+checksum = "4a3951fe28ea48b72e618fc7104b5953389b496f06813da3d9038c0da6735982"
 dependencies = [
  "cedar-policy-core",
  "cedar-policy-formatter",
@@ -621,12 +1003,12 @@ dependencies = [
 
 [[package]]
 name = "cedar-policy-core"
-version = "4.12.0"
+version = "4.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9d9ec16707c7b60aa73b922dc255ec0b97b6892e8e58e45188b15d874ca3590"
+checksum = "292bc6f7f897fcdfe5291a2fe74e2446817c7b8e01fce0977805877a23943f5b"
 dependencies = [
  "chrono",
- "educe 0.7.6",
+ "educe 0.8.2",
  "either",
  "itertools 0.15.0",
  "lalrpop",
@@ -649,9 +1031,9 @@ dependencies = [
 
 [[package]]
 name = "cedar-policy-formatter"
-version = "4.12.0"
+version = "4.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2483b2fa74f74b1b3945bec59feb7a3fc0ea56b6fb35564ef300884dd8415d4b"
+checksum = "3bb1d7ab0eecb543e4586b556d72343699663093d951169eeedd2e6ec6fca06c"
 dependencies = [
  "cedar-policy-core",
  "itertools 0.15.0",
@@ -1206,7 +1588,7 @@ dependencies = [
 [[package]]
 name = "did-ethr"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "hex",
  "iref",
@@ -1221,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "did-ion"
 version = "0.6.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "iref",
@@ -1241,7 +1623,7 @@ dependencies = [
 [[package]]
 name = "did-jwk"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "iref",
@@ -1259,7 +1641,7 @@ dependencies = [
 [[package]]
 name = "did-method-key"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "bs58 0.4.0",
  "iref",
@@ -1278,7 +1660,7 @@ dependencies = [
 [[package]]
 name = "did-pkh"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "bech32",
@@ -1298,7 +1680,7 @@ dependencies = [
 [[package]]
 name = "did-tz"
 version = "0.5.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
@@ -1320,9 +1702,9 @@ dependencies = [
 [[package]]
 name = "did-web"
 version = "0.5.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
- "http",
+ "http 1.5.0",
  "iref",
  "reqwest",
  "ssi-dids-core",
@@ -1394,7 +1776,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 [[package]]
 name = "ecdsa"
 version = "0.17.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "crypto-bigint",
  "der 0.8.2",
@@ -1474,9 +1856,9 @@ dependencies = [
 
 [[package]]
 name = "educe"
-version = "0.7.6"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e451fac8dd8dece16234604bf1efce6e90fddd8ab6ad4d66eec0eca5160959dd"
+checksum = "a00371d2607edea062396ef1ce6ade65c8e915ac7a1277daa198208420f682c6"
 dependencies = [
  "enum-ordinalize 4.4.2",
  "proc-macro2",
@@ -1766,6 +2148,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs-err"
+version = "3.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5c95b673b8f6f7235229ae11c5642d81b04c2e64c1e2fb417bc0cf73ca45f29"
+dependencies = [
+ "autocfg",
+ "tokio",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1964,7 +2356,7 @@ dependencies = [
  "fnv",
  "futures-core",
  "futures-sink",
- "http",
+ "http 1.5.0",
  "indexmap 2.14.2",
  "slab",
  "tokio",
@@ -2126,6 +2518,17 @@ dependencies = [
 
 [[package]]
 name = "http"
+version = "0.2.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "601cbb57e577e2f5ef5be8e7b83f0f63994f25aa94d673e54a92d5c516d101f1"
+dependencies = [
+ "bytes",
+ "fnv",
+ "itoa",
+]
+
+[[package]]
+name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "918d3568bebf352712bc2ef3d46a8bcf1a75b373be6539de198e9105cbbf9ce0"
@@ -2136,12 +2539,23 @@ dependencies = [
 
 [[package]]
 name = "http-body"
+version = "0.4.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ceab25649e9960c0311ea418d17bee82c0dcec1bd053b5f9a66e265a693bed2"
+dependencies = [
+ "bytes",
+ "http 0.2.12",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "http-body"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca2a8f2913ee65f60facd6a5905613afaa448497a0230cc41ce022d93290bc2c"
 dependencies = [
  "bytes",
- "http",
+ "http 1.5.0",
 ]
 
 [[package]]
@@ -2152,8 +2566,8 @@ checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
 dependencies = [
  "bytes",
  "futures-core",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "pin-project-lite",
 ]
 
@@ -2191,8 +2605,8 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "h2",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "httparse",
  "httpdate",
  "itoa",
@@ -2208,10 +2622,11 @@ version = "0.27.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa8e654703247911e29c23fbeaa261834bd9bb74efba2f9acddc37bfb127f53"
 dependencies = [
- "http",
+ "http 1.5.0",
  "hyper",
  "hyper-util",
  "rustls",
+ "rustls-native-certs",
  "tokio",
  "tokio-rustls",
  "tower-service",
@@ -2256,8 +2671,8 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-util",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "httparse",
  "hyper",
  "ipnet",
@@ -2477,10 +2892,11 @@ dependencies = [
 
 [[package]]
 name = "isomdl"
-version = "0.3.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
+version = "0.4.0"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=fc3aaa2628cd106d4f36f50c957d7f33211f8a5e#fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.13.1",
  "ciborium",
  "const-oid 0.9.6",
@@ -2489,6 +2905,7 @@ dependencies = [
  "digest 0.10.7",
  "ecdsa",
  "elliptic-curve",
+ "flate2",
  "getrandom 0.2.17",
  "hex",
  "isomdl-macros",
@@ -2516,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "isomdl-macros"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f#1e7ab823e26559dfce2f7e0f1fdf2aa61a936b4f"
+source = "git+https://github.com/ElevenID/isomdl-elevenid?rev=fc3aaa2628cd106d4f36f50c957d7f33211f8a5e#fc3aaa2628cd106d4f36f50c957d7f33211f8a5e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3196,7 +3613,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3213,7 +3630,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3259,7 +3676,7 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "aes-kw",
  "base64 0.22.1",
@@ -3285,7 +3702,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -3313,7 +3730,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "hostname",
- "http",
+ "http 1.5.0",
  "http-body-util",
  "httpdate",
  "hyper",
@@ -3323,17 +3740,21 @@ dependencies = [
  "marty-crypto",
  "marty-didcomm",
  "marty-emrtd-issuance",
+ "marty-jwt-vc-issuance",
  "marty-key-material-policy",
  "marty-mdoc-status-binding",
  "marty-oid4vci",
+ "marty-oid4vp-contract",
  "marty-openbao-http",
  "marty-passport-auth",
  "marty-platform-clock",
  "marty-response-compat",
  "marty-schema-startup",
+ "marty-service-contracts",
  "marty-service-runtime",
  "marty-signing-grant",
  "marty-verification",
+ "mmf-aws-kms",
  "mmf-config",
  "mmf-core",
  "mmf-platform",
@@ -3372,6 +3793,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-jwt-vc-issuance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "marty-oid4vci",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "marty-key-material-policy"
 version = "0.1.0"
 dependencies = [
@@ -3394,7 +3826,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3421,6 +3853,22 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "marty-oid4vp-contract"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "marty-canonical-digest",
+ "marty-oid4vci",
+ "p256",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]
@@ -3464,14 +3912,23 @@ name = "marty-schema-startup"
 version = "0.1.0"
 
 [[package]]
+name = "marty-service-contracts"
+version = "0.1.0"
+
+[[package]]
 name = "marty-service-runtime"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "axum-server",
+ "mmf-aws-kms",
  "mmf-platform",
  "mmf-runtime",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tonic",
+ "url",
 ]
 
 [[package]]
@@ -3482,6 +3939,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "marty-openbao-http",
+ "mmf-aws-kms",
  "redis",
  "reqwest",
  "serde",
@@ -3495,7 +3953,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3554,7 +4012,7 @@ dependencies = [
 [[package]]
 name = "marty-x509-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 dependencies = [
  "chrono",
  "const-oid 0.9.6",
@@ -3663,9 +4121,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mmf-aws-kms"
+version = "0.1.1"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-kms",
+ "aws-smithy-http-client",
+ "base64 0.23.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "mmf-config"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -3678,7 +4153,7 @@ dependencies = [
 [[package]]
 name = "mmf-core"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "serde",
  "serde_json",
@@ -3689,7 +4164,7 @@ dependencies = [
 [[package]]
 name = "mmf-observability"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -3703,12 +4178,13 @@ dependencies = [
 [[package]]
 name = "mmf-platform"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
- "http",
+ "http 1.5.0",
  "hyper-util",
+ "mmf-aws-kms",
  "mmf-core",
  "mmf-observability",
  "mmf-resilience",
@@ -3734,7 +4210,7 @@ dependencies = [
 [[package]]
 name = "mmf-resilience"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -3747,7 +4223,7 @@ dependencies = [
 [[package]]
 name = "mmf-runtime"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "axum",
  "mmf-core",
@@ -3759,7 +4235,7 @@ dependencies = [
 [[package]]
 name = "mmf-security"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -3784,7 +4260,7 @@ dependencies = [
 [[package]]
 name = "mmf-security-contracts"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c2b33130da0b597d712e29008dd5a6adf313bb0f#c2b33130da0b597d712e29008dd5a6adf313bb0f"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=67e6121f233d3edbb07a35b9b3be2ae7e1462821#67e6121f233d3edbb07a35b9b3be2ae7e1462821"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -4057,6 +4533,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "outref"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
+
+[[package]]
 name = "p256"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4239,6 +4721,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pin-utils"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 
 [[package]]
 name = "pkcs1"
@@ -4871,6 +5359,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "regex-lite"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cab834c73d247e67f4fae452806d17d3c7501756d98c8808d7c9c7aa7d18f973"
+
+[[package]]
 name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4893,8 +5387,8 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "http-body-util",
  "hyper",
  "hyper-rustls",
@@ -4985,9 +5479,9 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.2",
  "errno",
@@ -5157,10 +5651,10 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 [[package]]
 name = "sd-jwt-rs"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d#26bd9cb142a1ab17b11ba2f76c76b40a5ef0e60d"
+source = "git+https://github.com/ElevenID/sd-jwt-rust?rev=fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2#fbe1e1b2c4bf0d62b0fdf0f47f265ffdaaae1ff2"
 dependencies = [
  "aws-lc-rs",
- "base64 0.21.7",
+ "base64 0.23.1",
  "curve25519-dalek",
  "ecdsa",
  "ed25519-dalek",
@@ -5171,9 +5665,9 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "serde_json",
- "sha2 0.10.9",
- "strum 0.25.0",
- "thiserror 1.0.69",
+ "sha2 0.11.1",
+ "strum 0.28.0",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5831,7 +6325,7 @@ dependencies = [
 [[package]]
 name = "ssi-caips"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "bs58 0.4.0",
  "linked-data",
@@ -5844,7 +6338,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims"
 version = "0.7.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "educe 0.4.23",
  "iref",
@@ -5876,7 +6370,7 @@ dependencies = [
 [[package]]
 name = "ssi-claims-core"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "chrono",
  "educe 0.4.23",
@@ -5891,12 +6385,12 @@ dependencies = [
 [[package]]
 name = "ssi-contexts"
 version = "0.1.10"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[package]]
 name = "ssi-core"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "pin-project",
@@ -5907,7 +6401,7 @@ dependencies = [
 [[package]]
 name = "ssi-cose"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "ciborium",
  "coset",
@@ -5920,7 +6414,7 @@ dependencies = [
 [[package]]
 name = "ssi-crypto"
 version = "0.2.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "bs58 0.4.0",
@@ -5943,7 +6437,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "chrono",
  "iref",
@@ -5971,8 +6465,9 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-core"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "contextual",
  "derivative",
@@ -6006,7 +6501,7 @@ dependencies = [
 [[package]]
 name = "ssi-data-integrity-suites"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6055,7 +6550,7 @@ dependencies = [
 [[package]]
 name = "ssi-di-sd-primitives"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "digest 0.10.7",
@@ -6077,7 +6572,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "did-ethr",
  "did-ion",
@@ -6094,7 +6589,7 @@ dependencies = [
 [[package]]
 name = "ssi-dids-core"
 version = "0.3.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "iref",
@@ -6118,7 +6613,7 @@ dependencies = [
 [[package]]
 name = "ssi-eip712"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "hex",
  "indexmap 2.14.2",
@@ -6136,7 +6631,7 @@ dependencies = [
 [[package]]
 name = "ssi-json-ld"
 version = "0.3.3"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "combination",
  "iref",
@@ -6154,7 +6649,7 @@ dependencies = [
 [[package]]
 name = "ssi-jwk"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "blake2b_simd",
@@ -6183,7 +6678,7 @@ dependencies = [
 [[package]]
 name = "ssi-jws"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "blake2",
@@ -6206,7 +6701,7 @@ dependencies = [
 [[package]]
 name = "ssi-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "chrono",
@@ -6228,7 +6723,7 @@ dependencies = [
 [[package]]
 name = "ssi-multicodec"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "csv",
  "ed25519-dalek",
@@ -6242,7 +6737,7 @@ dependencies = [
 [[package]]
 name = "ssi-rdf"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "combination",
  "indexmap 2.14.2",
@@ -6256,7 +6751,7 @@ dependencies = [
 [[package]]
 name = "ssi-sd-jwt"
 version = "0.6.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "indexmap 2.14.2",
@@ -6275,7 +6770,7 @@ dependencies = [
 [[package]]
 name = "ssi-security"
 version = "0.1.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "iref",
  "linked-data",
@@ -6288,7 +6783,7 @@ dependencies = [
 [[package]]
 name = "ssi-vc"
 version = "0.9.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "bitvec 0.20.4",
@@ -6318,7 +6813,7 @@ dependencies = [
 [[package]]
 name = "ssi-vc-jose-cose"
 version = "0.7.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "base64 0.22.1",
  "ciborium",
@@ -6338,7 +6833,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "async-trait",
  "derivative",
@@ -6371,7 +6866,7 @@ dependencies = [
 [[package]]
 name = "ssi-verification-methods-core"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 dependencies = [
  "bs58 0.4.0",
  "educe 0.4.23",
@@ -6485,11 +6980,11 @@ checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
 
 [[package]]
 name = "strum"
-version = "0.25.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
+checksum = "9628de9b8791db39ceda2b119bbe13134770b56c138ec1d3af810d045c04f9bd"
 dependencies = [
- "strum_macros 0.25.3",
+ "strum_macros 0.28.0",
 ]
 
 [[package]]
@@ -6507,14 +7002,13 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.25.3"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
+checksum = "ab85eea0270ee17587ed4156089e10b9e6880ee688791d45a905f5b1ca36f664"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
- "rustversion",
  "syn 2.0.119",
 ]
 
@@ -6853,8 +7347,8 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "h2",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "http-body-util",
  "hyper",
  "hyper-timeout",
@@ -6953,8 +7447,8 @@ dependencies = [
  "bitflags 2.13.2",
  "bytes",
  "futures-util",
- "http",
- "http-body",
+ "http 1.5.0",
+ "http-body 1.1.0",
  "pin-project-lite",
  "tower",
  "tower-layer",
@@ -7248,6 +7742,12 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vsimd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "walkdir"
@@ -7628,6 +8128,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "xmlparser"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "66fee0b777b0f5ac1c69bb06d361268faafa61cd4682ae064a171c16c433e9e4"
+
+[[package]]
 name = "xsd-types"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7787,49 +8293,49 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[patch.unused]]
 name = "bls12_381_plus"
 version = "0.8.18"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 
 [[patch.unused]]
 name = "elliptic-curve"
 version = "0.13.8"
-source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
+source = "git+https://github.com/ElevenID/marty-core?rev=2cd3126fd715e6df6c8afe3b302dd5f0364fc531#2cd3126fd715e6df6c8afe3b302dd5f0364fc531"
 
 [[patch.unused]]
 name = "ssi"
 version = "0.16.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-bbs"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-did-test"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-ssh"
 version = "0.3.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-status"
 version = "0.8.1"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-tzkey"
 version = "0.4.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-ucan"
 version = "0.5.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"
 
 [[patch.unused]]
 name = "ssi-zcap-ld"
 version = "0.8.0"
-source = "git+https://github.com/ElevenID/ssi-elevenid?rev=234723638447c30f90cf499bce1d6b092f865e9d#234723638447c30f90cf499bce1d6b092f865e9d"
+source = "git+https://github.com/ElevenID/ssi-elevenid?rev=8b546ef5dbcd6e806ec1c26a0c05296515798429#8b546ef5dbcd6e806ec1c26a0c05296515798429"

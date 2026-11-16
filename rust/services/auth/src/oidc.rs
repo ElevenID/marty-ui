@@ -1,29 +1,52 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
+use marty_oid4vci::jose::validate_public_signing_jwk_json;
 use marty_oid4vci::oidc::{validate_id_token, OidcIdTokenPolicy, OidcValidationError};
+use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::Mutex;
 use url::Url;
 
 use crate::{
-    OidcAuthorizationRequest, OidcCodeExchange, OidcLogoutRequest, OidcProvider, OidcTokenSet,
-    OidcUserInfo, OidcValidatedIdentity, PortError,
+    validate_ui_locales, OidcAuthenticationFreshness, OidcAuthorizationRequest,
+    OidcClientAuthMethod, OidcCodeExchange, OidcLogoutRequest, OidcMaxAge, OidcPrompt,
+    OidcProvider, OidcProviderCapabilities, OidcTokenSet, OidcUserInfo, OidcUserInfoMode,
+    OidcValidatedIdentity, PortError,
 };
 
 pub const OIDC_DISCOVERY_MAX_BYTES: usize = 256 * 1024;
 pub const OIDC_JWKS_MAX_BYTES: usize = 1024 * 1024;
 pub const OIDC_TOKEN_RESPONSE_MAX_BYTES: usize = 256 * 1024;
+pub const OIDC_USERINFO_MAX_BYTES: usize = 256 * 1024;
+const OIDC_ENDPOINT_MAX_BYTES: usize = 2_048;
+const OIDC_TRUSTED_ORIGINS_MAX: usize = 8;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OidcProviderMode {
+    #[default]
+    Keycloak,
+    External,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OidcConfig {
+    pub provider_mode: OidcProviderMode,
+    pub trusted_endpoint_origins: Vec<String>,
     pub issuer_url: String,
     pub external_issuer_url: String,
     pub client_id: String,
     pub client_secret: Option<String>,
+    pub client_auth_method: Option<OidcClientAuthMethod>,
+    pub userinfo_mode: OidcUserInfoMode,
+    pub prompt: Vec<OidcPrompt>,
+    pub max_age: OidcMaxAge,
+    pub provider_name: Option<String>,
+    pub account_url: Option<String>,
+    pub recovery_url: Option<String>,
     pub redirect_uri: String,
     pub scopes: Vec<String>,
     pub allowed_algorithms: Vec<String>,
@@ -33,10 +56,104 @@ pub struct OidcConfig {
 
 impl OidcConfig {
     pub fn validate(mut self) -> Result<Self, PortError> {
-        self.issuer_url = normalize_issuer(&self.issuer_url, "internal issuer")?;
-        self.external_issuer_url = normalize_issuer(&self.external_issuer_url, "external issuer")?;
+        match self.provider_mode {
+            OidcProviderMode::Keycloak => {
+                self.issuer_url = normalize_issuer(&self.issuer_url, "internal issuer")?;
+                self.external_issuer_url =
+                    normalize_issuer(&self.external_issuer_url, "external issuer")?;
+                if !self.trusted_endpoint_origins.is_empty() {
+                    return Err(config_error(
+                        "OIDC trusted endpoint origins require external provider mode",
+                    ));
+                }
+            }
+            OidcProviderMode::External => {
+                let issuer = external_https_url(&self.issuer_url)?;
+                if issuer.query().is_some() || self.issuer_url != self.external_issuer_url {
+                    return Err(config_error(
+                        "External OIDC requires one exact HTTPS issuer without a query",
+                    ));
+                }
+                if self.trusted_endpoint_origins.len() > OIDC_TRUSTED_ORIGINS_MAX {
+                    return Err(config_error(
+                        "OIDC supports at most eight extra endpoint origins",
+                    ));
+                }
+                let mut origins = std::collections::HashSet::new();
+                for origin in &mut self.trusted_endpoint_origins {
+                    let parsed = external_https_url(origin)?;
+                    if parsed.path() != "/" || parsed.query().is_some() {
+                        return Err(config_error(
+                            "OIDC endpoint allowlist must contain origins only",
+                        ));
+                    }
+                    *origin = parsed.origin().ascii_serialization();
+                    if !origins.insert(origin.clone()) {
+                        return Err(config_error("OIDC endpoint origins must be unique"));
+                    }
+                }
+            }
+        }
         if self.client_id.trim().is_empty() {
             return Err(config_error("OIDC client ID is required"));
+        }
+        match self.selected_client_auth_method() {
+            OidcClientAuthMethod::None if self.client_secret.is_some() => {
+                return Err(config_error(
+                    "Public OIDC clients cannot supply a client secret",
+                ));
+            }
+            OidcClientAuthMethod::ClientSecretPost | OidcClientAuthMethod::ClientSecretBasic
+                if self
+                    .client_secret
+                    .as_ref()
+                    .is_none_or(|secret| secret.is_empty()) =>
+            {
+                return Err(config_error(
+                    "Confidential OIDC clients require a non-empty client secret",
+                ));
+            }
+            _ => {}
+        }
+        OidcPrompt::validate_list(&self.prompt)?;
+        if self
+            .max_age
+            .seconds()
+            .is_some_and(|seconds| seconds > 86_400)
+        {
+            return Err(config_error("OIDC max age must not exceed 86400 seconds"));
+        }
+        if self.provider_name.as_ref().is_some_and(|name| {
+            name.trim() != name
+                || name.is_empty()
+                || name.len() > 80
+                || name.chars().any(char::is_control)
+        }) {
+            return Err(config_error(
+                "OIDC provider name must contain 1..80 bytes without control characters",
+            ));
+        }
+        for link in [&self.account_url, &self.recovery_url]
+            .into_iter()
+            .flatten()
+        {
+            if link.len() > OIDC_ENDPOINT_MAX_BYTES
+                || link.trim() != link
+                || link.chars().any(char::is_control)
+            {
+                return Err(config_error("OIDC account links are invalid or too long"));
+            }
+            let mut parsed =
+                Url::parse(link).map_err(|_| config_error("OIDC account link is invalid"))?;
+            parsed.set_fragment(None);
+            self.trusted_external_url(parsed.as_str())?;
+        }
+        if self.userinfo_mode == OidcUserInfoMode::Fallback
+            && self.provider_mode != OidcProviderMode::External
+        {
+            return Err(config_error(
+                "UserInfo fallback requires external OIDC mode",
+            ));
         }
         if self.redirect_uri.trim().is_empty() {
             return Err(config_error("OIDC redirect URI is required"));
@@ -45,6 +162,17 @@ impl OidcConfig {
             .map_err(|error| config_error(format!("OIDC redirect URI is invalid: {error}")))?;
         if self.scopes.is_empty() || self.scopes.iter().any(|scope| scope.trim().is_empty()) {
             return Err(config_error("OIDC scopes must contain non-empty values"));
+        }
+        if self.provider_mode == OidcProviderMode::External
+            && (!self.scopes.iter().any(|scope| scope == "openid")
+                || self
+                    .client_secret
+                    .as_ref()
+                    .is_some_and(|secret| secret.is_empty()))
+        {
+            return Err(config_error(
+                "External OIDC requires the openid scope and a non-empty client secret when supplied",
+            ));
         }
         if self.allowed_algorithms.is_empty() {
             return Err(config_error(
@@ -58,6 +186,24 @@ impl OidcConfig {
         if unique.len() != self.allowed_algorithms.len() {
             return Err(config_error("OIDC allowed algorithms must be unique"));
         }
+        if self.allowed_algorithms.iter().any(|algorithm| {
+            !matches!(
+                algorithm.as_str(),
+                "ES256"
+                    | "ES384"
+                    | "EdDSA"
+                    | "RS256"
+                    | "RS384"
+                    | "RS512"
+                    | "PS256"
+                    | "PS384"
+                    | "PS512"
+            )
+        }) {
+            return Err(config_error(
+                "OIDC algorithm policy contains an unsupported signature algorithm",
+            ));
+        }
         if self.leeway_seconds > 300 {
             return Err(config_error(
                 "OIDC clock leeway must be between 0 and 300 seconds",
@@ -69,6 +215,30 @@ impl OidcConfig {
             ));
         }
         Ok(self)
+    }
+
+    #[must_use]
+    pub fn selected_client_auth_method(&self) -> OidcClientAuthMethod {
+        self.client_auth_method
+            .unwrap_or(if self.client_secret.is_some() {
+                OidcClientAuthMethod::ClientSecretPost
+            } else {
+                OidcClientAuthMethod::None
+            })
+    }
+
+    fn trusted_external_url(&self, value: &str) -> Result<Url, PortError> {
+        let url = external_https_url(value)?;
+        let issuer = Url::parse(&self.external_issuer_url)
+            .map_err(|_| config_error("OIDC issuer is invalid"))?;
+        let origin = url.origin().ascii_serialization();
+        if url.origin() != issuer.origin() && !self.trusted_endpoint_origins.contains(&origin) {
+            return Err(PortError::new(
+                "untrusted_oidc_endpoint",
+                "OIDC URL origin is not trusted",
+            ));
+        }
+        Ok(url)
     }
 
     #[must_use]
@@ -99,8 +269,35 @@ impl OidcConfig {
 
     #[must_use]
     pub fn discovery_endpoint(&self) -> String {
-        format!("{}/.well-known/openid-configuration", self.issuer_url)
+        format!(
+            "{}/.well-known/openid-configuration",
+            self.issuer_url.trim_end_matches('/')
+        )
     }
+}
+
+fn external_https_url(value: &str) -> Result<Url, PortError> {
+    if value.len() > OIDC_ENDPOINT_MAX_BYTES
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        return Err(config_error(
+            "External OIDC URL is invalid or exceeds the size limit",
+        ));
+    }
+    let parsed = Url::parse(value).map_err(|_| config_error("External OIDC URL is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || parsed.host_str().is_some_and(|host| host.contains('*'))
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(config_error(
+            "External OIDC URLs must use HTTPS without user information or fragments",
+        ));
+    }
+    Ok(parsed)
 }
 
 fn normalize_issuer(value: &str, name: &str) -> Result<String, PortError> {
@@ -128,6 +325,18 @@ pub trait OidcHttpClient: Send + Sync {
         document_name: &str,
     ) -> Result<Value, PortError>;
 
+    async fn get_userinfo_json_object(
+        &self,
+        _url: &str,
+        _access_token: &str,
+        _max_bytes: usize,
+    ) -> Result<Value, PortError> {
+        Err(PortError::new(
+            "unsupported_oidc_http_authorization",
+            "OIDC HTTP transport does not support UserInfo",
+        ))
+    }
+
     async fn post_form_json_object(
         &self,
         url: &str,
@@ -135,6 +344,21 @@ pub trait OidcHttpClient: Send + Sync {
         max_bytes: usize,
         document_name: &str,
     ) -> Result<Value, PortError>;
+
+    async fn post_form_json_object_basic(
+        &self,
+        _url: &str,
+        _form: &[(String, String)],
+        _client_id: &str,
+        _client_secret: &str,
+        _max_bytes: usize,
+        _document_name: &str,
+    ) -> Result<Value, PortError> {
+        Err(PortError::new(
+            "unsupported_oidc_http_authorization",
+            "OIDC HTTP transport does not support Basic client authentication",
+        ))
+    }
 }
 
 #[async_trait]
@@ -229,6 +453,24 @@ impl OidcHttpClient for ReqwestOidcHttpClient {
         Self::bounded_json(response, max_bytes, document_name).await
     }
 
+    async fn get_userinfo_json_object(
+        &self,
+        url: &str,
+        access_token: &str,
+        max_bytes: usize,
+    ) -> Result<Value, PortError> {
+        let response = self
+            .client
+            .get(url)
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|_| {
+                PortError::new("oidc_http_request_failed", "OIDC UserInfo request failed")
+            })?;
+        Self::bounded_json(response, max_bytes, "UserInfo").await
+    }
+
     async fn post_form_json_object(
         &self,
         url: &str,
@@ -258,6 +500,47 @@ impl OidcHttpClient for ReqwestOidcHttpClient {
             })?;
         Self::bounded_json(response, max_bytes, document_name).await
     }
+
+    async fn post_form_json_object_basic(
+        &self,
+        url: &str,
+        form: &[(String, String)],
+        client_id: &str,
+        client_secret: &str,
+        max_bytes: usize,
+        document_name: &str,
+    ) -> Result<Value, PortError> {
+        // RFC 6749 section 2.3.1 applies form encoding to each credential
+        // before constructing Basic authentication, including colon/space.
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(form)
+            .finish();
+        let response = self
+            .client
+            .post(url)
+            .basic_auth(
+                oauth_basic_component(client_id),
+                Some(oauth_basic_component(client_secret)),
+            )
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .map_err(|_| {
+                PortError::new(
+                    "oidc_http_request_failed",
+                    "OIDC authenticated token request failed",
+                )
+            })?;
+        Self::bounded_json(response, max_bytes, document_name).await
+    }
+}
+
+fn oauth_basic_component(value: &str) -> String {
+    let encoded = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("", value)
+        .finish();
+    encoded.strip_prefix('=').unwrap_or_default().to_owned()
 }
 
 struct JwksCache {
@@ -265,10 +548,46 @@ struct JwksCache {
     expires_at: Instant,
 }
 
+#[derive(Clone)]
+struct ExternalProviderMetadata {
+    authorization_endpoint: String,
+    token_endpoint: String,
+    jwks_uri: String,
+    end_session_endpoint: Option<String>,
+    registration_supported: bool,
+    userinfo_endpoint: Option<String>,
+    signing_algorithms: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OidcPreflightReport {
+    pub schema: &'static str,
+    pub status: &'static str,
+    pub issuer: String,
+    pub token_endpoint_auth_method: OidcClientAuthMethod,
+    pub compatible_signing_algorithms: Vec<String>,
+    pub userinfo_fallback_enabled: bool,
+    pub provider: OidcProviderCapabilities,
+    pub limitations: Vec<&'static str>,
+}
+
+/// Opaque metadata-only configuration. It cannot be passed to the operational
+/// provider or code-exchange constructors, and carries no operator credential.
+pub struct OidcPreflightConfig(pub(crate) OidcConfig);
+
+/// Read discovery and public keys only. This cannot verify client registration,
+/// credentials, callback registration, returned identity claims or JIT access.
+pub async fn preflight_oidc(config: OidcPreflightConfig) -> Result<OidcPreflightReport, PortError> {
+    KeycloakOidcProvider::with_reqwest(config.0)?
+        .preflight()
+        .await
+}
+
 pub struct KeycloakOidcProvider {
     config: OidcConfig,
     http: Arc<dyn OidcHttpClient>,
     jwks: Mutex<JwksCache>,
+    external_metadata: RwLock<Option<ExternalProviderMetadata>>,
 }
 
 impl KeycloakOidcProvider {
@@ -280,6 +599,7 @@ impl KeycloakOidcProvider {
                 document: None,
                 expires_at: Instant::now(),
             }),
+            external_metadata: RwLock::new(None),
         })
     }
 
@@ -290,6 +610,68 @@ impl KeycloakOidcProvider {
     /// Resolve discovery and JWKS before the service becomes ready.
     pub async fn health_check(&self) -> Result<(), PortError> {
         self.provider_jwks(true).await.map(|_| ())
+    }
+
+    pub async fn preflight(&self) -> Result<OidcPreflightReport, PortError> {
+        let jwks = self.provider_jwks(true).await?;
+        let keys = jwks
+            .get("keys")
+            .and_then(Value::as_array)
+            .filter(|keys| !keys.is_empty() && keys.len() <= 64)
+            .ok_or_else(|| {
+                PortError::new(
+                    "invalid_oidc_jwks",
+                    "OIDC preflight requires 1..64 public keys",
+                )
+            })?;
+        if keys.iter().any(|key| {
+            !key.is_object()
+                || ["d", "rsa_d", "p", "q", "dp", "dq", "qi", "oth", "k"]
+                    .iter()
+                    .any(|field| key.get(field).is_some())
+        }) {
+            return Err(PortError::new(
+                "invalid_oidc_jwks",
+                "OIDC preflight refuses malformed or private key material",
+            ));
+        }
+        let advertised = if self.config.provider_mode == OidcProviderMode::External {
+            self.external_metadata()?.signing_algorithms
+        } else {
+            None
+        };
+        let compatible_signing_algorithms = self
+            .config
+            .allowed_algorithms
+            .iter()
+            .filter(|algorithm| {
+                advertised
+                    .as_ref()
+                    .is_none_or(|advertised| advertised.contains(algorithm))
+                    && keys.iter().any(|key| {
+                        unambiguous_key_id(key, keys)
+                            && compatible_key_type(key, algorithm)
+                            && validate_public_signing_jwk_json(&key.to_string(), algorithm).is_ok()
+                    })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if compatible_signing_algorithms.is_empty() {
+            return Err(PortError::new(
+                "unsupported_oidc_signing_key",
+                "OIDC discovery and public keys have no compatible allowed signing algorithm",
+            ));
+        }
+        Ok(OidcPreflightReport {
+            schema: "elevenid.oidc-provider-preflight/v1",
+            status: "metadata_compatible",
+            issuer: self.config.external_issuer_url.clone(),
+            token_endpoint_auth_method: self.config.selected_client_auth_method(),
+            compatible_signing_algorithms,
+            userinfo_fallback_enabled: self.config.userinfo_mode == OidcUserInfoMode::Fallback,
+            provider: self.capabilities()?,
+            limitations: vec!["Client credentials and redirect registration were not tested", "A live login must verify returned claims, email verification and organization access"],
+        })
     }
 
     async fn provider_jwks(&self, force_refresh: bool) -> Result<Value, PortError> {
@@ -315,26 +697,37 @@ impl KeycloakOidcProvider {
         let discovered_issuer = discovery
             .get("issuer")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .trim_end_matches('/');
+            .unwrap_or_default();
+        let discovered_issuer = if self.config.provider_mode == OidcProviderMode::Keycloak {
+            discovered_issuer.trim_end_matches('/')
+        } else {
+            discovered_issuer
+        };
         if discovered_issuer != self.config.external_issuer_url {
             return Err(PortError::new(
                 "oidc_discovery_issuer_mismatch",
                 "OIDC discovery issuer does not match configured issuer",
             ));
         }
-        let jwks_uri = discovery
-            .get("jwks_uri")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let internal_jwks_uri = self.trusted_internal_jwks_uri(jwks_uri)?;
+        let external_metadata = if self.config.provider_mode == OidcProviderMode::External {
+            Some(self.parse_external_metadata(&discovery)?)
+        } else {
+            None
+        };
+        let jwks_uri = if let Some(metadata) = &external_metadata {
+            metadata.jwks_uri.clone()
+        } else {
+            self.trusted_internal_jwks_uri(
+                discovery
+                    .get("jwks_uri")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )?
+            .into()
+        };
         let jwks = self
             .http
-            .get_json_object(
-                internal_jwks_uri.as_str(),
-                OIDC_JWKS_MAX_BYTES,
-                "JWKS document",
-            )
+            .get_json_object(&jwks_uri, OIDC_JWKS_MAX_BYTES, "JWKS document")
             .await?;
         if !jwks.get("keys").is_some_and(Value::is_array) {
             return Err(PortError::new(
@@ -342,7 +735,261 @@ impl KeycloakOidcProvider {
                 "OIDC JWKS response is malformed",
             ));
         }
+        if let Some(metadata) = external_metadata {
+            *self
+                .external_metadata
+                .write()
+                .map_err(|_| metadata_unavailable())? = Some(metadata);
+        }
         Ok(jwks)
+    }
+
+    fn parse_external_metadata(
+        &self,
+        discovery: &Value,
+    ) -> Result<ExternalProviderMetadata, PortError> {
+        let selected_auth_method = self.config.selected_client_auth_method().as_str();
+        let supported_auth_methods =
+            metadata_values(discovery, "token_endpoint_auth_methods_supported")?
+                .unwrap_or_else(|| vec!["client_secret_basic"]);
+        if !supported_auth_methods.contains(&selected_auth_method) {
+            return Err(PortError::new(
+                "unsupported_oidc_client_authentication",
+                "OIDC discovery does not support the configured client authentication method",
+            ));
+        }
+        // Preserve existing compatibility when the metadata is absent. A
+        // present list must overlap the operator's policy; discovery never
+        // adds an algorithm to the token validator's configured allowlist.
+        if let Some(algorithms) =
+            metadata_values(discovery, "id_token_signing_alg_values_supported")?
+        {
+            if !algorithms.iter().any(|&algorithm| {
+                algorithm != "none"
+                    && self
+                        .config
+                        .allowed_algorithms
+                        .iter()
+                        .any(|allowed| allowed == algorithm)
+            }) {
+                return Err(PortError::new(
+                    "unsupported_oidc_signing_algorithm",
+                    "OIDC discovery does not support a configured ID-token signing algorithm",
+                ));
+            }
+        }
+        // Discovery section 3 permits supported scopes to be unadvertised;
+        // scopes_supported is not a complete scope allowlist for the client.
+        if !metadata_values(discovery, "response_types_supported")?
+            .is_some_and(|types| types.contains(&"code"))
+            || metadata_values(discovery, "code_challenge_methods_supported")?
+                .is_some_and(|methods| !methods.contains(&"S256"))
+        {
+            return Err(PortError::new(
+                "unsupported_oidc_code_flow",
+                "OIDC discovery does not support the required authorization-code flow with S256 PKCE",
+            ));
+        }
+        let prompts = metadata_values(discovery, "prompt_values_supported")?;
+        if prompts.as_ref().is_some_and(|supported| {
+            self.config
+                .prompt
+                .iter()
+                .any(|prompt| !supported.contains(&prompt.as_str()))
+        }) {
+            return Err(PortError::new(
+                "unsupported_oidc_prompt",
+                "OIDC discovery does not support the configured prompt policy",
+            ));
+        }
+        let userinfo_endpoint = if self.config.userinfo_mode == OidcUserInfoMode::Fallback {
+            Some(self.external_endpoint(discovery, "userinfo_endpoint")?)
+        } else {
+            None
+        };
+        Ok(ExternalProviderMetadata {
+            authorization_endpoint: self.external_endpoint(discovery, "authorization_endpoint")?,
+            token_endpoint: self.external_endpoint(discovery, "token_endpoint")?,
+            jwks_uri: self.external_endpoint(discovery, "jwks_uri")?,
+            end_session_endpoint: discovery
+                .get("end_session_endpoint")
+                .map(|_| self.external_endpoint(discovery, "end_session_endpoint"))
+                .transpose()?,
+            registration_supported: prompts.is_some_and(|prompts| prompts.contains(&"create")),
+            userinfo_endpoint,
+            signing_algorithms: metadata_values(
+                discovery,
+                "id_token_signing_alg_values_supported",
+            )?
+            .map(|values| values.into_iter().map(str::to_owned).collect()),
+        })
+    }
+
+    fn external_endpoint(&self, discovery: &Value, field: &str) -> Result<String, PortError> {
+        let value = discovery
+            .get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PortError::new(
+                    "invalid_oidc_metadata",
+                    format!("OIDC discovery requires a string {field}"),
+                )
+            })?;
+        let endpoint = self.config.trusted_external_url(value)?;
+        if endpoint.query_pairs().any(|(name, _)| {
+            matches!(
+                name.as_ref(),
+                "client_id"
+                    | "client_secret"
+                    | "response_type"
+                    | "redirect_uri"
+                    | "scope"
+                    | "state"
+                    | "nonce"
+                    | "code"
+                    | "code_verifier"
+                    | "grant_type"
+                    | "code_challenge"
+                    | "code_challenge_method"
+                    | "prompt"
+                    | "max_age"
+                    | "ui_locales"
+                    | "kc_locale"
+                    | "access_token"
+                    | "id_token_hint"
+                    | "post_logout_redirect_uri"
+            )
+        }) {
+            return Err(PortError::new(
+                "invalid_oidc_metadata",
+                format!("OIDC {field} must not prepopulate authentication parameters"),
+            ));
+        }
+        Ok(endpoint.into())
+    }
+
+    fn external_metadata(&self) -> Result<ExternalProviderMetadata, PortError> {
+        self.external_metadata
+            .read()
+            .map_err(|_| metadata_unavailable())?
+            .clone()
+            .ok_or_else(metadata_unavailable)
+    }
+
+    fn validated_identity(&self, claims: Value) -> Result<OidcValidatedIdentity, PortError> {
+        let access_claims = Value::Object(serde_json::Map::new());
+        let user_info = OidcUserInfo::from_claims(&claims, Some(&access_claims));
+        // Organization bootstrap links the trusted principal to an email-bound
+        // membership. Never let an unverified external email claim reach JIT.
+        if self.config.provider_mode == OidcProviderMode::External
+            && (!user_info.email_verified
+                || user_info.email.trim().is_empty()
+                || user_info.sub.trim().is_empty())
+        {
+            return Err(PortError::new(
+                "oidc_verified_email_required",
+                "External OIDC requires a verified email and a non-empty subject",
+            ));
+        }
+        Ok(OidcValidatedIdentity {
+            user_info,
+            id_token_claims: claims,
+            access_token_claims: access_claims,
+        })
+    }
+
+    async fn validated_identity_with_userinfo(
+        &self,
+        claims: Value,
+        access_token: &str,
+    ) -> Result<OidcValidatedIdentity, PortError> {
+        if self.config.userinfo_mode != OidcUserInfoMode::Fallback {
+            return self.validated_identity(claims);
+        }
+        let id_user = OidcUserInfo::from_claims(&claims, None);
+        // A signed negative verification claim is authoritative. Fallback
+        // fills missing profile information; it cannot overturn that claim.
+        if claims
+            .get("email_verified")
+            .is_some_and(|value| value != &Value::Bool(true))
+        {
+            return self.validated_identity(claims);
+        }
+        let profile_missing = id_user.email.trim().is_empty()
+            || !id_user.email_verified
+            || id_user.name.is_none()
+            || id_user.given_name.is_none()
+            || id_user.family_name.is_none();
+        if !profile_missing {
+            return self.validated_identity(claims);
+        }
+        let endpoint = self.external_metadata()?.userinfo_endpoint.ok_or_else(|| {
+            PortError::new(
+                "invalid_oidc_metadata",
+                "OIDC UserInfo fallback requires a trusted endpoint",
+            )
+        })?;
+        let userinfo = self
+            .http
+            .get_userinfo_json_object(&endpoint, access_token, OIDC_USERINFO_MAX_BYTES)
+            .await?;
+        if userinfo.get("sub").and_then(Value::as_str) != Some(id_user.sub.as_str()) {
+            return Err(PortError::new(
+                "oidc_userinfo_subject_mismatch",
+                "OIDC UserInfo subject does not match the ID token",
+            ));
+        }
+        if !id_user.email.trim().is_empty()
+            && userinfo
+                .get("email")
+                .is_some_and(|value| value.as_str() != Some(id_user.email.as_str()))
+        {
+            return Err(PortError::new(
+                "oidc_userinfo_email_mismatch",
+                "OIDC UserInfo email conflicts with the ID token",
+            ));
+        }
+        if (id_user.email.trim().is_empty() || !id_user.email_verified)
+            && (userinfo.get("email_verified") != Some(&Value::Bool(true))
+                || userinfo
+                    .get("email")
+                    .and_then(Value::as_str)
+                    .is_none_or(|email| email.trim().is_empty()))
+        {
+            return Err(PortError::new(
+                "oidc_verified_email_required",
+                "OIDC UserInfo requires the matching verified email",
+            ));
+        }
+        let mut profile = claims.clone();
+        let profile_object = profile.as_object_mut().ok_or_else(|| {
+            PortError::new("invalid_oidc_claims", "OIDC claims must be an object")
+        })?;
+        // UserInfo has no authority over roles, organization, issuer, nonce,
+        // authentication time or token claims. Copy only missing profile data.
+        for name in [
+            "email",
+            "email_verified",
+            "name",
+            "given_name",
+            "family_name",
+            "preferred_username",
+            "picture",
+            "locale",
+        ] {
+            let missing = profile_object.get(name).is_none_or(|value| {
+                value.is_null() || value.as_str().is_some_and(|text| text.is_empty())
+            });
+            if missing {
+                if let Some(value) = userinfo.get(name) {
+                    profile_object.insert(name.into(), value.clone());
+                }
+            }
+        }
+        let mut identity = self.validated_identity(profile)?;
+        // Preserve the actual signed claims for session assurance/provenance.
+        identity.id_token_claims = claims;
+        Ok(identity)
     }
 
     fn trusted_internal_jwks_uri(&self, jwks_uri: &str) -> Result<Url, PortError> {
@@ -463,19 +1110,122 @@ impl KeycloakOidcProvider {
                 (!access_token.is_empty()).then_some(access_token),
             )
             .await?;
-        let access_claims = Value::Object(serde_json::Map::new());
-        Ok(Some(OidcValidatedIdentity {
-            user_info: OidcUserInfo::from_claims(&claims, Some(&access_claims)),
-            id_token_claims: claims,
-            access_token_claims: access_claims,
-        }))
+        self.validated_identity(claims).map(Some)
     }
 }
 
 #[async_trait]
 impl OidcProvider for KeycloakOidcProvider {
+    fn capabilities(&self) -> Result<OidcProviderCapabilities, PortError> {
+        let external = self.config.provider_mode == OidcProviderMode::External;
+        let metadata = if external {
+            Some(self.external_metadata()?)
+        } else {
+            None
+        };
+        Ok(OidcProviderCapabilities {
+            provider_mode: if external { "external" } else { "keycloak" },
+            provider_name: self.config.provider_name.clone().unwrap_or_else(|| {
+                if external {
+                    "Identity provider"
+                } else {
+                    "11ID"
+                }
+                .into()
+            }),
+            registration_supported: metadata
+                .as_ref()
+                .is_none_or(|metadata| metadata.registration_supported),
+            account_url: self.config.account_url.clone().or_else(|| {
+                (!external
+                    && Url::parse(&self.config.external_issuer_url)
+                        .is_ok_and(|issuer| issuer.scheme() == "https"))
+                .then(|| format!("{}/account/", self.config.external_issuer_url))
+            }),
+            recovery_url: self.config.recovery_url.clone(),
+            passkey_enrollment_supported: !external,
+            provider_logout_supported: metadata
+                .as_ref()
+                .is_none_or(|metadata| metadata.end_session_endpoint.is_some()),
+        })
+    }
+
+    fn authentication_freshness(
+        &self,
+        request: &OidcAuthorizationRequest,
+    ) -> Option<OidcAuthenticationFreshness> {
+        if request.registration {
+            return None;
+        }
+        let max_age = if request.reauthenticate {
+            Some(0)
+        } else {
+            self.config.max_age.seconds()
+        };
+        max_age.map(|max_age_seconds| OidcAuthenticationFreshness {
+            max_age_seconds,
+            leeway_seconds: self.config.leeway_seconds,
+        })
+    }
+
+    fn passkey_management_url(&self, return_uri: &str) -> Option<String> {
+        if self.config.provider_mode != OidcProviderMode::Keycloak {
+            return None;
+        }
+        let target = Url::parse(return_uri).ok()?;
+        if !matches!(target.scheme(), "https" | "http")
+            || !target.username().is_empty()
+            || target.password().is_some()
+        {
+            return None;
+        }
+        let mut url = Url::parse(&format!(
+            "{}/account/account-security/signing-in",
+            self.config.external_issuer_url
+        ))
+        .ok()?;
+        url.query_pairs_mut()
+            .append_pair("referrer", &self.config.client_id)
+            .append_pair("referrer_uri", return_uri);
+        Some(url.into())
+    }
+
+    fn supports_passkey_enrollment(&self) -> bool {
+        self.config.provider_mode == OidcProviderMode::Keycloak
+    }
+
+    fn passkey_enrollment_url(
+        &self,
+        request: &OidcAuthorizationRequest,
+        id_token_hint: &str,
+    ) -> Result<String, PortError> {
+        if !self.supports_passkey_enrollment() || request.registration || id_token_hint.is_empty() {
+            return Err(PortError::new(
+                "passkey_enrollment_unsupported",
+                "Native Keycloak enrollment is unavailable",
+            ));
+        }
+        let mut enrollment_request = request.clone();
+        enrollment_request.reauthenticate = true;
+        let mut url = Url::parse(&self.authorization_url(&enrollment_request)?)
+            .map_err(|error| config_error(error.to_string()))?;
+        url.query_pairs_mut()
+            .append_pair("kc_action", "webauthn-register-passwordless")
+            .append_pair("id_token_hint", id_token_hint);
+        Ok(url.into())
+    }
+
     fn authorization_url(&self, request: &OidcAuthorizationRequest) -> Result<String, PortError> {
-        let endpoint = if request.registration {
+        let endpoint = if self.config.provider_mode == OidcProviderMode::External {
+            let metadata = self.external_metadata()?;
+            if request.registration && !metadata.registration_supported {
+                return Err(PortError::new(
+                    "oidc_registration_unsupported",
+                    "OIDC provider does not advertise user registration support",
+                ));
+            }
+            metadata.authorization_endpoint
+        } else if request.registration {
             self.config.registration_endpoint()
         } else {
             self.config.authorization_endpoint()
@@ -497,15 +1247,44 @@ impl OidcProvider for KeycloakOidcProvider {
                 .append_pair("code_challenge", &request.code_challenge)
                 .append_pair("code_challenge_method", "S256");
             if !request.registration {
-                query
-                    .append_pair("prompt", "consent login")
-                    .append_pair("max_age", "0");
+                let prompts = if request.reauthenticate
+                    && self.config.provider_mode == OidcProviderMode::Keycloak
+                {
+                    vec![OidcPrompt::Consent, OidcPrompt::Login]
+                } else {
+                    self.config.prompt.clone()
+                };
+                if !prompts.is_empty() {
+                    query.append_pair(
+                        "prompt",
+                        &prompts
+                            .iter()
+                            .map(|prompt| prompt.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    );
+                }
+                if let Some(freshness) = self.authentication_freshness(request) {
+                    query.append_pair("max_age", &freshness.max_age_seconds.to_string());
+                }
+            } else if self.config.provider_mode == OidcProviderMode::External {
+                query.append_pair("prompt", "create");
+            }
+            if let Some(locales) = &request.ui_locales {
+                query.append_pair("ui_locales", &validate_ui_locales(locales)?);
             }
         }
         Ok(url.into())
     }
 
     async fn exchange_code(&self, request: &OidcCodeExchange) -> Result<OidcTokenSet, PortError> {
+        let token_endpoint = if self.config.provider_mode == OidcProviderMode::External {
+            self.provider_jwks(false).await?;
+            self.external_metadata()?.token_endpoint
+        } else {
+            self.config.token_endpoint()
+        };
+        let method = self.config.selected_client_auth_method();
         let mut form = vec![
             ("grant_type".to_owned(), "authorization_code".to_owned()),
             ("code".to_owned(), request.code.clone()),
@@ -516,21 +1295,38 @@ impl OidcProvider for KeycloakOidcProvider {
                     .clone()
                     .unwrap_or_else(|| self.config.redirect_uri.clone()),
             ),
-            ("client_id".to_owned(), self.config.client_id.clone()),
             ("code_verifier".to_owned(), request.code_verifier.clone()),
         ];
-        if let Some(secret) = &self.config.client_secret {
-            form.push(("client_secret".to_owned(), secret.clone()));
+        if method != OidcClientAuthMethod::ClientSecretBasic {
+            form.push(("client_id".into(), self.config.client_id.clone()));
         }
-        let tokens = self
-            .http
-            .post_form_json_object(
-                &self.config.token_endpoint(),
-                &form,
-                OIDC_TOKEN_RESPONSE_MAX_BYTES,
-                "token response",
-            )
-            .await?;
+        if method == OidcClientAuthMethod::ClientSecretPost {
+            form.push((
+                "client_secret".to_owned(),
+                self.config.client_secret.clone().unwrap_or_default(),
+            ));
+        }
+        let tokens = if method == OidcClientAuthMethod::ClientSecretBasic {
+            self.http
+                .post_form_json_object_basic(
+                    &token_endpoint,
+                    &form,
+                    &self.config.client_id,
+                    self.config.client_secret.as_deref().unwrap_or_default(),
+                    OIDC_TOKEN_RESPONSE_MAX_BYTES,
+                    "token response",
+                )
+                .await?
+        } else {
+            self.http
+                .post_form_json_object(
+                    &token_endpoint,
+                    &form,
+                    OIDC_TOKEN_RESPONSE_MAX_BYTES,
+                    "token response",
+                )
+                .await?
+        };
         Ok(OidcTokenSet {
             access_token: tokens
                 .get("access_token")
@@ -562,17 +1358,20 @@ impl OidcProvider for KeycloakOidcProvider {
                 Some(access_token),
             )
             .await?;
-        let access_claims = Value::Object(serde_json::Map::new());
-        Ok(OidcValidatedIdentity {
-            user_info: OidcUserInfo::from_claims(&claims, Some(&access_claims)),
-            id_token_claims: claims,
-            access_token_claims: access_claims,
-        })
+        self.validated_identity_with_userinfo(claims, access_token)
+            .await
     }
 
     fn logout_url(&self, request: &OidcLogoutRequest) -> Result<Option<String>, PortError> {
-        let mut url = Url::parse(&self.config.logout_endpoint())
-            .map_err(|error| config_error(error.to_string()))?;
+        let endpoint = if self.config.provider_mode == OidcProviderMode::External {
+            let Some(endpoint) = self.external_metadata()?.end_session_endpoint else {
+                return Ok(None);
+            };
+            endpoint
+        } else {
+            self.config.logout_endpoint()
+        };
+        let mut url = Url::parse(&endpoint).map_err(|error| config_error(error.to_string()))?;
         {
             let mut query = url.query_pairs_mut();
             query.append_pair("client_id", &self.config.client_id);
@@ -586,6 +1385,70 @@ impl OidcProvider for KeycloakOidcProvider {
         }
         Ok(Some(url.into()))
     }
+}
+
+fn metadata_values<'a>(
+    discovery: &'a Value,
+    field: &str,
+) -> Result<Option<Vec<&'a str>>, PortError> {
+    let Some(value) = discovery.get(field) else {
+        return Ok(None);
+    };
+    let values = value
+        .as_array()
+        .filter(|values| values.len() <= 64)
+        .ok_or_else(|| {
+            PortError::new(
+                "invalid_oidc_metadata",
+                format!("OIDC {field} must be a bounded string array"),
+            )
+        })?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    PortError::new(
+                        "invalid_oidc_metadata",
+                        format!("OIDC {field} must contain non-empty strings"),
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn metadata_unavailable() -> PortError {
+    PortError::new(
+        "oidc_metadata_unavailable",
+        "OIDC discovery must be validated before use",
+    )
+}
+
+fn compatible_key_type(key: &Value, algorithm: &str) -> bool {
+    match algorithm {
+        "ES256" => key["kty"] == "EC" && key["crv"] == "P-256",
+        "ES384" => key["kty"] == "EC" && key["crv"] == "P-384",
+        "EdDSA" => key["kty"] == "OKP" && key["crv"] == "Ed25519",
+        "RS256" | "RS384" | "RS512" | "PS256" | "PS384" | "PS512" => key["kty"] == "RSA",
+        _ => false,
+    }
+}
+
+fn unambiguous_key_id(key: &Value, keys: &[Value]) -> bool {
+    let Some(kid) = key
+        .get("kid")
+        .and_then(Value::as_str)
+        .filter(|kid| !kid.is_empty() && kid.len() <= OIDC_ENDPOINT_MAX_BYTES)
+    else {
+        return false;
+    };
+    keys.iter()
+        .filter(|candidate| candidate.get("kid").and_then(Value::as_str) == Some(kid))
+        .count()
+        == 1
 }
 
 #[async_trait]

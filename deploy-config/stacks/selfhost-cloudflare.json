@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "name": "selfhost-cloudflare",
+  "description": "Explicit optional Cloudflare connector for existing selfhost deployments; new installers use the signed hosting add-on.",
+  "parent_stack": "selfhost-production",
+  "env_file": ".env.selfhost.production.local",
+  "compose_files": [
+    "docker-compose.selfhost.prod.yml",
+    "docker-compose.selfhost.cloudflare-legacy.yml"
+  ],
+  "compose_profiles": [],
+  "domains": [
+    "elevenidllc.com"
+  ],
+  "primary_domain": "elevenidllc.com",
+  "required_service_groups": [
+    "selfhost_cloudflare"
+  ],
+  "required_services": [
+    "cloudflared"
+  ],
+  "required_secrets": [
+    "cloudflare_tunnel_token"
+  ],
+  "artifact_profile": "oss-release",
+  "deployment_targets": [
+    "docker-compose"
+  ],
+  "operations": {
+    "up": [
+      "up",
+      "-d",
+      "cloudflared"
+    ],
+    "stop": [
+      "stop",
+      "cloudflared"
+    ],
+    "ps": [
+      "ps",
+      "cloudflared"
+    ],
+    "logs": [
+      "logs",
+      "-f",
+      "cloudflared"
+    ]
+  }
+}

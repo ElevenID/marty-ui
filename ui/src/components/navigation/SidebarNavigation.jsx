@@ -5,7 +5,7 @@
  * Supports console mode switching and nested navigation items.
  */
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useLocation, useNavigate, Link } from 'react-router';
 import {
   Drawer,
@@ -26,6 +26,7 @@ import {
   ToggleButton,
   Alert,
   Button,
+  CircularProgress,
 } from '@mui/material';
 import ExpandLess from '@mui/icons-material/ExpandLess';
 import ExpandMore from '@mui/icons-material/ExpandMore';
@@ -35,11 +36,12 @@ import StarIcon from '@mui/icons-material/Star';
 import PersonIcon from '@mui/icons-material/Person';
 import BusinessIcon from '@mui/icons-material/Business';
 import LogoutIcon from '@mui/icons-material/Logout';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import Badge from '@mui/material/Badge';
 import { useAuth } from '../../hooks/useAuth';
+import { useAsyncActionScope } from '../../hooks/useAsyncActionScope';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
-import { getApplicantStats } from '../../services/dashboardApi';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
 import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 
@@ -52,7 +54,7 @@ const HEADER_HEIGHT = 64;
  * Renders a single nav item with optional children
  * Supports visual hierarchy: primary items, badges, and section-specific styling
  */
-function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
+function NavItem({ item, isActive, isChildActive, expanded, onToggle, onNavigate, collapsed, depth = 0, parentId = null, badgeCounts = {} }) {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
@@ -69,15 +71,17 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
   const handleClick = useCallback(() => {
     if (hasChildren) {
       if (collapsed && item.path) {
+        onNavigate();
         navigate(item.path);
         return;
       }
 
       onToggle(item.id);
     } else {
+      onNavigate();
       navigate(item.path);
     }
-  }, [collapsed, hasChildren, item.id, item.path, navigate, onToggle]);
+  }, [collapsed, hasChildren, item.id, item.path, navigate, onNavigate, onToggle]);
 
   const isItemActive = isActive || isChildActive;
 
@@ -207,6 +211,7 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
                   <ListItemButton
                     component={Link}
                     to={child.path}
+                    onClick={onNavigate}
                     aria-current={childActive ? 'page' : undefined}
                     data-testid={`sidebar.nav.${child.id}`}
                     sx={{
@@ -244,51 +249,44 @@ function NavItem({ item, isActive, isChildActive, expanded, onToggle, collapsed,
  * Sidebar Navigation Component
  */
 function SidebarNavigation({ mobileOpen, onMobileClose }) {
+  const beginAction = useAsyncActionScope();
   const theme = useTheme();
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
-  const { isAdministrator, isVendor, isApplicant, organizationId, logout } = useAuth();
-  const { mode, setMode, activeOrgId, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
+  const { isAdministrator, isVendor, isApplicant, logout } = useAuth();
+  const { mode, setMode, memberships, isOrgConsoleAvailable, isApplicantConsoleAvailable, isOrgBlocked } = useConsole();
   const isJoinOnlyMode = memberships.length === 0;
   const showConsoleSwitcher = isApplicantConsoleAvailable && isOrgConsoleAvailable;
 
-  // System/sentinel org IDs that backend policy blocks member-level operations on.
-  const SYSTEM_ORG_IDS = new Set(['00000000-0000-0000-0000-000000000001']);
-
-  // Badge counts fetched from API
-  const [badgeCounts, setBadgeCounts] = useState({});
-  useEffect(() => {
-    const fallbackOrgId = SYSTEM_ORG_IDS.has(organizationId) ? null : organizationId;
-    const effectiveOrgId = activeOrgId || fallbackOrgId;
-    if (mode !== 'applicant' || !effectiveOrgId) {
-      setBadgeCounts({});
-      return;
-    }
-
-    let mounted = true;
-    getApplicantStats(effectiveOrgId).then((stats) => {
-      if (mounted) setBadgeCounts({ applications: stats.pending || 0 });
-    });
-    return () => { mounted = false; };
-  }, [activeOrgId, mode, organizationId]);
-
   // Collapsed state for desktop — persisted so mode switches don't reset it
-  const [collapsed, setCollapsed] = useState(() => {
+  const [desktopCollapsed, setDesktopCollapsed] = useState(() => {
     try { return localStorage.getItem('sidebar-collapsed') === 'true'; } catch { return false; }
   });
+  const collapsed = !isMobile && desktopCollapsed;
 
   // Track which parent items are expanded
   const [expandedItems, setExpandedItems] = useState({});
 
-  const { can } = usePermissions();
+  const { can, isLoading: permissionsLoading, error: permissionError, refresh: refreshPermissions } = usePermissions();
+
+  const handleDestinationSelection = useCallback(() => {
+    if (isMobile) onMobileClose();
+  }, [isMobile, onMobileClose]);
 
   // Console mode switching
-  const handleModeChange = useCallback((event, newMode) => {
+  const handleModeChange = useCallback(async (event, newMode) => {
     if (newMode && newMode !== mode) {
-      setMode(newMode);
+      handleDestinationSelection();
+      const action = beginAction();
+      try {
+        await action.run(setMode, newMode);
+      } catch (error) {
+        if (!action.isCurrent() || error?.name === 'AbortError') return;
+        console.error('[SidebarNavigation] Failed to switch console:', error);
+      }
     }
-  }, [mode, setMode]);
+  }, [beginAction, handleDestinationSelection, mode, setMode]);
 
   // Get nav items based on console mode, filtered by permissions
   const navItems = useMemo(() => {
@@ -300,7 +298,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         .filter((item) => {
           if (!item.requiredPermission) return true;
           const { resource, action } = item.requiredPermission;
-          return can(resource, action);
+          return !permissionsLoading && !permissionError && can(resource, action);
         })
         .map((item) => {
           if (!item.children) return item;
@@ -309,7 +307,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
         });
 
     return filterByPermission(items);
-  }, [mode, can]);
+  }, [mode, can, permissionsLoading, permissionError]);
 
   // Find active item
   const activeItem = useMemo(() => {
@@ -334,7 +332,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   }, []);
 
   const handleCollapseToggle = useCallback(() => {
-    setCollapsed((prev) => {
+    setDesktopCollapsed((prev) => {
       const next = !prev;
       try {
         localStorage.setItem('sidebar-collapsed', String(next));
@@ -390,7 +388,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
           <Tooltip title="Applicant Console" placement="right">
             <IconButton
               size="small"
-              onClick={() => setMode('applicant')}
+              onClick={(event) => handleModeChange(event, 'applicant')}
               disabled={!isApplicantConsoleAvailable}
               sx={{
                 bgcolor: mode === 'applicant' ? 'action.selected' : 'transparent',
@@ -404,7 +402,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             <Tooltip title="Organization Console" placement="right">
               <IconButton
                 size="small"
-                onClick={() => setMode('org')}
+                onClick={(event) => handleModeChange(event, 'org')}
                 sx={{
                   bgcolor: mode === 'org' ? 'action.selected' : 'transparent',
                   '&:hover': { bgcolor: 'action.hover' },
@@ -422,7 +420,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
       {/* Collapse toggle for desktop */}
       {!isMobile && !collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'flex-end', px: 2, py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Collapse navigation" aria-expanded={true}>
             <ChevronLeftIcon />
           </IconButton>
         </Box>
@@ -430,10 +428,34 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
 
       {!isMobile && collapsed && (
         <Box sx={{ display: 'flex', justifyContent: 'center', py: 1 }}>
-          <IconButton onClick={handleCollapseToggle} size="small">
+          <IconButton onClick={handleCollapseToggle} size="small" aria-label="Expand navigation" aria-expanded={false}>
             <MenuIcon />
           </IconButton>
         </Box>
+      )}
+
+      {mode === 'org' && permissionsLoading && (
+        <Box role="status" aria-label="Loading navigation permissions"
+          sx={{ display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'flex-start', gap: 1, px: 2, pb: 1 }}>
+          <CircularProgress size={18} aria-hidden="true" />
+          {!collapsed && <Typography variant="body2">Loading navigation...</Typography>}
+        </Box>
+      )}
+      {mode === 'org' && !permissionsLoading && permissionError && (
+        collapsed ? (
+          <Box role="alert" aria-label="Navigation permissions could not be loaded" sx={{ textAlign: 'center', pb: 1 }}>
+            <Tooltip title="Navigation permissions could not be loaded. Retry.">
+              <IconButton color="error" aria-label="Retry navigation permissions" onClick={refreshPermissions}>
+                <RefreshIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        ) : (
+          <Alert severity="error" icon={false} sx={{ mx: 2, mb: 1 }}
+            action={<Button color="inherit" size="small" aria-label="Retry navigation permissions" onClick={refreshPermissions}>Retry</Button>}>
+            Navigation permissions could not be loaded.
+          </Alert>
+        )
       )}
 
       {/* Section C - Navigation Items */}
@@ -456,9 +478,9 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             isChildActive={activeItem.parent?.id === item.id && !!activeItem.child}
             expanded={expandedItems[item.id] || false}
             onToggle={handleToggle}
+            onNavigate={handleDestinationSelection}
             collapsed={collapsed}
             parentId={null}
-            badgeCounts={badgeCounts}
           />
         ))}
       </List>
@@ -487,7 +509,7 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
             {SHOW_PUBLIC_DOCUMENTATION_NAV && (
               <Typography variant="caption" color="text.secondary">
                 Need help?{' '}
-                <Link to="/docs" style={{ color: theme.palette.primary.main }}>
+                <Link to="/docs" onClick={handleDestinationSelection} style={{ color: theme.palette.primary.main }}>
                   View API Docs
                 </Link>
               </Typography>

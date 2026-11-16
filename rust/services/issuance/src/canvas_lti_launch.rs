@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
+use crate::legacy_json_compat::json_truthy as truthy;
+
 use crate::canvas_lti_login::{
     random_token, CanvasLtiLoginError, CanvasLtiLoginService, CanvasLtiPlatform,
 };
@@ -1788,17 +1790,6 @@ fn scalar_string(value: &Value) -> String {
         Value::Bool(false) => "False".to_owned(),
         Value::String(value) => value.clone(),
         _ => value.to_string(),
-    }
-}
-
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
     }
 }
 

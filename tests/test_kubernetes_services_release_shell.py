@@ -17,7 +17,7 @@ MANIFESTS = (
     "05b-revocation-profile-migrations.yaml", "06-db-migrate.yaml",
     "06a-issuance-migrations.yaml", "07-microservices.yaml",
     "07a-issuance-native.yaml", "07b-signing-keys.yaml",
-    "08-ui.yaml", "09-cloudflared.yaml",
+    "08-ui.yaml",
 )
 
 
@@ -36,17 +36,24 @@ def bash_binary() -> str:
     return value
 
 
-def run_preflight(repo: Path, manifest_dir: Path) -> subprocess.CompletedProcess:
+def run_preflight(repo: Path, manifest_dir: Path, token: str = "") -> subprocess.CompletedProcess:
     source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     prefix = "require_kubernetes_services_release() {\n"
     assert source.count(prefix) == 1
     body = source.split(prefix, 1)[1].split("\n}", 1)[0]
+    helpers = ""
+    for name in ("resolve_secret_input", "is_placeholder_secret"):
+        declaration = name + "() {\n"
+        helpers += declaration + source.split(declaration, 1)[1].split("\n}", 1)[0] + "\n}\n"
     script = (
         "set -euo pipefail\n"
         + prefix + body + "\n}\n"
+        + helpers
         + "error() { printf '%s\\n' \"$*\" >&2; return 1; }\n"
         + 'REPO_ROOT="$(cd "$1" && pwd -P)"\n'
         + 'K8S_DIR="$2"\n'
+        + 'CLOUDFLARE_TUNNEL_TOKEN="$3"\n'
+        + 'unset CLOUDFLARE_TUNNEL_TOKEN_FILE\n'
         + 'MARTY_STACK_MANIFEST=stack-manifest.json\n'
         + 'MARTY_SERVICES_IMAGE=ghcr.io/elevenid/marty-ui-oss/services@sha256:'
         + "a" * 64 + '\n'
@@ -59,7 +66,7 @@ def run_preflight(repo: Path, manifest_dir: Path) -> subprocess.CompletedProcess
     )
     return subprocess.run(
         [bash_binary(), "--noprofile", "--norc", "-c", script,
-         "preflight", repo.as_posix(), manifest_dir.as_posix()],
+         "preflight", repo.as_posix(), manifest_dir.as_posix(), token],
         capture_output=True, text=True, check=False,
     )
 
@@ -80,6 +87,13 @@ def test_signed_kubernetes_preflight_requires_clean_tracked_manifests(
         "commit", "-qm", "fixture", cwd=repo)
 
     assert run_preflight(repo, manifests).returncode == 0
+    assert run_preflight(repo, manifests, "selected-token-123456789").returncode != 0
+    optional = manifests / "09-cloudflared.yaml"
+    optional.write_text("kind: List\n", encoding="utf-8")
+    git("add", ".", cwd=repo)
+    git("-c", "user.name=Test", "-c", "user.email=test@example.test",
+        "commit", "-qm", "optional connector", cwd=repo)
+    assert run_preflight(repo, manifests, "selected-token-123456789").returncode == 0
     tracked.write_text("kind: Deployment\n", encoding="utf-8")
     assert run_preflight(repo, manifests).returncode != 0
     tracked.write_text("kind: List\n", encoding="utf-8")

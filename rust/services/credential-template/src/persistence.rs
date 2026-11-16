@@ -286,6 +286,7 @@ pub struct CredentialTemplate {
     pub issuer_requirements: IssuerRequirements,
     pub supported_formats: Vec<CredentialFormat>,
     pub credential_payload_format: String,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     pub wallet_configs: Vec<WalletConfig>,
     pub compliance_profile: Option<Value>,
     pub compliance_profile_id: Option<String>,
@@ -301,6 +302,35 @@ pub struct CredentialTemplate {
 }
 
 impl CredentialTemplate {
+    pub fn validate_jwt_vc_profile(&self) -> Result<(), CredentialTemplateError> {
+        let direct = self.credential_payload_format == marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT;
+        match &self.jwt_vc_profile {
+            Some(policy) if direct
+                && self.supported_formats == [CredentialFormat::VcJwtDirectV1]
+                && self.issuance_protocol == "OID4VCI_PRE_AUTH"
+                && self.wallet_configs.is_empty()
+                && !self.validity_rules.renewable
+                && self.selective_disclosure_fields.is_empty()
+                && self.zk_predicate_claims.is_empty() => {
+                    marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                        policy.clone(), &self.credential_type, &self.id, self.version,
+                        i64::from(self.validity_rules.default_validity_days) * 86_400,
+                        i64::from(self.validity_rules.not_before_offset_seconds),
+                    ).map_err(|_| CredentialTemplateError::InvalidConfiguration("invalid explicit JWT-VC issuance policy".into()))?;
+                    Ok(())
+                }
+            None if !direct && !self.supported_formats.contains(&CredentialFormat::VcJwtDirectV1) => Ok(()),
+            _ => Err(CredentialTemplateError::InvalidConfiguration("direct JWT-VC requires an explicit policy, one format and the pre-authorized wallet route".into())),
+        }
+    }
+
+    pub fn storage_status(&self) -> String {
+        if self.jwt_vc_profile.is_some() {
+            format!("jose1_{}", self.status.as_str())
+        } else {
+            self.status.as_str().to_owned()
+        }
+    }
     pub fn validate_definition(&self) -> Result<(), CredentialTemplateError> {
         validate_credential_type(&self.credential_type)?;
         if self.claims.is_empty() {

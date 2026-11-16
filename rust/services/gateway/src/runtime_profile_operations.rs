@@ -676,6 +676,10 @@ pub(super) async fn issuance_create_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
 ) -> Response {
+    let idempotency_key = match issuance_idempotency_key(request.headers()) {
+        Ok(value) => value,
+        Err(detail) => return detail_response(422, detail),
+    };
     let identity = request
         .extensions()
         .get::<TrustedIdentityContext>()
@@ -805,13 +809,16 @@ pub(super) async fn issuance_create_handler(
         Ok(value) => value,
         Err(error) => return detail_response(422, error.0),
     };
+    let headers = idempotency_key
+        .map(|value| BTreeMap::from([("idempotency-key".into(), value)]))
+        .unwrap_or_default();
     let response = match execute_json_proxy(
         &state,
         &identity,
         HttpMethod::Post,
         "/v1/issuance",
         downstream,
-        BTreeMap::new(),
+        headers,
     )
     .await
     {

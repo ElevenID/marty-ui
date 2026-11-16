@@ -1,5 +1,5 @@
 use axum::Router;
-use mmf_core::{BuildInfo, ComponentHealth, HealthStatus, LifecycleState, MmfError};
+use mmf_core::{BuildInfo, LifecycleState, MmfError};
 use mmf_runtime::NativeBackendDiagnostics;
 use mmf_runtime::{system_router, RuntimeState};
 
@@ -66,26 +66,24 @@ pub struct AuthRuntime {
 
 impl AuthRuntime {
     pub fn new(config: &AuthServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "auth".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "http".into(),
-                "grpc".into(),
-                "postgres".into(),
-                "redis".into(),
-                "oidc".into(),
-                "credential_login".into(),
-                "durable_outbox".into(),
-                "native_auth".into(),
-            ],
-        });
-        for dependency in AuthDependency::all() {
-            state.register_required_component(dependency.name())?;
-        }
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "auth".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "http".into(),
+                    "grpc".into(),
+                    "postgres".into(),
+                    "redis".into(),
+                    "oidc".into(),
+                    "credential_login".into(),
+                    "durable_outbox".into(),
+                    "native_auth".into(),
+                ],
+            },
+            AuthDependency::all().map(|dependency| dependency.name()),
+        )?;
         Ok(Self { state })
     }
 
@@ -95,13 +93,7 @@ impl AuthRuntime {
     }
 
     pub fn mark_healthy(&self, dependency: AuthDependency) -> Result<(), MmfError> {
-        self.state.set_component_health(
-            dependency.name(),
-            ComponentHealth {
-                status: HealthStatus::Healthy,
-                message: None,
-            },
-        )
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn activate(&self) -> Result<(), MmfError> {

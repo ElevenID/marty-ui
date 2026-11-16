@@ -1,12 +1,12 @@
 /**
  * Profile Page Component
  *
- * Shows user profile information from OIDC claims.
+ * Shows user profile information from the authenticated account response.
  * Supports viewing and uploading a profile picture.
  * Available to all authenticated users.
  */
 
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import {
   Box,
   Card,
@@ -31,17 +31,28 @@ import EmailIcon from '@mui/icons-material/Email';
 import BadgeIcon from '@mui/icons-material/Badge';
 import PublicIcon from '@mui/icons-material/Public';
 import CakeIcon from '@mui/icons-material/Cake';
-import SecurityIcon from '@mui/icons-material/Security';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BusinessIcon from '@mui/icons-material/Business';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';
-import { updateProfilePicture } from '../services/authApi';
+import { updateProfilePicture, startPasskeyEnrollment } from '../services/authApi';
+import {
+  createProfilePictureBody,
+  MAX_PROFILE_PICTURE_FILE_BYTES,
+  PROFILE_PICTURE_SIZE_ERROR,
+} from '../services/profilePicturePayload';
 import { formatOfficialReference, pickOfficialReference } from '../utils/officialReferences';
 import OrganizationMembershipHub from './organizations/OrganizationMembershipHub';
+import IdentityProviderDetails from './IdentityProviderDetails';
 
 function ProfilePage() {
+  const auth = useAuth();
+  const accountId = auth.user?.user_id || auth.user?.sub || auth.user?.id || auth.user?.subject || auth.user?.email;
+  return <AccountProfile key={accountId || 'no-account'} auth={auth} />;
+}
+
+function AccountProfile({ auth }) {
   const {
     user,
     isAdministrator,
@@ -49,18 +60,46 @@ function ProfilePage() {
     organizationId,
     organizations = [],
     refreshUser,
-  } = useAuth();
+  } = auth;
   const { activeOrgId, setActiveOrgId } = useConsole();
 
   const fileInputRef = useRef(null);
+  const readerRef = useRef(null);
+  const pictureGeneration = useRef(0);
+  const savePending = useRef(false);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [readingPhoto, setReadingPhoto] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [enrollingPasskey, setEnrollingPasskey] = useState(false);
+  const [passkeyError, setPasskeyError] = useState(null);
+  const [passkeyEmailSent, setPasskeyEmailSent] = useState(false);
+
+  const handleCreatePasskey = async () => {
+    setEnrollingPasskey(true);
+    setPasskeyError(null);
+    try {
+      const result = await startPasskeyEnrollment(window.location.pathname);
+      if (result?.email_sent) {
+        setPasskeyEmailSent(true);
+        setEnrollingPasskey(false);
+      }
+    } catch (error) {
+      setPasskeyError(error.message);
+      setEnrollingPasskey(false);
+    }
+  };
+
+  useLayoutEffect(() => () => {
+    pictureGeneration.current += 1;
+    readerRef.current?.abort();
+    readerRef.current = null;
+  }, []);
 
   if (!user) {
     return (
-      <Box display="flex" alignItems="center" justifyContent="center" minHeight="40vh">
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '40vh' }}>
         <CircularProgress />
       </Box>
     );
@@ -76,9 +115,12 @@ function ProfilePage() {
   };
 
   const displayPicture = previewUrl || user.picture || undefined;
-  const userInitial = (user.given_name || user.name || user.email || 'U')[0].toUpperCase();
+  const fullName = user.name?.trim()
+    || [user.given_name, user.family_name].map((name) => name?.trim()).filter(Boolean).join(' ');
+  const displayName = fullName || user.username?.trim() || user.preferred_username?.trim() || user.email || 'User';
+  const userInitial = displayName[0].toUpperCase();
   const accountReference = pickOfficialReference({
-    rawId: user.id || user.subject,
+    rawId: user.user_id || user.id || user.subject,
     kind: 'account',
   });
   const applicantReference = pickOfficialReference({
@@ -88,45 +130,103 @@ function ProfilePage() {
 
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || savePending.current) return;
+
+    const generation = ++pictureGeneration.current;
+    readerRef.current?.abort();
+    readerRef.current = null;
+    // Allow the same file to be selected again after cancellation or a failure.
+    e.target.value = '';
+    setReadingPhoto(false);
+    setPreviewUrl(null);
+    setUploadError(null);
+    setUploadSuccess(false);
 
     if (!file.type.startsWith('image/')) {
       setUploadError('Please select an image file (JPEG, PNG, GIF, WebP).');
       return;
     }
-    if (file.size > 2 * 1024 * 1024) {
-      setUploadError('Image must be smaller than 2 MB.');
+    if (file.size > MAX_PROFILE_PICTURE_FILE_BYTES) {
+      setUploadError(PROFILE_PICTURE_SIZE_ERROR);
       return;
     }
 
-    setUploadError(null);
-    setUploadSuccess(false);
-
     const reader = new FileReader();
-    reader.onload = (ev) => setPreviewUrl(ev.target.result);
-    reader.readAsDataURL(file);
+    readerRef.current = reader;
+    setReadingPhoto(true);
+    const isCurrentRead = () => pictureGeneration.current === generation && readerRef.current === reader;
+    const readFailed = () => {
+      if (!isCurrentRead()) return;
+      readerRef.current = null;
+      setReadingPhoto(false);
+      setUploadError('Unable to read this image. Please select it again.');
+    };
+    reader.onload = (ev) => {
+      if (!isCurrentRead()) return;
+      if (typeof ev.target?.result !== 'string' || !ev.target.result) {
+        readFailed();
+        return;
+      }
+      readerRef.current = null;
+      setReadingPhoto(false);
+      try {
+        createProfilePictureBody(ev.target.result);
+      } catch {
+        setUploadError(PROFILE_PICTURE_SIZE_ERROR);
+        return;
+      }
+      setPreviewUrl(ev.target.result);
+    };
+    reader.onerror = readFailed;
+    try {
+      reader.readAsDataURL(file);
+    } catch {
+      readFailed();
+    }
   };
 
   const handleSavePicture = async () => {
-    if (!previewUrl) return;
+    if (!previewUrl || readerRef.current || savePending.current) return;
 
+    const generation = pictureGeneration.current;
+    const isCurrentSave = () => pictureGeneration.current === generation;
+    savePending.current = true;
     setUploading(true);
     setUploadError(null);
     setUploadSuccess(false);
 
-    const result = await updateProfilePicture(previewUrl);
-
-    setUploading(false);
-    if (result.success) {
-      setUploadSuccess(true);
-      setPreviewUrl(null);
-      await refreshUser();
-    } else {
-      setUploadError(result.error || 'Failed to update profile picture.');
+    try {
+      const result = await updateProfilePicture(previewUrl);
+      if (!isCurrentSave()) return;
+      if (result.success) {
+        setUploadSuccess(true);
+        setPreviewUrl(null);
+        try {
+          await refreshUser({ background: true });
+        } catch (error) {
+          if (isCurrentSave() && error?.name !== 'AbortError') {
+            setUploadError('Your picture was saved, but account details could not be refreshed. Reload the page to see it.');
+          }
+        }
+      } else {
+        setUploadError(result.error || 'Failed to update profile picture.');
+      }
+    } catch {
+      if (isCurrentSave()) setUploadError('Failed to update profile picture.');
+    } finally {
+      if (isCurrentSave()) {
+        savePending.current = false;
+        setUploading(false);
+      }
     }
   };
 
   const handleCancelPicture = () => {
+    if (savePending.current) return;
+    pictureGeneration.current += 1;
+    readerRef.current?.abort();
+    readerRef.current = null;
+    setReadingPhoto(false);
     setPreviewUrl(null);
     setUploadError(null);
     setUploadSuccess(false);
@@ -141,7 +241,7 @@ function ProfilePage() {
 
       <Grid container spacing={3}>
         {/* Profile Card */}
-        <Grid item xs={12} md={4}>
+        <Grid size={{ xs: 12, md: 4 }}>
           <Card>
             <CardContent sx={{ textAlign: 'center', py: 4 }}>
               {/* Avatar with camera overlay */}
@@ -161,23 +261,27 @@ function ProfilePage() {
                 </Avatar>
 
                 <Tooltip title="Change profile picture">
-                  <IconButton
-                    size="small"
-                    onClick={() => fileInputRef.current?.click()}
-                    sx={{
-                      position: 'absolute',
-                      bottom: 0,
-                      right: -4,
-                      bgcolor: 'primary.main',
-                      color: 'white',
-                      border: '2px solid white',
-                      width: 32,
-                      height: 32,
-                      '&:hover': { bgcolor: 'primary.dark' },
-                    }}
-                  >
-                    <PhotoCameraIcon sx={{ fontSize: 16 }} />
-                  </IconButton>
+                  <span>
+                    <IconButton
+                      size="small"
+                      aria-label="Change profile picture"
+                      disabled={uploading}
+                      onClick={() => fileInputRef.current?.click()}
+                      sx={{
+                        position: 'absolute',
+                        bottom: 0,
+                        right: -4,
+                        bgcolor: 'primary.main',
+                        color: 'white',
+                        border: '2px solid white',
+                        width: 32,
+                        height: 32,
+                        '&:hover': { bgcolor: 'primary.dark' },
+                      }}
+                    >
+                      <PhotoCameraIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </span>
                 </Tooltip>
 
                 <input
@@ -185,20 +289,25 @@ function ProfilePage() {
                   type="file"
                   accept="image/*"
                   hidden
+                  disabled={uploading}
                   onChange={handleFileChange}
                 />
               </Box>
 
-              {previewUrl && (
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Images up to 1.5 MB.
+              </Typography>
+
+              {(previewUrl || readingPhoto) && (
                 <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center', mb: 2 }}>
                   <Button
                     variant="contained"
                     size="small"
                     onClick={handleSavePicture}
-                    disabled={uploading}
-                    startIcon={uploading ? <CircularProgress size={14} color="inherit" /> : null}
+                    disabled={uploading || readingPhoto}
+                    startIcon={uploading || readingPhoto ? <CircularProgress size={14} color="inherit" /> : null}
                   >
-                    {uploading ? 'Saving…' : 'Save'}
+                    {uploading ? 'Saving…' : readingPhoto ? 'Reading…' : 'Save'}
                   </Button>
                   <Button
                     variant="outlined"
@@ -223,7 +332,7 @@ function ProfilePage() {
               )}
 
               <Typography variant="h5" gutterBottom>
-                {user.name || 'User'}
+                {displayName}
               </Typography>
 
               <Typography variant="body2" color="textSecondary" gutterBottom>
@@ -243,7 +352,7 @@ function ProfilePage() {
         </Grid>
 
         {/* Details Card */}
-        <Grid item xs={12} md={8}>
+        <Grid size={{ xs: 12, md: 8 }}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
@@ -255,7 +364,7 @@ function ProfilePage() {
                   <ListItemIcon>
                     <PersonIcon />
                   </ListItemIcon>
-                  <ListItemText primary="Full Name" secondary={user.name || 'Not provided'} />
+                  <ListItemText primary="Full Name" secondary={fullName || 'Not provided'} />
                 </ListItem>
 
                 <ListItem>
@@ -285,7 +394,7 @@ function ProfilePage() {
                   <ListItemText
                     primary="Account Reference"
                     secondary={
-                      <Typography variant="body2" fontFamily="monospace">
+                      <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                         {accountReference}
                       </Typography>
                     }
@@ -321,15 +430,7 @@ function ProfilePage() {
               </Typography>
 
               <List>
-                <ListItem>
-                  <ListItemIcon>
-                    <SecurityIcon />
-                  </ListItemIcon>
-                  <ListItemText
-                    primary="Authentication Provider"
-                    secondary="Keycloak OpenID Connect"
-                  />
-                </ListItem>
+                <IdentityProviderDetails />
 
                 {user.applicant_id && (
                   <ListItem>
@@ -339,7 +440,7 @@ function ProfilePage() {
                     <ListItemText
                       primary="Applicant Reference"
                       secondary={
-                        <Typography variant="body2" fontFamily="monospace">
+                        <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                           {applicantReference}
                         </Typography>
                       }
@@ -349,6 +450,31 @@ function ProfilePage() {
               </List>
 
               {/* Roles */}
+              {user.passkey_enrollment_available && (
+                <Box sx={{ my: 2 }} data-testid="profile-passkey-enrollment">
+                  <Typography variant="h6" gutterBottom>Passkeys</Typography>
+                  <Typography variant="body2" sx={{ mb: 2 }}>
+                    Create a passkey for this account using your phone, computer, or security key.
+                    Your other sign-in options stay available. You will confirm your account before enrollment.
+                  </Typography>
+                  {passkeyError && <Alert severity="error" sx={{ mb: 2 }}>{passkeyError}</Alert>}
+                  {passkeyEmailSent && <Alert severity="success" sx={{ mb: 2 }}>
+                    Check your account email for a link to finish creating your passkey. The link expires in 5 minutes.
+                  </Alert>}
+                  <Button variant="outlined" onClick={handleCreatePasskey} disabled={enrollingPasskey || passkeyEmailSent}>
+                    {passkeyEmailSent ? 'Enrollment email sent' : enrollingPasskey ? 'Opening passkey setup…' : 'Create a passkey'}
+                  </Button>
+                  {user.passkey_management_url && (
+                    <Box sx={{ mt: 2 }}>
+                      <Button component="a" href={user.passkey_management_url}>Manage passkeys</Button>
+                      <Typography variant="body2" color="text.secondary">
+                        Confirm your account in the identity account console to rename or remove passkeys.
+                        Keep another passkey or a working password before removing your last passkey.
+                      </Typography>
+                    </Box>
+                  )}
+                </Box>
+              )}
               {user.roles && user.roles.length > 0 && (
                 <>
                   <Divider sx={{ my: 2 }} />
@@ -366,7 +492,7 @@ function ProfilePage() {
           </Card>
         </Grid>
 
-        <Grid item xs={12}>
+        <Grid size={12}>
           <Card>
             <CardContent>
               <OrganizationMembershipHub

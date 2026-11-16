@@ -490,12 +490,15 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
-    // The frozen published-schema template predates the Rust OID4VCI
-    // migration. Prepare this disposable clone once, then exercise the
-    // packaged service with its production `validate` startup setting.
+    // The frozen published-schema template predates the Rust OID4VCI and
+    // explicit-profile migrations. Prepare this disposable clone once, then
+    // exercise the packaged service with its production `validate` setting.
     marty_issuance_service::migration::migrate(&check)
         .await
         .map_err(|_| "Packaged selfhost qualification failed: database:migrate-oid4vci")?;
+    marty_issuance_service::migration::migrate_jwt_vc_profile(&check)
+        .await
+        .map_err(|_| "Packaged selfhost qualification failed: database:migrate-jwt-vc-profile")?;
     record_database_stage("seed");
     seed(&check).await?;
     check.close().await;
@@ -577,10 +580,6 @@ fn write_synthetic_secrets(
         ),
         ("issuance_api_key", MANAGEMENT_KEY),
         (
-            "didcomm_issuance_openbao_token",
-            "synthetic-selfhost-didcomm-openbao-token",
-        ),
-        (
             "sign_grant_mint_issuance_credential_token",
             "synthetic-credential-grant-token",
         ),
@@ -601,6 +600,9 @@ fn write_synthetic_secrets(
             "canvas_credentials_shared_secret",
             "synthetic-selfhost-canvas-shared-secret",
         ),
+        ("canvas_credentials_api_token", ""),
+        ("passport_tenant_api_keys", ""),
+        ("personalization_bureau_api_key", ""),
         ("grpc_service_token", SERVICE_TOKEN),
         ("workload_identity_ca_cert", kms_ca_pem),
         ("issuance_workload_server_cert", kms_ca_pem),
@@ -635,7 +637,8 @@ fn write_synthetic_secrets(
             std::fs::create_dir(&path).map_err(|_| ERROR)?;
             continue;
         }
-        let contents = if case == SecretCase::CrLf {
+        // Unselected optional placeholders stay empty in every fault case.
+        let contents = if case == SecretCase::CrLf && !value.is_empty() {
             format!("{value}\r\n")
         } else {
             value.to_string()
@@ -861,6 +864,28 @@ mod tests {
             dedicated_key,
             super::super::selfhost_runtime_sidecar::MANAGEMENT_KEY
         );
+        for case in [
+            SecretCase::Correct,
+            SecretCase::CrLf,
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let log_values = write_synthetic_secrets(directory.path(), case, KMS_CA_CERT).unwrap();
+            for name in [
+                "canvas_credentials_api_token",
+                "passport_tenant_api_keys",
+                "personalization_bureau_api_key",
+            ] {
+                assert_eq!(std::fs::read(directory.path().join(name)).unwrap(), b"");
+            }
+            assert!(log_values.iter().all(|value| !value.is_empty()));
+        }
     }
 
     #[test]

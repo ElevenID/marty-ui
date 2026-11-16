@@ -2,13 +2,13 @@ use crate::webhook::WebhookSecretEnvelope;
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 
-const HEAD: &str = "20260808_0002";
+const HEAD: &str = "20261031_0003";
 
 #[derive(Debug, Error)]
 pub enum MigrationError {
     #[error("notification migration storage failure: {0}")]
     Database(#[from] sqlx::Error),
-    #[error("legacy webhook secrets require available OpenBao protection: {0}")]
+    #[error("legacy webhook secrets require available remote KMS protection: {0}")]
     Envelope(String),
     #[error("notification schema is incompatible: {0}")]
     Incompatible(String),
@@ -30,25 +30,13 @@ pub async fn migrate(
     )
     .fetch_one(&mut *transaction)
     .await?;
+    let mut legacy_secrets = false;
     if endpoint_exists {
         let columns = sqlx::query("SELECT column_name FROM information_schema.columns WHERE table_schema='notification_service' AND table_name='webhook_endpoints'")
             .fetch_all(&mut *transaction).await?.into_iter().map(|row| row.get::<String, _>("column_name")).collect::<Vec<_>>();
-        if columns.iter().any(|value| value == "secret") {
+        legacy_secrets = columns.iter().any(|value| value == "secret");
+        if legacy_secrets {
             sqlx::query("ALTER TABLE notification_service.webhook_endpoints ADD COLUMN IF NOT EXISTS secret_envelope text, ADD COLUMN IF NOT EXISTS secret_hint varchar(8)").execute(&mut *transaction).await?;
-            let rows = sqlx::query("SELECT id, organization_id, secret FROM notification_service.webhook_endpoints WHERE secret_envelope IS NULL").fetch_all(&mut *transaction).await?;
-            for row in rows {
-                let id: String = row.try_get("id")?;
-                let organization_id: String = row.try_get("organization_id")?;
-                let secret: String = row.try_get("secret")?;
-                let ciphertext = envelope
-                    .wrap(&organization_id, &id, &secret)
-                    .await
-                    .map_err(|error| MigrationError::Envelope(error.to_string()))?;
-                sqlx::query("UPDATE notification_service.webhook_endpoints SET secret_envelope=$1, secret_hint=$2 WHERE id=$3")
-                    .bind(ciphertext).bind(secret.chars().take(4).collect::<String>()).bind(id).execute(&mut *transaction).await?;
-            }
-            sqlx::query("ALTER TABLE notification_service.webhook_endpoints ALTER COLUMN secret_envelope SET NOT NULL, ALTER COLUMN secret_hint SET NOT NULL, DROP COLUMN secret")
-                .execute(&mut *transaction).await?;
         }
     }
     sqlx::raw_sql(include_str!("../migrations/0001_notification_schema.sql"))
@@ -59,6 +47,27 @@ pub async fn migrate(
     ))
     .execute(&mut *transaction)
     .await?;
+    sqlx::raw_sql(include_str!("../migrations/0003_webhook_aws_envelope.sql"))
+        .execute(&mut *transaction)
+        .await?;
+    // Install the forward constraint before backfilling either provider. The
+    // historical schema retains its original vault-only constraint unchanged.
+    if legacy_secrets {
+        let rows = sqlx::query("SELECT id, organization_id, secret FROM notification_service.webhook_endpoints WHERE secret_envelope IS NULL").fetch_all(&mut *transaction).await?;
+        for row in rows {
+            let id: String = row.try_get("id")?;
+            let organization_id: String = row.try_get("organization_id")?;
+            let secret: String = row.try_get("secret")?;
+            let ciphertext = envelope
+                .wrap(&organization_id, &id, &secret)
+                .await
+                .map_err(|error| MigrationError::Envelope(error.to_string()))?;
+            sqlx::query("UPDATE notification_service.webhook_endpoints SET secret_envelope=$1, secret_hint=$2 WHERE id=$3")
+                .bind(ciphertext).bind(secret.chars().take(4).collect::<String>()).bind(id).execute(&mut *transaction).await?;
+        }
+        sqlx::query("ALTER TABLE notification_service.webhook_endpoints ALTER COLUMN secret_envelope SET NOT NULL, ALTER COLUMN secret_hint SET NOT NULL, DROP COLUMN secret")
+            .execute(&mut *transaction).await?;
+    }
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -98,6 +107,15 @@ async fn validate_connection(connection: &mut sqlx::PgConnection) -> Result<(), 
     if checks != 2 {
         return Err(MigrationError::Incompatible(
             "webhook secret storage constraints are missing".into(),
+        ));
+    }
+    let envelope_constraint: Option<String> = sqlx::query_scalar("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='notification_service.webhook_endpoints'::regclass AND conname='ck_webhook_endpoints_secret_envelope'")
+        .fetch_optional(&mut *connection).await?;
+    if !envelope_constraint.is_some_and(|definition| {
+        definition.contains("vault:%") && definition.contains("aws-kms:v1:%")
+    }) {
+        return Err(MigrationError::Incompatible(
+            "selected-provider webhook secret constraint is missing".into(),
         ));
     }
     let delivery_correlation: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='notification_service' AND table_name='webhook_deliveries' AND column_name='correlation_id' AND data_type='character varying' AND character_maximum_length=64")

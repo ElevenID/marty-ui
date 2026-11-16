@@ -5,6 +5,8 @@ const test = require('node:test');
 
 const {
   approveAndIssue,
+  reviewerActionMode,
+  confirmUiReviewerLockReleased,
   createAndSubmitApplication,
   clearanceApplicationTemplatePayload,
   clearanceCredentialPayload,
@@ -229,9 +231,24 @@ test('D-01 retains its created application ID when stored passport evidence fail
   assert.equal(body.form_data.passport_evidence_sha256, evidenceDigest);
 });
 
+test('D-01 preserves failed lock acquisition and never releases an unverified lock', async () => {
+  const owned = ownedRun({ applicationId: 'passport-application/1' });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
+    new Error('Acquire reviewer lock failed'),
+  ]);
+  await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64)), /Acquire reviewer lock failed/);
+  const root = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/passport-application%2F1`;
+  assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method || 'GET']), [
+    [root, 'GET'], [`${root}/lock`, 'POST'],
+  ]);
+  assert.deepEqual(owned.uncertainMutations, [{ operation: 'reviewer_lock' }]);
+});
+
 test('D-01 attempts exact lock release on approval mismatch and retains unconfirmed lock outcomes', async () => {
   for (const lostRelease of [false, true]) {
     const owned = ownedRun({ applicationId: 'passport-application/1' });
+    owned.reviewLockReleaseFailure = 'REVIEWER_LOCK_RELEASE_UNCONFIRMED';
     const page = fakePage([
       { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
       {
@@ -247,9 +264,8 @@ test('D-01 attempts exact lock release on approval mismatch and retains unconfir
       lostRelease ? new Error('Lost reviewer lock release response') : { ok: true, status: 200, body: { released: true } },
     ]);
 
-    await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64)), lostRelease
-      ? /Lost reviewer lock release response/
-      : /Application response does not match this run/);
+    await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64)),
+      /Application response does not match this run/);
     const root = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/passport-application%2F1`;
     assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method || 'GET']), [
       [root, 'GET'],
@@ -259,5 +275,63 @@ test('D-01 attempts exact lock release on approval mismatch and retains unconfir
     ]);
     assert.equal(owned.transactionId, undefined);
     assert.deepEqual(owned.uncertainMutations, lostRelease ? [{ operation: 'reviewer_lock' }] : []);
+    assert.equal(owned.reviewLockReleaseFailure, lostRelease ? 'REVIEWER_LOCK_RELEASE_UNCONFIRMED' : undefined);
   }
+});
+
+test('D-01 detail UI rejects foreign reviewer lock without a second lock mutation', async () => {
+  const owned = ownedRun({ applicationId: 'passport-application/1' });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
+    { ok: true, status: 200, body: { authenticated: true, user: { user_id: 'reviewer-A' } } },
+    { ok: true, status: 200, body: { id: 'lock', status: 'ACTIVE', organization_id: owned.organizationId,
+      applicant_id: owned.applicationId, holder_user_id: 'reviewer-B' } },
+  ]);
+  await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64), { recording: {} }), /not held by this authenticated reviewer/);
+  assert.deepEqual(page.requests.map(({ requestOptions }) => requestOptions.method || 'GET'), ['GET', 'GET', 'GET']);
+  assert.deepEqual(owned.uncertainMutations, []);
+});
+
+test('D-01 detail UI requires authenticated actor and leaves its lock lifecycle to UI', async () => {
+  const owned = ownedRun({ applicationId: 'passport-application/1' });
+  for (const authenticated of [false, true]) {
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
+      { ok: true, status: 200, body: { authenticated, user: { user_id: 'reviewer-A' } } },
+      ...(authenticated ? [{ ok: true, status: 200, body: { id: 'lock', status: 'ACTIVE',
+        organization_id: owned.organizationId, applicant_id: owned.applicationId,
+        holder_user_id: 'reviewer-A' } }] : []),
+    ]);
+    const recording = { explain: async () => { throw new Error('STOP_AFTER_UI_LOCK_PROOF'); } };
+    await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64), { recording }), authenticated
+      ? /STOP_AFTER_UI_LOCK_PROOF/ : /Authenticated D-01 reviewer identity is unavailable/);
+    assert.deepEqual(page.requests.map(({ requestOptions }) => requestOptions.method || 'GET'),
+      authenticated ? ['GET', 'GET', 'GET'] : ['GET', 'GET']);
+  }
+  assert.deepEqual(owned.uncertainMutations, []);
+});
+
+test('D-01 detail UI navigation confirms exact lock absence before browser close', async () => {
+  const owned = ownedRun({ applicationId: 'passport-application/1' });
+  const page = fakePage([
+    { ok: true, status: 200, body: { id: 'lock', status: 'ACTIVE', organization_id: owned.organizationId,
+      applicant_id: owned.applicationId, holder_user_id: 'reviewer-A' } },
+    { ok: true, status: 200, body: { id: null, status: 'AVAILABLE', organization_id: owned.organizationId,
+      applicant_id: owned.applicationId, holder_user_id: null } },
+  ]);
+  let navigated = false;
+  page.goto = async () => { navigated = true; };
+  page.waitForTimeout = async () => {};
+  assert.equal(await confirmUiReviewerLockReleased(page, owned.applicationId), true);
+  assert.equal(navigated, true);
+  assert.deepEqual(page.requests.map(({ requestOptions }) => requestOptions.method || 'GET'), ['GET', 'GET']);
+});
+
+test('D-01 API-only reviewer claim cannot qualify as real Admin UI', () => {
+  assert.deepEqual(reviewerActionMode(true), {
+    boundary: 'AUTHENTICATED_PUBLIC_API', qualifiesUiReview: false,
+  });
+  assert.deepEqual(reviewerActionMode(false), {
+    boundary: 'REAL_ADMIN_UI', qualifiesUiReview: true,
+  });
 });

@@ -80,7 +80,13 @@ fn did_publication_and_failures_match_language_neutral_vectors() {
     let fixture = fixture();
     let vector = &fixture["did"];
     let request: PublishDidRequest = serde_json::from_value(vector["request"].clone()).unwrap();
-    let result = build_did_document(None, vector["service_id"].as_str().unwrap(), request).unwrap();
+    let result = build_did_document(
+        None,
+        vector["organization_id"].as_str().unwrap(),
+        vector["service_id"].as_str().unwrap(),
+        request,
+    )
+    .unwrap();
     assert_eq!(result.did_id, vector["expected_did"]);
     assert_eq!(result.org_slug.as_deref(), Some("acme"));
     assert_eq!(
@@ -93,10 +99,16 @@ fn did_publication_and_failures_match_language_neutral_vectors() {
     assert_eq!(result.verification_method_count, 1);
     let private: PublishDidRequest =
         serde_json::from_value(vector["private_request"].clone()).unwrap();
-    assert!(build_did_document(None, vector["service_id"].as_str().unwrap(), private).is_err());
+    assert!(build_did_document(
+        None,
+        vector["organization_id"].as_str().unwrap(),
+        vector["service_id"].as_str().unwrap(),
+        private
+    )
+    .is_err());
 
     for invalid in fixture["invalid_did_requests"].as_array().unwrap() {
         let request: PublishDidRequest = serde_json::from_value(invalid.clone()).unwrap();
-        assert!(build_did_document(None, "svc-a", request).is_err());
+        assert!(build_did_document(None, "org-a", "svc-a", request).is_err());
     }
 }

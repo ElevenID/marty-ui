@@ -136,7 +136,7 @@ impl CredentialTemplateControlPlane for ControlPlane {
         assert_eq!(organization_id, "org-1");
         assert!(matches!(
             credential_format,
-            "sd_jwt_vc" | "icao_emrtd" | "ldp_vc"
+            "sd_jwt_vc" | "icao_emrtd" | "ldp_vc" | "jwt_vc" | "vc_jwt_direct_v1"
         ));
         Ok(IssuerIdentity {
             issuer_did: requested_issuer_did
@@ -205,6 +205,8 @@ fn claim(name: &str) -> ClaimDefinition {
 
 fn command() -> CreateTemplateCommand {
     CreateTemplateCommand {
+        jwt_vc_profile: None,
+
         user_id: "user-1".to_owned(),
         organization_id: "org-1".to_owned(),
         name: "Employee Badge".to_owned(),
@@ -558,4 +560,152 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
     assert_eq!(converted.revocation_profile_id, None);
     physical.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
     assert!(application.create_template(physical).await.is_err());
+}
+
+fn direct_command() -> CreateTemplateCommand {
+    let mut value = command();
+    value.jwt_vc_profile = Some(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap());
+    value.credential_payload_format = Some("vc_jwt_direct_v1".into());
+    value.supported_formats = vec![CredentialFormat::VcJwtDirectV1];
+    value.selective_disclosure_fields.clear();
+    value.privacy_posture = PrivacyPosture::Standard;
+    value.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
+    value.validity_rules = Some(marty_credential_template::ValidityRules {
+        default_validity_days: 2,
+        not_before_offset_seconds: -30,
+        renewable: false,
+        ..Default::default()
+    });
+    value
+}
+
+#[tokio::test]
+async fn explicit_profile_has_distinct_storage_namespace_and_exact_discovery() {
+    let (_repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let template = application.create_template(direct_command()).await.unwrap();
+    assert_eq!(template.storage_status(), "jose1_draft");
+    assert_eq!(template.status, TemplateStatus::Draft);
+    // This parser is unchanged from the old adapter. Unfiltered old readers
+    // fail the whole result; template management must use upgraded services.
+    assert!(TemplateStatus::parse(&template.storage_status()).is_err());
+    let active = application
+        .activate_template("user-1", &template.id, Utc::now())
+        .await
+        .unwrap();
+    assert_eq!(active.storage_status(), "jose1_active");
+    assert_eq!(active.status, TemplateStatus::Active);
+    let metadata = application
+        .credential_configurations_internal()
+        .await
+        .unwrap();
+    assert!(!metadata.configurations.contains_key("EmployeeBadge"));
+    let config = &metadata.configurations["EmployeeBadge#vc2-jose-2026-v1"];
+    assert_eq!(config["format"], "application/vc+jwt");
+    assert_eq!(config["marty_securing_profile"], "w3c_vc2_jose_2026_v1");
+    assert_eq!(
+        config["credential_definition"]["type"],
+        serde_json::json!(["VerifiableCredential", "EmployeeBadge"])
+    );
+}
+
+#[tokio::test]
+async fn explicit_template_rejects_incomplete_or_unsupported_opt_in_before_save() {
+    for invalid in 0..6 {
+        let (repository, application) = build_application(ControlPlane {
+            deny_membership: false,
+            deny_revocation: false,
+            deny_trust: false,
+        });
+        let mut value = direct_command();
+        match invalid {
+            0 => value.jwt_vc_profile = None,
+            1 => value.credential_payload_format = Some("w3c_vcdm_v2_jwt_vc".into()),
+            2 => value.supported_formats.push(CredentialFormat::VcJwt),
+            3 => value.issuance_protocol = Some("OID4VCI_AUTH_CODE".into()),
+            4 => value.validity_rules.as_mut().unwrap().renewable = true,
+            5 => {
+                value
+                    .validity_rules
+                    .as_mut()
+                    .unwrap()
+                    .not_before_offset_seconds = 3600
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            application.create_template(value).await.is_err(),
+            "case {invalid}"
+        );
+        assert!(
+            repository.templates.lock().unwrap().is_empty(),
+            "case {invalid}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn explicit_profile_requires_fresh_create_and_preserves_policy_across_its_own_versions() {
+    let (repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let legacy = application.create_template(command()).await.unwrap();
+    let result = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: legacy.id.clone(),
+            now: Utc::now(),
+            patch: UpdateTemplatePatch {
+                jwt_vc_profile: Some(
+                    marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap(),
+                ),
+                credential_payload_format: Some("VC_JWT_DIRECT_V1".into()),
+                supported_formats: Some(vec![CredentialFormat::VcJwtDirectV1]),
+                ..Default::default()
+            },
+        })
+        .await;
+    assert!(result.is_err());
+    assert_eq!(repository.templates.lock().unwrap()[&legacy.id], legacy);
+    let direct = application.create_template(direct_command()).await.unwrap();
+    let revised = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: direct.id.clone(),
+            now: Utc::now(),
+            patch: UpdateTemplatePatch {
+                jwt_vc_profile: Some(
+                    marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(7200).unwrap(),
+                ),
+                ..Default::default()
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        revised
+            .jwt_vc_profile
+            .as_ref()
+            .unwrap()
+            .signature_lifetime_seconds(),
+        7200
+    );
+    assert_eq!(revised.compliance_profile_id, direct.compliance_profile_id);
+    application
+        .activate_template("user-1", &direct.id, Utc::now())
+        .await
+        .unwrap();
+    let version = application
+        .new_version("user-1", &direct.id, Utc::now())
+        .await
+        .unwrap();
+    assert_ne!(version.id, direct.id);
+    assert_eq!(version.jwt_vc_profile, revised.jwt_vc_profile);
+    assert_eq!(version.compliance_profile_id, direct.compliance_profile_id);
+    assert_eq!(version.storage_status(), "jose1_draft");
 }

@@ -1,7 +1,9 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 const MINIMUM_SECRET_BYTES: usize = 32;
 
@@ -20,16 +22,7 @@ impl RuntimeEnvironment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkloadServerTlsFiles {
-    pub certificate: PathBuf,
-    pub ca_certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as WorkloadServerTlsFiles;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentationPolicyServiceConfig {
@@ -40,9 +33,12 @@ pub struct PresentationPolicyServiceConfig {
     pub grpc_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
+    pub marty_organization_id: Uuid,
     pub organization_grpc_target: String,
     pub organization_grpc_ca_cert: Option<PathBuf>,
     pub trust_profile_url: String,
+    pub credential_template_url: String,
+    pub organization_url: String,
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
@@ -50,6 +46,7 @@ pub struct PresentationPolicyServiceConfig {
     pub signing_registry_api_key: Option<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
+    pub managed_owner_channels: Option<crate::ManagedOwnerChannelConfig>,
     pub release_version: String,
     pub build_revision: String,
 }
@@ -112,6 +109,10 @@ impl PresentationPolicyServiceConfig {
         if database_max_connections == 0 || database_max_connections > 100 {
             return Err(invalid("PRESENTATION_POLICY_DATABASE_MAX_CONNECTIONS"));
         }
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .parse()
+            .map_err(|_| invalid("MARTY_ORG_ID"))?;
         let organization_grpc_target =
             grpc_target(value(&values, "ORG_GRPC_TARGET").unwrap_or("organization:9002"))?;
         let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
@@ -127,6 +128,15 @@ impl PresentationPolicyServiceConfig {
         let trust_profile_url = service_url(
             value(&values, "TRUST_PROFILE_SERVICE_URL").unwrap_or("http://trust-profile:8004"),
             "TRUST_PROFILE_SERVICE_URL",
+        )?;
+        let credential_template_url = service_url(
+            value(&values, "CREDENTIAL_TEMPLATE_SERVICE_URL")
+                .unwrap_or("http://credential-template:8003"),
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        )?;
+        let organization_url = service_url(
+            value(&values, "ORGANIZATION_SERVICE_URL").unwrap_or("http://organization:8002"),
+            "ORGANIZATION_SERVICE_URL",
         )?;
         let issuance_url = service_url(
             value(&values, "ISSUANCE_NATIVE_SERVICE_URL")
@@ -209,9 +219,12 @@ impl PresentationPolicyServiceConfig {
             grpc_addr,
             database_url,
             database_max_connections,
+            marty_organization_id,
             organization_grpc_target,
             organization_grpc_ca_cert,
             trust_profile_url,
+            credential_template_url,
+            organization_url,
             credential_status_url_template,
             service_token,
             issuance_api_key,
@@ -223,6 +236,7 @@ impl PresentationPolicyServiceConfig {
                 5_u64,
             )?),
             workload_server_tls,
+            managed_owner_channels: crate::ManagedOwnerChannelConfig::from_values(&values)?,
             release_version: value(&values, "MARTY_RELEASE_VERSION")
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .to_owned(),
@@ -252,45 +266,23 @@ fn workload_server_tls(
     values: &BTreeMap<String, String>,
     environment: RuntimeEnvironment,
 ) -> Result<Option<WorkloadServerTlsFiles>, PresentationPolicyConfigError> {
-    let names = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
+    const CERT: &str = "GRPC_WORKLOAD_TLS_SERVER_CERT";
     if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
         return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
     }
-    let configured = names
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 && !environment.is_deployed() {
-        return Ok(None);
+    let files = WorkloadServerTlsFiles::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        value(values, "GRPC_WORKLOAD_TLS_CA_CERT").is_some(),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|_| invalid(CERT))?;
+    if files.is_none() && environment.is_deployed() {
+        return Err(PresentationPolicyConfigError::Missing { name: CERT });
     }
-    if configured != names.len() {
-        return Err(if configured == 0 {
-            PresentationPolicyConfigError::Missing { name: names[0] }
-        } else {
-            invalid(names[0])
-        });
-    }
-    Ok(Some(WorkloadServerTlsFiles {
-        certificate: PathBuf::from(required(values, names[0])?),
-        ca_certificate: PathBuf::from(required(values, names[1])?),
-        kms_endpoint: required(values, names[2])?,
-        kms_ca_certificate: PathBuf::from(required(values, names[3])?),
-        kms_token_file: PathBuf::from(required(values, names[4])?),
-        kms_key_name: required(values, names[5])?,
-        kms_key_version: required(values, names[6])?
-            .parse::<u32>()
-            .ok()
-            .filter(|version| *version > 0)
-            .ok_or_else(|| invalid(names[6]))?,
-    }))
+    Ok(files)
 }
 
 fn secret(
@@ -371,9 +363,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name).map_or(Ok(default), |value| {
-        value.parse().map_err(|_| invalid(name))
-    })
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn required(
@@ -386,11 +376,7 @@ fn required(
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn load_secret(

@@ -1,4 +1,5 @@
 use crate::{
+    dependency_http::{client, DEFAULT_DEPENDENCY_TIMEOUT},
     issuance::IssuanceOffer,
     service::{
         ApplicationEvent, ApplicationTemplate, EventPublisher, FlowProvider, ProviderError,
@@ -10,6 +11,7 @@ use async_trait::async_trait;
 use marty_event_stream::proto::{
     event_stream_service_client::EventStreamServiceClient, DomainEvent, PublishEventRequest,
 };
+use marty_service_contracts::application_approval::NO_MATCHING_FLOW;
 use mmf_security::ApplicationEventAuthenticator;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Map, Value};
@@ -25,15 +27,12 @@ pub struct HttpTemplateProvider {
 }
 
 impl HttpTemplateProvider {
-    pub fn new(base_url: String, api_key: Option<String>) -> Self {
-        Self {
-            client: Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("native issuer HTTP client"),
+    pub fn new(base_url: String, api_key: Option<String>) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: client(DEFAULT_DEPENDENCY_TIMEOUT)?,
             base_url: base_url.trim_end_matches('/').into(),
             api_key,
-        }
+        })
     }
 }
 
@@ -126,9 +125,13 @@ impl TemplateProvider for HttpTemplateProvider {
                 "application template not found".into(),
             ));
         }
+        if !response.status().is_success() {
+            return Err(ProviderError::Unavailable(format!(
+                "application template lookup failed with status {}",
+                response.status()
+            )));
+        }
         let template = response
-            .error_for_status()
-            .map_err(|error| ProviderError::Unavailable(error.to_string()))?
             .json::<ApplicationTemplate>()
             .await
             .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
@@ -148,13 +151,79 @@ pub struct HttpFlowProvider {
     authenticator: ApplicationEventAuthenticator,
 }
 
+#[derive(serde::Deserialize)]
+struct ApplicationApprovalResponse {
+    success: bool,
+    flows_triggered: usize,
+    #[serde(default)]
+    instance_ids: Vec<String>,
+    #[serde(default)]
+    offers: Vec<Value>,
+    #[serde(default)]
+    failed_flow_ids: Vec<String>,
+    #[serde(default)]
+    reason_code: Option<String>,
+}
+
+impl ApplicationApprovalResponse {
+    fn offer(&self) -> Result<&Value, ProviderError> {
+        if !self.failed_flow_ids.is_empty() {
+            // Flow has already reserved the matching instance. Keep the current
+            // issuance attempt so a later retry uses that same durable plan.
+            return Err(ProviderError::Unavailable(
+                "flow offer preparation failed".into(),
+            ));
+        }
+        if self.offers.is_empty() {
+            // Flow emits this code only for an empty durable plan. Missing or
+            // unknown codes cannot turn a retryable failure into a claim blocker.
+            if !self.success
+                && self.flows_triggered == 0
+                && self.instance_ids.is_empty()
+                && self.reason_code.as_deref() == Some(NO_MATCHING_FLOW)
+            {
+                return Err(ProviderError::NoActiveFlow);
+            }
+            return Err(ProviderError::Unavailable(
+                "flow issuance response contains no offer".into(),
+            ));
+        }
+        if !self.success || self.flows_triggered == 0 {
+            return Err(ProviderError::Unavailable(
+                "flow offer preparation failed".into(),
+            ));
+        }
+        self.offers
+            .iter()
+            .find(|offer| {
+                offer
+                    .get("credential_offer_uri")
+                    .and_then(Value::as_str)
+                    .is_some_and(|uri| !uri.trim().is_empty())
+                    || offer
+                        .get("credential_offer_uris")
+                        .and_then(Value::as_object)
+                        .is_some_and(|uris| {
+                            uris.values()
+                                .any(|uri| uri.as_str().is_some_and(|uri| !uri.trim().is_empty()))
+                        })
+            })
+            .ok_or_else(|| {
+                ProviderError::Unavailable("flow issuance response contains no offer".into())
+            })
+    }
+}
+
 impl HttpFlowProvider {
-    pub fn new(base_url: String, authenticator: ApplicationEventAuthenticator) -> Self {
-        Self {
-            client: Client::new(),
+    pub fn new(
+        base_url: String,
+        authenticator: ApplicationEventAuthenticator,
+    ) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: client(DEFAULT_DEPENDENCY_TIMEOUT)?,
             base_url: base_url.trim_end_matches('/').into(),
             authenticator,
-        }
+        })
     }
 }
 
@@ -220,19 +289,10 @@ impl FlowProvider for HttpFlowProvider {
             )));
         }
         let body = response
-            .json::<Value>()
+            .json::<ApplicationApprovalResponse>()
             .await
-            .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
-        let offer = body
-            .get("offers")
-            .and_then(Value::as_array)
-            .and_then(|offers| {
-                offers.iter().find(|offer| {
-                    offer.get("credential_offer_uri").is_some()
-                        || offer.get("credential_offer_uris").is_some()
-                })
-            })
-            .ok_or(ProviderError::NoActiveFlow)?;
+            .map_err(|_| ProviderError::Unavailable("flow issuance response is invalid".into()))?;
+        let offer = body.offer()?;
         let transaction_id = offer
             .get("credential_offer_transaction_id")
             .or_else(|| offer.get("flow_instance_id"))
@@ -290,14 +350,14 @@ impl GrpcEventPublisher {
         notification_url: Option<String>,
         notification_token: Option<String>,
         event_stream_token: Option<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, reqwest::Error> {
+        Ok(Self {
             channel,
             notification_url,
             notification_token,
             event_stream_token,
-            client: Client::new(),
-        }
+            client: client(DEFAULT_DEPENDENCY_TIMEOUT)?,
+        })
     }
 }
 
@@ -356,16 +416,21 @@ impl EventPublisher for GrpcEventPublisher {
                 "notification event delivery is not configured".into(),
             ));
         };
-        self.client
+        let response = self
+            .client
             .post(url)
             .header("x-service-token", token)
             .header("x-marty-event-producer", "applicant")
             .json(&notification_wire(event, &event.event_id))
             .send()
             .await
-            .map_err(|error| ProviderError::Unavailable(error.to_string()))?
-            .error_for_status()
             .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ProviderError::Unavailable(format!(
+                "notification event delivery failed with status {}",
+                response.status()
+            )));
+        }
 
         let wire = event_stream_wire(event, &event.event_id);
         let mut request = Request::new(PublishEventRequest { event: Some(wire) });
@@ -428,7 +493,8 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let api_key = "native-owner-api-key";
         let provider =
-            HttpTemplateProvider::new(format!("http://{address}"), Some(api_key.to_owned()));
+            HttpTemplateProvider::new(format!("http://{address}"), Some(api_key.to_owned()))
+                .unwrap();
 
         let template = provider
             .get("org-1", "application-template-1")
@@ -447,6 +513,66 @@ mod tests {
             .await
             .is_err());
         assert!(provider.get("", "application-template-1").await.is_err());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn template_lookup_rejects_a_redirect_with_a_valid_template_body() {
+        let app = Router::new().route(
+            "/v1/application-templates/{id}",
+            get(|| async {
+                (
+                    StatusCode::FOUND,
+                    Json(json!({
+                        "id": "application-template-1",
+                        "organization_id": "org-1",
+                        "status": "ACTIVE",
+                        "credential_template_id": "credential-template-1"
+                    })),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let result = HttpTemplateProvider::new(origin, Some("synthetic-api-key".into()))
+            .unwrap()
+            .get("org-1", "application-template-1")
+            .await;
+        assert!(matches!(result, Err(ProviderError::Unavailable(message))
+            if message.contains("status 302")));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn notification_redirect_is_rejected_before_event_stream_delivery() {
+        let app = Router::new().route(
+            "/internal/events",
+            axum::routing::post(|| async { StatusCode::TEMPORARY_REDIRECT }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/internal/events", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let publisher = GrpcEventPublisher::new(
+            tonic::transport::Endpoint::from_static("http://127.0.0.1:1").connect_lazy(),
+            Some(url),
+            Some("synthetic-notification-token".into()),
+            None,
+        )
+        .unwrap();
+        let event = ApplicationEvent {
+            event_id: "event-1".into(),
+            event_type: "application.approved".into(),
+            aggregate_id: "application-1".into(),
+            aggregate_type: "application".into(),
+            organization_id: "organization-1".into(),
+            correlation_id: "correlation-1".into(),
+            timestamp: chrono::Utc::now(),
+            data: json!({"application_id": "application-1"}),
+        };
+        let result = publisher.publish(&event).await;
+        assert!(matches!(result, Err(ProviderError::Unavailable(message))
+            if message.contains("notification event delivery failed with status 307")));
         server.abort();
     }
 
@@ -563,7 +689,8 @@ mod tests {
             let provider = HttpTemplateProvider::new(
                 format!("http://{address}"),
                 Some("test-native-key".into()),
-            );
+            )
+            .unwrap();
             assert_eq!(
                 provider.validate_offer_lifetime("org-1", 60).await.is_ok(),
                 accepted

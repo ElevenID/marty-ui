@@ -12,8 +12,9 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowProviderError,
-    FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
+    presentation_request::{load_frozen_flow_presentation_request, FrozenFlowPresentationRequest},
+    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowPresentationRequestError,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
     PresentationEvaluationResult, VerificationResultResponse,
 };
 
@@ -38,11 +39,13 @@ pub struct VerificationSubmissionOptions {
 #[derive(Clone, Debug)]
 pub struct PreparedVerificationFinalization {
     pub instance: FlowInstanceRecord,
-    pub expected_status: FlowInstanceStatus,
+    pub expected_instance: FlowInstanceRecord,
     pub nonce_digest: String,
     pub replay_expires_at_ms: u64,
     pub callback: Option<Message>,
     pub submission_digest: String,
+    pub(crate) receipt_input: Option<crate::verification_receipt::PreparedVerificationReceipt>,
+    pub(crate) managed_evidence: Option<crate::canonical_evidence::PreparedManagedEvidence>,
 }
 
 #[derive(Clone, Debug)]
@@ -73,8 +76,14 @@ pub enum FlowVerificationSubmissionError {
     InvalidState,
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_CONTEXT: {0}")]
     InvalidContext(&'static str),
+    #[error("FLOW.VERIFICATION_RESTART_REQUIRED: start a new verification request")]
+    RestartRequired,
+    #[error("FLOW.VERIFICATION_POLICY_REVISION_MISMATCH: start a new verification request")]
+    PolicyRevisionMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_STATE_MISMATCH")]
     StateMismatch,
+    #[error("FLOW.VERIFICATION_SUBMISSION_RESPONSE_MODE_MISMATCH")]
+    ResponseModeMismatch,
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_PRESENTATION_SUBMISSION")]
     InvalidPresentationSubmission,
     #[error("FLOW.VERIFICATION_SUBMISSION_CALLBACK_UNAVAILABLE")]
@@ -141,6 +150,93 @@ pub async fn decrypt_verification_response(
     Ok(value)
 }
 
+/// Accept only a fresh error response for the exact emitted direct-post request.
+/// `access_denied` is a wallet protocol outcome, not proof of a particular UI action.
+pub fn prepare_verification_decline(
+    mut instance: FlowInstanceRecord,
+    state: Option<&str>,
+    encrypted: bool,
+    now: DateTime<Utc>,
+) -> Result<FlowInstanceRecord, FlowVerificationSubmissionError> {
+    if !matches!(
+        instance.status,
+        FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+    ) || instance.expires_at.is_none_or(|expiry| now >= expiry)
+        || instance.completed_at.is_some()
+        || instance.subject_id.is_some()
+        || instance.result.as_ref().is_some_and(|result| {
+            [
+                "evaluation_result",
+                "decision",
+                "submission_digest",
+                marty_oid4vp_contract::VERIFICATION_RECEIPT,
+            ]
+            .iter()
+            .any(|field| result.get(*field).is_some())
+        })
+    {
+        return Err(FlowVerificationSubmissionError::InvalidState);
+    }
+    let context = instance
+        .context
+        .as_object()
+        .ok_or(FlowVerificationSubmissionError::InvalidContext("context"))?;
+    let expected_state = required_context_string(context, "oid4vp_expected_state")?;
+    // Both maintained direct-post emitters put instance.id in the actual state
+    // parameter. The MIP projection does not carry state; do not treat a changed
+    // context value as authority to accept a different wallet response.
+    if !constant_time_equal(expected_state, &instance.id)
+        || state.is_none_or(|value| value.is_empty() || !constant_time_equal(value, expected_state))
+    {
+        return Err(FlowVerificationSubmissionError::StateMismatch);
+    }
+    let message = &instance.context["mip_messages"]["presentation_request"];
+    let payload = &message["payload"];
+    if !matches!(
+        payload["response_mode"].as_str(),
+        Some("direct_post" | "direct_post.jwt")
+    ) || (encrypted && payload["response_mode"].as_str() != Some("direct_post.jwt"))
+    {
+        return Err(FlowVerificationSubmissionError::ResponseModeMismatch);
+    }
+    if context.get("flow_type").and_then(Value::as_str) != Some("verification")
+        || context.get("oid4vp_verifier_context") != Some(&Value::Bool(true))
+        || message["correlation_id"].as_str() != Some(instance.id.as_str())
+        || payload["mip_flow_instance_id"].as_str() != Some(instance.id.as_str())
+        || payload["response_type"].as_str() != Some("vp_token")
+        || payload["nonce"].as_str() != Some(required_context_string(context, "nonce")?)
+        || payload["client_id"].as_str()
+            != Some(required_context_string(context, "oid4vp_client_id")?)
+        || payload["response_uri"].as_str()
+            != Some(required_context_string(context, "oid4vp_response_uri")?)
+    {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_binding",
+        ));
+    }
+    load_frozen_flow_presentation_request(&instance)
+        .map_err(|_| FlowVerificationSubmissionError::RestartRequired)?;
+    let mut kernel = instance.kernel()?;
+    kernel
+        .transition_to(
+            FlowInstanceStatus::Cancelled,
+            Some("wallet_submission".into()),
+            Some("wallet_access_denied".into()),
+            u64::try_from(now.timestamp_millis())
+                .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?,
+        )
+        .map_err(|_| FlowVerificationSubmissionError::InvalidState)?;
+    transition(
+        &mut instance,
+        FlowInstanceStatus::Cancelled,
+        "wallet_access_denied",
+        now,
+    );
+    instance.error = Some("access_denied".into());
+    instance.kernel()?;
+    Ok(instance)
+}
+
 pub async fn prepare_verification_submission(
     providers: &FlowProviderRegistry,
     mut instance: FlowInstanceRecord,
@@ -184,7 +280,7 @@ pub async fn prepare_verification_submission(
     ) {
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
-    let expected_status = instance.status;
+    let expected_instance = instance.clone();
     let context = instance
         .context
         .as_object()
@@ -200,6 +296,12 @@ pub async fn prepare_verification_submission(
     }
     let nonce = required_context_string(context, "nonce")?.to_owned();
     let policy_id = required_context_string(context, "presentation_policy_id")?.to_owned();
+    let frozen = load_frozen_flow_presentation_request(&instance).map_err(|error| match error {
+        FlowPresentationRequestError::FrozenRequestMissing => {
+            FlowVerificationSubmissionError::RestartRequired
+        }
+        _ => FlowVerificationSubmissionError::InvalidContext("frozen_presentation_request"),
+    })?;
     let principal_id =
         required_context_string(context, "_marty_verification_principal_id")?.to_owned();
     let audience = input
@@ -210,9 +312,22 @@ pub async fn prepare_verification_submission(
         .to_owned();
     let presentation_submission = parse_presentation_submission(input.presentation_submission)?;
     let raw_vp_token = input.vp_token;
-    let oid4vp_transport =
-        evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
-    let vp_token = select_vp_token(&raw_vp_token);
+    let oid4vp_transport = evaluation_transport(
+        context,
+        &frozen,
+        presentation_submission.as_ref(),
+        &raw_vp_token,
+    )?;
+    let associated = oid4vp_transport
+        .associate_response()
+        .map_err(|_| FlowVerificationSubmissionError::InvalidPresentationSubmission)?;
+    // Keep the full response for the verifier. A scalar is used only when the
+    // complete association proves there is exactly one actual response item.
+    let vp_token = if associated.presentation_count == 1 {
+        associated.tokens[0].token.clone()
+    } else {
+        raw_vp_token.clone()
+    };
     let mut evaluation_context = BTreeMap::new();
     if context
         .get("oid4vp_verifier_context")
@@ -239,7 +354,7 @@ pub async fn prepare_verification_submission(
             response_jwk.as_deref(),
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
-        marty_iso18013::openid4vp::mdoc_binding_digests(
+        let binding = marty_iso18013::openid4vp::mdoc_binding_digests(
             &transcript,
             client_id,
             &nonce,
@@ -248,6 +363,18 @@ pub async fn prepare_verification_submission(
             &vp_token,
         )
         .map_err(|_| FlowVerificationSubmissionError::InvalidContext("mdoc_handover"))?;
+        // Preserve the existing privacy-safe audit message inside tracing JSON.
+        // Only hashes cross the log boundary; request and credential bytes stay private.
+        tracing::info!(
+            "OID4VP mdoc binding flow_instance_sha256={} transcript_sha256={} client_id_sha256={} nonce_sha256={} response_uri_sha256={} response_key_thumbprint_sha256={} presentation_sha256={}",
+            sha256_hex(instance.id.as_bytes()),
+            binding.transcript_sha256,
+            binding.client_id_sha256,
+            binding.nonce_sha256,
+            binding.response_uri_sha256,
+            binding.response_key_thumbprint_sha256,
+            binding.presentation_sha256,
+        );
         evaluation_context.insert(
             "mdoc_session_transcript_b64url".into(),
             json!(URL_SAFE_NO_PAD.encode(transcript)),
@@ -264,21 +391,19 @@ pub async fn prepare_verification_submission(
         .ok_or(FlowProviderError::Unavailable {
             provider: "presentation_policy",
         });
+    let evaluation_request = PresentationEvaluationRequest {
+        policy_id: policy_id.clone(),
+        organization_id: instance.organization_id.clone(),
+        expected_policy_revision: frozen.policy_revision.clone(),
+        principal_id,
+        presentation: vp_token.clone(),
+        nonce: nonce.clone(),
+        audience: audience.clone(),
+        oid4vp_transport: Some(oid4vp_transport),
+        context: evaluation_context,
+    };
     let evaluation = match policy {
-        Ok(provider) => {
-            provider
-                .evaluate(&PresentationEvaluationRequest {
-                    policy_id: policy_id.clone(),
-                    organization_id: instance.organization_id.clone(),
-                    principal_id,
-                    presentation: vp_token.clone(),
-                    nonce: nonce.clone(),
-                    audience: audience.clone(),
-                    oid4vp_transport,
-                    context: evaluation_context,
-                })
-                .await
-        }
+        Ok(provider) => provider.evaluate(&evaluation_request).await,
         Err(error) => Err(error),
     };
     let evaluation = match evaluation {
@@ -296,6 +421,12 @@ pub async fn prepare_verification_submission(
                 now,
             ));
         }
+        Err(FlowProviderError::PolicyRevisionMismatch) => {
+            return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
+        }
+        Err(FlowProviderError::CredentialAuthorityChanged) => {
+            return Err(FlowVerificationSubmissionError::RestartRequired);
+        }
         Err(error) => {
             tracing::warn!(
                 flow_instance_id = %instance.id,
@@ -311,6 +442,20 @@ pub async fn prepare_verification_submission(
             ));
         }
     };
+    // A successful credential check under another policy revision cannot
+    // authorize this session. Check before any result, nonce or callback is
+    // prepared for the repository's finalization transaction.
+    if evaluation.policy_revision.validate().is_err()
+        || evaluation.policy_revision != frozen.policy_revision
+    {
+        return Err(FlowVerificationSubmissionError::PolicyRevisionMismatch);
+    }
+    if frozen.credential_authority.is_some() && evaluation.evaluation_timestamp.is_none() {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "policy_evaluation_timestamp",
+        ));
+    }
+    evaluation.validate_validity_for(&evaluation_request)?;
     let authenticated = !evaluation.credential_results.is_empty()
         && evaluation
             .credential_results
@@ -336,15 +481,34 @@ pub async fn prepare_verification_submission(
         );
     }
     let final_allowed = evaluation.result == "passed" && evaluation.decision == "allow";
+    let managed_evidence = crate::canonical_evidence::PreparedManagedEvidence::acquire(
+        &expected_instance,
+        &evaluation_request,
+        &evaluation,
+        input.state.as_deref(),
+        &submission_digest,
+    )
+    .map_err(|_| FlowVerificationSubmissionError::InvalidContext("managed_evidence"))?;
     let verified_claims = if final_allowed {
         public_context(&json!(evaluation.verified_claims))
     } else {
         json!({})
     };
-    let credential_results = public_context(&json!(evaluation.credential_results))
+    let mut credential_results = public_context(&json!(evaluation.credential_results))
         .as_array()
         .cloned()
         .ok_or(FlowVerificationSubmissionError::Serialization)?;
+    if managed_evidence.is_some() {
+        // The canonical owner envelope retains this stable subject/key binding.
+        // Remove its legacy adjacent projection before sealing public results
+        // and callbacks; changing the stored receipt basis later is forbidden.
+        for credential in &mut credential_results {
+            if let Some(credential) = credential.as_object_mut() {
+                credential.remove("authenticated_sd_jwt_query");
+                credential.remove("managed_sd_jwt_authority");
+            }
+        }
+    }
     let error_codes = merged_error_codes(&evaluation.error_codes, &credential_results);
     let warnings = merged_warnings(&evaluation.warnings, &credential_results);
     let context = instance
@@ -400,6 +564,7 @@ pub async fn prepare_verification_submission(
         now,
     );
     instance.result = Some(json!({
+        "policy_revision": evaluation.policy_revision,
         "evaluation_result": evaluation.result,
         "decision": evaluation.decision,
         "decision_reason": evaluation.decision_reason,
@@ -409,6 +574,26 @@ pub async fn prepare_verification_submission(
         "warnings": warnings,
         "submission_digest": submission_digest
     }));
+    if let Some(timestamp) = evaluation.evaluation_timestamp.as_deref() {
+        let timestamp = crate::verification_receipt::canonical_policy_timestamp(timestamp)
+            .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
+        instance.result.as_mut().expect("result was assigned")["evaluation_timestamp"] =
+            json!(timestamp);
+    } else if frozen.credential_authority.is_some() {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "policy_evaluation_timestamp",
+        ));
+    }
+    if let Some(validity) = evaluation.evaluation_validity.as_ref() {
+        instance.result.as_mut().expect("result was assigned")
+            [marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
+            .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
+    }
+    if let Some(evidence) = &managed_evidence {
+        instance.result.as_mut().expect("result was assigned")
+            [marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_DIGEST_V2] =
+            json!(evidence.candidate_digest());
+    }
     record_verification_result_message(&mut instance, &policy_id, options, now)?;
     instance.kernel()?;
     let callback = build_callback(&instance, &policy_id, options, now)?;
@@ -424,15 +609,26 @@ pub async fn prepare_verification_submission(
         );
     let replay_expires_at_ms = u64::try_from(replay_expires_at.timestamp_millis())
         .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
+    let mut finalization = PreparedVerificationFinalization {
+        instance,
+        expected_instance,
+        nonce_digest: sha256_hex(nonce.as_bytes()),
+        replay_expires_at_ms,
+        callback,
+        submission_digest,
+        receipt_input: None,
+        managed_evidence,
+    };
+    if evaluation.evaluation_timestamp.is_some() {
+        finalization.receipt_input = Some(
+            crate::verification_receipt::PreparedVerificationReceipt::prepare(&finalization)
+                .map_err(|_| {
+                    FlowVerificationSubmissionError::InvalidContext("verification_receipt")
+                })?,
+        );
+    }
     Ok(PreparedVerificationSubmission::Final(Box::new(
-        PreparedVerificationFinalization {
-            instance,
-            expected_status,
-            nonce_digest: sha256_hex(nonce.as_bytes()),
-            replay_expires_at_ms,
-            callback,
-            submission_digest,
-        },
+        finalization,
     )))
 }
 
@@ -520,22 +716,24 @@ fn parse_presentation_submission(
 
 fn evaluation_transport(
     context: &Map<String, Value>,
+    frozen: &FrozenFlowPresentationRequest,
     submission: Option<&Value>,
     vp_token_raw: &str,
-) -> Result<Option<Oid4vpEvaluationTransportV1>, FlowVerificationSubmissionError> {
+) -> Result<Oid4vpEvaluationTransportV1, FlowVerificationSubmissionError> {
     if context.get("oid4vp_verifier_context") != Some(&Value::Bool(true)) {
-        return Ok(None);
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request",
+        ));
     }
-    // Only the request actually emitted and retained by Flow is authoritative.
-    // Legacy records lacking that request keep their current evaluation path;
-    // malformed recorded requests are not silently promoted to metadata.
-    let Some(message) = context
+    // The emitted request must contain one of the exact Core artifacts frozen
+    // with this policy. Public message projections are not authority alone.
+    let message = context
         .get("mip_messages")
         .and_then(Value::as_object)
         .and_then(|messages| messages.get("presentation_request"))
-    else {
-        return Ok(None);
-    };
+        .ok_or(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request",
+        ))?;
     let payload = message.get("payload").and_then(Value::as_object).ok_or(
         FlowVerificationSubmissionError::InvalidContext("presentation_request"),
     )?;
@@ -564,7 +762,13 @@ fn evaluation_transport(
             ))
         }
     };
+    if !frozen.matches_query(query_kind, query_document) {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_query",
+        ));
+    }
     let transport = Oid4vpEvaluationTransportV1 {
+        credential_authority: frozen.credential_authority.clone(),
         query_kind,
         query_document: query_document.clone(),
         query_digest: digest_query_document(query_document).map_err(|_| {
@@ -587,55 +791,15 @@ fn evaluation_transport(
             ))?
             .into(),
     };
-    match transport.validate_transport() {
-        Ok(()) => {}
-        // Existing accepted payloads can exceed the narrower canonical
-        // transport limits. Keep their legacy policy path, but expose no
-        // transport metadata that a future signed-VP route could accept.
-        Err(marty_oid4vp_contract::Oid4vpContractError::SizeLimit(_)) => return Ok(None),
-        Err(_) => {
-            return Err(FlowVerificationSubmissionError::InvalidContext(
-                "presentation_request_query",
-            ));
-        }
-    }
-    Ok(Some(transport))
-}
-
-fn select_vp_token(raw: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return raw.into();
-    };
-    if let Some(object) = value.as_object() {
-        if object.len() == 1 {
-            if let Some(values) = object.values().next().and_then(Value::as_array) {
-                if values.len() == 1 {
-                    if let Some(token) = values[0].as_str().filter(|value| !value.trim().is_empty())
-                    {
-                        return token.into();
-                    }
-                }
-            }
-        }
-    }
-    find_token(&value).unwrap_or(raw).into()
-}
-
-fn find_token(value: &Value) -> Option<&str> {
-    match value {
-        Value::String(value)
-            if value.contains('~')
-                || value.matches('.').count() >= 2
-                || value.starts_with("mso_mdoc:")
-                || value.starts_with("mdoc:")
-                || value.starts_with("oob:") =>
-        {
-            Some(value)
-        }
-        Value::Array(values) => values.iter().find_map(find_token),
-        Value::Object(values) => values.values().find_map(find_token),
-        _ => None,
-    }
+    transport
+        .validate_transport()
+        .map_err(|error| match error {
+            marty_oid4vp_contract::Oid4vpContractError::SizeLimit(
+                "presentation_submission" | "vp_token_raw",
+            ) => FlowVerificationSubmissionError::InvalidPresentationSubmission,
+            _ => FlowVerificationSubmissionError::InvalidContext("presentation_request_query"),
+        })?;
+    Ok(transport)
 }
 
 fn prepare_retryable_authentication_rejection(
@@ -753,6 +917,8 @@ fn retryable_response(
         decision_reason: Some(reason.into()),
         verified_claims: json!({}),
         credential_results: Vec::new(),
+        verification_receipt: None,
+        canonical_evidence_digest: None,
         last_presentation_attempt: None,
         error_codes: Vec::new(),
         warnings: Vec::new(),
@@ -831,6 +997,11 @@ fn record_verification_result_message(
         .get("nonce")
         .cloned()
         .unwrap_or(Value::Null);
+    let evaluated_at = result
+        .get("evaluation_timestamp")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| now.to_rfc3339());
     let message = json!({
         "mip_version": "0.3.1",
         "message_type": "VerificationResult",
@@ -853,7 +1024,7 @@ fn record_verification_result_message(
             "trust_chain_valid": trust_valid,
             "revocation_checked": revocation_checked,
             "revocation_status": match not_revoked { Some(true) => "VALID", Some(false) => "REVOKED", None => "UNKNOWN" },
-            "evaluated_at": now.to_rfc3339(),
+            "evaluated_at": evaluated_at,
             "verifier_nonce": instance.context.get("nonce").and_then(Value::as_str).unwrap_or_default()
         },
         "signature": null
@@ -898,24 +1069,14 @@ fn build_callback(
         .as_ref()
         .and_then(Value::as_object)
         .ok_or(FlowVerificationSubmissionError::Serialization)?;
-    let credential_results = result
-        .get("credential_results")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    let mut payload = json!({
-        "flow_instance_id": instance.id,
-        "result": result.get("evaluation_result"),
-        "decision": result.get("decision"),
-        "decision_reason": result.get("decision_reason"),
-        "verified_claims": result.get("verified_claims"),
-        "presentation_policy_id": policy_id,
-        "completed_at": instance.completed_at.map(|value| value.to_rfc3339()),
-        "evidence_digest": payload_digest(&json!({"credential_results": credential_results}))
-            .map_err(|_| FlowVerificationSubmissionError::Serialization)?
-    });
-    let decision_digest =
-        payload_digest(&payload).map_err(|_| FlowVerificationSubmissionError::Serialization)?;
-    payload["decision_digest"] = json!(decision_digest);
+    let payload = marty_oid4vp_contract::build_verification_callback_payload(
+        &instance.id,
+        policy_id,
+        instance.completed_at.map(|value| value.to_rfc3339()),
+        result,
+        payload_digest,
+    )
+    .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
     let created_at_ms = u64::try_from(now.timestamp_millis())
         .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
     CallbackEvent::new_with_retention(
@@ -997,6 +1158,14 @@ mod tests {
     #[test]
     fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
         let evaluation = PresentationEvaluationResult {
+            managed_evidence: None,
+            evaluation_validity: None,
+            evaluation_timestamp: None,
+            policy_revision: marty_oid4vp_contract::FrozenPolicyIdentity {
+                id: "policy-1".into(),
+                version: 1,
+                content_digest: format!("sha256:{}", "a".repeat(64)),
+            },
             authentication_diagnostic: None,
             result: "failed".into(),
             decision: "deny".into(),

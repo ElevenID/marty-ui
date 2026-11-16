@@ -1,11 +1,12 @@
+import { useSurfaceNavigate } from '../../application/routing/useSurfaceNavigate';
 import { Box, Typography, Paper, Grid, Button, Divider } from '@mui/material';
 import { SEOHead } from '../seo';
 import { articleSchema, breadcrumbListSchema } from '../seo/structuredData';
-import { useNavigate } from 'react-router';
+
 import SearchIcon from '@mui/icons-material/Search';
 
 function WhatIsCredentialVerificationPage() {
-  const navigate = useNavigate();
+  const navigate = useSurfaceNavigate();
 
   return (
     <Box>

@@ -10,6 +10,7 @@ services:
       CANVAS_PORTABLE_INTEGRATION_ENABLED: "false"
       CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+      CANVAS_CREDENTIALS_API_TOKEN_FILE: ""
     secrets: !override
       - marty_db_password
       - openbao_service_token
@@ -18,7 +19,6 @@ services:
       - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - openbao_tls_ca_cert
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
@@ -31,6 +31,7 @@ services:
       CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
       CANVAS_MIRROR_WORKER_ENABLED: "false"
       CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+      CANVAS_CREDENTIALS_API_TOKEN_FILE: ""
     secrets: !override
       - marty_db_password
       - issuance_api_key
@@ -38,7 +39,6 @@ services:
       - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
-      - didcomm_issuance_openbao_token
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
       - sign_grant_mint_issuance_readiness_token
@@ -47,3 +47,5 @@ services:
       - issuance_workload_server_cert
       - openbao_tls_ca_cert
       - issuance_tls_kms_token
+      - passport_tenant_api_keys
+      - personalization_bureau_api_key

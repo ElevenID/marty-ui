@@ -1,9 +1,13 @@
 *.sh text eol=lf
+scripts/installer_candidate_vm_assets/moby-docker-v29.1.3/LICENSE text eol=lf
+scripts/installer_candidate_vm_assets/moby-docker-v29.1.3/NOTICE text eol=lf
 *.svg text eol=lf
 *.vtt text eol=lf
 docker/canvas-oss/source-policy.json text eol=lf
 rust/crates/canvas-demo-seed/assets/*.rb text eol=lf
 release/stack-lock*.json text eol=lf
+release/stable-publication-policy.json text eol=lf
+release/source-authority-policy.json text eol=lf
 contracts/canvas-worker-body-timeout-oracle.json text eol=lf
 contracts/canvas-worker-lease-expiry-oracle.json text eol=lf
 scripts/sql/passport-beta-fence-*.sql text eol=lf
@@ -14,14 +18,11 @@ scripts/sql/passport-beta-db-maintenance-start.sql text eol=lf
 scripts/sql/passport-beta-db-enable-app-login.sql text eol=lf
 scripts/sql/passport-beta-rust-owner-transition.sql text eol=lf
 scripts/sql/passport-beta-rust-owner-verify.sql text eol=lf
-tests/scripts/audit-beta-canvas-capture.js text eol=lf
-tests/scripts/audit-beta-credential-lifecycle.js text eol=lf
-tests/scripts/audit-beta-employee-access.js text eol=lf
-tests/scripts/audit-beta-first-party-browser-wallet.js text eol=lf
-tests/scripts/audit-beta-first-party-dev-test-wallet.js text eol=lf
-tests/scripts/audit-beta-independent-wallet-interoperability.js text eol=lf
-tests/scripts/audit-beta-direct-vc-api.js text eol=lf
+tests/scripts/audit-beta-*.js text eol=lf
 docs/demo-audit/2026-10-20-canvas-adapter/focused-source-tests.log -text
 docs/demo-audit/2026-10-20-vc-api-auth/*.json -text
 
-tests/scripts/audit-beta-issuer-provider-switch.js text eol=lf
+
+# Preserve the exact signed public image-lock fixture bytes on Windows.
+tests/fixtures/nightly263-images.json text eol=lf
+tests/fixtures/release-tag-inspection-41791774863.json text eol=lf

@@ -50,32 +50,30 @@ pub struct OrganizationRuntime {
 
 impl OrganizationRuntime {
     pub fn new(config: &OrganizationServiceConfig) -> Result<Self, MmfError> {
-        let state = RuntimeState::new(BuildInfo {
-            service: "organization".into(),
-            version: config.release_version.clone(),
-            build_revision: config.build_revision.clone(),
-            enabled_features: vec![
-                "native_organization".into(),
-                "http".into(),
-                "grpc".into(),
-                "postgres".into(),
-                "redis".into(),
-                "cedar".into(),
-                "transactional_outbox".into(),
-                "scim".into(),
-            ],
-        });
-        for dependency in OrganizationDependency::required() {
-            state.register_required_component(dependency.name())?;
-        }
+        let state = RuntimeState::starting(
+            BuildInfo {
+                service: "organization".into(),
+                version: config.release_version.clone(),
+                build_revision: config.build_revision.clone(),
+                enabled_features: vec![
+                    "native_organization".into(),
+                    "http".into(),
+                    "grpc".into(),
+                    "postgres".into(),
+                    "redis".into(),
+                    "cedar".into(),
+                    "transactional_outbox".into(),
+                    "scim".into(),
+                ],
+            },
+            OrganizationDependency::required().map(|dependency| dependency.name()),
+        )?;
         state.register_optional_component(OrganizationDependency::EventStream.name())?;
-        state.transition(LifecycleState::Initialized)?;
-        state.transition(LifecycleState::Starting)?;
         Ok(Self { state })
     }
 
     pub fn mark_healthy(&self, dependency: OrganizationDependency) -> Result<(), MmfError> {
-        self.set_health(dependency, HealthStatus::Healthy, None)
+        self.state.mark_component_healthy(dependency.name())
     }
 
     pub fn mark_degraded(

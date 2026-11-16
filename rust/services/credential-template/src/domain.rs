@@ -11,6 +11,7 @@ pub enum CredentialFormat {
     Mdoc,
     SdJwtVc,
     VcJwt,
+    VcJwtDirectV1,
     JsonLd,
     ZkMdoc,
     VdsNc,
@@ -25,6 +26,7 @@ impl CredentialFormat {
             "sd_jwt_vc" | "vc+sd_jwt" | "dc+sd_jwt" | "spruce_vc+sd_jwt" | "sd_jwt"
             | "ietf_sd_jwt" => Ok(Self::SdJwtVc),
             "vc_jwt" | "jwt_vc" | "jwt_vc_json" | "jwt_vc_json_ld" => Ok(Self::VcJwt),
+            "vc_jwt_direct_v1" | "application/vc+jwt" => Ok(Self::VcJwtDirectV1),
             "jsonld" | "json_ld" | "ldp_vc" => Ok(Self::JsonLd),
             "zk_mdoc" | "zkp_mdoc" => Ok(Self::ZkMdoc),
             "vds_nc" | "vds_nc_barcode" => Ok(Self::VdsNc),
@@ -39,6 +41,7 @@ impl CredentialFormat {
             Self::Mdoc => "MDOC",
             Self::SdJwtVc => "SD_JWT_VC",
             Self::VcJwt => "VC_JWT",
+            Self::VcJwtDirectV1 => marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT,
             Self::JsonLd => "JSON_LD",
             Self::ZkMdoc => "ZK_MDOC",
             Self::VdsNc => "VDS_NC",
@@ -52,7 +55,7 @@ impl CredentialFormat {
             Self::Mdoc | Self::ZkMdoc => "mdoc_dsc",
             Self::VdsNc => "vdsnc_signing",
             Self::IcaoEmrtd => "x509_doc_signer",
-            Self::SdJwtVc | Self::VcJwt | Self::JsonLd => "vc_jwt_issuer",
+            Self::SdJwtVc | Self::VcJwt | Self::VcJwtDirectV1 | Self::JsonLd => "vc_jwt_issuer",
         }
     }
 
@@ -62,6 +65,7 @@ impl CredentialFormat {
             Self::Mdoc => "mdoc",
             Self::SdJwtVc => "sd_jwt_vc",
             Self::VcJwt => "jwt_vc",
+            Self::VcJwtDirectV1 => "vc_jwt_direct_v1",
             Self::JsonLd => "ldp_vc",
             Self::ZkMdoc => "zk_mdoc",
             Self::VdsNc => "vds_nc",
@@ -75,6 +79,7 @@ impl CredentialFormat {
             Self::Mdoc => "mso_mdoc",
             Self::SdJwtVc => "dc+sd-jwt",
             Self::VcJwt => "jwt_vc_json",
+            Self::VcJwtDirectV1 => marty_jwt_vc_issuance::DIRECT_WIRE_FORMAT,
             Self::JsonLd => "ldp_vc",
             Self::ZkMdoc => "zk_mdoc",
             Self::VdsNc => "vds_nc",

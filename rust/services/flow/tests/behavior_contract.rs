@@ -124,7 +124,7 @@ fn all_flow_types_references_and_sequences_match_the_behavior_contract() {
             case.steps.iter().map(String::as_str).collect::<Vec<_>>()
         );
     }
-    assert_eq!(FlowType::all().count(), 12);
+    assert_eq!(FlowType::public_05().count(), 12);
 }
 
 #[test]
@@ -281,4 +281,22 @@ fn callback_delivery_composes_shared_registry_signature_and_fenced_outbox() {
         &destinations,
     )
     .is_err());
+}
+
+#[test]
+fn private_context_case_and_array_paths_preserve_public_domain_values() {
+    for key in ["_MaRtY_\u{e9}", "AcCeSs_ToKeN"] {
+        let input = json!({"items": [{key: null, "public": [1, null, true]}]});
+        assert!(matches!(
+            reject_private_context(&input),
+            Err(FlowDomainError::PrivateContext(_))
+        ));
+        assert_eq!(
+            public_context(&input),
+            json!({"items": [{"public": [1, null, true]}]})
+        );
+    }
+    let public = json!({"api_\u{212a}ey": null, "_marty": "public", "\u{e9}": [false]});
+    assert!(reject_private_context(&public).is_ok());
+    assert_eq!(public_context(&public), public);
 }

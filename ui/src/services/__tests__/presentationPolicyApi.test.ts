@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { server } from '@test/mocks/server'
 import { http, HttpResponse } from 'msw'
+import { waitFor } from '@testing-library/react'
 import {
   createPresentationPolicy,
   listPresentationPolicies,
@@ -1053,7 +1054,7 @@ describe('presentationPolicyApi', () => {
           entityPayload = await request.json()
           return HttpResponse.json({
             id: '10000000-0000-4000-8000-000000000002',
-            compliance_status: 'PENDING',
+            compliance_status: 'COMPLIANT',
             ...entityPayload,
           }, { status: 201 })
         }),
@@ -1147,3 +1148,206 @@ describe('presentationPolicyApi', () => {
     })
   })
 })
+
+describe('Trust issuer response scope and action boundaries', () => {
+  const entity = (extra = {}) => ({
+    id: 'entity-1', organization_id: 'org-1', issuer_id: 'did:web:issuer.example',
+    display_name: 'Native issuer', issuer_type: 'ORGANIZATION', compliance_status: 'COMPLIANT',
+    ...extra,
+  });
+  const relationship = (extra = {}) => ({
+    id: 'relationship-1', trust_profile_id: 'profile-1', issuer_id: 'entity-1',
+    relationship_status: 'TRUSTED', trust_level: 100, cascade_revocation_policy: 'NOTIFY_ONLY', metadata: {},
+    ...extra,
+  });
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  it.each([100, 101])('reads all %i relationships, including a full page followed by an empty or partial page', async (count) => {
+    const records = Array.from({ length: count }, (_, index) => relationship({ id: 'relationship-' + index }));
+    const offsets: number[] = []; let inventoryCalls = 0;
+    server.use(
+      http.get('*/v1/issuer-entities', ({ request }) => {
+        inventoryCalls++;
+        const query = new URL(request.url).searchParams;
+        expect(query.get('organization_id')).toBe('org-1');
+        expect(query.has('offset')).toBe(false);
+        expect(query.has('limit')).toBe(false);
+        return HttpResponse.json([entity()]);
+      }),
+      http.get('*/v1/trust-profiles/profile-1/issuers', ({ request }) => {
+        const query = new URL(request.url).searchParams;
+        const offset = Number(query.get('offset') || 0);
+        const limit = Number(query.get('limit') || 100);
+        offsets.push(offset);
+        return HttpResponse.json(records.slice(offset, offset + limit));
+      }),
+    );
+    const result = await listTrustProfileIssuers('profile-1', 'org-1');
+    expect(result).toHaveLength(count);
+    expect(offsets).toEqual([0, 100]);
+    expect(inventoryCalls).toBe(1);
+  });
+
+  it('accepts a linked global system issuer without rejecting unrelated unowned or foreign-system inventory', async () => {
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([
+        entity({ id: 'unowned', organization_id: null, is_system_issuer: false }),
+        entity({ id: 'foreign-system', organization_id: 'other-org', is_system_issuer: true }),
+        entity({ organization_id: undefined, is_system_issuer: true }),
+      ])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', () => HttpResponse.json([relationship()])),
+    );
+    const result = await listTrustProfileIssuers('profile-1', 'org-1');
+    expect(result).toHaveLength(1);
+    expect(result[0].issuer_entity.is_system_issuer).toBe(true);
+    expect(result[0].relationship_status).toBe('TRUSTED');
+    expect(result[0].compliance_status).toBe('COMPLIANT');
+  });
+
+  it.each(['own', 'global-system'])('reuses an eligible %s issuer and keeps action callbacks outside HTTP payloads', async (kind) => {
+    let entityPosts = 0; let linkBody: unknown;
+    const global = entity({ id: 'system-entity', organization_id: null, is_system_issuer: true });
+    const own = entity();
+    const inventory = [
+      entity({ id: 'foreign-system', organization_id: 'other-org', is_system_issuer: true }),
+      entity({ id: 'global-ordinary', organization_id: null, is_system_issuer: false }),
+      global, ...(kind === 'own' ? [own] : []),
+    ];
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json(inventory)),
+      http.post('*/v1/issuer-entities', () => { entityPosts++; return HttpResponse.json(own); }),
+      http.post('*/v1/trust-profiles/profile-1/issuers', async ({ request }) => {
+        linkBody = await request.json();
+        return HttpResponse.json(relationship({ issuer_id: kind === 'own' ? own.id : global.id }));
+      }),
+    );
+    const result = await addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example' }, { isCurrent: () => true });
+    expect(result.issuer_id).toBe(kind === 'own' ? own.id : global.id);
+    expect(entityPosts).toBe(0);
+    expect(linkBody).toEqual({
+      issuer_id: kind === 'own' ? own.id : global.id, trust_level: 100,
+      relationship_status: 'TRUSTED', cascade_revocation_policy: 'NOTIFY_ONLY', metadata: { credential_template_ids: [] },
+    });
+  });
+
+  it.each([
+    { organization_id: 'other-org' },
+    { organization_id: null, is_system_issuer: false },
+    { organization_id: 'other-org', is_system_issuer: true },
+  ])('refuses a referenced issuer outside the native linkable owner scope: %j', async (wrong) => {
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity(wrong)])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', () => HttpResponse.json([relationship()])),
+    );
+    await expect(listTrustProfileIssuers('profile-1', 'org-1')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+
+  it('rejects a relationship from a different profile instead of reporting a scoped inventory', async () => {
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity()])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', () => HttpResponse.json([relationship({ trust_profile_id: 'other-profile' })])),
+    );
+    await expect(listTrustProfileIssuers('profile-1', 'org-1')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+
+  it('refuses repeated pages and ambiguous entity identities', async () => {
+    let pages = 0;
+    const records = Array.from({ length: 100 }, (_, index) => relationship({ id: 'relationship-' + index }));
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity()])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', () => { pages++; return HttpResponse.json(records); }),
+    );
+    await expect(listTrustProfileIssuers('profile-1', 'org-1')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    expect(pages).toBe(2);
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity(), entity({ issuer_id: 'did:web:ambiguous.example' })])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', () => HttpResponse.json([relationship()])),
+    );
+    await expect(listTrustProfileIssuers('profile-1', 'org-1')).rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+
+  it('does not advance relationship pagination after the requesting action becomes obsolete', async () => {
+    const page = deferred(); let pages = 0; let current = true;
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity()])),
+      http.get('*/v1/trust-profiles/profile-1/issuers', async () => {
+        pages++; await page.promise;
+        return HttpResponse.json(Array.from({ length: 100 }, (_, index) => relationship({ id: 'relationship-' + index })));
+      }),
+    );
+    const outcome = listTrustProfileIssuers('profile-1', 'org-1', { isCurrent: () => current })
+      .then((value) => ({ value, error: null as any }), (error) => ({ value: null, error }));
+    await waitFor(() => expect(pages).toBe(1));
+    current = false; page.resolve();
+    expect((await outcome).error).toMatchObject({ name: 'AbortError' });
+    expect(pages).toBe(1);
+  });
+
+  it.each(['inventory', 'entity', 'relationship'])('stops after a dispatched %s response if the add action changed', async (stage) => {
+    const entered = deferred(); const release = deferred();
+    let current = true; let entityPosts = 0; let linkPosts = 0;
+    const pause = async (at: string) => { if (stage === at) { entered.resolve(); await release.promise; } };
+    server.use(
+      http.get('*/v1/issuer-entities', async () => { await pause('inventory'); return HttpResponse.json([]); }),
+      http.post('*/v1/issuer-entities', async () => { entityPosts++; await pause('entity'); return HttpResponse.json(entity()); }),
+      http.post('*/v1/trust-profiles/profile-1/issuers', async () => { linkPosts++; await pause('relationship'); return HttpResponse.json(relationship()); }),
+    );
+    const outcome = addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example', name: 'Native issuer' }, { isCurrent: () => current })
+      .then((value) => ({ value, error: null as any }), (error) => ({ value: null, error }));
+    await entered.promise;
+    current = false; release.resolve();
+    expect((await outcome).error).toMatchObject({ name: 'AbortError' });
+    expect(entityPosts).toBe(stage === 'inventory' ? 0 : 1);
+    expect(linkPosts).toBe(stage === 'relationship' ? 1 : 0);
+  });
+
+  it('performs no request for an already obsolete add and never creates after a rejected stale inventory', async () => {
+    let inventoryCalls = 0; let posts = 0;
+    server.use(
+      http.get('*/v1/issuer-entities', () => { inventoryCalls++; return HttpResponse.json({ detail: 'Denied' }, { status: 403 }); }),
+      http.post('*/v1/issuer-entities', () => { posts++; return HttpResponse.json(entity()); }),
+    );
+    await expect(addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example' }, { isCurrent: () => false }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(inventoryCalls).toBe(0);
+    expect(posts).toBe(0);
+    const entered = deferred(); const release = deferred(); let current = true;
+    server.use(http.get('*/v1/issuer-entities', async () => {
+      entered.resolve(); await release.promise;
+      return HttpResponse.json({ detail: 'Old inventory denied' }, { status: 403 });
+    }));
+    const outcome = addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example' }, { isCurrent: () => current })
+      .then(() => null, (error) => error);
+    await entered.promise; current = false; release.resolve();
+    expect(await outcome).toMatchObject({ name: 'AbortError' });
+    expect(posts).toBe(0);
+  });
+
+  it.each([
+    { organization_id: 'other-org' }, { issuer_id: 'did:web:other.example' }, { id: undefined },
+    { organization_id: null, is_system_issuer: true },
+  ])('does not link a newly created entity whose identity differs from the requested write: %j', async (wrong) => {
+    let links = 0;
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([])),
+      http.post('*/v1/issuer-entities', () => HttpResponse.json(entity(wrong))),
+      http.post('*/v1/trust-profiles/profile-1/issuers', () => { links++; return HttpResponse.json(relationship()); }),
+    );
+    await expect(addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example' }))
+      .rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+    expect(links).toBe(0);
+  });
+
+  it.each([{ trust_profile_id: 'other-profile' }, { issuer_id: 'other-entity' }, { id: undefined }])('rejects mismatched relationship acknowledgement: %j', async (wrong) => {
+    server.use(
+      http.get('*/v1/issuer-entities', () => HttpResponse.json([entity()])),
+      http.post('*/v1/trust-profiles/profile-1/issuers', () => HttpResponse.json(relationship(wrong))),
+    );
+    await expect(addTrustProfileIssuer('profile-1', 'org-1', { issuer_did: 'did:web:issuer.example' }))
+      .rejects.toMatchObject({ code: 'MALFORMED_RESPONSE' });
+  });
+});

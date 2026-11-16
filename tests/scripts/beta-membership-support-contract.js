@@ -52,24 +52,32 @@ function validateExpiryPrerequisite(expiry) {
 
 function validateFixture(fixture, lane) {
   assert.ok(['expired-offer', 'untrusted-issuer'].includes(lane), 'Explicit D05 supporting lane required');
-  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
+  objectKeys(fixture, ['schemaVersion', 'kind', 'synthetic', 'authorization', 'applicant', 'secondaryApplicant', 'trusted', 'foreign', 'login', 'expiry'], 'fixture');
   assert.equal(fixture.schemaVersion, 1);
   assert.equal(fixture.kind, 'membership-support-fixture');
   assert.equal(fixture.synthetic, true, 'Only explicitly synthetic applicant fixtures are supported');
   assert.equal(fixture.authorization, 'PREPROVISIONED_DEMO_FIXTURE', 'Preprovisioned demo fixture authorization is required');
-  objectKeys(fixture.applicant, ['id', 'email', 'formData'], 'applicant');
-  assert.match(fixture.applicant.id || '', UUID, 'Applicant ID must be explicit');
-  requiredText(fixture.applicant.email, 'Applicant email');
-  const form = fixture.applicant.formData;
-  assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
-    'A bounded synthetic application form is required');
-  for (const [key, value] of Object.entries(form)) {
-    assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
-      && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
-    assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
-      || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+  function validateApplicant(applicant, label) {
+    objectKeys(applicant, ['id', 'email', 'formData'], label);
+    assert.match(applicant.id || '', UUID, `${label} ID must be explicit`);
+    requiredText(applicant.email, `${label} email`);
+    const form = applicant.formData;
+    assert.ok(form && typeof form === 'object' && !Array.isArray(form) && Object.keys(form).length <= 50,
+      'A bounded synthetic application form is required');
+    for (const [key, value] of Object.entries(form)) {
+      assert.ok(/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key)
+        && !/(password|secret|token|private.?key|authorization|cookie)/i.test(key), 'Fixture form must not contain secrets');
+      assert.ok(typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+        || (typeof value === 'string' && value.length <= 512), 'Synthetic form values must be bounded scalars');
+    }
+    if (Object.hasOwn(form, 'email')) assert.equal(form.email, applicant.email, 'Form email must match the existing applicant');
   }
-  if (Object.hasOwn(form, 'email')) assert.equal(form.email, fixture.applicant.email, 'Form email must match the existing applicant');
+  validateApplicant(fixture.applicant, 'Applicant');
+  if (fixture.secondaryApplicant) {
+    validateApplicant(fixture.secondaryApplicant, 'Secondary applicant');
+    assert.notEqual(fixture.secondaryApplicant.id, fixture.applicant.id, 'Distinct synthetic applicant profiles are required');
+    assert.notEqual(fixture.secondaryApplicant.email, fixture.applicant.email, 'Distinct synthetic applicant accounts are required');
+  }
   const issuerFields = ['organizationId', 'credentialTemplateId', 'applicationTemplateId', 'trustProfileId',
     'issuerEntityId', 'issuerDid', 'credentialFormat', 'credentialConfigurationId'];
   if (lane === 'untrusted-issuer') assert.ok(fixture.foreign, 'The authorized foreign issuer fixture is required');
@@ -223,7 +231,7 @@ async function awaitNaturalExpiry({ readOffer, window, now = Date.now, delay = (
   throw new Error('Server did not report natural offer expiration within the explicit maximum wait');
 }
 
-function loginInstanceBinding(details, instance, fixture, origin) {
+function loginInstanceOwnership(details, instance, fixture, origin, window) {
   requiredText(details?.nonce, 'Credential login nonce');
   requiredText(details?.href, 'Credential login wallet link');
   const request = new URL(details?.dcApiRequestUrl, origin);
@@ -232,11 +240,103 @@ function loginInstanceBinding(details, instance, fixture, origin) {
   assert.ok(match && UUID.test(match[1]), 'Login page must expose its native Flow request instance');
   assert.equal(instance?.id, match[1]);
   assert.equal(instance.organization_id, fixture.login.organizationId);
-  assert.equal(instance.context_data?.presentation_policy_id, fixture.login.presentationPolicyId);
-  assert.equal(instance.context_data?.trust_profile_id, fixture.login.trustProfileId);
-  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  const callback=new URL(instance.context_data?.callback_url);
+  assert.equal(callback.pathname,'/internal/v1/auth/credential-verified',
+    'Login Flow must use the native credential verification callback');
+  const callbackNonces=callback.searchParams.getAll('nonce');
+  assert.equal(callbackNonces.length,1,'Login Flow callback must contain one Auth nonce');
+  assert.ok(callbackNonces[0]===details.nonce,'Login Flow callback nonce must belong to the current page');
+  if(window){const created=Date.parse(instance.created_at);
+    assert(Number.isFinite(created)&&created>=window.afterMs&&created<=window.beforeMs,
+      'Login Flow must belong to the current owned start window');}
   return { instanceId: instance.id, organizationId: instance.organization_id, presentationPolicyId: fixture.login.presentationPolicyId,
-    trustProfileId: fixture.login.trustProfileId, nonceSha256: hash(details.nonce) };
+    contextPolicyPresent:Object.hasOwn(instance.context_data||{},'presentation_policy_id'),
+    contextPolicyId: instance.context_data?.presentation_policy_id ?? null,
+    trustProfileId: fixture.login.trustProfileId,
+    contextTrustProfilePresent:Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    contextTrustProfileId: instance.context_data?.trust_profile_id ?? null,
+    nonceSha256: hash(details.nonce) };
+}
+
+function loginInstanceBinding(details, instance, fixture, origin, policyProof) {
+  const binding=loginInstanceOwnership(details, instance, fixture, origin);
+  assert.equal(binding.contextPolicyId,fixture.login.presentationPolicyId);
+  assert.equal(policyProof?.policyId, fixture.login.presentationPolicyId);
+  assert.equal(policyProof.trustProfileId, fixture.login.trustProfileId);
+  assert(Object.hasOwn(instance.context_data||{},'trust_profile_id'),
+    'Login Flow must expose its trust override state');
+  assert.equal(binding.contextTrustProfileId===null || binding.contextTrustProfileId===fixture.login.trustProfileId,true,
+    'Login Flow cannot override the governed policy trust profile');
+  assert.equal(instance.context_data?.oid4vp_issuer_did, fixture.login.verifierDid);
+  return binding;
+}
+
+// Public request metadata binding only: decoding a JWT is not signature verification.
+function directPostRequestReference(details, origin) {
+  const reference = new URL(details.href).searchParams.getAll('request_uri');
+  assert.equal(reference.length, 1, 'Exact wallet request reference required');
+  const requestUrl = new URL(reference[0]);
+  const match = requestUrl.pathname.match(/^\/v1\/flows\/instances\/([0-9a-f-]{36})\/request$/i);
+  assert(requestUrl.origin === origin && match && !requestUrl.username && !requestUrl.password && !requestUrl.hash,
+    'Owned native request origin and instance required');
+  return { url: requestUrl.href, instanceId: match[1] };
+}
+
+function directPostLoginBinding(details, instance, organizationId, origin, window, compactRequest) {
+  const reference = directPostRequestReference(details, origin);
+  assert.equal(instance.id, reference.instanceId);
+  assert(typeof compactRequest === 'string' && compactRequest.length <= 512 * 1024, 'Bounded native request required');
+  const parts = compactRequest.split('.');
+  assert(parts.length === 3 && parts.every(Boolean), 'Native JWT request required');
+  const request = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  assert.equal(request.response_mode, 'direct_post');
+  const callback = new URL(request.response_uri);
+  assert.equal(callback.href, `${origin}/v1/flows/instances/${instance.id}/submit`);
+  for (const key of ['nonce', 'state']) requiredText(request[key], 'Native request ' + key);
+  assert.equal(request.nonce, instance.context_data?.nonce);
+  assert.equal(request.state, instance.context_data?.oid4vp_expected_state);
+  const login = { organizationId, presentationPolicyId: instance.context_data?.presentation_policy_id,
+    trustProfileId: instance.context_data?.trust_profile_id };
+  const owned = loginInstanceOwnership({ ...details, dcApiRequestUrl: reference.url }, instance, { login }, origin, window);
+  assert(['AWAITING_WALLET', 'IN_PROGRESS'].includes(String(instance.status).toUpperCase()), 'Active owned request required');
+  return { ...owned, instancePath: `/v1/flows/instances/${instance.id}`,
+    requestSha256: hash(compactRequest), flowNonceSha256: hash(request.nonce), stateSha256: hash(request.state),
+    responseMode: request.response_mode, requestMetadataSignatureVerified: false };
+}
+
+function holderDeclineEvidence(binding, instance, acknowledgement, noSession) {
+  assert.equal(instance.id, binding.instanceId);
+  assert.equal(instance.organization_id, binding.organizationId);
+  assert.equal(instance.context_data?.presentation_policy_id, binding.contextPolicyPresent ? binding.contextPolicyId : undefined);
+  assert.equal(instance.context_data?.trust_profile_id, binding.contextTrustProfilePresent ? binding.contextTrustProfileId : undefined);
+  assert.equal(hash(instance.context_data?.nonce), binding.flowNonceSha256);
+  assert.equal(hash(instance.context_data?.oid4vp_expected_state), binding.stateSha256);
+  assert.equal(String(instance.status).toUpperCase(), 'CANCELLED');
+  assert.equal(instance.error_code, 'access_denied');
+  const history = instance.state_history?.filter(row => row.event === 'wallet_access_denied'
+    && String(row.new_state).toUpperCase() === 'CANCELLED' && row.actor === 'wallet_submission');
+  assert.equal(history?.length, 1, 'One committed wallet decline transition required');
+  assert.equal(acknowledgement.status, 200);
+  assert.equal(acknowledgement.acknowledged, true);
+  assert.equal(acknowledgement.verifierHttpStatus, 200);
+  assert.equal(acknowledgement.holderDecision, 'Cancel');
+  assert.equal(acknowledgement.consentProtocol, 'EXPLICIT_TEST_WALLET_DIALOG_V1');
+  assert(noSession.authHttpStatus === 200 && noSession.authenticated === false && noSession.sessionCookiePresent === false
+    && noSession.finalizeSetCookie === false && [400, 302].includes(noSession.finalizeStatus), 'Decline created a login session');
+  return { kind: 'ACTUAL_TEST_WALLET_UI_HOLDER_DECLINE', holderClickCancel: true, flowInstanceId: binding.instanceId,
+    authNonceSha256: binding.nonceSha256, flowNonceSha256: binding.flowNonceSha256, stateSha256: binding.stateSha256,
+    requestSha256: binding.requestSha256, terminalStatus: 'CANCELLED', errorCode: 'access_denied',
+    historyEvent: 'wallet_access_denied', noSession, deliveryAcknowledgement: acknowledgement };
+}
+
+function freshDirectPostLogin(cancelled, retry) {
+  for (const key of ['instanceId', 'nonceSha256', 'flowNonceSha256', 'stateSha256', 'requestSha256']) {
+    assert.notEqual(retry[key], cancelled[key], 'Fresh login reused ' + key);
+  }
+  assert.equal(retry.organizationId, cancelled.organizationId);
+  assert.equal(retry.contextPolicyId, cancelled.contextPolicyId);
+  assert.equal(retry.contextTrustProfileId, cancelled.contextTrustProfileId);
+  return true;
 }
 
 function nativeLoginResult(result, binding, fixture, issuerDid, allowed) {
@@ -271,6 +371,6 @@ function assertions(lane, checks) {
   return result;
 }
 
-module.exports = { GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
-  credentialContract, expiryWindow, hash, loginInstanceBinding, nativeLoginResult, validateFixture,
+module.exports = { directPostRequestReference, directPostLoginBinding, holderDeclineEvidence, freshDirectPostLogin, GRANT, MAX_EXPIRY_WAIT_SECONDS, MAX_OFFER_TTL_SECONDS, assertions, awaitNaturalExpiry,
+  credentialContract, expiryWindow, hash, loginInstanceBinding, loginInstanceOwnership, nativeLoginResult, validateFixture,
   validateIssuerSetup, validateLoginSetup };

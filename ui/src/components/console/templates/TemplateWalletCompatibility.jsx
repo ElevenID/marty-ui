@@ -24,7 +24,7 @@ function validateProfile(profile, organizationId, template) {
 
 function Values({ label, values }) {
   return <Box><Typography variant="subtitle2">{label}</Typography>
-    {values.length ? <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">{values.map((value, index) => <Chip key={`${index}-${value}`} label={value} size="small" />)}</Stack>
+    {values.length ? <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap' }}>{values.map((value, index) => <Chip key={`${index}-${value}`} label={value} size="small" />)}</Stack>
       : <Typography variant="body2">None configured</Typography>}</Box>;
 }
 
@@ -50,7 +50,7 @@ export default function TemplateWalletCompatibility({ template, organizationId }
     {loading && <LinearProgress aria-label="Loading wallet profile" />}
     {error && <Alert severity="error">{error}<Button onClick={() => setAttempt((value) => value + 1)}>Retry wallet profile</Button></Alert>}
     {profile && <Paper variant="outlined" sx={{ p: 3 }}><Stack spacing={2}>
-      <Stack direction="row" spacing={1} alignItems="center"><Typography variant="h6">{profile.name}</Typography><Chip label="Derived configuration" size="small" /></Stack>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}><Typography variant="h6">{profile.name}</Typography><Chip label="Derived configuration" size="small" /></Stack>
       <Typography>{profile.description}</Typography>
       <Typography variant="body2"><strong>Derived from:</strong> {profile.derived_from.credential_format} / {profile.derived_from.issuance_protocol} / {profile.derived_from.compliance_profile_code || 'No compliance code'}</Typography>
       <Values label="Configured wallet applications" values={profile.wallet_apps} />

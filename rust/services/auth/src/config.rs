@@ -1,4 +1,5 @@
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
+use marty_service_runtime::config;
+use std::{collections::HashMap, net::SocketAddr};
 
 use thiserror::Error;
 use tonic::metadata::AsciiMetadataValue;
@@ -6,10 +7,14 @@ use url::Url;
 
 use mmf_messaging::OutboxDispatcherConfig;
 
-use crate::{KeycloakAdminConfig, OidcConfig, SessionCookieConfig, UiOriginPolicy};
+use crate::{
+    KeycloakAdminConfig, OidcClientAuthMethod, OidcConfig, OidcMaxAge, OidcPreflightConfig,
+    OidcPrompt, OidcProviderMode, OidcUserInfoMode, SessionCookieConfig, UiOriginPolicy,
+};
 
 #[derive(Clone, Debug)]
 pub struct AuthServiceConfig {
+    pub passkeys_enabled: bool,
     pub environment: String,
     pub release_version: String,
     pub build_revision: String,
@@ -25,6 +30,7 @@ pub struct AuthServiceConfig {
     pub cookie: SessionCookieConfig,
     pub post_logout_redirect_uri: String,
     pub credential_login_policy_id: String,
+    pub credential_login_trust_profile_id: Option<String>,
     pub credential_login_organization_id: String,
     pub credential_login_issuer_did: String,
     pub credential_login_webhook_secret: String,
@@ -55,16 +61,7 @@ pub struct AuthServiceConfig {
     pub workload_server_tls: Option<AuthWorkloadServerTlsFiles>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthWorkloadClientTlsFiles {
-    pub ca_certificate: PathBuf,
-    pub certificate: PathBuf,
-    pub kms_endpoint: String,
-    pub kms_ca_certificate: PathBuf,
-    pub kms_token_file: PathBuf,
-    pub kms_key_name: String,
-    pub kms_key_version: u32,
-}
+pub use marty_service_runtime::WorkloadTlsFiles as AuthWorkloadClientTlsFiles;
 
 pub type AuthWorkloadServerTlsFiles = AuthWorkloadClientTlsFiles;
 
@@ -72,6 +69,139 @@ pub type AuthWorkloadServerTlsFiles = AuthWorkloadClientTlsFiles;
 pub enum AuthConfigError {
     #[error("AUTH.CONFIGURATION: {0}")]
     Invalid(String),
+}
+
+/// Parse only OIDC settings. Discovery preflight does not need database,
+/// cache, service credentials, migration or workload TLS configuration.
+pub fn oidc_config_from_values(
+    values: impl IntoIterator<Item = (String, String)>,
+) -> Result<OidcConfig, AuthConfigError> {
+    oidc_config_from_map(&values.into_iter().collect())
+}
+
+/// Metadata preflight never loads a secret file or uses an operator secret.
+/// Confidential clients select their method explicitly. The private marker
+/// exists only inside this opaque value and is never used in an HTTP request.
+pub fn oidc_preflight_config_from_values(
+    values: impl IntoIterator<Item = (String, String)>,
+) -> Result<OidcPreflightConfig, AuthConfigError> {
+    let mut inherited_credential = false;
+    let mut values = values
+        .into_iter()
+        .filter(|(name, _)| {
+            let secret = matches!(
+                name.as_str(),
+                "OIDC_CLIENT_SECRET" | "OIDC_CLIENT_SECRET_FILE"
+            );
+            inherited_credential |= secret;
+            !secret
+        })
+        .collect::<HashMap<_, _>>();
+    if inherited_credential
+        && values
+            .get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .is_none_or(String::is_empty)
+    {
+        return Err(invalid("OIDC metadata preflight requires an explicit client authentication method when credential settings are inherited"));
+    }
+    let method = OidcClientAuthMethod::parse(
+        values
+            .get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .map(String::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("none"),
+    )
+    .map_err(|error| invalid(error.to_string()))?;
+    values.insert(
+        "OIDC_TOKEN_ENDPOINT_AUTH_METHOD".into(),
+        method.as_str().into(),
+    );
+    if method != OidcClientAuthMethod::None {
+        values.insert(
+            "OIDC_CLIENT_SECRET".into(),
+            "metadata-preflight-private-marker".into(),
+        );
+    }
+    oidc_config_from_map(&values).map(OidcPreflightConfig)
+}
+
+fn oidc_config_from_map(values: &HashMap<String, String>) -> Result<OidcConfig, AuthConfigError> {
+    let get = |name: &str| values.get(name).map(String::as_str);
+    let provider_mode = match get("OIDC_PROVIDER_MODE").unwrap_or("keycloak") {
+        "keycloak" => OidcProviderMode::Keycloak,
+        "external" => OidcProviderMode::External,
+        _ => return Err(invalid("OIDC_PROVIDER_MODE must be keycloak or external")),
+    };
+    let realm = if provider_mode == OidcProviderMode::Keycloak {
+        required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?
+    } else {
+        String::new()
+    };
+    let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
+    let (issuer, client_id) = if provider_mode == OidcProviderMode::External {
+        (
+            required(get("OIDC_ISSUER_URL"), "OIDC_ISSUER_URL")?,
+            required(get("OIDC_CLIENT_ID"), "OIDC_CLIENT_ID")?,
+        )
+    } else {
+        (
+            get("OIDC_ISSUER_URL")
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}")),
+            get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
+        )
+    };
+    let redirect_uri = get("OIDC_REDIRECT_URI")
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
+    let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
+    OidcConfig {
+        provider_mode,
+        trusted_endpoint_origins: list(get("OIDC_TRUSTED_ENDPOINT_ORIGINS").unwrap_or_default()),
+        issuer_url: issuer.clone(),
+        external_issuer_url: get("OIDC_EXTERNAL_ISSUER_URL").unwrap_or(&issuer).into(),
+        client_id,
+        client_secret: get("OIDC_CLIENT_SECRET").map(str::to_owned),
+        client_auth_method: get("OIDC_TOKEN_ENDPOINT_AUTH_METHOD")
+            .filter(|value| !value.is_empty())
+            .map(OidcClientAuthMethod::parse)
+            .transpose()
+            .map_err(|error| invalid(error.to_string()))?,
+        userinfo_mode: OidcUserInfoMode::parse(
+            get("OIDC_USERINFO_MODE")
+                .filter(|value| !value.is_empty())
+                .unwrap_or("disabled"),
+        )
+        .map_err(|error| invalid(error.to_string()))?,
+        prompt: OidcPrompt::parse_list(get("OIDC_PROMPT").unwrap_or("consent login"))
+            .map_err(|error| invalid(error.to_string()))?,
+        max_age: OidcMaxAge::parse(
+            get("OIDC_MAX_AGE_SECONDS")
+                .filter(|value| !value.is_empty())
+                .unwrap_or("0"),
+        )
+        .map_err(|error| invalid(error.to_string()))?,
+        provider_name: get("OIDC_PROVIDER_NAME")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        account_url: get("OIDC_ACCOUNT_URL")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        recovery_url: get("OIDC_RECOVERY_URL")
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        redirect_uri,
+        scopes: list(get("OIDC_SCOPES").unwrap_or("openid,profile,email")),
+        allowed_algorithms,
+        leeway_seconds: number(get("OIDC_LEEWAY_SECONDS"), 60, "OIDC_LEEWAY_SECONDS")?,
+        jwks_cache_seconds: number(
+            get("OIDC_JWKS_CACHE_SECONDS"),
+            300,
+            "OIDC_JWKS_CACHE_SECONDS",
+        )?,
+    }
+    .validate()
+    .map_err(|error| invalid(error.to_string()))
 }
 
 impl AuthServiceConfig {
@@ -95,7 +225,16 @@ impl AuthServiceConfig {
             _ => return Err(invalid("ENVIRONMENT is invalid")),
         }
         .to_owned();
-        let realm = required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?;
+        let provider_mode = match get("OIDC_PROVIDER_MODE").unwrap_or("keycloak") {
+            "keycloak" => OidcProviderMode::Keycloak,
+            "external" => OidcProviderMode::External,
+            _ => return Err(invalid("OIDC_PROVIDER_MODE must be keycloak or external")),
+        };
+        let realm = if provider_mode == OidcProviderMode::Keycloak {
+            required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?
+        } else {
+            String::new()
+        };
         let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
         let ui_additional = get("UI_ALLOWED_ORIGINS")
             .or_else(|| get("UI_ADDITIONAL_BASE_URLS"))
@@ -106,30 +245,7 @@ impl AuthServiceConfig {
             .collect::<Vec<_>>();
         let ui_origins = UiOriginPolicy::new(ui_base, ui_additional)
             .map_err(|error| invalid(error.to_string()))?;
-        let issuer = get("OIDC_ISSUER_URL")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("http://localhost:8180/realms/{realm}"));
-        let redirect_uri = get("OIDC_REDIRECT_URI")
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("{}/v1/auth/callback", ui_base.trim_end_matches('/')));
-        let allowed_algorithms = list(get("OIDC_ALLOWED_ALGORITHMS").unwrap_or("RS256"));
-        let oidc = OidcConfig {
-            issuer_url: issuer.clone(),
-            external_issuer_url: get("OIDC_EXTERNAL_ISSUER_URL").unwrap_or(&issuer).into(),
-            client_id: get("OIDC_CLIENT_ID").unwrap_or("marty-ui").into(),
-            client_secret: get("OIDC_CLIENT_SECRET").map(str::to_owned),
-            redirect_uri,
-            scopes: list(get("OIDC_SCOPES").unwrap_or("openid,profile,email")),
-            allowed_algorithms,
-            leeway_seconds: number(get("OIDC_LEEWAY_SECONDS"), 60, "OIDC_LEEWAY_SECONDS")?,
-            jwks_cache_seconds: number(
-                get("OIDC_JWKS_CACHE_SECONDS"),
-                300,
-                "OIDC_JWKS_CACHE_SECONDS",
-            )?,
-        }
-        .validate()
-        .map_err(|error| invalid(error.to_string()))?;
+        let oidc = oidc_config_from_map(&values)?;
         let session_ttl_seconds = number(
             get("SESSION_TTL_SECONDS"),
             86_400_i64,
@@ -183,12 +299,42 @@ impl AuthServiceConfig {
         cookie
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
-        let keycloak_admin = keycloak_admin(&values, &realm)?;
+        let keycloak_admin = if provider_mode == OidcProviderMode::External {
+            if [
+                "KEYCLOAK_ADMIN_URL",
+                "MARTY_API_CLIENT_ID",
+                "MARTY_API_CLIENT_SECRET",
+            ]
+            .iter()
+            .any(|name| get(name).is_some_and(|value| !value.trim().is_empty()))
+                || boolean(get("KEYCLOAK_TOKEN_EXCHANGE_ENABLED"), false)?
+                || boolean(
+                    get("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER"),
+                    false,
+                )?
+                || boolean(get("CREDENTIAL_LOGIN_CREATE_USERS"), false)?
+                || boolean(
+                    get("KEYCLOAK_PASSKEYS_ENABLED").filter(|v| !v.is_empty()),
+                    false,
+                )?
+            {
+                return Err(invalid(
+                    "External OIDC cannot configure Keycloak Admin, account requirements, user creation, or token exchange",
+                ));
+            }
+            None
+        } else {
+            keycloak_admin(&values, &realm)?
+        };
         let credential_login_organization_id = required(
             get("CREDENTIAL_LOGIN_ORGANIZATION_ID").or_else(|| get("MARTY_ORG_ID")),
             "CREDENTIAL_LOGIN_ORGANIZATION_ID",
         )?;
         let config = Self {
+            passkeys_enabled: boolean(
+                get("KEYCLOAK_PASSKEYS_ENABLED").filter(|v| !v.is_empty()),
+                false,
+            )?,
             environment,
             release_version: get("MARTY_RELEASE_VERSION").unwrap_or("development").into(),
             build_revision: get("MARTY_UI_SHA").unwrap_or("unknown").into(),
@@ -213,6 +359,10 @@ impl AuthServiceConfig {
                 get("CREDENTIAL_LOGIN_POLICY_ID"),
                 "CREDENTIAL_LOGIN_POLICY_ID",
             )?,
+            credential_login_trust_profile_id: get("CREDENTIAL_LOGIN_TRUST_PROFILE_ID")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned),
             credential_login_organization_id: credential_login_organization_id.clone(),
             credential_login_issuer_did: required(
                 get("CREDENTIAL_LOGIN_ISSUER_DID").or_else(|| get("OID4VP_ISSUER_DID")),
@@ -414,20 +564,14 @@ fn number<T: std::str::FromStr + Copy>(
     default: T,
     name: &str,
 ) -> Result<T, AuthConfigError> {
-    value.map_or(Ok(default), |value| {
-        value
-            .parse()
-            .map_err(|_| invalid(format!("{name} is invalid")))
-    })
+    config::number_or(value, default).map_err(|_| invalid(format!("{name} is invalid")))
 }
 
 fn boolean(value: Option<&str>, default: bool) -> Result<bool, AuthConfigError> {
-    match value.map(str::to_ascii_lowercase).as_deref() {
-        None => Ok(default),
-        Some("true" | "1" | "yes") => Ok(true),
-        Some("false" | "0" | "no") => Ok(false),
-        Some(_) => Err(invalid("boolean configuration is invalid")),
-    }
+    value.map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive)
+            .map_err(|_| invalid("boolean configuration is invalid"))
+    })
 }
 
 fn listener(
@@ -490,58 +634,20 @@ fn workload_tls(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     };
-    let client_names = [
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
-    ];
-    let server_names = [
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-    ];
-    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY")
-        || values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY")
-    {
-        return Err(invalid("workload TLS private-key files are not supported"));
-    }
     let ca = value("GRPC_WORKLOAD_TLS_CA_CERT");
-    let parse_role =
-        |names: [&'static str; 6]| -> Result<Option<AuthWorkloadClientTlsFiles>, AuthConfigError> {
-            let configured = names.iter().filter(|name| value(name).is_some()).count();
-            if configured == 0 {
-                return Ok(None);
-            }
-            if configured != names.len() || ca.is_none() {
-                return Err(invalid(format!(
-                    "{} requires public certificate, CA and remote KMS identity",
-                    names[0]
-                )));
-            }
-            let version = value(names[5])
-                .unwrap_or_default()
-                .parse::<u32>()
-                .ok()
-                .filter(|version| *version > 0)
-                .ok_or_else(|| invalid(format!("{} is invalid", names[5])))?;
-            Ok(Some(AuthWorkloadClientTlsFiles {
-                ca_certificate: PathBuf::from(ca.unwrap_or_default()),
-                certificate: PathBuf::from(value(names[0]).unwrap_or_default()),
-                kms_endpoint: value(names[1]).unwrap_or_default().into(),
-                kms_ca_certificate: PathBuf::from(value(names[2]).unwrap_or_default()),
-                kms_token_file: PathBuf::from(value(names[3]).unwrap_or_default()),
-                kms_key_name: value(names[4]).unwrap_or_default().into(),
-                kms_key_version: version,
-            }))
-        };
-    let client = parse_role(client_names)?;
-    let server = parse_role(server_names)?;
+    let parse_role = |prefix: &str| {
+        AuthWorkloadClientTlsFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            marty_service_runtime::TlsIdentityNames::new(prefix),
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            false,
+            std::time::Duration::from_secs(10),
+            64,
+        )
+        .map_err(invalid)
+    };
+    let client = parse_role("GRPC_WORKLOAD_TLS_CLIENT")?;
+    let server = parse_role("GRPC_WORKLOAD_TLS_SERVER")?;
     if ca.is_some() && client.is_none() && server.is_none() {
         return Err(invalid("workload TLS CA requires a remote identity"));
     }

@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -54,10 +56,10 @@ def model(root: Path, bundle: Path, port: int = 18200,
 
     return {"name": project, "networks": {"default": {"name": project + "_default"}},
             "services": {
-        "openbao-tls-init": {"image": IMAGE, "networks": {"default": None},
+        "openbao-tls-init": {"image": IMAGE, "mem_limit": "536870912", "networks": {"default": None},
                              "entrypoint": ["/usr/local/bin/selfhost-tls-init"],
                              "restart": "no", "volumes": [bind(state, "/bao/data")]},
-        "openbao": {"image": IMAGE, "networks": {"default": None},
+        "openbao": {"image": IMAGE, "mem_limit": "536870912", "networks": {"default": None},
                     "entrypoint": None, "command": [
                         "server", "-config=/bao/config/openbao.hcl"],
                     "restart": "unless-stopped", "depends_on": {
@@ -73,7 +75,7 @@ def model(root: Path, bundle: Path, port: int = 18200,
             bind(state, "/bao/data"),
             bind(bundle / "docker" / "openbao-selfhost.hcl", "/bao/config/openbao.hcl", True),
         ]},
-        "openbao-unseal": {"image": IMAGE, "networks": {"default": None},
+        "openbao-unseal": {"image": IMAGE, "mem_limit": "536870912", "networks": {"default": None},
                             "entrypoint": ["/usr/local/bin/selfhost-unseal"],
                             "restart": "unless-stopped", "depends_on": {"openbao": {
                                 "condition": "service_started", "required": True}},
@@ -82,7 +84,7 @@ def model(root: Path, bundle: Path, port: int = 18200,
                                 "BAO_CACERT": "/bao/data/tls/ca.crt",
                                 "BAO_UNSEAL_KEY_FILE": "/bao/data/unseal.key",
                             }, "volumes": [bind(state, "/bao/data", True)]},
-        "openbao-bootstrap": {"image": IMAGE, "networks": {"default": None},
+        "openbao-bootstrap": {"image": IMAGE, "mem_limit": "536870912", "networks": {"default": None},
                               "entrypoint": ["/bin/sh", "/scripts/openbao-selfhost-init.sh"],
                               "profiles": ["kms-init"], "restart": "no", "depends_on": {"openbao": {
                                   "condition": "service_started", "required": True}},
@@ -109,6 +111,92 @@ def model(root: Path, bundle: Path, port: int = 18200,
                  "/scripts/openbao-selfhost-init.sh", True),
         ]},
     }}
+
+
+@pytest.mark.parametrize("override,expected", [(None, "536870912"), ("2g", "2147483648")])
+def test_current_compose_renders_admitted_memory_limits(
+    tmp_path: Path, override: str | None, expected: str,
+) -> None:
+    renderer = os.environ.get("MARTY_COMPOSE_RENDERER")
+    if renderer:
+        command = [renderer]
+    else:
+        docker = shutil.which("docker")
+        if docker is None or subprocess.run(
+            [docker, "compose", "version"], capture_output=True, check=False, timeout=10,
+        ).returncode:
+            pytest.skip("Docker Compose is unavailable")
+        command = [docker, "compose"]
+
+    # Render the actual shipped file, without a daemon or ambient .env input.
+    # The standalone renderer is already pinned by the release-contract job.
+    bundle = Path(__file__).resolve().parents[1]
+    root = tmp_path / "private"
+    project = "marty-preview-1234567890abcdef"
+    env_file = tmp_path / "empty.env"
+    env_file.write_text("", encoding="ascii")
+    environment = {key: os.environ[key] for key in ("PATH", "HOME", "SYSTEMROOT") if key in os.environ}
+    environment.update({
+        "MARTY_OPENBAO_DIDCOMM_IMAGE": IMAGE,
+        "SELFHOST_OPENBAO_STATE_DIR": str(root / "openbao-state"),
+        "SELFHOST_SECRET_DIR": str(root / "secrets"),
+        "SELFHOST_OPENBAO_HOST_PORT": "18200",
+    })
+    if override is not None:
+        environment["MARTY_OPENBAO_MEMORY_LIMIT"] = override
+    result = subprocess.run(
+        [*command, "--project-name", project, "--env-file", str(env_file),
+         "-f", str(bundle / "docker-compose.selfhost.openbao.yml"),
+         "--profile", "kms-init", "config", "--format", "json"],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, check=False, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    actual = json.loads(result.stdout)
+    assert {name: service["mem_limit"] for name, service in actual["services"].items()} == {
+        "openbao": expected, "openbao-tls-init": "536870912",
+        "openbao-unseal": "536870912", "openbao-bootstrap": "536870912",
+    }
+    starter.verify_model(actual, IMAGE, root / "openbao-state", root / "secrets",
+                         bundle, 18200, project)
+
+
+@pytest.mark.parametrize("role", ["openbao", "openbao-tls-init", "openbao-unseal", "openbao-bootstrap"])
+@pytest.mark.parametrize("memory", [None, True, 536870912, "0", "-1", "01", "+1", "512m", "1.5",
+                                    "9223372036854775808", "9" * 100])
+def test_model_rejects_noncanonical_or_unbounded_memory_limits(
+    tmp_path: Path, role: str, memory: object,
+) -> None:
+    root, bundle = staged(tmp_path)
+    actual = model(root, bundle)
+    if memory is None:
+        actual["services"][role].pop("mem_limit")
+    else:
+        actual["services"][role]["mem_limit"] = memory
+    with pytest.raises(ValueError, match="memory limit"):
+        starter.verify_model(actual, IMAGE, root / "openbao-state", root / "secrets",
+                             bundle, 18200, "marty-preview-1234567890abcdef")
+
+
+@pytest.mark.parametrize("memory", ["1", "805306368", "2147483648", "9223372036854775807"])
+def test_model_preserves_canonical_operator_memory_overrides(tmp_path: Path, memory: str) -> None:
+    root, bundle = staged(tmp_path)
+    actual = model(root, bundle)
+    actual["services"]["openbao"]["mem_limit"] = memory
+    starter.verify_model(actual, IMAGE, root / "openbao-state", root / "secrets",
+                         bundle, 18200, "marty-preview-1234567890abcdef")
+
+
+@pytest.mark.parametrize("field,value", [("memswap_limit", "-1"), ("mem_swappiness", 0),
+                                       ("deploy", {"resources": {"limits": {"memory": "2g"}}})])
+def test_memory_admission_does_not_allow_other_resource_overrides(
+    tmp_path: Path, field: str, value: object,
+) -> None:
+    root, bundle = staged(tmp_path)
+    actual = model(root, bundle)
+    actual["services"]["openbao"][field] = value
+    with pytest.raises(ValueError, match="unsafe runtime overrides"):
+        starter.verify_model(actual, IMAGE, root / "openbao-state", root / "secrets",
+                             bundle, 18200, "marty-preview-1234567890abcdef")
 
 
 def test_model_rejects_public_port_foreign_mount_and_extra_service(tmp_path: Path) -> None:

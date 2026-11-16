@@ -149,8 +149,8 @@ function ResourceCreateDrawer({
       anchor="right"
       open={open}
       onClose={handleClose}
-      PaperProps={{
-        sx: { width: { xs: '100%', sm: 600 } },
+      slotProps={{
+        paper: { sx: { width: { xs: '100%', sm: 600 } } },
       }}
     >
       <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

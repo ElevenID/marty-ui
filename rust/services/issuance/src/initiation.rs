@@ -188,6 +188,10 @@ pub struct InitiationTemplate {
     pub zk_predicate_claims: Vec<String>,
     pub selective_disclosure_claims: Vec<String>,
     pub credential_payload_format: String,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
+    pub template_version: i32,
+    pub not_before_offset_seconds: i64,
+    pub issuance_protocol: String,
     pub revocation_profile_id: Option<String>,
     pub issuer_did: Option<String>,
     pub issuer_algorithm: Option<String>,
@@ -205,6 +209,10 @@ impl Default for InitiationTemplate {
             zk_predicate_claims: Vec::new(),
             selective_disclosure_claims: Vec::new(),
             credential_payload_format: "w3c_vcdm_v2_sd_jwt".to_owned(),
+            jwt_vc_profile: None,
+            template_version: 1,
+            not_before_offset_seconds: 0,
+            issuance_protocol: "OID4VCI_PRE_AUTH".into(),
             revocation_profile_id: None,
             issuer_did: None,
             issuer_algorithm: None,
@@ -410,6 +418,60 @@ impl InitiationService {
             }
         }
         let template = self.resolve_template(request).await?;
+        let jwt_vc_profile = match template.jwt_vc_profile.as_ref() {
+            Some(policy)
+                if template.credential_payload_format
+                    == marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT
+                    && template.issuance_protocol == "OID4VCI_PRE_AUTH"
+                    && template.wallet_configs.is_empty()
+                    && !template.renewable
+                    && request.application_id.is_none()
+                    && request.credential_document.is_none()
+                    && request.normalized_delivery_mode()? == "wallet_only" =>
+            {
+                let template_id = request
+                    .credential_template_id
+                    .as_deref()
+                    .ok_or(InitiationServiceError::UnsupportedPayloadFormat)?;
+                Some(
+                    marty_jwt_vc_issuance::JwtVcIssuanceSelection::new(
+                        policy.clone(),
+                        &template.credential_type,
+                        template_id,
+                        template.template_version,
+                        template
+                            .validity_days
+                            .checked_mul(86_400)
+                            .ok_or(InitiationServiceError::UnsupportedPayloadFormat)?,
+                        template.not_before_offset_seconds,
+                    )
+                    .map_err(|_| InitiationServiceError::UnsupportedPayloadFormat)?,
+                )
+            }
+            None if template.credential_payload_format
+                != marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT =>
+            {
+                None
+            }
+            _ => return Err(InitiationServiceError::UnsupportedPayloadFormat),
+        };
+        if jwt_vc_profile.is_some()
+            && request.claims.as_ref().is_some_and(|claims| {
+                [
+                    "iat",
+                    "exp",
+                    "nbf",
+                    "validFrom",
+                    "validUntil",
+                    "issuanceDate",
+                    "expirationDate",
+                ]
+                .iter()
+                .any(|key| claims.contains_key(*key))
+            })
+        {
+            return Err(InitiationServiceError::UnsupportedPayloadFormat);
+        }
         validate_explicit_inputs(request, &template.credential_payload_format)?;
         if let Some(document) = &request.credential_document {
             self.ports
@@ -455,6 +517,8 @@ impl InitiationService {
             selective_disclosure_claims: template.selective_disclosure_claims,
             zk_predicate_claims: template.zk_predicate_claims,
             credential_payload_format: template.credential_payload_format,
+            jwt_vc_profile,
+            jwt_vc_signing_timing: None,
             wallet_configs: template.wallet_configs,
             validity_days: template.validity_days,
             renewable: template.renewable,
@@ -593,7 +657,7 @@ fn validate_explicit_inputs(
     let normalized = payload_format.trim().to_ascii_lowercase().replace('-', "_");
     let jwt_vc = matches!(
         normalized.as_str(),
-        "jwt_vc" | "jwt_vc_json" | "w3c_vcdm_v2_jwt" | "w3c_vcdm_v2_jwt_vc"
+        "jwt_vc" | "jwt_vc_json" | "w3c_vcdm_v2_jwt" | "w3c_vcdm_v2_jwt_vc" | "vc_jwt_direct_v1"
     );
     let data_integrity = matches!(normalized.as_str(), "json_ld" | "ldp_vc" | "w3c_vcdm_v2_di");
     if request.credential_subject.is_some() && !(jwt_vc || data_integrity) {
@@ -1471,5 +1535,123 @@ mod tests {
         assert!(has_didcomm_wallet(&[serde_json::json!({
             "format_variant": "didcomm_v2"
         })]));
+    }
+    struct DirectTemplates(CallLog);
+    #[async_trait]
+    impl InitiationTemplateResolver for DirectTemplates {
+        async fn resolve(&self, id: &str) -> Result<InitiationTemplate, InitiationDependencyError> {
+            let mut template = TestTemplates(self.0.clone()).resolve(id).await?;
+            template.jwt_vc_profile =
+                Some(marty_jwt_vc_issuance::JwtVcTemplatePolicy::new(3600).unwrap());
+            template.credential_payload_format =
+                marty_jwt_vc_issuance::DIRECT_PAYLOAD_FORMAT.into();
+            template.template_version = 7;
+            template.validity_days = 2;
+            template.not_before_offset_seconds = -30;
+            template.renewable = false;
+            template.selective_disclosure_claims.clear();
+            Ok(template)
+        }
+    }
+    struct DirectIssuer(CallLog);
+    #[async_trait]
+    impl IssuerContextResolver for DirectIssuer {
+        async fn resolve(
+            &self,
+            transaction: &CredentialTransaction,
+            format: &str,
+            force: bool,
+        ) -> Result<IssuerContext, CredentialIssuanceError> {
+            assert_eq!(format, "application/vc+jwt");
+            TestIssuerResolver(self.0.clone())
+                .resolve(transaction, "jwt_vc_json", force)
+                .await
+        }
+    }
+    fn direct_service_harness() -> (InitiationService, Arc<TestRepository>, CallLog) {
+        let (mut service, repository, calls) = service_harness();
+        service.ports.templates = Arc::new(DirectTemplates(calls.clone()));
+        service.ports.issuer_resolver = Arc::new(DirectIssuer(calls.clone()));
+        (service, repository, calls)
+    }
+    fn direct_request() -> InitiationRequest {
+        let mut value = request();
+        value.application_id = None;
+        value.delivery_mode = "wallet_only".into();
+        value
+    }
+    #[tokio::test]
+    async fn explicit_profile_reservation_freezes_selection_but_not_signing_time_and_replays_before_template_read(
+    ) {
+        let (mut service, _, calls) = direct_service_harness();
+        let created = service
+            .initiate(&direct_request(), Some("direct-replay"))
+            .await
+            .unwrap();
+        let selection = created.transaction.jwt_vc_profile.as_ref().unwrap();
+        assert_eq!(
+            selection.configuration_id(),
+            "UniversityDegreeCredential#vc2-jose-2026-v1"
+        );
+        assert_eq!(
+            serde_json::to_value(selection).unwrap()["template_version"],
+            7
+        );
+        assert!(created.transaction.jwt_vc_signing_timing.is_none());
+        assert_eq!(
+            created.transaction.expires_at - created.transaction.created_at,
+            Duration::days(7)
+        );
+        calls.take();
+        // A now-legacy template is not re-read during idempotent recovery.
+        service.ports.templates = Arc::new(TestTemplates(calls.clone()));
+        let recovered = service
+            .initiate(&direct_request(), Some("direct-replay"))
+            .await
+            .unwrap();
+        assert!(!recovered.created);
+        assert_eq!(recovered.transaction, created.transaction);
+        assert!(!calls.take().contains(&"resolve-template"));
+    }
+    #[tokio::test]
+    async fn explicit_profile_rejects_alternate_routes_and_caller_temporal_claims_before_reservation(
+    ) {
+        for case in 0..10 {
+            let (service, repository, _) = direct_service_harness();
+            let mut input = direct_request();
+            match case {
+                0 => input.application_id = Some("application-1".into()),
+                1 => input.delivery_mode = "wallet_plus_canvas_mirror".into(),
+                2 => {
+                    input.claims = None;
+                    input.credential_document = Some(
+                        serde_json::json!({"@context":[VCDM_V2_CONTEXT],"type":["VerifiableCredential"],"issuer":input.issuer_did,"credentialSubject":{"id":"did:example:holder"}}),
+                    );
+                }
+                _ => {
+                    input.claims.as_mut().unwrap().insert(
+                        [
+                            "iat",
+                            "exp",
+                            "nbf",
+                            "validFrom",
+                            "validUntil",
+                            "issuanceDate",
+                            "expirationDate",
+                        ][case - 3]
+                            .into(),
+                        serde_json::json!(1800000000),
+                    );
+                }
+            }
+            assert!(service.initiate(&input, None).await.is_err(), "case {case}");
+            assert!(repository.transaction.lock().unwrap().is_none());
+        }
+        let (service, _, _) = direct_service_harness();
+        let mut input = direct_request();
+        input.claims = None;
+        input.credential_subject =
+            Some(serde_json::json!({"id":"did:example:holder","degree":"BSc"}));
+        assert!(service.initiate(&input, None).await.is_ok());
     }
 }

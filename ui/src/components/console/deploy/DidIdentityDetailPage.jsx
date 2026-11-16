@@ -29,7 +29,7 @@ function Methods({ methods, label }) {
 function PublicDocument({ title, document, onCopy }) {
   if (!document) return null;
   return <Paper variant="outlined" sx={{ p: 2 }}>
-    <Stack direction="row" justifyContent="space-between"><Typography variant="h6">{title}</Typography>
+    <Stack direction="row" sx={{ justifyContent: 'space-between' }}><Typography variant="h6">{title}</Typography>
       <Button onClick={() => onCopy(JSON.stringify(document, null, 2), title)}>Copy {title.toLowerCase()}</Button></Stack>
     <Box component="pre" tabIndex={0} aria-label={title} sx={{ overflow: 'auto', maxHeight: 400, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(document, null, 2)}</Box>
   </Paper>;
@@ -66,7 +66,7 @@ export default function DidIdentityDetailPage() {
   const pem = data?.certificate.x5c.map((certificate) => `-----BEGIN CERTIFICATE-----\n${certificate}\n-----END CERTIFICATE-----`).join('\n');
   return <Container maxWidth="lg" sx={{ py: 3 }}>
     <Stack spacing={3}>
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ justifyContent: 'space-between' }}>
         <Box><Typography variant="h4">DID identity</Typography><Typography color="text.secondary">Public documents and current signer observations.</Typography></Box>
         <Button onClick={() => navigate('/console/org/deploy/issuer-identity')}>Back to identities</Button>
       </Stack>

@@ -1,11 +1,11 @@
 {
   "protocol": {
-    "heroTitle": "Built on an Open Standard",
+    "heroTitle": "Built around an Open Draft Protocol",
     "heroSubtitle": "The Marty Identity Protocol (MIP) is a vendor-neutral, open specification for cryptographically verifiable digital identity management.",
     "sectionPrimitives": "Five Core Primitives",
     "primitivesSubtitle": "MIP defines the minimum automatable set of primitives for issuing, holding, presenting, and verifying digital credentials.",
     "sectionStandards": "Standards Alignment",
-    "standardsSubtitle": "MIP unifies international identity standards into a single interoperability layer.",
+    "standardsSubtitle": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
     "sectionGovernance": "Open Governance",
     "governanceSubtitle": "No single organization controls the protocol. All decisions are made publicly on GitHub.",
     "governanceModel": "Vendor-neutral, community-governed",
@@ -13,91 +13,92 @@
     "governanceDecisions": "All decisions made publicly on GitHub — no private steering committees",
     "governanceCopyright": "Copyright held by The MIP Authors",
     "sectionComponents": "What's in the Repo",
-    "componentsSubtitle": "Everything you need to implement, validate, and extend the protocol.",
+    "componentsSubtitle": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
     "ctaTitle": "Get Involved",
     "ctaDescription": "MIP is Apache 2.0 licensed and open to contributions. Read the spec, file issues, or submit a PR.",
     "ctaGitHub": "View on GitHub",
     "ctaSpec": "Read the Specification",
-    "badge": "Open Standard",
+    "badge": "Open Draft Protocol",
     "version": "v{{version}} — {{status}}",
     "license": "Apache 2.0"
   },
   "valueProposition": {
-    "headline": "Identity verification is not enough.",
-    "subheadline": "Build verifiable identity infrastructure.",
-    "extendedSubheadline": "Issue, verify, and govern credentials—built for EUDI Wallets, Open Badges, and enterprise trust.",
-    "primaryCTA": "Start Free",
-    "secondaryCTA": "Why Verifiable Identity"
+    "headline": "Marty: identity workflows you operate.",
+    "subheadline": "Build trust around your workflow.",
+    "extendedSubheadline": "Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.",
+    "primaryCTA": "Explore the Developer Docs",
+    "secondaryCTA": "View Verification API",
+    "supporting": "Portable credentials, applicant and document verification, and Travel Trust."
   },
   "idvComparison": {
-    "title": "From IDV to Verifiable Identity",
-    "takeaway": "ElevenID LLC replaces repeated verification with reusable trust.",
+    "title": "Plan the Trust Exchange",
+    "takeaway": "Start with the questions your workflow must answer, then evaluate the selected implementation.",
     "traditional": {
-      "title": "Traditional IDV",
-      "oneTimeChecks": "One-time document checks",
-      "vendorControlled": "Vendor-controlled identity data",
-      "biometric": "Biometric decision outputs",
-      "closedAPIs": "Closed, proprietary APIs",
-      "manualTrust": "Manual trust configuration",
-      "reVerification": "Re-verification everywhere"
+      "title": "Questions to Resolve",
+      "oneTimeChecks": "Which claim must be checked?",
+      "vendorControlled": "Who operates the data and keys?",
+      "biometric": "How is the presenter bound to the credential?",
+      "closedAPIs": "Which interfaces and profiles are required?",
+      "manualTrust": "Which issuers and rules are trusted?",
+      "reVerification": "When can a credential be reused?"
     },
     "elevenid": {
-      "title": "ElevenID LLC",
-      "reusable": "Reusable verifiable credentials",
-      "holderControlled": "Holder-controlled digital wallets",
-      "cryptographic": "Cryptographic proofs",
-      "openStandards": "Open standards (W3C VC, OID4VC, ISO)",
-      "governedTrust": "Governed trust registries",
-      "reuseAcross": "Identity reuse across ecosystems"
+      "title": "Marty Evaluation",
+      "reusable": "Defined credential and document inputs",
+      "holderControlled": "Customer or selected-partner operations",
+      "cryptographic": "Profile-specific holder-binding tests",
+      "openStandards": "Documented interfaces and tested combinations",
+      "governedTrust": "Explicit issuer trust and policy configuration",
+      "reuseAcross": "Reuse evaluated within an agreed workflow"
     }
   },
   "eudiOpenBadges": {
-    "title": "Built for EUDI Wallets and Verifiable Credentials",
-    "verifyCredentials": "Verify Verifiable Credentials—not just documents.",
-    "trustIssuers": "Trust issuers—not databases.",
-    "walletFirst": "Wallet-first by design—EUDI-ready.",
-    "quote": "IDV platforms stop at a one-time decision. ElevenID LLC produces cryptographically verifiable outcomes that can be reused across wallets, ecosystems, and trust registries."
+    "title": "Explore Wallet and Credential Interoperability",
+    "verifyCredentials": "Define the credential format and presentation profile you need.",
+    "trustIssuers": "Identify trusted issuers and acceptance rules.",
+    "walletFirst": "Test the chosen wallets and release together.",
+    "quote": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence."
   },
   "organizationOutcomes": {
-    "title": "Why This Matters for Organizations",
-    "reduceKYC": "Reduce repeat KYC costs with reusable credentials",
-    "eudiReady": "Prepare for EUDI Wallet acceptance",
-    "avoidLockIn": "Avoid vendor lock-in with open standards",
-    "supportBadges": "Support Open Badges, workforce credentials, and government IDs in one system"
+    "title": "What You Can Evaluate",
+    "reduceKYC": "Explore credential reuse across an agreed workflow",
+    "eudiReady": "Evaluate travel-document trust and journey rules",
+    "avoidLockIn": "Make applicant and document checks explicit",
+    "supportBadges": "Customer or partner operated"
   },
   "audienceRouting": {
     "title": "Choose Your Path",
-    "subtitle": "Pick your entry point—enterprise, government, or developers.",
+    "subtitle": "Explore Marty directly or through a partner or OEM integration.",
     "enterprise": {
       "title": "Enterprise",
-      "description": "Reduce repeat KYC, enable partner interoperability, and govern trust at scale.",
+      "description": "Define a useful credential or document workflow and the team that will operate it.",
       "cta": "Explore Enterprise"
     },
     "government": {
       "title": "Government",
-      "description": "EUDI-ready infrastructure for ISO credentials, trust lists, and regulated acceptance.",
+      "description": "Review trust sources, required credential profiles, and deployment constraints.",
       "cta": "Explore Government"
     },
     "developers": {
       "title": "Developers",
-      "description": "Docs, SDKs, and quickstarts for VC issuance and verification.",
+      "description": "Inspect APIs, source, and integration requirements for the selected workflow.",
       "cta": "Read Docs"
     }
   },
   "proofStrip": {
-    "title": "Built on Proven Foundations",
-    "interoperability": "Interoperability",
-    "offlineVerification": "Offline Verification",
-    "deployment": "Deployment",
+    "title": "A Defined Product and Operating Model",
+    "interoperability": "Scope",
+    "offlineVerification": "Evaluation",
+    "deployment": "Operations",
     "keySecurity": "Key Security",
-    "compliance": "Compliance"
+    "compliance": "Evidence"
   },
   "infrastructure": {
-    "title": "Why Infrastructure Beats Per-Check Pricing",
-    "commodity": "Verification becomes a commodity",
-    "orchestration": "Trust orchestration compounds in value",
-    "reusable": "Reusable credentials reduce long-term cost",
-    "preventLockIn": "Standards prevent vendor lock-in"
+    "title": "Start with a Useful Workflow",
+    "commodity": "Agree the inputs, trust sources, and expected result",
+    "orchestration": "Customer or partner operated",
+    "reusable": "Synthetic evaluation first",
+    "preventLockIn": "Expand scope when evidence supports it"
   },
   "landingPage": {
     "loading": "Loading...",
@@ -105,15 +106,15 @@
     "features": {
       "issuance": {
         "title": "Issuance",
-        "description": "Issue standards-based credentials with cryptographic signatures and policy enforcement."
+        "description": "Define the credential format and presentation profile you need."
       },
       "verification": {
         "title": "Verification",
-        "description": "Verify credentials against trust anchors with revocation checking and selective disclosure."
+        "description": "Identify trusted issuers and acceptance rules."
       },
       "governance": {
         "title": "Governance",
-        "description": "Manage trust, policy, and deployment centrally—without changing verifier code."
+        "description": "Explicit trust and key configuration"
       }
     },
     "identityProblem": {
@@ -128,8 +129,8 @@
     },
     "solvesIt": {
       "title": "How ElevenID LLC Solves It",
-      "intro": "Govern identity with four primitives: trust profiles, credential templates, presentation policies, and flows.",
-      "subheading": "Policies are configuration, not code. Endpoints execute centrally governed trust and disclosure rules without redeployment."
+      "intro": "Agree the inputs, trust sources, and expected result",
+      "subheading": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence."
     },
     "howItWorks": {
       "title": "How It Works",
@@ -138,17 +139,17 @@
     },
     "standards": {
       "title": "Standards-Based Architecture",
-      "subtitle": "Standards are not integrations. They are the product.",
-      "description": "These layers let ElevenID LLC interoperate across governments, wallets, and enterprises without custom integrations.",
+      "subtitle": "Standards guide the design. Tests establish compatibility.",
+      "description": "A named standard is a starting point. Review the exact release and profile; compatibility and conformance require their own evidence.",
       "cta": "Explore Standards"
     },
     "startFirst": {
       "title": "What are you doing first?",
-      "description": "Choose a starting point. You can expand into a full ecosystem when you're ready.",
+      "description": "Choose a defined use case, evaluate it with synthetic data, and run the agreed deployment yourself or with your chosen partner.",
       "cards": {
         "verify": {
           "title": "Verify credentials",
-          "description": "Verify EUDI wallets, Open Badges, and ISO credentials."
+          "description": "Define the credential format and presentation profile you need."
         },
         "issue": {
           "title": "Issue credentials",
@@ -156,53 +157,53 @@
         },
         "offline": {
           "title": "Offline / facility",
-          "description": "Verify at checkpoints with limited connectivity."
+          "description": "Offline and headless profiles need validation"
         },
         "wallet": {
           "title": "Wallet experience",
-          "description": "Give users a wallet to hold and present credentials."
+          "description": "Test the chosen wallets and release together."
         }
       },
       "notSure": "Not sure?",
       "startWithVerificationApi": "Start with Verification API"
     },
     "products": {
-      "title": "Products & Capabilities",
-      "description": "A complete platform—from issuance to verification and governance.",
+      "title": "Marty Components",
+      "description": "Components of one Marty product. Availability and included scope depend on the selected release and agreement.",
       "viewDetails": "View Details",
-      "viewAll": "View All Products"
+      "viewAll": "Explore Marty Components"
     },
     "trustSignals": {
-      "title": "Enterprise-Grade Infrastructure",
+      "title": "Security and Deployment Review",
       "security": {
         "title": "Security",
-        "item1": "Enterprise-grade cryptographic validation",
-        "item2": "PKI and revocation management",
-        "item3": "HSM and key vault integration"
+        "item1": "Explicit trust and key configuration",
+        "item2": "Test signature, expiry, and failure handling",
+        "item3": "Review key storage for the selected deployment"
       },
       "infrastructure": {
         "title": "Infrastructure",
-        "item1": "Offline-first capability (72h cache)",
-        "item2": "High-availability SaaS deployment",
-        "item3": "Self-hosted options for sovereignty",
-        "item4": "Horizontal scaling and load balancing",
-        "item5": "Built with AI-assisted development workflows to maintain high quality at lower cost."
+        "item1": "Customer or partner operated",
+        "item2": "Release-specific installation requirements",
+        "item3": "Offline and headless profiles need validation",
+        "item4": "No included managed production or uptime SLA",
+        "item5": "Use documented issue and vulnerability reporting channels"
       },
       "compliance": {
-        "title": "Compliance",
-        "item1": "Implements ICAO 9303",
-        "item2": "Implements ISO 18013-5 (mDoc)",
-        "item3": "GDPR and privacy by design",
-        "item4": "Selective disclosure and data minimization"
+        "title": "Acceptance requirements",
+        "item1": "Define the credential format and presentation profile you need.",
+        "item2": "Release-specific evidence",
+        "item3": "Approve real-data handling separately",
+        "item4": "Confirm acceptance requirements with the responsible organization"
       }
     },
     "proofStrip": {
       "claims": {
-        "w3c": "W3C VC / SD-JWT / OID4VP",
-        "offlineCache": "72-hour offline cache",
-        "deployment": "SaaS + Self-hosted",
-        "keySecurity": "HSM / Vault integration",
-        "auditLogs": "Immutable audit logs"
+        "w3c": "One Marty product, three use cases",
+        "offlineCache": "Synthetic evaluation first",
+        "deployment": "Customer or partner operated",
+        "keySecurity": "Explicit trust and key configuration",
+        "auditLogs": "Release-specific evidence"
       }
     },
     "portals": {
@@ -212,8 +213,9 @@
     },
     "footer": {
       "title": "Ready to get started?",
-      "description": "Start free, or compare plans for your organization.",
-      "viewPricing": "View Pricing"
+      "description": "Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs.",
+      "viewPricing": "Review Commercial Scope",
+      "descriptionComingSoon": "Explore the documentation and a synthetic demonstration, then discuss the workflow and deployment your organization needs."
     },
     "orientation": {
       "title": "New to verifiable identity?",

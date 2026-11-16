@@ -3,6 +3,7 @@
 // Browser transport only. Ownership, storage isolation and expiry are enforced
 // by marty-core's Rust test wallet, shared by all first-party browser demos.
 const { randomUUID } = require('node:crypto');
+const assert = require('node:assert/strict');
 const sessions = new WeakMap();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const COOKIE = 'marty_test_wallet_session';
@@ -102,4 +103,43 @@ async function resetIsolatedWallet(page, origin) {
   return ownedWalletSession(page, origin).reset();
 }
 
-module.exports = { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin };
+// One presentation UI transport for all first-party test-wallet consumers.
+// The caller retains recording/masking and interprets its own response contract.
+async function presentWalletRequest(page, requestUri, { origin, holderDecision = null } = {}) {
+  assert([null, 'Approve', 'Cancel'].includes(holderDecision));
+  origin = walletOrigin(origin);
+  const current = new URL(page.url());
+  assert(current.origin === origin && current.pathname === '/', 'Owned wallet UI context changed');
+  assert(typeof requestUri === 'string' && requestUri.length > 0, 'Wallet request URI is required');
+  const requestInput = page.getByLabel('Presentation request URI');
+  await requestInput.fill(requestUri);
+  assert(await requestInput.inputValue() === requestUri, 'Wallet request input changed');
+  // Distinguish the static client before Present. A missing/late dialog after
+  // dispatch, malformed dialog, or failed click never authorizes a fallback.
+  const consent = page.locator('#presentation-consent');
+  const dialogCount = await consent.count();
+  assert([0, 1].includes(dialogCount), 'Ambiguous wallet consent UI');
+  if (dialogCount === 1) {
+    assert.equal(await consent.evaluate(element => element.tagName), 'DIALOG');
+    for (const name of ['Approve', 'Cancel']) {
+      assert.equal(await consent.getByRole('button', { name, exact: true, includeHidden: true }).count(), 1);
+    }
+  } else assert.equal(holderDecision, null, 'This holder decision requires the reviewed consent UI');
+  const decision = dialogCount === 1 ? holderDecision || 'Approve' : null;
+  const endpoint = decision === 'Cancel' ? '/api/presentation-decline' : '/api/present';
+  const responsePromise = page.waitForResponse(response => {
+    if (response.url() !== `${origin}${endpoint}` || response.request().method() !== 'POST') return false;
+    try { return response.request().postDataJSON()?.request_uri === requestUri; } catch { return false; }
+  }, { timeout: 60_000 });
+  responsePromise.catch(() => {});
+  await page.getByRole('button', { name: /^present$/i }).click();
+  if (decision !== null) {
+    await consent.waitFor({ state: 'visible', timeout: 15000 });
+    await consent.getByRole('button', { name: decision, exact: true }).click({ timeout: 15000 });
+    await consent.waitFor({ state: 'hidden', timeout: 15000 });
+  }
+  return { response: await responsePromise, holderDecision: decision,
+    consentProtocol: dialogCount === 1 ? 'EXPLICIT_TEST_WALLET_DIALOG_V1' : 'LEGACY_PRESENT_UI' };
+}
+
+module.exports = { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin, presentWalletRequest };

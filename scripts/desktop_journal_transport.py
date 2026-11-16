@@ -8,6 +8,7 @@ import re
 import subprocess
 import time
 import uuid
+from scoped_native_runtime import JOURNAL_FILES, JOURNAL_RESPONSE_MAXIMUM, daemon_source
 
 ENGINE = "3dbbbe66-1c98-4e0c-b0a6-f927c05e7341"
 IMAGE = "sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1"
@@ -43,6 +44,13 @@ def exact_capabilities(values, expected):
 
 def exact_security_options(values):
     require(values in (["no-new-privileges"], ["no-new-privileges:true"]), "DESKTOP_JOURNAL_SECURITY_SCOPE")
+
+
+def exact_readonly_host_source(host_source, actual_source):
+    host_source = host_source.replace("\\", "/")
+    require(host_source.startswith("C:/Users/maree/.codex/private/")
+            and daemon_source(actual_source) == daemon_source(host_source),
+            "DESKTOP_JOURNAL_HELPER_HOST_SOURCE")
 
 
 def helper_arguments(spec, run_id, name, command, readonly_files=(), *, root_setup=False):
@@ -107,7 +115,7 @@ class DesktopPrivateJournalTransport:
             require(remaining > 0, "DESKTOP_JOURNAL_HELPER_OUTCOME_UNKNOWN_NO_RETRY")
             timeout = min(timeout, remaining)
         result = subprocess.run([*self.base, *args], env=self.env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
-        require(len(result.stdout) <= 512 * 1024 and len(result.stderr) <= 64 * 1024, "DESKTOP_JOURNAL_RESPONSE_BOUND")
+        require(len(result.stdout) <= JOURNAL_RESPONSE_MAXIMUM and len(result.stderr) <= 64 * 1024, "DESKTOP_JOURNAL_RESPONSE_BOUND")
         require(not check or result.returncode == 0, "DESKTOP_JOURNAL_COMMAND_NONZERO")
         return result
 
@@ -156,8 +164,7 @@ class DesktopPrivateJournalTransport:
             require(sha(source["path"]) == source["sha256"], "DESKTOP_JOURNAL_WORKER_SOURCE_CHANGED")
             match = [m for m in mounts if m["Destination"] == source["alias"]]
             require(len(match) == 1 and match[0]["Type"] == "bind" and match[0]["RW"] is False, "DESKTOP_JOURNAL_HELPER_READONLY_FILE")
-            host_source = source["path"].replace("\\", "/")
-            require(host_source.startswith("C:/Users/maree/.codex/private/") and match[0]["Source"] == "/run/desktop/mnt/host/c/" + host_source[3:], "DESKTOP_JOURNAL_HELPER_HOST_SOURCE")
+            exact_readonly_host_source(source["path"], match[0]["Source"])
         self._record("created", {"containerId": cid, "name": name, "mounts": mounts, "rootSetup": root_setup})
         self._command(["start", cid])
         deadline = time.monotonic() + 30
@@ -184,9 +191,23 @@ class DesktopPrivateJournalTransport:
 
     def prepare_volume(self):
         self._engine()
+        legacy = self.private / "desktop-journal-bootstrap-intent.private.json"
+        if legacy.exists() or legacy.is_symlink():
+            require(legacy.is_file() and not legacy.is_symlink(), "DESKTOP_JOURNAL_LEGACY_INTENT_UNREADABLE")
+            value = json.loads(legacy.read_bytes())
+            require(isinstance(value, dict)
+                    and set(value) == {"volumeName", "runId", "scope", "windowsParentDurabilityClaimed"}
+                    and isinstance(value["runId"], str)
+                    and re.fullmatch(r"[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}", value["runId"])
+                    and value["volumeName"] == "marty-d02-journal-" + value["runId"]
+                    and value["scope"] == "NEW_METADATA_VOLUME_ONLY"
+                    and value["windowsParentDurabilityClaimed"] is False,
+                    "DESKTOP_JOURNAL_LEGACY_INTENT_CHANGED")
+            require(value["runId"] != self.run_id, "DESKTOP_JOURNAL_LEGACY_RUN_ALREADY_CONSUMED")
         existing = self._command(["volume", "ls", "--format", "{{.Name}}"]).stdout.decode().split()
         require(self.spec["volumeName"] not in existing, "DESKTOP_JOURNAL_VOLUME_EXISTS_NO_RETRY")
-        intent = self.private / "desktop-journal-bootstrap-intent.private.json"
+        intent = self.private / ("desktop-journal-bootstrap-intent-" + self.run_id + ".private.json")
+        require(not intent.exists() and not intent.is_symlink(), "DESKTOP_JOURNAL_RUN_INTENT_ALREADY_CONSUMED")
         with intent.open("xb") as stream:
             stream.write((json.dumps({"volumeName": self.spec["volumeName"], "runId": self.run_id, "scope": "NEW_METADATA_VOLUME_ONLY", "windowsParentDurabilityClaimed": False}) + "\n").encode());stream.flush();os.fsync(stream.fileno())
         require(self._command(["volume", "create", "--driver", "local", "--label", "elevenid.owner=" + OWNER, "--label", "elevenid.run=" + self.run_id, self.spec["volumeName"]]).stdout.decode().strip() == self.spec["volumeName"], "DESKTOP_JOURNAL_VOLUME_CREATE_UNKNOWN")
@@ -204,4 +225,13 @@ class DesktopPrivateJournalTransport:
         readonly = [{"role": role, "path": str(file), "alias": aliases(file), "sha256": request_sha if role == "request" else sha(file)}
                     for role, file in (("worker", worker_file), ("shared", shared_file), ("request", request_file))]
         require(all(sha(row["path"]) == row["sha256"] for row in readonly), "DESKTOP_JOURNAL_REQUEST_CHANGED")
+        request = json.loads(Path(request_file).read_bytes())
+        operation, name = request.get("operation"), request.get("name")
+        require(operation in {"initialize", "exclusive", "state", "read"}, "DESKTOP_JOURNAL_OPERATION_REFUSED")
+        if operation == "initialize":
+            require(name is None, "DESKTOP_JOURNAL_INITIALIZATION_NAME")
+        else:
+            require(name in JOURNAL_FILES, "DESKTOP_JOURNAL_FILENAME_REFUSED")
+            require(operation != "state" or name == "build-state.json", "DESKTOP_JOURNAL_STATE_FILENAME_REFUSED")
+            require(operation != "exclusive" or name != "build-state.json", "DESKTOP_JOURNAL_EXCLUSIVE_FILENAME_REFUSED")
         return self._helper(["/usr/bin/python3", "-I", aliases(worker_file), "--worker", aliases(request_file), request_sha], readonly)

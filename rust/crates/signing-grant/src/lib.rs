@@ -1,16 +1,20 @@
 //! Canonical, short-lived authorization claims for remote issuer signing.
 //!
-//! The byte string returned by [`bound_input`] is authenticated with an
-//! OpenBao Transit HMAC. This crate neither stores nor computes a secret key.
+//! The byte string returned by [`bound_input`] is authenticated with a
+//! remote provider HMAC. This crate neither stores nor computes a secret key.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+mod aws;
 pub mod ceremony;
 pub mod certificate_profile;
+pub mod configuration;
+pub mod didcomm;
 pub mod minter;
+pub mod provider;
 pub mod replay;
 mod token_file;
 pub mod transit;
@@ -36,6 +40,16 @@ pub enum SigningOrigin {
 }
 
 impl SigningOrigin {
+    pub const ALL: [Self; 7] = [
+        Self::GatewayService,
+        Self::GatewayIssuerDid,
+        Self::FlowWalletRequest,
+        Self::IssuanceCredential,
+        Self::IssuanceCanvas,
+        Self::IssuanceReadiness,
+        Self::IssuancePassport,
+    ];
+
     pub const fn transit_key_name(self) -> &'static str {
         match self {
             Self::GatewayService => "marty-sign-grant-gateway-service-v1",
@@ -89,8 +103,9 @@ impl SigningOrigin {
                     && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512")
             }
             Self::IssuanceCredential => {
-                issuer_did_route_shape(claims)
-                    && matches!(claims.key_purpose.as_str(), "vc_jwt_issuer" | "mdoc_dsc")
+                (issuer_did_route_shape(claims)
+                    && matches!(claims.key_purpose.as_str(), "vc_jwt_issuer" | "mdoc_dsc"))
+                    || didcomm::authorizes_route_shape(claims)
             }
             Self::IssuanceCanvas => {
                 issuer_did_route_shape(claims)
@@ -213,7 +228,7 @@ pub enum GrantError {
     MinterUnavailable,
 }
 
-/// A bound grant authenticated by OpenBao. Only this crate can construct it;
+/// A bound grant authenticated by the configured remote KMS. Only this crate can construct it;
 /// callers must atomically consume it before any issuer KMS signing call.
 pub struct VerifiedGrant {
     claims: GrantClaims,
@@ -230,9 +245,9 @@ impl VerifiedGrant {
 }
 
 /// Mint a grant only after the calling service has independently authorized
-/// `binding` against its own operation record. The HMAC key stays in OpenBao.
+/// `binding` against its own operation record. The HMAC key stays in its KMS.
 pub async fn mint_bound(
-    client: &transit::TransitGrantClient,
+    client: &dyn provider::GrantMac,
     mint_token: &str,
     binding: &GrantBinding<'_>,
 ) -> Result<GrantEnvelope, GrantError> {
@@ -268,7 +283,7 @@ pub async fn mint_bound(
 }
 
 pub async fn verify_envelope(
-    client: &transit::TransitGrantClient,
+    client: &dyn provider::GrantMac,
     verify_token: &str,
     envelope: &GrantEnvelope,
     binding: &GrantBinding<'_>,
@@ -284,7 +299,7 @@ pub async fn verify_envelope(
 }
 
 pub async fn verify_bound(
-    client: &transit::TransitGrantClient,
+    client: &dyn provider::GrantMac,
     verify_token: &str,
     claims: &GrantClaims,
     binding: &GrantBinding<'_>,
@@ -306,7 +321,7 @@ pub async fn verify_bound(
     })
 }
 
-/// Return the exact bytes to authenticate or verify through Transit HMAC.
+/// Return the exact bytes to authenticate or verify through remote HMAC.
 /// This deliberately does not generate or verify a local MAC.
 pub fn bound_input(
     claims: &GrantClaims,

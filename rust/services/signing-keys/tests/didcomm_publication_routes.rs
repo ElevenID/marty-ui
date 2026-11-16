@@ -14,6 +14,103 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[allow(dead_code)]
+mod support {
+    pub mod disposable_backends;
+}
+
+#[tokio::test]
+#[ignore = "requires disposable loopback MARTY_TEST_REDIS_URL and nonce sentinel"]
+async fn exact_didcomm_binding_can_be_disabled_after_profile_or_provider_loss() {
+    let redis_url = support::disposable_backends::disposable_redis_url().await;
+    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let documents = DocumentStore::from_connection(registry.connection());
+    let app = marty_signing_keys::http::router_with_dependencies(
+        "test-internal-key".into(),
+        Some(registry.clone()),
+        Some(documents),
+        None,
+        Some(profiles.clone()),
+        None,
+        Some("issuer.example".into()),
+    );
+    for inactive_profile in [false, true] {
+        let organization_id = format!("revoke_{}", Uuid::new_v4().simple());
+        let issuer_did = format!("did:web:issuer.example:orgs:{organization_id}");
+        let reference = format!(
+            "didcomm/keys/{organization_id}/sender/versions/{}",
+            "a".repeat(32)
+        );
+        let public_jwk = json!({"kty":"OKP","crv":"X25519","x":URL_SAFE_NO_PAD.encode([7_u8;32])});
+        let stored = json!({"services":[], "did_operation_bindings":{(&issuer_did):{"didcomm_authcrypt":{
+            "service_id":"removed-provider", "service_config_sha256":"b".repeat(64),
+            "key_reference":reference, "sender_key_id":format!("{issuer_did}#sender"), "public_key":public_jwk["x"],
+        }}}});
+        let mut connection = registry.connection();
+        // Simulate retained private state after provider/profile loss; ordinary
+        // configuration writes cannot manufacture this server-owned binding.
+        let _: () = connection
+            .set(registry_storage_key(&organization_id), stored.to_string())
+            .await
+            .unwrap();
+        if inactive_profile {
+            let fixture: Value =
+                serde_json::from_str(include_str!("fixtures/issuer_profile_vectors.json")).unwrap();
+            let mut profile = fixture["normalize"]["expected"].clone();
+            profile["organization_id"] = json!(organization_id);
+            profile["issuer_did"] = json!(issuer_did);
+            profile["status"] = json!("revoked");
+            profiles
+                .put(&organization_id, "ip-vector", profile)
+                .await
+                .unwrap();
+        }
+        let request = json!({"organization_id":organization_id,"issuer_did":issuer_did,
+            "key_purpose":"vc_jwt_issuer","credential_format":"SD_JWT_VC","algorithm":"ES256",
+            "service_id":"removed-provider","key_reference":reference,"public_jwk":public_jwk,"enabled":false});
+        for (field, wrong) in [
+            ("service_id", json!("different-provider")),
+            (
+                "key_reference",
+                json!(format!(
+                    "didcomm/keys/{organization_id}/other/versions/{}",
+                    "a".repeat(32)
+                )),
+            ),
+        ] {
+            let mut mismatch = request.clone();
+            mismatch[field] = wrong;
+            assert_eq!(
+                publish(&app, &organization_id, mismatch).await.0,
+                StatusCode::CONFLICT
+            );
+            assert!(registry
+                .load(&organization_id)
+                .await
+                .unwrap()
+                .get("did_operation_bindings")
+                .is_some());
+        }
+        let (status, response) = publish(&app, &organization_id, request).await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert_eq!(response["enabled"], false);
+        assert!(registry
+            .load(&organization_id)
+            .await
+            .unwrap()
+            .get("did_operation_bindings")
+            .is_none());
+        let _: () = connection
+            .del(&[
+                registry_storage_key(&organization_id),
+                profile_storage_key(&organization_id),
+            ])
+            .await
+            .unwrap();
+    }
+}
+
 async fn publish(app: &Router, organization_id: &str, payload: Value) -> (StatusCode, Value) {
     let response = app
         .clone()
@@ -64,6 +161,8 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     let other_organization_id = format!("rust-didcomm-other-{}", Uuid::new_v4().simple());
     let slug = format!("didcomm-{}", Uuid::new_v4().simple());
     let issuer_did = format!("did:web:issuer.example:orgs:{slug}");
+    let signing_reference =
+        "arn:aws:kms:us-east-1:123456789012:key/12345678-1234-1234-1234-123456789012";
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
     let profiles = ProfileStore::from_connection(registry.connection());
     let documents = DocumentStore::from_connection(registry.connection());
@@ -72,6 +171,7 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     let mut profile = fixture["normalize"]["expected"].clone();
     profile["organization_id"] = json!(organization_id);
     profile["issuer_did"] = json!(issuer_did);
+    profile["signing_key_reference"] = json!(signing_reference);
     profiles
         .put(&organization_id, "ip-vector", profile.clone())
         .await
@@ -93,6 +193,8 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
         "credential_format":"SD_JWT_VC",
         "algorithm":"ES256",
         "public_jwk":public_jwk,
+        "service_id":"svc-a",
+        "key_reference":format!("didcomm/keys/{organization_id}/sender/versions/{}", "a".repeat(32)),
     });
 
     let (missing_service, missing_detail) = publish(&app, &organization_id, request.clone()).await;
@@ -114,7 +216,7 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     );
     let service = json!({
         "id": "svc-a", "name": "Test issuer service", "service_type": "aws-kms",
-        "provider": "aws", "auth_mode": "iam_role", "key_reference": "key-a",
+        "provider": "aws", "auth_mode": "iam_role", "region": "us-east-1", "key_reference": signing_reference,
         "credential_formats": ["dc+sd-jwt"], "key_purposes": ["vc_jwt_issuer"],
         "algorithms": ["ES256"]
     });
@@ -124,28 +226,29 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
         .unwrap();
 
     let (status, response) = publish(&app, &organization_id, request.clone()).await;
-    assert_eq!(status, StatusCode::OK, "{response}");
-    assert_eq!(response["issuer_did"], issuer_did);
-    let method_id = format!("{issuer_did}#didcomm-authcrypt-x25519");
-    assert_eq!(response["key_agreement_method_id"], method_id);
-    assert_eq!(response.as_object().unwrap().len(), 2);
-    let stored = documents
-        .load_did(
-            &organization_id,
-            LoadDidRequest {
-                did_id: Some(issuer_did.clone()),
-                fallback_did: None,
-            },
-        )
-        .await
-        .unwrap();
-    assert!(stored.found);
-    assert_eq!(stored.document["keyAgreement"], json!([method_id]));
-    assert_eq!(
-        stored.document["verificationMethod"][0]["publicKeyJwk"],
-        public_jwk
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{response}");
+    assert_eq!(response["code"], "capability_unavailable");
+    assert_eq!(response["capability"], "didcomm_authcrypt");
+    assert!(
+        !documents
+            .load_did(
+                &organization_id,
+                LoadDidRequest {
+                    did_id: Some(issuer_did.clone()),
+                    fallback_did: None,
+                }
+            )
+            .await
+            .unwrap()
+            .found,
+        "a caller-supplied public key alone cannot enable authcrypt"
     );
-    assert!(!stored.document.to_string().contains("\"d\""));
+    assert!(registry
+        .load(&organization_id)
+        .await
+        .unwrap()
+        .get("did_operation_bindings")
+        .is_none());
 
     let mut incompatible_service = service.clone();
     incompatible_service["algorithms"] = json!(["ES384"]);
@@ -178,7 +281,7 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
             &organization_id,
             &json!({
                 "services": [service.clone()],
-                "key_reference_purposes": {"svc-a": {"key-a": ["lti_tool_signing"]}}
+                "key_reference_purposes": {"svc-a": {(signing_reference): ["lti_tool_signing"]}}
             }),
         )
         .await
@@ -212,6 +315,10 @@ async fn public_didcomm_publication_is_tenant_scoped_and_public_only() {
     );
     let mut absent = request.clone();
     absent["organization_id"] = json!(other_organization_id);
+    absent["key_reference"] = json!(format!(
+        "didcomm/keys/{other_organization_id}/sender/versions/{}",
+        "a".repeat(32)
+    ));
     assert_eq!(
         publish(&app, &other_organization_id, absent).await.0,
         StatusCode::NOT_FOUND

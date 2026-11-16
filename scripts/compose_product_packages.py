@@ -249,7 +249,10 @@ def console_composition(package: dict, origin: str, port: int = 3002) -> dict:
             "console": {
                 "image": images["ui"],
                 "pull_policy": "missing",
-                "environment": {"MARTY_SERVER_ORIGIN": origin},
+                "environment": {
+                    "MARTY_SERVER_ORIGIN": origin,
+                    "UI_ENABLED_SECTIONS": "${UI_ENABLED_SECTIONS-public,console}",
+                },
                 "ports": [f"127.0.0.1:{port}:80"],
                 "restart": "unless-stopped",
             }

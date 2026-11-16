@@ -83,6 +83,10 @@ npm run storybook:build
 npm run test:visual
 ```
 
+Both Storybook commands prepare the service worker from the installed MSW version
+in `.storybook/public/`. Storybook serves that generated directory; the production
+site's `public/` directory does not receive a mock worker.
+
 ## Writing Tests
 
 ### Component Tests
@@ -327,7 +331,7 @@ Tests run automatically on:
 If you see "unhandled request" warnings, add handlers to `handlers.ts` or mark them as expected:
 
 ```typescript
-server.listen({ onUnhandledRequest: 'warn' })
+server.listen({ onUnhandledFrame: 'warn' })
 ```
 
 ### Material-UI Warnings

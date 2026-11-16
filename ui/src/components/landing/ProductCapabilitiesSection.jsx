@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../../application/routing/publicEntry';
 import { Box, Button, Card, CardContent, Chip, Grid, Typography } from '@mui/material';
 import FlightTakeoffIcon from '@mui/icons-material/FlightTakeoff';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
@@ -19,10 +20,10 @@ export default function ProductCapabilitiesSection({ t }) {
   return (
     <Section>
       <SectionHeading
-        subtitle={t('landingPage.products.description', 'A complete platform-from issuance to verification and governance.')}
+        subtitle={t('landingPage.products.description', 'Components of one Marty product. Availability and included scope depend on the selected release and agreement.')}
         divider
       >
-        {t('landingPage.products.title', 'Products & Capabilities')}
+        {t('landingPage.products.title', 'Marty Components')}
       </SectionHeading>
 
       <Grid container spacing={3}>
@@ -64,7 +65,7 @@ export default function ProductCapabilitiesSection({ t }) {
                   fullWidth
                   variant="text"
                   component="a"
-                  href="/product"
+                  href={publicEntryHref('/product')}
                   endIcon={<ArrowForwardIcon fontSize="small" />}
                   sx={{ '&:hover': { bgcolor: 'primary.50' } }}
                 >
@@ -81,11 +82,11 @@ export default function ProductCapabilitiesSection({ t }) {
           variant="outlined"
           size="large"
           component="a"
-          href="/product"
+          href={publicEntryHref('/product')}
           endIcon={<ArrowForwardIcon />}
           sx={{ transition: 'all 0.2s ease', '&:hover': { transform: 'translateY(-2px)' } }}
         >
-          {t('landingPage.products.viewAll', 'View All Products')}
+          {t('landingPage.products.viewAll', 'Explore Marty Components')}
         </Button>
       </Box>
     </Section>

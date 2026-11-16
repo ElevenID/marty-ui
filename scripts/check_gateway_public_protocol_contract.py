@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -513,6 +514,13 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
     changes = job("changes")
     service = job("test-rust-services")
     gate = job("ci-gate")
+    classifier_path = REPO_ROOT / "scripts/ci/affected_components.sh"
+    if not classifier_path.is_file() or classifier_path.is_symlink():
+        raise AssertionError(
+            "the full Rust workspace test owner is not registered in CI: "
+            "the extracted classifier is missing or not a regular file"
+        )
+    classifier = classifier_path.read_text(encoding="utf-8")
     strategy_match = re.search(
         r"(?ms)^    strategy:\n(.*?)(?=^    [a-z][a-z0-9-]*:\n|\Z)", service
     )
@@ -563,10 +571,24 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         '          \'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}'
     )
     required = (
-        'rust_matrix=\'["canvas","contracts","selfhost"]\'' in changes
-        and "rust_matrix='[\"contracts\"]'" in changes
-        and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
-        and "needs: changes" in service
+        # Matrix ownership moved into a checked-out helper. Verify its exact
+        # invocation and output wiring, then inspect the authoritative source
+        # rather than requiring stale copies of the old inline classifier.
+        "        id: classify\n" in changes
+        and "        run: |\n          source scripts/ci/affected_components.sh\n" in changes
+        and "      rust_matrix: ${{ steps.classify.outputs.rust_matrix }}\n" in changes
+        and "      plan: ${{ steps.classify.outputs.plan }}\n" in changes
+        and 'rust_matrix=\'["canvas","contracts","selfhost"]\'' in classifier
+        and "rust_matrix='[\"contracts\"]'" in classifier
+        and (
+            'if [[ "$website_only" == true ]]; then\n'
+            '  website=true\n'
+            'elif [[ "$EVENT_NAME" != pull_request ]]; then\n'
+            '  all=true\nelse\n'
+        ) in classifier
+        and 'if [[ "$all" == true ]]; then\n  ui=true\n  python=true\n  rust=true\n' in classifier
+        and "python3 scripts/ci/affected_components.py emit\n" in classifier
+        and re.search(r"(?m)^    needs: \[changes, release-preflight\]$", service)
         and "if: needs.changes.outputs.rust == 'true'" in service
         and matrix_body == diagnostic_matrix
         and "cargo test --locked --workspace --no-run" in service
@@ -583,11 +605,79 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]' in gate
         and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
         in gate
+        and 'if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then' in gate
+        and "          CI_PLAN: ${{ needs.changes.outputs.plan }}\n" in gate
+        and "          CI_NEEDS_JSON: ${{ toJSON(needs) }}\n" in gate
+        and "        run: python3 scripts/ci/affected_components.py gate\n" in gate
     )
     if not required:
         raise AssertionError(
             "the full Rust workspace test owner is not registered in CI"
         )
+
+
+def _rust_vector_test_source(source_path: Path) -> str:
+    """Follow an explicitly registered sibling test module without changing its owner."""
+    source = _without_rust_comments(source_path.read_text(encoding="utf-8"))
+    code = _without_rust_comments(source, mask_strings=True)
+    modules = list(re.finditer(r"(?m)^mod[ \t]+tests[ \t]*;[ \t]*$", code))
+    if not modules:
+        return source
+    if len(modules) != 1:
+        raise AssertionError("Rust vector test module has ambiguous registration")
+    module = modules[0]
+    attributes: list[str] = []
+    attribute_start = module.start()
+    # Outer attributes still apply across blank lines and comments. Collect the
+    # complete sequence, including multiline payloads, before accepting it.
+    while True:
+        end = len(code[:attribute_start].rstrip())
+        if not end or code[end - 1] != "]":
+            break
+        opening, depth = end - 1, 1
+        while opening and depth:
+            opening -= 1
+            if code[opening] == "]":
+                depth += 1
+            elif code[opening] == "[":
+                depth -= 1
+        if depth or not opening or code[opening - 1] != "#":
+            raise AssertionError("Rust vector test module has malformed outer attributes")
+        attribute_start = opening - 1
+        attributes.append(source[attribute_start:end])
+    path_attributes = [
+        match
+        for attribute in attributes
+        if (match := re.fullmatch(r'#\[path = "([A-Za-z0-9_]+\.rs)"\]', attribute))
+    ]
+    if (
+        len(attributes) != 2
+        or "#[cfg(test)]" not in attributes
+        or len(path_attributes) != 1
+    ):
+        raise AssertionError(
+            "Rust vector external test module requires only cfg(test) and a sibling path"
+        )
+    test_path = source_path.with_name(path_attributes[0].group(1))
+    if not test_path.is_file() or test_path.is_symlink() or test_path == source_path:
+        raise AssertionError("Rust vector external test module is not a sibling source")
+    test_source = _without_rust_comments(test_path.read_text(encoding="utf-8"))
+    if re.search(
+        r"#\s*!\s*\[\s*(?:r#)?cfg(?:_attr)?\b",
+        _without_rust_comments(test_source, mask_strings=True),
+    ):
+        raise AssertionError("Rust vector external test module is conditionally compiled")
+
+    # Keep the owning library module (and therefore its libtest name) unchanged.
+    # Reuse the existing annotation, ignore, helper and fixture checks on the
+    # registered module body; do not search unregistered files for matching tests.
+    return (
+        source[:attribute_start]
+        + "#[cfg(test)]\nmod tests {\n"
+        + textwrap.indent(test_source, "    ")
+        + "\n}\n"
+        + source[module.end() :]
+    )
 
 
 def _assert_rust_behavior_vector_test_owners() -> None:
@@ -652,7 +742,7 @@ def _assert_rust_behavior_vector_test_owners() -> None:
                 f"public vector test module is conditionally registered: {vector_name}"
             )
 
-        source = _without_rust_comments(source_path.read_text(encoding="utf-8"))
+        source = _rust_vector_test_source(source_path)
         code = _without_rust_comments(source, mask_strings=True)
         test_section = _test_section(source, owner.test)
         if owner.loader is None:

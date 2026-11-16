@@ -72,7 +72,7 @@ def policy(source: Path) -> list[str]:
             and value["platform"] == "linux/amd64" and value["signer_workflow"] == WORKFLOW,
             "nightly asset policy changed")
     files = value["signed_inputs"]
-    require(len(files) == 19 and len(set(files)) == len(files)
+    require(len(files) == 18 and len(set(files)) == len(files)
             and {"install.sh", "installer-inventory.json"}.issubset(files)
             and all(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]+", name) for name in files),
             "invalid nightly release inventory")
@@ -170,8 +170,14 @@ def verify_signed(assets: Path, source: Path, tag: str, run_id: str, *,
     return candidate
 
 
-def publish(assets: Path, source: Path, tag: str, run_id: str, gh: Path) -> None:
+def publish(assets: Path, source: Path, tag: str, run_id: str, gh: Path, *,
+            cloudflare_addon_assets: Path | None = None) -> None:
     candidate = verify_signed(assets, source, tag, run_id, gh=gh)
+    selected = list(sorted(assets.iterdir()))
+    if cloudflare_addon_assets is not None:
+        from publish_hosting_addon import publication_files, verify_prepared
+        verify_prepared(cloudflare_addon_assets, assets, gh)
+        selected.extend(cloudflare_addon_assets / name for name in sorted(publication_files()))
     for path in sorted(assets.iterdir()):
         if path.name in provenance_files():
             continue
@@ -208,18 +214,25 @@ def publish(assets: Path, source: Path, tag: str, run_id: str, gh: Path) -> None
         command("gh", "release", "create", tag, "--repo", REPOSITORY,
             "--verify-tag", "--prerelease", "--latest=false", "--title", tag + " installation testing",
             "--notes-file", str(assets / "SELFHOST-PREVIEW-README.md"),
-            *[str(path) for path in sorted(assets.iterdir())])
+            *[str(path) for path in selected])
     published = json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}"))
     require(published["prerelease"] is True and published["draft"] is False
+            and published.get("immutable") is True
             and published["tag_name"] == tag, "nightly release tier differs")
-    require(len(published["assets"]) == len(list(assets.iterdir()))
-            and {item["name"] for item in published["assets"]} == {p.name for p in assets.iterdir()}
-            and all(item["state"] == "uploaded" and item["size"] > 0 for item in published["assets"]),
+    # gh release create stages every selected file before publishing its draft.
+    # An existing coordinate is read-only: never append, replace or delete bytes.
+    expected = {path.name for path in selected}
+    published_names = [item["name"] for item in published["assets"]]
+    require(len(set(published_names)) == len(published_names)
+            and set(published_names) == expected
+            and all(item["state"] == "uploaded" and item["size"] > 0
+                    for item in published["assets"]),
             "published nightly asset inventory differs")
     with tempfile.TemporaryDirectory(prefix="nightly-published-") as directory:
-        command("gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", directory)
+        patterns = [argument for name in sorted(expected) for argument in ("--pattern", name)]
+        command("gh", "release", "download", tag, "--repo", REPOSITORY, "--dir", directory, *patterns)
         require(all(file_digest(Path(directory) / path.name) == file_digest(path)
-                    for path in assets.iterdir()), "published nightly asset bytes differ")
+                    for path in selected), "published nightly asset bytes differ")
     print(published["html_url"])
 
 
@@ -232,7 +245,10 @@ def main() -> None:
     parser.add_argument("--source", required=True, type=Path)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--cloudflare-addon-assets", type=Path)
     args = parser.parse_args()
+    require(args.cloudflare_addon_assets is None or args.phase == "publish",
+            "optional assets are only valid for publication")
     if args.phase != "sign":
         require(args.gh is not None and args.gh.is_absolute(), "explicit trusted GitHub verifier path required")
     if args.phase == "export-provenance":
@@ -244,7 +260,9 @@ def main() -> None:
     if args.phase == "sign":
         sign(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id)
     else:
-        publish(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id, args.gh)
+        publish(args.assets.resolve(), args.source.resolve(), args.tag, args.run_id, args.gh,
+                cloudflare_addon_assets=args.cloudflare_addon_assets.resolve(strict=True)
+                if args.cloudflare_addon_assets is not None else None)
 
 
 if __name__ == "__main__":

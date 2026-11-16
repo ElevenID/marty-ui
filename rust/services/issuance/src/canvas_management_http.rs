@@ -1060,6 +1060,9 @@ fn map_discovery_oauth_error(error: CanvasOAuthError) -> CanvasManagementHttpErr
         } => CanvasManagementHttpError::DiscoveryUnavailable {
             retry_after_seconds: Some(retry_after_seconds),
         },
+        CanvasOAuthError::SecretCapabilityUnavailable => CanvasManagementHttpError::Service(
+            CanvasPlatformManagementError::SecretCapabilityUnavailable,
+        ),
         CanvasOAuthError::RepositoryUnavailable
         | CanvasOAuthError::SecretUnavailable
         | CanvasOAuthError::InvalidConfiguration => {
@@ -1965,6 +1968,16 @@ fn service_failure(error: CanvasPlatformManagementError) -> Response {
             StatusCode::CONFLICT,
             "Canvas platform conflicts with an existing resource".to_owned(),
         ),
+        CanvasPlatformManagementError::SecretCapabilityUnavailable => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "code": "capability_unavailable",
+                    "capability": "integration_secret_encryption",
+                    "detail": "The configured KMS cannot encrypt this secret. Reduce its size or use a KMS with support for larger secrets."
+                })),
+            ).into_response();
+        }
         CanvasPlatformManagementError::RepositoryUnavailable => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Canvas platform repository is unavailable".to_owned(),
@@ -2049,6 +2062,26 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[tokio::test]
+    async fn oauth_secret_capability_refusal_remains_typed_during_discovery() {
+        let response = map_discovery_oauth_error(CanvasOAuthError::SecretCapabilityUnavailable)
+            .into_response();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(response.headers().get("retry-after").is_none());
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "capability_unavailable");
+        assert_eq!(body["capability"], "integration_secret_encryption");
+        assert_eq!(
+            map_discovery_oauth_error(CanvasOAuthError::SecretUnavailable)
+                .into_response()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 
     #[tokio::test]
     async fn shared_authentication_keeps_canvas_resource_hiding_and_tenant_policy() {

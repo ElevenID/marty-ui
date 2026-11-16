@@ -116,11 +116,12 @@ def assert_https_graph(model):
     if "issuance-native" in services:
         native = services["issuance-native"]
         env = environment(native)
-        assert env["DIDCOMM_KMS_ADDR"] == HTTPS_KMS
-        assert env["DIDCOMM_KMS_CA_CERT_FILE"] == PUBLIC_CA
-        assert env["DIDCOMM_KMS_TOKEN_FILE"] == "/bao/didcomm-issuance-token/token"
+        assert not {"DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_CA_CERT_FILE", "DIDCOMM_KMS_TOKEN_FILE"} & set(env)
+        assert env["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
+        signing = services["signing-keys"]
+        assert environment(signing)["DIDCOMM_KMS_TOKEN_FILE"] == "/bao/didcomm-issuance-token/token"
         assert mount(
-            native,
+            signing,
             "openbao_didcomm_issuance_token",
             "/bao/didcomm-issuance-token",
             True,

@@ -17,9 +17,10 @@ use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
         canvas_claim_time, plan_legacy_canvas_approval_transaction,
-        plan_projected_canvas_transaction, resolve_and_attach_canvas_issuer,
-        resolve_and_attach_required_issuer, reuse_projected_canvas_approval_transaction,
-        CanvasApplicationApprovalSnapshot, CanvasAwardApprovalSeedGenerator,
+        plan_projected_canvas_transaction, project_approval_binding,
+        resolve_and_attach_canvas_issuer, resolve_and_attach_required_issuer,
+        reuse_projected_canvas_approval_transaction, CanvasApplicationApprovalSnapshot,
+        CanvasAwardApprovalSeedGenerator,
     },
     canvas_event_status::CanvasEventReceipt,
     canvas_issuance_guard::{
@@ -735,7 +736,7 @@ fn reconciliation_plan(
     let transaction = transaction.map(|transaction| {
         json!({
             "id": transaction.id,
-            "status": credential_transaction_status(transaction.status),
+            "status": transaction.status.as_str(),
             "is_expired": now > transaction.expires_at,
         })
     });
@@ -844,18 +845,6 @@ fn stale_receipt(
     match &result {
         Ok(receipt) if receipt.reasons.is_empty() => None,
         _ => Some(result),
-    }
-}
-
-fn credential_transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
     }
 }
 
@@ -1075,7 +1064,7 @@ fn approval_snapshot(
         application: application_approval_json(&snapshot.application),
         application_template: approval_template_json(template),
         platform: platform.clone(),
-        binding: approval_binding_json(binding),
+        binding: project_approval_binding(binding),
         existing_transaction: snapshot.existing_transaction.clone(),
     }
 }
@@ -1134,49 +1123,8 @@ fn approval_template_json(template: &ApplicationTemplateRecord) -> Map<String, V
     template_policy_json(template)
 }
 
-fn approval_binding_json(binding: &Map<String, Value>) -> Map<String, Value> {
-    project(
-        binding,
-        &[
-            "id",
-            "organization_id",
-            "platform_id",
-            "application_template_id",
-            "credential_template_id",
-            "approval_policy_set_id",
-            "auto_approve_on_evidence",
-            "evidence_requirements",
-            "feature_flags",
-            "enabled",
-            "config_version",
-            "validated_config_version",
-            "readiness_checks",
-            "readiness_validated_at",
-            "credential_template_snapshot",
-            "activated_at",
-            "archived_at",
-        ],
-    )
-}
-
-fn project(source: &Map<String, Value>, fields: &[&str]) -> Map<String, Value> {
-    Map::from_iter(fields.iter().filter_map(|field| {
-        source
-            .get(*field)
-            .cloned()
-            .map(|value| ((*field).to_owned(), value))
-    }))
-}
-
 fn python_falsy(value: &Value) -> bool {
-    match value {
-        Value::Null | Value::Bool(false) => true,
-        Value::Number(value) => value.as_f64() == Some(0.0),
-        Value::String(value) => value.is_empty(),
-        Value::Array(value) => value.is_empty(),
-        Value::Object(value) => value.is_empty(),
-        Value::Bool(true) => false,
-    }
+    !crate::python_value::python_truthy(value)
 }
 
 fn value_text(value: &Value) -> String {
@@ -1225,4 +1173,35 @@ pub(crate) fn canvas_scope_matches(expected: Option<&Value>, actual: &Map<String
             .find_map(|alias| actual.get(*alias))
             .is_some_and(|value| value_text(value) == value_text(expected))
     })
+}
+
+#[cfg(test)]
+mod shared_falsiness_contract_tests {
+    use super::python_falsy;
+    use serde_json::json;
+
+    #[test]
+    fn reconciliation_falsiness_does_not_treat_large_numbers_as_missing() {
+        for value in [
+            json!(null),
+            json!(false),
+            json!(0),
+            json!(-0.0),
+            json!(""),
+            json!([]),
+            json!({}),
+        ] {
+            assert!(python_falsy(&value), "{value}");
+        }
+        for value in [
+            json!(true),
+            json!("false"),
+            json!(" "),
+            json!([null]),
+            json!({"x": null}),
+            serde_json::from_str("1e400").unwrap(),
+        ] {
+            assert!(!python_falsy(&value), "{value}");
+        }
+    }
 }

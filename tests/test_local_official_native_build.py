@@ -35,7 +35,10 @@ class OfficialNativeBuildTests(unittest.TestCase):
                      "sourceBeforeAfterMatched": True,
                      "sourceMountedReadOnly": True,
                      "targetHardlinksToSource": False}
-        self.script = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
+        # Modeled parser input for the closed profile, not a historical script.
+        self.script = "cargo build " + " ".join(
+            f"--bin {binary}" for _, binary in self.profile.roles
+        )
 
     def test_closed_profile_union_preserves_core_target_and_journal_dispatch(self):
         expected = (
@@ -74,6 +77,15 @@ class OfficialNativeBuildTests(unittest.TestCase):
         for delimiter in ("BOUNDARY", "ARTIFACTS"):
             code = recipe.split("<<'" + delimiter + "'\n", 1)[1].split("\n" + delimiter, 1)[0]
             compile(code, delimiter, "exec")
+
+    def test_current_build_outputs_cannot_enter_the_frozen_profile(self):
+        current = (Path(__file__).resolve().parents[1] / "scripts/build-rust-service-binaries.sh").read_text()
+        self.assertIn("--bin marty-installer-organization-api-key", current)
+        with self.assertRaisesRegex(ValueError, "CANONICAL_ALL_SERVICES_SET_CHANGED"):
+            build.verify_official_inputs(self.freeze, self.seed, current, self.scope)
+        with self.assertRaisesRegex(ValueError, "BUILD_TOOL_BINARY_SET_CHANGED"):
+            build.verify_official_inputs(self.freeze, self.seed, self.script,
+                                         self.scope, current)
 
     def test_localized_lock_allows_only_two_exact_unused_core_patch_source_removals(self):
         core_source = "git+https://github.com/ElevenID/marty-core?rev=4320b5fa1c6f41231ee0aa2bc57d8008549f67ac#4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
@@ -165,6 +177,7 @@ class OfficialNativeBuildTests(unittest.TestCase):
         self.assertEqual(helper.VOLUMES, build.VOLUMES)
 
     def test_verified_target_seed_survives_start_and_terminal_receipt(self):
+        cache_prefix = "targetReuse" if self.profile.name == build.LATEST_OFFICIAL_PROFILE else "targetSeed"
         # SOURCE-ONLY: typed transport/journal mocks never dispatch Docker.
         seed_module = importlib.import_module("seed_local_official_native_target")
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,7 +214,7 @@ class OfficialNativeBuildTests(unittest.TestCase):
                     "sources": {"ui": {"directory": "/owned/ui"}, "core": {"directory": "/owned/core"}},
                     "outputDirectory": str(output), "recipe": {"path": "/owned/build.sh"},
                     "buildTool": {"path": "/owned/tool.sh"}, "lockGuard": {"path": "/owned/lock_guard.py"},
-                    "targetSeedReceipt": {"path": str(root / "seed.json")}}
+                    cache_prefix + "Receipt": {"path": str(root / "seed.json")}}
             prepared = root / "prepared.json"
             prepared.write_text(json.dumps(plan), encoding="utf-8")
             dispatches = []
@@ -217,8 +230,8 @@ class OfficialNativeBuildTests(unittest.TestCase):
                 if "run" in args:
                     before = Journal().read("build-state.json")
                     self.assertEqual(before["state"], "BUILD_CREATE_INTENT")
-                    self.assertEqual(before["targetSeedProbe"]["outcome"], "READBACK_MATCHED")
-                    self.assertEqual(before["targetSeedReadback"], verified)
+                    self.assertEqual(before[cache_prefix + "Probe"]["outcome"], "READBACK_MATCHED")
+                    self.assertEqual(before[cache_prefix + "Readback"], verified)
                     dispatches.append(args)
                     return SimpleNamespace(stdout=cid)
                 if args[1] == "inspect":
@@ -238,19 +251,24 @@ class OfficialNativeBuildTests(unittest.TestCase):
                     mock.patch.object(build, "build_journal", return_value=Journal()), \
                     mock.patch.object(build, "sha", side_effect=lambda path:
                         build.REVIEWED_BUILD_HELPER_SHA256 if str(path) == helper.__file__ else original_sha(path)), \
-                    mock.patch.object(seed_module, "inspect_target", return_value=verified) as readback, \
+                    mock.patch.object(seed_module, "inspect_reuse_target" if cache_prefix == "targetReuse" else "inspect_target", return_value=verified) as readback, \
                     mock.patch.dict(os.environ, {"DOCKER_CONTEXT": "desktop-linux"}):
                 running = build.start(build.ref(prepared), helper, lambda args: b"", self.profile.name)
                 self.assertEqual(running["state"], "BUILD_RUNNING")
-                self.assertEqual(running["targetSeedReadback"], verified)
-                self.assertEqual(running["targetSeedProbe"]["outcome"], "READBACK_MATCHED")
+                self.assertEqual(running[cache_prefix + "Readback"], verified)
+                self.assertEqual(running[cache_prefix + "Probe"]["outcome"], "READBACK_MATCHED")
                 result = build.finish(build.ref(prepared), helper, lambda args: b"", self.profile.name)
             self.assertEqual(len(dispatches), 1)
-            readback.assert_called_once_with(Path(plan["targetSeedReceipt"]["path"]))
+            readback.assert_called_once_with(Path(plan[cache_prefix + "Receipt"]["path"]))
             self.assertEqual(result["state"], "BUILD_FAILED_RETAINED")
             receipt = Journal().read("build-receipt.json")
-            self.assertEqual(receipt["targetSeedReadback"], verified)
-            self.assertEqual(receipt["targetSeedProbe"], running["targetSeedProbe"])
+            self.assertEqual(receipt[cache_prefix + "Readback"], verified)
+            self.assertEqual(receipt[cache_prefix + "Probe"], running[cache_prefix + "Probe"])
+
+    def test_verified_latest_cache_reuse_survives_start_and_terminal_receipt(self):
+        self.profile = profiles.LATEST_ALL_SERVICES
+        self.scope = build.build_scope(self.profile.name)
+        self.test_verified_target_seed_survives_start_and_terminal_receipt()
 
     def test_pinned_engine_uuid_and_debug_artifact_directory(self):
         launcher.require_build_identifiers("11111111-1111-4111-8111-111111111111",

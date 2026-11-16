@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
+    body::Bytes,
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
@@ -8,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
+use marty_service_contracts::organization_defaults;
 use mmf_security::ServiceTokenAuthenticator;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -17,12 +19,13 @@ use uuid::Uuid;
 
 use crate::{
     authenticate_forwarded_http_request, authenticate_http_service, ApiKey, ApiKeyScopeType,
-    CreateApiKeyCommand, CreateOrganizationCommand, ForwardedPrincipal, HttpTrustError,
-    InviteMemberCommand, JoinByCodeCommand, JoinMechanism, JoinOrganizationCommand, Member,
-    MemberStatus, Organization, OrganizationApplication, OrganizationApplicationError,
-    OrganizationAuthorizationContext, OrganizationType, RemoveMemberCommand, RevokeApiKeyCommand,
-    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
-    UpdateOrganizationCommand, UpdateOrganizationPatch, ViewMode,
+    ApproveMemberCommand, CreateApiKeyCommand, CreateOrganizationCommand, DomainError,
+    ForwardedPrincipal, HttpTrustError, InviteMemberCommand, JoinByCodeCommand, JoinMechanism,
+    JoinOrganizationCommand, Member, MemberStatus, Organization, OrganizationApplication,
+    OrganizationApplicationError, OrganizationAuthorizationContext, OrganizationType,
+    RemoveMemberCommand, RevokeApiKeyCommand, SetMemberRolesCommand,
+    UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch, UpdateOrganizationCommand,
+    UpdateOrganizationPatch, ViewMode,
 };
 
 pub const CORE_ORGANIZATION_HTTP_ROUTES: &[&str] = &[
@@ -37,6 +40,8 @@ pub const CORE_ORGANIZATION_HTTP_ROUTES: &[&str] = &[
     "GET /v1/organizations/mine",
     "GET /v1/organizations/{org_id}",
     "PATCH /v1/organizations/{org_id}",
+    "GET /v1/organizations/{org_id}/defaults",
+    "PATCH /v1/organizations/{org_id}/defaults",
     "GET /v1/organizations/{org_id}/environment",
     "PATCH /v1/organizations/{org_id}/environment",
     "GET /v1/organizations/{org_id}/lifecycle",
@@ -51,6 +56,7 @@ pub const MEMBERSHIP_API_HTTP_ROUTES: &[&str] = &[
     "POST /v1/organizations/{org_id}/members",
     "PATCH /v1/organizations/{org_id}/members/{member_id}",
     "DELETE /v1/organizations/{org_id}/members/{member_id}",
+    "POST /v1/organizations/{org_id}/members/{member_id}/approve",
     "GET /v1/organizations/{org_id}/api-keys",
     "POST /v1/organizations/{org_id}/api-keys",
     "DELETE /v1/organizations/{org_id}/api-keys/{key_id}",
@@ -75,6 +81,10 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
         .route(
             "/v1/organizations/{organization_id}",
             get(get_organization).patch(update_organization),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/defaults",
+            get(get_organization_defaults).patch(update_organization_defaults),
         )
         .route(
             "/v1/organizations/{organization_id}/lifecycle",
@@ -117,6 +127,10 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
         .route(
             "/v1/organizations/{organization_id}/members/{member_id}",
             patch(update_member).delete(remove_member),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/members/{member_id}/approve",
+            post(approve_member),
         )
         .route(
             "/v1/organizations/{organization_id}/api-keys",
@@ -169,6 +183,13 @@ struct PaginationQuery {
     search: Option<String>,
     org_type: Option<String>,
     join_mechanism: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct MemberPaginationQuery {
+    limit: Option<u32>,
+    offset: Option<u32>,
+    status: Option<MemberStatus>,
 }
 
 #[derive(Serialize)]
@@ -245,6 +266,13 @@ struct OrganizationEnvironmentResponse {
     // The dashboard contract distinguishes an explicit unset value from an
     // incomplete response. Preserve the field even when no environment is set.
     environment: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OrganizationDefaultsResponse {
+    default_trust_profile_id: Option<String>,
+    default_policy_id: Option<String>,
+    default_template_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -572,6 +600,44 @@ async fn get_organization_environment(
     Ok(Json(environment_response(&organization)))
 }
 
+async fn get_organization_defaults(
+    State(state): State<OrganizationHttpState>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+) -> Result<Json<OrganizationDefaultsResponse>, OrganizationHttpError> {
+    authorize_membership(&state, &headers, organization_id).await?;
+    let organization = load_organization(&state, organization_id).await?;
+    Ok(Json(defaults_response(&organization)))
+}
+
+async fn update_organization_defaults(
+    State(state): State<OrganizationHttpState>,
+    headers: HeaderMap,
+    Path(organization_id): Path<Uuid>,
+    Json(input): Json<Value>,
+) -> Result<Json<OrganizationDefaultsResponse>, OrganizationHttpError> {
+    // Like other composed writes, forwarded actors require service authentication.
+    // The gateway checks each reference's read permission, owner and active status
+    // before calling this native owner; browsers cannot invoke trusted forwarding.
+    authorize_action(&state, &headers, organization_id, "organization:edit").await?;
+    let settings = parse_defaults_patch(input)?;
+    let result = state
+        .application
+        .update_organization(UpdateOrganizationCommand {
+            organization_id,
+            patch: UpdateOrganizationPatch {
+                // Merge only supplied keys while holding the existing row lock.
+                // Null clears a key; omitted defaults and private settings survive.
+                settings: Some(settings),
+                ..UpdateOrganizationPatch::default()
+            },
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(defaults_response(&result.value)))
+}
+
 async fn update_organization_environment(
     State(state): State<OrganizationHttpState>,
     headers: HeaderMap,
@@ -818,29 +884,33 @@ async fn get_team_snapshot(
         .list_members(organization_id)
         .await
         .map_err(application_error)?;
+    Ok(Json(team_snapshot_response(&members)))
+}
+
+fn team_snapshot_response(members: &[Member]) -> TeamSnapshotResponse {
     let active = members
         .iter()
         .filter(|member| member.status == MemberStatus::Active)
         .collect::<Vec<_>>();
     let pending = members
         .iter()
-        .filter(|member| matches!(member.status, MemberStatus::Invited | MemberStatus::Pending))
+        .filter(|member| member.status == MemberStatus::Invited)
         .collect::<Vec<_>>();
-    Ok(Json(TeamSnapshotResponse {
+    TeamSnapshotResponse {
         role_distribution: role_distribution(&active),
         members: active.into_iter().map(team_member_response).collect(),
         pending_invites: pending.into_iter().map(team_member_response).collect(),
-    }))
+    }
 }
 
 async fn list_members(
     State(state): State<OrganizationHttpState>,
     Path(organization_id): Path<Uuid>,
     headers: HeaderMap,
-    Query(query): Query<PaginationQuery>,
+    Query(query): Query<MemberPaginationQuery>,
 ) -> Result<Json<Vec<MemberResponse>>, OrganizationHttpError> {
     authorize_action(&state, &headers, organization_id, "team:view").await?;
-    let (offset, limit) = bounded_page(&query, 500)?;
+    let (offset, limit) = bounded_page(query.limit, query.offset, 500)?;
     let members = state
         .application
         .list_members(organization_id)
@@ -849,6 +919,7 @@ async fn list_members(
     Ok(Json(
         members
             .iter()
+            .filter(|member| query.status.is_none_or(|status| member.status == status))
             .skip(offset)
             .take(limit)
             .map(member_response)
@@ -904,6 +975,30 @@ async fn update_member(
     Ok(Json(member_response(&result.value)))
 }
 
+async fn approve_member(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<MemberResponse>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "team:manage").await?;
+    if !body.is_empty() {
+        return Err(invalid_request());
+    }
+    let result = state
+        .application
+        .approve_member(ApproveMemberCommand {
+            organization_id,
+            member_id,
+            approved_by: context.principal_id,
+            approved_by_source: context.source,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(member_response(&result.value)))
+}
+
 async fn remove_member(
     State(state): State<OrganizationHttpState>,
     Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
@@ -933,7 +1028,7 @@ async fn list_api_keys(
     Query(query): Query<PaginationQuery>,
 ) -> Result<Json<Vec<ApiKeyResponse>>, OrganizationHttpError> {
     authorize_action(&state, &headers, organization_id, "api-key:view").await?;
-    let (offset, limit) = bounded_page(&query, 500)?;
+    let (offset, limit) = bounded_page(query.limit, query.offset, 500)?;
     let api_keys = state
         .application
         .list_api_keys(organization_id)
@@ -1226,6 +1321,21 @@ fn parse_update_patch(input: Value) -> Result<UpdateOrganizationPatch, Organizat
     })
 }
 
+fn parse_defaults_patch(input: Value) -> Result<Map<String, Value>, OrganizationHttpError> {
+    let object = strict_object(input, organization_defaults::FIELDS)?;
+    if object.is_empty()
+        || object.values().any(|value| {
+            !value.is_null()
+                && !value
+                    .as_str()
+                    .is_some_and(organization_defaults::valid_reference_id)
+        })
+    {
+        return Err(invalid_request());
+    }
+    Ok(object)
+}
+
 fn strict_object(
     value: Value,
     allowed: &[&str],
@@ -1439,6 +1549,22 @@ fn environment_response(organization: &Organization) -> OrganizationEnvironmentR
     }
 }
 
+fn defaults_response(organization: &Organization) -> OrganizationDefaultsResponse {
+    let reference = |field| {
+        organization
+            .settings
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| organization_defaults::valid_reference_id(value))
+            .map(str::to_owned)
+    };
+    OrganizationDefaultsResponse {
+        default_trust_profile_id: reference("default_trust_profile_id"),
+        default_policy_id: reference("default_policy_id"),
+        default_template_id: reference("default_template_id"),
+    }
+}
+
 fn preferences_response(preference: &crate::ConsoleContextPreference) -> PreferencesResponse {
     PreferencesResponse {
         last_view_mode: preference.last_view_mode.as_str().into(),
@@ -1497,16 +1623,14 @@ fn limit(query: &PaginationQuery, maximum: u32) -> u32 {
 }
 
 fn bounded_page(
-    query: &PaginationQuery,
+    limit: Option<u32>,
+    offset: Option<u32>,
     maximum: u32,
 ) -> Result<(usize, usize), OrganizationHttpError> {
-    if query.limit.is_some_and(|limit| limit > maximum) {
+    if limit.is_some_and(|limit| limit > maximum) {
         return Err(invalid_request());
     }
-    Ok((
-        query.offset.unwrap_or(0) as usize,
-        query.limit.unwrap_or(100) as usize,
-    ))
+    Ok((offset.unwrap_or(0) as usize, limit.unwrap_or(100) as usize))
 }
 
 fn default_organization_type() -> String {
@@ -1534,6 +1658,12 @@ fn trust_error(error: HttpTrustError) -> OrganizationHttpError {
 
 pub(crate) fn application_error(error: OrganizationApplicationError) -> OrganizationHttpError {
     match error {
+        OrganizationApplicationError::Domain(DomainError::MembershipNotPending) => {
+            OrganizationHttpError {
+                status: StatusCode::CONFLICT,
+                detail: "ORGANIZATION.MEMBERSHIP_NOT_PENDING",
+            }
+        }
         OrganizationApplicationError::NotFound(_)
         | OrganizationApplicationError::MemberNotFound(_)
         | OrganizationApplicationError::RoleNotFound(_)
@@ -1587,6 +1717,31 @@ pub(crate) const fn not_found(detail: &'static str) -> OrganizationHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn team_snapshot_separates_invited_members_from_pending_requests_and_deactivated_members() {
+        let organization_id = Uuid::new_v4();
+        let now = Utc::now();
+        let active = Member::create(organization_id, "active", None, MemberStatus::Active, now);
+        let pending = Member::create(organization_id, "pending", None, MemberStatus::Pending, now);
+        let deactivated = Member::create(
+            organization_id,
+            "deactivated",
+            None,
+            MemberStatus::Deactivated,
+            now,
+        );
+        let invited =
+            Member::create_invitation(organization_id, "invitee@example.test", "reviewer", now);
+        let active_id = active.id.to_string();
+        let invited_id = invited.id.to_string();
+        let snapshot = team_snapshot_response(&[active, pending, deactivated, invited]);
+        assert_eq!(snapshot.members.len(), 1);
+        assert_eq!(snapshot.members[0].id, active_id);
+        assert_eq!(snapshot.pending_invites.len(), 1);
+        assert_eq!(snapshot.pending_invites[0].id, invited_id);
+        assert_eq!(snapshot.pending_invites[0].status, "invited");
+    }
 
     #[test]
     fn organization_readback_omits_absent_optional_membership_metadata() {
@@ -1670,6 +1825,69 @@ mod tests {
                 serde_json::to_value(environment_response(&organization)).unwrap(),
                 json!({"organization_id": organization.id.to_string(), "environment": expected})
             );
+        }
+    }
+
+    #[test]
+    fn defaults_updates_preserve_omitted_values_and_private_settings() {
+        let now = Utc::now();
+        let mut organization = crate::startup::default_marty_organization(Uuid::new_v4(), now);
+        organization
+            .settings
+            .insert("environment".into(), json!("staging"));
+        organization
+            .settings
+            .insert("pilot_retention_days".into(), json!(30));
+        assert_eq!(
+            serde_json::to_value(defaults_response(&organization)).unwrap(),
+            json!({
+                "default_trust_profile_id": null,
+                "default_policy_id": null,
+                "default_template_id": null
+            })
+        );
+        for patch in [
+            json!({"default_trust_profile_id":"trust-1", "default_policy_id":"policy-1"}),
+            json!({"default_template_id":"template-1"}),
+            json!({"default_policy_id":null}),
+        ] {
+            organization = crate::application::plan_organization_update(
+                &organization,
+                UpdateOrganizationPatch {
+                    settings: Some(parse_defaults_patch(patch).unwrap()),
+                    ..UpdateOrganizationPatch::default()
+                },
+                now,
+            )
+            .unwrap()
+            .0;
+        }
+        assert_eq!(organization.settings["environment"], "staging");
+        assert_eq!(organization.settings["pilot_retention_days"], 30);
+        assert_eq!(
+            serde_json::to_value(defaults_response(&organization)).unwrap(),
+            json!({
+                "default_trust_profile_id": "trust-1",
+                "default_policy_id": null,
+                "default_template_id": "template-1"
+            })
+        );
+    }
+
+    #[test]
+    fn defaults_patch_cannot_change_private_settings_or_store_invalid_references() {
+        for invalid in [
+            json!({}),
+            json!([]),
+            json!({"settings":{"default_policy_id":null}}),
+            json!({"default_policy_id":null,"pilot_retention_days":1}),
+            json!({"default_policy_id":42}),
+            json!({"default_policy_id":""}),
+            json!({"default_policy_id":"."}),
+            json!({"default_policy_id":".."}),
+            json!({"default_policy_id":"../another-org"}),
+        ] {
+            assert!(parse_defaults_patch(invalid).is_err());
         }
     }
 

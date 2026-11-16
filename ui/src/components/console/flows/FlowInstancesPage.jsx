@@ -1,6 +1,7 @@
 import { loadScopedCatalog } from '../../../services/loadScopedCatalog';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useMatch, useParams } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import {
   Alert,
   Box,
@@ -36,6 +37,7 @@ import AccountTreeIcon from '@mui/icons-material/AccountTree';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 import BadgeIcon from '@mui/icons-material/Badge';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
@@ -46,6 +48,7 @@ import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common'
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { getOperateTabs } from '../../../config/operateTabs';
 import { advanceFlowInstance, cancelFlowExecution, getFlowInstance, listFlowInstances, listFlows } from '../../../services/flowsApi';
 
 function requireInstanceScope(instance, organizationId, instanceId) {
@@ -108,13 +111,6 @@ function ExecutionActions({ instance, organizationId, loading, reload }) {
   </Box>;
 }
 
-const OPERATE_TABS = [
-  { label: 'Flow Instances', path: '/console/org/operate/flow-instances' },
-  { label: 'Applications', path: '/console/org/operate/applications' },
-  { label: 'Issued Credentials', path: '/console/org/operate/issuance' },
-  { label: 'Verification Sessions', path: '/console/org/operate/verify' },
-];
-
 function readContext(instance) {
   return instance?.context_data && typeof instance.context_data === 'object' ? instance.context_data : {};
 }
@@ -146,21 +142,43 @@ function normalizeInstance(instance, flow) {
 }
 
 function formatDate(value) {
-  if (!value) return 'Not completed';
+  if (value === null || value === undefined || value === '') return 'Not completed';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? 'Unavailable' : date.toLocaleString();
 }
 
-function displayStatus(status) {
-  if (status === 'pending') return 'running';
-  return status;
+function textValue(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function historyEvent(value, index) {
+  const entry = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  // Native history owns these fields. Older aliases are used only when the
+  // corresponding canonical field is absent, including a nullable prior state.
+  const state = Object.hasOwn(entry, 'new_state')
+    ? textValue(entry.new_state)
+    : textValue(entry.to_status) || textValue(entry.status) || textValue(entry.state);
+  const prior = Object.hasOwn(entry, 'prior_state') ? textValue(entry.prior_state) : textValue(entry.from_status);
+  const timestamp = Number.isInteger(entry.timestamp_ms) && entry.timestamp_ms >= 0
+    ? entry.timestamp_ms
+    : textValue(entry.timestamp) || textValue(entry.changed_at) || textValue(entry.created_at);
+  const status = state?.toLowerCase();
+  return {
+    id: `${timestamp ?? index}-${index}`,
+    label: state || 'State not reported',
+    detail: [prior ? `From ${prior.replaceAll('_', ' ')}` : null,
+      textValue(entry.event)?.replaceAll('_', ' '), textValue(entry.reason)].filter(Boolean).join(' | '),
+    timestamp,
+    failed: status === 'failed',
+    completed: status === 'completed',
+  };
 }
 
 function RelatedRecord({ icon: Icon, label, value, path }) {
   if (!value) return null;
   return (
     <Box sx={{ minWidth: 0 }}>
-      <Stack direction="row" spacing={1} alignItems="center">
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
         <Icon color="action" fontSize="small" />
         <Typography variant="caption" color="text.secondary">{label}</Typography>
       </Stack>
@@ -175,21 +193,17 @@ function RelatedRecord({ icon: Icon, label, value, path }) {
 
 function InstanceTimeline({ instance }) {
   const history = Array.isArray(instance.state_history) ? instance.state_history : [];
-  const stepResults = instance.step_results && typeof instance.step_results === 'object' ? instance.step_results : {};
+  const stepResults = instance.step_results && typeof instance.step_results === 'object' && !Array.isArray(instance.step_results)
+    ? instance.step_results : {};
   const events = history.length > 0
-    ? history.map((event, index) => ({
-      id: `${event.timestamp || event.changed_at || index}-${index}`,
-      label: event.to_status || event.status || event.state || 'State updated',
-      detail: event.reason || event.from_status || null,
-      timestamp: event.timestamp || event.changed_at || event.created_at || null,
-      failed: String(event.to_status || event.status || '').toLowerCase().includes('fail'),
-    }))
+    ? history.map(historyEvent)
     : Object.entries(stepResults).map(([step, result], index) => ({
       id: `${step}-${index}`,
       label: step,
-      detail: result?.status || result?.result || 'completed',
-      timestamp: result?.completed_at || result?.timestamp || null,
-      failed: String(result?.status || result?.result || '').toLowerCase().includes('fail'),
+      detail: textValue(result?.status) || textValue(result?.result) || 'Outcome not reported',
+      timestamp: textValue(result?.completed_at) || textValue(result?.timestamp),
+      failed: ['failed', 'failure'].includes((textValue(result?.status) || textValue(result?.result))?.toLowerCase()),
+      completed: ['completed', 'success'].includes((textValue(result?.status) || textValue(result?.result))?.toLowerCase()),
     }));
 
   if (events.length === 0) {
@@ -197,7 +211,7 @@ function InstanceTimeline({ instance }) {
   }
 
   return (
-    <List disablePadding>
+    <List disablePadding aria-label="Runtime timeline">
       {events.map((event, index) => (
         <ListItem
           key={event.id}
@@ -206,13 +220,14 @@ function InstanceTimeline({ instance }) {
           sx={index < events.length - 1 ? { borderBottom: 1, borderColor: 'divider' } : undefined}
         >
           <ListItemIcon sx={{ minWidth: 36, mt: 0.25 }}>
-            {event.failed ? <WarningIcon color="error" fontSize="small" /> : <CheckCircleIcon color="success" fontSize="small" />}
+            {event.failed ? <WarningIcon color="error" fontSize="small" /> : event.completed
+              ? <CheckCircleIcon color="success" fontSize="small" /> : <InfoOutlinedIcon color="action" fontSize="small" />}
           </ListItemIcon>
           <ListItemText
             primary={String(event.label).replaceAll('_', ' ')}
-            secondary={[event.detail, event.timestamp ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
+            secondary={[event.detail, event.timestamp !== null ? formatDate(event.timestamp) : null].filter(Boolean).join(' | ')}
             slotProps={{
-              primary: { variant: 'body2', fontWeight: 600, textTransform: 'capitalize' },
+              primary: { variant: 'body2', sx: { fontWeight: 600, textTransform: 'capitalize' } },
               secondary: { variant: 'caption' }
             }} />
         </ListItem>
@@ -221,14 +236,14 @@ function InstanceTimeline({ instance }) {
   );
 }
 
-function InstanceDetail({ instance, organizationId, loading, error, reload }) {
+function InstanceDetail({ instance, organizationId, loading, error, reload, tabs }) {
   const jobId = instance?.physicalJob?.id || instance?.physicalJob?.job_id || null;
   const jobStatus = instance?.physicalJob?.status || null;
   return (
     <ResourcePage
       title={instance ? `Flow Instance ${instance.id}` : 'Flow Instance'}
       description="Runtime state, protocol progress, and related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },
@@ -243,13 +258,13 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
         <Stack spacing={3}>
           <ExecutionActions instance={instance} organizationId={organizationId} loading={loading} reload={reload} />
           <Paper variant="outlined" sx={{ p: 3 }}>
-            <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" gap={2}>
+            <Stack direction={{ xs: 'column', md: 'row' }} sx={{ justifyContent: "space-between", gap: 2 }}>
               <Box>
                 <Typography variant="overline" color="text.secondary">Current step</Typography>
                 <Typography variant="h6">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting to start'}</Typography>
                 <Typography variant="body2" color="text.secondary">{instance.flowType.replaceAll('_', ' ')}</Typography>
               </Box>
-              <StatusChip status={displayStatus(instance.status)} />
+              <StatusChip status={instance.status} />
             </Stack>
             <Divider sx={{ my: 2 }} />
             <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(4, minmax(0, 1fr))' }, gap: 2 }}>
@@ -283,6 +298,8 @@ function InstanceDetail({ instance, organizationId, loading, error, reload }) {
 }
 
 function ScopedFlowInstancesPage({ instanceId, organizationId }) {
+  const { t } = useTranslation('console');
+  const tabs = getOperateTabs(t);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
@@ -316,13 +333,13 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
     });
   }, [instances, searchQuery, statusFilter]);
 
-  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} />;
+  if (instanceId) return <InstanceDetail instance={selectedInstance} organizationId={organizationId} loading={loading} error={error} reload={reload} tabs={tabs} />;
 
   return (
     <ResourcePage
       title="Flow Instances"
       description="The operational record of every MIP flow execution and its related product records."
-      tabs={OPERATE_TABS}
+      tabs={tabs}
       breadcrumbs={[
         { label: 'Console', path: '/console' },
         { label: 'Operate', path: '/console/org/operate' },
@@ -343,13 +360,18 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
           }}
         />
         <FormControl size="small" sx={{ minWidth: 170 }}>
-          <InputLabel>Status</InputLabel>
-          <Select value={statusFilter} label="Status" onChange={(event) => setStatusFilter(event.target.value)}>
+          <InputLabel id="flow-instance-status-label">Status</InputLabel>
+          <Select labelId="flow-instance-status-label" value={statusFilter} label="Status" onChange={(event) => setStatusFilter(event.target.value)}>
             <MenuItem value="all">All statuses</MenuItem>
-            <MenuItem value="pending">Running</MenuItem>
+            <MenuItem value="pending">Pending</MenuItem>
+            <MenuItem value="in_progress">In progress</MenuItem>
+            <MenuItem value="awaiting_wallet">Awaiting wallet</MenuItem>
             <MenuItem value="awaiting_approval">Awaiting approval</MenuItem>
+            <MenuItem value="awaiting_evidence">Awaiting evidence</MenuItem>
             <MenuItem value="completed">Completed</MenuItem>
             <MenuItem value="failed">Failed</MenuItem>
+            <MenuItem value="cancelled">Cancelled</MenuItem>
+            <MenuItem value="expired">Expired</MenuItem>
           </Select>
         </FormControl>
       </Box>
@@ -365,11 +387,11 @@ function ScopedFlowInstancesPage({ instanceId, organizationId }) {
               ) : filteredInstances.map((instance) => (
                 <TableRow key={instance.id} hover>
                   <TableCell><Typography variant="body2" sx={{ fontFamily: 'monospace' }}>{instance.id}</Typography></TableCell>
-                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" display="block" color="text.secondary">{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
+                  <TableCell><MuiLink component={Link} to={instance.flowId ? `/console/org/flows/definitions/${instance.flowId}` : '#'}>{instance.flowName}</MuiLink><Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>{instance.flowType.replaceAll('_', ' ')}</Typography></TableCell>
                   <TableCell><Typography variant="body2">{instance.currentStep?.replaceAll('_', ' ') || 'Waiting'}</Typography>{instance.currentStepNumber && instance.totalSteps && <Typography variant="caption" color="text.secondary">Step {instance.currentStepNumber} of {instance.totalSteps}</Typography>}</TableCell>
                   <TableCell>{instance.applicationId ? <Chip size="small" label="Application" /> : instance.credentialId ? <Chip size="small" label="Credential" /> : instance.physicalJob ? <Chip size="small" label={`Physical: ${instance.physicalJob.status || 'pending'}`} /> : <Typography variant="caption" color="text.secondary">None</Typography>}</TableCell>
                   <TableCell>{formatDate(instance.startedAt)}</TableCell>
-                  <TableCell><StatusChip status={displayStatus(instance.status)} /></TableCell>
+                  <TableCell><StatusChip status={instance.status} /></TableCell>
                   <TableCell align="right"><Tooltip title="View runtime details"><IconButton component={Link} to={`/console/org/operate/flow-instances/${instance.id}`} size="small" aria-label={`View flow instance ${instance.id}`}><VisibilityIcon fontSize="small" /></IconButton></Tooltip></TableCell>
                 </TableRow>
               ))}

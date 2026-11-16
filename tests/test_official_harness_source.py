@@ -86,6 +86,16 @@ def test_claim_runs_the_guard_and_evidence_verifier_uses_the_same_pin() -> None:
                                      if step.get("name") == "Create the durable digest-first release claim")
 
 
+def test_official_candidate_waits_for_current_attempt_operator_catalog() -> None:
+    jobs = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())["jobs"]
+    caller = jobs["official-interoperability"]
+    assert "build-operator-catalog" in caller["needs"]
+    assert caller["permissions"]["actions"] == "read"
+    assert "operator-catalog-${{ matrix.arch }}-${{ github.run_id }}" in (
+        ROOT / ".github/workflows/cd.yml"
+    ).read_text()
+
+
 def test_github_failure_is_bounded_and_does_not_echo_credentials(tmp_path: Path) -> None:
     workflow = tmp_path / "cd.yml"
     workflow.write_text(CALLER)

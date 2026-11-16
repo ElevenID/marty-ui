@@ -3,6 +3,10 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
+vi.mock('../../extensions/commerce/public', () => ({
+  renderCommercePublicRoutes: vi.fn(() => null),
+}));
+
 vi.mock('../../components/pages/LegalPages', () => ({
   PrivacyPolicyPage: () => <div>Privacy policy content</div>,
   TermsOfServicePage: () => <div>Terms of service content</div>,
@@ -24,6 +28,7 @@ vi.mock('../../components/pages/DemoPages', () => ({
 }));
 
 import { renderMarketingRoutes } from '../publicSite.public';
+import { renderCommercePublicRoutes } from '../../extensions/commerce/public';
 
 function renderMarketingRoute(path: string, showDemos = true) {
   render(
@@ -37,6 +42,17 @@ function renderMarketingRoute(path: string, showDemos = true) {
     </MemoryRouter>,
   );
 }
+
+it('binds private commerce routes to the public checkout and console destinations', () => {
+  const login = vi.fn();
+  renderMarketingRoutes({ login });
+  expect(renderCommercePublicRoutes).toHaveBeenLastCalledWith(expect.objectContaining({
+    login,
+    checkoutBasePath: '/pricing/checkout',
+    setupPath: '/console/org/setup',
+    billingPath: '/console/org/billing',
+  }));
+});
 
 describe('publicSite.public legal routes', () => {
   it.each([
@@ -74,7 +90,7 @@ describe('publicSite.public demo routes', () => {
     expect(await screen.findByText(expectedText)).toBeInTheDocument();
   });
 
-  it('omits demo routes from the tester profile without changing the full profile', async () => {
+  it('omits demo routes when explicitly excluded from the public site', async () => {
     renderMarketingRoute('/demos/2026.07.0', false);
     expect(await screen.findByText('Not available')).toBeInTheDocument();
   });

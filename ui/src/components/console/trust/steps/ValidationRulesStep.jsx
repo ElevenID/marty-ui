@@ -165,7 +165,7 @@ const ValidationRulesStep = ({ data, onChange }) => {
           variant="outlined"
         />
       </Box>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.trustProfile.validationRulesStep.description')}
       </Typography>
 

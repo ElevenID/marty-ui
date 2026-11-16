@@ -15,9 +15,11 @@ Compose inputs to their committed Git blobs (using Git's configured checkout
 filters). It then verifies transaction identity, version, recorded digests,
 and service closure. The caller must render the model from that same checkout.
 
-The two additional Marty roles are supplied in `--selfhost-images` as a JSON
-object with exactly `ui-selfhost` and `cloudflared-wrapper` keys, each an
-`ghcr.io/elevenid/marty-ui-oss/<role>@sha256:<digest>` reference.
+The additional core Marty role is supplied in `--selfhost-images` as a JSON
+object with exactly the `ui-selfhost` key and its
+`ghcr.io/elevenid/marty-ui-oss/ui-selfhost@sha256:<digest>` reference.
+Cloudflare has a separate optional signed add-on and is rejected as an extra
+core image role.
 `--external-services` maps every independently published service—issuance and
 the PostgreSQL, Redis, Keycloak, and Nginx infrastructure—to an exact OCI
 digest. The two issuance services must map to the same image. Missing, extra,
@@ -57,8 +59,8 @@ bundle, and sign/attest the eventual lock and archive before publication.
 
 Every `Stack release` dispatch runs the mandatory official-release
 **preparation lane** after the existing stack qualification gates; there is no
-`prepare_selfhost_lock` bypass. It builds only the distinct self-host UI and pinned cloudflared wrapper
-as digest-only, provenance-attested, signed images. It renders all Compose
+`prepare_selfhost_lock` bypass. It builds the distinct self-host UI
+as a digest-only, provenance-attested, signed image. It renders all Compose
 profiles from the exact claimed checkout, takes the issuance digest from the
 source stack lock, requires `selfhost_external_images_json` to name every
 independent service by exact digest, verifies Marty's image attestations and

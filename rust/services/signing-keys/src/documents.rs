@@ -544,7 +544,7 @@ impl DocumentStore {
         service_id: &str,
         request: PublishDidRequest,
     ) -> Result<PublishDidResponse, DocumentError> {
-        let prepared = prepare_did_publication(service_id, request)?;
+        let prepared = prepare_did_publication(organization_id, service_id, request)?;
         let key = did_storage_key(organization_id, Some(&prepared.did_id));
         let existing = self.load_optional(&key).await?;
         let response = build_prepared_did_document(existing, prepared)?;
@@ -570,7 +570,7 @@ impl DocumentStore {
                 "Signing registry lease belongs to a different tenant.".into(),
             ));
         }
-        let prepared = prepare_did_publication(service_id, request)?;
+        let prepared = prepare_did_publication(organization_id, service_id, request)?;
         let key = did_storage_key(organization_id, Some(&prepared.did_id));
         let default_key = did_storage_key(organization_id, None);
         let slug_key = prepared
@@ -1288,6 +1288,7 @@ fn certificate_chain(
 }
 
 fn prepare_did_publication(
+    organization_id: &str,
     service_id: &str,
     request: PublishDidRequest,
 ) -> Result<PreparedDidPublication, DocumentError> {
@@ -1354,11 +1355,26 @@ fn prepare_did_publication(
         }
         validate_x25519_public_jwk(&request.jwk)?;
     }
-    let jwk = sanitize_public_jwk(&request.jwk, request.key_reference.as_deref())?;
+    // A DID verification method identifies public key material independently
+    // of its provider. Never turn an ARN, Transit name, or provider JWK `kid`
+    // into public metadata, even when an operator chose an explicit fragment.
+    let mut jwk = public_jwk_projection(&request.jwk)?;
+    for field in ["kid", "service_id", "name", "status"] {
+        jwk.as_object_mut()
+            .expect("public JWK projection is an object")
+            .remove(field);
+    }
     let fragment = request
         .fragment
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| did_fragment(service_id, request.key_reference.as_deref()));
+        .unwrap_or_else(|| {
+            issuer_did_fragment(
+                organization_id,
+                &did_id,
+                service_id,
+                request.key_reference.as_deref(),
+            )
+        });
     if !slug_pattern().is_match(&fragment) {
         return Err(DocumentError::Invalid(
             "fragment must contain only letters, numbers, '.', '_' or '-'.".to_string(),
@@ -1467,10 +1483,11 @@ fn upsert_did_document(
 
 pub fn build_did_document(
     existing: Option<Value>,
+    organization_id: &str,
     service_id: &str,
     request: PublishDidRequest,
 ) -> Result<PublishDidResponse, DocumentError> {
-    let prepared = prepare_did_publication(service_id, request)?;
+    let prepared = prepare_did_publication(organization_id, service_id, request)?;
     build_prepared_did_document(existing, prepared)
 }
 
@@ -1553,6 +1570,43 @@ pub fn did_web_org_slug(did_id: &str, public_domain: Option<&str>) -> Option<Str
     slug_pattern().is_match(&slug).then_some(slug)
 }
 
+pub(crate) fn issuer_did_fragment(
+    organization_id: &str,
+    issuer_did: &str,
+    service_id: &str,
+    key_reference: Option<&str>,
+) -> String {
+    let managed = service_id == "managed-openbao-transit";
+    // Retain the already published managed identity derivation. New bindings to
+    // other providers use an unambiguous tuple and never embed custody details
+    // into a public verification-method ID. Existing profiles keep their stored
+    // verification_method_id and legacy document resolution remains unchanged.
+    let binding = if managed {
+        format!(
+            "{organization_id}|{issuer_did}|{service_id}|{}",
+            key_reference.unwrap_or_default()
+        )
+        .into_bytes()
+    } else {
+        serde_json::to_vec(&[
+            organization_id,
+            issuer_did,
+            service_id,
+            key_reference.unwrap_or_default(),
+        ])
+        .expect("a tuple of string references is serializable")
+    };
+    let token = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, &binding)
+        .simple()
+        .to_string();
+    if managed {
+        format!("managed-{}", &token[..20])
+    } else {
+        format!("vm-{token}")
+    }
+}
+
+// Retained for already published legacy verification-method IDs.
 pub fn did_fragment(service_id: &str, key_reference: Option<&str>) -> String {
     let source = key_reference
         .map(str::to_string)
@@ -1895,10 +1949,164 @@ mod tests {
     }
 
     #[test]
+    fn new_issuer_fragments_are_opaque_and_scoped_for_every_provider() {
+        let first = issuer_did_fragment(
+            "org-a",
+            "did:web:issuer.example:orgs:a",
+            "managed-openbao-transit",
+            Some("cred-issuer-internal-key"),
+        );
+        assert_eq!(first, "managed-272b892d1ee15c88aa83");
+        assert_eq!(
+            first,
+            issuer_did_fragment(
+                "org-a",
+                "did:web:issuer.example:orgs:a",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        assert!(!first.contains("internal-key"));
+        assert_ne!(
+            first,
+            issuer_did_fragment(
+                "org-b",
+                "did:web:issuer.example:orgs:a",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        assert_ne!(
+            first,
+            issuer_did_fragment(
+                "org-a",
+                "did:web:issuer.example:orgs:b",
+                "managed-openbao-transit",
+                Some("cred-issuer-internal-key"),
+            )
+        );
+        let issuer_did = "did:web:issuer.example:orgs:a";
+        let aws_reference =
+            "arn:aws:kms:us-east-2:111122223333:key/11111111-2222-3333-4444-555555555555";
+        let cloud = issuer_did_fragment("org-a", issuer_did, "aws-primary", Some(aws_reference));
+        assert!(cloud.starts_with("vm-"));
+        assert_eq!(
+            cloud,
+            issuer_did_fragment("org-a", issuer_did, "aws-primary", Some(aws_reference))
+        );
+        for private_coordinate in ["aws", "us-east-2", "111122223333", "11111111-2222"] {
+            assert!(!cloud.contains(private_coordinate));
+        }
+        for (organization, did, service, reference) in [
+            ("org-b", issuer_did, "aws-primary", aws_reference),
+            (
+                "org-a",
+                "did:web:issuer.example:orgs:b",
+                "aws-primary",
+                aws_reference,
+            ),
+            ("org-a", issuer_did, "aws-secondary", aws_reference),
+            ("org-a", issuer_did, "aws-primary", "other-key"),
+        ] {
+            assert_ne!(
+                cloud,
+                issuer_did_fragment(organization, did, service, Some(reference))
+            );
+        }
+        assert_ne!(
+            issuer_did_fragment("org-a", issuer_did, "provider|reference", Some("key")),
+            issuer_did_fragment("org-a", issuer_did, "provider", Some("reference|key")),
+            "tuple boundaries must not alias different custody bindings"
+        );
+    }
+
+    #[test]
+    fn automatic_did_publication_hides_custody_and_retains_published_ids() {
+        let did = "did:web:issuer.example:orgs:acme";
+        let provider_key =
+            "arn:aws:kms:us-east-2:111122223333:key/11111111-2222-3333-4444-555555555555";
+        let request = PublishDidRequest {
+            jwk: json!({
+                "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+                "alg": "ES256", "use": "sig",
+                "kid": provider_key, "service_id": "aws-primary",
+                "name": "private-key-name", "status": "active",
+                "provider_config": {"key_reference": provider_key},
+            }),
+            public_domain: "issuer.example".into(),
+            did_id: Some(did.into()),
+            org_slug: Some("acme".into()),
+            fragment: None,
+            key_reference: Some(provider_key.into()),
+            cert_pem: None,
+            cert_chain_pem: None,
+            relationship: DidVerificationRelationship::AssertionMethod,
+        };
+        let published = build_did_document(None, "org-a", "aws-primary", request.clone()).unwrap();
+        assert_eq!(
+            published.verification_method["id"],
+            format!(
+                "{did}#{}",
+                issuer_did_fragment("org-a", did, "aws-primary", Some(provider_key))
+            )
+        );
+        assert_eq!(
+            published.verification_method["publicKeyJwk"],
+            json!({
+                "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
+                "alg": "ES256", "use": "sig",
+            })
+        );
+        let public_document = published.document.to_string();
+        for private_coordinate in [
+            "arn:",
+            "us-east-2",
+            "111122223333",
+            "aws-primary",
+            "private-key-name",
+            "provider_config",
+        ] {
+            assert!(!public_document.contains(private_coordinate));
+        }
+        let repeated = build_did_document(
+            Some(published.document),
+            "org-a",
+            "aws-primary",
+            request.clone(),
+        )
+        .unwrap();
+        assert_eq!(repeated.verification_method_count, 1);
+        assert_eq!(repeated.verification_method, published.verification_method);
+
+        // Explicit identifiers are kept verbatim, including already published
+        // legacy fragments that clients continue to resolve.
+        let mut explicit = request.clone();
+        explicit.fragment = Some("issuer-key".into());
+        let legacy =
+            build_did_document(Some(repeated.document), "org-a", "aws-primary", explicit).unwrap();
+        assert_eq!(
+            legacy.verification_method["id"],
+            format!("{did}#issuer-key")
+        );
+        let repeated =
+            build_did_document(Some(legacy.document), "org-a", "aws-primary", request).unwrap();
+        assert_eq!(repeated.verification_method_count, 2);
+        assert!(repeated.document["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .contains(&legacy.verification_method));
+        assert!(repeated.document["assertionMethod"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(format!("{did}#issuer-key"))));
+    }
+
+    #[test]
     fn assertion_publication_uses_interoperable_jwk_method_type() {
         let did = "did:web:issuer.example:orgs:acme";
         let result = build_did_document(
             None,
+            "org-a",
             "oid4vp-request-signing",
             PublishDidRequest {
                 jwk: json!({
@@ -1931,6 +2139,7 @@ mod tests {
         let did = "did:web:issuer.example:orgs:acme";
         let result = build_did_document(
             None,
+            "org-a",
             "didcomm-authcrypt",
             PublishDidRequest {
                 jwk: json!({
@@ -1973,13 +2182,17 @@ mod tests {
             relationship: DidVerificationRelationship::KeyAgreement,
         };
         let public = json!({"id": did, "verificationMethod": [{"publicKeyJwk": public_jwk} ]});
-        assert!(
-            build_did_document(Some(public.clone()), "didcomm-authcrypt", request.clone()).is_ok()
-        );
+        assert!(build_did_document(
+            Some(public.clone()),
+            "org-a",
+            "didcomm-authcrypt",
+            request.clone()
+        )
+        .is_ok());
         let mut private = public;
         private["verificationMethod"][0]["publicKeyJwk"]["d"] = json!("secret");
         assert!(matches!(
-            build_did_document(Some(private), "didcomm-authcrypt", request),
+            build_did_document(Some(private), "org-a", "didcomm-authcrypt", request),
             Err(DocumentError::Corrupt(_))
         ));
     }
@@ -1997,6 +2210,7 @@ mod tests {
         ] {
             assert!(build_did_document(
                 None,
+                "org-a",
                 "didcomm-authcrypt",
                 PublishDidRequest {
                     jwk,

@@ -6,6 +6,7 @@ use marty_signing_keys::{
     flow_envelope::OpenBaoEnvelopeProvider,
     integration_secret_envelope::{
         self, DecryptRequest, EncryptRequest, IntegrationSecretEnvelopeError,
+        IntegrationSecretProvider,
     },
 };
 use serde_json::Value;
@@ -17,7 +18,9 @@ const KEY_ID: &str = "integration-secret-envelope-marty-aes256";
 async fn integration_secret_envelope_survives_rotation_and_rejects_wrong_binding() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
-    let provider = OpenBaoEnvelopeProvider::new(&endpoint, &token).expect("KMS client");
+    let provider = IntegrationSecretProvider::OpenBao(
+        OpenBaoEnvelopeProvider::new(&endpoint, &token).expect("KMS client"),
+    );
     let secret_id = format!("secret-{}", uuid::Uuid::new_v4());
     let envelope = integration_secret_envelope::encrypt(
         &provider,

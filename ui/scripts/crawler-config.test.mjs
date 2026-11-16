@@ -14,7 +14,7 @@ function validateCrawlerStructure(source) {
   )
 
   const publicGuard = [
-    '...(!isDev && !isSelfhostBuild ? [',
+    '...(!isDev && !isSelfhostBuild && !isApplicationBuild ? [',
     '        Sitemap({',
   ].join('\n')
   assert.ok(
@@ -106,7 +106,7 @@ for (const [label, mutate] of [
   [
     'coupling crawler generation back to prerendering',
     (source) => source.replace(
-      '...(!isDev && !isSelfhostBuild ? [\n        Sitemap({',
+      '...(!isDev && !isSelfhostBuild && !isApplicationBuild ? [\n        Sitemap({',
       '...(!disablePrerender ? [\n        Sitemap({',
     ),
   ],

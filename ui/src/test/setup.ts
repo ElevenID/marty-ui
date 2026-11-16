@@ -26,7 +26,7 @@ vi.stubGlobal('import.meta', {
 // Start MSW server before all tests
 beforeAll(() => {
   server.listen({
-    onUnhandledRequest: 'warn',
+    onUnhandledFrame: 'warn',
   })
 })
 

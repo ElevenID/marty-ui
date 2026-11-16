@@ -10,13 +10,14 @@ use sqlx::{postgres::PgRow, Executor, PgPool, Postgres, Row, Transaction};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::oid4vci_authorization::Oid4vciAuthorizationRepository;
+use crate::oid4vci_authorization::{authorization_transaction_id, Oid4vciAuthorizationRepository};
 use crate::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
 use crate::{
     credential::{
-        reserved_credential_id, CredentialAccessTokenGrant, CredentialAuthorizationSession,
-        CredentialIssuanceError, CredentialRepository, CredentialTransaction,
-        CredentialTransactionStatus, ExistingCredential, IssuedCredential,
+        reserved_credential_id, same_signing_target, CredentialAccessTokenGrant,
+        CredentialAuthorizationSession, CredentialIssuanceError, CredentialRepository,
+        CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
+        ExistingCredential, IssuedCredential,
     },
     credential_lifecycle::delivery_record_id,
     credential_renewal::{RenewalRepository, RenewalRepositoryError, RenewalSource},
@@ -43,7 +44,7 @@ macro_rules! transaction_columns {
      zk_predicate_claims, credential_payload_format, wallet_configs, validity_days,
      renewable, renewal_window_days, delivery_mode, issuer_profile_id,
      issuer_mode, issuer_did_override, issuer_algorithm, signing_service_id,
-     reserved_credential_id, oid4vci_client_id, created_at, expires_at"
+     reserved_credential_id, oid4vci_client_id, created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing"
     };
 }
 
@@ -152,13 +153,42 @@ const REFRESH_PENDING_CANVAS_APPLICATION_OFFER: &str = concat!(
      RETURNING ",
     transaction_columns!()
 );
+// The same fresh-clock gate protects a new signing claim and recovery after a
+// concurrent winner. The caller already holds the transaction and linked session
+// rows, so neither expiry nor token collisions may be checked only before a wait.
+macro_rules! signing_authority_predicate {
+    () => {
+        "id = $1 AND organization_id = $2
+         AND access_token = $3 AND access_token_expires_at > clock_timestamp()
+         AND expires_at > clock_timestamp()
+         AND NOT EXISTS (
+             SELECT 1 FROM issuance_service.issuance_transactions AS other
+             WHERE other.access_token = $3 AND other.id <> $1
+               AND other.access_token_expires_at > clock_timestamp())
+         AND NOT EXISTS (
+             SELECT 1 FROM issuance_service.authorization_sessions AS other
+             WHERE other.access_token = $3
+               AND other.access_token_expires_at > clock_timestamp()
+               AND ($4::text IS NULL OR other.id <> $4))
+         AND ($4::text IS NULL OR EXISTS (
+             SELECT 1 FROM issuance_service.authorization_sessions AS session
+             WHERE session.id = $4 AND session.access_token = $3
+               AND session.access_token_expires_at > clock_timestamp()))"
+    };
+}
+const SIGNING_AUTHORITY_IS_LIVE: &str = concat!(
+    "SELECT EXISTS (SELECT 1 FROM issuance_service.issuance_transactions WHERE ",
+    signing_authority_predicate!(),
+    ")"
+);
 const CLAIM_FOR_SIGNING: &str = concat!(
     "UPDATE issuance_service.issuance_transactions
-     SET status = 'signing', reserved_credential_id = $2, credential_type = $3,
-         issuer_profile_id = $4, issuer_mode = $5, issuer_did_override = $6,
-         issuer_algorithm = $7, signing_service_id = $8
-     WHERE id = $1 AND status = 'authorized'
-     RETURNING ",
+     SET status = 'signing', reserved_credential_id = $5, credential_type = $6,
+         issuer_profile_id = $7, issuer_mode = $8, issuer_did_override = $9,
+         issuer_algorithm = $10, signing_service_id = $11, jwt_vc_signing_timing = $12
+     WHERE status = 'authorized' AND ",
+    signing_authority_predicate!(),
+    " RETURNING ",
     transaction_columns!()
 );
 
@@ -182,10 +212,10 @@ const RESERVE_INITIATION: &str = concat!(
           validity_days, renewable, renewal_window_days, delivery_mode,
           issuer_profile_id, issuer_mode, issuer_did_override, issuer_algorithm,
           signing_service_id, reserved_credential_id, oid4vci_client_id,
-          created_at, expires_at)
+          created_at, expires_at, jwt_vc_profile, jwt_vc_signing_timing)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
              $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25,
-             $26, $27, $28, $29, $30, $31, $32)
+             $26, $27, $28, $29, $30, $31, $32, $33, $34)
      ON CONFLICT (organization_id, idempotency_key_hash) DO NOTHING
      RETURNING ",
     transaction_columns!()
@@ -214,6 +244,7 @@ pub(crate) async fn insert_issuance_transaction<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    transaction.validate_jwt_vc_profile()?;
     if transaction_contains_private_material(transaction) {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
@@ -232,7 +263,7 @@ where
         .bind(&transaction.subject_did)
         .bind(&transaction.idempotency_key_hash)
         .bind(&transaction.idempotency_request_hash)
-        .bind(transaction_status(transaction.status))
+        .bind(transaction.status.as_str())
         .bind(&transaction.pre_authorized_code)
         .bind(&transaction.nonce)
         .bind(Value::Object(transaction.claims.clone()))
@@ -254,6 +285,13 @@ where
         .bind(&transaction.oid4vci_client_id)
         .bind(transaction.created_at)
         .bind(transaction.expires_at)
+        .bind(
+            transaction
+                .jwt_vc_profile
+                .as_ref()
+                .map(|value| json!(value)),
+        )
+        .bind(transaction.jwt_vc_signing_timing.map(|value| json!(value)))
         .fetch_optional(executor)
         .await
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?
@@ -469,9 +507,15 @@ impl CredentialRepository for PostgresCredentialRepository {
             return Ok(CredentialAccessTokenGrant::Missing);
         };
         if let Some(transaction) = self.transaction_by_access_token(access_token).await? {
-            return Ok(CredentialAccessTokenGrant::Transaction(Box::new(
-                transaction,
-            )));
+            return Ok(
+                match self.authorization_by_access_token(access_token).await? {
+                    Some(authorization_session) => CredentialAccessTokenGrant::LinkedTransaction {
+                        transaction: Box::new(transaction),
+                        authorization_session,
+                    },
+                    None => CredentialAccessTokenGrant::Transaction(Box::new(transaction)),
+                },
+            );
         }
         self.authorization_by_access_token(access_token)
             .await
@@ -517,6 +561,15 @@ impl CredentialRepository for PostgresCredentialRepository {
         session: &CredentialAuthorizationSession,
         access_token: &str,
     ) -> Result<CredentialTransaction, CredentialIssuanceError> {
+        if session
+            .credential_configuration_ids
+            .iter()
+            .any(|id| id.ends_with(marty_jwt_vc_issuance::DIRECT_CONFIGURATION_SUFFIX))
+        {
+            return Err(CredentialIssuanceError::UnsupportedFormat(
+                "direct JWT-VC authorization-code issuance is unavailable".into(),
+            ));
+        }
         if let Some(issuer_state) = session.issuer_state.as_deref() {
             if let Some(transaction) = sqlx::query(BIND_AUTHORIZATION_TRANSACTION)
                 .bind(issuer_state)
@@ -682,9 +735,130 @@ impl CredentialRepository for PostgresCredentialRepository {
         &self,
         transaction: &CredentialTransaction,
         credential_id: &str,
+        authorization: &CredentialSigningAuthorization<'_>,
     ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError> {
-        sqlx::query(CLAIM_FOR_SIGNING)
-            .bind(&transaction.id)
+        let digest = hash_access_token(&self.token_hmac_key, authorization.access_token);
+        let mut database = self.pool.begin().await.map_err(repository_error)?;
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            transaction_columns!(),
+            ", access_token, access_token_expires_at, ",
+            "expires_at > clock_timestamp() AS transaction_live, ",
+            "access_token_expires_at > clock_timestamp() AS grant_live ",
+            "FROM issuance_service.issuance_transactions ",
+            "WHERE id = $1 AND organization_id = $2 FOR UPDATE"
+        ))
+        .bind(&authorization.transaction.id)
+        .bind(&authorization.transaction.organization_id)
+        .fetch_optional(&mut *database)
+        .await
+        .map_err(repository_error)?
+        .ok_or(CredentialIssuanceError::InvalidTransactionState)?;
+        if row
+            .try_get::<Option<String>, _>("access_token")
+            .map_err(repository_error)?
+            .as_deref()
+            != Some(digest.as_str())
+            || row
+                .try_get::<Option<bool>, _>("grant_live")
+                .map_err(repository_error)?
+                != Some(true)
+        {
+            return Err(CredentialIssuanceError::InvalidAccessToken);
+        }
+        if !row
+            .try_get::<bool, _>("transaction_live")
+            .map_err(repository_error)?
+        {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        let token_expires_at = row
+            .try_get::<DateTime<Utc>, _>("access_token_expires_at")
+            .map_err(repository_error)?;
+        let current = transaction_row(row)?;
+        if let Some(expected) = authorization.authorization_session {
+            let row = sqlx::query(
+                "SELECT id, client_id, organization_id, issuer_state,
+                        credential_configuration_ids, dpop_jkt, access_token_expires_at
+                 FROM issuance_service.authorization_sessions
+                 WHERE id = $1 AND access_token = $2
+                   AND access_token_expires_at > clock_timestamp()
+                 FOR UPDATE",
+            )
+            .bind(&expected.id)
+            .bind(&digest)
+            .fetch_optional(&mut *database)
+            .await
+            .map_err(repository_error)?
+            .ok_or(CredentialIssuanceError::InvalidAccessToken)?;
+            let session = authorization_row(row)?;
+            let deterministic_link = current.id == authorization_transaction_id(&session.id);
+            if session != *expected
+                || session.organization_id != current.organization_id
+                || !(current.oid4vci_client_id.as_deref() == Some(session.client_id.as_str())
+                    || (deterministic_link && current.oid4vci_client_id.is_none()))
+                || session.dpop_jkt.as_deref()
+                    != current.claims.get("_dpop_jkt").and_then(Value::as_str)
+                || session.access_token_expires_at != token_expires_at
+                || !(session.issuer_state.as_deref() == Some(current.pre_authorized_code.as_str())
+                    || deterministic_link)
+            {
+                return Err(CredentialIssuanceError::InvalidAccessToken);
+            }
+        }
+        if current.status != CredentialTransactionStatus::Authorized {
+            if !matches!(
+                current.status,
+                CredentialTransactionStatus::Signing | CredentialTransactionStatus::Issued
+            ) || !same_signing_target(transaction, &current)
+            {
+                return Err(CredentialIssuanceError::InvalidTransactionState);
+            }
+            let live = sqlx::query_scalar::<_, bool>(SIGNING_AUTHORITY_IS_LIVE)
+                .bind(&authorization.transaction.id)
+                .bind(&authorization.transaction.organization_id)
+                .bind(&digest)
+                .bind(
+                    authorization
+                        .authorization_session
+                        .map(|session| session.id.as_str()),
+                )
+                .fetch_one(&mut *database)
+                .await
+                .map_err(repository_error)?;
+            return if live {
+                Ok(None)
+            } else {
+                Err(CredentialIssuanceError::InvalidAccessToken)
+            };
+        }
+        if current != *authorization.transaction {
+            return Err(CredentialIssuanceError::InvalidTransactionState);
+        }
+        transaction.validate_jwt_vc_profile()?;
+        let jwt_vc_signing_timing = if let Some(selection) = &transaction.jwt_vc_profile {
+            let issued_at: DateTime<Utc> =
+                sqlx::query_scalar("SELECT date_trunc('second', clock_timestamp())")
+                    .fetch_one(&mut *database)
+                    .await
+                    .map_err(repository_error)?;
+            Some(
+                selection
+                    .timing_at(issued_at.timestamp())
+                    .map_err(|_| CredentialIssuanceError::InvalidTransactionState)?,
+            )
+        } else {
+            None
+        };
+        let claimed = sqlx::query(CLAIM_FOR_SIGNING)
+            .bind(&authorization.transaction.id)
+            .bind(&authorization.transaction.organization_id)
+            .bind(&digest)
+            .bind(
+                authorization
+                    .authorization_session
+                    .map(|session| session.id.as_str()),
+            )
             .bind(credential_id)
             .bind(&transaction.credential_type)
             .bind(&transaction.issuer_profile_id)
@@ -692,11 +866,14 @@ impl CredentialRepository for PostgresCredentialRepository {
             .bind(&transaction.issuer_did)
             .bind(&transaction.issuer_algorithm)
             .bind(&transaction.signing_service_id)
-            .fetch_optional(&self.pool)
+            .bind(jwt_vc_signing_timing.map(|value| json!(value)))
+            .fetch_optional(&mut *database)
             .await
             .map_err(repository_error)?
-            .map(transaction_row)
-            .transpose()
+            .ok_or(CredentialIssuanceError::InvalidAccessToken)?;
+        let claimed = transaction_row(claimed)?;
+        database.commit().await.map_err(repository_error)?;
+        Ok(Some(claimed))
     }
 
     async fn finalize(
@@ -1098,7 +1275,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
             .bind(&transaction.issuer_algorithm)
             .bind(&transaction.signing_service_id)
             .bind(&transaction.organization_id)
-            .bind(transaction_status(transaction.status))
+            .bind(transaction.status.as_str())
             .fetch_optional(&self.pool)
             .await
             .map_err(repository_error)?
@@ -1120,7 +1297,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
              WHERE id = $2 AND organization_id = $3 AND status = 'signing'
                AND reserved_credential_id = $4",
         )
-        .bind(transaction_status(claim.previous_status))
+        .bind(claim.previous_status.as_str())
         .bind(&claim.transaction.id)
         .bind(&claim.transaction.organization_id)
         .bind(&claim.transaction.reserved_credential_id)
@@ -1221,14 +1398,6 @@ struct CanvasProjection {
     renewal_source: Option<String>,
 }
 
-fn authorization_transaction_id(session_id: &str) -> String {
-    Uuid::new_v5(
-        &Uuid::NAMESPACE_URL,
-        format!("marty:oid4vci:authorization-session:{session_id}").as_bytes(),
-    )
-    .to_string()
-}
-
 fn random_capability() -> String {
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
@@ -1239,18 +1408,6 @@ fn missing_issuer_identity(credential_type: &str) -> CredentialIssuanceError {
     CredentialIssuanceError::IssuerUnavailable(format!(
         "The selected credential configuration '{credential_type}' has no active DID-mediated issuer identity."
     ))
-}
-
-const fn transaction_status(status: CredentialTransactionStatus) -> &'static str {
-    match status {
-        CredentialTransactionStatus::Pending => "pending",
-        CredentialTransactionStatus::Authorized => "authorized",
-        CredentialTransactionStatus::Signing => "signing",
-        CredentialTransactionStatus::Issued => "issued",
-        CredentialTransactionStatus::Failed => "failed",
-        CredentialTransactionStatus::Expired => "expired",
-        CredentialTransactionStatus::Revoked => "revoked",
-    }
 }
 
 fn validate_idempotent_recovery(
@@ -1296,6 +1453,14 @@ pub(crate) fn transaction_row(
         selective_disclosure_claims: json_vec(&row, "selective_disclosure_claims")?,
         zk_predicate_claims: json_vec(&row, "zk_predicate_claims")?,
         credential_payload_format: get(&row, "credential_payload_format")?,
+        jwt_vc_profile: get::<Option<Value>>(&row, "jwt_vc_profile")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
+        jwt_vc_signing_timing: get::<Option<Value>>(&row, "jwt_vc_signing_timing")?
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?,
         wallet_configs: json_vec(&row, "wallet_configs")?,
         validity_days: i64::from(get::<i32>(&row, "validity_days")?),
         renewable: get(&row, "renewable")?,
@@ -1311,6 +1476,7 @@ pub(crate) fn transaction_row(
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
     };
+    transaction.validate_jwt_vc_profile()?;
     if transaction_contains_private_material(&transaction) {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
@@ -2265,6 +2431,30 @@ mod tests {
             authorization_transaction_id("authorization-session-race"),
             "dca62a6b-abc0-590d-906b-2582303615e5"
         );
+    }
+
+    #[test]
+    fn authorization_transaction_identity_preserves_session_bytes() {
+        // Independent UUID-v5 vectors retain the existing Python contract.
+        for (session, expected) in [
+            ("", "f2748c94-ac3a-55be-bfaa-50ac29c8a56e"),
+            (
+                "authorization-session-other",
+                "8e63872b-80ac-5026-ad0a-146587f73a60",
+            ),
+            (
+                " authorization-session-race",
+                "02d92c0f-5325-5e96-9cc6-7da0e1af66d8",
+            ),
+            (
+                "authorization-session-race ",
+                "902e66f6-d815-5764-beb1-10cfa18cc53d",
+            ),
+            ("café/雪", "93931080-f4b8-54ea-92e7-a6e844ff2bc8"),
+            ("x\0y", "00d4e6d1-f5ab-5990-a94e-ca70f71d713a"),
+        ] {
+            assert_eq!(authorization_transaction_id(session), expected);
+        }
     }
 
     #[test]

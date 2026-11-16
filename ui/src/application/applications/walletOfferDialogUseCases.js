@@ -1,6 +1,6 @@
 const DEFAULT_WALLET_OFFER_ERROR = 'Failed to generate wallet offer.';
 const MISSING_WALLET_OFFER_ERROR = 'Could not generate a wallet offer. Please try again or contact support.';
-const MISSING_ISSUANCE_FLOW_ERROR = 'This credential is not ready for wallet issuance yet. The issuer needs to activate an OID4VCI issuance flow for this credential template.';
+const WALLET_OFFER_UNAVAILABLE_ERROR = 'Your application is saved, but the issuer could not prepare a wallet invitation. Contact the issuer for help, then return to this application.';
 const ANY_OID4VCI_WALLET_ID = 'wr-default';
 const MARTY_AUTHENTICATOR_WALLET_ID = 'wr-marty-001';
 const FALLBACK_WALLET_PRIORITY = ['wr-waltid-001', 'wr-spruce-001', 'wr-marty-001', 'spruce', 'sprucekit', 'marty'];
@@ -235,22 +235,32 @@ export function resolveWalletOfferDialogLoad(data) {
   });
 }
 
-export function getWalletOfferDialogError(error) {
+export function getWalletOfferDialogFailure(error) {
   const message = [
     error?.error_description,
     error?.response?.error_description,
     error?.response?.data?.error_description,
     error?.response?.error?.user_message,
     error?.response?.data?.detail,
+    error?.response?.detail,
     error?.detail,
     error?.message,
   ].find((value) => typeof value === 'string' && value.trim());
 
-  if (!message) return DEFAULT_WALLET_OFFER_ERROR;
-  if (/No active issuance flow produced an offer/i.test(message)) {
-    return MISSING_ISSUANCE_FLOW_ERROR;
-  }
-  return message;
+  // Older native endpoints used the same absence error for a matching flow
+  // whose offer preparation failed. Do not infer missing configuration from it.
+  const requiresIssuerHelp = typeof message === 'string' && (
+    /^no active issuance flow(?:[.!]?| produced an offer\b.*)$/i.test(message.trim())
+    || /^provider unavailable: flow (?:offer preparation failed|issuance response contains no offer|issuance response is invalid)[.!]?$/i.test(message.trim())
+  );
+  return {
+    message: requiresIssuerHelp ? WALLET_OFFER_UNAVAILABLE_ERROR : (message || DEFAULT_WALLET_OFFER_ERROR),
+    requiresIssuerHelp,
+  };
+}
+
+export function getWalletOfferDialogError(error) {
+  return getWalletOfferDialogFailure(error).message;
 }
 
 export async function loadWalletOfferDialog({ applicationId, generateIssuanceOffer }) {
@@ -262,8 +272,10 @@ export async function loadWalletOfferDialog({ applicationId, generateIssuanceOff
     const data = await generateIssuanceOffer(applicationId);
     return resolveWalletOfferDialogLoad(data);
   } catch (error) {
+    const failure = getWalletOfferDialogFailure(error);
     return createWalletOfferDialogState({
-      error: getWalletOfferDialogError(error),
+      error: failure.message,
+      ...(failure.requiresIssuerHelp ? { requiresIssuerHelp: true } : {}),
     });
   }
 }
@@ -358,6 +370,6 @@ export {
   ANY_OID4VCI_WALLET_ID,
   DEFAULT_WALLET_OFFER_ERROR,
   MARTY_AUTHENTICATOR_WALLET_ID,
-  MISSING_ISSUANCE_FLOW_ERROR,
+  WALLET_OFFER_UNAVAILABLE_ERROR,
   MISSING_WALLET_OFFER_ERROR,
 };

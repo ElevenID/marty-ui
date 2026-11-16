@@ -1,3 +1,4 @@
+use crate::policy_contract::service_policy;
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -45,6 +46,8 @@ pub struct EvaluatePresentationRequest {
 pub enum PresentationVerificationError {
     #[error("PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE")]
     Unavailable,
+    #[error("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")]
+    CredentialAuthorityChanged,
     #[error("PRESENTATION_POLICY.VERIFICATION_FAILED: {0}")]
     Failed(String),
 }
@@ -54,6 +57,16 @@ pub enum PresentationVerificationError {
 /// the HTTP service never interprets an unverified token as policy facts.
 #[async_trait]
 pub trait PresentationVerificationOrchestrator: Send + Sync {
+    async fn freeze_credential_authority(
+        &self,
+        _policy: &PresentationPolicy,
+    ) -> Result<
+        Option<marty_oid4vp_contract::trust_authority::CredentialAuthoritySnapshotV1>,
+        PresentationVerificationError,
+    > {
+        Ok(None)
+    }
+
     async fn verify(
         &self,
         policy: &PresentationPolicy,
@@ -76,6 +89,11 @@ pub trait PresentationVerificationOrchestrator: Send + Sync {
 pub struct VerifiedPolicyMaterial {
     pub(crate) policy_facts: Value,
     pub(crate) authenticated_outer_jti: Option<String>,
+    pub(crate) authenticated_issuer: Option<crate::AuthenticatedIssuerEvidence>,
+    pub(crate) authenticated_sd_jwt_query: Option<crate::AuthenticatedSdJwtQueryEvidence>,
+    pub(crate) authenticated_sd_jwt_presentation:
+        Option<crate::AuthenticatedSdJwtPresentationEvidence>,
+    pub(crate) managed_credential_authority: Option<crate::VerifiedManagedCredentialAuthority>,
 }
 
 impl VerifiedPolicyMaterial {
@@ -83,6 +101,10 @@ impl VerifiedPolicyMaterial {
         Self {
             policy_facts,
             authenticated_outer_jti: None,
+            authenticated_issuer: None,
+            authenticated_sd_jwt_query: None,
+            authenticated_sd_jwt_presentation: None,
+            managed_credential_authority: None,
         }
     }
 
@@ -92,6 +114,20 @@ impl VerifiedPolicyMaterial {
 
     pub fn authenticated_outer_jti(&self) -> Option<&str> {
         self.authenticated_outer_jti.as_deref()
+    }
+
+    pub fn authenticated_issuer(&self) -> Option<&crate::AuthenticatedIssuerEvidence> {
+        self.authenticated_issuer.as_ref()
+    }
+
+    pub fn authenticated_sd_jwt_query(&self) -> Option<&crate::AuthenticatedSdJwtQueryEvidence> {
+        self.authenticated_sd_jwt_query.as_ref()
+    }
+
+    pub fn managed_credential_authority(
+        &self,
+    ) -> Option<&crate::VerifiedManagedCredentialAuthority> {
+        self.managed_credential_authority.as_ref()
     }
 }
 
@@ -196,6 +232,11 @@ struct CredentialRequirementRequest {
     required: bool,
     #[serde(default = "default_credential_format")]
     credential_payload_format: String,
+    #[serde(
+        default,
+        deserialize_with = "marty_oid4vp_contract::jwt_vc_profile::deserialize_optional_profile"
+    )]
+    expected_securing_profile: Option<marty_oid4vp_contract::jwt_vc_profile::JwtVcSecuringProfile>,
     requested_claims: Vec<RequestedClaimRequest>,
     trust_profile_id: Option<String>,
     max_age_seconds: Option<u64>,
@@ -233,6 +274,7 @@ struct DisplayMetadataRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CreatePolicyRequest {
+    prerequisite_evidence_profile: Option<crate::PrerequisiteEvidenceProfile>,
     organization_id: String,
     name: String,
     description: Option<String>,
@@ -264,6 +306,8 @@ struct CreatePolicyRequest {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct UpdatePolicyRequest {
+    #[serde(deserialize_with = "nullable_prerequisite_profile")]
+    prerequisite_evidence_profile: Option<Option<crate::PrerequisiteEvidenceProfile>>,
     name: Option<String>,
     description: Option<String>,
     purpose: Option<String>,
@@ -279,6 +323,12 @@ struct UpdatePolicyRequest {
     credential_requirements: Option<Vec<CredentialRequirementRequest>>,
     alternative_requirements: Option<Vec<AlternativeRequirementRequest>>,
     compliance_profile_id: Option<String>,
+}
+
+fn nullable_prerequisite_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<crate::PrerequisiteEvidenceProfile>>, D::Error> {
+    Option::<crate::PrerequisiteEvidenceProfile>::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -466,6 +516,7 @@ async fn evaluate_inline(
     }
     let now = Utc::now();
     let policy = PresentationPolicy {
+        prerequisite_evidence_profile: None,
         id: Uuid::new_v4(),
         organization_id,
         name: "Inline Policy".into(),
@@ -513,7 +564,13 @@ async fn evaluate(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
-    evaluate_policy(state.verification.as_ref(), policy, request).await
+    let mut result = evaluate_policy(state.verification.as_ref(), policy, request).await?;
+    // Full native evidence belongs to the authenticated internal producer path.
+    // Public evaluations retain their existing minimized result projection.
+    if let Some(object) = result.as_object_mut() {
+        object.remove(marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2);
+    }
+    Ok(result)
 }
 
 pub(crate) async fn evaluate_policy(
@@ -524,7 +581,7 @@ pub(crate) async fn evaluate_policy(
     if policy.status != PolicyStatus::Active {
         return Err(bad_request(&format!(
             "Policy is not active (status: {})",
-            status_name(policy.status)
+            policy.status.as_str()
         )));
     }
     validate_evaluation_request(request)?;
@@ -547,15 +604,87 @@ pub fn evaluate_verified_facts_for_policy(
     )
 }
 
-fn evaluate_verified_material_for_policy(
+/// Evaluate native material and project its independently authenticated
+/// provenance through the same boundary used by the HTTP and gRPC adapters.
+/// Material built with `facts_only` cannot supply authenticated query identity.
+pub fn evaluate_verified_material_for_policy(
     material: VerifiedPolicyMaterial,
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
+    crate::policy_contract::validate_policy(policy)
+        .map_err(|error| bad_request(&error.to_string()))?;
     let VerifiedPolicyMaterial {
         mut policy_facts,
         authenticated_outer_jti,
+        authenticated_issuer,
+        authenticated_sd_jwt_query,
+        authenticated_sd_jwt_presentation,
+        managed_credential_authority,
     } = material;
+    if managed_credential_authority
+        .as_ref()
+        .is_some_and(|authority| {
+            policy.prerequisite_evidence_profile.is_none()
+                || authenticated_sd_jwt_query
+                    .as_ref()
+                    .is_none_or(|query| !authority.matches_query(query))
+        })
+        || (policy.prerequisite_evidence_profile.is_some()
+            && managed_credential_authority.is_none()
+            && policy_facts["credentials"]
+                .as_array()
+                .is_some_and(|credentials| {
+                    credentials
+                        .iter()
+                        .any(|credential| credential["signature_verified"] == true)
+                }))
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
+        ));
+    }
+    if authenticated_sd_jwt_query.as_ref().is_some_and(|query| {
+        !query.matches_request(policy, request)
+            || policy_facts["credentials"]
+                .as_array()
+                .is_none_or(|credentials| {
+                    credentials.len() != 1
+                        || credentials[0]["claims"]
+                            .as_object()
+                            .is_none_or(|claims| !query.matches_claims(claims))
+                })
+    }) {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
+        ));
+    }
+    if authenticated_sd_jwt_presentation
+        .as_ref()
+        .is_some_and(|presentation| {
+            authenticated_sd_jwt_query.is_some()
+                || policy.prerequisite_evidence_profile.is_some()
+                || !presentation.matches_request(policy, request)
+                || authenticated_issuer
+                    .as_ref()
+                    .is_none_or(|issuer| issuer.issuer_id != presentation.issuer_id())
+                || policy_facts["credentials"]
+                    .as_array()
+                    .is_none_or(|credentials| {
+                        credentials.len() != 1
+                            || credentials[0]["signature_verified"] != true
+                            || credentials[0]["issuer_id"].as_str()
+                                != Some(presentation.issuer_id())
+                            || credentials[0]["claims"]
+                                .as_object()
+                                .is_none_or(|claims| !presentation.matches_claims(claims))
+                    })
+        })
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.QUERY_EVIDENCE_BINDING_MISMATCH",
+        ));
+    }
     let object = policy_facts
         .as_object_mut()
         .ok_or_else(|| service_unavailable("PRESENTATION_POLICY.INVALID_VERIFICATION_EVIDENCE"))?;
@@ -567,13 +696,97 @@ fn evaluate_verified_material_for_policy(
     let output = evaluate_verified_facts_json(&policy_facts.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(
+    if policy.prerequisite_evidence_profile.is_some()
+        && native["decision"] == "allow"
+        && (authenticated_sd_jwt_query.is_none() || managed_credential_authority.is_none())
+    {
+        return Err(bad_request(
+            "PRESENTATION_POLICY.MANAGED_AUTHORITY_BINDING_INVALID",
+        ));
+    }
+    let managed_native_result = policy
+        .prerequisite_evidence_profile
+        .is_some()
+        .then(|| native.clone());
+    let mut result = project_evaluation(
         native,
         request,
         &policy_facts,
         authentication_diagnostic.as_ref(),
         authenticated_outer_jti.as_deref(),
-    ))
+        authenticated_issuer.as_ref(),
+    );
+    // The reference comes from the saved policy used above, never from request
+    // context, verifier facts or the native result's self-reported identity.
+    result["policy_revision"] = crate::policy_revision::policy_revision_value(policy)
+        .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_POLICY_REVISION"))?;
+    // Carry only native-constructed query evidence on its unique credential
+    // result. Generic policy facts and caller JSON cannot create this field.
+    if let Some(query) = authenticated_sd_jwt_query.as_ref() {
+        if let Some(results) = result
+            .get_mut("credential_results")
+            .and_then(Value::as_array_mut)
+        {
+            if results.len() == 1 {
+                let credential = &mut results[0];
+                if credential["signature_valid"] == true
+                    && credential["credential_template_id"].as_str()
+                        == Some(query.credential_template_id())
+                    && credential["issuer_did"].as_str() == Some(query.issuer_id())
+                {
+                    credential["authenticated_sd_jwt_query"] = serde_json::to_value(query)
+                        .map_err(|_| {
+                            service_unavailable("PRESENTATION_POLICY.INVALID_QUERY_EVIDENCE")
+                        })?;
+                    if let Some(authority) = managed_credential_authority.as_ref() {
+                        credential["managed_sd_jwt_authority"] = serde_json::to_value(authority)
+                            .map_err(|_| {
+                                service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_AUTHORITY")
+                            })?;
+                    }
+                }
+            }
+        }
+    }
+    if policy.prerequisite_evidence_profile.is_some() && result["decision"] == "allow" {
+        let query = authenticated_sd_jwt_query
+            .as_ref()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let authority = managed_credential_authority
+            .as_ref()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let validity = crate::evaluation_validity::managed_validity(
+            policy, request, query, authority, &result,
+        )
+        .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY"))?;
+        let selected_claims = policy_facts["credentials"][0]["claims"]
+            .as_object()
+            .ok_or_else(|| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
+        let managed_evidence = query
+            .managed_policy_evidence(
+                authority,
+                crate::sd_jwt_query::ManagedPolicyEvidenceInput {
+                    policy,
+                    request,
+                    selected_claims,
+                    native_result: managed_native_result.as_ref().ok_or_else(|| {
+                        bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
+                    })?,
+                    projected_result: &result,
+                    validity: &validity,
+                },
+            )
+            .map_err(|_| bad_request("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE"))?;
+        result[marty_oid4vp_contract::POLICY_EVALUATION_VALIDITY] = serde_json::to_value(validity)
+            .map_err(|_| {
+                service_unavailable("PRESENTATION_POLICY.INVALID_FINALIZATION_VALIDITY")
+            })?;
+        result[marty_oid4vp_contract::MANAGED_POLICY_EVIDENCE_V2] =
+            serde_json::to_value(managed_evidence).map_err(|_| {
+                service_unavailable("PRESENTATION_POLICY.INVALID_MANAGED_POLICY_EVIDENCE")
+            })?;
+    }
+    Ok(result)
 }
 
 fn build_policy(
@@ -610,6 +823,7 @@ fn build_policy(
         id: Uuid::new_v4(),
         organization_id,
         name: input.name,
+        prerequisite_evidence_profile: input.prerequisite_evidence_profile,
         description: input.description,
         status: PolicyStatus::Draft,
         display_metadata,
@@ -654,6 +868,9 @@ fn apply_update(
     input: UpdatePolicyRequest,
     now: chrono::DateTime<Utc>,
 ) -> Result<(), PresentationPolicyHttpError> {
+    if let Some(profile) = input.prerequisite_evidence_profile {
+        policy.prerequisite_evidence_profile = profile;
+    }
     if let Some(name) = input.name {
         validate_name(&name, "name", 255)?;
         policy.name = name;
@@ -757,7 +974,7 @@ fn convert_requirements(
 fn convert_requirement(
     value: CredentialRequirementRequest,
 ) -> Result<CredentialRequirement, PresentationPolicyHttpError> {
-    if value.requested_claims.is_empty() {
+    if value.expected_securing_profile.is_none() && value.requested_claims.is_empty() {
         return Err(unprocessable("requested_claims must not be empty"));
     }
     Ok(CredentialRequirement {
@@ -767,6 +984,7 @@ fn convert_requirement(
         description: value.description,
         required: value.required,
         credential_payload_format: value.credential_payload_format,
+        expected_securing_profile: value.expected_securing_profile,
         requested_claims: value
             .requested_claims
             .into_iter()
@@ -857,17 +1075,15 @@ fn convert_alternatives(
 fn synthetic_requirement(
     name: &str,
     description: Option<String>,
-    accepted_types: &[String],
+    _accepted_types: &[String],
     trust_profile_id: Option<&str>,
     freshness: Option<&FreshnessPolicy>,
     claims: &[RequestedClaim],
 ) -> Result<CredentialRequirement, PresentationPolicyHttpError> {
     Ok(CredentialRequirement {
+        expected_securing_profile: None,
         id: Uuid::new_v4(),
-        credential_template_id: accepted_types
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "protocol-inline".into()),
+        credential_template_id: "protocol-inline".into(),
         display_name: name.to_owned(),
         description,
         required: true,
@@ -884,7 +1100,7 @@ pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
         "id": policy.id,
         "organization_id": policy.organization_id,
         "name": policy.name,
-        "status": status_name(policy.status),
+        "status": policy.status.as_str(),
         "description": policy.description,
         "purpose": policy.purpose.as_ref().or(policy.display_metadata.purpose_description.as_ref()),
         "required_claims": policy.required_claims.iter().map(protocol_claim_response).collect::<Vec<_>>(),
@@ -894,6 +1110,7 @@ pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
         "alternative_requirements": policy.alternative_requirements.iter().map(alternative_response).collect::<Vec<_>>(),
         "compliance_profile_id": policy.compliance_profile_id,
         "trust_profile_id": policy.trust_profile_id,
+        "prerequisite_evidence_profile": policy.prerequisite_evidence_profile,
         "holder_binding": holder_response(&policy.holder_binding),
         "freshness": policy.freshness,
         "prefer_predicates": policy.prefer_predicates,
@@ -927,7 +1144,7 @@ fn protocol_claim_response(claim: &RequestedClaim) -> Value {
 }
 
 fn requirement_response(requirement: &CredentialRequirement) -> Value {
-    json!({
+    let mut response = json!({
         "credential_template_id": requirement.credential_template_id,
         "display_name": requirement.display_name,
         "description": requirement.description,
@@ -937,7 +1154,11 @@ fn requirement_response(requirement: &CredentialRequirement) -> Value {
         "trust_profile_id": requirement.trust_profile_id,
         "max_age_seconds": requirement.max_age_seconds,
         "require_fresh_issuance": requirement.require_fresh_issuance
-    })
+    });
+    if let Some(profile) = requirement.expected_securing_profile {
+        response["expected_securing_profile"] = json!(profile);
+    }
+    response
 }
 
 fn requested_claim_response(claim: &RequestedClaim) -> Value {
@@ -975,74 +1196,44 @@ fn holder_response(binding: &HolderBinding) -> Value {
     }
 }
 
-fn service_policy(policy: &PresentationPolicy) -> Value {
-    let freshness = policy.holder_binding.proof_freshness.clone();
-    json!({
-        "id": policy.id.to_string(),
-        "name": policy.name,
-        "organization_id": policy.organization_id.to_string(),
-        "credential_requirements": policy.credential_requirements.iter().map(service_requirement).collect::<Vec<_>>(),
-        "alternative_requirements": policy.alternative_requirements.iter().map(|alternative| json!({
-            "id": alternative.id.to_string(),
-            "name": alternative.name,
-            "credential_requirements": alternative.credential_requirements.iter().map(service_requirement).collect::<Vec<_>>(),
-            "min_satisfied": alternative.min_satisfied
-        })).collect::<Vec<_>>(),
-        "trust_profile_id": policy.trust_profile_id.map(|id| id.to_string()),
-        "presentation_proof_required": policy.presentation_proof_required,
-        "holder_binding": {
-            "required": policy.holder_binding.required,
-            "binding_methods": policy.holder_binding.binding_methods,
-            "proof_profiles": policy.holder_binding.proof_profiles,
-            "challenge_required": freshness.get("challenge_required").copied().unwrap_or(false),
-            "audience_binding_required": freshness.get("audience_binding_required").copied().unwrap_or(false),
-            "replay_detection_required": freshness.get("replay_detection_required").copied().unwrap_or(false),
-            "max_proof_age_seconds": Value::Null
-        },
-        "freshness": policy.freshness,
-        "issuer_constraints": policy.issuer_constraints,
-        "allowed_issuers": [],
-        "single_presentation": true
-    })
-}
-
-fn service_requirement(requirement: &CredentialRequirement) -> Value {
-    json!({
-        "id": requirement.id.to_string(),
-        "credential_template_id": requirement.credential_template_id,
-        "required": requirement.required,
-        "credential_payload_format": requirement.credential_payload_format,
-        "requested_claims": requirement.requested_claims.iter().map(|claim| json!({
-            "claim_name": claim.claim_name,
-            "required": claim.required,
-            "selective_disclosure": claim.selective_disclosure,
-            "accept_derived": claim.accept_derived,
-            "predicate_spec": claim.predicate_spec,
-            "constraints": claim.constraints.iter().map(|constraint| json!({
-                "claim_name": constraint.claim_name,
-                "constraint_type": constraint.constraint_type,
-                "value": constraint.value
-            })).collect::<Vec<_>>()
-        })).collect::<Vec<_>>(),
-        "trust_profile_id": requirement.trust_profile_id.map(|id| id.to_string()),
-        "max_age_seconds": requirement.max_age_seconds,
-        "require_fresh_issuance": requirement.require_fresh_issuance
-    })
-}
-
 /// Match evaluated requirements to exactly one trusted internal evidence row.
 /// An absent or ambiguous match cannot establish any verification check.
 fn credential_evidence<'a>(verified: &'a Value, result: &Value) -> Option<&'a Value> {
     let template_id = result["credential_template_id"].as_str()?;
     let issuer_id = result["issuer_id"].as_str()?;
+    let credential_id = result["credential_id"].as_str()?;
+    let policy = &verified["policy"];
+    let requirement = policy["credential_requirements"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(
+            policy["alternative_requirements"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|alternative| {
+                    alternative["credential_requirements"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                }),
+        )
+        .find(|requirement| requirement["id"] == result["requirement_id"])?;
+    let profile = requirement["trust_profile_id"]
+        .as_str()
+        .or_else(|| policy["trust_profile_id"].as_str());
     let mut matches = verified["credentials"]
         .as_array()?
         .iter()
         .filter(|credential| {
             credential["issuer_id"].as_str() == Some(issuer_id)
-                && credential["credential_template_ids"]
-                    .as_array()
-                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
+                && credential["credential_id"].as_str() == Some(credential_id)
+                && credential["trust_profile_id"].as_str() == profile
+                && (template_id.is_empty()
+                    || credential["credential_template_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id))))
         });
     let credential = matches.next()?;
     matches.next().is_none().then_some(credential)
@@ -1121,6 +1312,7 @@ fn project_evaluation(
     verified: &Value,
     diagnostic: Option<&Value>,
     authenticated_outer_jti: Option<&str>,
+    authenticated_issuer: Option<&crate::AuthenticatedIssuerEvidence>,
 ) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
@@ -1152,6 +1344,12 @@ fn project_evaluation(
                 .filter(|id| !id.is_empty() && id.len() <= 2048 && !id.chars().any(char::is_control))
                 .filter(|id| signature_valid == Some(true)
                     && evidence.and_then(|credential| credential["credential_id"].as_str()) == Some(*id));
+            let issuer_authentication = authenticated_issuer.filter(|issuer| {
+                signature_valid == Some(true)
+                    && issuer.satisfies_contract()
+                    && evidence.and_then(|credential| credential["issuer_id"].as_str())
+                        == Some(issuer.issuer_id.as_str())
+            });
             let status_checked = evidence.map(|credential| {
                 credential["revocation_checked_at_epoch_seconds"].as_u64().is_some()
             });
@@ -1160,6 +1358,7 @@ fn project_evaluation(
                 "credential_template_id": result["credential_template_id"],
                 "satisfied": result["satisfied"],
                 "issuer_did": result["issuer_id"],
+                "authenticated_issuer": issuer_authentication,
                 "issuer_name": Value::Null,
                 "claim_results": result["claim_results"],
                 "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
@@ -1401,15 +1600,9 @@ fn verification_error(error: PresentationVerificationError) -> PresentationPolic
             service_unavailable("PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE")
         }
         PresentationVerificationError::Failed(detail) => unprocessable(&detail),
-    }
-}
-
-fn status_name(status: PolicyStatus) -> &'static str {
-    match status {
-        PolicyStatus::Draft => "draft",
-        PolicyStatus::Active => "active",
-        PolicyStatus::Suspended => "suspended",
-        PolicyStatus::Archived => "archived",
+        PresentationVerificationError::CredentialAuthorityChanged => {
+            bad_request("PRESENTATION_POLICY.CREDENTIAL_AUTHORITY_CHANGED")
+        }
     }
 }
 
@@ -1503,10 +1696,12 @@ mod error_code_projection_tests {
         let request: EvaluatePresentationRequest =
             serde_json::from_value(json!({"vp_token": {}})).unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
         let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
             "credential_template_ids": ["template-1"], "issuer_id": "issuer-1",
             "signature_verified": true, "trust_profile_verified": true,
             "revocation_checked_at_epoch_seconds": null, "not_revoked": null
@@ -1524,7 +1719,8 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": [evidence]}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": [evidence]}),
+                None,
                 None,
                 None,
             );
@@ -1545,7 +1741,8 @@ mod error_code_projection_tests {
             let projected = project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
+                None,
                 None,
                 None,
             );
@@ -1565,11 +1762,94 @@ mod error_code_projection_tests {
     }
 
     #[test]
+    fn authenticated_issuer_requires_a_verified_unique_matching_credential() {
+        let issuer = crate::AuthenticatedIssuerEvidence {
+            issuer_id: "did:web:issuer.example".into(),
+            key_id: Some("did:web:issuer.example#assertion".into()),
+            algorithm: "EdDSA".into(),
+            provenance: crate::IssuerKeyProvenance {
+                mechanism: crate::IssuerKeyMechanism::DidAssertionMethod,
+                trust_profile_id: None,
+                organization_id: None,
+                issuer_organization_id: None,
+                source: "configured_public_resolver".into(),
+                retrieved_at: Some("2026-11-07T12:00:00Z".into()),
+                content_sha256: Some("a".repeat(64)),
+            },
+        };
+        let request: EvaluatePresentationRequest = serde_json::from_value(json!({
+            "vp_token": {}, "context": {"authenticated_issuer":issuer}
+        }))
+        .unwrap();
+        let native = json!({"decision":"allow", "credential_results":[{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
+            "credential_template_id":"template-1", "issuer_id":issuer.issuer_id,
+            "satisfied":true, "errors":[]
+        }]});
+        let credential = json!({
+            "credential_id":"urn:uuid:signed-1",
+            "credential_template_ids":["template-1"], "issuer_id":issuer.issuer_id,
+            "signature_verified":true,
+        });
+        let projection =
+            |credentials: Value, authenticated: Option<&crate::AuthenticatedIssuerEvidence>| {
+                project_evaluation(
+                    native.clone(),
+                    &request,
+                    &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials":credentials}),
+                    None,
+                    None,
+                    authenticated,
+                )
+            };
+        let projected: crate::AuthenticatedIssuerEvidence = serde_json::from_value(
+            projection(json!([credential]), Some(&issuer))["credential_results"][0]
+                ["authenticated_issuer"]
+                .clone(),
+        )
+        .unwrap();
+        assert_eq!(projected, issuer);
+        assert!(
+            projection(json!([credential]), None)["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
+        let mut invalid = credential.clone();
+        invalid["signature_verified"] = json!(false);
+        for credentials in [
+            json!([]),
+            json!([invalid]),
+            json!([credential.clone(), credential.clone()]),
+        ] {
+            assert!(
+                projection(credentials, Some(&issuer))["credential_results"][0]
+                    .get("authenticated_issuer")
+                    .is_none()
+            );
+        }
+        let mut malformed = issuer.clone();
+        malformed.provenance.content_sha256 = Some("not-a-digest".into());
+        assert!(
+            projection(json!([credential]), Some(&malformed))["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
+        let mut other = issuer;
+        other.issuer_id = "did:web:other.example".into();
+        assert!(
+            projection(json!([credential]), Some(&other))["credential_results"][0]
+                .get("authenticated_issuer")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn credential_id_requires_authenticated_outer_jti_and_unique_matching_evidence() {
         let request: EvaluatePresentationRequest =
             serde_json::from_value(json!({"vp_token": {}, "context": {"credential_id": "forged"}}))
                 .unwrap();
         let native = json!({"decision": "allow", "credential_results": [{
+            "requirement_id":"requirement-1", "credential_id":"urn:uuid:signed-1",
             "credential_template_id": "template-1", "issuer_id": "issuer-1",
             "satisfied": true, "errors": []
         }]});
@@ -1581,9 +1861,10 @@ mod error_code_projection_tests {
             project_evaluation(
                 native.clone(),
                 &request,
-                &json!({"credentials": credentials}),
+                &json!({"policy":{"credential_requirements":[{"id":"requirement-1"}]}, "credentials": credentials}),
                 None,
                 authenticated,
+                None,
             )
         };
         assert_eq!(

@@ -21,7 +21,7 @@ const EXPECTED_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFIGURATION
 const HEADLESS = process.env.HEADED !== '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 
-function loadEnvFile(file) {
+function loadEnvFile(file, environment = process.env) {
   if (!fs.existsSync(file)) return;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -33,7 +33,7 @@ function loadEnvFile(file) {
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
-    if (!process.env[key]) process.env[key] = value;
+    if (!environment[key]) environment[key] = value;
   }
 }
 

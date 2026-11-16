@@ -28,6 +28,7 @@
 	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
 	selfhost-prod-config selfhost-prod-check selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
+	selfhost-prod-cloudflare-up selfhost-prod-cloudflare-stop \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
 	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
 	deploy-prod
@@ -68,10 +69,11 @@ SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 SELFHOST_ENV_FILE ?= .env.selfhost.production.local
 -include $(SELFHOST_ENV_FILE)
 SELFHOST_PROD_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.prod.yml
-SELFHOST_PROD_BETA_COMPOSE := $(SELFHOST_PROD_COMPOSE) --profile beta-tunnel
+SELFHOST_PROD_CLOUDFLARE_COMPOSE := $(SELFHOST_PROD_COMPOSE) -f docker-compose.selfhost.cloudflare-legacy.yml
+SELFHOST_PROD_BETA_COMPOSE := $(SELFHOST_PROD_CLOUDFLARE_COMPOSE) --profile beta-tunnel
 SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.openbao.yml
 SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-unseal
-SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
+SELFHOST_PROD_LOG_SERVICES := edge gateway keycloak
 SELFHOST_PROD_BETA_TUNNEL_SERVICES := tunnel-nginx-proxy cloudflared-beta
 SELFHOST_SECRET_DIR ?=
 
@@ -233,6 +235,12 @@ selfhost-prod-ps: ## Show the self-host production stack status
 
 selfhost-prod-logs: ## Follow logs for the self-host production stack core services
 	@$(SELFHOST_PROD_COMPOSE) logs -f $(SELFHOST_PROD_LOG_SERVICES)
+
+selfhost-prod-cloudflare-up: selfhost-prod-config ## Start the explicitly selected legacy production Cloudflare connector
+	@$(SELFHOST_PROD_CLOUDFLARE_COMPOSE) up -d --no-deps cloudflared
+
+selfhost-prod-cloudflare-stop: ## Stop the optional production Cloudflare connector
+	@$(SELFHOST_PROD_CLOUDFLARE_COMPOSE) stop cloudflared
 
 selfhost-prod-beta-tunnel-up: selfhost-prod-config ## Start the optional beta.elevenidllc.com tunnel against the self-host edge
 	@if [ -z "$(SELFHOST_SECRET_DIR)" ]; then \

@@ -55,7 +55,7 @@ function SectionCard({ title, icon, children }) {
         }}
       >
         {icon}
-        <Typography variant="subtitle1" fontWeight="medium">
+        <Typography variant="subtitle1" sx={{ fontWeight: "medium" }}>
           {title}
         </Typography>
       </Box>

@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_candidate_vm_launch as launch  # noqa: E402
 import installer_candidate_vm_seed as seed  # noqa: E402
+import installer_candidate_vm_policy as policy  # noqa: E402
 import installer_release as release  # noqa: E402
 import installer_test_vm_rootless_fixture as fixture  # noqa: E402
 import installer_test_vm_rootless_setup as setup  # noqa: E402
@@ -86,8 +87,13 @@ def fixture_records(root: Path):
                                      control_dir_device=control_stat.st_dev,
                                      control_dir_inode=control_stat.st_ino,
                                      memory_mib=2048)
+    profile = policy.ROOTLESS_FIXTURE_RESOURCE_PROFILE
+    for key in ("seed_intent", "seed_receipt"):
+        entries[key].update(schema=policy.seed_schema(profile), **policy.profile_seed_fields(profile))
+    for key in ("launch_intent", "launch_receipt"):
+        entries[key].update(schema=policy.launch_schema(profile), resource_profile=profile)
     with mock.patch.object(launch, "_safe_runtime_path"):
-        args = launch._arguments(runtime_parent / vm_id, vm_id, 22022, 2048)
+        args = launch._arguments(runtime_parent / vm_id, vm_id, 22022, profile)
     entries["launch_intent"]["args"] = entries["launch_receipt"]["args"] = args
     refresh_links(entries)
     intent = {"schema": fixture.SCHEMA, "phase": "intent", "vm_id": vm_id,

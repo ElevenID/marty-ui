@@ -29,9 +29,28 @@ const {
   createIdentity,
   directRebind,
   rebindThroughConsole,
+  matchesOwnedRebindRequest,
+  matchesOwnedRebindInventory,
   ownedIdentityRevision,
   createConfigMutationJournal,
 } = require('./audit-beta-issuer-provider-switch');
+
+
+// Execute the real production service function and shared query utilities;
+// only its network primitive is replaced with a unit capture.
+async function productionRebindRequest(body, operation = 'rebindIssuerIdentity') {
+  const services=path.resolve(__dirname,'../../ui/src/services');
+  const queryModule={exports:{}};
+  vm.runInNewContext(fs.readFileSync(path.join(services,'queryUtils.js'),'utf8').replace(/\bexport\s+/g,'')
+    +'\nmodule.exports={requireOrganizationId,buildDefinedQueryString,withQuery};', {module:queryModule,URLSearchParams});
+  let observed;
+  const client=fs.readFileSync(path.join(services,'issuerIdentitiesApi.js'),'utf8')
+    .replace(/^import .*;\r?$/gm,'').replace(/export default \{[^}]+\};/,'').replace(/\bexport\s+/g,'');
+  const fn=vm.runInNewContext(client+'\n'+operation+';', {...queryModule.exports,
+    get:async(url)=>{observed={url:new URL(url,'https://beta.elevenidllc.com').href,body:null,method:'GET'};return {identities:[]};},
+    patch:async(url,payload)=>{observed={url:new URL(url,'https://beta.elevenidllc.com').href,body:JSON.parse(JSON.stringify(payload)),method:'PATCH'};return {};}});
+  await fn(body);return observed;
+}
 
 function fakeConfigTransport(initial) {
   let config = structuredClone(initial);
@@ -140,10 +159,12 @@ test('D02 real UI rebind is intercepted once with the owned revision and fails o
   const issuerDid = 'did:web:beta.elevenidllc.com:orgs:d02';
   for (const current of [expected, '"r-00000000-0000-4000-8000-000000000002"']) {
     let routeHandler, responseMatch, receiveResponse;
-    const forwarded = [];
+    const forwarded = [], observation = {};
+    const wire = await productionRebindRequest(identityRequest(issuerDid));
+    const readWire = await productionRebindRequest({organization_id:identityRequest(issuerDid).organization_id}, 'listPublicIssuerIdentities');
     const request = {
-      url: () => 'https://beta.elevenidllc.com/v1/signing-keys/issuer-identities?organization_id=00000000-0000-0000-0000-000000000001',
-      method: () => 'PATCH', postDataJSON: () => ({ organization_id: '00000000-0000-0000-0000-000000000001', issuer_did: issuerDid }),
+      url: () => wire.url,
+      method: () => wire.method, postDataJSON: () => wire.body,
       headers: () => ({ 'content-type': 'application/json' }),
       allHeaders: async () => ({ 'content-type': 'application/json', cookie: 'owned-session=present' }),
     };
@@ -160,14 +181,19 @@ test('D02 real UI rebind is intercepted once with the owned revision and fails o
             const response = { url: request.url, request: () => request, status: () => status,
               ok: () => status === 200, json: async () => ({ changed: status === 200,
                 config_revision: status === 200 ? '"r-00000000-0000-4000-8000-000000000003"' : null }) };
+            assert.equal(responseMatch({...response,url:()=>response.url()+'?foreign=1'}),false);
             if (responseMatch(response)) receiveResponse(response);
           } });
+        await routeHandler({request:()=>({url:()=>readWire.url,method:()=>readWire.method,postData:()=>null}),
+          abort:async()=>{throw new Error('Production UI refresh was blocked');},continue:async(options)=>{assert.equal(options,undefined);}});
+        await routeHandler({request:()=>request,abort:async()=>{},continue:async()=>{throw new Error('Duplicate request was forwarded');}});
       } }) }),
       route: async (_, handler) => { routeHandler = handler; },
       unroute: async (_, handler) => { assert.equal(handler, routeHandler); routeHandler = null; },
       waitForResponse: (match) => { responseMatch = match; return new Promise((resolve) => { receiveResponse = resolve; }); },
     };
-    const result = await rebindThroughConsole(page, issuerDid, expected);
+    const result = await rebindThroughConsole(page, issuerDid, expected, null, observation);
+    assert.deepEqual(observation,{forwardAttempted:1,blockedRequests:1,readRequestsContinued:1,responseObserved:true});
     assert.deepEqual(forwarded, [expected]);
     assert.equal(routeHandler, null);
     if (current === expected) assert.equal(ownedIdentityRevision(result), '"r-00000000-0000-4000-8000-000000000003"');
@@ -529,4 +555,29 @@ test('D02 setup-failure browser cleanup still retires the server session and alw
  const context={cookies:async()=>[{name:'session',value:'SOURCE_ONLY_COOKIE'}],close:async()=>{closed++;},request:{post:async()=>({status:()=>302}),get:async()=>({status:()=>200,json:async()=>({authenticated:false,user:null})})}};
  const report={};await closeProviderBrowser(context,{retain(){retained++;},retire:()=>true},report);assert.equal(retained,1);assert.equal(closed,1);assert.equal(report.adminSessionRetirement.oldCookieAuthenticated,false);assert.equal(report.adminSessionRetirement.contextClosed,true);
  const failed={};context.request.get=async()=>({status:()=>200,json:async()=>({authenticated:true,user:{}})});await assert.rejects(closeProviderBrowser(context,{retain(){},retire:()=>true},failed));assert.equal(closed,2);assert.equal(failed.adminSessionRetirement,undefined);
+});
+
+test('D02 UI request guard matches actual body-only client and public Rust DTO, refusing foreign selectors',async()=>{
+ const issuerDid='did:web:beta.elevenidllc.com:orgs:d02',tuple=identityRequest(issuerDid);
+ const wire=await productionRebindRequest({...tuple,signing_service_id:'private-provider',key_reference:'private-key'});
+ assert.equal(new URL(wire.url).search,'');assert.deepEqual(wire.body,tuple);
+ const dto=fs.readFileSync(path.resolve(__dirname,'../../rust/services/signing-keys/src/http.rs'),'utf8').match(/struct IssuerIdentityRequest \{([\s\S]*?)\n\}/)[1];
+ const fields=[...dto.matchAll(/^\s+([a-z_]+):/gm)].map(m=>m[1]);assert(Object.keys(wire.body).every(k=>fields.includes(k)));assert(!fields.includes('signing_service_id'));assert(!fields.includes('key_reference'));
+ const request=(url=wire.url,body=wire.body,method='PATCH')=>({url:()=>url,postDataJSON:()=>body,method:()=>method});
+ assert.equal(matchesOwnedRebindRequest(request(),issuerDid),true);
+ for(const [url,body,method]of [
+  [wire.url+'?organization_id='+tuple.organization_id,wire.body,'PATCH'],
+  [wire.url.replace('beta.elevenidllc.com','foreign.test'),wire.body,'PATCH'],
+  [wire.url+'/inspection',wire.body,'PATCH'],[wire.url,{...wire.body,organization_id:'foreign'},'PATCH'],
+  [wire.url,{...wire.body,issuer_did:'did:web:foreign.test'},'PATCH'],[wire.url,{...wire.body,key_purpose:'csca'},'PATCH'],
+  [wire.url,{...wire.body,credential_format:'ICAO_EMRTD'},'PATCH'],[wire.url,{...wire.body,algorithm:'EdDSA'},'PATCH'],
+  [wire.url,{...wire.body,signing_service_id:'private-provider'},'PATCH'],[wire.url,wire.body,'POST']
+ ])assert.equal(Boolean(matchesOwnedRebindRequest(request(url,body,method),issuerDid)),false);
+});
+
+test('D02 route preserves only the exact public organization inventory refresh',async()=>{
+ const org='00000000-0000-0000-0000-000000000001',wire=await productionRebindRequest({organization_id:org},'listPublicIssuerIdentities');
+ const request=(url=wire.url,method='GET',body=null)=>({url:()=>url,method:()=>method,postData:()=>body});
+ assert.equal(matchesOwnedRebindInventory(request()),true);
+ for(const [url,method,body]of [[wire.url.replace(org,'foreign'),'GET',null],[wire.url+'&algorithm=ES256','GET',null],[wire.url+'&organization_id='+org,'GET',null],[wire.url.replace('/issuer-identities?','/issuer-identities/inspection?'),'GET',null],[wire.url.replace('beta.elevenidllc.com','foreign.test'),'GET',null],[wire.url,'GET','{}'],[wire.url,'POST',null],[wire.url,'PUT',null],[wire.url,'DELETE',null]])assert.equal(matchesOwnedRebindInventory(request(url,method,body)),false);
 });

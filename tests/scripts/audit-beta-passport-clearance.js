@@ -426,31 +426,83 @@ async function approveAndIssue(page, ownedResources, evidenceDigest, { recording
   requireOwnedApplication(await requireJson(page, root), ownedResources);
   let lock;
   let approved;
-  ownedResources.uncertainMutations ||= [];
-  ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
-  try {
-    lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire passport reviewer lock');
-    if (!lock?.id || lock.organization_id !== ORG_ID || lock.applicant_id !== applicationId) {
-      throw new Error('Reviewer lock does not match the exact passport application');
+  if (recording) {
+    // The detail page owns this lock for its entire mounted lifetime.
+    const identity = await requireJson(page, '/v1/auth/me');
+    const reviewerId = identity?.authenticated === true
+      ? (identity?.user?.user_id || identity?.user?.sub) : null;
+    if (!reviewerId) throw new Error('Authenticated D-01 reviewer identity is unavailable');
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      lock = await requireJson(page, `${root}/lock`);
+      if (lock?.status === 'ACTIVE') break;
+      await page.waitForTimeout(250);
     }
-    approved = recording
-      ? await approveThroughConsole(page, ownedResources, recording,
-        `Synthetic scenario: approve pre-boarding clearance after reviewing passport evidence ${evidenceDigest}.`)
-      : requireOwnedApplication(await requireJson(page, `${root}/approve`, {
+    if (!lock?.id || lock.status !== 'ACTIVE' || lock.organization_id !== ORG_ID
+        || lock.applicant_id !== applicationId || lock.holder_user_id !== reviewerId) {
+      throw new Error('Detail-page reviewer lock is not held by this authenticated reviewer');
+    }
+    approved = await approveThroughConsole(page, ownedResources, recording,
+      `Synthetic scenario: approve pre-boarding clearance after reviewing passport evidence ${evidenceDigest}.`);
+  } else {
+    let verifiedLock = false;
+    let primaryError;
+    let releaseError;
+    ownedResources.uncertainMutations ||= [];
+    ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+    try {
+      lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire passport reviewer lock');
+      if (!lock?.id || lock.organization_id !== ORG_ID || lock.applicant_id !== applicationId) {
+        throw new Error('Reviewer lock does not match the exact passport application');
+      }
+      verifiedLock = true;
+      approved = requireOwnedApplication(await requireJson(page, `${root}/approve`, {
         method: 'POST',
         body: JSON.stringify({ notes: `D-01 passport evidence ${evidenceDigest} approved` }),
       }, 'Approve passport clearance application'), ownedResources);
-    if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
-  } finally {
-    const released = await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release passport reviewer lock');
-    if (released?.released !== true) throw new Error('Passport reviewer lock release was not confirmed');
-    ownedResources.uncertainMutations = ownedResources.uncertainMutations
-      .filter(({ operation }) => operation !== 'reviewer_lock');
+      if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
+    } catch (error) { primaryError = error; }
+    if (verifiedLock) {
+      try {
+        const released = await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release passport reviewer lock');
+        if (released?.released !== true) throw new Error('Passport reviewer lock release was not confirmed');
+        ownedResources.uncertainMutations = ownedResources.uncertainMutations
+          .filter(({ operation }) => operation !== 'reviewer_lock');
+        delete ownedResources.reviewLockReleaseFailure;
+      } catch (error) {
+        releaseError = error;
+        ownedResources.reviewLockReleaseFailure = 'REVIEWER_LOCK_RELEASE_UNCONFIRMED';
+      }
+    }
+    if (primaryError) throw primaryError;
+    if (releaseError) throw releaseError;
   }
+  if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
   const { issued, transaction } = await issueOwnedApplication(page, ownedResources, 'Issue pre-boarding credential', {
     requestIssue: recording ? (endpoint) => issueThroughConsole(page, recording, endpoint) : undefined,
   });
   return { lock, approved, issued, transaction };
+}
+
+function reviewerActionMode(apiOnly) {
+  return apiOnly
+    ? { boundary: 'AUTHENTICATED_PUBLIC_API', qualifiesUiReview: false }
+    : { boundary: 'REAL_ADMIN_UI', qualifiesUiReview: true };
+}
+
+async function confirmUiReviewerLockReleased(page, applicationId) {
+  const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
+  // Navigate while the authenticated browser still exists, then verify the
+  // detail page released its own lock. Closing the context cannot prove this.
+  await page.goto(`${BETA_ORIGIN}/console/org/operate/applications`, {
+    waitUntil: 'domcontentloaded', timeout: 60_000,
+  });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const lock = await requireJson(page, `${root}/lock`);
+    if (lock?.status === 'AVAILABLE' && !lock.id && !lock.holder_user_id
+        && lock.organization_id === ORG_ID && lock.applicant_id === applicationId) return true;
+    await page.waitForTimeout(250);
+  }
+  throw new Error('Detail-page reviewer lock release remains unconfirmed');
 }
 
 async function cleanup(page, ownedResources) {
@@ -565,9 +617,10 @@ async function runPassportDemo(evidence) {
       enabled: RECORD_VIDEO, scenario: 'passport-pre-boarding-clearance', pageName: 'clearance',
       onEvent: (events) => { report.recordingActions = events; },
     });
+    const reviewMode = reviewerActionMode(ADMIN_API_FUNCTIONAL);
     report.demonstrationBoundary = {
       data: 'SYNTHETIC_TRAVELER_WITH_NATIVE_PASSPORT_EVIDENCE', setup: 'AUTHENTICATED_PUBLIC_API',
-      applicationSubmission: 'AUTHENTICATED_PUBLIC_API', reviewerActions: 'REAL_ADMIN_UI',
+      applicationSubmission: 'AUTHENTICATED_PUBLIC_API', reviewerActions: reviewMode.boundary,
       verification: 'REAL_WALLET_PRESENTATION_WITH_API_RESULT',
     };
     const walletPage = await adminContext.newPage();
@@ -639,7 +692,8 @@ async function runPassportDemo(evidence) {
     }
     await showClearanceStep(page, 'Passport evidence submitted', 'The application carries the exact digest of the passport result already validated by the native Rust verifier.');
 
-    const approval = await approveAndIssue(page, ownedResources, evidenceDigest, { recording });
+    const approval = await approveAndIssue(page, ownedResources, evidenceDigest,
+      { recording: ADMIN_API_FUNCTIONAL ? undefined : recording });
     report.application.lockAcquired = Boolean(approval.lock?.id);
     report.application.approvedStatus = approval.approved?.status || null;
     const offerUri = approval.issued?.credential_offer_uri
@@ -708,7 +762,8 @@ async function runPassportDemo(evidence) {
     report.cleanup = await cleanup(page, ownedResources);
     cleanupComplete = report.cleanup.ok === true;
     journeyReady = Boolean(
-      report.configuration.allActive
+      reviewMode.qualifiesUiReview
+      && report.configuration.allActive
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && cleanupComplete
       && report.cleanup.credentialRevoked
@@ -726,6 +781,19 @@ async function runPassportDemo(evidence) {
       await cleanup(adminPage, ownedResources)
         .then((result) => { report.cleanup = result; })
         .catch((error) => { report.cleanupError = redact(error.message || String(error)); });
+    }
+    if (!ADMIN_API_FUNCTIONAL && adminPage && applicationId
+        && report.reviewSurface === 'ADMIN_APPLICATION_DETAIL') {
+      try {
+        report.application.uiLockReleased = await confirmUiReviewerLockReleased(adminPage, applicationId);
+      } catch (error) {
+        ownedResources.uncertainMutations ||= [];
+        if (!ownedResources.uncertainMutations.some(({ operation }) => operation === 'reviewer_lock')) {
+          ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+        }
+        report.finalizationFailures.push({ operation: 'ui_reviewer_lock_release',
+          error: redact(error.message || String(error)) });
+      }
     }
     let walletClosed = false;
     if (walletSession) {
@@ -791,6 +859,8 @@ if (require.main === module) {
 
 module.exports = {
   approveAndIssue,
+  reviewerActionMode,
+  confirmUiReviewerLockReleased,
   createAndSubmitApplication,
   clearanceApplicationTemplatePayload,
   clearanceCredentialPayload,

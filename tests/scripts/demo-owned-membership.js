@@ -72,6 +72,10 @@ function createOwnedMembership(operator, inputs) {
       for (const name of ['name', 'description']) assert(applicationSource.claim_collection_rules.some(rule =>
         rule.claim_name === `achievement_${name}` && rule.source === 'SYSTEM'
           && rule.source_config?.system_field === `template.${name}`), 'Preserve governed badge metadata rules');
+      assert(applicationSource.claim_collection_rules.some(rule => rule.claim_name === 'achievement_criteria'
+        && rule.source === 'SYSTEM' && rule.source_config?.system_field === 'constant'
+        && rule.source_config.value && typeof rule.source_config.value === 'object'
+        && !Array.isArray(rule.source_config.value)), 'Membership badge requires issuer-owned criteria');
       // Credential login's governed policy requires this exact source template.
       // Own the application and credential, never clone or retire shared policy authority.
       owned.credentialTemplateId = credential.id;

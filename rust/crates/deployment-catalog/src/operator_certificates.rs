@@ -33,11 +33,21 @@ fn lifetime(cert: &Certificate, now: Duration, minimum_ttl: Duration) -> Result<
 }
 
 pub fn check_lifetime(pem: &[u8], minimum_ttl: u64) -> Result<bool> {
-    Ok(lifetime(
-        &first_certificate(pem)?,
+    check_lifetime_at(
+        pem,
+        minimum_ttl,
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| REFUSAL)?,
+    )
+}
+
+/// Retained certificate evidence is validated at its bound observation time;
+/// live admission continues to use the current-time wrapper above.
+pub(crate) fn check_lifetime_at(pem: &[u8], minimum_ttl: u64, now: Duration) -> Result<bool> {
+    Ok(lifetime(
+        &first_certificate(pem)?,
+        now,
         Duration::from_secs(minimum_ttl),
     )
     .is_ok())
@@ -158,7 +168,16 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
     issuer_matches(&cert, &cert)?;
     // Reuse webpki's existing verification algorithms, including P-256 with
     // SHA-384/512. Match both AlgorithmIdentifiers, including parameters.
-    let public_algorithm = tbs
+    certificate_signature(&cert, &cert)
+}
+
+fn certificate_signature(cert: &Certificate, signer: &Certificate) -> Result<()> {
+    let tbs = &cert.tbs_certificate;
+    if cert.signature_algorithm != tbs.signature {
+        return Err(REFUSAL);
+    }
+    let public_algorithm = signer
+        .tbs_certificate
         .subject_public_key_info
         .algorithm
         .to_der()
@@ -169,7 +188,8 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
     let signature_algorithm =
         spki::der::asn1::AnyRef::from_der(&signature_algorithm).map_err(|_| REFUSAL)?;
     let message = tbs.to_der().map_err(|_| REFUSAL)?;
-    let public = tbs
+    let public = signer
+        .tbs_certificate
         .subject_public_key_info
         .subject_public_key
         .as_bytes()
@@ -185,6 +205,25 @@ pub fn check_replacement_ca(pem: &[u8], kind: &str, version: u64) -> Result<()> 
         return Err(REFUSAL);
     }
     Ok(())
+}
+
+/// Recovery checks the retained leaf's signature against the observed current
+/// issuer, without claiming that issuer's certificate bytes existed at bootstrap.
+/// This does not make the expired leaf usable for live TLS or alter check_chain.
+pub(crate) fn retained_leaf_signature(pem: &[u8], issuer_pem: &[u8], now: Duration) -> Result<()> {
+    let leaf = first_certificate(pem)?;
+    let issuer = first_certificate(issuer_pem)?;
+    let validity = &leaf.tbs_certificate.validity;
+    if validity.not_before.to_unix_duration() > now
+        || validity.not_after.to_unix_duration() <= validity.not_before.to_unix_duration()
+        || issuer.tbs_certificate.subject != issuer.tbs_certificate.issuer
+    {
+        return Err(REFUSAL);
+    }
+    issuer_constraints(&issuer, now, 0)?;
+    issuer_matches(&leaf, &issuer)?;
+    certificate_signature(&issuer, &issuer)?;
+    certificate_signature(&leaf, &issuer)
 }
 
 // The old `openssl verify` invocation had no purpose or hostname option. Parse
@@ -260,6 +299,16 @@ fn issuer_matches(child: &Certificate, parent: &Certificate) -> Result<()> {
 }
 
 pub fn check_chain(pem: &[u8], issuers: &[u8]) -> Result<()> {
+    check_chain_at(
+        pem,
+        issuers,
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| REFUSAL)?,
+    )
+}
+
+pub(crate) fn check_chain_at(pem: &[u8], issuers: &[u8], now: Duration) -> Result<()> {
     use rustls::pki_types::{CertificateDer, UnixTime};
     if !issuers.iter().any(|byte| !byte.is_ascii_whitespace())
         || issuers.len() > 64 * 1024
@@ -292,9 +341,6 @@ pub fn check_chain(pem: &[u8], issuers: &[u8]) -> Result<()> {
             intermediates.push(der.clone());
         }
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|_| REFUSAL)?;
     let verify_path = |path: &webpki::VerifiedPath<'_>| {
         let check = || -> Result<()> {
             let index = anchors

@@ -1,5 +1,5 @@
 /** Public DID identity operations. Provider configuration belongs to signingKeysApi. */
-import { get, post, put, patch, del } from './api';
+import { get, getWithRetryConfig, post, put, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
@@ -9,7 +9,9 @@ const organization = (params, action) => requireOrganizationId(
   action,
 );
 
-export async function createIssuerIdentity(body) {
+export async function createIssuerIdentity(body, options = {}) {
+  // Helper-only read controls must not leak from a shared options object to POST.
+  const { singleAttemptReads: _singleAttemptReads, allowReadback: _allowReadback, ...requestOptions } = options;
   return postWithIdempotency(BASE_PATH, {
     organization_id: organization(body, 'creating issuer identities'),
     issuer_did: body?.issuer_did,
@@ -17,7 +19,7 @@ export async function createIssuerIdentity(body) {
     credential_format: body?.credential_format,
     algorithm: body?.algorithm,
     key_attestation_policy: body?.key_attestation_policy,
-  });
+  }, requestOptions);
 }
 
 export async function listPublicIssuerIdentities(params = {}) {
@@ -102,11 +104,28 @@ export async function inspectIssuerIdentity(params = {}) {
   return result;
 }
 
-export async function getIssuerIdentityCapabilities(params = {}) {
+export async function getIssuerIdentityCapabilities(params = {}, options = {}) {
   const organizationId = organization(params, 'loading issuer capabilities');
-  const result = await get(withQuery(`${BASE_PATH}/capabilities`, buildDefinedQueryString({
+  const endpoint = withQuery(`${BASE_PATH}/capabilities`, buildDefinedQueryString({
     organization_id: organizationId,
-  })));
+  }));
+  const assertCurrent = () => {
+    if (options.isCurrent && !options.isCurrent()) {
+      const error = new Error('The issuer identity view or action changed.');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
+  assertCurrent();
+  let result;
+  try {
+    // Only explicit callers opt out of internal GET retries. Legacy callers
+    // retain the installed transport's retry policy and public response shape.
+    result = await (options.singleAttemptReads
+      ? getWithRetryConfig(endpoint, {}, { maxRetries: 0 }) : get(endpoint));
+  } finally {
+    assertCurrent();
+  }
   if (result?.organization_id !== organizationId
     || result?.basis !== 'configuration'
     || !Array.isArray(result?.creation_options)

@@ -23,7 +23,7 @@ const ReviewActivationCard = ({
           control={<Switch checked={checked} onChange={onChange} color="primary" {...switchProps} />}
           label={label}
         />
-        <Typography variant="caption" color="text.secondary" display="block" sx={{ ml: 4 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", ml: 4 }}>
           {checked ? activeDescription : inactiveDescription}
         </Typography>
       </CardContent>

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "selfhost-production",
-  "description": "Open-source self-host production stack served through the configured edge and tunnel.",
+  "description": "Open-source self-host production stack with configurable hosting and optional tunnel integration.",
   "env_file": ".env.selfhost.production.local",
   "compose_files": ["docker-compose.selfhost.prod.yml"],
   "compose_profiles": [],
@@ -81,8 +81,7 @@
     "haip_kms_token",
     "signing_keys_workload_server_cert",
     "openbao_tls_ca_cert",
-    "signing_keys_tls_kms_token",
-    "cloudflare_tunnel_token"
+    "signing_keys_tls_kms_token"
   ],
   "artifact_profile": "oss-release",
   "deployment_targets": ["docker-compose", "customer-bundle"],
@@ -91,7 +90,7 @@
     "up": ["up", "-d", "--build"],
     "down": ["down"],
     "ps": ["ps"],
-    "logs": ["logs", "-f", "edge", "cloudflared", "gateway", "keycloak"]
+    "logs": ["logs", "-f", "edge", "gateway", "keycloak"]
   },
   "smoke_tests": {
     "public_routes": ["/", "/login", "/console", "/v1/auth/me"],

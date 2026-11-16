@@ -195,7 +195,11 @@ fn application_status(error: AuthApplicationError) -> Status {
         | AuthApplicationError::ExpiredState
         | AuthApplicationError::MissingNonce
         | AuthApplicationError::MissingAccessToken
-        | AuthApplicationError::MissingIdToken => Status::invalid_argument(error.to_string()),
+        | AuthApplicationError::MissingIdToken
+        | AuthApplicationError::PasskeyEnrollmentUnavailable
+        | AuthApplicationError::PasskeyEnrollmentMismatch => {
+            Status::invalid_argument(error.to_string())
+        }
         AuthApplicationError::Port { .. } => Status::unavailable("AUTH.BACKEND_UNAVAILABLE"),
     }
 }

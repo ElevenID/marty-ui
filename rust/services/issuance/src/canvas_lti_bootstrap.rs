@@ -176,6 +176,10 @@ pub enum CanvasLtiBootstrapPlanError {
 pub enum CanvasLtiBootstrapRepositoryError {
     #[error("Canvas LTI bootstrap repository is unavailable")]
     Unavailable,
+    #[error("Canvas LTI binding is disabled")]
+    FeatureDisabled,
+    #[error("Canvas LTI session binding is invalid")]
+    InvalidSession,
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -422,8 +426,18 @@ fn session_error(cause: CanvasLtiExperienceSessionError) -> CanvasLtiBootstrapSe
     }
 }
 
-fn repository_error(_cause: CanvasLtiBootstrapRepositoryError) -> CanvasLtiBootstrapServiceError {
-    CanvasLtiBootstrapServiceError::RepositoryUnavailable
+fn repository_error(cause: CanvasLtiBootstrapRepositoryError) -> CanvasLtiBootstrapServiceError {
+    match cause {
+        CanvasLtiBootstrapRepositoryError::Unavailable => {
+            CanvasLtiBootstrapServiceError::RepositoryUnavailable
+        }
+        CanvasLtiBootstrapRepositoryError::FeatureDisabled => {
+            CanvasLtiBootstrapPlanError::FeatureDisabled.into()
+        }
+        CanvasLtiBootstrapRepositoryError::InvalidSession => {
+            CanvasLtiBootstrapPlanError::InvalidSession.into()
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

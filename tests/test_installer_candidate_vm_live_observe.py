@@ -161,8 +161,9 @@ def test_guest_readiness_remains_diagnostic_under_same_lease(
     calls = []
 
     def pinned(_control, *, port, user, packages, key_sha256,
-               known_hosts_sha256):
-        calls.append((port, user, packages, key_sha256, known_hosts_sha256))
+               known_hosts_sha256, resource_profile):
+        calls.append((port, user, packages, key_sha256, known_hosts_sha256,
+                      resource_profile))
         return {"guest_uid": 1000, "docker_initially_empty": True}
 
     monkeypatch.setattr(live, "pinned_guest", pinned)
@@ -174,6 +175,7 @@ def test_guest_readiness_remains_diagnostic_under_same_lease(
     assert record["qualified"] is False
     assert record["dispatch_authorized"] is False
     assert len(calls) == 1
+    assert calls[0][-1] is None  # Preserve the legacy seed's absent rootless profile.
     assert (registry / f"{VM_ID}.guest-readiness.json").is_file()
 
 

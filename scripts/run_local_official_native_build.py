@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
+import subprocess
 
+import prepare_local_official_native_build as source_preparer
 import scoped_native_build as build
 import scoped_native_profiles as profiles
 import seed_local_official_native_target as seed
@@ -19,6 +19,7 @@ from scoped_native_runtime import ref, require, sha
 
 HELPER = Path("C:/Users/maree/OneDrive/Glthub/marty-workspace/audits/beta-release-20261018/core440-issuer-build.py")
 PROFILE = "oid4vc-all-services"
+LATEST_PROFILE = "oid4vc-latest-maintenance-all-services"
 IMAGE = "sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1"
 
 
@@ -31,8 +32,8 @@ def read_exact(path: Path, digest: str) -> dict:
 def source_export(path: Path, digest: str) -> dict:
     packet = read_exact(path, digest)
     require(packet["state"] == "SOURCE_EXPORTED_NO_COMPILER"
-            and packet["buildProfile"] == PROFILE
-            and packet["freeze"]["sha256"] == build.OFFICIAL_FREEZE_SHA256,
+            and packet["buildProfile"] in build.OFFICIAL_PROFILES
+            and packet["freeze"]["sha256"] == (build.OFFICIAL_FREEZE_SHA256 if packet["buildProfile"] == PROFILE else build.LATEST_FREEZE_SHA256),
             "SOURCE_EXPORT_CHANGED")
     root = path.parent.resolve()
     for name, bound in packet["operatorFiles"].items():
@@ -46,17 +47,15 @@ def source_export(path: Path, digest: str) -> dict:
             and sha(Path(profiles.__file__)) == packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"],
             "LOADED_BUILD_SOURCE_CHANGED")
     product_repo = Path(packet["sources"]["ui"]["repository"])
+    producer_repo = Path(packet.get("producerRepository", product_repo))
     producer = packet["producerRevision"]
     tool = Path(packet["buildTool"]["path"])
     require(re.fullmatch(r"[a-f0-9]{40}", producer)
-            and subprocess.check_output(["git", "-C", str(product_repo), "rev-parse",
-                                         producer + "^{tree}"], text=True).strip() == packet["producerTree"]
-            and subprocess.check_output(["git", "-C", str(product_repo), "show",
-                                         producer + ":scripts/build-rust-service-binaries.sh"]) == tool.read_bytes(),
+            and source_preparer.git(producer_repo, "rev-parse", producer + "^{tree}").decode().strip() == packet["producerTree"]
+            and source_preparer.git(producer_repo, "show", producer + ":scripts/build-rust-service-binaries.sh") == tool.read_bytes(),
             "REVIEWED_BUILD_TOOL_GIT_OBJECT_CHANGED")
     for name, bound in packet["operatorFiles"].items():
-        require(subprocess.check_output(["git", "-C", str(product_repo), "show",
-                                         producer + ":scripts/" + name])
+        require(source_preparer.git(producer_repo, "show", producer + ":scripts/" + name)
                 == Path(bound["path"]).read_bytes(), "OPERATOR_GIT_OBJECT_CHANGED")
     return packet
 
@@ -86,7 +85,8 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             journal_path: Path, run_id: str, engine_id: str) -> None:
     packet = source_export(packet_path, packet_sha)
     seed = read_exact(seed_path, seed_sha)
-    scope = build.build_scope(PROFILE)
+    profile = packet["buildProfile"]
+    scope = build.build_scope(profile)
     freeze = read_exact(Path(packet["freeze"]["path"]), packet["freeze"]["sha256"])
     source_script = Path(packet["sources"]["ui"]["directory"]) / "scripts/build-rust-service-binaries.sh"
     build.verify_official_inputs(freeze, seed, source_script.read_text(), scope,
@@ -95,12 +95,13 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     require_official_journal(journal)
     root = packet_path.parent.resolve()
-    plan = {"privateDirectory": str(root), "buildProfile": PROFILE,
+    plan = {"privateDirectory": str(root), "buildProfile": profile,
             "profileSourceSha256": packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"],
             "executionOperatorSha256": packet["operatorFiles"]["scoped_native_build.py"]["sha256"],
             "uiRevision": scope["uiRevision"], "coreRevision": build.CORE_REVISION,
             "roleBinaries": scope["roles"], "sources": packet["sources"],
-            "sourceFreezeReceipt": packet["freeze"], "targetSeedReceipt": ref(seed_path),
+            "sourceFreezeReceipt": packet["freeze"],
+            ("targetReuseReceipt" if profile == LATEST_PROFILE else "targetSeedReceipt"): ref(seed_path),
             "recipe": packet["recipe"], "buildTool": packet["buildTool"],
             "lockGuard": packet["lockGuard"],
             "buildToolProducerRevision": packet["producerRevision"],
@@ -108,8 +109,9 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             "runId": run_id, "containerName": scope["prefix"] + run_id,
             "outputDirectory": str(root / "output"), "journalBackend": journal,
             "releaseQualified": False, "recordingQualified": False}
-    require(plan["targetSeedReceipt"]["sha256"] == seed_sha, "TARGET_SEED_CHANGED")
-    build.verify(plan, lambda args: subprocess.check_output(["git", *args]), PROFILE)
+    cache_key = "targetReuseReceipt" if profile == LATEST_PROFILE else "targetSeedReceipt"
+    require(plan[cache_key]["sha256"] == seed_sha, "TARGET_CACHE_INPUT_CHANGED")
+    build.verify(plan, lambda args: subprocess.check_output(["git", *args]), profile)
     destination = root / "prepared-build.json"
     with destination.open("x", encoding="utf-8") as target:
         json.dump(plan, target, indent=2)
@@ -121,22 +123,24 @@ def execute(mode: str, packet_path: Path, packet_sha: str, prepared_sha: str) ->
     packet = source_export(packet_path, packet_sha)
     prepared = packet_path.parent / "prepared-build.json"
     plan = read_exact(prepared, prepared_sha)
-    require(plan["buildProfile"] == PROFILE and plan["builderImage"] == IMAGE
+    profile = packet["buildProfile"]
+    require(plan["buildProfile"] == profile and plan["builderImage"] == IMAGE
             and plan["profileSourceSha256"] == packet["operatorFiles"]["scoped_native_profiles.py"]["sha256"]
             and plan["buildTool"] == packet["buildTool"]
             and plan["lockGuard"] == packet["lockGuard"]
             and plan["buildToolProducerRevision"] == packet["producerRevision"],
             "PREPARED_PROFILE_CHANGED")
     reference = {"path": str(prepared), "sha256": prepared_sha}
-    git = lambda args: subprocess.check_output(["git", *args])
+    def git(args):
+        return subprocess.check_output(["git", *args])
     if mode == "check":
-        build.verify(plan, git, PROFILE)
+        build.verify(plan, git, profile)
         print(json.dumps({"state": "SOURCE_INPUTS_VERIFIED_NO_COMPILER", "source": plan["uiRevision"]}))
         return
     require(os.environ.get("DOCKER_CONTEXT") == "desktop-linux", "EXPLICIT_DESKTOP_CONTEXT_REQUIRED")
     helper = helper_module()
-    result = (build.start(reference, helper, git, PROFILE) if mode == "start"
-              else build.finish(reference, helper, git, PROFILE))
+    result = (build.start(reference, helper, git, profile) if mode == "start"
+              else build.finish(reference, helper, git, profile))
     print(json.dumps({"state": result["state"], "source": plan["uiRevision"],
                       "exitCode": result.get("exitCode"), "releaseQualified": False}))
 
@@ -148,6 +152,8 @@ def main() -> None:
     parser.add_argument("--source-export", type=Path, required=True)
     parser.add_argument("--source-export-sha256", required=True)
     parser.add_argument("--seed-receipt", type=Path)
+    parser.add_argument("--reuse-receipt", type=Path)
+    parser.add_argument("--reuse-receipt-sha256")
     parser.add_argument("--seed-sha256")
     parser.add_argument("--journal-backend", type=Path)
     parser.add_argument("--run-id")
@@ -155,18 +161,21 @@ def main() -> None:
     parser.add_argument("--prepared-sha256")
     args = parser.parse_args()
     if args.mode == "prepare":
-        require(all((args.seed_receipt, args.seed_sha256, args.journal_backend,
-                     args.run_id, args.engine_id)) and args.prepared_sha256 is None,
-                "PREPARE_INPUTS_REQUIRED")
-        prepare(args.source_export, args.source_export_sha256,
-                args.seed_receipt, args.seed_sha256, args.journal_backend,
-                args.run_id, args.engine_id)
+        packet = read_exact(args.source_export, args.source_export_sha256)
+        latest = packet["buildProfile"] == LATEST_PROFILE
+        cache_path, cache_sha = ((args.reuse_receipt, args.reuse_receipt_sha256) if latest
+                                else (args.seed_receipt, args.seed_sha256))
+        other = (args.seed_receipt, args.seed_sha256) if latest else (args.reuse_receipt, args.reuse_receipt_sha256)
+        require(all((cache_path, cache_sha, args.journal_backend, args.run_id, args.engine_id))
+                and not any(other) and args.prepared_sha256 is None, "PREPARE_INPUTS_REQUIRED")
+        prepare(args.source_export, args.source_export_sha256, cache_path, cache_sha,
+                args.journal_backend, args.run_id, args.engine_id)
     else:
         require(args.prepared_sha256 and not any((args.seed_receipt, args.seed_sha256,
-                                                   args.journal_backend, args.run_id, args.engine_id)),
+                args.reuse_receipt, args.reuse_receipt_sha256, args.journal_backend, args.run_id, args.engine_id)),
                 "EXACT_PREPARED_INPUT_REQUIRED")
-        execute(args.mode, args.source_export, args.source_export_sha256,
-                args.prepared_sha256)
+        execute(args.mode, args.source_export, args.source_export_sha256, args.prepared_sha256)
+
 
 
 if __name__ == "__main__":

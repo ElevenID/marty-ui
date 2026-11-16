@@ -14,6 +14,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::legacy_json_compat::{json_truthy as python_json_truthy, untrimmed_json_text as text};
+
 use crate::{
     canvas_award_candidate::python_canonical_json,
     canvas_award_candidate_approval::{
@@ -573,9 +575,13 @@ fn canvas_approval_plan_failure(
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect::<String>();
+    if normalized == "openbadgev2" {
+        return "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template"
+            .to_owned();
+    }
     if !matches!(
         normalized.as_str(),
-        "openbadge" | "openbadgev2" | "openbadgev3" | "openbadgecredential"
+        "openbadge" | "openbadgev3" | "openbadgecredential"
     ) {
         return "Canvas issuance requires an Open Badge credential template".to_owned();
     }
@@ -778,7 +784,7 @@ fn verify_signature(
     Ok(())
 }
 
-fn validate_replay(
+pub(crate) fn validate_replay(
     receipt: &CanvasLegacyStoredReceipt,
     payload_hash: &str,
 ) -> Result<(), CanvasLegacyIngestError> {
@@ -1440,17 +1446,6 @@ fn feature_enabled(binding: &Map<String, Value>, flag: &str) -> bool {
     flags.get(flag).is_some_and(python_json_truthy)
 }
 
-fn python_json_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-    }
-}
-
 fn projected_evidence_heads(current: &[Value], revision: &Value) -> Vec<Value> {
     let revision_key = revision.get("logical_key").and_then(Value::as_str);
     current
@@ -1886,19 +1881,54 @@ fn nonempty_owned(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
-fn text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.clone(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').to_owned(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn retired_ob2_approval_reports_reissuance_instead_of_relabeling() {
+        let binding = json!({"credential_template_snapshot": {"credential_type": "OpenBadgeV2"}});
+        assert_eq!(
+            canvas_approval_plan_failure(&Map::new(), binding.as_object().unwrap(), None, true),
+            "Open Badges 2.0 is retired; configure an Open Badges 3.0 credential template"
+        );
+    }
+
+    #[test]
+    fn replay_requires_matching_payload_then_exact_success_status() {
+        for (stored_hash, status, expected) in [
+            ("payload", "evidence_received", Ok(())),
+            (
+                "other",
+                "evidence_received",
+                Err(CanvasLegacyIngestError::ReplayPayloadConflict),
+            ),
+            (
+                "payload",
+                "processed",
+                Err(CanvasLegacyIngestError::ReplayFlowConflict),
+            ),
+            (
+                "other",
+                "processed",
+                Err(CanvasLegacyIngestError::ReplayPayloadConflict),
+            ),
+            (
+                "payload",
+                "Evidence_Received",
+                Err(CanvasLegacyIngestError::ReplayFlowConflict),
+            ),
+        ] {
+            let receipt = CanvasLegacyStoredReceipt {
+                payload_hash: stored_hash.into(),
+                status: status.into(),
+                response: json!({"preserved": [null, {"replayed": false}]}),
+            };
+            assert_eq!(validate_replay(&receipt, "payload"), expected);
+        }
+    }
 
     #[test]
     fn config_debug_redacts_the_webhook_secret() {

@@ -19,7 +19,7 @@ The core console work is largely implemented:
 - Guided setup and quick-create drawers exist in the current UI
 - Initial automated coverage now extends across dashboard readiness logic, focused RBAC coverage for `TeamPage`, notifications, audit, and signing keys, polling-resilience checks for notification and dashboard refresh surfaces, and gateway-backed service smoke for dashboard and signing-key contracts
 - Real CLI binary smoke coverage now exercises API-key auth, health, organization bootstrap, template listing, verification start/status, and the shipped `marty test e2e` health scenario against a live local HTTP surface
-- A dedicated CLI + gateway manual smoke task list now exists in `MANUAL_READINESS_TASKS.md`
+- A dedicated CLI + gateway manual smoke task list now exists in `docs/operations/MANUAL_READINESS_TASKS.md`
 
 The remaining work is mostly in documentation, accessibility, scale testing, and real-environment sign-off.
 
@@ -101,7 +101,7 @@ The following files provide the strongest current evidence that the implementati
   - Dashboard rendering coverage across empty, partial, operational, degraded, and error states
 - `marty-cli/src/commands/__tests__/cliSmoke.integration.test.js`
   - Real `bin/marty.js` smoke coverage for API-key auth, `health`, `orgs list/switch`, `templates list`, `verify start`, `verify status`, and `test e2e --scenario health`
-- `MANUAL_READINESS_TASKS.md`
+- `docs/operations/MANUAL_READINESS_TASKS.md`
   - Prioritized CLI + gateway task list for manual sign-off and smoke validation
 
 ---

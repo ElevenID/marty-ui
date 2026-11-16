@@ -1,0 +1,146 @@
+--- a/src/account.rs
++++ b/src/account.rs
+@@ -20 +19,0 @@
+-use serde::de::DeserializeOwned;
+@@ -28 +27 @@
+-    AccountCredentials, AuthorizationStatus, Empty, Header, JoseJson, Jwk, KeyOrKeyId, NewAccount,
++    AccountCredentials, AuthorizationState, AuthorizationStatus, Empty, Header, JoseJson, Jwk, KeyOrKeyId, NewAccount,
+@@ -110 +109 @@
+-        let state = Problem::check::<OrderState>(rsp).await?;
++        let state = OrderState::from_response(rsp).await?;
+@@ -150 +149 @@
+-            state: Problem::check::<OrderState>(rsp).await?,
++            state: OrderState::from_response(rsp).await?,
+@@ -379 +378 @@
+-    pub(crate) async fn get<T: DeserializeOwned>(
++    pub(crate) async fn get_authorization(
+@@ -383 +382 @@
+-    ) -> Result<T, Error> {
++    ) -> Result<AuthorizationState, Error> {
+@@ -386 +385 @@
+-        Problem::check(rsp).await
++        AuthorizationState::from_response(rsp).await
+--- a/src/types.rs
++++ b/src/types.rs
+@@ -5 +5 @@
+-use std::time::Instant;
++use std::time::{Instant, SystemTime};
+@@ -163,0 +164,5 @@
++    /// HTTP response hints, when this problem was returned by an ACME request.
++    ///
++    /// This is populated from response headers, never from the JSON document.
++    #[serde(skip)]
++    pub response_metadata: Option<ResponseMetadata>,
+@@ -171,0 +177 @@
++        let metadata = ResponseMetadata::from_response(&rsp);
+@@ -176 +182,25 @@
+-            false => Err(serde_json::from_slice::<Self>(&body)?.into()),
++            false => {
++                let mut problem = serde_json::from_slice::<Self>(&body)?;
++                problem.response_metadata = Some(metadata);
++                Err(problem.into())
++            }
++        }
++    }
++}
++
++/// Response hints for an installation owner that persists its own retry schedule.
++///
++/// Exposing these hints does not change the client's existing retry behavior.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ResponseMetadata {
++    /// Observed HTTP status, independent of a problem document's optional status.
++    pub status: u16,
++    /// Absolute deadline parsed from a valid Retry-After header, if present.
++    pub retry_after: Option<SystemTime>,
++}
++
++impl ResponseMetadata {
++    pub(crate) fn from_response(rsp: &BytesResponse) -> Self {
++        Self {
++            status: rsp.parts.status.as_u16(),
++            retry_after: crate::retry_after(rsp),
+@@ -348,0 +379,12 @@
++    /// The server's expiry timestamp, when supplied, in its original RFC 3339 form.
++    ///
++    /// Callers persisting orders must validate this value before scheduling work.
++    pub expires: Option<String>,
++    /// The exact identifiers in the server's order document, when supplied.
++    ///
++    /// Missing identifiers remain distinguishable from an empty list. Durable
++    /// installation owners must require and compare these with their saved intent.
++    pub identifiers: Option<Vec<Identifier>>,
++    /// HTTP hints for the response that produced this state.
++    #[serde(skip)]
++    pub response_metadata: Option<ResponseMetadata>,
+@@ -371,0 +414,9 @@
++}
++
++impl OrderState {
++    pub(crate) async fn from_response(rsp: BytesResponse) -> Result<Self, Error> {
++        let metadata = ResponseMetadata::from_response(&rsp);
++        let mut state = Problem::check::<Self>(rsp).await?;
++        state.response_metadata = Some(metadata);
++        Ok(state)
++    }
+@@ -621,0 +673,5 @@
++    /// The server's expiry timestamp, when supplied, in its original RFC 3339 form.
++    pub expires: Option<String>,
++    /// HTTP hints for the response that produced this state.
++    #[serde(skip)]
++    pub response_metadata: Option<ResponseMetadata>,
+@@ -629,0 +686,7 @@
++    pub(crate) async fn from_response(rsp: BytesResponse) -> Result<Self, Error> {
++        let metadata = ResponseMetadata::from_response(&rsp);
++        let mut state = Problem::check::<Self>(rsp).await?;
++        state.response_metadata = Some(metadata);
++        Ok(state)
++    }
++
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -49 +49,2 @@
+-    OrderStatus, Problem, ProfileMeta, RevocationReason, RevocationRequest, Subproblem, ZeroSsl,
++    OrderStatus, Problem, ProfileMeta, ResponseMetadata, RevocationReason, RevocationRequest,
++    Subproblem, ZeroSsl,
+@@ -192 +193 @@
+-        Ok(secs) => SystemTime::now() + Duration::from_secs(secs),
++        Ok(secs) => return SystemTime::now().checked_add(Duration::from_secs(secs)),
+--- a/src/order.rs
++++ b/src/order.rs
+@@ -101 +101 @@
+-        self.state = Problem::check::<OrderState>(rsp).await?;
++        self.state = OrderState::from_response(rsp).await?;
+@@ -119 +119 @@
+-            self.state = Problem::check::<OrderState>(rsp).await?;
++            self.state = OrderState::from_response(rsp).await?;
+@@ -218 +218 @@
+-        self.state = Problem::check::<OrderState>(rsp).await?;
++        self.state = OrderState::from_response(rsp).await?;
+@@ -298 +298 @@
+-            match self.account.get(self.nonce, &authz.url).await {
++            match self.account.get_authorization(self.nonce, &authz.url).await {
+@@ -343 +343 @@
+-        *self.state = Problem::check::<AuthorizationState>(rsp).await?;
++        *self.state = AuthorizationState::from_response(rsp).await?;
+@@ -384 +384 @@
+-        *self.state = Problem::check::<AuthorizationState>(rsp).await?;
++        *self.state = AuthorizationState::from_response(rsp).await?;
+@@ -442,0 +443,7 @@
++        self.set_ready_with_response().await.map(|_| ())
++    }
++
++    /// Notify readiness and return HTTP hints for a durable owner's schedule.
++    ///
++    /// This performs exactly the same request as [`Self::set_ready`].
++    pub async fn set_ready_with_response(&mut self) -> Result<crate::ResponseMetadata, Error> {
+@@ -448,0 +456 @@
++        let metadata = crate::ResponseMetadata::from_response(&rsp);
+@@ -451,2 +459,5 @@
+-            Some(details) => Err(Error::Api(details)),
+-            None => Ok(()),
++            Some(mut details) => {
++                details.response_metadata = Some(metadata);
++                Err(Error::Api(details))
++            }
++            None => Ok(metadata),

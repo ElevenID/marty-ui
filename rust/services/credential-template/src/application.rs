@@ -167,6 +167,7 @@ pub struct CreateTemplateCommand {
     pub compliance_profile_id: String,
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     pub issuance_protocol: Option<String>,
     pub now: DateTime<Utc>,
 }
@@ -188,6 +189,7 @@ pub struct UpdateTemplatePatch {
     pub revocation_profile_id: Option<String>,
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
+    pub jwt_vc_profile: Option<marty_jwt_vc_issuance::JwtVcTemplatePolicy>,
     pub issuance_protocol: Option<String>,
 }
 
@@ -275,6 +277,7 @@ impl CredentialTemplateApplication {
             issuer_requirements: IssuerRequirements::default(),
             supported_formats: command.supported_formats,
             credential_payload_format: payload_format.canonical().to_owned(),
+            jwt_vc_profile: command.jwt_vc_profile,
             wallet_configs: Vec::<WalletConfig>::new(),
             compliance_profile: command.compliance_profile,
             compliance_profile_id: Some(command.compliance_profile_id),
@@ -288,6 +291,7 @@ impl CredentialTemplateApplication {
             created_at: command.now,
             updated_at: command.now,
         };
+        template.validate_jwt_vc_profile()?;
         for attribute in &template.derived_attributes {
             crate::public_configuration::validate_derivation_parameters(&attribute.parameters, 0)?;
         }
@@ -350,6 +354,12 @@ impl CredentialTemplateApplication {
         let current = self.load(&command.template_id).await?;
         self.require_membership(&command.user_id, &current).await?;
         current.ensure_draft_mutation()?;
+        if current.jwt_vc_profile.is_none() && command.patch.jwt_vc_profile.is_some() {
+            return Err(CredentialTemplateError::InvalidConfiguration(
+                "create a new explicit JWT-VC template with its own compliance binding".into(),
+            )
+            .into());
+        }
         let mut candidate = apply_update(current, command.patch, command.now)?;
         let payload_format = normalize_payload_format(
             Some(&candidate.credential_payload_format),
@@ -379,6 +389,7 @@ impl CredentialTemplateApplication {
         candidate.credential_payload_format = payload_format.canonical().to_owned();
         candidate.issuer_did = Some(issuer.issuer_did);
         candidate.issuer_algorithm = Some(issuer.issuer_algorithm);
+        candidate.validate_jwt_vc_profile()?;
         for attribute in &candidate.derived_attributes {
             crate::public_configuration::validate_derivation_parameters(&attribute.parameters, 0)?;
         }
@@ -437,6 +448,7 @@ impl CredentialTemplateApplication {
             .await?;
         template.issuer_did = Some(issuer.issuer_did);
         template.issuer_algorithm = Some(issuer.issuer_algorithm);
+        template.validate_jwt_vc_profile()?;
         template.activate(now)?;
         self.repository.save(&template).await?;
         Ok(template)
@@ -530,6 +542,12 @@ impl CredentialTemplateApplication {
                 continue;
             };
             first_organization_id.get_or_insert_with(|| template.organization_id.clone());
+            if template.jwt_vc_profile.is_some() && configurations.contains_key(&credential_type) {
+                return Err(CredentialTemplateError::InvalidConfiguration(
+                    "duplicate explicit JWT-VC credential configuration".into(),
+                )
+                .into());
+            }
             configurations.insert(credential_type, configuration);
         }
         let issuer_display_name = if let Some(organization_id) = first_organization_id {
@@ -685,7 +703,7 @@ fn oid4vci_configuration(
             configuration.insert("format".to_owned(), Value::String("mso_mdoc".to_owned()));
             configuration.insert("doctype".to_owned(), Value::String(doctype.to_owned()));
         }
-        CredentialFormat::VcJwt => {
+        CredentialFormat::VcJwt | CredentialFormat::VcJwtDirectV1 => {
             configuration.insert("format".to_owned(), Value::String("jwt_vc_json".to_owned()));
             configuration.insert(
                 "credential_definition".to_owned(),
@@ -705,6 +723,15 @@ fn oid4vci_configuration(
         CredentialFormat::ZkMdoc | CredentialFormat::VdsNc | CredentialFormat::IcaoEmrtd => {
             return Ok(None);
         }
+    }
+    if let Some(policy) = &template.jwt_vc_profile {
+        template.validate_jwt_vc_profile()?;
+        let (id, metadata) = policy
+            .profile_metadata(credential_type, Value::Object(configuration))
+            .map_err(|_| {
+                CredentialTemplateError::InvalidConfiguration("invalid profile metadata".into())
+            })?;
+        return Ok(Some((id, metadata)));
     }
     Ok(Some((
         credential_type.to_owned(),
@@ -787,6 +814,9 @@ fn apply_update(
     }
     if let Some(value) = patch.issuance_protocol {
         template.issuance_protocol = IssuanceProtocol::parse(Some(&value))?.wire().to_owned();
+    }
+    if let Some(profile) = patch.jwt_vc_profile {
+        template.jwt_vc_profile = Some(profile);
     }
     template.updated_at = now;
     Ok(template)

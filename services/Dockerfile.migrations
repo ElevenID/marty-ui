@@ -1,5 +1,14 @@
+# syntax=docker/dockerfile:1.7
 # Public database migration image. Build context: marty-ui repository root.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS rust-migration-builder
+
+ARG PRIVATE_FORKS_ENABLED=false
+# The reader is never a build argument or image environment variable.
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3 \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+COPY .github/scripts/private-forks.py /usr/local/lib/marty-private-forks.py
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
@@ -7,7 +16,17 @@ COPY contracts/python-text-semantics.json /build/contracts/python-text-semantics
 COPY contracts/demo-seed-reference-v1.json /build/contracts/demo-seed-reference-v1.json
 COPY contracts/issuer-identity-capabilities-response.json /build/contracts/issuer-identity-capabilities-response.json
 COPY contracts/issuer-identity-inspection-response.json /build/contracts/issuer-identity-inspection-response.json
-RUN cargo build --locked --release -p marty-notification --bin marty-notification \
+# Keep source authentication separate from every Rust compilation step.
+RUN --mount=type=secret,id=private_forks_read_token \
+    if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      CARGO_HOME=/opt/private-cargo python3 /usr/local/lib/marty-private-forks.py \
+        fetch --container --token-file /run/secrets/private_forks_read_token; \
+    fi
+RUN if [ "$PRIVATE_FORKS_ENABLED" = true ]; then \
+      export CARGO_HOME=/opt/private-cargo CARGO_NET_OFFLINE=true; \
+      unset RUSTC_WRAPPER; \
+    fi; \
+    cargo build --locked --release -p marty-notification --bin marty-notification \
     && cargo build --locked --release -p marty-signing-keys --bin marty-migration-bootstrap \
     && cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed \
     && cargo build --locked --release -p marty-canvas-demo-seed --bin marty-canvas-demo-seed

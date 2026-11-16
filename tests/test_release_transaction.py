@@ -413,3 +413,71 @@ def test_claim_validation_rejects_tampering(
     target[path[-1]] = replacement
     with pytest.raises(transaction.ReleaseTransactionError, match=message):
         transaction.validate_claim(value)
+
+
+INSTALLER_CONSUMERS = (
+    "prepare-selfhost-image-lock", "preflight-selfhost-prepared-consumer", "prepare-installer-inputs",
+)
+
+
+@pytest.mark.parametrize("job", INSTALLER_CONSUMERS)
+def test_installer_qualified_consumers_use_the_canonical_validator(job: str) -> None:
+    import yaml
+    workflow = yaml.safe_load((SCRIPT.parents[1] / ".github/workflows/cd.yml").read_text(encoding="utf-8"))
+    consumers = [step.get("run", "") for step in workflow["jobs"][job]["steps"]
+                 if "python scripts/release_transaction.py validate" in step.get("run", "")]
+    assert len(consumers) == 1
+    assert "validate --require-qualified" in consumers[0]
+    assert ".gates | length" not in consumers[0]
+    assert '.state == "qualified"' not in consumers[0]
+    if job == "prepare-installer-inputs":
+        assert "'.tag == $tag'" in consumers[0]
+
+
+def installer_validate_args(tmp_path: Path, value: dict[str, object], *, qualified_mode: bool = True):
+    source = tmp_path / "installer-transaction.json"
+    source.write_text(json.dumps(value), encoding="utf-8")
+    arguments = ["validate", "--input", str(source), "--repository", "ElevenID/marty-ui",
+                 "--source-sha", SOURCE, "--stack-lock", str(tmp_path / "stack-lock.json"),
+                 "--claim-run-id", "99", "--output", str(tmp_path / "validated-installer.json")]
+    if qualified_mode:
+        arguments.append("--require-qualified")
+    return transaction._parser().parse_args(arguments)
+
+
+@pytest.mark.parametrize("state", ["qualified", "promoting", "promoted"])
+def test_installer_qualified_cli_accepts_all_six_canonical_gates(tmp_path: Path, state: str) -> None:
+    value = qualified(tmp_path)
+    if state == "promoting":
+        value = transaction.record_promotion(value, role="ui", digest=DIGESTS["ui"])
+    elif state == "promoted":
+        for role in transaction.REQUIRED_IMAGE_ROLES:
+            value = transaction.record_promotion(value, role=role, digest=DIGESTS[role])
+    transaction.main(installer_validate_args(tmp_path, value))
+    actual = json.loads((tmp_path / "validated-installer.json").read_text(encoding="utf-8"))
+    assert actual["state"] == state
+    assert set(actual["gates"]) == set(GATES)
+    assert "official_interoperability" in actual["gates"]
+
+
+@pytest.mark.parametrize("change", ["missing-official", "renamed-official"])
+def test_installer_qualified_cli_refuses_missing_or_foreign_official_gate(tmp_path: Path, change: str) -> None:
+    value = qualified(tmp_path)
+    removed = value["gates"].pop("official_interoperability")
+    if change == "renamed-official":
+        value["gates"]["local_demo"] = removed
+    with pytest.raises(transaction.ReleaseTransactionError, match="gate roles"):
+        transaction.main(installer_validate_args(tmp_path, value))
+    assert not (tmp_path / "validated-installer.json").exists()
+
+
+@pytest.mark.parametrize("factory", [claim, digests_recorded])
+def test_installer_qualified_cli_refuses_unqualified_states(tmp_path: Path, factory) -> None:
+    with pytest.raises(transaction.ReleaseTransactionError, match="qualified transaction"):
+        transaction.main(installer_validate_args(tmp_path, factory(tmp_path)))
+    assert not (tmp_path / "validated-installer.json").exists()
+
+
+def test_installer_qualified_opt_in_preserves_default_claim_validation(tmp_path: Path) -> None:
+    transaction.main(installer_validate_args(tmp_path, claim(tmp_path), qualified_mode=False))
+    assert json.loads((tmp_path / "validated-installer.json").read_text(encoding="utf-8"))["state"] == "claimed"

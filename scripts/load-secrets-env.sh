@@ -36,7 +36,13 @@ load_secret_var() {
             exit 1
         fi
 
-        value="$(tr -d '\r' < "${file_path}")"
+        # Callers also source this script in an && list, where shell errexit
+        # does not stop a failed read. Never launch with a partial/empty value
+        # after the selected file reader fails, and keep its output private.
+        if ! value="$(tr -d '\r' 2>/dev/null < "${file_path}")"; then
+            echo "Secret file for ${var_name} could not be read before startup." >&2
+            exit 1
+        fi
         export "${var_name}=${value}"
         unset "${file_var_name}"
     fi
@@ -53,17 +59,59 @@ require_secret_var() {
     fi
 }
 
-expand_template_var() {
-    var_name="$1"
-    template_var_name="${var_name}_TEMPLATE"
+# Encode one URI component using only POSIX shell builtins. Keeping only RFC
+# 3986 unreserved bytes also encodes a literal '%' instead of decoding a
+# customer's password twice. The subshell keeps bytewise LC_ALL local.
+encode_database_password() (
+    LC_ALL=C
+    export LC_ALL
+    marty_password_remaining=$1
+    while [ -n "$marty_password_remaining" ]; do
+        marty_password_tail=${marty_password_remaining#?}
+        marty_password_byte=${marty_password_remaining%"$marty_password_tail"}
+        case "$marty_password_byte" in
+            [a-zA-Z0-9.~_-]) printf '%s' "$marty_password_byte" ;;
+            *) printf '%%%02X' "'$marty_password_byte" ;;
+        esac
+        marty_password_remaining=$marty_password_tail
+    done
+)
 
-    eval "template_value=\${${template_var_name}:-}"
-    if [ -z "${template_value}" ]; then
+expand_database_url() {
+    if [ -z "${DATABASE_URL_TEMPLATE:-}" ]; then
         return 0
     fi
 
-    expanded_value="$(eval "printf '%s' \"${template_value}\"")"
-    export "${var_name}=${expanded_value}"
+    # Compose resolves $$ to $ before starting a container. Accept either
+    # spelling for the one catalog-owned password slot; never evaluate shell
+    # commands, additional variables or substitutions from configuration.
+    marty_database_slot='${MARTY_DB_PASSWORD}'
+    case "$DATABASE_URL_TEMPLATE" in
+        *'$${MARTY_DB_PASSWORD}'*) marty_database_slot='$${MARTY_DB_PASSWORD}' ;;
+    esac
+    case "$DATABASE_URL_TEMPLATE" in
+        *"$marty_database_slot"*)
+            marty_database_prefix=${DATABASE_URL_TEMPLATE%%"$marty_database_slot"*}
+            marty_database_suffix=${DATABASE_URL_TEMPLATE#*"$marty_database_slot"}
+            ;;
+        *)
+            marty_database_prefix=$DATABASE_URL_TEMPLATE
+            marty_database_suffix=
+            ;;
+    esac
+    case "$marty_database_prefix$marty_database_suffix" in
+        *'$'*|*'`'*)
+            echo 'DATABASE_URL_TEMPLATE only supports the MARTY_DB_PASSWORD placeholder; use DATABASE_URL for a complete URI.' >&2
+            exit 1
+            ;;
+    esac
+    case "$DATABASE_URL_TEMPLATE" in
+        *"$marty_database_slot"*)
+            DATABASE_URL="$marty_database_prefix$(encode_database_password "${MARTY_DB_PASSWORD:-}")$marty_database_suffix"
+            ;;
+        *) DATABASE_URL=$DATABASE_URL_TEMPLATE ;;
+    esac
+    export DATABASE_URL
 }
 
 load_secret_env() {
@@ -77,6 +125,7 @@ load_secret_env() {
     load_secret_var GOOGLE_ANALYTICS_MEASUREMENT_ID
     load_secret_var GOOGLE_SITE_VERIFICATION
     load_secret_var MARTY_API_CLIENT_SECRET
+    load_secret_var OIDC_CLIENT_SECRET
     load_secret_var ISSUANCE_API_KEY
     load_secret_var TOKEN_HMAC_KEY
     load_secret_var SIGNING_KEYS_INTERNAL_API_KEY
@@ -93,7 +142,7 @@ load_secret_env() {
     load_secret_var OPENBAO_SERVICE_TOKEN
     load_secret_var SMTP_PASSWORD
     load_secret_var CLOUDFLARE_TUNNEL_TOKEN
-    expand_template_var DATABASE_URL
+    expand_database_url
 }
 
 load_secret_env

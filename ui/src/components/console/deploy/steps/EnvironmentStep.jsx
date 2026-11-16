@@ -54,7 +54,7 @@ const EnvironmentStep = ({ data, onChange }) => {
       <Typography variant="h6" gutterBottom>
         {t('wizards.deploymentProfile.environmentStep.title')}
       </Typography>
-      <Typography color="text.secondary" paragraph>
+      <Typography color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.environmentStep.description')}
       </Typography>
 
@@ -85,13 +85,13 @@ const EnvironmentStep = ({ data, onChange }) => {
       <Typography variant="subtitle2" gutterBottom>
         {t('wizards.deploymentProfile.environmentStep.fields.environmentType')}
       </Typography>
-      <Typography variant="body2" color="text.secondary" paragraph>
+      <Typography variant="body2" color="text.secondary" component="p" sx={{ marginBottom: '16px' }}>
         {t('wizards.deploymentProfile.environmentStep.helpers.environmentType')}
       </Typography>
 
       <Grid container spacing={2} sx={{ mb: 4 }}>
         {getEnvironmentTypes(t).map((type) => (
-          <Grid item xs={12} md={4} key={type.value}>
+          <Grid size={{ xs: 12, md: 4 }} key={type.value}>
             <Card
               variant={data.environment_type === type.value ? 'outlined' : 'elevation'}
               sx={{

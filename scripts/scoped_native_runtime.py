@@ -6,6 +6,8 @@ Compose helpers may be supplied by a hash-bound private wrapper at execution.
 """
 from __future__ import annotations
 import hashlib
+import base64
+import binascii
 import errno
 import json
 import os
@@ -19,7 +21,50 @@ CORE_REVISION = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"flow": "marty-flow", "gateway": "marty-gateway", "issuance-native": "marty-issuance-service"}
 MARTY_CLIENTS = frozenset("auth organization credential-template trust-profile applicant notification compliance-profile presentation-policy deployment-profile flow verification revocation-profile device-registration issuance issuance-native canvas-sync-worker passport-beta-bureau".split())
 RUNTIME_ROLES = MARTY_CLIENTS | frozenset(("gateway", "signing-keys", "passport-callback-signer", "canvas-sandbox", "ui-prod"))
+# The current D12 functional cohort has event-stream in the 22 owned runtime
+# slots. Keep the historical Canvas cohort exact for every older profile.
+D12_CURRENT_RUNTIME_ROLES = (RUNTIME_ROLES - {"canvas-sandbox"}) | {"event-stream"}
+
+def runtime_roles(profile=None):
+    if profile in ("d12-passport-current-functional", "d05-membership-current-functional"):
+        return D12_CURRENT_RUNTIME_ROLES
+    require(profile in (None, "native-devtest-passport-four-role", "d12-passport-canonical-subset"),
+            "UNREVIEWED_RUNTIME_ROLE_PROFILE")
+    return RUNTIME_ROLES
 MIGRATIONS = ("flow/0003_physical_start_intents", "issuance/0010_passport_start_idempotency", "issuance/0011_passport_administrative_cancellation")
+D05_MIGRATIONS = (*MIGRATIONS, "credential-template/0003_membership_achievement_criteria", "issuance/0012_membership_achievement_criteria")
+
+def migration_names(profile=None):
+    return D05_MIGRATIONS if profile == "d05-membership-current-functional" else MIGRATIONS
+
+JOURNAL_FILES = frozenset(("build-apply-intent.json", "build-state.json", "build-receipt.json", "configuration-receipt.json"))
+JOURNAL_FILE_MAXIMUM = 256 * 1024
+JOURNAL_RESPONSE_MAXIMUM = 1024 * 1024
+
+
+def journal_readback(raw):
+    """Exact private stored bytes; never reconstruct a writer's JSON encoding."""
+    require(isinstance(raw, bytes) and 0 < len(raw) <= JOURNAL_FILE_MAXIMUM, "JOURNAL_STORED_BYTES_BOUND")
+    def nonfinite(_):
+        raise ValueError("JOURNAL_NONFINITE_JSON")
+    value = json.loads(raw.decode("utf-8", errors="strict"), parse_constant=nonfinite)
+    return {"sha256": hashlib.sha256(raw).hexdigest(), "value": value,
+            "storedBytesBase64": base64.b64encode(raw).decode("ascii")}
+
+
+def validate_journal_readback(response):
+    encoded = response.get("storedBytesBase64")
+    require(isinstance(encoded, str) and 0 < len(encoded) <= 4 * ((JOURNAL_FILE_MAXIMUM + 2) // 3), "JOURNAL_BASE64_BOUND")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ValueError("JOURNAL_BASE64_INVALID") from error
+    require(base64.b64encode(raw).decode("ascii") == encoded, "JOURNAL_BASE64_NONCANONICAL")
+    reopened = journal_readback(raw)
+    require(response.get("sha256") == reopened["sha256"], "JOURNAL_STORED_SHA_CHANGED")
+    require(json.dumps(response.get("value"), sort_keys=True, ensure_ascii=True, allow_nan=False)
+            == json.dumps(reopened["value"], sort_keys=True, ensure_ascii=True, allow_nan=False), "JOURNAL_STORED_VALUE_CHANGED")
+    return raw
 
 def require(value, code):
     if not value:
@@ -39,6 +84,13 @@ def read_ref(bound, maximum=16 * 1024 * 1024):
     require(file.stat().st_size <= maximum and re.fullmatch(r"[a-f0-9]{64}", bound.get("sha256", "")), "BOUNDED_EXACT_REF_REQUIRED")
     require(sha(file) == bound["sha256"], "BOUND_FILE_CHANGED")
     return file
+
+EXECUTABLE_REF_MAXIMUM = 512 * 1024 * 1024
+
+def read_executable_ref(bound):
+    """Executable bytes need a separate bound; JSON/log refs stay narrow."""
+    return read_ref(bound, EXECUTABLE_REF_MAXIMUM)
+
 
 def sync_parent(file):
     """One bounded directory flush; unexpected errors stop before dispatch.
@@ -86,11 +138,22 @@ def durable_barrier(proof):
 def selected_sources(plan, profile=None):
     if profile is None:
         ui_revision, core_revision, roles = UI_REVISION, CORE_REVISION, ROLE_BINARIES
+    elif profile == "native-devtest-passport-four-role":
+        from scoped_native_maintenance import SOURCE, CORE, PROFILE, ROLE_BINARIES as FOUR_ROLES
+        require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
+                "MAINTENANCE_ROLLOUT_IS_NOT_BUILD_PROFILE")
+        ui_revision, core_revision, roles = SOURCE, CORE, FOUR_ROLES
     elif profile == "d12-passport-canonical-subset":
         from scoped_passport_successor import SOURCE, CORE, PROFILE
         require(plan.get("rolloutProfile") == PROFILE and plan.get("buildProfile") is None,
                 "D12_ROLLOUT_IS_NOT_A_BUILD_PROFILE")
         ui_revision, core_revision, roles = SOURCE, CORE, ROLE_BINARIES
+    elif profile in ("d12-passport-current-functional", "d05-membership-current-functional"):
+        from scoped_native_profiles import current_rollout_build
+        selected = current_rollout_build(profile)
+        require(plan.get("rolloutProfile") == profile and plan.get("buildProfile") is None,
+                "D12_ROLLOUT_IS_NOT_BUILD_PROFILE")
+        ui_revision, core_revision, roles = (selected.ui_revision, selected.core_revision, dict(selected.roles))
     else:
         import scoped_native_profiles
         selected = scoped_native_profiles.reviewed_profile(profile)

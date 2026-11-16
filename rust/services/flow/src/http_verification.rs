@@ -372,6 +372,20 @@ struct DirectPostForm {
     state: Option<String>,
     #[serde(default)]
     response: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+enum DirectPostInput {
+    Presentation(VerificationSubmissionInput),
+    Decline {
+        state: Option<String>,
+        encrypted: bool,
+    },
 }
 
 async fn submit_direct_post(
@@ -380,8 +394,34 @@ async fn submit_direct_post(
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let instance = required_instance(&state, &instance_id).await?;
+    let expected_instance = instance.clone();
     let (input, instance) = direct_post_input(&state, instance, form).await?;
-    let result = evaluate_submission(&state, instance, input, false).await?;
+    let input = match input {
+        DirectPostInput::Presentation(input) => input,
+        DirectPostInput::Decline {
+            state: wallet_state,
+            encrypted,
+        } => {
+            let now = Utc::now().max(instance.updated_at + Duration::microseconds(1));
+            let cancelled = crate::prepare_verification_decline(
+                instance,
+                wallet_state.as_deref(),
+                encrypted,
+                now,
+            )?;
+            // A CAS of the state-bound preimage prevents a concurrent completion or
+            // replacement request from being cancelled. No verification/auth-session finalizer runs.
+            commit_request_snapshot(
+                &state,
+                &cancelled,
+                expected_instance.status,
+                expected_instance.updated_at,
+            )
+            .await?;
+            return Ok(Json(json!({})));
+        }
+    };
+    let result = evaluate_submission(&state, instance, input, false, expected_instance).await?;
     if result.decision.as_deref() != Some("allow") || result.result.as_deref() != Some("passed") {
         return Err(FlowHttpError::new(
             StatusCode::BAD_REQUEST,
@@ -409,9 +449,26 @@ async fn direct_post_input(
     state: &FlowHttpState,
     instance: crate::FlowInstanceRecord,
     form: DirectPostForm,
-) -> Result<(VerificationSubmissionInput, crate::FlowInstanceRecord), FlowHttpError> {
-    let vp_token = form.vp_token.filter(|value| !value.is_empty());
-    let response = form.response.filter(|value| !value.is_empty());
+) -> Result<(DirectPostInput, crate::FlowInstanceRecord), FlowHttpError> {
+    if direct_post_decline(&form)? {
+        return Ok((
+            DirectPostInput::Decline {
+                state: form.state,
+                encrypted: false,
+            },
+            instance,
+        ));
+    }
+    let vp_token = form
+        .vp_token
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .cloned();
+    let response = form
+        .response
+        .as_ref()
+        .filter(|value| !value.is_empty())
+        .cloned();
     if vp_token.is_some() == response.is_some() {
         return Err(FlowHttpError::new(
             StatusCode::BAD_REQUEST,
@@ -423,6 +480,15 @@ async fn direct_post_input(
         reject_unactionable_encrypted_submission(state, &instance).await?;
         let decrypted =
             decrypt_verification_response(&state.providers, &instance, &response).await?;
+        if decrypted.get("error").is_some() {
+            return Ok((
+                DirectPostInput::Decline {
+                    state: encrypted_decline_state(&decrypted, &form)?,
+                    encrypted: true,
+                },
+                instance,
+            ));
+        }
         let vp_token = decrypted.get("vp_token").cloned().ok_or_else(|| {
             FlowHttpError::new(
                 StatusCode::BAD_REQUEST,
@@ -431,7 +497,7 @@ async fn direct_post_input(
             )
         })?;
         return Ok((
-            VerificationSubmissionInput {
+            DirectPostInput::Presentation(VerificationSubmissionInput {
                 vp_token: token_string(vp_token)?,
                 presentation_submission: decrypted
                     .get("presentation_submission")
@@ -443,19 +509,82 @@ async fn direct_post_input(
                     .map(str::to_owned)
                     .or(form.state),
                 audience_override: None,
-            },
+            }),
             instance,
         ));
     }
     Ok((
-        VerificationSubmissionInput {
+        DirectPostInput::Presentation(VerificationSubmissionInput {
             vp_token: vp_token.unwrap_or_default(),
             presentation_submission: form.presentation_submission.map(Value::String),
             state: form.state,
             audience_override: None,
-        },
+        }),
         instance,
     ))
+}
+
+fn direct_post_decline(form: &DirectPostForm) -> Result<bool, FlowHttpError> {
+    let Some(error) = form.error.as_deref() else {
+        return Ok(false);
+    };
+    validate_decline_shape(
+        error,
+        form.vp_token.is_some()
+            || form.response.is_some()
+            || form.presentation_submission.is_some()
+            || form.id_token.is_some()
+            || form.code.is_some(),
+    )?;
+    Ok(true)
+}
+
+fn encrypted_decline_state(
+    decrypted: &Value,
+    form: &DirectPostForm,
+) -> Result<Option<String>, FlowHttpError> {
+    let error = decrypted
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    validate_decline_shape(
+        error,
+        decrypted.get("vp_token").is_some()
+            || decrypted.get("presentation_submission").is_some()
+            || decrypted.get("id_token").is_some()
+            || decrypted.get("code").is_some()
+            || decrypted.get("response").is_some()
+            || form.vp_token.is_some()
+            || form.presentation_submission.is_some()
+            || form.id_token.is_some()
+            || form.code.is_some(),
+    )?;
+    if decrypted
+        .get("state")
+        .is_some_and(|value| !value.is_string())
+    {
+        return Err(FlowVerificationSubmissionError::StateMismatch.into());
+    }
+    let inner_state = decrypted.get("state").and_then(Value::as_str);
+    if let (Some(inner), Some(outer)) = (inner_state, form.state.as_deref()) {
+        if !constant_time_equal(inner, outer) {
+            return Err(FlowVerificationSubmissionError::StateMismatch.into());
+        }
+    }
+    Ok(inner_state
+        .map(str::to_owned)
+        .or_else(|| form.state.clone()))
+}
+
+fn validate_decline_shape(error: &str, mixed_response: bool) -> Result<(), FlowHttpError> {
+    if error != "access_denied" || mixed_response {
+        return Err(FlowHttpError::new(
+            StatusCode::BAD_REQUEST,
+            "verification_submission_shape",
+            "Expected access_denied without presentation or encrypted response fields",
+        ));
+    }
+    Ok(())
 }
 
 async fn submit_dc_api(
@@ -473,6 +602,9 @@ async fn submit_dc_api(
         ));
     }
     let mut instance = required_instance(&state, &instance_id).await?;
+    // Origin observations below belong to the replacement record, not to the
+    // persisted preimage used by finalization's compare-and-swap.
+    let expected_instance = instance.clone();
     let mut data = Value::Object(request.data.into_iter().collect());
     let mut response_mode = None;
     if let Some(response) = data
@@ -545,7 +677,7 @@ async fn submit_dc_api(
         audience_override: Some(format!("origin:{origin}")),
     };
     Ok(Json(json!(
-        evaluate_submission(&state, instance, input, true).await?
+        evaluate_submission(&state, instance, input, true, expected_instance).await?
     )))
 }
 
@@ -554,9 +686,10 @@ async fn evaluate_submission(
     instance: crate::FlowInstanceRecord,
     input: VerificationSubmissionInput,
     permit_terminal_replay: bool,
+    expected_instance: crate::FlowInstanceRecord,
 ) -> Result<crate::VerificationResultResponse, FlowHttpError> {
-    let expected_status = instance.status;
-    let expected_updated_at = instance.updated_at;
+    let expected_status = expected_instance.status;
+    let expected_updated_at = expected_instance.updated_at;
     let verifier_sender_id = instance
         .context
         .get("oid4vp_client_id")
@@ -580,7 +713,15 @@ async fn evaluate_submission(
     )
     .await?;
     match prepared {
-        PreparedVerificationSubmission::Final(finalization) => {
+        PreparedVerificationSubmission::Final(mut finalization) => {
+            finalization.expected_instance = expected_instance;
+            if finalization.receipt_input.is_some() {
+                finalization.receipt_input = Some(
+                    crate::verification_receipt::PreparedVerificationReceipt::prepare(
+                        &finalization,
+                    )?,
+                );
+            }
             commit_verification(state, &finalization, permit_terminal_replay).await
         }
         PreparedVerificationSubmission::Retryable(response) => Ok(response),
@@ -602,9 +743,11 @@ async fn evaluate_submission(
                 "Verification transaction has expired",
             ))
         }
-        PreparedVerificationSubmission::SameTerminal(response) if permit_terminal_replay => {
-            Ok(response)
-        }
+        PreparedVerificationSubmission::SameTerminal(response) if permit_terminal_replay => state
+            .repository
+            .verification_result(&expected_instance.organization_id, &response.instance_id)
+            .await?
+            .ok_or_else(verification_request_changed),
         PreparedVerificationSubmission::SameTerminal(_) => Err(already_processed()),
         PreparedVerificationSubmission::ReplayConflict => Err(replay_conflict()),
     }
@@ -615,34 +758,56 @@ async fn commit_verification(
     finalization: &PreparedVerificationFinalization,
     permit_terminal_replay: bool,
 ) -> Result<crate::VerificationResultResponse, FlowHttpError> {
-    let response = finalization.instance.verification_projection()?;
-    if !state
+    let response = if finalization.receipt_input.is_some() {
+        state
+            .repository
+            .finalize_verification_with_receipt(finalization)
+            .await?
+            .map(|committed| committed.verification_projection())
+            .transpose()?
+    } else if state
         .repository
         .finalize_verification(
             &finalization.instance,
             &finalization.nonce_digest,
             finalization.replay_expires_at_ms,
-            finalization.expected_status,
+            &finalization.expected_instance,
             finalization.callback.as_ref(),
         )
         .await?
     {
-        let current = required_instance(state, &finalization.instance.id).await?;
-        let same_digest = current
-            .result
-            .as_ref()
-            .and_then(|result| result.get("submission_digest"))
-            .and_then(Value::as_str)
-            .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
-        if same_digest && permit_terminal_replay {
-            return Ok(current.verification_projection()?);
-        }
-        if same_digest {
-            return Err(already_processed());
-        }
-        return Err(replay_conflict());
+        Some(finalization.instance.verification_projection()?)
+    } else {
+        None
+    };
+    if let Some(response) = response {
+        return Ok(response);
     }
-    Ok(response)
+    let current = required_instance(state, &finalization.instance.id).await?;
+    let same_digest = current
+        .result
+        .as_ref()
+        .and_then(|result| result.get("submission_digest"))
+        .and_then(Value::as_str)
+        .is_some_and(|digest| constant_time_equal(digest, &finalization.submission_digest));
+    if same_digest && permit_terminal_replay {
+        return state
+            .repository
+            .verification_result(&current.organization_id, &current.id)
+            .await?
+            .ok_or_else(verification_request_changed);
+    }
+    if same_digest {
+        return Err(already_processed());
+    }
+    if matches!(
+        current.status,
+        marty_verification::flow::FlowInstanceStatus::AwaitingWallet
+            | marty_verification::flow::FlowInstanceStatus::InProgress
+    ) {
+        return Err(verification_request_changed());
+    }
+    Err(replay_conflict())
 }
 
 async fn submit_siop(
@@ -670,12 +835,19 @@ async fn submit_siop(
                     &prepared.finalization.instance,
                     &prepared.finalization.nonce_digest,
                     prepared.finalization.replay_expires_at_ms,
-                    prepared.finalization.expected_status,
+                    &prepared.finalization.expected_instance,
                     None,
                 )
                 .await?
             {
                 let current = required_instance(&state, &request.instance_id).await?;
+                if matches!(
+                    current.status,
+                    marty_verification::flow::FlowInstanceStatus::AwaitingWallet
+                        | marty_verification::flow::FlowInstanceStatus::InProgress
+                ) {
+                    return Err(verification_request_changed());
+                }
                 if let PreparedSiopSubmission::SameTerminal(response) = prepare_siop_submission(
                     current,
                     &request.id_token,
@@ -818,6 +990,14 @@ fn replay_conflict() -> FlowHttpError {
     )
 }
 
+fn verification_request_changed() -> FlowHttpError {
+    FlowHttpError::new(
+        StatusCode::CONFLICT,
+        "verification_request_changed",
+        "Verification request changed during evaluation; retrieve the current request and retry",
+    )
+}
+
 impl From<FlowVerificationStartError> for FlowHttpError {
     fn from(error: FlowVerificationStartError) -> Self {
         match error {
@@ -856,6 +1036,11 @@ impl From<FlowVerificationRequestError> for FlowHttpError {
     fn from(error: FlowVerificationRequestError) -> Self {
         match error {
             FlowVerificationRequestError::Provider(error) => error.into(),
+            FlowVerificationRequestError::RestartRequired => Self::new(
+                StatusCode::CONFLICT,
+                "verification_restart_required",
+                "Start a new verification request to bind its policy and credential authority revisions",
+            ),
             FlowVerificationRequestError::MethodNotAllowed => Self::new(
                 StatusCode::METHOD_NOT_ALLOWED,
                 "verification_request_method_not_allowed",
@@ -880,6 +1065,12 @@ impl From<FlowVerificationSubmissionError> for FlowHttpError {
     fn from(error: FlowVerificationSubmissionError) -> Self {
         match error {
             FlowVerificationSubmissionError::Provider(error) => error.into(),
+            FlowVerificationSubmissionError::RestartRequired
+            | FlowVerificationSubmissionError::PolicyRevisionMismatch => Self::new(
+                StatusCode::CONFLICT,
+                "verification_restart_required",
+                "Start a new verification request to bind its policy revision",
+            ),
             FlowVerificationSubmissionError::Record(_)
             | FlowVerificationSubmissionError::InvalidContext(_) => Self::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -929,6 +1120,57 @@ impl From<FlowSiopSubmissionError> for FlowHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallet_decline_shape_rejects_mixed_success_and_unknown_errors() {
+        assert!(validate_decline_shape("access_denied", false).is_ok());
+        assert!(validate_decline_shape("access_denied", true).is_err());
+        for error in ["", "invalid_request", "Access_Denied"] {
+            assert!(validate_decline_shape(error, false).is_err());
+        }
+    }
+
+    #[test]
+    fn direct_post_error_fields_and_encrypted_state_are_not_ambiguous() {
+        let clean = || {
+            serde_json::from_value::<DirectPostForm>(
+                json!({"error":"access_denied","state":"state-1"}),
+            )
+            .unwrap()
+        };
+        assert!(direct_post_decline(&clean()).unwrap());
+        for field in [
+            "vp_token",
+            "response",
+            "presentation_submission",
+            "id_token",
+            "code",
+        ] {
+            let mut value = json!({"error":"access_denied","state":"state-1"});
+            value[field] = json!("");
+            assert!(
+                direct_post_decline(&serde_json::from_value(value).unwrap()).is_err(),
+                "{field}"
+            );
+        }
+        let form = DirectPostForm {
+            state: Some("state-1".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            encrypted_decline_state(&json!({"error":"access_denied","state":"state-1"}), &form)
+                .unwrap()
+                .as_deref(),
+            Some("state-1")
+        );
+        for value in [
+            json!({"error":"access_denied","state":"other"}),
+            json!({"error":"access_denied","state":123}),
+            json!({"error":"access_denied","vp_token":"token"}),
+        ] {
+            assert!(encrypted_decline_state(&value, &form).is_err());
+        }
+    }
 
     #[tokio::test]
     async fn unresolved_policy_reference_has_a_stable_preflight_error() {

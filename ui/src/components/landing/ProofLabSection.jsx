@@ -1,3 +1,4 @@
+import { publicEntryHref } from '../../application/routing/publicEntry';
 import {
   Box,
   Button,
@@ -127,7 +128,7 @@ export default function ProofLabSection({
               <Button
                 variant="outlined"
                 component="a"
-                href={`/blog/${activeScenario.slug}`}
+                href={publicEntryHref(`/blog/${activeScenario.slug}`)}
                 endIcon={<ArrowForwardIcon />}
                 sx={{ borderColor: 'rgba(255,255,255,0.3)', color: 'common.white' }}
               >

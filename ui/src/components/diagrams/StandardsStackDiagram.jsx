@@ -122,7 +122,7 @@ function StandardsStackDiagram({ interactive = true }) {
         textAlign="center"
         sx={{ mt: 4, fontStyle: 'italic' }}
       >
-        Standards ensure portability, trust, and long-term viability
+        Standards provide a common vocabulary; test compatibility for the selected versions and profiles
       </Typography>
     </Box>
   );

@@ -1,3 +1,4 @@
+use marty_service_runtime::config;
 use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf};
 
 use mmf_messaging::OutboxDispatcherConfig;
@@ -38,6 +39,8 @@ pub struct OrganizationServiceConfig {
     pub event_stream_timeout_seconds: u64,
     pub organization_creation_enabled: bool,
     pub marty_organization_id: Uuid,
+    pub marty_organization_name: String,
+    pub marty_organization_slug: String,
     pub marty_admin_email: Option<String>,
     pub marty_reviewer_email: Option<String>,
     pub outbox: OutboxDispatcherConfig,
@@ -160,6 +163,13 @@ impl OrganizationServiceConfig {
             event_stream_timeout_seconds: number(&values, "ES_GRPC_TIMEOUT_SECONDS", 5)?,
             organization_creation_enabled: boolean(&values, "ORGANIZATION_CREATION_ENABLED", true)?,
             marty_organization_id,
+            marty_organization_name: value(&values, "MARTY_ORG_NAME")
+                .unwrap_or("Marty")
+                .to_owned(),
+            marty_organization_slug: config::canonical_slug(
+                value(&values, "MARTY_ORG_SLUG").unwrap_or("marty"),
+                "marty",
+            ),
             marty_admin_email: email(&values, "MARTY_ORG_ADMIN_EMAIL")?,
             marty_reviewer_email: email(&values, "MARTY_ORG_REVIEWER_EMAIL")?,
             outbox,
@@ -174,11 +184,7 @@ impl OrganizationServiceConfig {
 }
 
 fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+    config::trimmed_nonempty(values.get(name).map(String::as_str))
 }
 
 fn invalid(name: &'static str) -> OrganizationConfigError {
@@ -199,42 +205,24 @@ fn grpc_server_tls(
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
         "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
-    let configured = NAMES
-        .iter()
-        .filter(|name| value(values, name).is_some())
-        .count();
-    if configured == 0 {
-        return Ok(None);
-    }
-    if configured != NAMES.len() {
-        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
-    }
-    let endpoint = value(values, NAMES[1]).ok_or_else(|| invalid(NAMES[1]))?;
-    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
-    if url.scheme() != "https"
-        || url.host_str().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.path() != "/"
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(invalid(NAMES[1]));
-    }
-    let kms_key_version = value(values, NAMES[5])
-        .ok_or_else(|| invalid(NAMES[5]))?
-        .parse::<u32>()
-        .ok()
-        .filter(|version| *version > 0)
-        .ok_or_else(|| invalid(NAMES[5]))?;
-    Ok(Some(OrganizationGrpcServerTls {
-        certificate: value(values, NAMES[0]).unwrap_or_default().into(),
-        kms_endpoint: endpoint.into(),
-        kms_ca_certificate: value(values, NAMES[2]).unwrap_or_default().into(),
-        kms_token_file: value(values, NAMES[3]).unwrap_or_default().into(),
-        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
-        kms_key_version,
-    }))
+    OrganizationGrpcServerTls::from_values(
+        |name| values.get(name).map(String::as_str),
+        marty_service_runtime::TlsIdentityNames::new("GRPC_WORKLOAD_TLS_SERVER"),
+        std::time::Duration::from_secs(10),
+        64,
+    )
+    .map_err(|error| {
+        let name = if error.ends_with("is required") {
+            NAMES[0]
+        } else {
+            NAMES
+                .iter()
+                .copied()
+                .find(|name| error.starts_with(name))
+                .unwrap_or(NAMES[0])
+        };
+        invalid(name)
+    })
 }
 
 fn environment(value: &str) -> Result<OrganizationEnvironment, OrganizationConfigError> {
@@ -268,7 +256,7 @@ fn number<T>(
 where
     T: std::str::FromStr,
 {
-    optional_number(values, name).map(|value| value.unwrap_or(default))
+    config::number_or(value(values, name), default).map_err(|_| invalid(name))
 }
 
 fn optional_number<T>(
@@ -278,9 +266,7 @@ fn optional_number<T>(
 where
     T: std::str::FromStr,
 {
-    value(values, name)
-        .map(|value| value.parse().map_err(|_| invalid(name)))
-        .transpose()
+    config::optional_number(value(values, name)).map_err(|_| invalid(name))
 }
 
 fn boolean(
@@ -288,12 +274,8 @@ fn boolean(
     name: &'static str,
     default: bool,
 ) -> Result<bool, OrganizationConfigError> {
-    value(values, name).map_or(Ok(default), |value| {
-        match value.to_ascii_lowercase().as_str() {
-            "true" | "1" | "yes" => Ok(true),
-            "false" | "0" | "no" => Ok(false),
-            _ => Err(invalid(name)),
-        }
+    value(values, name).map_or(Ok(default), |raw| {
+        config::boolean(raw, config::BooleanVocabulary::AsciiInsensitive).map_err(|_| invalid(name))
     })
 }
 
@@ -367,6 +349,35 @@ mod tests {
         assert_eq!(config.redis_url, "redis://localhost:6379/2");
         assert!(config.database_url.starts_with("postgresql://"));
         assert!(config.organization_creation_enabled);
+        assert_eq!(config.marty_organization_name, "Marty");
+        assert_eq!(config.marty_organization_slug, "marty");
+    }
+
+    #[test]
+    fn customer_organization_configuration_preserves_identity_and_branding() {
+        let mut values = base();
+        values.extend([
+            (
+                "MARTY_ORG_ID".into(),
+                "750e8400-e29b-41d4-a716-446655440001".into(),
+            ),
+            ("MARTY_ORG_NAME".into(), " Canyon Skills Academy ".into()),
+            ("MARTY_ORG_SLUG".into(), " Canyon-Skills ".into()),
+        ]);
+        let config = OrganizationServiceConfig::from_values(values.clone()).unwrap();
+        assert_eq!(
+            config.marty_organization_id.to_string(),
+            "750e8400-e29b-41d4-a716-446655440001"
+        );
+        assert_eq!(config.marty_organization_name, "Canyon Skills Academy");
+        assert_eq!(config.marty_organization_slug, "canyon-skills");
+        values.insert("MARTY_ORG_SLUG".into(), "canyon--skills-".into());
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values)
+                .unwrap()
+                .marty_organization_slug,
+            "canyon--skills-",
+        );
     }
 
     #[test]
@@ -474,14 +485,14 @@ mod tests {
         ] {
             values.insert(name.into(), value.into());
         }
-        assert_eq!(
-            OrganizationServiceConfig::from_values(values.clone())
-                .unwrap()
-                .grpc_server_tls
-                .unwrap()
-                .kms_key_version,
-            1
-        );
+        let tls = OrganizationServiceConfig::from_values(values.clone())
+            .unwrap()
+            .grpc_server_tls
+            .unwrap();
+        let OrganizationGrpcServerTls::OpenBao(identity) = tls else {
+            panic!("omitted provider must preserve OpenBao");
+        };
+        assert_eq!(identity.kms_key_version, 1);
         values.insert(
             "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
             "http://bao:8200".into(),

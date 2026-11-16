@@ -5,6 +5,7 @@
  */
 
 import { getGoogleAnalyticsMeasurementId } from './runtimeConfig';
+import { getPublicEntryCanonicalOrigin } from '../application/routing/publicEntry';
 
 let analyticsInitialized = false;
 let webVitalsTrackingStarted = false;
@@ -22,6 +23,7 @@ function logAnalytics(...args) {
  * Call this once in App.jsx after router is ready
  */
 export const initAnalytics = () => {
+  if (getPublicEntryCanonicalOrigin()) return;
   const GA_ID = getGoogleAnalyticsMeasurementId();
   
   if (!GA_ID || typeof window === 'undefined') {
@@ -67,7 +69,7 @@ export const initAnalytics = () => {
  * @param {string} title - Page title
  */
 export const trackPageView = (path, title) => {
-  if (typeof window === 'undefined' || !window.gtag) return;
+  if (typeof window === 'undefined' || !window.gtag || getPublicEntryCanonicalOrigin()) return;
 
   window.gtag('event', 'page_view', {
     page_path: path,
@@ -82,7 +84,7 @@ export const trackPageView = (path, title) => {
  * @param {object} params - Event parameters
  */
 export const trackEvent = (eventName, params = {}) => {
-  if (typeof window === 'undefined' || !window.gtag) return;
+  if (typeof window === 'undefined' || !window.gtag || getPublicEntryCanonicalOrigin()) return;
 
   window.gtag('event', eventName, params);
 };
@@ -92,7 +94,7 @@ export const trackEvent = (eventName, params = {}) => {
  * Automatically reports CLS, FID, LCP to Google Analytics
  */
 export const trackWebVitals = () => {
-  if (typeof window === 'undefined' || webVitalsTrackingStarted) return;
+  if (typeof window === 'undefined' || webVitalsTrackingStarted || getPublicEntryCanonicalOrigin()) return;
 
   webVitalsTrackingStarted = true;
 

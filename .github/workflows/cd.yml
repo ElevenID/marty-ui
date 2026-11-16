@@ -8,19 +8,30 @@ on:
         required: true
         type: string
       resume_run_id:
-        description: Prior Stack release run containing a later transaction checkpoint
+        description: Historical input; bounded publication rejects resume dispatches
         required: false
         type: string
       resume_artifact:
-        description: Exact transaction artifact name from resume_run_id
+        description: Historical input; leave empty for a fresh original-attempt release
         required: false
         type: string
+      publication_contract:
+        description: v1 retains the existing publisher; choose v2 explicitly for an approved rollout of independent publication retry
+        required: false
+        default: v1
+        type: choice
+        options: [v1, v2]
       selfhost_public_profile:
-        description: Public UI surface included in the separately built self-host image
+        description: Customer application profile (both exclude production marketing pages)
         required: false
         default: tester
         type: choice
         options: [tester, full]
+      publish_cloudflare_addon:
+        description: Include the optional signed Cloudflare connector in the immutable release
+        required: false
+        type: boolean
+        default: false
       selfhost_external_images_json:
         description: Required exact service-to-digest JSON for independent infrastructure images
         required: true
@@ -43,11 +54,11 @@ env:
   OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
   KEYCLOAK_IMAGE: ghcr.io/elevenid/marty-ui-oss/keycloak
   SELFHOST_UI_IMAGE: ghcr.io/elevenid/marty-ui-oss/ui-selfhost
-  CLOUDFLARED_WRAPPER_IMAGE: ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper
 
 jobs:
   resolve-transaction:
     runs-on: ubuntu-latest
+    timeout-minutes: 350
     permissions:
       actions: read
       contents: read
@@ -64,6 +75,43 @@ jobs:
       openbao_didcomm_digest: ${{ steps.identity.outputs.openbao_didcomm_digest }}
       keycloak_digest: ${{ steps.identity.outputs.keycloak_digest }}
     steps:
+      - name: Require a fresh bounded original release attempt
+        env:
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+          RESUME_ARTIFACT: ${{ inputs.resume_artifact }}
+          PUBLICATION_CONTRACT: ${{ inputs.publication_contract }}
+          PUBLISH_CLOUDFLARE_ADDON: ${{ inputs.publish_cloudflare_addon }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          case "$PUBLICATION_CONTRACT" in v1|v2) ;; *) exit 1 ;; esac
+          if [ "$PUBLICATION_CONTRACT" = v2 ] && [ "$PUBLISH_CLOUDFLARE_ADDON" = true ]; then
+            echo '::error::The optional Cloudflare producer requires publication_contract=v1; v2 core publication has a closed asset inventory.'
+            exit 1
+          fi
+          if [ -n "$RESUME_RUN_ID" ] || [ -n "$RESUME_ARTIFACT" ]; then
+            echo '::error::The bounded release path requires one fresh original attempt. Expired or failed candidates need a new reviewed source and unused claim; resume is not supported.'
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+
+      - name: Wait for the admitted original claim before downloading it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
+        run: python scripts/wait_release_dependency.py stable-claim --run-id "$CLAIM_RUN_ID"
+
       - name: Download the exact claim or resume checkpoint
         env:
           CLAIM_RUN_ID: ${{ inputs.claim_run_id }}
@@ -127,14 +175,6 @@ jobs:
           test "$GITHUB_SHA" = "$source_sha"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-
       - name: Validate the exact durable transaction
         id: identity
         env:
@@ -173,7 +213,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Stage the authenticated transaction for this run
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: release-transaction.json
@@ -222,7 +262,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Require the exact claimed protected-main source
@@ -322,7 +362,7 @@ jobs:
         run: >-
           python scripts/admit_client_packages.py --lock release/stack-lock.json
           --output "$RUNNER_TEMP/client-packages"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-client-packages-${{ github.run_id }}
           path: ${{ runner.temp }}/client-packages/*
@@ -361,7 +401,7 @@ jobs:
           gh attestation verify integration-source.tar.gz \
             --repo "$repository" --source-digest "$commit" \
             --source-ref "$source_ref" --deny-self-hosted-runners
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: integration-source.tar.gz
@@ -384,7 +424,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -395,8 +435,12 @@ jobs:
         with:
           context: .
           file: docker/ui.Dockerfile
+          target: selfhost
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
+            UI_VARIANT=selfhost
+            SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}
+            NGINX_CONFIG=nginx.spa.conf
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
             MARTY_API_CORE_VERSION=${{ needs.validate-stack.outputs.api_core_version }}
@@ -424,7 +468,7 @@ jobs:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - if: needs.resolve-transaction.outputs.ui_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -455,18 +499,26 @@ jobs:
       id-token: write
       attestations: write
       artifact-metadata: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
       - name: Expose public image compiler cache credentials
-        if: needs.resolve-transaction.outputs.services_digest == ''
+        if: vars.PRIVATE_FORKS_ENABLED != 'true' && (needs.resolve-transaction.outputs.services_digest == '')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -480,6 +532,9 @@ jobs:
       - id: services
         if: needs.resolve-transaction.outputs.services_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
           context: .
           file: services/Dockerfile
@@ -488,17 +543,24 @@ jobs:
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: mode=max
           sbom: true
-          cache-from: type=gha,scope=marty-ui-public-services
+          cache-from: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'type=gha,scope=marty-ui-public-services' || '' }}
           secret-envs: |
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
       - id: migrations
         if: needs.resolve-transaction.outputs.migrations_digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: ${{ vars.PRIVATE_FORKS_ENABLED != 'true' && 'true' || 'false' }}
+          PRIVATE_FORKS_READ_TOKEN: ${{ vars.PRIVATE_FORKS_ENABLED == 'true' && secrets.PRIVATE_FORKS_READ_TOKEN || '' }}
         with:
+          secret-envs: |
+            private_forks_read_token=PRIVATE_FORKS_READ_TOKEN
           context: .
           file: services/Dockerfile.migrations
           outputs: type=image,name=${{ env.MIGRATIONS_IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -514,6 +576,7 @@ jobs:
             MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
             MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
             MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
+            PRIVATE_FORKS_ENABLED=${{ vars.PRIVATE_FORKS_ENABLED == 'true' && 'true' || 'false' }}
           provenance: mode=max
           sbom: true
       - id: digests
@@ -554,7 +617,7 @@ jobs:
           subject-name: ${{ env.MIGRATIONS_IMAGE }}
           subject-digest: ${{ steps.digests.outputs.migrations_digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Sign images by digest
         if: needs.resolve-transaction.outputs.services_digest == ''
         env:
@@ -600,7 +663,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -631,7 +694,7 @@ jobs:
           subject-name: ${{ env.OPENBAO_DIDCOMM_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -666,7 +729,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -697,7 +760,7 @@ jobs:
           subject-name: ${{ env.KEYCLOAK_IMAGE }}
           subject-digest: ${{ steps.digest.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - if: needs.resolve-transaction.outputs.keycloak_digest == ''
         env:
           DIGEST: ${{ steps.digest.outputs.digest }}
@@ -725,10 +788,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: transaction
@@ -750,7 +813,7 @@ jobs:
           --digest "keycloak=$KEYCLOAK_DIGEST"
           --build-run-id "$GITHUB_RUN_ID"
           --output release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: release-transaction.json
@@ -770,10 +833,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: transaction
@@ -792,7 +855,7 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: stack-manifest.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: stack-manifest.json
@@ -801,38 +864,54 @@ jobs:
 
   official-interoperability:
     name: Collect seven official candidate lanes
-    needs: [resolve-transaction, prepare-official-candidate]
+    needs: [resolve-transaction, prepare-official-candidate, build-operator-catalog]
     permissions:
+      actions: read
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@1e646774e43d41868e1e927c48b492d23678dda7
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@b46fbd7bc79135e715efb1d5cfe271778d712313
     with:
       lane: all
       collect_only: true
-      review_recipient: ${{ vars.OFFICIAL_REVIEW_RECIPIENT }}
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 1e646774e43d41868e1e927c48b492d23678dda7
+      harness_revision: b46fbd7bc79135e715efb1d5cfe271778d712313
 
   official-gate-evidence:
+    timeout-minutes: 30
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
     runs-on: ubuntu-latest
     permissions:
       contents: read
       actions: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-      HARNESS_SHA: 1e646774e43d41868e1e927c48b492d23678dda7
+      HARNESS_SHA: b46fbd7bc79135e715efb1d5cfe271778d712313
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: candidate
@@ -852,15 +931,15 @@ jobs:
           --manifest candidate/stack-manifest.json
           --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
           --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
-      - name: Preserve immutable review inputs before requiring approval
+      - name: Preserve the immutable automated assessment inputs
         if: steps.freeze.outputs.frozen_new == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
-          name: official-review-input-${{ github.run_id }}
-          path: official-review-input/
+          name: official-evidence-input-${{ github.run_id }}
+          path: official-evidence-input/
           if-no-files-found: error
           retention-days: 90
-      - name: Qualify raw suite results and exact protected-main reviews
+      - name: Qualify raw suite results and deterministic verifier assertions
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -870,13 +949,12 @@ jobs:
           --manifest candidate/stack-manifest.json
           --source "$SOURCE_SHA" --harness "$HARNESS_SHA"
           --run-id "$GITHUB_RUN_ID" --current-attempt "$GITHUB_RUN_ATTEMPT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-official-gate-${{ github.run_id }}
           path: |
             official-interoperability.json
-            official-review-input/
-            official-review-authorization/
+            official-evidence-input/
           if-no-files-found: error
           retention-days: 90
 
@@ -896,11 +974,11 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Extract the verified integration harness without trusting archive paths
@@ -914,11 +992,11 @@ jobs:
           --destination integration-tests
           --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
           --expected-sha256 "$INTEGRATION_DIGEST"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-client-packages-${{ github.run_id }}
           path: ${{ runner.temp }}/client-packages
@@ -990,29 +1068,27 @@ jobs:
             fi
           done < <(jq -r '.components[].artifacts[] | select(.type == "oci") | .uri + "@" + .digest' stack-manifest.json)
       - name: Smoke-test UI image
+        working-directory: marty-ui
         env:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
-          docker run --rm -d --name marty-ui-smoke -p 18080:80 "$IMAGE@$UI_DIGEST"
-          homepage="$(mktemp)"
-          trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$homepage"' EXIT
-          for _ in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:18080/ --output "$homepage"; then
-              if grep --quiet 'Welcome to nginx' "$homepage"; then
-                echo "UI image contains the default Nginx homepage"
-                exit 1
-              fi
-              if grep --quiet 'ElevenID' "$homepage"; then
-                exit 0
-              fi
-              echo "UI image homepage is missing ElevenID content"
-              exit 1
-            fi
-            sleep 1
-          done
-          docker logs marty-ui-smoke
-          exit 1
+          set -euo pipefail
+          metadata="$(mktemp)"
+          trap 'docker rm -f marty-ui-smoke >/dev/null 2>&1 || true; rm -f "$metadata"' EXIT
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$metadata"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" --image-metadata "$metadata"
+          docker run --rm -d --name marty-ui-smoke -e UI_ENABLED_SECTIONS=none \
+            -p 127.0.0.1:18080:80 "$IMAGE@$UI_DIGEST"
+          curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-all-errors --retry-delay 1 \
+            http://127.0.0.1:18080/healthz
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/)" = 404
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18080/console/)" = 404
       - name: Install the released test interface
         working-directory: integration-tests
         env:
@@ -1115,7 +1191,7 @@ jobs:
               images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
                       openbao_didcomm:$openbao_didcomm_digest,keycloak:$keycloak_digest}}' \
             > work/release-evidence/public-stack.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: integration-tests/work/release-evidence/public-stack.json
@@ -1131,14 +1207,29 @@ jobs:
       contents: read
       id-token: write
       packages: read
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 "marty-ui/.github/scripts/private-forks.py" check
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 "marty-ui/.github/scripts/private-forks.py" fetch --manifest-path "marty-ui/rust/Cargo.toml"
       - name: Build the Rust public-key fixture converter
         working-directory: marty-ui/rust
         shell: bash
@@ -1151,11 +1242,11 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           test "$(uname -m)" = x86_64
           cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Fetch the exact upstream harness history
@@ -1194,7 +1285,7 @@ jobs:
           python -m pip install --disable-pip-version-check
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
-      - name: Build the exact attested Core KMS verifier producer
+      - name: Prepare the exact attested Core KMS verifier source
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -1233,12 +1324,22 @@ jobs:
             --expected-root "marty-core-${version}" --expected-sha256 "$digest" \
             --history core-history --expected-commit "$commit"
           rustup toolchain install 1.97.1 --profile minimal
+      - name: Fetch the attested Core private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 marty-ui/.github/scripts/private-forks.py fetch --manifest-path core-source/Cargo.toml
+      - name: Build the exact attested Core KMS verifier producer
+        shell: bash
+        run: |
+          set -euo pipefail
           cargo +1.97.1 build --locked --manifest-path core-source/Cargo.toml \
             -p marty-test-wallet --bin marty-kms-positive-verifier-input \
             --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -1337,7 +1438,7 @@ jobs:
           python marty-ui/scripts/verify_selfhost_public_kms_helper.py \
             --producer-attestations --directory . \
             --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
           path: |
@@ -1347,7 +1448,7 @@ jobs:
             selfhost-public-kms-jwk.slsa-bundle.json
           if-no-files-found: error
           retention-days: 7
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: |
@@ -1367,10 +1468,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1418,7 +1519,7 @@ jobs:
             .verify_only_database == "reachable-unreachable-malformed-read-only" and
             .profile == "selfhost-production" and .runs == "2"
           ' native-schema.json >/dev/null
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: native-schema.json
@@ -1433,22 +1534,36 @@ jobs:
       contents: read
       packages: read
     env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
       CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare source-matched Rust KMS operator for image qualification
         run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Verify and exercise the exact published OpenBao DIDComm image
@@ -1475,7 +1590,7 @@ jobs:
             '{schema:"marty.stack-didcomm-plugin-qualification/v1",image:$image,
               source_sha:$source,scoped_token:"passed",raft_failover:"passed",
               raft_snapshot_recovery:"passed"}' > didcomm-plugin.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: didcomm-plugin.json
@@ -1493,10 +1608,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1529,7 +1644,7 @@ jobs:
               keycloak_image:$keycloak,openbao_image:$openbao,source_sha:$source,
               browser_pkce:"passed",ciba:"passed",rotation:"passed",
               kms_loss:"denied",private_key_database:"absent"}' > keycloak-kms.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-keycloak-kms-gate-${{ github.run_id }}
           path: keycloak-kms.json
@@ -1545,34 +1660,34 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: gates/public
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: gates/verifier
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: gates/native
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: gates/didcomm
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-keycloak-kms-gate-${{ github.run_id }}
           path: gates/keycloak
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-gate-${{ github.run_id }}
           path: gates/official
@@ -1599,7 +1714,7 @@ jobs:
               --gate "official_interoperability=$GITHUB_RUN_ID:$official_digest" \
               --output release-transaction.json
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: release-transaction.json
@@ -1619,7 +1734,6 @@ jobs:
       artifact-metadata: write
     outputs:
       ui_digest: ${{ steps.digests.outputs.ui_digest }}
-      cloudflared_digest: ${{ steps.digests.outputs.cloudflared_digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -1666,7 +1780,7 @@ jobs:
             ) | .key) | sort) == ($external[0] | keys | sort)
           ' compose-model.json >/dev/null
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1693,46 +1807,36 @@ jobs:
             MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
           provenance: mode=max
           sbom: true
-      - id: cloudflared
-        name: Build the pinned cloudflared wrapper by digest only
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: docker/cloudflared-wrapper.Dockerfile
-          outputs: type=image,name=${{ env.CLOUDFLARED_WRAPPER_IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          provenance: mode=max
-          sbom: true
       - id: digests
         env:
           UI_DIGEST: ${{ steps.ui.outputs.digest }}
-          CLOUDFLARED_DIGEST: ${{ steps.cloudflared.outputs.digest }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
           [[ "$UI_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          [[ "$CLOUDFLARED_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "$SELFHOST_UI_IMAGE@$UI_DIGEST"
+          test "$(docker inspect --format '{{ index .Config.Labels "io.elevenid.ui.audience" }}' "$SELFHOST_UI_IMAGE@$UI_DIGEST")" = customer
+          docker run --rm --entrypoint cat "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
+            /opt/marty-ui-static/marty-ui-release.json > "$RUNNER_TEMP/ui-metadata.json"
+          python scripts/ui_release.py check-image --audience customer \
+            --source-sha "$SOURCE_SHA" --version "$VERSION" \
+            --image-metadata "$RUNNER_TEMP/ui-metadata.json"
           echo "ui_digest=$UI_DIGEST" >> "$GITHUB_OUTPUT"
-          echo "cloudflared_digest=$CLOUDFLARED_DIGEST" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-name: ${{ env.SELFHOST_UI_IMAGE }}
           subject-digest: ${{ steps.digests.outputs.ui_digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
-        with:
-          subject-name: ${{ env.CLOUDFLARED_WRAPPER_IMAGE }}
-          subject-digest: ${{ steps.digests.outputs.cloudflared_digest }}
-          push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Sign only the exact produced digests
         env:
           UI_DIGEST: ${{ steps.digests.outputs.ui_digest }}
-          CLOUDFLARED_DIGEST: ${{ steps.digests.outputs.cloudflared_digest }}
         shell: bash
         run: |
           set -euo pipefail
           cosign sign --yes "$SELFHOST_UI_IMAGE@$UI_DIGEST"
-          cosign sign --yes "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"
 
   prepare-selfhost-image-lock:
     # Produces mandatory build inputs, still unqualified and never implicitly
@@ -1747,17 +1851,25 @@ jobs:
       packages: read
       attestations: write
       id-token: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -1776,15 +1888,12 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input transaction/release-transaction.json \
             --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
             --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
             --output validated-transaction.json
-          jq -e '
-            (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 5)
-          ' validated-transaction.json >/dev/null
+
           printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
             if type == "object" and length > 0
                and (has("issuance") | not)
@@ -1806,7 +1915,6 @@ jobs:
       - name: Verify exact Marty image attestations and generate the lock
         env:
           CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
-          CLOUDFLARED_DIGEST: ${{ needs.build-selfhost-lock-roles.outputs.cloudflared_digest }}
           GH_TOKEN: ${{ github.token }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
@@ -1817,14 +1925,12 @@ jobs:
           set -euo pipefail
           jq -n \
             --arg ui "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
-            --arg cloudflared "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST" \
-            '{"ui-selfhost":$ui,"cloudflared-wrapper":$cloudflared}' \
+            '{"ui-selfhost":$ui}' \
             > selfhost-images.json
           for image in \
             "$SERVICES_IMAGE@$SERVICES_DIGEST" \
             "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
             "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
-            "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST" \
             "$(jq -er '.images.openbao_didcomm | .uri + "@" + .digest' validated-transaction.json)" \
             "$(jq -er '.images.keycloak | .uri + "@" + .digest' validated-transaction.json)"; do
             gh attestation verify "oci://$image" \
@@ -1850,9 +1956,16 @@ jobs:
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Package and record the unqualified exact-lock ZIP
         env:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -1905,13 +2018,13 @@ jobs:
           set -euo pipefail
           test -s "$BUNDLE"
           cp -- "$BUNDLE" installer-prepared.provenance.jsonl
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-prepared-provenance-${{ github.run_id }}
           path: installer-prepared.provenance.jsonl
           if-no-files-found: error
           retention-days: 30
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: |
@@ -1933,16 +2046,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: prepared
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -1951,17 +2064,13 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input transaction/release-transaction.json \
             --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
             --stack-lock release/stack-lock.json \
             --claim-run-id "$(jq -r .claim_run_id transaction/release-transaction.json)" \
             --output "$RUNNER_TEMP/selfhost-consumer-transaction.json"
-          jq -e '
-            (.state == "qualified" or .state == "promoting" or
-             .state == "promoted") and
-            (.gates | length == 5)
-          ' "$RUNNER_TEMP/selfhost-consumer-transaction.json" >/dev/null
+
           python scripts/check_prepared_selfhost_consumer.py \
             --archive prepared/prepared-selfhost-bundle.zip \
             --image-lock prepared/prepared-selfhost-images.json \
@@ -2026,11 +2135,19 @@ jobs:
       contents: read
       id-token: write
       attestations: write
+    env:
+      PRIVATE_FORKS_ENABLED: ${{ vars.PRIVATE_FORKS_ENABLED }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Authorize private fork access
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          python3 ".github/scripts/private-forks.py" check
       - name: Require the exact qualified protected-main source
         env:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -2042,10 +2159,17 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
+      - name: Fetch locked private fork dependencies
+        if: vars.PRIVATE_FORKS_ENABLED == 'true'
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        env:
+          PRIVATE_FORKS_READ_TOKEN: ${{ secrets.PRIVATE_FORKS_READ_TOKEN }}
+        run: python3 ".github/scripts/private-forks.py" fetch --manifest-path "rust/Cargo.toml"
       - name: Prepare source-matched Rust execution policy
         run: bash scripts/ci/prepare-native-ci-execution.sh
       - name: Build and test the native operator binary
@@ -2078,19 +2202,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export MARTY_INSTALLER_COMPOSE_EXECUTABLE=
-          for plugin in /usr/libexec/docker/cli-plugins/docker-compose /usr/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose; do
-            if [ -x "$plugin" ]; then export MARTY_INSTALLER_COMPOSE_EXECUTABLE="$plugin"; break; fi
-          done
-          test -n "$MARTY_INSTALLER_COMPOSE_EXECUTABLE"
           source scripts/ci/rust_contract_execution.sh
-          run_timed installer_compose_model cargo test --locked --manifest-path rust/Cargo.toml \
-            -p marty-deployment-catalog --test installer_application_model -- --ignored
+          run_timed installer_compose_model bash scripts/ci/qualify-installer-compose-model.sh "$GITHUB_WORKSPACE/rust/target"
       - id: installer_operator_provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: marty-deploy-linux-${{ matrix.arch }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: operator-catalog-${{ matrix.arch }}-${{ github.run_id }}
           path: marty-deploy-linux-${{ matrix.arch }}
@@ -2106,7 +2224,7 @@ jobs:
           set -euo pipefail
           test -s "$BUNDLE"
           cp -- "$BUNDLE" "marty-deploy-linux-$ARCH.provenance.jsonl"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: operator-installer-provenance-${{ matrix.arch }}-${{ github.run_id }}
           path: marty-deploy-linux-${{ matrix.arch }}.provenance.jsonl
@@ -2116,8 +2234,8 @@ jobs:
   prepare-installer-inputs:
     # Mandatory build prerequisite only: no acceptance, admission, channel, or
     # installer release assets are created by this job. Old producer attempts
-    # cannot be relabelled on a rerun-failed attempt. Use a fresh dispatch with
-    # the supported same-source transaction checkpoint; preserve old artifacts.
+    # cannot be relabelled on a rerun-failed attempt. The bounded original run
+    # completes qualification or fails closed; preserve its immutable artifacts.
     needs: [resolve-transaction, validate-stack, qualify-release, build-operator-catalog, prepare-selfhost-image-lock, preflight-selfhost-prepared-consumer, verifier-differential]
     runs-on: ubuntu-24.04
     permissions:
@@ -2132,32 +2250,32 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
       - name: Install exact input-contract parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-prepared
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: installer-prepared-provenance-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-prepared-proof
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-operator
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-installer-provenance-amd64-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-operator-proof
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
           path: ${{ runner.temp }}/installer-public-kms
@@ -2186,15 +2304,13 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-          python scripts/release_transaction.py validate \
+          python scripts/release_transaction.py validate --require-qualified \
             --input "$RUNNER_TEMP/installer-transaction/release-transaction.json" \
             --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
             --stack-lock release/stack-lock.json --claim-run-id "$CLAIM_RUN_ID" \
             --output "$RUNNER_TEMP/installer-validated-transaction.json"
-          jq -e --arg tag "$TAG" '
-            .tag == $tag and (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 5)
-          ' "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
+          jq -e --arg tag "$TAG" '.tag == $tag' \
+            "$RUNNER_TEMP/installer-validated-transaction.json" >/dev/null
           for directory in installer-prepared installer-prepared-proof installer-operator installer-operator-proof installer-public-kms; do
             chmod 700 "$RUNNER_TEMP/$directory"
           done
@@ -2257,7 +2373,7 @@ jobs:
             --build-run-id "$GITHUB_RUN_ID" --build-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --output "$output/installer-inventory.json"
           cp "$inputs/"* "$output/"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/installer-unqualified/
@@ -2265,7 +2381,20 @@ jobs:
           retention-days: 30
 
   publish-manifest:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs]
+    concurrency:
+      group: stable-release-coordinate-${{ needs.resolve-transaction.outputs.tag }}
+      cancel-in-progress: false
+    timeout-minutes: 90
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs, publish-cloudflare-addon]
+    if: >-
+      ${{ !cancelled() && needs.resolve-transaction.result == 'success' &&
+          needs.validate-stack.result == 'success' && needs.build-ui.result == 'success' &&
+          needs.build-services.result == 'success' && needs.build-openbao-didcomm.result == 'success' &&
+          needs.build-keycloak.result == 'success' && needs.qualify-release.result == 'success' &&
+          needs.build-operator-catalog.result == 'success' && needs.prepare-official-candidate.result == 'success' &&
+          needs.prepare-installer-inputs.result == 'success' &&
+          ((inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'success') ||
+           (!inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: stack-release
     env:
@@ -2273,7 +2402,7 @@ jobs:
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
       TAG: ${{ needs.resolve-transaction.outputs.tag }}
     permissions:
-      actions: read
+      actions: write
       contents: write
       packages: write
       id-token: write
@@ -2283,25 +2412,34 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: stack-release-official-gate-${{ github.run_id }}
+          path: gates/official
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
           path: .
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-arm64-${{ github.run_id }}
           path: .
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/stable-installer-inputs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.publish_cloudflare_addon
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon
       - name: Revalidate exact installer inputs before any publication signing
         shell: bash
         run: |
@@ -2356,7 +2494,7 @@ jobs:
               --deny-self-hosted-runners
           done
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -2371,7 +2509,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role ui)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role ui)"
           test "$DIGEST" = "$(jq -er '.images.ui.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("ui") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2385,7 +2523,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role ui --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-ui-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -2401,7 +2539,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role services)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role services)"
           test "$DIGEST" = "$(jq -er '.images.services.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("services") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2415,7 +2553,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role services --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-services-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -2431,7 +2569,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role migrations)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role migrations)"
           test "$DIGEST" = "$(jq -er '.images.migrations.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("migrations") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2455,7 +2593,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role openbao_didcomm)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role openbao_didcomm)"
           test "$DIGEST" = "$(jq -er '.images.openbao_didcomm.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("openbao_didcomm") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2479,7 +2617,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role keycloak)"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json --role keycloak)"
           test "$DIGEST" = "$(jq -er '.images.keycloak.digest' transaction/release-transaction.json)"
           if ! jq -e '.promoted_roles | index("keycloak") != null' transaction/release-transaction.json >/dev/null; then
             if [ "$tag_state" = absent ]; then
@@ -2493,38 +2631,38 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role keycloak --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-complete-${{ github.run_id }}
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-openbao-didcomm-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.KEYCLOAK_IMAGE }}@${{ needs.build-keycloak.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-keycloak-sbom.cdx.json
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-official-candidate-${{ github.run_id }}
           path: official-candidate
@@ -2538,7 +2676,7 @@ jobs:
           test "$actual" = "$EXPECTED_MANIFEST_SHA256"
           cp official-candidate/stack-manifest.json stack-manifest.json
           cp transaction/release-transaction.json release-transaction.json
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Sign and checksum manifest evidence
         shell: bash
         run: |
@@ -2621,33 +2759,87 @@ jobs:
             cp "$assets/$asset" "$asset"
           done
           operator_release_require_local_assets
-      - name: Create or verify the late annotated source tag
+      - name: Seal all signed publication bytes for the bounded tag handoff
         env:
-          CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
-          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
-          TAG: ${{ needs.resolve-transaction.outputs.tag }}
-          TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          source scripts/operator-release-assets.sh
+          operator_release_verify_published_assets "$GITHUB_WORKSPACE" "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
+            "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
+            "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          python scripts/stable_publication_checkpoint.py prepare \
+            --assets "$GITHUB_WORKSPACE" --transaction transaction/release-transaction.json \
+            --official-gate gates/official/official-interoperability.json \
+            --source-sha "$SOURCE_SHA" --tag "$TAG" --claim-run-id "$CLAIM_RUN_ID" \
+            --output "$RUNNER_TEMP/stable-publication-checkpoint"
+      - id: publication_handoff
+        name: Preserve the exact publication checkpoint before the tag wait
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-publication-inputs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-publication-checkpoint/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Wait for the exact operator tag handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLICATION_ARTIFACT_ID: ${{ steps.publication_handoff.outputs.artifact-id }}
+          PUBLICATION_ARTIFACT_DIGEST: ${{ steps.publication_handoff.outputs.artifact-digest }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
-          existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
-          if [ -n "$existing" ]; then
-            git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
-            test "$(git cat-file -t "refs/tags/$TAG")" = tag
-            test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"
-            git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
-            grep -Fx "Release-Transaction: $TRANSACTION_ID" tag-message.txt
-            grep -Fx "Claim-Run: $CLAIM_RUN_ID" tag-message.txt
-            grep -Fx "Source-SHA: $SOURCE_SHA" tag-message.txt
-          else
-            echo "::error::Qualified images are promoted and checkpointed. Push the exact annotated tag locally with scripts/push_promoted_release_tag.py using this run ID, then dispatch a resume from stack-release-promotion-complete-$GITHUB_RUN_ID. No Actions secret is required."
-            exit 1
-          fi
-      - name: Detect only an exact resumable immutable release
-        id: existing_release
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          python scripts/release_tag_handoff.py wait \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --artifact-id "$PUBLICATION_ARTIFACT_ID" \
+            --artifact-digest "$PUBLICATION_ARTIFACT_DIGEST" \
+            --dispatch-receipt "$RUNNER_TEMP/stable-tag-dispatch.json" \
+            --output "$RUNNER_TEMP/stable-tag-handoff.json"
+      - name: Preserve the automatic tag dispatch outcome
+        if: always() && steps.publication_handoff.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-tag-dispatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-dispatch.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preserve the authenticated operator handoff admission
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stack-release-tag-admission-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/stable-tag-handoff.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Seal the immutable v2 publication candidate
+        if: inputs.publication_contract == 'v2'
+        run: |
+          set -euo pipefail
+          umask 077
+          python scripts/stable_publication_candidate.py seal \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint" \
+            --tag-admission "$RUNNER_TEMP/stable-tag-handoff.json" \
+            --output "$RUNNER_TEMP/stable-publication-candidate-v2"
+      - name: Preserve candidate for a separate successful-run publisher
+        if: inputs.publication_contract == 'v2'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: stable-publication-candidate-v2-${{ github.run_id }}-${{ github.run_attempt }}-${{ needs.resolve-transaction.outputs.tag }}
+          path: ${{ runner.temp }}/stable-publication-candidate-v2/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record the independent publication handoff
+        if: inputs.publication_contract == 'v2'
+        run: |
+          printf '%s\n' 'The immutable v2 candidate is sealed. Publish stable candidate starts only after this original Stack release run completes successfully. Retry publication by a fresh manual publisher dispatch naming this original run; never rerun original CD.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Require the release coordinate to remain absent
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
@@ -2662,36 +2854,11 @@ jobs:
             "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")"
           case "$status" in
             404)
-              echo "exists=false" >> "$GITHUB_OUTPUT"
+              test "$(jq -er .message release-response.json)" = 'Not Found'
               ;;
             200)
-              test "$(jq -er .tag_name release-response.json)" = "$TAG"
-              test "$(jq -er .draft release-response.json)" = false
-              source scripts/operator-release-assets.sh
-              operator_release_require_local_assets
-              operator_release_require_remote_allowlist release-response.json
-              mkdir -m 700 existing-release
-              gh release download "$TAG" --dir existing-release
-              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
-                "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
-                "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
-              # Preserve the existing release's original signed inventory and
-              # producer invocation; compare the four actual candidate payloads.
-              for payload in install.sh marty-deploy-linux-amd64 prepared-selfhost-bundle.zip prepared-selfhost-images.json; do
-                cmp --silent "$payload" "existing-release/$payload"
-              done
-              if ! cmp --silent stack-manifest.json existing-release/stack-manifest.json; then
-                echo '::error::Existing release manifest differs from this exact-source resume'
-                exit 1
-              fi
-              if ! cmp --silent release-transaction.json existing-release/release-transaction.json; then
-                echo '::error::Existing release transaction differs from this exact-source resume'
-                exit 1
-              fi
-              {
-                echo "exists=true"
-                echo "release_id=$(jq -er .id release-response.json)"
-              } >> "$GITHUB_OUTPUT"
+              echo '::error::An immutable release already owns this first-attempt coordinate'
+              exit 1
               ;;
             *)
               echo "::error::GitHub release lookup failed with HTTP $status"
@@ -2700,45 +2867,77 @@ jobs:
           esac
       - id: release
         name: Publish the qualified GitHub release and exact assets
-        if: steps.existing_release.outputs.exists != 'true'
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          CLOUDFLARE_ADDON_SELECTED: ${{ inputs.publish_cloudflare_addon }}
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
-          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
           source scripts/operator-release-assets.sh
           operator_release_require_local_assets
-          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"
+          done
+          optional_assets=()
+          case "$CLOUDFLARE_ADDON_SELECTED" in
+            true)
+              chmod 700 "$RUNNER_TEMP/cloudflare-addon"
+              python scripts/publish_hosting_addon.py --phase verify-prepared \
+                --assets "$RUNNER_TEMP/cloudflare-addon" \
+                --core-assets "$RUNNER_TEMP/stable-installer-publication" \
+                --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+              while IFS= read -r asset; do
+                optional_assets+=("$RUNNER_TEMP/cloudflare-addon/$asset")
+              done < <(hosting_addon_release_assets)
+              ;;
+            false) test ! -e "$RUNNER_TEMP/cloudflare-addon" ;;
+            *) exit 1 ;;
+          esac
+          python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
+          # Registry/API reads may outlast the original checkpoint deadline.
+          python scripts/stable_publication_checkpoint.py verify \
+            --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
+          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}" "${optional_assets[@]}"
           release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
           [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
           operator_release_require_remote_allowlist published-release.json
+          operator_release_require_publication_assets published-release.json "$CLOUDFLARE_ADDON_SELECTED"
           mkdir -m 700 published-release-assets
-          gh release download "$TAG" --dir published-release-assets
+          core_download=()
+          for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do core_download+=(--pattern "$asset"); done
+          gh release download "$TAG" --dir published-release-assets "${core_download[@]}"
           operator_release_verify_published_assets published-release-assets "$SOURCE_SHA" "$GITHUB_REPOSITORY" \
             "$GITHUB_WORKSPACE/scripts/stable_installer_assets.py" "$TAG" \
             "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
           for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
-            cmp --silent "$asset" "published-release-assets/$asset"
+            cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"
           done
+          if [[ "$CLOUDFLARE_ADDON_SELECTED" = true ]]; then
+            python scripts/publish_hosting_addon.py --phase verify-published \
+              --assets "$RUNNER_TEMP/cloudflare-addon" \
+              --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          fi
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
+        if: inputs.publication_contract == 'v1'
         env:
           GH_TOKEN: ${{ github.token }}
-          EXISTING_RELEASE_ID: ${{ steps.existing_release.outputs.release_id }}
           RELEASE_ID: ${{ steps.release.outputs.id }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
-          release_id="${EXISTING_RELEASE_ID:-${RELEASE_ID:-$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)}}"
+          release_id="$RELEASE_ID"
+          [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
           manifest_digest="sha256:$(sha256sum stack-manifest.json | cut -d' ' -f1)"
           python scripts/release_transaction.py publish \
             --input release-transaction.json \
@@ -2746,13 +2945,15 @@ jobs:
             --manifest-sha256 "$manifest_digest" \
             --publication-run-id "$GITHUB_RUN_ID" \
             --output published-release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: inputs.publication_contract == 'v1'
         with:
           name: stack-release-published-${{ github.run_id }}
           path: published-release-transaction.json
           if-no-files-found: error
           retention-days: 90
       - name: Record required stable installer qualification
+        if: inputs.publication_contract == 'v1'
         env:
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
@@ -2766,3 +2967,144 @@ jobs:
             printf 'Before this version can become the stable one-line installer channel, run the main-only staged installed-journey acceptance, replay the published version anonymously on a clean host, run the installer admission gate with both signed reports, publish its separate immutable admission metadata, and promote a signed stable channel generation with a compare-and-swap pointer update.\n'
             printf 'The version release itself does not authorize channel promotion.\n'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-cloudflare-addon:
+    # Prepare the explicitly selected closure before immutable publication.
+    if: ${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}
+    needs: [resolve-transaction]
+    env:
+      TAG: ${{ needs.resolve-transaction.outputs.tag }}
+      SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+    runs-on: ubuntu-24.04
+    environment: stack-release
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - name: Read the exact optional image recipe
+        id: addon
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+          python - <<'PY_ADDON'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from hosting_addon import build_workflow, policy
+          item = policy(Path.cwd())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('image=' + item['image'] + '\n')
+              output.write('dockerfile=' + item['dockerfile'] + '\n')
+              output.write('workflow=' + build_workflow(os.environ['TAG']) + '\n')
+          PY_ADDON
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: ${{ steps.addon.outputs.dockerfile }}
+          platforms: linux/amd64
+          outputs: type=image,name=${{ steps.addon.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ steps.addon.outputs.image }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
+        with:
+          image: ${{ steps.addon.outputs.image }}@${{ steps.image.outputs.digest }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/cloudflared_wrapper.sbom.cdx.json
+          upload-artifact: false
+      - name: Authenticate image and package the selected connector
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.addon.outputs.image }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          WORKFLOW: ${{ steps.addon.outputs.workflow }}
+          TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign verify "$IMAGE@$DIGEST" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/$WORKFLOW@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --source-digest "$GITHUB_SHA" --source-ref refs/heads/main \
+            --signer-workflow "$GITHUB_REPOSITORY/$WORKFLOW" \
+            --deny-self-hosted-runners
+          mkdir "$RUNNER_TEMP/addon-anonymous-docker"
+          DOCKER_CONFIG="$RUNNER_TEMP/addon-anonymous-docker" python - <<'PY_PROBE'
+          import os, sys
+          sys.path.insert(0, 'scripts')
+          from check_selfhost_locked_image_platform import probe_images
+          probe_images({os.environ['IMAGE'] + '@' + os.environ['DIGEST']})
+          PY_PROBE
+          docker run --rm --network none --read-only --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges:true --entrypoint /bin/sh \
+            "$IMAGE@$DIGEST" -ec 'command -v wget >/dev/null; wget --help >/dev/null 2>&1; cloudflared --version'
+          python scripts/hosting_addon.py --source "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/cloudflare-addon" --source-sha "$GITHUB_SHA" \
+            --release-tag "$TAG" --build-run-id "$GITHUB_RUN_ID" \
+            --build-run-attempt "$GITHUB_RUN_ATTEMPT" --image "$IMAGE@$DIGEST" \
+            --sbom "$RUNNER_TEMP/cloudflared_wrapper.sbom.cdx.json"
+          python scripts/publish_hosting_addon.py --phase sign --assets "$RUNNER_TEMP/cloudflare-addon"
+      - id: addon_provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: ${{ runner.temp }}/cloudflare-addon/*
+      - name: Prepare the installer-pinned provenance verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          verifier="$RUNNER_TEMP/installer-gh"
+          mkdir "$verifier"
+          curl --fail --location --silent --show-error --proto '=https' --proto-redir '=https' \
+            --connect-timeout 20 --max-time 120 --max-filesize 15031001 \
+            https://github.com/cli/cli/releases/download/v2.103.2/gh_2.103.2_linux_amd64.tar.gz \
+            --output "$verifier/gh.tar.gz"
+          test "$(stat -c %s "$verifier/gh.tar.gz")" = 15031001
+          printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
+          tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
+          chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
+      - name: Export evidence for the selected immutable publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROVENANCE_BUNDLE: ${{ steps.addon_provenance.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/publish_hosting_addon.py --phase export-provenance \
+            --assets "$RUNNER_TEMP/cloudflare-addon" --provenance-bundle "$PROVENANCE_BUNDLE" \
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon/
+          if-no-files-found: error
+          retention-days: 30

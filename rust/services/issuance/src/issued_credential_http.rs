@@ -9,9 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::{
-    credential_management::{
-        CredentialLifecycleAction, CredentialLifecycleAuditContext, CredentialManagementError,
-    },
+    credential_management::{CredentialLifecycleAction, CredentialLifecycleAuditContext},
     issued_credential_records::{IssuedCredentialAdapterError, IssuedCredentialAdapterService},
     management_http::{header, malformed_json, missing_organization_query},
     transaction_reads::TransactionReadError,
@@ -190,7 +188,12 @@ fn adapter_error(error: IssuedCredentialAdapterError) -> Response {
             "Issued credential data is temporarily unavailable",
         ),
         IssuedCredentialAdapterError::Security(error) => security_error(error),
-        IssuedCredentialAdapterError::Lifecycle(error) => lifecycle_error(error),
+        IssuedCredentialAdapterError::Lifecycle(error) => {
+            return crate::management_http::lifecycle_error(
+                error,
+                crate::management_http::LifecycleSurface::IssuedCredential,
+            );
+        }
     };
     (status, Json(json!({"detail": detail}))).into_response()
 }
@@ -211,53 +214,6 @@ fn security_error(error: TransactionReadError) -> (StatusCode, &'static str) {
         _ => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Issued credential data is temporarily unavailable",
-        ),
-    }
-}
-
-fn lifecycle_error(error: CredentialManagementError) -> (StatusCode, &'static str) {
-    match error {
-        CredentialManagementError::NotFound => (StatusCode::NOT_FOUND, "Credential not found"),
-        CredentialManagementError::ResourceNotFound => {
-            (StatusCode::NOT_FOUND, "Issued credential not found")
-        }
-        CredentialManagementError::AlreadyRevoked => {
-            (StatusCode::BAD_REQUEST, "Credential already revoked")
-        }
-        CredentialManagementError::CannotSuspendRevoked => {
-            (StatusCode::BAD_REQUEST, "Cannot suspend revoked credential")
-        }
-        CredentialManagementError::CannotReinstateRevoked => (
-            StatusCode::BAD_REQUEST,
-            "Cannot reinstate revoked credential",
-        ),
-        CredentialManagementError::NotSuspended => (
-            StatusCode::BAD_REQUEST,
-            "Only suspended credentials can be reinstated",
-        ),
-        CredentialManagementError::ReasonTooLong => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Credential lifecycle reason exceeds 2000 characters",
-        ),
-        CredentialManagementError::CommentsTooLong => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Credential lifecycle comments exceed 4000 characters",
-        ),
-        CredentialManagementError::PublicationUnavailable(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Revocation service unavailable",
-        ),
-        CredentialManagementError::RepositoryUnavailable(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Credential repository is temporarily unavailable",
-        ),
-        CredentialManagementError::CanvasRetryUnavailable(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canvas lifecycle retry could not be recorded",
-        ),
-        CredentialManagementError::CanvasTextEncoding => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Canvas lifecycle status text could not be encoded",
         ),
     }
 }

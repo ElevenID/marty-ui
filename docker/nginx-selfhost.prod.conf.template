@@ -14,9 +14,19 @@ server {
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-XSS-Protection "1; mode=block" always;
 
+    # Optional, authenticated website deployment routes. With no mounted *.conf
+    # file the existing combined application routing is unchanged.
+    include /etc/nginx/marty-website/*.conf;
+
+    location = /edge-healthz {
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        return 200 "ok\n";
+    }
+
     location /api/ {
         set $backend_api ${GATEWAY_UPSTREAM};
-        proxy_pass http://$backend_api/api/;
+        proxy_pass http://$backend_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -27,7 +37,7 @@ server {
 
     location /auth/ {
         set $backend_api ${GATEWAY_UPSTREAM};
-        proxy_pass http://$backend_api/auth/;
+        proxy_pass http://$backend_api;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -205,7 +215,8 @@ server {
         proxy_set_header X-Forwarded-Port 443;
     }
 
-    location /resources/ {
+    # Keep exact /resources in the UI; only descendants belong to Keycloak.
+    location ~ ^/resources/ {
         set $keycloak ${KEYCLOAK_UPSTREAM};
         proxy_pass http://$keycloak;
         proxy_http_version 1.1;
@@ -282,7 +293,7 @@ server {
     location = /console {
         if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
-        proxy_pass http://$ui_upstream/console;
+        proxy_pass http://$ui_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -294,7 +305,7 @@ server {
     location ^~ /console/ {
         if ($console_disabled) { return 404; }
         set $ui_upstream ${UI_UPSTREAM};
-        proxy_pass http://$ui_upstream/console;
+        proxy_pass http://$ui_upstream;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
