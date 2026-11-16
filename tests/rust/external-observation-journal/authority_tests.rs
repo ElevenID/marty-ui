@@ -167,7 +167,8 @@ async fn canonical_scope_revocation_and_lifecycle_changes_fail_closed() {
         },
         fixture.now,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, Denial::ScopeMissing);
     transaction.rollback().await.unwrap();
 
@@ -190,7 +191,8 @@ async fn canonical_scope_revocation_and_lifecycle_changes_fail_closed() {
         },
         fixture.now,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, Denial::AuthenticationRequired);
     transaction.rollback().await.unwrap();
 
@@ -219,7 +221,8 @@ async fn canonical_scope_revocation_and_lifecycle_changes_fail_closed() {
         },
         fixture.now,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, Denial::ApplicationClosed);
     transaction.rollback().await.unwrap();
 }
@@ -346,7 +349,8 @@ async fn authority_mutation_waits_then_denies(statement: &'static str, expected:
         },
         fixture.now,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, expected);
     transaction.rollback().await.unwrap();
     fixture.pool.close().await;
@@ -401,7 +405,8 @@ async fn canonical_key_and_application_expiry_are_checked_at_decision_time() {
         },
         locked.principal.expires_at_ms,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, Denial::AuthenticationRequired);
     transaction.rollback().await.unwrap();
     sqlx::query("UPDATE issuance_service.applications SET expires_at=clock_timestamp() - interval '1 second'")
@@ -423,7 +428,8 @@ async fn canonical_key_and_application_expiry_are_checked_at_decision_time() {
         },
         locked.application.expires_at_ms,
     )
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(denied, Denial::ApplicationClosed);
     transaction.rollback().await.unwrap();
     fixture.pool.close().await;
@@ -438,7 +444,8 @@ async fn membership_updates_cannot_bypass_grant_revision_fences() {
     )
     .execute(&fixture.pool)
     .await
-    .unwrap_err();
+    .err()
+    .expect("operation must be denied");
     assert_eq!(
         error
             .as_database_error()

@@ -122,3 +122,24 @@ inside one transaction. The delete and insert triggers bump the affected grant
 revisions. In-place UPDATE is rejected even for a no-op, so changes cannot
 silently bypass revision fencing. This database constraint also applies to
 privileged administrative clients; it does not grant connector database access.
+
+## Gateway activation prerequisites
+
+The current Gateway runtime has shared body buffering and an idempotency cache.
+Evidence submission must enforce its 65,536-byte bound before the shared tenant
+middleware buffers a body, preserving original bytes and repeated header values
+for the strict wire decoder. A later service-side bound alone is insufficient.
+
+The Gateway idempotency middleware can return a cached response before reaching
+the journal. Evidence submissions must reach canonical authority revalidation on
+every retry, including exact retries after grant revocation or binding changes.
+The journal owns observation replay and receipts; the generic response cache
+must not bypass that decision. Test a successful receipt followed by revocation
+and the same request, and verify the second request is denied.
+
+Require an actual API-key identity with an organization and exact evidence:submit
+permission. Session authentication and unrelated administrator scopes do not
+establish a producer identity. Strip caller-supplied identity headers and forward
+only authenticated identity using the existing trusted internal transport. The
+connector accesses only the public Gateway; Gateway-to-service transport does
+not authorize connector access to private endpoints or shared PostgreSQL.
