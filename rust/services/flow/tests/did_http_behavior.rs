@@ -37,7 +37,9 @@ struct IdentityBinding {
     algorithm: String,
 }
 
-struct Signing;
+struct Signing {
+    mutation: Option<&'static str>,
+}
 
 #[async_trait]
 impl SigningIdentityProvider for Signing {
@@ -54,7 +56,7 @@ impl SigningIdentityProvider for Signing {
         assert_eq!(key_purpose, "oid4vp_request_signing");
         assert_eq!(credential_format, "oauth-authz-req+jwt");
         assert_eq!(algorithm, Some("ES256"));
-        Ok(SigningIdentity {
+        let mut identity = SigningIdentity {
             organization_id: organization_id.into(),
             issuer_did: issuer_did.into(),
             verification_method_id: format!("{issuer_did}#key-1"),
@@ -62,13 +64,39 @@ impl SigningIdentityProvider for Signing {
             public_jwk: BTreeMap::from([
                 ("kty".into(), json!("EC")),
                 ("crv".into(), json!("P-256")),
-                ("x".into(), json!("x-coordinate")),
-                ("y".into(), json!("y-coordinate")),
+                (
+                    "x".into(),
+                    json!("axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY"),
+                ),
+                (
+                    "y".into(),
+                    json!("T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"),
+                ),
             ]),
             key_purpose: key_purpose.into(),
             credential_format: credential_format.into(),
             algorithm: "ES256".into(),
-        })
+        };
+        match self.mutation {
+            Some("tenant") => identity.organization_id = "other-org".into(),
+            Some("did") => identity.issuer_did = "did:web:other.example".into(),
+            Some("method") => {
+                identity.verification_method_id = "did:web:other.example#key-1".into()
+            }
+            Some("purpose") => identity.key_purpose = "credential_issuer".into(),
+            Some("format") => identity.credential_format = "jwt_vc_json".into(),
+            Some("algorithm") => identity.algorithm = "EdDSA".into(),
+            Some("private") => {
+                identity
+                    .public_jwk
+                    .insert("dp".into(), json!("forbidden-fixture-material"));
+            }
+            Some("point") => {
+                identity.public_jwk.insert("x".into(), json!("invalid"));
+            }
+            _ => {}
+        }
+        Ok(identity)
     }
 
     async fn sign(&self, _request: &SigningRequest) -> Result<SigningResult, FlowProviderError> {
@@ -87,12 +115,16 @@ fn contract() -> Contract {
 }
 
 fn router(with_provider: bool) -> axum::Router {
+    configured_router(with_provider, None)
+}
+
+fn configured_router(with_provider: bool, mutation: Option<&'static str>) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://localhost/marty_flow_did_contract")
         .unwrap();
     let mut providers = FlowProviderRegistry::default();
     if with_provider {
-        providers.signing_identity = Some(Arc::new(Signing));
+        providers.signing_identity = Some(Arc::new(Signing { mutation }));
     }
     let verification = FlowHttpVerificationOptions {
         default_issuer_did: "did:web:issuer.example:orgs:marty".into(),
@@ -159,6 +191,10 @@ async fn did_document_binding_headers_and_failure_behavior_match_contract() {
         .await
         .unwrap();
     let document: Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        document.get("@context").is_none(),
+        "the advertised representation is DID JSON"
+    );
     assert_eq!(document["id"], "did:web:issuer.example:orgs:marty");
     assert_eq!(document["verificationMethod"][0]["type"], "JsonWebKey2020");
     assert_eq!(
@@ -178,4 +214,34 @@ async fn did_document_binding_headers_and_failure_behavior_match_contract() {
         .await
         .unwrap();
     assert_eq!(unavailable.status(), 503);
+}
+
+#[tokio::test]
+async fn did_publication_rejects_unbound_private_or_invalid_provider_keys() {
+    for mutation in [
+        "tenant",
+        "did",
+        "method",
+        "purpose",
+        "format",
+        "algorithm",
+        "private",
+        "point",
+    ] {
+        let response = configured_router(true, Some(mutation))
+            .oneshot(
+                Request::get("/oid4vp/did.json")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 503, "{mutation}");
+        let body = axum::body::to_bytes(response.into_body(), 32_768)
+            .await
+            .unwrap();
+        let text = String::from_utf8(body.to_vec()).unwrap();
+        assert!(!text.contains("forbidden-fixture-material"));
+        assert!(!text.contains("publicKeyJwk"));
+    }
 }

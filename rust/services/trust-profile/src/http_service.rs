@@ -61,6 +61,10 @@ fn credential_authority_routes() -> Router<TrustProfileHttpState> {
             get(wallet_verifier_authority),
         )
         .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-profile-admission",
+            get(wallet_verifier_profile_admission),
+        )
+        .route(
             "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
             post(credential_authority_snapshot),
         )
@@ -1287,19 +1291,94 @@ struct WalletVerifierAuthorityQuery {
     client_id: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletVerifierProfileQuery {
+    organization_id: String,
+}
+
+async fn wallet_verifier_profile_for_caller(
+    state: &TrustProfileHttpState,
+    headers: &HeaderMap,
+    profile_id: &str,
+    require_user: bool,
+) -> Result<TrustProfile, TrustProfileHttpError> {
+    credential_authority_service(state, headers)?;
+    let id = uuid(profile_id, "profile_id")?;
+    let permitted_organization = if require_user || header(headers, "x-user-id").is_some() {
+        let user = trusted_user(state, headers)?;
+        Some(
+            state
+                .application
+                .profile(&user, id)
+                .await
+                .map_err(application_error)?
+                .organization_id,
+        )
+    } else {
+        None
+    };
+    // Read after the permission await; do not project a profile captured before
+    // a potentially slow authorization call.
+    let current = state
+        .repository
+        .profile_by_id(id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    if permitted_organization.is_some_and(|organization| organization != current.organization_id) {
+        return Err(forbidden("Trust Profile authorization changed"));
+    }
+    Ok(current)
+}
+
+async fn wallet_verifier_profile_admission(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierProfileQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    let now = Utc::now();
+    let mut selected = None;
+    for source in profile
+        .trust_sources
+        .iter()
+        .filter(|source| source.source_type == TrustSourceType::RegisteredVerifier)
+    {
+        let registration =
+            crate::registered_verifier::registration(source).map_err(application_error)?;
+        if source.enabled && registration.valid_from <= now && registration.valid_until > now {
+            selected = Some(registration.client_id);
+        }
+    }
+    let client =
+        selected.ok_or_else(|| unprocessable("No active verifier registration is available"))?;
+    let snapshot = crate::registered_verifier::project_wallet_verifier_authority(
+        &profile,
+        &query.organization_id,
+        &client,
+        now,
+    )
+    .map_err(application_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "contract":"marty.wallet/verifier-profile-admission/v1",
+            "organization_id":snapshot.organization_id,"trust_profile_id":snapshot.trust_profile_id,
+            "observed_at":snapshot.observed_at,"expires_at":snapshot.expires_at,
+        })),
+    )
+        .into_response())
+}
+
 async fn wallet_verifier_authority(
     State(state): State<TrustProfileHttpState>,
     headers: HeaderMap,
     Path(profile_id): Path<String>,
     Query(query): Query<WalletVerifierAuthorityQuery>,
 ) -> Result<Response, TrustProfileHttpError> {
-    credential_authority_service(&state, &headers)?;
-    let profile = state
-        .repository
-        .profile_by_id(uuid(&profile_id, "profile_id")?)
-        .await
-        .map_err(repository_error)?
-        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, false).await?;
     let snapshot = crate::registered_verifier::project_wallet_verifier_authority(
         &profile,
         &query.organization_id,
