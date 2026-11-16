@@ -235,11 +235,52 @@ pub async fn build_standard_request_object(
 
 pub async fn build_profiled_request_object(
     providers: &FlowProviderRegistry,
+    instance: FlowInstanceRecord,
+    artifacts: Option<&PresentationRequestArtifacts>,
+    public_base_url: &str,
+    options: &RequestObjectOptions,
+    now: DateTime<Utc>,
+) -> Result<SignedRequestObject, FlowRequestObjectError> {
+    build_profiled_request_object_inner(
+        providers,
+        instance,
+        artifacts,
+        public_base_url,
+        options,
+        now,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn build_paired_wallet_request_object(
+    providers: &FlowProviderRegistry,
+    instance: FlowInstanceRecord,
+    artifacts: &PresentationRequestArtifacts,
+    public_base_url: &str,
+    options: &RequestObjectOptions,
+    now: DateTime<Utc>,
+) -> Result<SignedRequestObject, FlowRequestObjectError> {
+    build_profiled_request_object_inner(
+        providers,
+        instance,
+        Some(artifacts),
+        public_base_url,
+        options,
+        now,
+        true,
+    )
+    .await
+}
+
+async fn build_profiled_request_object_inner(
+    providers: &FlowProviderRegistry,
     mut instance: FlowInstanceRecord,
     artifacts: Option<&PresentationRequestArtifacts>,
     public_base_url: &str,
     options: &RequestObjectOptions,
     now: DateTime<Utc>,
+    paired_wallet: bool,
 ) -> Result<SignedRequestObject, FlowRequestObjectError> {
     let profiled = artifacts
         .map(|artifacts| validate_profiled_query_transport(&instance, artifacts, options))
@@ -380,7 +421,11 @@ pub async fn build_profiled_request_object(
         });
         match options.compatibility {
             RequestObjectCompatibility::Standard => {
-                payload["client_metadata"] = selected_client_metadata(base, options, profiled);
+                payload["client_metadata"] = if paired_wallet {
+                    paired_wallet_client_metadata(base, options)
+                } else {
+                    selected_client_metadata(base, options, profiled)
+                };
                 payload["dcql_query"] = artifacts.dcql_query.clone();
             }
             RequestObjectCompatibility::Lissi => {
@@ -613,7 +658,7 @@ fn verifier_did(
     }
 }
 
-fn verifier_request_kid(
+pub(crate) fn verifier_request_kid(
     identity: &SigningIdentity,
     verifier_did: &str,
     method: VerifierDidMethod,
@@ -763,6 +808,20 @@ pub(crate) fn validate_profiled_query_transport(
         return Ok(Some(query.binding));
     }
     Ok(None)
+}
+
+pub(crate) fn paired_wallet_client_metadata(
+    base_url: &str,
+    options: &RequestObjectOptions,
+) -> Value {
+    let mut metadata = client_metadata(base_url, options);
+    metadata["vp_formats_supported"] = json!({
+        "dc+sd-jwt": {
+            "sd-jwt_alg_values": ["ES256", "ES384", "EdDSA", "RS256"],
+            "kb-jwt_alg_values": ["ES256"]
+        }
+    });
+    metadata
 }
 
 fn selected_client_metadata(

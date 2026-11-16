@@ -20,6 +20,9 @@ chrono.workspace = true
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-didcomm = { workspace = true, features = ["did_web"] }
 marty-verification.workspace = true
+marty-oid4vci = { workspace = true, features = ["jose-verification"] }
+reqwest.workspace = true
+sha2.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true

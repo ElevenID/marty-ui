@@ -332,6 +332,7 @@ async fn rotate_holder_credential(
 #[serde(deny_unknown_fields)]
 struct WalletVerifierQuery {
     client_id: String,
+    request_uri: Option<String>,
 }
 
 async fn wallet_verifier_authority(
@@ -348,6 +349,52 @@ async fn wallet_verifier_authority(
         .wallet_verifier_trust
         .as_ref()
         .ok_or(DeviceError::AuthorizationUnavailable)?;
+    if let Some(locator) = query.request_uri.as_deref() {
+        let scope = confirmations.governance_for_bearer(bearer).await?;
+        state
+            .memberships
+            .require_active(&scope.user_id, &scope.organization_id)
+            .await?;
+        let snapshot = trust
+            .fetch_managed(
+                &scope.verifier_trust_profile_id,
+                &scope.organization_id,
+                &scope.user_id,
+                &query.client_id,
+                locator,
+            )
+            .await?;
+        state
+            .memberships
+            .require_active(&scope.user_id, &scope.organization_id)
+            .await?;
+        if confirmations.governance_for_bearer(bearer).await? != scope {
+            return Err(DeviceError::Forbidden("wallet governance scope changed".into()).into());
+        }
+        let now = chrono::Utc::now();
+        let expires =
+            serde_json::from_value::<chrono::DateTime<chrono::Utc>>(snapshot["expires_at"].clone())
+                .map_err(|_| DeviceError::AuthorizationUnavailable)?
+                .min(scope.credential_expires_at);
+        if expires <= now {
+            return Err(DeviceError::AuthorizationUnavailable.into());
+        }
+        let envelope = json!({"contract":"marty.wallet/device-verifier-governance/v2","scope":scope,
+            "observed_at":now,"expires_at":expires,"verifier":snapshot});
+        if serde_json::to_vec(&envelope)
+            .map_err(|_| DeviceError::AuthorizationUnavailable)?
+            .len()
+            > 65536
+        {
+            return Err(DeviceError::AuthorizationUnavailable.into());
+        }
+        let mut response = Json(envelope).into_response();
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        return Ok(response);
+    }
     let profile = confirmations.profile_for_bearer(bearer).await?;
     let verifier = profile
         .verifier_trust_profile_id

@@ -19,11 +19,18 @@ import tempfile
 import threading
 from urllib.parse import parse_qs, urlsplit
 
+import qualify_wallet_verifier_pairing as pairing
+
 PROFILE = "00000000-0000-4000-8000-000000000002"
 CASE = "fixed_owner_tls_authentication_and_closed_response_controls"
+HTTP_CASE = "device_http_governance_rereads_scope_after_paused_managed_authority"
+HTTP_ORG = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+PAUSED_CASES = {"unchanged", "device_id", "user_id", "organization_id", "inactive",
+    "issuer_profile", "verifier_profile", "pairing_expired", "binding_revoked", "signing_revoked",
+    "key_version", "bearer_rotated", "credential_revoked", "membership_revoked"}
 
 
-def qualify(binary: Path) -> dict:
+def qualify(binary: Path, device_http_binary: Path | None = None) -> dict:
     binary = binary.resolve(strict=True)
     if not binary.is_file() or not binary.name.startswith("verifier_trust_tls-"):
         raise ValueError("expected the compiled verifier_trust_tls test executable")
@@ -31,12 +38,19 @@ def qualify(binary: Path) -> dict:
         capture_output=True, text=True, timeout=30, check=False)
     if discovery.returncode != 0 or [line for line in discovery.stdout.splitlines() if line.endswith(": test")] != [f"{CASE}: test"]:
         raise RuntimeError("exact verifier TLS test discovery failed before fixture allocation")
+    if device_http_binary is not None:
+        device_http_binary = pairing.discover(device_http_binary, "verifier_governance_http", HTTP_CASE)
     fixture = Path(__file__).resolve().parents[1] / "rust/services/trust-profile/tests/fixtures/registered-verifier-source.json"
     registration = json.loads(fixture.read_text())["registered_verifier"]
     token, nonce = secrets.token_hex(32), secrets.token_hex(32)
     requests: list[str] = []
     fixture_errors: list[str] = []
     response_cases: set[str] = set()
+    pause_lock = threading.Lock()
+    pause = {"case": None, "arrived": threading.Event(), "release": threading.Event()}
+    paused_cases: set[str] = set()
+    http_detail = ""
+    http_receipt = None
     with tempfile.TemporaryDirectory(prefix="marty-verifier-tls-") as directory:
         root = Path(directory)
         os.chmod(root, 0o700)
@@ -91,22 +105,92 @@ def qualify(binary: Path) -> dict:
                 if url.path == f"/fixture-guard/{nonce}":
                     self.respond(200, nonce.encode())
                     return
+                prefix = f"/fixture-control/{nonce}/"
+                if url.path.startswith(prefix):
+                    if self.headers.get("x-service-token") != token:
+                        self.respond(401, b"{}")
+                        return
+                    parts = url.path.removeprefix(prefix).split("/")
+                    if len(parts) != 2 or parts[1] not in PAUSED_CASES or url.query:
+                        self.respond(400, b"{}")
+                        return
+                    action, case = parts
+                    with pause_lock:
+                        if action == "arm":
+                            if pause["case"] is not None and not pause["release"].is_set():
+                                self.respond(409, b"{}")
+                                return
+                            pause["case"] = case
+                            pause["arrived"].clear()
+                            pause["release"].clear()
+                        elif pause["case"] != case:
+                            self.respond(404, b"{}")
+                            return
+                        elif action == "arrived":
+                            self.respond(200 if pause["arrived"].is_set() else 404, b"{}")
+                            return
+                        elif action == "release":
+                            if not pause["arrived"].is_set():
+                                self.respond(409, b"{}")
+                                return
+                            paused_cases.add(case)
+                            pause["release"].set()
+                        else:
+                            self.respond(400, b"{}")
+                            return
+                    self.respond(200, b"{}")
+                    return
                 requests.append(url.path)
                 if self.headers.get("x-service-token") != token:
                     self.respond(401, b"{}")
                     return
                 query = parse_qs(url.query)
-                if self.headers.get("x-user-id") != "browser-user" or query.get("organization_id") != ["org-a"]:
+                if self.headers.get("authorization") is not None:
+                    raise RuntimeError("wallet bearer forwarded to authority fixture")
+                organizations = {"org-a", HTTP_ORG} if device_http_binary is not None else {"org-a"}
+                organization = query.get("organization_id", [""])[0]
+                if self.headers.get("x-user-id") != "browser-user" or organization not in organizations:
                     self.respond(403, b"{}")
                     return
                 if not url.path.startswith(f"/internal/v1/trust-profiles/{PROFILE}/"):
                     self.respond(404, b"{}")
                     return
+                if url.path.endswith("/wallet-managed-verifier-authority"):
+                    with pause_lock:
+                        active = pause["case"]
+                    if active is not None:
+                        pause["arrived"].set()
+                        if not pause["release"].wait(timeout=10):
+                            raise RuntimeError("owned authority pause was not released")
                 now = datetime.now(timezone.utc).replace(microsecond=0)
-                snapshot = {"organization_id": "org-a", "trust_profile_id": PROFILE,
+                snapshot = {"organization_id": organization, "trust_profile_id": PROFILE,
                             "observed_at": now.isoformat(), "expires_at": (now + timedelta(seconds=30)).isoformat()}
                 if url.path.endswith("/wallet-verifier-profile-admission"):
                     snapshot["contract"] = "marty.wallet/verifier-profile-admission/v1"
+                elif url.path.endswith("/wallet-managed-verifier-authority"):
+                    import hashlib
+                    client_id = query.get("client_id", [""])[0]
+                    locator = query.get("request_uri", [""])[0]
+                    instance = "11111111-2222-4333-8444-555555555555"
+                    expected = f"https://verifier.example/v1/flows/instances/{instance}/request"
+                    if client_id != "decentralized_identifier:did:web:verifier.example" or locator != expected:
+                        self.respond(403, b"{}")
+                        return
+                    response_cases.add("managed-client")
+                    recipient = expected.removesuffix("/request") + "/submit"
+                    selected = dict(registration, client_id=client_id,
+                        request_key_id="did:web:verifier.example#key-1", response_uris=[recipient],
+                        valid_from=(now-timedelta(seconds=60)).isoformat(), valid_until=(now+timedelta(seconds=600)).isoformat())
+                    original = "synthetic.not.authenticated"
+                    snapshot.update(contract="marty.wallet/verifier-authority/v2", authority={
+                        "authority_id": f"{PROFILE}/00000000-0000-4000-8000-000000000001",
+                        "revision": "fixture-managed-revision", "key_purpose": "oid4vp_request_signing",
+                        "algorithm": "ES256", "request_clock_skew_seconds": 30,
+                        "max_request_lifetime_seconds": 900, "registration": selected},
+                        request={"producer_id": "flow-primary", "instance_id": instance, "request_uri": expected,
+                            "response_uri": recipient, "nonce": "synthetic-nonce", "compact_request_jws": original,
+                            "request_jws_sha256": hashlib.sha256(original.encode()).hexdigest(),
+                            "request_issued_at": now.isoformat(), "request_expires_at": (now+timedelta(seconds=120)).isoformat()})
                 elif url.path.endswith("/wallet-verifier-authority"):
                     client_id = query.get("client_id", [""])[0]
                     response_cases.add(client_id)
@@ -156,10 +240,20 @@ def qualify(binary: Path) -> dict:
                     return
                 self.respond(200, json.dumps(snapshot).encode())
 
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certificate, key)
-        server.socket = context.wrap_socket(server.socket, server_side=True)
+
+        class FixtureServer(http.server.ThreadingHTTPServer):
+            def get_request(self):
+                connection, address = self.socket.accept()
+                connection.settimeout(5)
+                try:
+                    return context.wrap_socket(connection, server_side=True), address
+                except BaseException:
+                    connection.close()
+                    raise
+
+        server = FixtureServer(("127.0.0.1", 0), Handler)
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
         try:
@@ -177,13 +271,27 @@ def qualify(binary: Path) -> dict:
             passed = result.returncode == 0 and "test result: ok. 1 passed; 0 failed;" in detail
             if not passed:
                 raise RuntimeError("owned TLS transport qualification failed:\n" + detail[-6000:])
+            if device_http_binary is not None:
+                with pairing.disposable_postgres() as (database_environment, http_receipt):
+                    # execute() inherits the host environment itself. Pass only
+                    # fixture secrets for redaction, never values like host
+                    # CARGO_BUILD_JOBS=1 that would erase libtest pass counts.
+                    fixture_environment = {name: environment[name] for name in (
+                        "MARTY_VERIFIER_TLS_FIXTURE_ORIGIN", "MARTY_VERIFIER_TLS_FIXTURE_CA",
+                        "MARTY_VERIFIER_TLS_FIXTURE_TOKEN", "MARTY_VERIFIER_TLS_FIXTURE_NONCE",
+                        "HTTPS_PROXY", "https_proxy")}
+                    http_detail = pairing.execute(device_http_binary, HTTP_CASE,
+                        dict(fixture_environment, **database_environment))
+                if paused_cases != PAUSED_CASES:
+                    raise RuntimeError("Device HTTP did not execute all controlled scope races")
             if fixture_errors:
                 raise RuntimeError("TLS fixture handler failed: " + ",".join(fixture_errors))
-            if response_cases != {"registered-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"}:
+            if response_cases != {"registered-client", "managed-client", "redirect", "oversized", "duplicate", "wrong-scope", "expired", "private-key"}:
                 raise RuntimeError("TLS fixture did not execute every required response case")
             if "/redirect-target" in requests:
                 raise RuntimeError("owner redirect was followed")
         finally:
+            pause["release"].set()
             server.shutdown()
             server.server_close()
             worker.join(timeout=5)
@@ -192,7 +300,9 @@ def qualify(binary: Path) -> dict:
     # Let the shared CI positive-execution guard inspect the real sanitized
     # libtest summary, after the fixture teardown also succeeded.
     print(detail, end="")
-    return {"test": CASE, "passed": 1, "ignored": 0, "tlsFixtureStopped": True,
+    print(http_detail, end="")
+    return {"test": CASE, "passed": 1 + int(device_http_binary is not None), "ignored": 0, "tlsFixtureStopped": True,
+            "deviceHttpPausedCases": len(paused_cases), "deviceHttpPostgres": http_receipt,
             "temporaryTlsMaterialRemoved": not root.exists(), "redirectFollowed": False,
             "scope": "actual fixed-owner TLS transport against synthetic owner responses; not deployed owner, KMS, rootless installation or wallet acceptance"}
 
@@ -200,5 +310,6 @@ def qualify(binary: Path) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--test-binary", required=True, type=Path)
+    parser.add_argument("--device-http-test-binary", type=Path)
     args = parser.parse_args()
-    print(json.dumps(qualify(args.test_binary)))
+    print(json.dumps(qualify(args.test_binary, args.device_http_test_binary)))

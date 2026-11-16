@@ -10,17 +10,132 @@ use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
 fn router() -> axum::Router {
+    router_with_auth(None)
+}
+
+fn router_with_auth(
+    service_authenticator: Option<Arc<mmf_security::ServiceTokenAuthenticator>>,
+) -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://localhost/flow")
         .expect("lazy pool");
     flow_read_router(FlowHttpState {
-        service_authenticator: None,
+        service_authenticator,
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "https://verifier.example".into(),
         verification: FlowHttpVerificationOptions::default(),
         application_approval: marty_flow::FlowHttpApplicationApprovalOptions::default(),
     })
+}
+
+#[tokio::test]
+async fn managed_https_router_exposes_only_the_workload_owner_operation() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgresql://localhost/flow")
+        .unwrap();
+    let app = marty_flow::flow_wallet_authority_router(FlowHttpState {
+        service_authenticator: None,
+        repository: PostgresFlowRepository::new(pool),
+        providers: Arc::new(FlowProviderRegistry::default()),
+        public_base_url: "https://verifier.example".into(),
+        verification: FlowHttpVerificationOptions::default(),
+        application_approval: marty_flow::FlowHttpApplicationApprovalOptions::default(),
+    });
+    for path in [
+        "/v1/flows/definitions",
+        "/v1/flows/instances/instance-1/request",
+        "/oid4vp/did.json",
+    ] {
+        assert_eq!(
+            app.clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status(),
+            404
+        );
+    }
+    let path = "/internal/v1/wallet-verifier-requests/00000000-0000-4000-8000-000000000001";
+    assert_eq!(
+        app.clone()
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        405
+    );
+    assert_eq!(
+        app.oneshot(Request::post(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+}
+
+#[tokio::test]
+async fn wallet_request_owner_requires_workload_auth_before_storage_or_signing() {
+    for gateway_headers in [false, true] {
+        let mut request = Request::post(
+            "/internal/v1/wallet-verifier-requests/00000000-0000-4000-8000-000000000001",
+        )
+        .header("x-service-token", "untrusted-caller-token")
+        .header("x-organization-id", "caller-controlled-tenant");
+        if gateway_headers {
+            request = request.header("x-api-key-id", "caller-key");
+        }
+        let response = router()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 401);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "service_authentication_required");
+    }
+}
+
+#[tokio::test]
+async fn wallet_request_owner_refuses_unconfigured_missing_wrong_and_duplicate_tokens() {
+    let valid = "s".repeat(32);
+    for configured in [false, true] {
+        for tokens in [
+            vec![],
+            vec!["wrong"],
+            vec![valid.as_str(), valid.as_str()],
+            vec![valid.as_str(), "wrong"],
+            vec!["wrong", valid.as_str()],
+        ] {
+            let auth = mmf_security::ServiceTokenAuthenticator::new(
+                configured.then(|| valid.clone()),
+                configured,
+            )
+            .unwrap();
+            let mut request = Request::post(
+                "/internal/v1/wallet-verifier-requests/00000000-0000-4000-8000-000000000001",
+            );
+            for token in tokens {
+                request = request.header("x-service-token", token);
+            }
+            let response = router_with_auth(Some(Arc::new(auth)))
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 401);
+        }
+        if !configured {
+            let auth = mmf_security::ServiceTokenAuthenticator::new(None, false).unwrap();
+            let response = router_with_auth(Some(Arc::new(auth)))
+                .oneshot(Request::post(
+                    "/internal/v1/wallet-verifier-requests/00000000-0000-4000-8000-000000000001",
+                ).header("x-service-token", valid.as_str()).body(Body::empty()).unwrap())
+                .await.unwrap();
+            assert_eq!(response.status(), 401);
+        }
+    }
 }
 
 #[tokio::test]

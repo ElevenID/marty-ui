@@ -32,6 +32,7 @@ impl Environment {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct FlowServiceConfig {
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
     pub public_verification: Option<crate::PublicVerificationOptions>,
     pub environment: Environment,
     pub http_addr: SocketAddr,
@@ -110,6 +111,13 @@ impl fmt::Debug for FlowServiceConfig {
             .field("environment", &self.environment)
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
+            .field(
+                "managed_authority_https_address",
+                &self
+                    .managed_authority_https
+                    .as_ref()
+                    .map(|config| config.address),
+            )
             .field("public_base_url", &self.public_base_url)
             .field("oid4vp_issuer_did", &self.oid4vp_issuer_did)
             .field("marty_organization_id", &self.marty_organization_id)
@@ -587,7 +595,18 @@ impl FlowServiceConfig {
             return Err(invalid("GRPC_INSECURE_ALLOWED"));
         }
 
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr || https.address == grpc_addr || service_token.is_none() {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+        }
         Ok(Self {
+            managed_authority_https,
             public_verification,
             environment,
             http_addr,

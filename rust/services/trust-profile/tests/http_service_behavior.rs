@@ -20,6 +20,103 @@ use uuid::Uuid;
 struct AllowControlPlane;
 
 #[tokio::test]
+async fn managed_flow_sources_round_trip_disabled_and_require_distinct_owner_scope() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let token = "s".repeat(32);
+    let state = TrustProfileHttpState {
+        flow_owner: None,
+        application: Arc::new(TrustProfileApplication::new(
+            repository.clone(),
+            Arc::new(AllowControlPlane),
+        )),
+        repository: repository.clone(),
+        service_authenticator: Arc::new(
+            ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+        ),
+        internal_api_key: None,
+        registry_synchronizer: Arc::new(EchoSynchronizer),
+    };
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let source = json!({"source_type":"MANAGED_FLOW_VERIFIER","purposes":["PRESENTATION_VERIFIER"],
+        "managed_flow_verifier":{"producer_id":"flow-primary","public_base_url":"https://verifier.example",
+            "verifier_did":"did:web:verifier.example","request_key_id":"did:web:verifier.example#key-1",
+            "public_jwk":fixture["registered_verifier"]["public_jwk"],"valid_from":now-Duration::minutes(1),"valid_until":now+Duration::hours(1)}});
+    let create = |source: Value| {
+        Request::post("/v1/trust-profiles")
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"organization_id":"org-1","name":"Managed Flow verifier",
+            "compliance_status":"COMPLIANT","trust_purposes":["PRESENTATION_VERIFIER"],
+            "allowed_algorithms":["ES256"],"trust_sources":[source]})
+                .to_string(),
+            ))
+            .unwrap()
+    };
+    let response = trust_profile_router(state.clone())
+        .oneshot(create(source.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let created = body(response).await;
+    assert_eq!(created["status"], "draft");
+    assert_eq!(created["trust_sources"][0]["enabled"], false);
+    assert_eq!(
+        created["trust_sources"][0]["managed_flow_verifier"],
+        source["managed_flow_verifier"]
+    );
+    assert!(created["trust_sources"][0]
+        .get("registered_verifier")
+        .is_none());
+    let mut selected = repository
+        .profile_by_id(Uuid::parse_str(created["id"].as_str().unwrap()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    selected.status = TrustProfileStatus::Active;
+    selected.trust_sources[0].enabled = true;
+    repository.save_profile(&selected, None).await.unwrap();
+    let prefix = format!("/internal/v1/trust-profiles/{}", selected.id);
+    let app = marty_trust_profile::trust_credential_authority_router(state.clone());
+    for (suffix,status) in [
+        ("/wallet-verifier-profile-admission?organization_id=org-1",200),
+        ("/wallet-verifier-authority?organization_id=org-1&client_id=registered-client",422),
+        ("/wallet-managed-verifier-authority?organization_id=other&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://verifier.example/v1/flows/instances/11111111-2222-4333-8444-555555555555/request",422),
+        ("/wallet-managed-verifier-authority?organization_id=org-1&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://attacker.example/request",422),
+        ("/wallet-managed-verifier-authority?organization_id=org-1&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://verifier.example/v1/flows/instances/11111111-2222-4333-8444-555555555555/request",503),
+    ] {
+        let response=app.clone().oneshot(Request::get(format!("{prefix}{suffix}"))
+            .header("x-service-token",&token).header("x-user-id","user-1").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status().as_u16(),status,"{suffix}");
+    }
+    for field in ["id", "enabled", "managed_flow_verifier"] {
+        let mut bad = source.clone();
+        bad[field] = Value::Null;
+        assert_eq!(
+            trust_profile_router(state.clone())
+                .oneshot(create(bad))
+                .await
+                .unwrap()
+                .status(),
+            422
+        );
+    }
+    let mut bad = source;
+    bad["registered_verifier"] = fixture["registered_verifier"].clone();
+    assert_eq!(
+        trust_profile_router(state)
+            .oneshot(create(bad))
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+}
+
+#[tokio::test]
 async fn registered_verifier_projection_requires_configured_workload_auth_and_tenant_scope() {
     let repository = Arc::new(MemoryTrustProfileRepository::default());
     let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
@@ -39,6 +136,7 @@ async fn registered_verifier_projection_requires_configured_workload_auth_and_te
     let path=format!("/internal/v1/trust-profiles/{}/wallet-verifier-authority?organization_id=org-1&client_id=registered-client",selected.id);
     for configured in [false, true] {
         let state = TrustProfileHttpState {
+            flow_owner: None,
             application: Arc::new(TrustProfileApplication::new(
                 repository.clone(),
                 Arc::new(AllowControlPlane),
@@ -130,6 +228,7 @@ async fn registered_verifier_projection_requires_configured_workload_auth_and_te
             assert_eq!(admission["trust_profile_id"], selected.id.to_string());
             let rejecting =
                 marty_trust_profile::trust_credential_authority_router(TrustProfileHttpState {
+                    flow_owner: None,
                     application: Arc::new(TrustProfileApplication::new(
                         repository.clone(),
                         Arc::new(RejectKeyMembership),
@@ -199,6 +298,7 @@ async fn registered_verifier_projection_requires_configured_workload_auth_and_te
                 let mut source = json!({"source_type":"ROOT_CA","certificate_pem":"-----BEGIN CERTIFICATE-----\nfixture"});
                 source[field] = Value::Null;
                 let response=trust_profile_router(TrustProfileHttpState{
+                    flow_owner: None,
                     application:Arc::new(TrustProfileApplication::new(repository.clone(),Arc::new(AllowControlPlane))),
                     repository:repository.clone(),service_authenticator:Arc::new(ServiceTokenAuthenticator::new(Some(token.clone()),true).unwrap()),
                     internal_api_key:None,registry_synchronizer:Arc::new(EchoSynchronizer),
@@ -266,6 +366,7 @@ async fn delegated_profile_read_authenticates_actor_without_human_membership() {
             Arc::new(RejectKeyMembership),
         ));
         let app = trust_profile_router(TrustProfileHttpState {
+            flow_owner: None,
             application,
             repository: repository.clone(),
             service_authenticator: Arc::new(
@@ -371,6 +472,7 @@ fn service_with_repository(repository: Arc<MemoryTrustProfileRepository>) -> axu
         Arc::new(AllowControlPlane),
     ));
     trust_profile_router(TrustProfileHttpState {
+        flow_owner: None,
         application,
         repository,
         service_authenticator: Arc::new(ServiceTokenAuthenticator::new(None, false).unwrap()),
@@ -1258,6 +1360,7 @@ async fn delegated_lifecycle_requires_service_identity_scope_and_profile_tenant_
                     Arc::new(RejectKeyMembership),
                 ));
                 let app = trust_profile_router(TrustProfileHttpState {
+                    flow_owner: None,
                     application,
                     repository: repository.clone(),
                     service_authenticator: Arc::new(
@@ -1601,6 +1704,7 @@ mod credential_authority_tests {
             Arc::new(AllowControlPlane),
         ));
         TrustProfileHttpState {
+            flow_owner: None,
             application,
             repository,
             service_authenticator: Arc::new(
