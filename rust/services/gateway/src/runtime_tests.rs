@@ -7245,9 +7245,15 @@ async fn observation_admin_gateway_requires_session_origin_and_forwards_only_tru
         ),
         (
             "cookie",
-            "sessionId=valid",
+            "sessionId=valid-uuid",
             "https://beta.elevenidllc.com",
             StatusCode::FORBIDDEN,
+        ),
+        (
+            "cookie",
+            "sessionId=valid",
+            "https://beta.elevenidllc.com",
+            StatusCode::UNAUTHORIZED,
         ),
         (
             "cookie",

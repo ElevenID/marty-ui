@@ -1298,7 +1298,19 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
+                + 4
         );
+        for operation in [
+            "submit_external_observation",
+            "revoke_external_observation_producer",
+            "approve_external_observation_producer",
+            "rotate_external_observation_producer_key",
+        ] {
+            assert!(
+                identifiers.contains(operation),
+                "missing operation: {operation}"
+            );
+        }
         assert_eq!(
             document["paths"]["/v1/notifications/unread/count"]["get"]["operationId"],
             "get_v1_notifications_unread_count"
