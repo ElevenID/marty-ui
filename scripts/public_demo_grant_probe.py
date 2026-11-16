@@ -347,7 +347,12 @@ def qualify(call, root, environment, *, runner=subprocess.run):
                 if not secret:
                     continue
                 detail = detail.replace(secret, "[fixture-capability]")
-            raise RuntimeError(f"Native demo qualification failed:\n{detail[-2000:]}")
+            # Keep the browser's first diagnostic as well as the terminal test
+            # failure: Chromium backtraces can otherwise hide the launch error.
+            diagnostic = detail if len(detail) <= 12000 else (
+                detail[:6000] + "\n[bounded diagnostic omitted]\n" + detail[-6000:]
+            )
+            raise RuntimeError(f"Native demo qualification failed:\n{diagnostic}")
         if admission and environment.get("MARTY_TEST_PUBLIC_DEMO_BROWSER") == "1":
             receipts = [
                 line.removeprefix("PUBLIC_DEMO_BROWSER_QUALIFIED ")

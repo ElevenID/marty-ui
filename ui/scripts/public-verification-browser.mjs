@@ -12,7 +12,16 @@ import { build, preview } from 'vite';
 const executable = await puppeteer.executablePath();
 assert(existsSync(executable), 'Cached Chromium is required before fixtures start');
 if (process.argv[2] === '--check') {
-  console.log(JSON.stringify({ browserAvailable: true }));
+  // Exercise the same sandboxed launch before allocating KMS fixtures. A cache
+  // path alone does not establish that this host can start Chromium.
+  const probe = await puppeteer.launch({ headless: true });
+  let version;
+  try {
+    version = await probe.version();
+  } finally {
+    await probe.close();
+  }
+  console.log(JSON.stringify({ browserAvailable: true, sandboxedLaunch: true, version }));
   process.exit(0);
 }
 const gateway = new URL(process.argv[2]);
