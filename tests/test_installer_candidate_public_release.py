@@ -1,4 +1,6 @@
 import hashlib
+import io
+import json
 import os
 from copy import deepcopy
 from pathlib import Path
@@ -10,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import installer_candidate_public_release as subject
 import installer_candidate_published_assets as controller_assets
 import installer_candidate_dispatch as dispatch
+import installer_candidate_rendezvous as transport
 import installer_release as release
 
 
@@ -50,6 +53,45 @@ def test_observe_immutable_annotated_tag_and_exact_assets(tmp_path):
     (tmp_path / snapshot["assets"][0]["name"]).write_bytes(b"y")
     with pytest.raises(ValueError):
         subject.verify_downloads(snapshot, tmp_path)
+
+
+def test_real_transport_observes_full_51_asset_metadata_over_64_kib():
+    responses = fixture()
+    metadata = responses["releases/tags/" + TAG]
+    metadata.update(url="https://api.github.com" + transport.REPO + "/releases/123", body="")
+    metadata["assets"].extend(
+        dict(name=f"synthetic-optional-{index}.json", id=index + 100, size=1,
+             digest="sha256:" + "a" * 64, state="uploaded")
+        for index in range(36)
+    )
+    for item in metadata["assets"]:
+        item.update(
+            url="https://api.github.com" + transport.REPO + "/releases/assets/" + str(item["id"]),
+            browser_download_url="https://github.com/ElevenID/marty-ui/releases/download/" + TAG + "/" + item["name"],
+            content_type="application/octet-stream", created_at="2026-11-16T00:00:00Z",
+            updated_at="2026-11-16T00:00:00Z", download_count=0,
+            uploader={"id": 456, "login": "synthetic-uploader", "type": "User",
+                      **{key + "_url": "https://api.github.com/users/synthetic-uploader/" + key
+                         for key in ("followers", "following", "gists", "starred", "subscriptions",
+                                     "organizations", "repos", "events", "received_events")}},
+        )
+    # Match the observed full response size using entirely synthetic public metadata.
+    metadata["body"] = "x" * (93157 - len(json.dumps(metadata).encode()))
+    raw = {key: json.dumps(value).encode() for key, value in responses.items()}
+    assert len(metadata["assets"]) == 51 and len(raw["releases/tags/" + TAG]) == 93157
+
+    class Opener:
+        def open(self, request, timeout):
+            assert timeout == 20 and request.get_method() == "GET"
+            key = request.full_url.removeprefix("https://api.github.com" + transport.REPO + "/")
+            return io.BytesIO(raw[key])
+
+    client = transport.Client("synthetic-token")
+    client.opener = Opener()
+    snapshot = subject.observe(lambda path: client.request("GET", transport.REPO + "/" + path), TAG, SOURCE)
+    assert snapshot["tag_chain"][-1]["sha"] == SOURCE
+    assert {item["name"] for item in snapshot["assets"]} == set(subject.expected_assets())
+    assert len(snapshot["assets"]) == 15
 
 
 @pytest.mark.parametrize("replacement", ["symlink", "fifo", "oversize"])

@@ -1,4 +1,4 @@
-"""Bounded GitHub draft transport; no acceptance, signing, or guest execution.
+"""Bounded GitHub release transport; no acceptance, signing, or guest execution.
 
 Controller uploader identity authenticates its guest/disk/Engine assertions, not
 physical observations by this signer. Guest preflight independently checks Engine.
@@ -18,6 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import installer_release as release
+import release_tag_handoff as handoff
 from installer_candidate_authorize import read_record, write_exclusive
 
 REPO = "/repos/ElevenID/marty-ui"
@@ -95,6 +96,11 @@ class Client:
             raise ValueError("GitHub transport request failed") from None
 
     def request(self, method, path, body=None):
+        published_release = re.fullmatch(re.escape(REPO) + r"/releases/tags/(v[0-9A-Za-z._-]{1,127})", path)
+        if published_release:
+            release.require(method == "GET" and body is None, "published release observation is read-only")
+            # Full asset/uploader metadata can exceed the receipt transport limit.
+            return handoff.decode(self._read("https://api.github.com" + path, maximum=handoff.MAX_JSON))
         run = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})", path)
         artifacts = re.fullmatch(re.escape(REPO) + r"/actions/runs/([1-9][0-9]{0,15})/artifacts\?per_page=100", path)
         artifact = re.fullmatch(re.escape(REPO) + r"/actions/artifacts/([1-9][0-9]{0,15})", path)
