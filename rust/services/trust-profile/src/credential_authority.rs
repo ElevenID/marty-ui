@@ -437,6 +437,92 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, CredentialAuthorityErro
         .map_err(|_| CredentialAuthorityError::Unavailable)
 }
 
+/// Project only grants accepted by the canonical owner decision. This is a
+/// public-key resolver input, not evidence that any credential was verified.
+/// Native consumers must authenticate the exact credential and apply its VCT
+/// grant before consent and at every subsequent presentation transition.
+pub fn wallet_issuer_authority(
+    snapshot: &CredentialAuthoritySnapshotV1,
+    now: DateTime<Utc>,
+) -> Result<Value, CredentialAuthorityError> {
+    snapshot
+        .validate()
+        .map_err(|_| CredentialAuthorityError::Unavailable)?;
+    validate_supported_configuration(&snapshot.basis)?;
+    let mut keys = Vec::new();
+    let mut identities = std::collections::BTreeSet::new();
+    let mut expires = now + chrono::Duration::seconds(CREDENTIAL_AUTHORITY_MAX_AGE_SECONDS);
+    for issuer in &snapshot.basis.issuer_relationships {
+        for key in &issuer.verification_keys {
+            let algorithm = issuer_public_key_algorithm(key)
+                .map_err(|_| CredentialAuthorityError::Unavailable)?;
+            let thumbprint = issuer_public_key_thumbprint(key)
+                .map_err(|_| CredentialAuthorityError::Unavailable)?;
+            let mut grants = Vec::new();
+            for grant in &issuer.credential_authorizations {
+                // No evaluation receipt is minted here. Reuse the owner's
+                // exact decision for each persisted public key/type grant;
+                // request_binding_digest is not consulted by that decision.
+                let request = CredentialTrustEvaluationRequestV1 {
+                    organization_id: snapshot.organization_id.clone(),
+                    expected_profile: snapshot.profile.clone(),
+                    issuer_id: issuer.issuer_id.clone(),
+                    format: grant.format.clone(),
+                    vct: grant.vct.clone(),
+                    issuer_algorithm: algorithm.to_owned(),
+                    issuer_key_thumbprint: thumbprint.clone(),
+                    request_binding_digest: snapshot.profile.content_digest.clone(),
+                };
+                if decision(&snapshot.basis, &request, now)?.0
+                    == "TRUST_PROFILE.CREDENTIAL_AUTHORIZED"
+                {
+                    grants.push(grant.clone());
+                }
+            }
+            if grants.is_empty() {
+                continue;
+            }
+            let kid = key.get("kid").and_then(Value::as_str);
+            if key.get("kid").is_some() && kid.is_none_or(str::is_empty) {
+                return Err(CredentialAuthorityError::Unavailable);
+            }
+            if !identities.insert((issuer.issuer_id.as_str(), kid, algorithm)) {
+                return Err(CredentialAuthorityError::Unavailable);
+            }
+            if let Some(until) = issuer.valid_until.as_deref() {
+                expires = expires.min(parse_timestamp(until)?);
+            }
+            keys.push(serde_json::json!({
+                "issuer":issuer.issuer_id, "key_id":kid, "algorithm":algorithm,
+                "public_jwk":key, "credential_authorizations":grants,
+            }));
+            if keys.len() > 256 {
+                return Err(CredentialAuthorityError::Unavailable);
+            }
+        }
+    }
+    if keys.is_empty() || expires <= now {
+        return Err(CredentialAuthorityError::Unavailable);
+    }
+    let projection = serde_json::json!({
+        "contract":"marty.wallet/issuer-authority/v2",
+        "organization_id":snapshot.organization_id,
+        "trust_profile_id":snapshot.profile.id,
+        "revision":snapshot.profile,
+        "generated_at":now, "expires_at":expires,
+        "require_not_before":snapshot.basis.policy_controls.time_policy.require_not_before,
+        "issuer_keys":keys,
+    });
+    if serde_json::to_vec(&projection)
+        .map_err(|_| CredentialAuthorityError::Unavailable)?
+        .len()
+        > 256 * 1024
+    {
+        return Err(CredentialAuthorityError::Unavailable);
+    }
+    Ok(projection)
+}
+
 fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }

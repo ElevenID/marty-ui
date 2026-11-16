@@ -58,6 +58,10 @@ pub fn trust_credential_authority_router(state: TrustProfileHttpState) -> Router
 fn credential_authority_routes() -> Router<TrustProfileHttpState> {
     Router::new()
         .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-authority",
+            get(wallet_issuer_authority),
+        )
+        .route(
             "/internal/v1/trust-profiles/{profile_id}/wallet-managed-verifier-authority",
             get(wallet_managed_verifier_authority),
         )
@@ -1499,6 +1503,46 @@ async fn wallet_issuer_keys(
         axum::http::HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+async fn wallet_issuer_authority(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierProfileQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    if profile.organization_id != query.organization_id {
+        return Err(forbidden("Wallet issuer organization does not match"));
+    }
+    let observed = state
+        .repository
+        .credential_authority_snapshot(&query.organization_id, profile.id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    // Repeat user/PDP authorization after the owner read, then compare the full
+    // canonical revision/basis. Do not grant from the legacy generic key list.
+    let current = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    if current.organization_id != query.organization_id {
+        return Err(forbidden("Wallet issuer authorization changed"));
+    }
+    let fresh = state
+        .repository
+        .credential_authority_snapshot(&query.organization_id, current.id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    if observed != fresh {
+        return Err(conflict("Wallet issuer authority changed during lookup"));
+    }
+    let projection = crate::credential_authority::wallet_issuer_authority(&fresh, Utc::now())
+        .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(projection),
+    )
+        .into_response())
 }
 
 fn project_wallet_issuer_keys(

@@ -237,3 +237,30 @@ ignores. The explicit driver above executes its four guarded Flow cases and one
 Trust Profile case separately. CI workflow/compile-scope/Docker-context Python
 checks report 266 passes and 12 platform skips. These counts have separate scopes;
 default fixture ignores are not counted as executed acceptance.
+
+## Canonical issuer authority migration
+
+The managed owner now offers a distinct `wallet-issuer-authority` operation with
+the `marty.wallet/issuer-authority/v2` contract. It uses the canonical repository
+snapshot and existing per-key/VCT decision, including explicit relationship
+grants, current issuer status, key usage and supported owner controls. Generic
+issuer trust grants no credential types implicitly. The projection carries the
+canonical profile revision, the `require_not_before` control, and only accepted
+public keys with their exact credential-type grants. Its expiry cannot exceed
+any projected issuer's validity. It mints no credential-verification receipt.
+
+The operation requires configured workload authentication and a user authorized
+by the current PDP. It repeats authorization after the snapshot read, rereads
+the canonical owner snapshot and rejects any intervening revision/basis change.
+In-process HTTP/memory-repository tests exercise grants, revision changes,
+unsupported policy, key usage, revocation, expiry, missing authentication,
+organization mismatch, membership loss and policy mutation during the second
+authorization. Full Trust Profile execution reports 90 passes and one guarded
+fixture ignore; formatting and all-target Clippy with warnings denied pass.
+Independent source review found no actionable findings and ran no tests.
+
+This owner operation is the first migration checkpoint. The fixed HTTPS Device
+transport, complete pairing-scope reread, native VCT/time-control enforcement,
+consent revision binding and actual combined/native qualification still need to
+consume this v2 contract. The legacy key-list operation remains distinct and
+does not establish that this migration or retained wallet acceptance is finished.
