@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sign and publish the optional connector after its exact core release."""
+"""Authenticate optional connector assets before one immutable publication."""
 
 from __future__ import annotations
 
@@ -85,7 +85,8 @@ def export_provenance(directory: Path, bundle: Path, gh: Path) -> None:
                 output.write(raw)
 
 
-def publish(directory: Path, gh: Path) -> None:
+def verify_prepared(directory: Path, core_directory: Path, gh: Path) -> dict:
+    """Bind the complete selected add-on to the already-authenticated core bytes."""
     value = verify_signatures(directory)
     expected = publication_files()
     require({p.name for p in directory.iterdir()} == expected, "signed add-on asset closure differs")
@@ -96,10 +97,35 @@ def publish(directory: Path, gh: Path) -> None:
         verify_subject(directory / name, directory / (name + ".provenance.jsonl"), gh=gh,
             workflow=value["signer_workflow"], source_sha=value["source_sha"], run_id=value["build_run_id"],
             run_attempt=value["build_run_attempt"])
+    for name, limit in (("installer-inventory.json", 65536),
+                        ("installer-inventory.json.sigstore.json", PROVENANCE_LIMIT),
+                        ("installer-inventory.json.provenance.jsonl", PROVENANCE_LIMIT)):
+        local_file(core_directory / name, maximum=limit, private=True)
+    subject = core_directory / "installer-inventory.json"
+    verify_subject(subject, core_directory / "installer-inventory.json.provenance.jsonl", gh=gh,
+        workflow=value["signer_workflow"], source_sha=value["source_sha"], run_id=value["build_run_id"],
+        run_attempt=value["build_run_attempt"])
+    command("cosign", "verify-blob", str(subject), "--bundle",
+            str(core_directory / "installer-inventory.json.sigstore.json"), "--certificate-identity",
+            f"https://github.com/{REPOSITORY}/{value['signer_workflow']}@refs/heads/main",
+            "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com")
+    inventory = decode(subject.read_bytes())
+    validate_inventory(inventory)
+    require(all(inventory[key] == value[key] for key in
+                ("source_sha", "release_tag", "build_run_id", "build_run_attempt")),
+            "core and optional producer identity or attempt differ")
+    return value
+
+
+def verify_published(directory: Path, gh: Path) -> None:
+    """Read back the complete selected release; never append or replace assets."""
+    value = validate(directory)
+    expected = publication_files()
     tag = value["release_tag"]
     release = json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}"))
     nightly = build_workflow(tag) == ".github/workflows/nightly-release.yml"
-    require(release["tag_name"] == tag and release["prerelease"] is nightly and release["draft"] is False,
+    require(release["tag_name"] == tag and release["prerelease"] is nightly
+            and release["draft"] is False and release.get("immutable") is True,
             "the expected core release has not been published")
     ref = json.loads(command("gh", "api", f"repos/{REPOSITORY}/git/ref/tags/{tag}"))
     require(ref["object"]["type"] == "tag", "core source tag is not annotated")
@@ -108,11 +134,10 @@ def publish(directory: Path, gh: Path) -> None:
             and annotated["object"]["sha"] == value["source_sha"], "core and add-on source differ")
     core = core_assets(tag)
     names = [item["name"] for item in release["assets"]]
-    require(len(names) == len(set(names)) and core <= set(names) <= core | expected
+    require(len(names) == len(set(names)) and set(names) == core | expected
             and all(item["state"] == "uploaded" and item["size"] > 0 for item in release["assets"]),
             "published core or optional asset closure differs")
-    # A rerun must not append an attempt-2 connector to an immutable attempt-1
-    # core, even when both were built from the same commit and release tag.
+    # A rerun may only verify the same original core/add-on bytes and invocation.
     with tempfile.TemporaryDirectory(prefix="marty-addon-core-") as temporary:
         core_directory = Path(temporary).resolve()
         for name, limit in (("installer-inventory.json", 65536),
@@ -123,46 +148,26 @@ def publish(directory: Path, gh: Path) -> None:
             command("gh", "release", "download", tag, "--repo", REPOSITORY,
                     "--pattern", name, "--dir", temporary)
             local_file(core_directory / name, maximum=limit, private=True)
-        subject = core_directory / "installer-inventory.json"
-        verify_subject(subject, core_directory / "installer-inventory.json.provenance.jsonl", gh=gh,
-            workflow=value["signer_workflow"], source_sha=value["source_sha"], run_id=value["build_run_id"],
-            run_attempt=value["build_run_attempt"])
-        command("cosign", "verify-blob", str(subject), "--bundle",
-                str(core_directory / "installer-inventory.json.sigstore.json"), "--certificate-identity",
-                f"https://github.com/{REPOSITORY}/{value['signer_workflow']}@refs/heads/main",
-                "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com")
-        inventory = decode(subject.read_bytes())
-        validate_inventory(inventory)
-        require(all(inventory[key] == value[key] for key in
-                    ("source_sha", "release_tag", "build_run_id", "build_run_attempt")),
-                "published core and optional producer attempt differ")
-    present = {a["name"] for a in release["assets"]} & expected
-    # Reconcile an interrupted upload without replacing any existing bytes.
+        verify_prepared(directory, core_directory, gh)
     with tempfile.TemporaryDirectory(prefix="marty-addon-published-") as temporary:
-        for name in sorted(present):
+        for name in sorted(expected):
             command("gh", "release", "download", tag, "--repo", REPOSITORY,
                     "--pattern", name, "--dir", temporary)
             require(file_digest(Path(temporary) / name) == file_digest(directory / name),
                     "existing add-on asset differs; refusing overwrite")
-        missing = expected - present
-        if missing:
-            command("gh", "release", "upload", tag, "--repo", REPOSITORY,
-                    *[str(directory / name) for name in sorted(missing)])
-        for name in sorted(missing):
-            command("gh", "release", "download", tag, "--repo", REPOSITORY,
-                    "--pattern", name, "--dir", temporary)
-            require(file_digest(Path(temporary) / name) == file_digest(directory / name),
-                    "published add-on bytes differ")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--phase", choices=("sign", "export-provenance", "publish"), required=True)
+    parser.add_argument("--phase", choices=("sign", "export-provenance", "verify-prepared", "verify-published"), required=True)
     parser.add_argument("--assets", type=Path, required=True)
     parser.add_argument("--gh", type=Path)
     parser.add_argument("--provenance-bundle", type=Path)
+    parser.add_argument("--core-assets", type=Path)
     args = parser.parse_args()
     directory = args.assets.resolve(strict=True)
+    require((args.core_assets is not None) == (args.phase == "verify-prepared"),
+            "core assets are required only for pre-publication verification")
     if args.phase == "sign":
         require(args.gh is None and args.provenance_bundle is None, "unexpected signing argument")
         sign(directory)
@@ -173,7 +178,10 @@ def main() -> None:
             export_provenance(directory, args.provenance_bundle, args.gh)
         else:
             require(args.provenance_bundle is None, "unexpected publication bundle")
-            publish(directory, args.gh)
+            if args.phase == "verify-prepared":
+                verify_prepared(directory, args.core_assets.resolve(strict=True), args.gh)
+            else:
+                verify_published(directory, args.gh)
 
 
 if __name__ == "__main__":

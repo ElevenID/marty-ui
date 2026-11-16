@@ -24,7 +24,8 @@ jobs:
   python:
     name: Warm shared Python dependency cache
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    # The exact 3.12.10 cache lane needs its published Ubuntu 24.04 runtime.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       matrix:

@@ -28,7 +28,7 @@ on:
         type: choice
         options: [tester, full]
       publish_cloudflare_addon:
-        description: Publish the optional signed Cloudflare connector after the core release
+        description: Include the optional signed Cloudflare connector in the immutable release
         required: false
         type: boolean
         default: false
@@ -2385,7 +2385,16 @@ jobs:
       group: stable-release-coordinate-${{ needs.resolve-transaction.outputs.tag }}
       cancel-in-progress: false
     timeout-minutes: 90
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, build-keycloak, qualify-release, build-operator-catalog, prepare-official-candidate, prepare-installer-inputs, publish-cloudflare-addon]
+    if: >-
+      ${{ !cancelled() && needs.resolve-transaction.result == 'success' &&
+          needs.validate-stack.result == 'success' && needs.build-ui.result == 'success' &&
+          needs.build-services.result == 'success' && needs.build-openbao-didcomm.result == 'success' &&
+          needs.build-keycloak.result == 'success' && needs.qualify-release.result == 'success' &&
+          needs.build-operator-catalog.result == 'success' && needs.prepare-official-candidate.result == 'success' &&
+          needs.prepare-installer-inputs.result == 'success' &&
+          ((inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'success') ||
+           (!inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'skipped')) }}
     runs-on: ubuntu-latest
     environment: stack-release
     env:
@@ -2426,6 +2435,11 @@ jobs:
         with:
           name: installer-inputs-unqualified-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/stable-installer-inputs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.publish_cloudflare_addon
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon
       - name: Revalidate exact installer inputs before any publication signing
         shell: bash
         run: |
@@ -2857,6 +2871,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          CLOUDFLARE_ADDON_SELECTED: ${{ inputs.publish_cloudflare_addon }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2869,17 +2884,33 @@ jobs:
           for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
             cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "$asset"
           done
+          optional_assets=()
+          case "$CLOUDFLARE_ADDON_SELECTED" in
+            true)
+              chmod 700 "$RUNNER_TEMP/cloudflare-addon"
+              python scripts/publish_hosting_addon.py --phase verify-prepared \
+                --assets "$RUNNER_TEMP/cloudflare-addon" \
+                --core-assets "$RUNNER_TEMP/stable-installer-publication" \
+                --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+              while IFS= read -r asset; do
+                optional_assets+=("$RUNNER_TEMP/cloudflare-addon/$asset")
+              done < <(hosting_addon_release_assets)
+              ;;
+            false) test ! -e "$RUNNER_TEMP/cloudflare-addon" ;;
+            *) exit 1 ;;
+          esac
           python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --official-gate gates/official/official-interoperability.json
           # Registry/API reads may outlast the original checkpoint deadline.
           python scripts/stable_publication_checkpoint.py verify \
             --checkpoint "$RUNNER_TEMP/stable-publication-checkpoint"
-          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"
+          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}" "${optional_assets[@]}"
           release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
           [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
           gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
           operator_release_require_remote_allowlist published-release.json
+          operator_release_require_publication_assets published-release.json "$CLOUDFLARE_ADDON_SELECTED"
           mkdir -m 700 published-release-assets
           core_download=()
           for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do core_download+=(--pattern "$asset"); done
@@ -2890,6 +2921,11 @@ jobs:
           for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
             cmp --silent "$RUNNER_TEMP/stable-publication-checkpoint/assets/$asset" "published-release-assets/$asset"
           done
+          if [[ "$CLOUDFLARE_ADDON_SELECTED" = true ]]; then
+            python scripts/publish_hosting_addon.py --phase verify-published \
+              --assets "$RUNNER_TEMP/cloudflare-addon" \
+              --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+          fi
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
         if: inputs.publication_contract == 'v1'
@@ -2933,16 +2969,16 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-cloudflare-addon:
-    # An explicit optional producer. Core publication never depends on this job.
+    # Prepare the explicitly selected closure before immutable publication.
     if: ${{ inputs.publish_cloudflare_addon && inputs.publication_contract == 'v1' }}
-    needs: [resolve-transaction, publish-manifest]
+    needs: [resolve-transaction]
     env:
       TAG: ${{ needs.resolve-transaction.outputs.tag }}
       SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
     runs-on: ubuntu-24.04
     environment: stack-release
     permissions:
-      contents: write
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -3056,7 +3092,7 @@ jobs:
           printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
           tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
           chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
-      - name: Export evidence and publish optional immutable assets
+      - name: Export evidence for the selected immutable publication
         env:
           GH_TOKEN: ${{ github.token }}
           PROVENANCE_BUNDLE: ${{ steps.addon_provenance.outputs.bundle-path }}
@@ -3066,6 +3102,9 @@ jobs:
           python scripts/publish_hosting_addon.py --phase export-provenance \
             --assets "$RUNNER_TEMP/cloudflare-addon" --provenance-bundle "$PROVENANCE_BUNDLE" \
             --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
-          python scripts/publish_hosting_addon.py --phase publish \
-            --assets "$RUNNER_TEMP/cloudflare-addon" \
-            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon/
+          if-no-files-found: error
+          retention-days: 30

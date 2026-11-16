@@ -31,6 +31,7 @@ def test_official_dispatch_requires_selfhost_inputs_without_optional_bypass() ->
         "resolve-transaction", "validate-stack", "build-ui",
         "build-services", "build-openbao-didcomm", "build-keycloak",
         "qualify-release", "build-operator-catalog", "prepare-official-candidate", "prepare-installer-inputs",
+        "publish-cloudflare-addon",
     ]
 
 
