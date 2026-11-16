@@ -72,6 +72,7 @@ impl Owner {
         user: &str,
         organization: &str,
         token: &str,
+        joined: Option<&Value>,
     ) -> Self {
         // The caller establishes fresh owned SQL before any migration.
         marty_trust_profile::run_migrations(pool).await.unwrap();
@@ -108,7 +109,7 @@ impl Owner {
         repository.save_profile(&profile, None).await.unwrap();
         // Public-only synthetic issuer identity. This acceptance test exercises
         // governance transport; credential signing is qualified by native tests.
-        let issuer = IssuerEntity {
+        let mut issuer = IssuerEntity {
             id: Uuid::new_v4(),
             organization_id: Some(organization.into()),
             issuer_id: "did:web:issuer.example".into(),
@@ -131,8 +132,12 @@ impl Owner {
             created_at: now,
             updated_at: now,
         };
+        if let Some(joined) = joined {
+            issuer.issuer_id = joined["signed_issuer"].as_str().unwrap().into();
+            issuer.metadata = json!({"verification_keys":[joined["issuer_public_jwk"]]});
+        }
         repository.save_issuer_entity(&issuer).await.unwrap();
-        let relationship = TrustProfileIssuer {
+        let mut relationship = TrustProfileIssuer {
             id: Uuid::new_v4(),
             trust_profile_id: profile_id,
             issuer_id: issuer.id,
@@ -146,6 +151,10 @@ impl Owner {
             created_at: now,
             updated_at: now,
         };
+        if let Some(joined) = joined {
+            relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]
+                ["credential_issuer"] = joined["issuer_origin"].clone();
+        }
         repository.save_profile_issuer(&relationship).await.unwrap();
         let pdp = Arc::new(ControlledPdp {
             user: user.into(),
@@ -201,6 +210,52 @@ impl Owner {
             repository,
             relationship,
             pdp,
+            shutdown,
+            task,
+        }
+    }
+    pub async fn stop(self) {
+        self.shutdown.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(20), self.task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+}
+
+/// TLS wrapping of the real Device router for the native test client. This
+/// uses a non-exportable fixture identity, not a plaintext/trust-all shortcut.
+pub struct DeviceHttps {
+    pub origin: String,
+    shutdown: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+impl DeviceHttps {
+    pub async fn start(app: axum::Router) -> Self {
+        let values: BTreeMap<String, String> = std::env::vars().collect();
+        let identity = RemoteTlsIdentityFiles::from_values(
+            |name| values.get(name).map(String::as_str),
+            TlsIdentityNames::files("MARTY_TEST_POLICY_OWNER_TLS"),
+            std::time::Duration::from_secs(5),
+            16,
+        )
+        .unwrap()
+        .unwrap();
+        let server = BoundKeylessHttpsServer::bind(
+            &ManagedAuthorityHttpsConfig {
+                address: "127.0.0.1:0".parse().unwrap(),
+                identity,
+            },
+            app,
+        )
+        .await
+        .unwrap();
+        let origin = format!("https://{}", server.local_addr().unwrap());
+        let (shutdown, receiver) = watch::channel(false);
+        let task = tokio::spawn(server.serve(receiver));
+        Self {
+            origin,
             shutdown,
             task,
         }

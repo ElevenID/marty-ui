@@ -8,9 +8,25 @@ from unittest.mock import Mock
 
 from scripts import probe_signing_keys_openbao_policy as probe
 from scripts import selfhost_openbao_client, with_disposable_policy_owner_kms, with_disposable_event_stream_kms
+from scripts import holder_native_receipt_fixture
 
 
 class HolderFixtureOwnershipTests(unittest.TestCase):
+    def test_joined_native_mode_requires_holder_artifact_before_backend_admission(self):
+        with patch.object(probe, "pull_pinned_openbao") as pull:
+            with self.assertRaisesRegex(RuntimeError, "requires the holder artifact"):
+                probe.qualify(native_wallet_test_binary=Path("missing-native-artifact"))
+        pull.assert_not_called()
+
+    def test_joined_issuer_refuses_foreign_marker_before_key_or_tls_creation(self):
+        client = Mock()
+        client.request.return_value = {"data": {"data": {"nonce": "foreign"}}}
+        with patch.object(holder_native_receipt_fixture.subprocess, "run") as openssl:
+            with self.assertRaisesRegex(RuntimeError, "unmarked"), holder_native_receipt_fixture.serve(client, "a" * 32):
+                self.fail("foreign issuer fixture admitted")
+        client.request.assert_called_once_with("GET", "secret/data/marty-test-disposable-guard")
+        openssl.assert_not_called()
+
     def test_owner_fixture_rejects_nonlocal_or_plaintext_provider_before_contact(self):
         for endpoint in ("http://127.0.0.1:8200", "https://provider.example:8200", "https://u:p@127.0.0.1:8200",
                          "https://127.0.0.1:8200/v1?token=bad", "https://127.0.0.1:8200/other"):

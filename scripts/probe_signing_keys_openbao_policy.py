@@ -19,7 +19,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 from pathlib import Path
@@ -362,15 +362,22 @@ def holder_issuer_tls(nonce, endpoint, ca_file, root_token):
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
             managed_mdoc: bool = False, mdoc_runner=subprocess.run,
             public_demo_grant: bool = False, grant_runner=subprocess.run,
-            public_demo_browser: bool = False, holder_test_binary: Path | None = None) -> dict | None:
+            public_demo_browser: bool = False, holder_test_binary: Path | None = None,
+            native_wallet_test_binary: Path | None = None) -> dict | None:
     holder_lifecycle = holder_test_binary is not None
+    ensure(native_wallet_test_binary is None or holder_lifecycle, "native wallet qualification requires the holder artifact")
     ensure(sum((rust_adapter, grant_verifier, managed_mdoc, public_demo_grant, public_demo_browser, holder_lifecycle)) <= 1, "select one Rust adapter mode")
     if holder_lifecycle:
         if __package__:
             from .qualify_wallet_verifier_pairing import discover
         else:
             from qualify_wallet_verifier_pairing import discover
-        holder_test_binary = discover(holder_test_binary, "holder_remote_live_kms", "registration_provision_sign_and_deactivate_delete_remote_key")
+        holder_case = ("native_receipt_uses_real_owner_device_and_remote_holder" if native_wallet_test_binary is not None
+                       else "registration_provision_sign_and_deactivate_delete_remote_key")
+        holder_test_binary = discover(holder_test_binary, "holder_remote_live_kms", holder_case)
+        if native_wallet_test_binary is not None:
+            native_wallet_test_binary = discover(native_wallet_test_binary, "marty_authenticator_bridge",
+                "operations::verified_issuance::joined_device_tests::actual_device_authority_and_remote_holder_qualify_receipt")
     rust_adapter = rust_adapter or holder_lifecycle
     public_demo_grant = public_demo_grant or public_demo_browser
     if public_demo_browser:
@@ -944,18 +951,33 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
                 }
             )
             if holder_lifecycle:
-                with holder_issuer_tls(nonce, endpoint, ca_file, root_token) as trust_environment:
+                with ExitStack() as joined_context:
+                    trust_environment = joined_context.enter_context(holder_issuer_tls(nonce, endpoint, ca_file, root_token))
+                    if native_wallet_test_binary is not None:
+                        if __package__:
+                            from .holder_native_receipt_fixture import serve
+                            from .selfhost_openbao_client import Bao
+                        else:
+                            from holder_native_receipt_fixture import serve
+                            from selfhost_openbao_client import Bao
+                        native_environment = joined_context.enter_context(serve(Bao(endpoint.removesuffix("/v1"), ca_file, root_token), nonce))
+                        trust_environment.update(native_environment,
+                            MARTY_TEST_JOINED_NATIVE_BINARY=str(native_wallet_test_binary))
                     holder = subprocess.run([str(holder_test_binary),
-                        "registration_provision_sign_and_deactivate_delete_remote_key", "--ignored", "--exact", "--nocapture"],
+                        holder_case, "--ignored", "--exact", "--nocapture"],
                         cwd=ROOT / "rust", env=dict(environment, **trust_environment),
-                        capture_output=True, text=True, timeout=120, check=False)
-                detail = holder.stdout + holder.stderr
-                for secret in (root_token, managed, postgres_password, nonce):
-                    detail = detail.replace(secret, "[fixture-private]")
-                if not rust_test_succeeded(holder) or "1 passed; 0 failed; 0 ignored;" not in holder.stdout:
-                    raise RuntimeError("Owned holder lifecycle failed:\n" + detail[-6000:])
+                        capture_output=True, text=True, timeout=150, check=False)
+                    detail = holder.stdout + holder.stderr
+                    for secret in (root_token, managed, postgres_password, nonce):
+                        detail = detail.replace(secret, "[fixture-private]")
+                    if not rust_test_succeeded(holder) or "1 passed; 0 failed; 0 ignored;" not in holder.stdout:
+                        raise RuntimeError("Owned holder lifecycle failed:\n" + detail[-6000:])
+                    if native_wallet_test_binary is not None:
+                        ensure("joined_native_consumer=1_passed_0_ignored" in holder.stdout,
+                               "actual native consumer success receipt missing")
                 print(detail, end="")
                 return {"holderLifecyclePassed": 1, "ignored": 0, "issuerOwner": "actual PostgreSQL Trust Profile over production keyless HTTPS and Device HTTP",
+                    "nativeConsumerPassed": int(native_wallet_test_binary is not None),
                     "scope": "actual holder provision/sign/rotate/revoke and issuer owner/Device chain with owned PostgreSQL/Redis/TLS OpenBao; controlled PDP/public issuer metadata, not installed wallet or deployed control plane"}
             migration_transport = subprocess.run(
                 ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
@@ -1502,7 +1524,8 @@ if __name__ == "__main__":
     parser.add_argument("--public-demo-browser", action="store_true", help="Owned loopback application/Chromium plus canonical remote example fixture; no deployment")
     parser.add_argument("--managed-mdoc", action="store_true", help="Run only the isolated real managed MDOC certificate-chain case; no CRL/wallet qualification")
     parser.add_argument("--holder-test-binary", type=Path, help="Execute only the discovered holder lifecycle on bounded owned fixtures")
+    parser.add_argument("--native-wallet-test-binary", type=Path, help="Join the exact native Authenticator consumer artifact to the real owner/Device/holder chain")
     args = parser.parse_args()
-    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser, holder_test_binary=args.holder_test_binary)
+    result = qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier, managed_mdoc=args.managed_mdoc, public_demo_grant=args.public_demo_grant, public_demo_browser=args.public_demo_browser, holder_test_binary=args.holder_test_binary, native_wallet_test_binary=args.native_wallet_test_binary)
     if result is not None:
         print(json.dumps(result, sort_keys=True))

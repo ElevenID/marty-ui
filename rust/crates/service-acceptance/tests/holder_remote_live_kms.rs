@@ -4,6 +4,9 @@
 #[path = "support/holder_issuer_authority.rs"]
 mod holder_issuer_authority;
 
+#[path = "support/holder_native_receipt.rs"]
+mod holder_native_receipt;
+
 use marty_trust_profile::TrustProfileRepository;
 
 use async_trait::async_trait;
@@ -65,6 +68,16 @@ impl MembershipAuthorizer for SwitchMembership {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires guarded disposable OpenBao, fresh PostgreSQL and non-exportable owner TLS"]
 async fn registration_provision_sign_and_deactivate_delete_remote_key() {
+    holder_lifecycle(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires exact native artifact and marked fresh SQL/Bao/keyless owner/Device/issuer fixtures"]
+async fn native_receipt_uses_real_owner_device_and_remote_holder() {
+    holder_lifecycle(true).await;
+}
+
+async fn holder_lifecycle(joined: bool) {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("OpenBao URL syntax");
     assert_eq!(parsed.scheme(), "https");
@@ -93,6 +106,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(marker.status().is_success());
     let marker: serde_json::Value = marker.json().await.expect("sentinel JSON");
     assert_eq!(marker["data"]["data"]["nonce"], nonce);
+    let joined_fixture: Option<serde_json::Value> = if joined {
+        let path =
+            std::path::PathBuf::from(std::env::var("MARTY_TEST_JOINED_WALLET_CONFIG").unwrap());
+        assert!(path.is_absolute() && path.file_name().unwrap() == "joined-fixture.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(value["nonce"].as_str() == Some(&nonce));
+        let issuer = reqwest::Url::parse(value["issuer_origin"].as_str().unwrap()).unwrap();
+        assert!(
+            issuer.scheme() == "https"
+                && issuer.host_str() == Some("127.0.0.1")
+                && issuer.port().is_some()
+                && issuer.path() == "/"
+                && issuer.query().is_none()
+        );
+        Some(value)
+    } else {
+        None
+    };
 
     let database_url =
         std::env::var("DEVICE_REGISTRATION_POSTGRES_TEST_URL").expect("disposable PostgreSQL URL");
@@ -167,6 +199,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         &user_id,
         &organization_id,
         &nonce,
+        joined_fixture.as_ref(),
     )
     .await;
     let trust_client = Arc::new(
@@ -202,6 +235,11 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         build_revision: "disposable".into(),
         gateway_key: gateway_key.into(),
     });
+    let native_device_https = if joined {
+        Some(holder_issuer_authority::DeviceHttps::start(app.clone()).await)
+    } else {
+        None
+    };
     let device_server = tokio::spawn(async move { axum::serve(device_listener, app).await });
     let pairing_body = json!({
         "pairing_code": ticket.token,
@@ -383,6 +421,17 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
             !encoded.contains(forbidden),
             "public issuer evidence leaked a custody capability"
         );
+    }
+    if let (Some(fixture), Some(device_https)) = (&joined_fixture, &native_device_https) {
+        holder_native_receipt::run(
+            &mut issuer_owner,
+            &device_https.origin,
+            gateway_key,
+            &enrolled,
+            &nonce,
+            fixture,
+        )
+        .await;
     }
     // Persist a service-only edit. The actual owner must allocate a new wallet
     // revision; Device must return that edit rather than a cached projection.
@@ -792,5 +841,8 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     );
     device_server.abort();
     server.abort();
+    if let Some(https) = native_device_https {
+        https.stop().await;
+    }
     issuer_owner.stop().await;
 }
