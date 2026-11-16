@@ -5883,9 +5883,14 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
         ("marty-issuance-service", "marty-signing-keys"),
         ("marty-issuance-service", "marty-credential-template"),
         ("marty-presentation-policy", "marty-flow"),
+        ("marty-flow", "marty-presentation-policy"),
     }, (
         "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
         f"{sorted(edges)}"
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
+        "marty-presentation-policy", "../presentation-policy",
     )
     issuance = documents[rust / "services/issuance/Cargo.toml"]
     _assert_signing_keys_fixture_dependency(

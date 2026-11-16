@@ -95,7 +95,7 @@ describe('LandingPage', () => {
 
     expect(screen.getByText('Enterprise')).toBeInTheDocument();
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
-    expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', 'https://marty.example.com:8443/developers');
+    expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', 'https://marty.example.com:8443/verify');
     expect(document.querySelectorAll('a[href^="/"]')).toHaveLength(0);
     expect(window.location.href).toBe(`${origin}/`);
     expect(mockNavigate).not.toHaveBeenCalled();
@@ -179,9 +179,9 @@ describe('LandingPage', () => {
     expect(screen.getByText('Verify a credential in one request.')).toBeInTheDocument();
     expect(screen.getByText('POST /v1/vc-api/credentials/verify')).toBeInTheDocument();
 
-    expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', '/developers');
+    expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', '/verify');
     expect(screen.getAllByRole('link', { name: 'View Verification API' })[0]).toHaveAttribute('href', '/verifiable-credential-api');
-    expect(screen.getByText('Verify Credentials').closest('a')).toHaveAttribute('href', '/product#verification-api');
+    expect(screen.getByText('Verify Credentials').closest('a')).toHaveAttribute('href', '/verify');
     expect(screen.getByText('Issue Credentials').closest('a')).toHaveAttribute('href', '/product#issuance-api');
     expect(screen.getByText('Build With ElevenID').closest('a')).toHaveAttribute('href', '/docs');
     expect(screen.getByText('Customer-Operated Deployment').closest('a')).toHaveAttribute('href', '/product#verification-api');
@@ -211,7 +211,7 @@ describe('LandingPage', () => {
         section: 'quick_start',
         card_id: 'verify-credentials',
         role: 'Operations',
-        destination_path: '/product#verification-api',
+        destination_path: '/verify',
       })
     );
 
@@ -239,7 +239,7 @@ describe('LandingPage', () => {
         page: 'landing',
         section: 'hero',
         cta_id: 'start_verifying',
-        destination_path: '/developers',
+        destination_path: '/verify',
       })
     );
 
@@ -261,7 +261,7 @@ describe('LandingPage', () => {
         page: 'landing',
         section: 'footer',
         cta_id: 'start_verifying',
-        destination_path: '/developers',
+        destination_path: '/verify',
       })
     );
 

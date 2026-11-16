@@ -1,6 +1,6 @@
 //! Trusted platform selection for signing-grant authority.
 //!
-//! This is deployment configuration for seven fixed authorization origins,
+//! This is deployment configuration for fixed authorization origins,
 //! not a tenant key registry. Tenant requests cannot alter these bindings.
 
 use std::{
@@ -35,6 +35,8 @@ struct AwsOriginKeys {
     gateway_service: String,
     gateway_issuer_did: String,
     flow_wallet_request: String,
+    #[serde(default)]
+    flow_demo_holder: Option<String>,
     issuance_credential: String,
     issuance_canvas: String,
     issuance_readiness: String,
@@ -53,6 +55,9 @@ impl AwsGrantConfiguration {
         }
         let mut unique = BTreeSet::new();
         for origin in SigningOrigin::ALL {
+            if !config.is_configured(origin) {
+                continue;
+            }
             let key = config.key_arn(origin);
             mmf_aws_kms::validate_key_arn(key, &config.region)
                 .map_err(|_| GrantProviderError::InvalidConfig)?;
@@ -86,6 +91,7 @@ impl AwsGrantConfiguration {
             SigningOrigin::GatewayService => &self.keys.gateway_service,
             SigningOrigin::GatewayIssuerDid => &self.keys.gateway_issuer_did,
             SigningOrigin::FlowWalletRequest => &self.keys.flow_wallet_request,
+            SigningOrigin::FlowDemoHolder => self.keys.flow_demo_holder.as_deref().unwrap_or(""),
             SigningOrigin::IssuanceCredential => &self.keys.issuance_credential,
             SigningOrigin::IssuanceCanvas => &self.keys.issuance_canvas,
             SigningOrigin::IssuanceReadiness => &self.keys.issuance_readiness,
@@ -93,10 +99,17 @@ impl AwsGrantConfiguration {
         }
     }
 
+    pub(crate) fn is_configured(&self, origin: SigningOrigin) -> bool {
+        origin != SigningOrigin::FlowDemoHolder || self.keys.flow_demo_holder.is_some()
+    }
+
     pub(crate) fn client(
         &self,
         origin: SigningOrigin,
     ) -> Result<AwsGrantClient, GrantProviderError> {
+        if !self.is_configured(origin) {
+            return Err(GrantProviderError::InvalidConfig);
+        }
         AwsGrantClient::new(origin, self.region.clone(), self.key_arn(origin).into())
     }
 }
@@ -202,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn all_seven_origins_need_distinct_immutable_regional_keys() {
+    fn configured_origins_need_distinct_immutable_regional_keys() {
         let value = config();
         assert!(decode(&value).is_ok());
         let mut changed = value.clone();
@@ -226,6 +239,31 @@ mod tests {
         let mut changed = value;
         changed["auth_reference"] = json!("never-accepted");
         assert!(decode(&changed).is_err());
+    }
+
+    #[test]
+    fn demo_holder_is_optional_and_cannot_reuse_an_existing_authority() {
+        let mut legacy = config();
+        legacy["keys"]
+            .as_object_mut()
+            .unwrap()
+            .remove("flow_demo_holder");
+        let decoded = decode(&legacy).unwrap();
+        assert!(!decoded.is_configured(SigningOrigin::FlowDemoHolder));
+        assert!(decoded.client(SigningOrigin::FlowDemoHolder).is_err());
+        assert!(decoded.is_configured(SigningOrigin::FlowWalletRequest));
+        let mut duplicated = config();
+        duplicated["keys"]["flow_demo_holder"] = duplicated["keys"]["flow_wallet_request"].clone();
+        assert!(decode(&duplicated).is_err());
+        for invalid in [
+            "",
+            "arn:aws:kms:us-west-2:111122223333:key/wrong-region",
+            "not-an-arn",
+        ] {
+            let mut value = config();
+            value["keys"]["flow_demo_holder"] = json!(invalid);
+            assert!(decode(&value).is_err());
+        }
     }
 
     #[test]

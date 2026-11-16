@@ -57,6 +57,10 @@ pub fn trust_credential_authority_router(state: TrustProfileHttpState) -> Router
 fn credential_authority_routes() -> Router<TrustProfileHttpState> {
     Router::new()
         .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority",
+            get(wallet_verifier_authority),
+        )
+        .route(
             "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
             post(credential_authority_snapshot),
         )
@@ -173,7 +177,13 @@ struct RegistrySyncConfigInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrustSourceInput {
+    #[serde(default, deserialize_with = "present_optional")]
+    id: Option<Option<Uuid>>,
     source_type: String,
+    #[serde(default, deserialize_with = "present_optional")]
+    enabled: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "present_optional")]
+    registered_verifier: Option<Option<crate::registered_verifier::RegisteredVerifier>>,
     url: Option<String>,
     certificate_pem: Option<String>,
     issuer_did: Option<String>,
@@ -183,6 +193,15 @@ struct TrustSourceInput {
     purposes: Option<Vec<TrustPurpose>>,
     description: Option<String>,
     registry_sync: Option<RegistrySyncConfigInput>,
+}
+
+// Preserve explicit null so these controls remain rejected on legacy sources.
+fn present_optional<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1261,6 +1280,40 @@ async fn internal_profile(
     Ok(Json(strip_nulls(response)))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletVerifierAuthorityQuery {
+    organization_id: String,
+    client_id: String,
+}
+
+async fn wallet_verifier_authority(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierAuthorityQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    credential_authority_service(&state, &headers)?;
+    let profile = state
+        .repository
+        .profile_by_id(uuid(&profile_id, "profile_id")?)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    let snapshot = crate::registered_verifier::project_wallet_verifier_authority(
+        &profile,
+        &query.organization_id,
+        &query.client_id,
+        Utc::now(),
+    )
+    .map_err(application_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(snapshot),
+    )
+        .into_response())
+}
+
 async fn wallet_issuer_keys(
     State(state): State<TrustProfileHttpState>,
     headers: HeaderMap,
@@ -1466,6 +1519,11 @@ async fn issuer_owner(
 fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpError> {
     crate::reject_private_custody_metadata(&Value::Object(profile.system_issuer_overrides.clone()))
         .map_err(|_| unavailable("Trust Profile contains private custody metadata"))?;
+    let sources = profile
+        .trust_sources
+        .iter()
+        .map(public_trust_source)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut methods = Vec::new();
     if profile.revocation_policy.check_crl {
         methods.push("CRL");
@@ -1489,7 +1547,7 @@ fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpErr
         "profile_type": profile.profile_type,
         "compliance_status": profile.compliance_status,
         "trust_purposes": profile.trust_purposes,
-        "trust_sources": profile.trust_sources.iter().map(public_trust_source).collect::<Vec<_>>(),
+        "trust_sources": sources,
         "allowed_algorithms": profile.validation_rules.allowed_algorithms,
         "revocation_policy": {
             "check_mode": profile.revocation_policy.check_mode,
@@ -1520,8 +1578,16 @@ fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpErr
     })))
 }
 
-fn public_trust_source(source: &TrustSource) -> Value {
-    strip_nulls(json!({
+fn public_trust_source(source: &TrustSource) -> Result<Value, TrustProfileHttpError> {
+    if source.source_type == TrustSourceType::RegisteredVerifier {
+        let registration =
+            crate::registered_verifier::registration(source).map_err(application_error)?;
+        return Ok(strip_nulls(json!({
+            "id":source.id,"source_type":source.source_type,"enabled":source.enabled,
+            "purposes":source.purposes,"description":source.description,"registered_verifier":registration,
+        })));
+    }
+    Ok(strip_nulls(json!({
         "source_type": source.source_type,
         "url": source.url,
         "certificate_pem": source.certificate_pem,
@@ -1533,7 +1599,7 @@ fn public_trust_source(source: &TrustSource) -> Value {
         "description": source.description,
         "pinned_certificates": source.pinned_certificates,
         "registry_sync": source.registry_sync,
-    }))
+    })))
 }
 
 fn registry_entry_response(entry: &TrustRegistryEntry) -> Value {
@@ -1614,7 +1680,28 @@ fn valid_verification_keys(value: &Value) -> Result<(), TrustProfileHttpError> {
 
 fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttpError> {
     let source_type = source_type(&input.source_type)?;
+    let registered = source_type == TrustSourceType::RegisteredVerifier;
+    if !registered
+        && (input.id.is_some() || input.enabled.is_some() || input.registered_verifier.is_some())
+    {
+        return Err(unprocessable(
+            "Registered verifier controls require REGISTERED_VERIFIER",
+        ));
+    }
+    if registered
+        && (input.id.as_ref().is_some_and(Option::is_none)
+            || input.enabled.as_ref().is_some_and(Option::is_none)
+            || input
+                .registered_verifier
+                .as_ref()
+                .is_some_and(Option::is_none))
+    {
+        return Err(unprocessable("Registered verifier controls cannot be null"));
+    }
     let mut extensions = Map::new();
+    if let Some(registration) = input.registered_verifier.flatten() {
+        extensions.insert("registered_verifier".into(), json!(registration));
+    }
     if input.organization_id.is_some()
         || input.verification_method_ids.is_some()
         || input.did_resolution.is_some()
@@ -1652,7 +1739,7 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         .and_then(|value| u16::try_from(value).ok())
         .unwrap_or(24);
     Ok(TrustSource {
-        id: Uuid::new_v4(),
+        id: input.id.flatten().unwrap_or_else(Uuid::new_v4),
         name: input
             .description
             .clone()
@@ -1666,8 +1753,16 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         purposes: input.purposes,
         description: input.description,
         pinned_certificates: vec![],
-        refresh_interval_hours,
-        enabled: true,
+        refresh_interval_hours: if registered {
+            0
+        } else {
+            refresh_interval_hours
+        },
+        enabled: if registered {
+            input.enabled.flatten().unwrap_or(false)
+        } else {
+            true
+        },
         registry_sync,
         registry_sync_token: None,
         registry_sequence: 0,
@@ -1683,6 +1778,7 @@ fn source_type(value: &str) -> Result<TrustSourceType, TrustProfileHttpError> {
         "allowlist" | "pinned_issuer" => Ok(TrustSourceType::PinnedIssuer),
         "pinned_root" | "root_ca" => Ok(TrustSourceType::RootCa),
         "pkd" | "pkd_url" => Ok(TrustSourceType::PkdUrl),
+        "registered_verifier" => Ok(TrustSourceType::RegisteredVerifier),
         _ => Err(unprocessable("source_type is invalid")),
     }
 }
