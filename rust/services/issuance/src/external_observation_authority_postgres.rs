@@ -73,7 +73,7 @@ fn positive_i64(value: i64) -> Result<u64, JournalError> {
     Ok(result)
 }
 
-fn parse_claim_rules(
+pub(crate) fn parse_claim_rules(
     value: serde_json::Value,
 ) -> Result<BTreeMap<String, ClaimRule>, JournalError> {
     let stored: BTreeMap<String, StoredClaimRule> =
