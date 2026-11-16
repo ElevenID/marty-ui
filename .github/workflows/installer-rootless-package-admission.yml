@@ -59,11 +59,12 @@ jobs:
               "tests/test_installer_test_vm_rootless_package_admission_controller.py",
           ], plugins=[gate])
           assert result == 0 and not gate.skipped, (result, gate.skipped)
-          assert len(gate.passed) == 12, gate.passed
+          assert len(gate.passed) == 13, gate.passed
           for exact in (
               "test_real_gpgv_signature_wrong_key_and_stale_release",
               "test_real_private_apt_solver_accepts_only_new_packages",
               "test_bounded_child_kills_closed_pipe_descendant_before_reaping",
+              "test_new_fixture_admission_selects_exact_setup_binding_before_stage",
           ):
               assert sum(node.endswith("::" + exact) for node in gate.passed) == 1, exact
           PY
