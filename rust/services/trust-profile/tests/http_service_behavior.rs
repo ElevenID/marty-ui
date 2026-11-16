@@ -139,6 +139,22 @@ async fn registered_verifier_projection_requires_configured_workload_auth_and_te
             assert_eq!(response.status().as_u16(), 200);
             let created = body(response).await;
             assert_eq!(created["status"], "draft");
+            for field in ["id", "enabled", "registered_verifier"] {
+                let mut source = json!({"source_type":"ROOT_CA","certificate_pem":"-----BEGIN CERTIFICATE-----\nfixture"});
+                source[field] = Value::Null;
+                let response=trust_profile_router(TrustProfileHttpState{
+                    application:Arc::new(TrustProfileApplication::new(repository.clone(),Arc::new(AllowControlPlane))),
+                    repository:repository.clone(),service_authenticator:Arc::new(ServiceTokenAuthenticator::new(Some(token.clone()),true).unwrap()),
+                    internal_api_key:None,registry_synchronizer:Arc::new(EchoSynchronizer),
+                }).oneshot(Request::builder().method("POST").uri("/v1/trust-profiles")
+                    .header("x-service-token",&token).header("x-user-id","user-1").header("content-type","application/json")
+                    .body(Body::from(json!({"organization_id":"org-1","name":"Legacy null guard","trust_sources":[source]}).to_string())).unwrap()).await.unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    422,
+                    "accepted legacy null {field}"
+                );
+            }
             assert_eq!(
                 created["trust_sources"][0]["id"],
                 selected.trust_sources[0].id.to_string()

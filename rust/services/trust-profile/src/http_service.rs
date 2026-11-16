@@ -177,10 +177,13 @@ struct RegistrySyncConfigInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrustSourceInput {
-    id: Option<Uuid>,
+    #[serde(default, deserialize_with = "present_optional")]
+    id: Option<Option<Uuid>>,
     source_type: String,
-    enabled: Option<bool>,
-    registered_verifier: Option<crate::registered_verifier::RegisteredVerifier>,
+    #[serde(default, deserialize_with = "present_optional")]
+    enabled: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "present_optional")]
+    registered_verifier: Option<Option<crate::registered_verifier::RegisteredVerifier>>,
     url: Option<String>,
     certificate_pem: Option<String>,
     issuer_did: Option<String>,
@@ -190,6 +193,15 @@ struct TrustSourceInput {
     purposes: Option<Vec<TrustPurpose>>,
     description: Option<String>,
     registry_sync: Option<RegistrySyncConfigInput>,
+}
+
+// Preserve explicit null so these controls remain rejected on legacy sources.
+fn present_optional<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1507,7 +1519,11 @@ async fn issuer_owner(
 fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpError> {
     crate::reject_private_custody_metadata(&Value::Object(profile.system_issuer_overrides.clone()))
         .map_err(|_| unavailable("Trust Profile contains private custody metadata"))?;
-    let sources=profile.trust_sources.iter().map(public_trust_source).collect::<Result<Vec<_>,_>>()?;
+    let sources = profile
+        .trust_sources
+        .iter()
+        .map(public_trust_source)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut methods = Vec::new();
     if profile.revocation_policy.check_crl {
         methods.push("CRL");
@@ -1562,9 +1578,10 @@ fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpErr
     })))
 }
 
-fn public_trust_source(source: &TrustSource) -> Result<Value,TrustProfileHttpError> {
+fn public_trust_source(source: &TrustSource) -> Result<Value, TrustProfileHttpError> {
     if source.source_type == TrustSourceType::RegisteredVerifier {
-        let registration=crate::registered_verifier::registration(source).map_err(application_error)?;
+        let registration =
+            crate::registered_verifier::registration(source).map_err(application_error)?;
         return Ok(strip_nulls(json!({
             "id":source.id,"source_type":source.source_type,"enabled":source.enabled,
             "purposes":source.purposes,"description":source.description,"registered_verifier":registration,
@@ -1663,13 +1680,27 @@ fn valid_verification_keys(value: &Value) -> Result<(), TrustProfileHttpError> {
 
 fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttpError> {
     let source_type = source_type(&input.source_type)?;
-    let registered=source_type==TrustSourceType::RegisteredVerifier;
-    if !registered && (input.id.is_some() || input.enabled.is_some() || input.registered_verifier.is_some()) {
-        return Err(unprocessable("Registered verifier controls require REGISTERED_VERIFIER"));
+    let registered = source_type == TrustSourceType::RegisteredVerifier;
+    if !registered
+        && (input.id.is_some() || input.enabled.is_some() || input.registered_verifier.is_some())
+    {
+        return Err(unprocessable(
+            "Registered verifier controls require REGISTERED_VERIFIER",
+        ));
+    }
+    if registered
+        && (input.id.as_ref().is_some_and(Option::is_none)
+            || input.enabled.as_ref().is_some_and(Option::is_none)
+            || input
+                .registered_verifier
+                .as_ref()
+                .is_some_and(Option::is_none))
+    {
+        return Err(unprocessable("Registered verifier controls cannot be null"));
     }
     let mut extensions = Map::new();
-    if let Some(registration)=input.registered_verifier {
-        extensions.insert("registered_verifier".into(),json!(registration));
+    if let Some(registration) = input.registered_verifier.flatten() {
+        extensions.insert("registered_verifier".into(), json!(registration));
     }
     if input.organization_id.is_some()
         || input.verification_method_ids.is_some()
@@ -1708,7 +1739,7 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         .and_then(|value| u16::try_from(value).ok())
         .unwrap_or(24);
     Ok(TrustSource {
-        id: input.id.unwrap_or_else(Uuid::new_v4),
+        id: input.id.flatten().unwrap_or_else(Uuid::new_v4),
         name: input
             .description
             .clone()
@@ -1722,8 +1753,16 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         purposes: input.purposes,
         description: input.description,
         pinned_certificates: vec![],
-        refresh_interval_hours: if registered {0} else {refresh_interval_hours},
-        enabled: if registered {input.enabled.unwrap_or(false)} else {true},
+        refresh_interval_hours: if registered {
+            0
+        } else {
+            refresh_interval_hours
+        },
+        enabled: if registered {
+            input.enabled.flatten().unwrap_or(false)
+        } else {
+            true
+        },
         registry_sync,
         registry_sync_token: None,
         registry_sequence: 0,
