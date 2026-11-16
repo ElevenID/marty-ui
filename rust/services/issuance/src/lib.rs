@@ -106,6 +106,7 @@ pub mod dependency_probe;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod external_observation_admin;
+pub mod external_observation_admin_read;
 pub mod external_observation_binding_admin;
 pub mod external_observation_admin_http;
 pub mod external_observation_admission;

@@ -44,14 +44,15 @@ pub async fn verify_storage(pool: &PgPool) -> Result<(), &'static str> {
     // records or modifying any authority. Keep this aligned with the adapter.
     for statement in [
         "SELECT id,organization_id,scopes,scope_type,deployment_profile_id,status,enabled,expires_at,updated_at FROM organization_service.api_keys LIMIT 0 FOR UPDATE",
-        "SELECT id,organization_id,source_id,api_key_id,active,revision,expires_at FROM issuance_service.external_observation_producer_grants LIMIT 0 FOR UPDATE",
+        "SELECT id,organization_id,source_id,api_key_id,active,revision,expires_at,created_by,approved_by,approved_at,created_at,updated_at FROM issuance_service.external_observation_producer_grants LIMIT 0 FOR UPDATE",
         "SELECT grant_id,binding_id,organization_id,source_id FROM issuance_service.external_observation_grant_bindings LIMIT 0 FOR SHARE",
-        "SELECT id,organization_id,source_id,application_id,subject_id,provider,fact_type,resource_scope,claim_rules,max_age_ms,max_clock_skew_ms,active,revision FROM issuance_service.external_observation_bindings LIMIT 0 FOR UPDATE",
+        "SELECT id,organization_id,source_id,application_id,subject_id,provider,fact_type,resource_scope,claim_rules,max_age_ms,max_clock_skew_ms,active,revision,created_by,updated_by,created_at,updated_at FROM issuance_service.external_observation_bindings LIMIT 0 FOR UPDATE",
         "SELECT id,organization_id,applicant_identifier,status,updated_at,expires_at FROM issuance_service.applications LIMIT 0 FOR UPDATE",
         "SELECT o.status,m.id,m.user_id,m.status,r.id,p.resource,p.action FROM organization_service.organizations o JOIN organization_service.members m ON m.organization_id=o.id JOIN organization_service.member_roles mr ON mr.member_id=m.id JOIN organization_service.roles r ON r.id=mr.role_id AND r.organization_id=o.id JOIN organization_service.role_permissions rp ON rp.role_id=r.id JOIN organization_service.permissions p ON p.id=rp.permission_id LIMIT 0 FOR SHARE OF o,m,mr,r,rp,p",
         "SELECT id,organization_id,event_type,action,category,resource_type,resource_id,actor_id,actor_type,severity,message,changes,metadata,created_at FROM organization_service.audit_events LIMIT 0",
         "SELECT receipt_id,organization_id,source_id,api_key_id,binding_id,binding_revision,observation_id,sequence,received_at_ms,application_id,subject_id,provider,fact_type,resource_scope,envelope FROM issuance_service.external_observation_receipts LIMIT 0",
         "SELECT organization_id,source_id,binding_id,sequence,receipt_id FROM issuance_service.external_observation_heads LIMIT 0 FOR UPDATE",
+        "SELECT receipt_id,event_type,received_at_ms FROM issuance_service.external_observation_audit LIMIT 0",
     ] {
         sqlx::query(statement).execute(&mut *tx).await.map_err(|_| FAILURE)?;
     }

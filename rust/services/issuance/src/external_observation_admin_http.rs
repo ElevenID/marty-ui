@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 use crate::{
     external_observation_admin::{revoke_grant, AdminError},
+    external_observation_admin_read::{inspect, AdminRead, AuditCursor, GrantPage, ResourceKind},
     external_observation_binding_admin::{
         create_binding, replace_binding_definition, set_binding_active, valid_definition,
         valid_replacement, BindingDefinition, BindingReplacement,
@@ -44,6 +45,16 @@ pub const BINDING_ACTIVATE_PATH: &str =
 pub const BINDING_DEACTIVATE_PATH: &str =
     "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/deactivate";
 pub const BINDING_REPLACE_PATH:&str="/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/replace-definition";
+pub const GRANT_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/inspect";
+pub const GRANT_AUDIT_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-producers/{grant_id}/audit";
+pub const BINDING_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/inspect";
+pub const BINDING_AUDIT_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-bindings/{binding_id}/audit";
+pub const RECEIPT_READ_PATH: &str =
+    "/v1/organizations/{organization_id}/external-observation-receipts/{observation_id}/inspect";
 #[derive(Clone, Copy)]
 enum Action {
     Bindings,
@@ -74,6 +85,11 @@ pub fn admin_router(pool: PgPool, gateway_service_key: &[u8]) -> Result<Router, 
         .route(BINDING_ACTIVATE_PATH, post(mutate_binding))
         .route(BINDING_DEACTIVATE_PATH, post(mutate_binding))
         .route(BINDING_REPLACE_PATH, post(mutate_binding))
+        .route(GRANT_READ_PATH, post(read_admin))
+        .route(GRANT_AUDIT_PATH, post(read_admin))
+        .route(BINDING_READ_PATH, post(read_admin))
+        .route(BINDING_AUDIT_PATH, post(read_admin))
+        .route(RECEIPT_READ_PATH, post(read_admin))
         .with_state(Arc::new(AdminState {
             pool,
             gateway_service_key: gateway_service_key.to_vec(),
@@ -440,4 +456,85 @@ async fn admin_body(
         return Err(failure(StatusCode::BAD_REQUEST, "invalid_admin_request"));
     }
     Ok((actor, bytes))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyRead {}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptRead {
+    source_id: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AuditRead {
+    cursor: Option<AuditCursor>,
+}
+async fn read_admin(
+    State(state): State<Arc<AdminState>>,
+    Path((org, resource)): Path<(Uuid, String)>,
+    request: Request,
+) -> Response {
+    let path = request.uri().path().to_owned();
+    let parts: Vec<_> = path.split('/').collect();
+    let (actor, bytes) = match admin_body(&state, org, request).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let query = match (parts.get(4).copied(), parts.last().copied()) {
+        (Some("external-observation-producers"), Some("inspect")) => {
+            let grant = match Uuid::parse_str(&resource) {
+                Ok(v) if !v.is_nil() && v.to_string() == resource => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            let page = match serde_json::from_slice::<GrantPage>(&bytes) {
+                Ok(v) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            AdminRead::Grant { grant, page }
+        }
+        (Some("external-observation-bindings"), Some("inspect")) => {
+            if serde_json::from_slice::<EmptyRead>(&bytes).is_err() {
+                return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
+            }
+            AdminRead::Binding { binding: resource }
+        }
+        (Some("external-observation-receipts"), Some("inspect")) => {
+            let input = match serde_json::from_slice::<ReceiptRead>(&bytes) {
+                Ok(v) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            AdminRead::Receipt {
+                source: input.source_id,
+                observation: resource,
+            }
+        }
+        (
+            Some(group @ ("external-observation-producers" | "external-observation-bindings")),
+            Some("audit"),
+        ) => {
+            let input = match serde_json::from_slice::<AuditRead>(&bytes) {
+                Ok(v) => v,
+                _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+            };
+            AdminRead::Audit {
+                kind: if group == "external-observation-producers" {
+                    ResourceKind::Producer
+                } else {
+                    ResourceKind::Binding
+                },
+                resource,
+                cursor: input.cursor,
+            }
+        }
+        _ => return failure(StatusCode::BAD_REQUEST, "invalid_admin_request"),
+    };
+    if !query.valid() {
+        return failure(StatusCode::BAD_REQUEST, "invalid_admin_request");
+    }
+    match inspect(&state.pool, org, &actor, query).await {
+        Ok(value) => (StatusCode::OK, [("cache-control", "no-store")], Json(value)).into_response(),
+        Err(error) => mutation_response(Err(error)),
+    }
 }

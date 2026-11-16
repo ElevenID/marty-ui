@@ -420,3 +420,59 @@ Storage preflight additionally requires UPDATE privileges on resource_scope,
 claim_rules, max_age_ms and max_clock_skew_ms. Production role and registered
 migration qualification, administrator reads/reconciliation, actual Gateway and
 Canvas-to-wallet qualification, and cross-repository retirement remain open.
+
+
+## Administrator snapshots and reconciliation reads
+
+Session-only POST queries under the public Common Gateway provide:
+
+- `/external-observation-producers/{grant_id}/inspect`: current grant metadata,
+  canonical key reference and at most 32 membership IDs. Its optional
+  `after_binding_id` requires `expected_revision`; stale revisions conflict.
+- `/external-observation-bindings/{binding_id}/inspect`: current definition,
+  subject and tenant-scoped application revision/lifecycle metadata.
+- `/external-observation-producers/{grant_id}/audit` and
+  `/external-observation-bindings/{binding_id}/audit`: at most eight canonical
+  observation-management events per page, ordered by exact timestamp plus UUID.
+  The next cursor contains those exact two fields. History remains readable
+  after the resource is removed. Metadata and unknown change fields are omitted;
+  allowed structured fields are validated before export.
+- `/external-observation-receipts/{observation_id}/inspect` with `source_id` in
+  the body: original committed unsigned envelope, original API-key reference,
+  receipt identity and current sequence head. The source is a read locator under
+  the authenticated tenant, never observation-admission authority. Receipt,
+  admission-audit timestamp and sequence head must agree; corrupt/incomplete
+  storage is an error, never an absent result.
+
+Every path is prefixed by `/v1/organizations/{organization_id}`. The existing
+strict 4096-byte original JSON reader, current session tenant, allowed Origin,
+trusted Gateway service authentication and canonical `external-observation:manage`
+permission apply. Producer API keys cannot inspect data. No secret-key column or
+raw provider payload is selected. An authorized administrator can inspect an
+original receipt after producer grant/key revocation; that does not restore
+submission authority. The returned normalized claims/subject data are scoped
+administrator data and must not enter logs or public/error responses.
+
+These are no-store, bounded (131072 bytes) snapshots, not authority tokens or
+requeue commands. Each query uses a regular SERIALIZABLE transaction with SELECT
+only and unconditional rollback; PostgreSQL READ ONLY mode cannot accommodate the
+canonical administrator row locks. `snapshot_at_ms` identifies the database
+snapshot acquisition, not a committed write. Permission removal denies later
+queries. No audit, grant, binding, receipt, head, application or sequence is
+changed by inspection.
+
+`found:false` means absent at that snapshot. A late/in-flight commit may become
+visible later under the same observation ID. Never regenerate observation IDs,
+body, times or sequence to hide uncertainty. Compare the original stored envelope
+and original producer key identity; cross-key retries remain subject to current
+canonical admission. Administrative event pages and current state help operator
+reconciliation but do not prove a specific unrecorded client intent after later
+competing mutations. Audit pagination is per-query snapshot data, not a frozen
+whole-history snapshot; new/backdated events require a fresh scan when relevant.
+Ambiguous outcomes remain parked for operator reconciliation. Reads never
+approve, verify, sign, issue or retry a write automatically.
+
+Storage preflight requires the additional grant/binding metadata columns and
+receipt-audit SELECT access. Production least-privilege roles, registered
+migrations, actual Gateway/core deployment, operator workflow and full
+Canvas-to-wallet/network-denial qualification remain open.
