@@ -52,7 +52,7 @@ def jobs_fixture() -> list[dict]:
     ] + [{"number": len(before) + 1, "name": handoff.WAIT_STEP, "status": "in_progress", "conclusion": None},
          {"number": len(before) + 2, "name": "Publish the qualified GitHub release and exact assets",
           "status": "pending", "conclusion": None}])
-    jobs[-1].update(status="queued", conclusion=None)
+    jobs[-1].update(status="completed", conclusion="skipped")
     return jobs
 
 
@@ -86,10 +86,12 @@ class OperatorStateTests(unittest.TestCase):
     def test_actual_matrix_and_reusable_job_names_admit_only_completed_prerequisites(self) -> None:
         operator.validate_waiting_jobs(jobs_fixture(), 123, SOURCE)
 
-    def test_optional_downstream_can_be_skipped_or_waiting_but_cannot_already_run(self) -> None:
+    def test_optional_preparation_must_succeed_or_be_unselected_before_tag_wait(self) -> None:
         for status, conclusion, accepted in (
-            ("completed", "skipped", True), ("waiting", None, True),
+            ("completed", "skipped", True), ("completed", "success", True),
+            ("waiting", None, False), ("queued", None, False), ("pending", None, False),
             ("in_progress", None, False), ("completed", "failure", False),
+            ("completed", "cancelled", False),
         ):
             with self.subTest(status=status, conclusion=conclusion):
                 jobs = jobs_fixture()
@@ -99,6 +101,17 @@ class OperatorStateTests(unittest.TestCase):
                 else:
                     with self.assertRaises(handoff.HandoffError):
                         operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_optional_preparation_must_have_one_unambiguous_job(self) -> None:
+        for mutation in ("missing", "duplicate"):
+            with self.subTest(mutation=mutation):
+                jobs = jobs_fixture()
+                if mutation == "missing":
+                    jobs.pop()
+                else:
+                    jobs.append({**jobs[-1], "id": 999})
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
 
     def test_missing_failed_skipped_foreign_and_later_prerequisites_refuse(self) -> None:
         for mutation in ("missing_lane", "failed", "skipped", "attempt", "source", "future_step", "skipped_crypto"):

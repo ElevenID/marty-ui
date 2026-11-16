@@ -426,7 +426,7 @@ pub(crate) async fn prepare(
     let directory = parent_path.join(DIRECTORY);
     let fetcher = GitHubReleaseFetcher::new()?;
     fetcher.fetch_record(&expected.release_tag, MANIFEST, &directory.join(MANIFEST)).await
-        .map_err(|_| "selected Cloudflare add-on is unavailable; publish the signed optional add-on for this exact release before retrying")?;
+        .map_err(|_| "selected Cloudflare add-on is unavailable; select a new signed release that includes the complete optional add-on")?;
     sidecars(&fetcher, &expected.release_tag, MANIFEST, &directory).await?;
     let workflow = release::build_workflow(&expected.release_tag)?;
     let verify = |name: &str| {

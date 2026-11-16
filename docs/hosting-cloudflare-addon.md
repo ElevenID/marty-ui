@@ -9,8 +9,8 @@ contracts as other hosting choices.
 
 For a new signed installation, the release producer must select
 `publish_cloudflare_addon` in **Nightly installation release** or **Stack release**
-for the stable version. The optional job runs after that workflow's core
-publication. It publishes these separate immutable subjects:
+for the stable v1 publication contract. The optional job prepares, signs and
+attests these separate subjects before that workflow publishes its release:
 
 - `selfhost-cloudflare-addon.zip`
 - `selfhost-cloudflare-images.json`
@@ -20,18 +20,27 @@ Each subject has a `.sigstore.json` signature and `.provenance.jsonl` sidecar.
 The add-on binds the exact core release tag, source commit, producer run and
 attempt, one approved connector image digest, and every packaged runtime file.
 The producer verifies image provenance, signature, and anonymous Linux amd64
-pull before publication. A core-only release remains installable without these
-optional assets. Selecting an unavailable or mismatched add-on fails closed.
-An interrupted optional upload also leaves the complete core usable. Core
-consumers ignore only the known optional asset names; unknown or duplicated
-assets remain invalid. The selected connector alone is blocked until all of its
-exact signed assets and proofs are available.
+pull before publication. The core publisher authenticates the complete selected
+add-on against its signed inventory, then supplies every core and selected add-on
+asset to the initial release creation. GitHub stages those files in a draft before
+making the complete release immutable. The producer reads back the exact selected
+closure and bytes; it never appends to or repairs a published release.
+A core-only release remains installable without these optional assets. An
+unselected add-on job is skipped without blocking core publication. A selected
+add-on that fails preparation, is incomplete or belongs to another producer blocks
+publication. The stable v2 publication contract continues to exclude add-ons.
+For historical release compatibility, core consumers ignore only known optional
+asset names even if that old optional upload was incomplete; unknown or duplicated
+assets remain invalid. Selecting a connector always requires all of its exact
+signed assets and proofs.
 The installer derives the allowed signer workflow from the release tier. A
 stable add-on must come from `cd.yml`; a nightly add-on must come from
 `nightly-release.yml`. Both must use the core inventory's original producer run
 and attempt. A later rerun or resumed publication cannot relabel an old core or
 append an add-on from a different attempt. Select the add-on when producing the
-release; if that exact producer cannot complete it, publish a new release.
+release. If a selected producer fails, or an immutable core-only release already
+exists, produce a new release with the complete selected add-on; do not rerun an
+old attempt to append assets.
 
 The optional job supplies a distribution artifact; it does not qualify a live
 Cloudflare route, grant installer admission, or turn a candidate into Ready.

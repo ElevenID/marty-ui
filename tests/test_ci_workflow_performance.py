@@ -5276,6 +5276,7 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
 
     python_warmer = warm["jobs"]["python"]
     assert python_warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert python_warmer["runs-on"] == "ubuntu-24.04"
     python_versions = python_warmer["strategy"]["matrix"]["python-version"]
     assert python_versions == ["3.12", "3.12.10"]
     for job_name in python_jobs:
