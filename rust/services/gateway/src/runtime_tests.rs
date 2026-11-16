@@ -291,6 +291,7 @@ impl GatewayIdentityProvider for RuntimeProvider {
         session_id: &str,
     ) -> Result<Option<SessionIdentity>, SecurityError> {
         let organization_id = match session_id {
+            "observation-session" => Some("20000000-0000-4000-8000-000000000001"),
             "valid" => Some("org-1"),
             "valid-org-2" => Some("org-2"),
             "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
@@ -306,6 +307,17 @@ impl GatewayIdentityProvider for RuntimeProvider {
 
     async fn validate_api_key(&self, key: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
         Ok(match key {
+            "observation-key" | "observation-admin" => Some(ApiKeyIdentity {
+                api_key_id: "10000000-0000-4000-8000-000000000001".into(),
+                organization_id: Some("20000000-0000-4000-8000-000000000001".into()),
+                key_prefix: None,
+                scopes: vec![if key == "observation-key" {
+                    "evidence:submit"
+                } else {
+                    "admin:full"
+                }
+                .into()],
+            }),
             "verification-complete"
             | "verification-alternative"
             | "verification-admin"
@@ -7127,6 +7139,199 @@ fn applicant_evidence_identity_is_exact_and_fail_closed() {
         "org-1",
         "app-1"
     ));
+}
+
+#[tokio::test]
+async fn observation_gateway_retries_reach_upstream_with_only_trusted_identity() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let route = state
+        .routes
+        .find(&GatewayRequest::new(
+            HttpMethod::Post,
+            crate::external_observation::PATH,
+            0,
+        ))
+        .unwrap();
+    assert_eq!(route.route.retries, 0);
+    let router = gateway_router(state);
+    let bytes = br#"{ "binding_id":"one", "claims":{"completed":false} }"#;
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(crate::external_observation::PATH)
+                    .header("x-api-key", "observation-key")
+                    .header("content-type", "application/json")
+                    .header("idempotency-key", "observation-one")
+                    .header("x-api-key-id", "forged-key")
+                    .header("x-organization-id", "forged-org")
+                    .body(Body::from(bytes.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    {
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "journal retries must bypass the response cache"
+        );
+        for (service, request) in requests.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(
+                request.header("x-api-key-id"),
+                Some("10000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(request.body.as_deref(), Some(bytes.as_slice()));
+        }
+    }
+    let denied = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(crate::external_observation::PATH)
+                .header("x-api-key", "observation-admin")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "observation-one")
+                .body(Body::from(bytes.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn observation_admin_gateway_requires_session_origin_and_forwards_only_trusted_actor() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let path="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+    let route = state
+        .routes
+        .find(&GatewayRequest::new(HttpMethod::Post, path, 0))
+        .unwrap();
+    assert_eq!(route.route.upstream_service, "issuance");
+    assert_eq!(route.route.retries, 0);
+    let router = gateway_router(state);
+    for action in ["revoke", "approve", "rotate-api-key"] {
+        for _ in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(path.replace("/revoke", &format!("/{action}")))
+                        .header("cookie", "sessionId=observation-session")
+                        .header("origin", "https://beta.elevenidllc.com")
+                        .header("content-type", "application/json")
+                        .header("x-user-id", "forged-user")
+                        .header("x-api-key-id", "forged-key")
+                        .header("x-organization-id", "forged-org")
+                        .body(Body::from(br#"{ "expected_revision":2 }"#.as_slice()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+    }
+    {
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            6,
+            "each administration attempt must reach canonical authorization"
+        );
+        for (service, request) in requests.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(request.header("x-user-id"), Some("user-1"));
+            assert_eq!(request.header("x-api-key-id"), None);
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.body.as_deref(),
+                Some(br#"{ "expected_revision":2 }"#.as_slice())
+            );
+        }
+    }
+    for (credential, value, origin, status) in [
+        (
+            "x-api-key",
+            "observation-admin",
+            "https://beta.elevenidllc.com",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "cookie",
+            "sessionId=valid-uuid",
+            "https://beta.elevenidllc.com",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "cookie",
+            "sessionId=valid",
+            "https://beta.elevenidllc.com",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "cookie",
+            "sessionId=observation-session",
+            "https://attacker.example",
+            StatusCode::FORBIDDEN,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header(credential, value)
+                    .header("origin", origin)
+                    .header("content-type", "application/json")
+                    .body(Body::from("{\"expected_revision\":2}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+    }
+    assert_eq!(recorder.0.lock().unwrap().len(), 6);
+}
+
+#[tokio::test]
+async fn malformed_observation_admin_paths_cannot_bypass_origin_or_reach_upstream() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+    let router = gateway_router(state.clone());
+    for path in [
+        "/v1/organizations/%32%30%30%30%30%30%30%30-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke",
+        "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/00000000-0000-0000-0000-000000000000/revoke",
+        "/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/bad.name/activate",
+    ] {
+        // Authentication resolves the route first. Unrouted malformed paths
+        // must be404; matching paths must reach the guard and be403.
+        let expected=if state.routes.find(&GatewayRequest::new(HttpMethod::Post,path,0)).is_ok(){StatusCode::FORBIDDEN}else{StatusCode::NOT_FOUND};
+        let response=router.clone().oneshot(Request::builder().method("POST").uri(path).header("cookie","sessionId=observation-session").header("content-type","application/json").body(Body::from("{}")).unwrap()).await.unwrap();
+        assert_eq!(response.status(),expected,"malformed path: {path}");
+        assert!(recorder.0.lock().unwrap().is_empty(),"malformed path reached upstream: {path}");
+    }
+    assert!(recorder.0.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

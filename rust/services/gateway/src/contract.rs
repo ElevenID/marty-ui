@@ -186,6 +186,44 @@ impl GatewayContract {
                 }]),
             })?;
         }
+        table.add(RouteConfig {
+            name: "external-observation:submit".into(),
+            pattern: crate::external_observation::PATH.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "issuance".into(),
+            methods: BTreeSet::from([HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 30_000,
+            retries: 0,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority(crate::external_observation::PATH),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
+        for path in [
+            crate::external_observation::ADMIN_PATH,
+            crate::external_observation::APPROVE_PATH,
+            crate::external_observation::ROTATE_PATH,
+        ] {
+            table.add(RouteConfig {
+                name: format!("external-observation:manage:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
         for path in MDOC_CERTIFICATE_PATHS {
             table.add(RouteConfig {
@@ -510,6 +548,39 @@ impl GatewayContract {
             );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
+        paths.insert(
+            crate::external_observation::PATH.into(),
+            json!({
+                "post": crate::external_observation::openapi_operation()
+            }),
+        );
+        for (path,operation_id,summary) in [
+            (crate::external_observation::ADMIN_PATH,"revoke_external_observation_producer","Revoke a canonical external observation producer grant"),
+            (crate::external_observation::APPROVE_PATH,"approve_external_observation_producer","Approve the current canonical external observation producer grant revision"),
+            (crate::external_observation::ROTATE_PATH,"rotate_external_observation_producer_key","Replace the canonical producer key and deactivate its grant pending fresh approval"),
+        ] {
+            let mut properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
+            let mut required=vec!["expected_revision"];
+            if path==crate::external_observation::ROTATE_PATH {
+                properties.as_object_mut().expect("static schema object").insert("new_api_key_id".into(),json!({"type":"string","format":"uuid"}));
+                required.push("new_api_key_id");
+            }
+            paths.insert(path.into(),json!({"post":{
+                "operationId":operation_id,"tags":["evidence"],"summary":summary,
+                "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
+                "security":[{"sessionCookie":[]},{"bearerAuth":[]}],
+                "parameters":[
+                    {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"grant_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+                "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"required":required,"properties":properties}}}},
+                "responses":{"200":{"description":"Committed revision and audit_id; no-store"},
+                    "400":{"description":"Invalid or ambiguous request"},"401":{"description":"Session required"},
+                    "403":{"description":"Tenant, Origin, canonical permission or replacement key denied"},"409":{"description":"Revision, state or transaction conflict"},
+                    "413":{"description":"Request exceeds 4096 bytes"},"503":{"description":"Unavailable or uncertain commit; reconcile"}}
+            }}));
+        }
         json!({
             "openapi": "3.1.0",
             "info": {
@@ -633,6 +704,11 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 }
 
 fn special_service(path: &str) -> Option<&'static str> {
+    if path == crate::external_observation::PATH
+        || crate::external_observation::is_admin_namespace(path)
+    {
+        return Some("issuance");
+    }
     if STATUS_PUBLIC.is_match(path) {
         return Some("revocation-profiles");
     }
@@ -997,7 +1073,7 @@ mod tests {
             &["trust:write".into()]
         )
         .is_ok());
-        assert!(route_for(&table, HttpMethod::Get, path).is_err());
+        assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
     }
 
     #[test]
@@ -1167,6 +1243,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 4
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1279,7 +1356,19 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
+                + 4
         );
+        for operation in [
+            "submit_external_observation",
+            "revoke_external_observation_producer",
+            "approve_external_observation_producer",
+            "rotate_external_observation_producer_key",
+        ] {
+            assert!(
+                identifiers.contains(operation),
+                "missing operation: {operation}"
+            );
+        }
         assert_eq!(
             document["paths"]["/v1/notifications/unread/count"]["get"]["operationId"],
             "get_v1_notifications_unread_count"
@@ -1479,6 +1568,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 4
         );
         assert_eq!(
             contract
@@ -1492,6 +1582,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 4
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1503,6 +1594,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 4
                 + 16
         );
         assert_eq!(
@@ -1774,7 +1866,7 @@ mod tests {
                 assert!(matched.route.auth_required);
                 assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
                 assert!(matched.route.rewrite_path.is_none());
-                assert!(route_for(&table, HttpMethod::Get, path).is_err());
+                assert_eq!(matched.route.methods, BTreeSet::from([HttpMethod::Post]));
                 assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
             }
         }
@@ -1880,5 +1972,25 @@ mod tests {
             route_ownership("/v1/devices/challenge").service,
             "device-registration"
         );
+    }
+}
+
+#[cfg(test)]
+mod observation_admin_contract_tests {
+    use super::*;
+    #[test]
+    fn administrator_revocation_is_public_gateway_to_issuance_with_no_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        let path="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+        for action in ["revoke", "approve", "rotate-api-key"] {
+            let path = path.replace("/revoke", &format!("/{action}"));
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
     }
 }
