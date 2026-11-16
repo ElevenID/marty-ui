@@ -210,3 +210,29 @@ Reviewed migration/roles, administrator grants/bindings and full public Gateway
 runtime/network-denial tests must pass before enabling it. The startup test uses
 canonical-shaped disposable tables, not a production installation. Configuration
 and full issuance bootstrap compilation remain part of the full CI gate.
+
+## Canonical grant-revocation service
+
+`external_observation_admin::revoke_grant` is the first administrative mutation.
+It requires an authenticated administrator actor from the Gateway's trusted
+session transport and reloads current organization membership, role links,
+organization-scoped roles and exact external-observation:manage permission
+from existing organization_service tables. No role cache, API-key shortcut,
+owner-name shortcut or connector authority mirror is used. Active membership
+and permission rows remain locked through the serializable transaction.
+
+After authorization locks, it locks the canonical API key before the producer
+grant, matching admission lock order. The expected grant revision must match.
+The inactive update/revision bump and canonical organization audit event commit
+together; an audit failure rolls back revocation. Audit metadata contains only
+fixed action/actor/resource identifiers and revisions, not secrets or payloads.
+Database conflicts are returned without automatic retry; uncertain commits
+require reconciliation before another administrative mutation.
+
+This service is not yet a public administrative HTTP route. Gateway session-only
+routing, trusted actor extraction, permission-catalog/role assignment review,
+grant creation/approval/modification, evidence-binding administration and audit
+read/reconciliation operations remain required. No permission is auto-granted.
+The current method can revoke an expired or inactive key's producer grant, since
+revocation reduces authority and must remain available for cleanup. It does not
+approve evidence, alter application policy or issue credentials.
