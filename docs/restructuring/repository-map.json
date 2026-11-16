@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "status": "audit-only",
+  "source": {
+    "repository": "ElevenID/marty-ui",
+    "ref": "main",
+    "commit": "9e098423b5d98bc1bb50147f6cf1412973256144"
+  },
+  "targets": [
+    {
+      "repository": "platform",
+      "responsibility": "installer-deployment-release-lifecycle",
+      "source_candidates": [
+        "install.sh",
+        "manage-ui.sh",
+        "deploy-config/",
+        "deploy/",
+        "k8s/",
+        "openbao/",
+        "SELFHOST_BUNDLE.md",
+        "SELFHOST_OPENBAO.md",
+        "SELFHOST_DEPLOYMENT_CHECKLIST.md"
+      ],
+      "migration": "classify-and-extract",
+      "notes": "Only installer-owned orchestration, deployment contracts, release tooling and operator lifecycle. Do not transfer service implementation or unclassified shared runtime assets."
+    },
+    {
+      "repository": "website",
+      "responsibility": "public-marketing-site",
+      "source_candidates": [
+        "contracts/website-source-ownership.json",
+        "contracts/web-surface-routes.json",
+        "ui/src/apps/website/",
+        "ui/src/variants/marketingRoutes.jsx",
+        "ui/src/variants/publicConfig.website.js",
+        "ui/src/data/marketingContent.js",
+        "ui/scripts/*website*",
+        "ui/nginx.website*.conf",
+        "scripts/website_release.py",
+        "scripts/website_provenance.py",
+        "scripts/deploy_website.py"
+      ],
+      "migration": "dependency-closure-required",
+      "notes": "Existing 34-module ownership manifest is the starting set only. Shared React imports, public assets, translations, Vite/prerender, Docker build context, blog dependency, private commerce producer and provenance identities require resolution."
+    },
+    {
+      "repository": "application",
+      "responsibility": "authenticated-user-application",
+      "source_candidates": [
+        "ui/src/apps/",
+        "ui/src/application/",
+        "ui/src/contexts/",
+        "ui/src/hooks/",
+        "ui/src/components/"
+      ],
+      "migration": "after-website-extraction",
+      "notes": "Do not move broad directories wholesale. Retain only application-owned code after import and route classification."
+    },
+    {
+      "repository": "canvas",
+      "responsibility": "independent-canvas-integration",
+      "source_candidates": [
+        "Canvas-related source, workflows, contracts and tests"
+      ],
+      "migration": "parallel-existing-workstream",
+      "notes": "Follow the active Canvas extraction plan; do not assume all Canvas-named files belong in one repository."
+    }
+  ],
+  "constraints": [
+    "preserve-git-history-where-practical",
+    "no-production-cutover-during-extraction",
+    "preserve-openbao-rootless-docker-tls-and-secrets-boundaries",
+    "preserve-original-artifact-provenance-and-signing",
+    "no-private-commerce-source-in-public-repositories",
+    "do-not-change-published-package-identities-incidentally",
+    "all-deployment-images-digest-pinned",
+    "destination-repositories-and-protection-require-organization-admin"
+  ]
+}
