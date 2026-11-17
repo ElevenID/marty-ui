@@ -94,3 +94,7 @@ revocation status. The fixture supplies a synthetic already-authenticated
 identity; it does not qualify the real identity provider, network TLS, full
 Gateway runtime or protected owner command. Clippy runs with warnings denied.
 No deployed identity or end-to-end provider replacement is claimed.
+
+## Own-session confirmation
+
+Auth positively attests that the validated session has no impersonation context. Gateway requires the optional `non_impersonated_session` assertion to be `true` before ownership confirmation, including replay. Missing assertions from older Auth versions and any retained impersonation context fail closed; caller headers cannot supply the assertion. Update Auth and Gateway together before enabling ownership. Administrator proposal/revocation retain their separate current permission policy.
