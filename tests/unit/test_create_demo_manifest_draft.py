@@ -128,7 +128,7 @@ def test_current_draft_retires_provider_demo_without_rewriting_archives():
     from scripts.validate_demo_manifests import load_manifests
     manifest = generator.build_manifest()
     assert manifest["stack_version"] == "2026.08.1"
-    assert all(item.get("demo_id") != "D-07" and "lti-1.3" not in item["protocols"]
+    assert all(item.get("demo_id") not in {"D-07", "D-08"} and "lti-1.3" not in item["protocols"]
                for item in manifest["scenarios"])
     assert "canvas" not in json.dumps(manifest).lower()
     index, archives = load_manifests(generator.ROOT / "ui/public/demos/manifests", generator.ROOT / "VERSION")

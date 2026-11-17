@@ -83,18 +83,6 @@
       ]
     },
     {
-      "demo_id": "D-08",
-      "slug": "external-evidence-to-credential",
-      "happy_path": [
-        "normalize_external_evidence",
-        "evaluate_policy",
-        "review_and_issue"
-      ],
-      "failure_paths": [
-        "insufficient_or_conflicting_evidence_review"
-      ]
-    },
-    {
       "demo_id": "D-09",
       "slug": "offline-facility-verification",
       "happy_path": [
@@ -165,5 +153,9 @@
         "foreign_or_tampered_package_denied"
       ]
     }
+  ],
+  "retired_demo_ids": [
+    "D-07",
+    "D-08"
   ]
 }

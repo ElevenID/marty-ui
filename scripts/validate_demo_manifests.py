@@ -282,8 +282,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     historical = manifest["stack_version"].startswith("2026.07.") or manifest["stack_version"] == "2026.08.0"
     portfolio = HISTORICAL_2026_08_PORTFOLIO if manifest["stack_version"] == "2026.08.0" else PORTFOLIO
     if not historical:
-        require(all(scenario.get("slug") != "canvas-learning-achievement"
-                    and scenario.get("demo_id") != "D-07"
+        require(all(scenario.get("slug") not in {"canvas-learning-achievement", "external-evidence-to-credential"}
+                    and scenario.get("demo_id") not in {"D-07", "D-08"}
                     and "lti-1.3" not in scenario.get("protocols", []) for scenario in scenarios),
                 "retired connector scenario cannot be promoted in the current platform catalog")
     required_scenarios = (

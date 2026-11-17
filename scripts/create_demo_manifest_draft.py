@@ -58,12 +58,6 @@ PRESENTATION = {
         ["Holder", "Issuer", "Verifier"],
         ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
     ),
-    "external-evidence-to-credential": (
-        "External Evidence to Credential",
-        "Normalize external evidence, evaluate policy, and issue only after governed review.",
-        ["Holder", "Issuer", "Administrator"],
-        ["openid4vci-1.0", "sd-jwt-vc"],
-    ),
     "offline-facility-verification": (
         "Offline Facility Verification",
         "Verify against provisioned trust offline, buffer the audit, and synchronize after reconnection.",

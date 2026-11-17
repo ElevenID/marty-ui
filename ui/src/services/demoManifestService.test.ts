@@ -344,9 +344,11 @@ describe('retired connector demo boundary', () => {
     expect(validateDemoManifest(archived)).toBe(archived);
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(original, { status: 200 }));
     const current = await loadDemoManifest('2026.08.0');
-    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => item.slug !== 'canvas-learning-achievement'));
+    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => !['canvas-learning-achievement','external-evidence-to-credential'].includes(item.slug)));
     expect(findDemoScenario(current, 'canvas-learning-achievement')).toBeNull();
     expect(findDemoScenario(archived, 'canvas-learning-achievement')).toBeNull();
+    expect(findDemoScenario(current, 'external-evidence-to-credential')).toBeNull();
+    expect(findDemoScenario(archived, 'external-evidence-to-credential')).toBeNull();
     expect(JSON.stringify(archived)).toBe(original);
   });
 
@@ -357,7 +359,7 @@ describe('retired connector demo boundary', () => {
     const archived = JSON.parse(readFileSync('public/demos/manifests/2026.08.0.json', 'utf8'));
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No network in prerender'));
     const current = await loadDemoManifest('2026.08.0');
-    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => item.slug !== 'canvas-learning-achievement'));
+    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => !['canvas-learning-achievement','external-evidence-to-credential'].includes(item.slug)));
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

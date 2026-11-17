@@ -392,10 +392,12 @@ def test_current_catalog_cannot_promote_the_retired_provider_demo():
     from scripts.create_demo_manifest_draft import build_manifest
     current = build_manifest()
     archived = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
-    retired = next(item for item in archived["scenarios"] if item["slug"] == "canvas-learning-achievement")
-    current["scenarios"].append(copy.deepcopy(retired))
-    with pytest.raises(ManifestValidationError, match="retired connector scenario"):
-        validate_manifest(current)
+    for slug in ["canvas-learning-achievement", "external-evidence-to-credential"]:
+        candidate=copy.deepcopy(current)
+        retired=next(item for item in archived["scenarios"] if item["slug"] == slug)
+        candidate["scenarios"].append(copy.deepcopy(retired))
+        with pytest.raises(ManifestValidationError, match="retired connector scenario"):
+            validate_manifest(candidate)
 
 
 def test_historical_provider_demo_contract_is_not_silently_relaxed():

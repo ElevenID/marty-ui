@@ -386,14 +386,14 @@ describe('DemoPages', () => {
     expect(screen.getByText(/Video sha256:/)).toHaveTextContent(`Video sha256:${'e'.repeat(64)}`);
   });
 
-  it('settles a retired provider demo route without rendering its media', async () => {
+  it.each([['canvas-learning-achievement','D-07'],['external-evidence-to-credential','D-08']])('settles retired route %s without rendering its media', async (slug,demo_id) => {
     mockLoadManifest.mockResolvedValue({
       ...manifest,
-      scenarios: [{ ...scenarios[0], slug: 'canvas-learning-achievement', demo_id: 'D-07' }],
+      scenarios: [{ ...scenarios[0], slug, demo_id }],
     });
     renderWithRouter(
       <Routes><Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} /></Routes>,
-      { initialEntries: ['/demos/2026.07.0/canvas-learning-achievement'] },
+      { initialEntries: [`/demos/2026.07.0/${slug}`] },
     );
     expect(await screen.findByText(/This scenario is not part of ElevenID LLC/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /YouTube/ })).not.toBeInTheDocument();
