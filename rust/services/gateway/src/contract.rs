@@ -1343,7 +1343,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 23
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1456,7 +1456,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 18
+                + 23
         );
         for operation in [
             "submit_external_observation",
@@ -1682,7 +1682,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 23
         );
         assert_eq!(
             contract
@@ -1696,7 +1696,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 23
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1708,7 +1708,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 18
+                + 23
                 + 16
         );
         assert_eq!(
@@ -2182,6 +2182,6 @@ mod observation_administrator_openapi_security_tests {
                 .iter()
                 .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
         }
-        assert_eq!(count, 17);
+        assert_eq!(count, 22);
     }
 }
