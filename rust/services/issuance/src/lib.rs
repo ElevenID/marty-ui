@@ -12,6 +12,7 @@ mod python_format;
 mod python_json_diagnostic;
 pub(crate) use marty_response_compat::python_value;
 
+pub mod application_ownership;
 pub mod canvas_award_candidate;
 pub mod canvas_award_candidate_approval;
 pub mod canvas_award_candidate_approval_postgres;
