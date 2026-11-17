@@ -245,3 +245,7 @@ path = "tests/mdoc_status_postgres_contract.rs"
 [[test]]
 name = "customer_bootstrap_postgres"
 path = "tests/customer_bootstrap_postgres.rs"
+
+[[test]]
+name = "integration_secret_restore_contract"
+path = "tests/integration_secret_restore_contract.rs"

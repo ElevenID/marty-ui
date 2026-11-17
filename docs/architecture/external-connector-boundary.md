@@ -228,3 +228,14 @@ from the recorder and rejects its old provider schema even with matching hashes.
 Keycloak renewal completion requires the current configurator without the
 retired administrator setting. Source tests do not upgrade old observations or
 qualify an existing deployment.
+
+
+The coordinated PostgreSQL/OpenBao restore gate uses the platform-owned
+`integration_secret_restore_contract` test target. Its disposable table comes
+from the current issuance baseline; ciphertext roundtrip, startup validation,
+all four database-bound identity fields and tenant-scoped reads remain checked.
+The probe retains its build phases, service guards, snapshots, restore and cleanup
+owners. No provider persistence adapter or OAuth lifecycle is restored. Generic
+platform integration-secret storage is not connector credential custody; the
+connector continues to own its provider secrets and uses only the public Gateway.
+Local mock-TLS checks do not claim a completed live Raft/PostgreSQL restore.

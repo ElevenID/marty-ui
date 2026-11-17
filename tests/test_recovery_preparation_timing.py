@@ -51,7 +51,7 @@ def expected_commands():
             (
                 "test",
                 "marty-issuance-service",
-                ["--test", "canvas_oauth_postgres_contract"],
+                ["--test", "integration_secret_restore_contract"],
             ),
             ("test", "marty-issuance-service", ["--test", "didcomm_remote_kms_live"]),
             ("test", "marty-flow", ["--test", "haip_live_signing"]),
