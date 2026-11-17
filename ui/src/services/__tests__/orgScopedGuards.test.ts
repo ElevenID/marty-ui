@@ -1,13 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
 import { listOrganizationApplications } from '../applicantApi'
-import {
-  createCanvasIntegrationSecret,
-  createCanvasPlatform,
-  createCanvasProgramBinding,
-  getCanvasMirrorHealth,
-  listCanvasPlatforms,
-} from '../canvasIntegrationsApi'
 import { createComplianceProfile, requireOrganizationId as requireComplianceOrganizationId } from '../complianceProfilesApi'
 import { getOrganizationIntegrationInfo, getRuntimeStatus } from '../dashboardApi'
 import { createDeliveryDestination, listDeliveryDestinations } from '../deliveryDestinationsApi'
@@ -39,15 +32,10 @@ describe('org-scoped service guards', () => {
 
   it('fails locally before credential tooling integration requests can be constructed', async () => {
     await expectOrgRequired(listWebhooks('undefined'))
-    await expectOrgRequired(listCanvasPlatforms(null as unknown as string))
-    await expectOrgRequired(createCanvasPlatform({ name: 'Canvas' }))
-    await expectOrgRequired(createCanvasProgramBinding('platform-1', { display_name: 'Course' }))
-    await expectOrgRequired(createCanvasIntegrationSecret({ provider: 'canvas_credentials' }))
-    await expectOrgRequired(getCanvasMirrorHealth('null'))
     await expectOrgRequired(listOrganizationDevices('undefined'))
     await expectOrgRequired(createComplianceProfile({ name: 'Enterprise VC' }))
     await expectOrgRequired(listDeliveryDestinations({ activeOnly: true }))
-    await expectOrgRequired(createDeliveryDestination({ name: 'Canvas Credentials' }))
+    await expectOrgRequired(createDeliveryDestination({ name: 'External destination' }))
     await expectOrgRequired(createWebhook('', { url: 'https://example.com/hook', eventTypes: ['credential.issued'] }))
     await expectOrgRequired(updateWebhook('', 'webhook-1', { description: 'blocked' }))
     await expectOrgRequired(deleteWebhook('undefined', 'webhook-1'))
