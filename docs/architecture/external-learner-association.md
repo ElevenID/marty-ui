@@ -415,3 +415,9 @@ Database group orchestration now accepts only the platform database mode.
 Provider preflights, executable digests and same-run Canvas qualification
 proofs are retired. Streaming logs, completion waits, aggregate failure and
 closed-label generic timing remain. Flow and self-host use dedicated runners.
+
+Execution-obligation dispatch no longer registers deleted Canvas acceptance
+crates or provider PostgreSQL targets. The issuance library roster requires
+current platform application-authority and renewal tests, with an exact
+ignored-test owner set; retired readiness/worker test names no longer gate it.
+Broader historical source inventory branches remain pending cleanup.

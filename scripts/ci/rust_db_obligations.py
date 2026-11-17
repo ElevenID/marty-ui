@@ -53,39 +53,11 @@ SELFHOST_OWNER = "scripts/ci/run-selfhost-acceptance-contracts.sh"
 SELFHOST_FIXTURE_OWNER = (
     "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
 )
-RENEWAL_UNIT_PREFIX = "canvas_sync_worker::retry_handoff_tests::"
-RENEWAL_UNIT_CASES = frozenset(
-    RENEWAL_UNIT_PREFIX + name
-    for name in (
-        "retry_delay_owns_all_normalized_header_shapes_and_backoff_edges",
-        "retry_hint_reaches_the_actual_worker_failure_port",
-        "terminal_validation_errors_reach_actual_worker_dead_letter_port",
-        "terminal_processor_errors_reach_actual_worker_dead_letter_port",
-    )
-) | frozenset(
-    RENEWAL_UNIT_PREFIX + "renewal_tests::" + name
-    for name in (
-        "lease_error_then_success",
-        "lease_error_then_retry",
-        "lease_error_then_terminal",
-        "lease_error_then_deadline",
-        "lease_error_then_cancel",
-        "target_error_then_success",
-        "target_error_then_retry",
-        "target_error_then_terminal",
-        "target_error_then_deadline",
-        "target_error_then_cancel",
-        "process_error_then_success",
-        "process_error_then_retry",
-        "process_error_then_terminal",
-        "process_error_then_deadline",
-        "process_error_then_cancel",
-        "lease_error_survives_failed_completion",
-        "target_error_survives_failed_retry_persistence",
-        "process_error_survives_failed_deadline_persistence",
-        "actual_cycle_does_not_count_persisted_success_after_renewal_error",
-    )
-)
+LIBRARY_UNIT_REQUIRED_CASES = frozenset({
+    "credential_lifecycle::tests::application_signing_requires_current_platform_authority",
+    "credential_lifecycle::tests::renewal_revocation_preserves_the_bound_status_entry_contract",
+    "credential_lifecycle::tests::renewal_revocation_rejects_a_status_entry_from_another_profile",
+})
 LIBRARY_UNIT_IGNORED_OWNERS = {
     **{
         "credential_builder::tests::"
@@ -95,15 +67,6 @@ LIBRARY_UNIT_IGNORED_OWNERS = {
             "jwt_vc_preserves_open_badge_profile_and_reserved_id",
             "mdoc_ignores_request_controlled_certificate_chain",
             "data_integrity_uses_native_canonicalization_and_verifies_completion",
-        )
-    },
-    **{
-        "canvas_readiness_runtime::tests::"
-        + name: "scripts/probe_integration_secret_coordinated_restore.py"
-        for name in (
-            "live_challenges_prove_the_published_lti_and_kms_keys",
-            "live_challenges_reject_ambiguous_or_private_key_material_before_kms_use",
-            "kms_challenge_requires_the_active_method_in_both_did_relationships",
         )
     },
     **{
@@ -117,7 +80,7 @@ LIBRARY_UNIT_IGNORED_OWNERS = {
             "beta_batch_http_never_creates_a_missing_batch_row_through_single_submit",
         )
     },
-    "canvas_operation_http::tests::native_socket_case": "scripts/run_canvas_timeout_consumer_oracle.py",
+    "outbound_http::tests::native_socket_case": "scripts/run_canvas_timeout_consumer_oracle.py",
     "internal_application_diagnostics::tests::actual_tracing_event_child": (
         "internal_application_diagnostics::tests::actual_tracing_event_fields_are_stable_in_isolated_process"
     ),
@@ -362,26 +325,10 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         ("internal_application", "internal_application_postgres_contract", postgres),
     ):
         entries[label] = ("marty-issuance-service", target, (variable,))
-    canvas = {
-        "canvas_award_candidate",
-        "canvas_event_status",
-        "canvas_lti_deep_linking",
-        "canvas_lti_evidence",
-        "canvas_lti_login",
-        "canvas_lti_sync_enqueue",
-        "canvas_management",
-        "canvas_mirror",
-        "canvas_oauth",
-        "canvas_sync_worker",
-        "proof_nonce",
-    }
-    for prefix in canvas:
-        target = f"{prefix}_postgres_contract"
-        entries[target] = (
-            "marty-issuance-service",
-            target,
-            ("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL",),
-        )
+    entries["proof_nonce_postgres_contract"] = (
+        "marty-issuance-service", "proof_nonce_postgres_contract",
+        ("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL",),
+    )
     entries["flow_acceptance"] = (
         "marty-flow-acceptance",
         "flow_published_schema_contract",
@@ -405,33 +352,7 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
         ),
     )
-    entries["canvas_composition_acceptance"] = (
-        "marty-canvas-acceptance",
-        "canvas_published_schema_contract",
-        (
-            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
-            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
-            "MARTY_ISSUANCE_TEST_BINARY",
-            "MARTY_CANVAS_OPENBAO_URL",
-            "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
-            "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
-        ),
-    )
-    entries["canvas_worker_acceptance"] = (
-        "marty-canvas-worker-acceptance",
-        "canvas_published_worker_contract",
-        (
-            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
-            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
-            "MARTY_CANVAS_WORKER_TEST_BINARY",
-        ),
-    )
-    entries["renewal_unit"] = (
-        "marty-issuance-service",
-        "marty_issuance_service",
-        (),
-    )
-    entries["issuance_library_unit"] = entries["renewal_unit"]
+    entries["issuance_library_unit"] = ("marty-issuance-service", "marty_issuance_service", ())
     if name not in entries:
         raise ValueError("unknown_dispatch")
     package, target, variables = entries[name]
@@ -666,8 +587,8 @@ def verify_renewal_unit_roster(
     arguments: list[str], expected: set[str], ignored: set[str]
 ) -> None:
     if (
-        arguments != [RENEWAL_UNIT_PREFIX, "--test-threads=4"]
-        or expected != RENEWAL_UNIT_CASES
+        arguments != ["--test-threads=4"]
+        or expected != LIBRARY_UNIT_REQUIRED_CASES
         or ignored
     ):
         raise ValueError("renewal_unit_roster_drift")
@@ -678,7 +599,7 @@ def verify_library_unit_roster(
 ) -> None:
     if (
         arguments != ["--test-threads=4"]
-        or not RENEWAL_UNIT_CASES <= expected
+        or not LIBRARY_UNIT_REQUIRED_CASES <= expected
         or ignored != set(LIBRARY_UNIT_IGNORED_OWNERS)
         or expected & ignored
     ):
@@ -1443,7 +1364,7 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         fixture = (
             "rust/services/issuance/src/lib.rs"
             if library_unit
-            else "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs"
+            else "rust/services/issuance/src/lib.rs"
         )
     else:
         gate = "test-rust-services/contracts"
