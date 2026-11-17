@@ -55,15 +55,15 @@ def ps_json(value: object) -> str:
     [
         ([], True),
         ([runner("other", "self-hosted", "linux", "x64", "passport-beta-wsl2")], True),
-        ([runner("same", "self-hosted", "linux", "x64", "canvas-oss-wsl2")], False),
-        ([runner("dual", "canvas-oss-wsl2", "passport-beta-wsl2")], False),
+        ([runner("same", "self-hosted", "linux", "x64", "integration-tests-wsl2")], False),
+        ([runner("dual", "integration-tests-wsl2", "passport-beta-wsl2")], False),
     ],
 )
 def test_existing_runner_routing(existing: list[dict], expected_ok: bool) -> None:
     payload = ps_json({"total_count": len(existing), "runners": existing})
     body = (f"$response = '{payload}' | ConvertFrom-Json; "
             "$runners = @(Assert-CompleteRunnerInventory $response); "
-            "Assert-ExistingRunnerRouting $runners 'canvas-oss-wsl2'")
+            "Assert-ExistingRunnerRouting $runners 'integration-tests-wsl2'")
     result = run_policy(body)
     assert (result.returncode == 0) is expected_ok, result.stderr
 
@@ -82,7 +82,7 @@ def test_incomplete_runner_inventory_rejected() -> None:
     [
         (("self-hosted", "linux", "x64", "passport-beta-wsl2"), True),
         (("self-hosted", "linux", "x64"), False),
-        (("self-hosted", "linux", "x64", "passport-beta-wsl2", "canvas-oss-wsl2"), False),
+        (("self-hosted", "linux", "x64", "passport-beta-wsl2", "integration-tests-wsl2"), False),
     ],
 )
 def test_new_runner_routing(labels: tuple[str, ...], expected_ok: bool) -> None:
@@ -104,7 +104,7 @@ def test_physical_capacity_boundary_uses_the_data_disk_volume(tmp_path: Path, av
         "function Get-Volume { param([string]$FilePath) $global:measured=$FilePath; "
         f"[PSCustomObject]@{{SizeRemaining=[UInt64]{available}}} "
         "}; "
-        f"$result = Get-CanvasDockerBackingCapacity -DataDiskPath '{literal}'; "
+        f"$result = Get-DockerBackingCapacity -DataDiskPath '{literal}'; "
         "@{result=$result;measured=$global:measured} | ConvertTo-Json -Depth 4 -Compress"
     )
     result = run_policy(body, "runner-host-capacity-policy.ps1")
@@ -125,7 +125,7 @@ def test_unknown_or_ambiguous_physical_capacity_fails_closed(tmp_path: Path, vol
     disk = tmp_path / "controlled-data.vhdx"
     disk.write_bytes(b"Controlled policy fixture")
     body = (f"function Get-Volume {{ param([string]$FilePath) {volume_expression} }}; "
-            f"Get-CanvasDockerBackingCapacity -DataDiskPath '{str(disk).replace(chr(39), chr(39)*2)}'")
+            f"Get-DockerBackingCapacity -DataDiskPath '{str(disk).replace(chr(39), chr(39)*2)}'")
     result = run_policy(body, "runner-host-capacity-policy.ps1")
     assert result.returncode != 0
     assert "Cannot establish physical free space" in result.stderr
@@ -144,7 +144,7 @@ def test_prebuilt_runtime_capacity_uses_physical_image_bounded_reserve(tmp_path,
     literal = str(disk).replace("'", "''")
     body = ('function Get-Volume { param([string]$FilePath) '
             f'[PSCustomObject]@{{SizeRemaining=[UInt64]{available}}} }}; '
-            f"Get-CanvasDockerBackingCapacity -DataDiskPath '{literal}' -Mode PrebuiltRuntime "
+            f"Get-DockerBackingCapacity -DataDiskPath '{literal}' -Mode PrebuiltRuntime "
             f'-PrebuiltImageSizeBytes {image_size} | ConvertTo-Json -Compress')
     result = run_policy(body, 'runner-host-capacity-policy.ps1')
     assert (result.returncode == 0) is expected_ok, result.stderr
@@ -152,25 +152,3 @@ def test_prebuilt_runtime_capacity_uses_physical_image_bounded_reserve(tmp_path,
         proof = json.loads(result.stdout)
         assert proof['required_free_bytes'] == max(20 * 1024**3, 2 * image_size)
         assert proof['capacity_mode'] == 'PrebuiltRuntime'
-
-
-def test_low_backing_capacity_prevents_wsl_and_github_registration(tmp_path: Path) -> None:
-    disk = tmp_path / "controlled-data.vhdx"
-    disk.write_bytes(b"Controlled policy fixture")
-    wrapper = str(ROOT / "scripts/register-canvas-oss-runner.ps1").replace("'", "''")
-    body = (
-        f"$env:ProgramData='{str(tmp_path).replace(chr(39), chr(39)*2)}'; "
-        "$global:calls=@(); "
-        "function gh { if (($args -join ' ') -ne 'auth status') {throw 'UNEXPECTED_GITHUB_OPERATION'}; "
-        "$global:calls+='auth-status'; $global:LASTEXITCODE=0 }; "
-        "function wsl.exe {$global:calls+='wsl'; throw 'WSL_MUST_NOT_BE_REACHED'}; "
-        "function Get-Volume { param([string]$FilePath) [PSCustomObject]@{SizeRemaining=1GB} }; "
-        f"try {{ & '{wrapper}' -DockerDesktopDataDiskPath '{str(disk).replace(chr(39), chr(39)*2)}'; "
-        "throw 'EXPECTED_CAPACITY_REJECTION' } catch { "
-        "@{reason=$_.Exception.Message;calls=$global:calls} | ConvertTo-Json -Compress }"
-    )
-    result = run_policy(body)
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert "at least 80 GiB" in payload["reason"]
-    assert payload["calls"] == ["auth-status"]

@@ -1,4 +1,4 @@
-"""Record effective libtest obligations for DB, Canvas, Flow, and self-host runners.
+"""Record effective libtest obligations for DB, Flow, and self-host runners.
 
 Discovery uses the same executable and selection arguments as execution. libtest
 --list includes ignored tests by default, so a second ignored-only discovery is

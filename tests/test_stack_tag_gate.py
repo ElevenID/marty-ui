@@ -175,7 +175,7 @@ def test_required_workflow_uses_latest_attempt_and_still_rejects_pending() -> No
         ({"event": "pull_request"}, "missing"),
     ],
 )
-def test_full_canvas_qualification_must_be_successful_on_exact_main(
+def test_full_platform_qualification_must_be_successful_on_exact_main(
     updates: dict[str, object], message: str
 ) -> None:
     document = payload()
@@ -186,7 +186,7 @@ def test_full_canvas_qualification_must_be_successful_on_exact_main(
         stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
 
 
-def test_latest_full_canvas_qualification_controls_release_claim() -> None:
+def test_latest_full_platform_qualification_controls_release_claim() -> None:
     document = payload()
     workflow_runs = document["workflow_runs"]
     assert isinstance(workflow_runs, list)
@@ -256,7 +256,7 @@ def test_qualification_rejects_missing_or_ambiguous_execution_time(
         stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
 
 
-def test_full_canvas_qualification_policy_cannot_be_removed() -> None:
+def test_full_platform_qualification_policy_cannot_be_removed() -> None:
     policy = {key: value for key, value in POLICY.items() if key != "required_full_qualification"}
     with pytest.raises(stack_tag_gate.StackTagGateError, match="required_full_qualification"):
         stack_tag_gate.validate_workflow_runs(payload(), policy, COMMIT, 99)

@@ -11,8 +11,9 @@ function Assert-ExistingRunnerRouting {
     param([object[]]$Runners, [string]$PurposeLabel)
     foreach ($existing in $Runners) {
         $labels = @($existing.labels | ForEach-Object { ([string]$_.name).ToLowerInvariant() })
-        if ("canvas-oss-wsl2" -in $labels -and "passport-beta-wsl2" -in $labels) {
-            throw "Existing runner $($existing.name) advertises both protected purposes"
+        $purposeLabels = @($labels | Where-Object { $_ -like '*-wsl2' })
+        if ($purposeLabels.Count -gt 1) {
+            throw "Existing runner $($existing.name) advertises multiple protected purposes"
         }
         if ($PurposeLabel -in $labels) {
             throw "Existing runner $($existing.name) already advertises $PurposeLabel"

@@ -47,23 +47,6 @@ updates:
       semver-patch-days: 3
     open-pull-requests-limit: 3
 
-  - package-ecosystem: npm
-    directory: /tests/canvas-oss-contract
-    schedule:
-      interval: weekly
-      day: sunday
-      time: "07:00"
-      timezone: "America/Denver"
-    groups:
-      canvas-contract:
-        patterns: ["*"]
-    cooldown:
-      default-days: 7
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
-    open-pull-requests-limit: 3
-
   - package-ecosystem: pip
     directory: /
     schedule:
