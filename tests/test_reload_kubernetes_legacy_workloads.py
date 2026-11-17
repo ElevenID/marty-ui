@@ -150,7 +150,7 @@ def reload_flow(recovery_flow, monkeypatch, capsys):
             # Model slow bounded readiness calls for the timeout case. This
             # consumes the one real budget without thousands of synthetic
             # polling iterations over the growing private evidence inventory.
-            elapsed = min(timeout, 25) if item.reload_failure == "wait-timeout" and len(item.reload_patches) == 16 else 0.001
+            elapsed = min(timeout, 25) if item.reload_failure == "wait-timeout" and len(item.reload_patches) == 15 else 0.001
             item.clock.monotonic += elapsed
             item.clock.wall += elapsed
             if command[:2] == ("get", "namespace"):
@@ -233,7 +233,7 @@ def reload_flow(recovery_flow, monkeypatch, capsys):
         name = command[7]
         assert name in reload.WORKLOADS and "PRIVATE_" not in repr(command)
         index = len(item.reload_patches)
-        assert len(list(item.request.output.glob("deployment-before-*.json"))) == 16
+        assert len(list(item.request.output.glob("deployment-before-*.json"))) == 15
         assert len(list(item.request.output.glob("secret-after-*.json"))) == 34
         assert (item.request.output / f"patch-intent-{index:02}.json").exists()
         patch = json.loads(kwargs["input"])
@@ -290,7 +290,7 @@ def run(item):
 def test_early_preflight_only_reads_all_original_profiles_without_requiring_ready_pods(reload_flow, capsys):
     item = reload_flow
     result = reload.preflight_workloads(item.request.original, item.request.binding, item.transport)
-    assert result["status"] == "original-workload-profiles-admitted" and result["workloadCount"] == 16
+    assert result["status"] == "original-workload-profiles-admitted" and result["workloadCount"] == 15
     assert set(result["workloads"]) == set(reload.WORKLOADS)
     assert result["binding"] == item.bound and result["originalRuntime"] == item.request.original["release"]
     assert result["credentialsIssued"] is result["activation"] is result["readinessAssessed"] is False
@@ -322,7 +322,7 @@ def test_last_workload_profile_refusal_has_no_mutations_or_partial_admission(rel
         value["metadata"]["uid"] = item.deployments[reload.WORKLOADS[0]]["metadata"]["uid"]
     with pytest.raises(bootstrap.BootstrapError):
         reload.preflight_workloads(item.request.original, item.request.binding, item.transport)
-    assert len(item.io) == 16 and not item.reload_patches and not item.execs
+    assert len(item.io) == 15 and not item.reload_patches and not item.execs
     assert not item.request.output.exists()
 
 
@@ -344,7 +344,7 @@ def test_preflight_uses_one_global_observation_budget(reload_flow, monkeypatch):
 
 def test_successful_early_preflight_cannot_replace_final_live_reload_admission(reload_flow):
     item = reload_flow
-    assert reload.preflight_workloads(item.request.original, item.request.binding, item.transport)["workloadCount"] == 16
+    assert reload.preflight_workloads(item.request.original, item.request.binding, item.transport)["workloadCount"] == 15
     item.deployments[reload.WORKLOADS[-1]]["spec"]["replicas"] = 0
     with pytest.raises(bootstrap.BootstrapError, match="original owned single-replica"):
         run(item)
@@ -381,7 +381,7 @@ def test_fifth_restart_refreshes_controller_only_resource_version_without_retry(
     monkeypatch.setattr(item.transport, "kubectl", get)
     monkeypatch.setattr(reload.subprocess, "run", process)
     result = run(item)
-    assert changed and result["reloadCount"] == 16
+    assert changed and result["reloadCount"] == 15
     assert item.reload_patches == list(reload.WORKLOADS)
     before = json.loads((item.request.output / "deployment-before-04.json").read_bytes())
     dispatch = json.loads((item.request.output / "deployment-dispatch-04.json").read_bytes())
@@ -483,8 +483,8 @@ def test_closed_reload_preserves_configuration_and_proves_new_projected_bytes(re
         for value in deployments.values():
             value["spec"]["template"]["metadata"]["annotations"]["marty.11id.dev/buildRunId"] = annotation
     result = run(item)
-    assert item.reload_patches == list(reload.WORKLOADS) and len(item.execs) == 16
-    assert result["reloadCount"] == 16 and result["fullEnvironmentHealthAssessed"] is False
+    assert item.reload_patches == list(reload.WORKLOADS) and len(item.execs) == 15
+    assert result["reloadCount"] == 15 and result["fullEnvironmentHealthAssessed"] is False
     assert result["inMemoryProviderUseProved"] is False
     assert (item.request.output / "reload-complete.json").exists()
     assert json.loads((item.request.output / "reload-complete.json").read_bytes())["evidenceLimits"] == {
@@ -500,7 +500,7 @@ def test_closed_reload_preserves_configuration_and_proves_new_projected_bytes(re
     assert {"postgres", "redis", "openbao", "applicant", "trust-profile", "device-registration", "ui"}.isdisjoint(item.reload_patches)
     assert any("OPENBAO_SERVICE_TOKEN" in command for command in item.execs)
     assert all(timeout <= 600 for _, timeout, _ in item.io)
-    assert item.guard_calls > 16
+    assert item.guard_calls > 15
     assert capsys.readouterr().out == ""
     assert "PRIVATE_" not in repr(item.execs)
     sealed = result["privateEvidence"]
@@ -719,7 +719,7 @@ def test_global_wait_budget_and_concurrent_rollout_refuse_completion(reload_flow
     expected = "reload budget expired" if failure == "wait-timeout" else "Deployment spec or patched template changed concurrently"
     with pytest.raises(bootstrap.BootstrapError, match=expected):
         run(item)
-    assert len(item.reload_patches) == 16 and not item.execs
+    assert len(item.reload_patches) == 15 and not item.execs
     assert item.clock.monotonic - started <= 601
     if failure == "wait-timeout":
         assert item.clock.monotonic - started >= 599
@@ -739,7 +739,7 @@ def test_new_pod_ownership_and_projection_injection_are_refused(reload_flow, tam
     item.pod_tamper = tamper
     with pytest.raises(bootstrap.BootstrapError):
         run(item)
-    assert len(item.reload_patches) == 16 and not item.execs
+    assert len(item.reload_patches) == 15 and not item.execs
 
 
 @pytest.mark.parametrize("failure", ["file-hash", "env-hash", "missing-tools", "pod-replaced-during-exec", "container-restarted-during-exec",
@@ -843,7 +843,7 @@ def test_written_projection_evidence_is_rechecked_after_the_next_observation(rel
     with pytest.raises(bootstrap.BootstrapError):
         run(item)
     assert state.mutated and state.calls_after == 0
-    assert len(item.execs) == 1 and len(item.reload_patches) == state.patches_at_mutation == 16
+    assert len(item.execs) == 1 and len(item.reload_patches) == state.patches_at_mutation == 15
     assert not (item.request.output / "reload-complete.json").exists()
 
 
@@ -906,7 +906,7 @@ def test_completion_does_not_seal_changed_prior_or_completion_bytes(reload_flow,
     with pytest.raises(bootstrap.BootstrapError):
         run(item)
     assert changed == [record]
-    assert len(item.reload_patches) == len(item.execs) == 16
+    assert len(item.reload_patches) == len(item.execs) == 15
 
 
 def test_adoption_readback_reuses_owned_profiles_and_never_restarts_workloads(reload_flow, monkeypatch):
@@ -970,7 +970,7 @@ def test_adoption_readback_reuses_owned_profiles_and_never_restarts_workloads(re
                     coordinator.delivery(verification, intent, item.request.original, legacy, item.transport, lambda: None)
                     receipt = json.loads((verification / "delivery.json").read_bytes())
                     assert receipt["schema"] == adoption.DELIVERY_SCHEMA
-                    assert receipt["secretCount"] == 34 and receipt["workloadCount"] == 16
+                    assert receipt["secretCount"] == 34 and receipt["workloadCount"] == 15
                     assert receipt["credentialDeliveryVerified"] is True and receipt["credentialConsumptionVerified"] is False
                     assert set(receipt["workloads"]) == set(reload.WORKLOADS)
                     assert len(receipt["observationHashes"]) > 100
@@ -982,3 +982,26 @@ def test_adoption_readback_reuses_owned_profiles_and_never_restarts_workloads(re
             error.add_note("adoption readback case: " + label)
             raise
     assert checked_cases == ["valid-before", "foreign-owner", "namespace", "secret", "projection", "expired", "valid-after"]
+
+
+def test_reload_inventory_is_the_retained_platform_projection():
+    assert reload.WORKLOADS == (
+        "auth", "organization", "credential-template", "gateway", "verification", "notification",
+        "compliance-profile", "presentation-policy", "deployment-profile", "flow", "revocation-profile",
+        "event-stream", "issuance-native", "signing-keys", "keycloak",
+    )
+    assert "canvas-sync-worker" not in reload.WORKLOADS
+
+
+@pytest.mark.parametrize("count,status", [
+    (16, "platform-ready-pods-with-matching-projections"),
+    (15, "sixteen-ready-pods-with-matching-projections"),
+    (16, "sixteen-ready-pods-with-matching-projections"),
+])
+def test_retired_reload_summary_refuses_before_private_evidence_access(tmp_path, count, status):
+    result = {"schema": reload.SCHEMA, "status": status, "reloadCount": count,
+              "privateEvidenceWritten": True, "privateEvidence": {},
+              "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False}
+    with pytest.raises(bootstrap.BootstrapError, match="returned completion summary differs"):
+        reload.verify_completed_evidence(tmp_path / "not-created", result, {}, "a" * 64)
+    assert not (tmp_path / "not-created").exists()

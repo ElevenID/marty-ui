@@ -20,7 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from test_inspect_kubernetes_legacy_credentials import (
-    flow, archive, ROOT_TOKEN, RECOVERY_KEY, KUBECONFIG_KEY, POD_UID,
+    flow, archive, ROOT_TOKEN, RECOVERY_KEY, KUBECONFIG_KEY, POD_UID, LEGACY_CATALOG, LEGACY_TOKEN_FILES,
 )
 import bootstrap_kubernetes_openbao as bootstrap
 from test_bootstrap_kubernetes_openbao import assert_private_directory_command, capture_private_directory_commands
@@ -52,9 +52,9 @@ def recovery_flow(flow, monkeypatch):
     item.export_calls = []
     item.plan_bytes = None
     item.replacements = (set(bootstrap.SELFHOST_TLS_FILES) - {"workload_identity_ca_cert"}
-        | bootstrap.KEYCLOAK_FILES | set(bootstrap.TOKEN_FILES.values()) - {"openbao_bootstrap_token"})
+        | bootstrap.KEYCLOAK_FILES | set(LEGACY_TOKEN_FILES.values()) - {"openbao_bootstrap_token"})
     assert len(item.replacements) == 51 and item.replacements <= set(item.snapshot)
-    catalog = json.loads((bootstrap.ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())
+    catalog = deepcopy(LEGACY_CATALOG)
     item.mappings, item.secrets = {}, {}
     for secret in catalog["secrets"]:
         fields = {key: field["env"].lower() for key, field in secret["fields"].items()
@@ -381,9 +381,9 @@ def sealed_reload_fixture(request):
         "binding": request.binding, "privatePlanSha256": request.qualified_plan_sha256, "patches": patches}), reload.LIST_LIMIT)
     private_evidence = evidence.complete({"schema": reload.SCHEMA, "binding": request.binding,
         "status": "new-ready-pods-with-matching-projected-credentials",
-        "privatePlanSha256": request.qualified_plan_sha256, "reloadCount": 16,
+        "privatePlanSha256": request.qualified_plan_sha256, "reloadCount": len(reload.WORKLOADS),
         "inMemoryProviderUseProved": False, "fullEnvironmentHealthAssessed": False})
-    return {"schema": reload.SCHEMA, "status": "sixteen-ready-pods-with-matching-projections", "reloadCount": 16,
+    return {"schema": reload.SCHEMA, "status": "platform-ready-pods-with-matching-projections", "reloadCount": len(reload.WORKLOADS),
             "privateEvidenceWritten": True, "privateEvidence": private_evidence,
             "fullEnvironmentHealthAssessed": False, "inMemoryProviderUseProved": False}
 
@@ -437,13 +437,13 @@ def test_explicit_reload_receives_verified_postimages_after_durable_credential_c
     assert preflight["credentialsIssued"] is False and preflight["readinessAssessed"] is False
     assert len(calls) == 1
     combined = json.loads((item.args.operation_dir / "recovery-reload-complete.json").read_bytes())
-    assert combined["reload"]["reloadCount"] == 16 and combined["fullEnvironmentHealthAssessed"] is False
+    assert combined["reload"]["reloadCount"] == 15 and combined["fullEnvironmentHealthAssessed"] is False
     assert combined["credentialCompletionSha256"] == recovery.sha256((item.args.operation_dir / "recovery-complete.json").read_bytes())
     evidence = combined["reload"]["privateEvidence"]
     assert evidence["completionSha256"] == recovery.sha256((item.args.operation_dir / "reload/reload-complete.json").read_bytes())
     reload.verify_completed_evidence(item.args.operation_dir / "reload", combined["reload"], item.bound,
                                      recovery.sha256(item.plan_bytes))
-    assert "16 new Ready Pods" in capsys.readouterr().out
+    assert "15 new Ready Pods" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("mutation", ["proof", "missing-proof", "extra-record", "proof-mode", "completion", "directory-mode"])
@@ -492,7 +492,7 @@ def test_post_return_journal_drift_prevents_the_callers_combined_completion(
     assert (item.args.operation_dir / "recovery-complete.json").exists()
     stopped = json.loads((item.args.operation_dir / "recovery-reload-stopped.json").read_bytes())
     assert stopped["credentialActivationComplete"] is True and stopped["workloadReloadCompletionAccepted"] is False
-    assert stopped["automaticReplay"] is False and "16 new Ready Pods" not in capsys.readouterr().out
+    assert stopped["automaticReplay"] is False and "15 new Ready Pods" not in capsys.readouterr().out
 
 
 def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(
@@ -516,7 +516,7 @@ def test_combined_receipt_write_race_preserves_evidence_and_refuses_success(
     assert (item.args.operation_dir / "recovery-reload-stopped.json").exists()
     assert (item.args.operation_dir / "recovery-reload-complete.json").exists()
     assert (item.args.operation_dir / "recovery-complete.json").exists()
-    assert "16 new Ready Pods" not in capsys.readouterr().out
+    assert "15 new Ready Pods" not in capsys.readouterr().out
 
 
 def test_reload_failure_keeps_the_completed_credential_receipt_without_claiming_full_recovery(

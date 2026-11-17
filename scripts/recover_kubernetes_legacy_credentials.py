@@ -704,7 +704,7 @@ def recover_locked(args: argparse.Namespace) -> None:
             print("Verified 34 existing Secret updates; workload reload is incomplete. "
                   "Preserve private evidence; do not replay the attempt.", file=sys.stderr)
             raise
-        print("Verified 34 existing Secret updates and 16 new Ready Pods with matching credential projections. "
+        print(f"Verified 34 existing Secret updates and {result['reloadCount']} new Ready Pods with matching credential projections. "
               "Full-environment health and end-to-end checks remain separate.")
     elif args.activate_existing_secrets:
         print("Verified 34 existing Secret updates. Private recovery evidence is retained; workload restart remains a separate step.")
@@ -739,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--stage-only", action="store_true")
     mode.add_argument("--activate-existing-secrets", action="store_true")
     parser.add_argument("--reload-owned-workloads", action="store_true",
-                        help="after complete Secret activation, reload only the 16 original credential consumers")
+                        help="after complete Secret activation, reload only retained platform credential consumers")
     parser.add_argument("--previous-recovery-dir", type=Path, action="append", default=[],
                         help="completed prior activation directory, repeated in original-to-current order")
     parser.add_argument("--previous-recovery-assets", type=Path, action="append", default=[],

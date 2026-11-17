@@ -103,3 +103,11 @@ deletes their receipts, refs, source exports or caches.
 TODO (platform build owner): provide a fresh current-source all-service profile
 if one is needed. The current provider-neutral CI image recipe remains the
 active image build path. A replacement historical build is not a split gate.
+
+
+Kubernetes credential reload and adoption use the shared inventory of fifteen
+retained platform consumers. They do not restart the retired connector worker.
+Historical native inspection still binds its original signed credential inventory;
+that evidence is not a current workload roster. New reload completion receipts
+use platform status and the exact retained count; old sixteen-workload receipts
+cannot authorize a current completion. Full-environment health remains separate.
