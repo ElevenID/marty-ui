@@ -1554,7 +1554,7 @@ impl RenewalRepository for PostgresCredentialRepository {
             .transpose()
             .map_err(|_| RenewalRepositoryError::Unavailable)?;
         if let Some(bound) = bound {
-            bind_canvas_renewal_application(&mut database, &bound, source, application_id).await?;
+            bind_renewal_application(&mut database, &bound, source, application_id).await?;
             database
                 .commit()
                 .await
@@ -1578,10 +1578,8 @@ impl RenewalRepository for PostgresCredentialRepository {
     }
 }
 
-/// Only actual Canvas-marked applications need their approved current
-/// transaction moved. Generic applications and absent historical IDs retain
-/// existing behavior. Candidate links and this association commit together.
-async fn bind_canvas_renewal_application(
+/// Advance canonical application authority atomically with renewal reservation.
+async fn bind_renewal_application(
     database: &mut Transaction<'_, Postgres>,
     candidate: &CredentialTransaction,
     source: &RenewalSource,
@@ -1590,6 +1588,9 @@ async fn bind_canvas_renewal_application(
     let Some(application_id) = application_id else {
         return Ok(());
     };
+    if application_id.trim().is_empty() {
+        return Err(RenewalRepositoryError::BindingConflict);
+    }
     let application: Option<Value> = sqlx::query_scalar(
         "SELECT to_jsonb(app) FROM issuance_service.applications app WHERE id=$1 FOR UPDATE",
     )
@@ -1598,13 +1599,10 @@ async fn bind_canvas_renewal_application(
     .await
     .map_err(|_| RenewalRepositoryError::Unavailable)?;
     let Some(application) = application else {
-        return Ok(());
+        return Err(RenewalRepositoryError::BindingConflict);
     };
-    if !application["integration_context"]["canvas"]
-        .as_object()
-        .is_some_and(crate::canvas_issuance_guard::has_canvas_marker)
-    {
-        return Ok(());
+    if !supported_application_delivery_context(&application["integration_context"]) {
+        return Err(RenewalRepositoryError::BindingConflict);
     }
     let source_bound: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM issuance_service.issued_credentials source
@@ -1645,8 +1643,7 @@ async fn bind_canvas_renewal_application(
     if current == Some(candidate.id.as_str()) {
         return Ok(());
     }
-    // Do not clear the source credential or award-candidate claim. Their current
-    // pointers advance only with successful credential finalization.
+    // Advance the credential pointer only with successful finalization.
     let updated = sqlx::query(
         "UPDATE issuance_service.applications SET issuance_transaction_id=$3
          WHERE id=$1 AND organization_id=$2 AND issuance_transaction_id=$4
@@ -2379,6 +2376,34 @@ mod tests {
             ("x\0y", "00d4e6d1-f5ab-5990-a94e-ca70f71d713a"),
         ] {
             assert_eq!(authorization_transaction_id(session), expected);
+        }
+    }
+}
+
+fn supported_application_delivery_context(context: &Value) -> bool {
+    context.as_object().is_some_and(|context| {
+        context
+            .keys()
+            .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+    })
+}
+#[cfg(test)]
+mod application_context_tests {
+    use super::supported_application_delivery_context;
+    use serde_json::json;
+    #[test]
+    fn only_platform_delivery_context_is_supported() {
+        assert!(supported_application_delivery_context(&json!({})));
+        assert!(supported_application_delivery_context(
+            &json!({"delivery_mode":"wallet_only"})
+        ));
+        for context in [
+            json!(null),
+            json!([]),
+            json!({"canvas":{}}),
+            json!({"provider":{}}),
+        ] {
+            assert!(!supported_application_delivery_context(&context));
         }
     }
 }

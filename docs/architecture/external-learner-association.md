@@ -327,3 +327,10 @@ foreign-tenant application bindings fail closed. Renewal lineage and the
 current credential fence remain enforced. Finalization does not query or
 update Canvas award candidates; provider claim projection belongs outside
 Core through public contracts.
+
+Renewal reservation advances canonical application transaction authority for
+supported ordinary applications. Explicit blank/missing bindings and legacy
+provider context are rejected. The source credential lineage, approved
+application state, tenant, current transaction and current credential fences
+are checked under the row lock before the binding compare-and-swap. No Canvas
+marker or platform registration participates in renewal authority.
