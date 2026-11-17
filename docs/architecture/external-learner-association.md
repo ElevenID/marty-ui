@@ -421,3 +421,9 @@ crates or provider PostgreSQL targets. The issuance library roster requires
 current platform application-authority and renewal tests, with an exact
 ignored-test owner set; retired readiness/worker test names no longer gate it.
 Broader historical source inventory branches remain pending cleanup.
+
+The orphaned published Canvas qualification runner and unreachable provider
+branches in execution evidence are retired. Flow and self-host evidence use
+their own lane ownership. Mixed execution-contract tests and historical source
+input inventories are not yet reconciled; their current failures remain an
+integration blocker and must not be treated as passing qualification.
