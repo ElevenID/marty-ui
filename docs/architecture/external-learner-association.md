@@ -319,3 +319,11 @@ provide origin validation, DNS pinning, verified TLS and per-operation
 budgets. They do not own provider configuration, application policy or
 credential authority. Remaining provider adapters consume these same
 platform primitives while their removal proceeds.
+
+Credential finalization projects the issued credential onto the canonical
+application under a row lock, requiring the approved current transaction and
+supported delivery-only integration context. Explicit missing, blank or
+foreign-tenant application bindings fail closed. Renewal lineage and the
+current credential fence remain enforced. Finalization does not query or
+update Canvas award candidates; provider claim projection belongs outside
+Core through public contracts.

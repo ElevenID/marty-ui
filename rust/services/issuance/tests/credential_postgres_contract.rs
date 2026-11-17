@@ -767,6 +767,50 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
             0
         );
     }
+    assert!(matches!(
+        repository
+            .finalize(&claimed, &issued, "notification-contract")
+            .await,
+        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE transaction_id=$1"
+        )
+        .bind(&claimed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::query("UPDATE issuance_service.applications SET organization_id='other-tenant' WHERE id='application-a'")
+        .execute(&pool).await.unwrap();
+    assert!(matches!(
+        repository
+            .finalize(&claimed, &issued, "notification-contract")
+            .await,
+        Err(CredentialIssuanceError::ApplicationEligibilityDenied)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE transaction_id=$1"
+        )
+        .bind(&claimed.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+    sqlx::query(
+        "UPDATE issuance_service.applications SET organization_id='org-a' WHERE id='application-a'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Switch this disposable fixture to an ordinary application to exercise the
+    // independent canonical projection. This is not a production migration.
+    sqlx::query("UPDATE issuance_service.applications SET integration_context='{}'::jsonb WHERE id='application-a'")
+        .execute(&pool).await.unwrap();
     repository
         .finalize(&claimed, &issued, "notification-contract")
         .await
@@ -961,13 +1005,16 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(candidate.try_get::<String, _>("state").unwrap(), "claimed");
+    assert_eq!(
+        candidate.try_get::<String, _>("state").unwrap(),
+        "pending_claim"
+    );
     assert_eq!(
         candidate
             .try_get::<Option<String>, _>("claimed_credential_id")
             .unwrap()
             .as_deref(),
-        Some(credential_id)
+        None
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
