@@ -1304,6 +1304,7 @@ async fn verify_sd_jwt(
 
     let bound = context.nonce.is_some() || context.audience.is_some();
     Ok(CredentialVerificationEvidence {
+        native_external_status: status.checked_at_epoch_seconds.map(|_| status.clone()),
         status,
         external_status_valid_until_epoch_seconds,
         verified: true,
