@@ -137,7 +137,7 @@ def rendered_additions(templates, values):
     return rendered
 
 
-# Observation ingress remains explicitly disabled in unqualified deployment profiles.
+# Observation ingress and application ownership remain disabled in unqualified profiles.
 UNFORWARDED = set(
     """
 APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
@@ -153,6 +153,7 @@ MARTY_RELEASE_VERSION MARTY_UI_SHA TOKEN_RATE_LIMIT TOKEN_RATE_WINDOW
 VCDM_RELATED_RESOURCE_MAX_BYTES VCDM_RELATED_RESOURCE_TIMEOUT_SECONDS
 VCDM_RELATED_RESOURCE_URLS
 MARTY_EXTERNAL_OBSERVATIONS_ENABLED
+MARTY_APPLICATION_OWNERSHIP_ENABLED
 ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL
 """.split()
 )

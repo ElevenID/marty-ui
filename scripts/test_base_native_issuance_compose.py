@@ -72,7 +72,7 @@ CANVAS_LTI_TOOL_PUBLIC_JWKS
 )
 # Exhaustive source-input inventory exclusions, each explained in the companion
 # document. "Unforwarded" is NOT "unsupported" or "native-only".
-# Observation ingress remains explicitly disabled in unqualified deployment profiles.
+# Observation ingress and application ownership remain disabled in unqualified profiles.
 UNFORWARDED_LEGACY = frozenset(
     """
 APP_ENV CANVAS_ADMIN_API_TOKEN CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK
@@ -85,6 +85,7 @@ TOKEN_RATE_WINDOW VCDM_RELATED_RESOURCE_MAX_BYTES VCDM_RELATED_RESOURCE_TIMEOUT_
 INTEGRATION_SECRET_MASTER_KEY INTEGRATION_SECRET_MASTER_KEY_ENV
 INTEGRATION_SECRET_MASTER_KEY_FILE
 MARTY_EXTERNAL_OBSERVATIONS_ENABLED
+MARTY_APPLICATION_OWNERSHIP_ENABLED
 ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL
 """.split()
 )
