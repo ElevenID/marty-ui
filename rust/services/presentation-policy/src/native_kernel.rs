@@ -444,7 +444,7 @@ impl CredentialVerificationKernel for RustCredentialKernel {
             DetectedCredentialFormat::W3cVcdmDi => verify_data_integrity(context).await,
             DetectedCredentialFormat::SdJwt => verify_sd_jwt(context).await,
             DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context).await,
-            DetectedCredentialFormat::Mdoc => verify_mdoc(context),
+            DetectedCredentialFormat::Mdoc => verify_mdoc(context).await,
             DetectedCredentialFormat::Unknown => {
                 Ok(rejected("Unsupported or malformed credential presentation"))
             }
@@ -452,7 +452,7 @@ impl CredentialVerificationKernel for RustCredentialKernel {
     }
 }
 
-fn verify_mdoc(
+async fn verify_mdoc(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let mdoc_bytes = match decode_mdoc_token(token_string(&context.token)?) {
@@ -493,6 +493,9 @@ fn verify_mdoc(
         ));
     }
 
+    if !crate::mdoc_external_status::bounded_presentation(&mdoc_bytes, &session_transcript) {
+        return Ok(rejected_mdoc("mDoc presentation exceeds supported bounds"));
+    }
     let result =
         verify_mdoc_presentation(&mdoc_bytes, &session_transcript, &roots, &pinned_issuers);
     let error_kind = classify_mdoc_error(result.error.as_deref());
@@ -511,7 +514,28 @@ fn verify_mdoc(
         if result.device_authentication_valid { "True" } else { "False" },
         error_kind,
     );
-    project_mdoc_result(&mdoc_bytes, result, context)
+    let mut evidence = project_mdoc_result(&mdoc_bytes, result, context)?;
+    if evidence.verified {
+        let declared = crate::mdoc_external_status::declares_status(&mdoc_bytes);
+        let (proof, status, until) = match crate::mdoc_external_status::resolve(
+            &mdoc_bytes,
+            &session_transcript,
+            &roots,
+            &pinned_issuers,
+            declared,
+            context.external_status_fixture_transport.as_ref(),
+        )
+        .await
+        {
+            Ok(verified) => verified,
+            Err(()) => return Ok(rejected_mdoc("mDoc proof expired during status evaluation")),
+        };
+        evidence.authenticated_mdoc_presentation = Some(proof);
+        evidence.native_external_status = declared.then(|| status.clone());
+        evidence.external_status_valid_until_epoch_seconds = until;
+        evidence.status = status;
+    }
+    Ok(evidence)
 }
 
 fn project_mdoc_result(

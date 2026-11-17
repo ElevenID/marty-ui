@@ -108,16 +108,37 @@ fn reference(
 }
 
 async fn fetch(uri: &str, fixture: Option<&ExternalStatusFixtureTransport>) -> Result<String, ()> {
+    String::from_utf8(fetch_bytes(uri, &["application/statuslist+jwt"], fixture).await?)
+        .map_err(|_| ())
+}
+
+pub(crate) async fn fetch_bytes(
+    uri: &str,
+    content_types: &[&str],
+    fixture: Option<&ExternalStatusFixtureTransport>,
+) -> Result<Vec<u8>, ()> {
     // The timeout includes DNS resolution, connection, TLS and streamed body.
     tokio::time::timeout(TIMEOUT, async {
+        if uri.len() > 4096 {
+            return Err(());
+        }
         let url = Url::parse(uri).map_err(|_| ())?;
+        let fixture = fixture.filter(|fixture| fixture.matches(&url));
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || (url.port().is_some() && fixture.is_none())
+        {
+            return Err(());
+        }
         let host = url.host_str().ok_or(())?;
         let addresses: Vec<_> =
             tokio::net::lookup_host((host, url.port_or_known_default().ok_or(())?))
                 .await
                 .map_err(|_| ())?
                 .collect();
-        let fixture = fixture.filter(|fixture| fixture.matches(&url));
         let mut policy = OutboundDestinationPolicy::public_https();
         let mut validation_url = url.clone();
         if fixture.is_some() {
@@ -144,7 +165,7 @@ async fn fetch(uri: &str, fixture: Option<&ExternalStatusFixtureTransport>) -> R
         // No workload token, cookies, service credentials or caller headers.
         let mut response = client
             .get(url)
-            .header("Accept", "application/statuslist+jwt")
+            .header("Accept", content_types.first().copied().ok_or(())?)
             .send()
             .await
             .map_err(|_| ())?;
@@ -154,7 +175,7 @@ async fn fetch(uri: &str, fixture: Option<&ExternalStatusFixtureTransport>) -> R
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.split(';').next())
-                .is_none_or(|v| v.trim() != "application/statuslist+jwt")
+                .is_none_or(|v| !content_types.contains(&v.trim()))
             || response
                 .content_length()
                 .is_some_and(|n| n > MAX_TOKEN_BYTES as u64)
@@ -172,7 +193,7 @@ async fn fetch(uri: &str, fixture: Option<&ExternalStatusFixtureTransport>) -> R
             }
             body.extend_from_slice(&chunk);
         }
-        String::from_utf8(body).map_err(|_| ())
+        Ok(body)
     })
     .await
     .map_err(|_| ())?

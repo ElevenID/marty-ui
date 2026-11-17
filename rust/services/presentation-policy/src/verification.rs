@@ -210,6 +210,9 @@ pub struct CredentialVerificationContext {
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CredentialVerificationEvidence {
+    /// Complete native mdoc proof retained across owner/policy awaits.
+    #[serde(skip)]
+    pub authenticated_mdoc_presentation: Option<crate::AuthenticatedMdocPresentationEvidence>,
     #[serde(skip)]
     pub authenticated_profiled_jwt_vc: Option<crate::AuthenticatedProfiledJwtVcEvidence>,
     /// Native query/subject/key evidence has no JSON promotion path.
@@ -698,6 +701,7 @@ impl VerifiedFactsOrchestrator {
             evidence.authenticated_sd_jwt_query = None;
             evidence.authenticated_sd_jwt_presentation = None;
             evidence.authenticated_profiled_jwt_vc = None;
+            evidence.authenticated_mdoc_presentation = None;
         }
 
         // Keep independent authorities separate until every lookup has completed.
@@ -817,6 +821,22 @@ impl VerifiedFactsOrchestrator {
             self.load_configured_authorization(policy, trust_profile.as_ref())
                 .await?
         };
+        // A native mdoc's trust roots are owner state, not a timeless key hint.
+        // Refresh after status/policy awaits and reject any snapshot change.
+        if evidence.authenticated_mdoc_presentation.is_some() {
+            let frozen = trust_profile
+                .as_ref()
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            let current = self
+                .trust
+                .load_profile(frozen.id, policy.organization_id)
+                .await?;
+            if current != *frozen {
+                return Err(PresentationVerificationError::Failed(
+                    "PRESENTATION_POLICY.MDOC_AUTHORITY_CHANGED".into(),
+                ));
+            }
+        }
         // Include every metadata/policy await in the native proof's validity
         // window; resolution must not extend the credential or holder proof.
         let evaluation_time = (self.clock)();
@@ -841,6 +861,29 @@ impl VerifiedFactsOrchestrator {
                 ));
             }
             evidence.status = combine_status_observations(external, evidence.status);
+        }
+        if let Some(proof) = evidence.authenticated_mdoc_presentation.as_ref() {
+            proof.revalidate_at(evaluation_time)?;
+            let frozen = trust_profile
+                .as_ref()
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            let upper = evaluation_time
+                .checked_add(1)
+                .and_then(|now| i64::try_from(now).ok())
+                .and_then(|now| chrono::DateTime::from_timestamp(now, 0))
+                .ok_or(PresentationVerificationError::Unavailable)?;
+            if !crate::control_plane::evaluate_issuer_document(
+                &frozen.document,
+                &issuer_id,
+                format,
+                upper,
+            )
+            .verified
+            {
+                return Err(PresentationVerificationError::Failed(
+                    "PRESENTATION_POLICY.MDOC_AUTHORITY_NOT_CURRENT".into(),
+                ));
+            }
         }
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
             query.revalidate_at(evaluation_time)?;

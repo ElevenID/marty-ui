@@ -132,7 +132,7 @@ impl CredentialStatusResolver for Status {
     }
 }
 
-fn policy() -> PresentationPolicy {
+pub(crate) fn policy() -> PresentationPolicy {
     let now = chrono::DateTime::from_timestamp(1_787_240_000, 0).unwrap();
     PresentationPolicy {
         prerequisite_evidence_profile: None,
@@ -4728,6 +4728,7 @@ mod real_mdoc_dcql_projection {
                 id,
                 organization_id,
                 document: json!({
+                    "status": "ACTIVE",
                     "allowed_algorithms": ["ES256"],
                     "trust_sources": [{"source_type":"PINNED_ISSUER", "certificate_pem":self.certificate}],
                 }),

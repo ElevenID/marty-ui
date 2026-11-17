@@ -44,13 +44,13 @@ httpdate = "1"
 log = "0.4"
 num-bigint = "0.4"
 num-traits = "0.2"
-marty-crypto = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531", default-features = false, features = ["kms-only", "ecdsa-verification", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531", default-features = false, features = ["kms-only"] }
-marty-iso18013 = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531", default-features = false }
-marty-oid4vci = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531", default-features = false, features = ["kms-only"] }
-marty-verification = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531", default-features = false, features = ["kms-only"] }
-marty-canonical-digest = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531" }
-marty-status = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531" }
+marty-crypto = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e", default-features = false, features = ["kms-only", "ecdsa-verification", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e", default-features = false, features = ["kms-only"] }
+marty-iso18013 = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e", default-features = false }
+marty-oid4vci = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e", default-features = false, features = ["kms-only"] }
+marty-verification = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e", default-features = false, features = ["kms-only"] }
+marty-canonical-digest = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e" }
+marty-status = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "67e6121f233d3edbb07a35b9b3be2ae7e1462821" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "67e6121f233d3edbb07a35b9b3be2ae7e1462821", features = ["aws-kms"] }
 mmf-aws-kms = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "67e6121f233d3edbb07a35b9b3be2ae7e1462821", features = ["sdk"] }
@@ -114,8 +114,8 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531" }
-elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "2cd3126fd715e6df6c8afe3b302dd5f0364fc531" }
+bls12_381_plus = { git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e" }
+elliptic-curve = { git = "https://github.com/ElevenID/marty-core", rev = "0c8fd065e82f37ec93c0dab46f8d74dab60b877e" }
 # Shared upstream arithmetic with verification-only module gates; see its patch notes.
 ecdsa = { git = "https://github.com/ElevenID/ssi-elevenid", rev = "8b546ef5dbcd6e806ec1c26a0c05296515798429" }
 # KMS-only SSI fork; keep all selected SSI and DID crates on one revision.
