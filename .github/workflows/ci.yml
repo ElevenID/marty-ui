@@ -861,6 +861,13 @@ jobs:
         if: vars.PRIVATE_FORKS_ENABLED != 'true' && (matrix.lane == 'flow' || matrix.lane == 'selfhost')
         continue-on-error: true
         run: bash scripts/ci/install-bookworm-sccache.sh
+      - name: Require Kubernetes deployment contract executables
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash
+          command -v envsubst
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash

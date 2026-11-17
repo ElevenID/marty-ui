@@ -454,11 +454,6 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: AUTH_SERVICE_INTERNAL_URL
-            - name: ISSUANCE_NATIVE_SERVICE_URL
-              valueFrom:
-                configMapKeyRef:
-                  name: marty-config
-                  key: ISSUANCE_NATIVE_SERVICE_URL
           volumeMounts:
             - name: auth-server-tls
               mountPath: /var/run/secrets/marty/auth-server-tls

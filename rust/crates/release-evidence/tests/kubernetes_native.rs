@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-const CANVAS_CREDENTIALS_PUBLICATION_CONTROLS: [(&str, &str); 5] = [
+const RETIRED_CONNECTOR_PUBLICATION_CONTROLS: [(&str, &str); 5] = [
     (
         "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
         "https://credentials.example/assertions/{assertion_id}",
@@ -118,8 +118,6 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                 "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
                 "credential",
             ),
-            ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
-            ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
             ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
         ] {
             assert_eq!(
@@ -208,7 +206,7 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     entries.pop().unwrap(),
                     json!({"name":"DIDCOMM_DELIVERY_OWNER","value":"native"})
                 );
-            } else if ["auth", "applicant", "presentation-policy"]
+            } else if ["applicant", "presentation-policy"]
                 .contains(&value["metadata"]["name"].as_str().unwrap())
             {
                 let entry = owner_mut(value)["env"]
@@ -251,6 +249,20 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
 #[test]
 fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() {
     let (baseline, template, ready, values) = fixtures();
+    assert!(!env(&baseline[index(&baseline, "Deployment", "auth")])
+        .contains_key("ISSUANCE_NATIVE_SERVICE_URL"));
+    for key in ["ISSUANCE_NATIVE_SERVICE_URL", "ISSUANCE_SERVICE_URL"] {
+        let mut mutated = baseline.clone();
+        let auth = index(&mutated, "Deployment", "auth");
+        owner_mut(&mut mutated[auth])["env"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name":key,"value":"http://issuance-native:8005"}));
+        assert_eq!(
+            native::compose(&mutated, &template, &ready, &values),
+            Err(REFUSAL)
+        );
+    }
     let common =
         native::documents(&fs::read(root().join("k8s/oracle/01-configmap.yaml")).unwrap()).unwrap();
     assert_eq!(common.len(), 1);
@@ -259,7 +271,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
         "http://issuance-native:8005"
     );
     let recovery_ref = json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"ISSUANCE_NATIVE_SERVICE_URL"}}});
-    for name in ["auth", "applicant", "presentation-policy"] {
+    for name in ["applicant", "presentation-policy"] {
         assert_eq!(
             env(&baseline[index(&baseline, "Deployment", name)])["ISSUANCE_NATIVE_SERVICE_URL"],
             recovery_ref
@@ -278,13 +290,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
 
     let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
     let selected = expected["items"].as_array().unwrap();
-    for name in [
-        "auth",
-        "applicant",
-        "presentation-policy",
-        "flow",
-        "gateway",
-    ] {
+    for name in ["applicant", "presentation-policy", "flow", "gateway"] {
         assert_eq!(
             env(&selected[index(selected, "Deployment", name)])["ISSUANCE_NATIVE_SERVICE_URL"],
             json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
@@ -300,7 +306,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
         json!({"name":"ISSUANCE_SERVICE_URL","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"ISSUANCE_SERVICE_URL"}}})
     );
 
-    for name in ["auth", "applicant", "presentation-policy", "flow"] {
+    for name in ["applicant", "presentation-policy", "flow"] {
         for fault in ["missing", "wrong", "duplicate"] {
             let mut mutated = baseline.clone();
             let deployment = index(&mutated, "Deployment", name);
@@ -340,13 +346,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
         Err(REFUSAL)
     );
 
-    for name in [
-        "auth",
-        "applicant",
-        "presentation-policy",
-        "flow",
-        "gateway",
-    ] {
+    for name in ["applicant", "presentation-policy", "flow", "gateway"] {
         let mut mutated = expected.clone();
         let rows = mutated["items"].as_array_mut().unwrap();
         let deployment = index(rows, "Deployment", name);
@@ -393,53 +393,43 @@ fn effective(value: &Value, shared: &Value, common: &Value) -> BTreeMap<String, 
 }
 
 #[test]
-fn canvas_credentials_publication_controls_reach_native_and_fail_closed() {
+fn retired_connector_settings_and_models_are_rejected_without_projection() {
     let (baseline, template, ready, values) = fixtures();
-    let model = native::compose(&baseline, &template, &ready, &values).unwrap();
-    let rows = model["items"].as_array().unwrap();
-    let shared = &rows[index(rows, "ConfigMap", "issuance-native-config")]["data"];
-    let common = Value::Object(
-        CANVAS_CREDENTIALS_PUBLICATION_CONTROLS
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), json!(value)))
-            .collect(),
-    );
-    for owner_name in ["issuance", "issuance-native"] {
-        let deployment = &rows[index(rows, "Deployment", owner_name)];
-        let resolved = effective(deployment, shared, &common);
-        for (name, value) in CANVAS_CREDENTIALS_PUBLICATION_CONTROLS {
-            assert_eq!(resolved.get(name).map(String::as_str), Some(value));
+    for (name, _) in RETIRED_CONNECTOR_PUBLICATION_CONTROLS {
+        for value in ["", "false", "true"] {
+            let mut supplied = values.clone();
+            supplied.insert(name.into(), value.into());
+            assert_eq!(native::configuration(&supplied), Err(REFUSAL));
+            let mut old = baseline.clone();
+            let issuer = index(&old, "Deployment", "issuance");
+            owner_mut(&mut old[issuer])["env"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"name":name,"value":value}));
             assert_eq!(
-                env(deployment)[name]["valueFrom"]["configMapKeyRef"]["key"],
-                name
+                native::compose(&old, &template, &ready, &values),
+                Err(REFUSAL)
             );
         }
     }
-
-    let native_index = index(&template, "Deployment", "issuance-native");
-    for (name, _) in CANVAS_CREDENTIALS_PUBLICATION_CONTROLS {
-        let mut missing = template.clone();
-        owner_mut(&mut missing[native_index])["env"]
-            .as_array_mut()
-            .unwrap()
-            .retain(|entry| entry["name"] != name);
+    let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
+    for declaration in [
+        json!({"kind":"Deployment","metadata":{"name":"canvas-sync-worker"}}),
+        json!({"kind":"Deployment","metadata":{"name":"canvas_sync_worker"}}),
+        json!({"kind":"ConfigMap","metadata":{"name":"marty-config"},"data":{"CANVAS_NEW_FLAG":"false"}}),
+        json!({"kind":"Secret","metadata":{"name":"legacy-grant"},"data":{"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN":"synthetic"}}),
+    ] {
+        let mut old = baseline.clone();
+        old.push(declaration.clone());
         assert_eq!(
-            native::compose(&baseline, &missing, &ready, &values),
-            Err(REFUSAL),
-            "missing {name}"
+            native::compose(&old, &template, &ready, &values),
+            Err(REFUSAL)
         );
-
-        let mut mismatched = template.clone();
-        owner_mut(&mut mismatched[native_index])["env"]
-            .as_array_mut()
-            .unwrap()
-            .iter_mut()
-            .find(|entry| entry["name"] == name)
-            .unwrap()["valueFrom"]["configMapKeyRef"]["key"] = json!("HOSTILE_OTHER_KEY");
+        let mut snapshot = expected.clone();
+        snapshot["items"].as_array_mut().unwrap().push(declaration);
         assert_eq!(
-            native::compose(&baseline, &mismatched, &ready, &values),
-            Err(REFUSAL),
-            "mismatched {name}"
+            native::check_update(&snapshot, &snapshot, "marty-prod"),
+            Err(REFUSAL)
         );
     }
 }
@@ -1094,7 +1084,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
     for name in [
         "DATABASE_URL",
         "TOKEN_HMAC_KEY",
-        "CANVAS_CREDENTIALS_API_TOKEN",
         "PERSONALIZATION_BUREAU_API_KEY",
         "PERSONALIZATION_BUREAU_URL",
         "ISSUER_BASE_URL",
@@ -1105,7 +1094,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
         let custom = if native::SECRET_SETTINGS.contains(&name)
-            || name == "CANVAS_CREDENTIALS_API_TOKEN"
             || name == "PERSONALIZATION_BUREAU_API_KEY"
         {
             json!({"name":name,"valueFrom":{"secretKeyRef":{"name":"existing-custom-credentials","key":name}}})
@@ -1634,7 +1622,13 @@ kubectl() {
   printf '%s\n' "$*" >> "$FIXTURE_LEDGER"
   case "$1 $2" in
     'get deployment/issuance-native') command cat "$FIXTURE_SNAPSHOT" ;;
-    'get deployment') printf '{}\n' ;;
+    'get deployment')
+      if [[ "$3" == canvas-sync-worker ]]; then
+        if [[ "$FIXTURE_FAULT" == retired-worker-query ]]; then return 17; fi
+        if [[ "$FIXTURE_FAULT" == retired-worker ]]; then printf 'deployment.apps/canvas-sync-worker\n'; fi
+      else
+        printf '{}\n'
+      fi ;;
     'set image') : ;;
     'rollout status')
       if [[ "$3" == deployment/issuance-native && "$FIXTURE_FAULT" == rollout ]]; then return 19; fi
@@ -1647,6 +1641,8 @@ cmd_update_images
 "#);
     for fault in [
         "none",
+        "retired-worker",
+        "retired-worker-query",
         "shared-map",
         "management-key",
         "policy-volume",
@@ -1811,7 +1807,7 @@ cmd_update_images
                     )
                 );
             }
-            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/issuance service/signing-keys configmap/issuance-native-config configmap/marty-config -n marty-prod -o json --request-timeout=10s\n"));
+            assert!(calls.contains("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/issuance service/signing-keys configmap/issuance-native-config configmap/marty-config -n marty-prod -o json --request-timeout=10s\n"));
             let signing = "rollout status deployment/signing-keys -n marty-prod --timeout=180s\n";
             assert!(
                 calls.find(signing).unwrap()

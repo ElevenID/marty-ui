@@ -53,44 +53,28 @@ def owner(value):
 
 def test_issuance_grant_tokens_are_mounted_by_exact_producers_only():
     values = resources("k8s/oracle/07-microservices.yaml")
+    assert not any(value.get("kind") == "Deployment" and value["metadata"]["name"]
+                   in {"canvas-sync-worker", "canvas-sandbox"} for value in values)
     issuer = deployment(values, "issuance")
-    worker = deployment(values, "canvas-sync-worker")
     issuer_container = owner(issuer)
-    worker_container = owner(worker)
-    origins = ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+    origins = ("CREDENTIAL", "PASSPORT")
     issuer_env = {entry["name"]: entry for entry in issuer_container["env"]}
-    worker_env = {entry["name"]: entry for entry in worker_container["env"]}
     for origin in origins:
         key = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
         assert issuer_env[key]["value"] == (
             f"/var/run/secrets/marty/issuance-sign-grants/{origin.lower()}"
         )
-        assert (key in worker_env) == (origin == "CANVAS")
-    assert worker_env["ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE"]["value"] == (
-        "/var/run/secrets/marty/issuance-canvas-sign-grant/token"
-    )
-    issuer_volume = next(
-        item for item in issuer["spec"]["template"]["spec"]["volumes"]
-        if item["name"] == "issuance-sign-grants"
-    )
+    assert not any("CANVAS" in key or "ISSUANCE_READINESS_" in key for key in issuer_env)
+    issuer_volume = next(item for item in issuer["spec"]["template"]["spec"]["volumes"]
+                         if item["name"] == "issuance-sign-grants")
     assert issuer_volume["secret"]["secretName"] == "marty-secrets"
     assert issuer_volume["secret"]["items"] == [
         {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
         for origin in origins
     ]
-    assert {item["name"] for item in issuer_container["volumeMounts"]} >= {
-        "issuance-sign-grants"
-    }
-    worker_volume = next(
-        item for item in worker["spec"]["template"]["spec"]["volumes"]
-        if item["name"] == "issuance-canvas-sign-grant"
-    )
-    assert worker_volume["secret"]["items"] == [
-        {"key": "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "path": "token"}
-    ]
-    assert {item["name"] for item in worker_container["volumeMounts"]} >= {
-        "issuance-canvas-sign-grant"
-    }
+    assert {item["name"] for item in issuer_container["volumeMounts"]} >= {"issuance-sign-grants"}
+    assert not any(entry["name"] in {"ISSUANCE_NATIVE_SERVICE_URL", "ISSUANCE_SERVICE_URL"}
+                   for entry in owner(deployment(values, "auth"))["env"])
 
 
 def constants(name):
@@ -454,7 +438,6 @@ def native_inventory(value):
         if "secretKeyRef" in v.get("valueFrom", {})
     }
     assert set(secret_refs) == constants("SECRET_SETTINGS") | {
-        "CANVAS_CREDENTIALS_API_TOKEN",
         "PERSONALIZATION_BUREAU_API_KEY",
     }
     for name, ref in secret_refs.items():
@@ -464,7 +447,7 @@ def native_inventory(value):
             **(
                 {"optional": True}
                 if name
-                in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
+                in {"PERSONALIZATION_BUREAU_API_KEY"}
                 else {}
             ),
         }
@@ -473,7 +456,7 @@ def native_inventory(value):
         or v["name"].startswith("DIDCOMM_KMS_")
         or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
     )
-    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT"):
+    for origin in ("CREDENTIAL", "PASSPORT"):
         name = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
         assert next(v for v in entries if v["name"] == name) == {
             "name": name,
@@ -520,7 +503,7 @@ def native_inventory(value):
                 "secretName": "marty-secrets",
                 "items": [
                     {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
-                    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+                    for origin in ("CREDENTIAL", "PASSPORT")
                 ],
             },
         },
@@ -630,10 +613,6 @@ def test_all_production_native_configuration_inputs_have_a_classification():
     covered |= PASSPORT_NOT_KUBERNETES_BOUND
     assert inputs - covered == {
         "APP_ENV",
-        "CANVAS_ADMIN_API_TOKEN",
-        "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK",
-        "CANVAS_CREDENTIALS_API_TOKEN_FILE",
-        "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
         "CARGO_PKG_VERSION",
         "DIDCOMM_ENCRYPTION_POLICY_FILE",
         "DIDCOMM_TLS_CA_FILE",
@@ -658,28 +637,8 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE",
     }
-    assert constants("OPTIONAL_SETTINGS") >= {
-        "CANVAS_MIRROR_WORKER_ENABLED",
-        "CANVAS_MIRROR_WORKER_ORGANIZATION_ID",
-        "CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS",
-        "CANVAS_MIRROR_STATUS_SYNC_INTERVAL_SECONDS",
-        "CANVAS_MIRROR_WORKER_BATCH_LIMIT",
-        "CANVAS_MIRROR_WORKER_RETRY_FAILED",
-        "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
-        "CANVAS_MIRROR_FAILURE_WARNING_ATTEMPTS",
-        "CANVAS_MIRROR_FAILURE_CRITICAL_ATTEMPTS",
-        "CANVAS_MIRROR_ALERT_WEBHOOK_URL",
-        "CANVAS_MIRROR_ALERT_WEBHOOK_TIMEOUT_SECONDS",
-    }
-    publication_controls = {
-        "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
-        "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
-        "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
-        "CANVAS_CREDENTIALS_RECIPIENT_HASHED",
-        "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
-    }
-    assert constants("INHERITED_SETTINGS") >= publication_controls
-    assert constants("OPTIONAL_SETTINGS").isdisjoint(publication_controls)
+    for category in ("OPTIONAL_SETTINGS", "INHERITED_SETTINGS", "SECRET_SETTINGS", "SHARED_BINDINGS"):
+        assert not any("CANVAS" in name for name in constants(category))
 
 
 def test_existing_three_way_management_identity_and_legacy_owner_are_preserved():
@@ -786,7 +745,7 @@ def ci_prerequisites(workflow):
     assert len(found) == 1
     selected = steps[found[0]]
     assert selected.get("shell") == "bash"
-    assert selected.get("if") == "matrix.lane == 'canvas'"
+    assert selected.get("if") == "matrix.lane == 'contracts'"
     assert "continue-on-error" not in selected
     assert selected["run"].strip().splitlines() == [
         "set -euo pipefail",
@@ -801,7 +760,7 @@ def ci_prerequisites(workflow):
     assert found[0] < compile_index
     assert "cargo test --locked --workspace --no-run" in steps[compile_index]["run"]
     assert any(
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"
+        "cargo test --locked --workspace --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"
         in step.get("run", "")
         for step in steps
     )
@@ -855,7 +814,7 @@ def test_ci_prerequisites_are_required_before_actual_workspace_gates(fault):
     elif fault == "disconnected":
         for candidate in steps:
             candidate["run"] = candidate.get("run", "").replace(
-                "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >",
+                "cargo test --locked --workspace --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >",
                 "echo disconnected >",
             )
     if fault:
