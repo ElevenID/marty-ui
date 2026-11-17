@@ -258,3 +258,10 @@ The canonical credential-management repository contract and its PostgreSQL
 implementation contain no provider synchronization method or provider
 injection option. Provider delivery errors belong to the remaining provider
 adapter, pending its removal; they are not repository capabilities.
+
+The platform no longer builds the standalone Canvas sync-worker executable.
+Canvas catalog, LTI/OAuth persistence, management and mirror HTTP/PostgreSQL
+adapters, and roster sync processor/worker persistence are retired from the
+issuance crate. Connector-owned replacements may remain TODOs. Remaining
+legacy provider domain/guard modules are transitional removal work, not
+supported integration interfaces.
