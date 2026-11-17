@@ -111,3 +111,16 @@ Historical native inspection still binds its original signed credential inventor
 that evidence is not a current workload roster. New reload completion receipts
 use platform status and the exact retained count; old sixteen-workload receipts
 cannot authorize a current completion. Full-environment health remains separate.
+
+
+The platform delivery catalog seeds only its two generic wallet destinations.
+Provider account setup, provider OAuth and publication belong to the independent
+connector; the platform does not advertise a provider mirror capability or accept
+provider-specific destination types. Custom external destinations retain generic
+tenant and organization-administrator validation. Connector interaction still
+uses only the public Common Gateway; it gains no issuance or signing authority.
+
+TODO (platform data owner): review historical provider destination records and
+references before any separately authorized data migration. Source retirement
+neither deletes tenant records nor rewrites them as generic destinations. No
+provider publication workflow is enabled by this split.

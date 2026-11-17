@@ -441,18 +441,18 @@ describe('MyIdentityPage', () => {
         {
           id: 'cred-1',
           credential_display_name: 'Interoperable Credentials Foundations Badge',
-          credential_template_id: 'cfg-canvas-badge',
+          credential_template_id: 'cfg-interoperability-badge',
           issuer_did: 'did:web:beta.elevenidllc.com:orgs:marty',
-          badge_image_url: 'https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg',
+          badge_image_url: 'https://beta.elevenidllc.com/credentials/interoperability-foundations-badge/image.svg',
           status: 'ACTIVE',
           issued_at: '2026-05-18T00:00:00.000Z',
           updated_at: '2026-05-18T00:05:00.000Z',
           deliveries: [
             {
               id: 'delivery-1',
-              delivery_target: 'canvas_credentials',
+              delivery_target: 'external_api',
               status: 'delivered',
-              external_credential_id: 'canvas-cred-1',
+              external_credential_id: 'external-cred-1',
             },
           ],
         },

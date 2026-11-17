@@ -224,3 +224,37 @@ fn delivery_destination_policy_is_tenant_safe() {
         assert_eq!(result.is_ok(), case.accepted, "{}: {result:?}", case.name);
     }
 }
+
+#[test]
+fn external_destination_policy_retains_tenant_authority_without_provider_types() {
+    let generic = DeliveryDestinationPolicy {
+        provider: "custom".to_owned(),
+        mode: "organization_mirror".to_owned(),
+        setup_actor: "org_admin".to_owned(),
+        delivery_target: "external_api".to_owned(),
+        is_system: false,
+        organization_id: Some("org-1".to_owned()),
+    };
+    assert!(generic.validate().is_ok());
+    for provider in ["canvas_credentials", "canvas_credentials_backpack"] {
+        let mut retired = generic.clone();
+        retired.provider = provider.to_owned();
+        assert!(retired.validate().is_err());
+    }
+    let mut retired = generic.clone();
+    retired.delivery_target = "canvas_credentials".to_owned();
+    assert!(retired.validate().is_err());
+
+    let mut learner = generic.clone();
+    learner.setup_actor = "learner".to_owned();
+    assert!(matches!(
+        learner.validate(),
+        Err(marty_credential_template::CredentialTemplateError::OrganizationMirrorRequiresAdmin)
+    ));
+    let mut unowned = generic;
+    unowned.organization_id = None;
+    assert!(matches!(
+        unowned.validate(),
+        Err(marty_credential_template::CredentialTemplateError::MissingDestinationOrganization)
+    ));
+}
