@@ -239,3 +239,16 @@ owners. No provider persistence adapter or OAuth lifecycle is restored. Generic
 platform integration-secret storage is not connector credential custody; the
 connector continues to own its provider secrets and uses only the public Gateway.
 Local mock-TLS checks do not claim a completed live Raft/PostgreSQL restore.
+
+
+Live issuance qualification dispatches the retained Credential Builder and Holder
+Proof suites; the removed provider runtime test owner is no longer selected. The
+API-only edge fixture supplies platform upstreams and exercises real Nginx API
+routes, while preserving default-console and failed-readiness behavior.
+
+
+Beta health no longer requires connector-hosted provider services. The protected
+passport fence source inventory retains all platform authority files and omits
+the two removed provider Compose profiles. Its exact source, approval, release,
+identity and database checks remain; old approvals need separate requalification
+against the changed protected source before any future operation.

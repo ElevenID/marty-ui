@@ -583,7 +583,7 @@ def live_issuance_signing_phase(bao_url: str, token: str, ca_file: Path) -> None
             "BAO_CACERT": str(ca_file),
         }
     )
-    for target in ("credential_builder::tests", "canvas_readiness_runtime::tests"):
+    for target in ("credential_builder::tests",):
         result = subprocess.run(
             [
                 "cargo",

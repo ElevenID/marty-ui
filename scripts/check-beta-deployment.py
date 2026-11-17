@@ -26,8 +26,6 @@ REQUIRED_SERVICES = (
     "issuance",
     "event-stream",
     "applicant",
-    "canvas-real",
-    "canvas-sandbox",
     "waltid-nginx",
     "docs",
     "nginx-proxy",

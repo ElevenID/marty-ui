@@ -109,8 +109,6 @@ PROTECTED_FILES = (
     "docker-compose.profile.dev.yml",
     "docker-compose.profile.tunnel.yml",
     "docker-compose.profile.waltid.yml",
-    "docker-compose.profile.canvas-real.yml",
-    "docker-compose.profile.canvas-sandbox.yml",
     "docker-compose.profile.passport-native-beta.yml",
     "docker-compose.profile.passport-premigrated-beta.yml",
     "docker-compose.ui-release.yml",

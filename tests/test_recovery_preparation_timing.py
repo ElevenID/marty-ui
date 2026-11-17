@@ -453,3 +453,24 @@ def test_main_warmer_reuses_exact_recovery_build_only_owner():
         and step.get("with", {}).get("python-version") == "3.12"
         for step in steps[:exact]
     )
+
+
+def test_live_issuance_dispatches_only_retained_credential_builder_owner(probe, monkeypatch):
+    module, _, _ = probe
+    calls = []
+    monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs:
+        calls.append((command, kwargs)) or subprocess.CompletedProcess(command, 0))
+    ca = module.ROOT / "synthetic-public-ca.pem"
+    module.live_issuance_signing_phase("https://kms.example.invalid", "synthetic-token", ca)
+    assert [command for command, _ in calls] == [
+        ["cargo", "+1.95.0", "test", "--locked", "-p", "marty-issuance-service",
+         "--lib", "-j", "1", "credential_builder::tests", "--", "--ignored"],
+        ["cargo", "+1.95.0", "test", "--locked", "-p", "marty-signing-keys",
+         "--test", "vc_api_holder_proof_live_kms", "-j", "1", "--", "--ignored"],
+    ]
+    for _, options in calls:
+        assert options["cwd"] == module.ROOT / "rust"
+        assert options["timeout"] == 300 and options["check"] is False
+        assert options["env"]["MARTY_KMS_DISPOSABLE_PROBE"] == "1"
+        assert options["env"]["MARTY_TEST_OPENBAO_URL"] == "https://kms.example.invalid"
+        assert options["env"]["BAO_CACERT"] == str(ca)

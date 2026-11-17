@@ -165,8 +165,8 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
   const handleRegenerate = useCallback(() => setOfferAttempt((attempt) => attempt + 1), []);
 
   // The Rust claim endpoint owns offer reuse and renewal. Wallet selection only
-  // chooses a link/transport; the endpoint does not support holder destination or
-  // Canvas mirror options. Reopening this dialog shares an in-flight request for
+  // chooses a link/transport; the endpoint owns delivery behavior.
+  // Reopening this dialog shares an in-flight request for
   // the same application/organization/holder, then uses the server's current offer.
   useEffect(() => {
     if (!open) {
