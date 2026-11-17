@@ -337,7 +337,6 @@ export async function submitCredentialApplication({
   formData,
   credentialConfig,
   credentialConfigId,
-  canvasLtiContext = null,
   allFields = [],
   resolveApplicantId,
   createApplicant,
@@ -463,7 +462,6 @@ export async function submitCredentialApplication({
       organizationId,
       credentialConfig,
       formData,
-      canvasLtiContext,
     })
   );
 

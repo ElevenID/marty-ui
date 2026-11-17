@@ -746,7 +746,7 @@ const CredentialCatalog = () => {
                   <Divider sx={{ my: 2 }} />
                   <Typography variant="caption" color="text.secondary">
                     {t('catalog.detailsDialog.offeredBy', { vendorName: selectedCredential.vendorName })}
-                    {selectedCredential.templateVersion && ` â€¢ ${t('catalog.detailsDialog.templateVersion', { version: selectedCredential.templateVersion })}`}
+                    {selectedCredential.templateVersion && ` • ${t('catalog.detailsDialog.templateVersion', { version: selectedCredential.templateVersion })}`}
                   </Typography>
                 </>
               )}
