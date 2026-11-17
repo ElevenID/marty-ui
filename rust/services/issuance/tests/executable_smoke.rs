@@ -18,9 +18,6 @@ use issuance_process::{
     wait_for_health_with_client, ChildGuard,
 };
 
-#[path = "support/canvas_worker_logging_contract.rs"]
-mod canvas_worker_logging_contract;
-
 /// Read a fixed-size snapshot without moving the child writer's shared file
 /// offset. This is also safe while an unhealthy child remains alive.
 fn bounded_startup_diagnostic(stderr: &std::fs::File) -> std::io::Result<String> {
@@ -457,12 +454,10 @@ async fn executable_does_not_bind_an_explicitly_disabled_grpc_listener() {
     drop(grpc_reservation);
 }
 
-/// Exercise main -> CanvasServices.with_operations -> router_with_all_services.
-/// This does not qualify the authenticated lifecycle, provider effects, or
-/// gateway cutover. Startup uses the real migration database; every operation
-/// probe itself is rejected by authentication middleware.
+/// Retired provider operations are absent from the actual executable router.
+/// Startup uses the disposable migration database; no provider is contacted.
 #[tokio::test]
-async fn executable_canvas_operations_preserve_auth_and_common_transport() {
+async fn executable_retired_provider_operations_return_not_found() {
     let Some(database_url) = smoke_database_url() else {
         return;
     };
@@ -476,6 +471,7 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
     let (_grpc_reservation, grpc_port) = reserve_port();
     let mut command = isolated_smoke_command(port, grpc_port);
     command
+        .stderr(std::process::Stdio::inherit())
         .env("ISSUANCE_API_KEY", "synthetic-process-operations-key")
         .env("DATABASE_URL", &database_url);
     drop(http_reservation);
@@ -521,7 +517,7 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
                 request = request.header("x-api-key", "synthetic-wrong-key");
             }
             let response = request.send().await.expect("owned process auth response");
-            assert_eq!(response.status(), 401, "route {index}");
+            assert_eq!(response.status(), 404, "route {index}");
             assert_eq!(response.headers()["x-request-id"], request_id.as_str());
             assert_eq!(
                 response.headers()["access-control-allow-origin"],
@@ -532,10 +528,6 @@ async fn executable_canvas_operations_preserve_auth_and_common_transport() {
                 "true"
             );
             assert_eq!(response.headers()["vary"], "Origin");
-            assert_eq!(
-                response.json::<Value>().await.unwrap(),
-                json!({"detail": if wrong_key { "Invalid API Key" } else { "X-API-Key header is missing" }})
-            );
         }
     }
     assert_eq!(covered.len(), 8);

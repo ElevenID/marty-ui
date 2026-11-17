@@ -187,41 +187,20 @@ path = "tests/canvas_event_status_postgres_contract.rs"
 name = "canvas_legacy_ingest_behavior"
 path = "tests/canvas_legacy_ingest_behavior.rs"
 
-[[test]]
-name = "canvas_legacy_ingest_http_behavior"
-path = "tests/canvas_legacy_ingest_http_behavior.rs"
 
-[[test]]
-name = "canvas_lti_bootstrap_behavior"
-path = "tests/canvas_lti_bootstrap_behavior.rs"
 
-[[test]]
-name = "canvas_lti_deep_linking_behavior"
-path = "tests/canvas_lti_deep_linking_behavior.rs"
 
 [[test]]
 name = "canvas_lti_deep_linking_postgres_contract"
 path = "tests/canvas_lti_deep_linking_postgres_contract.rs"
 
-[[test]]
-name = "canvas_lti_evidence_behavior"
-path = "tests/canvas_lti_evidence_behavior.rs"
 
 [[test]]
 name = "canvas_lti_evidence_postgres_contract"
 path = "tests/canvas_lti_evidence_postgres_contract.rs"
 
-[[test]]
-name = "canvas_lti_experience_behavior"
-path = "tests/canvas_lti_experience_behavior.rs"
 
-[[test]]
-name = "canvas_lti_launch_behavior"
-path = "tests/canvas_lti_launch_behavior.rs"
 
-[[test]]
-name = "canvas_lti_login_behavior"
-path = "tests/canvas_lti_login_behavior.rs"
 
 [[test]]
 name = "canvas_lti_login_postgres_contract"
@@ -231,9 +210,6 @@ path = "tests/canvas_lti_login_postgres_contract.rs"
 name = "canvas_lti_sync_enqueue_postgres_contract"
 path = "tests/canvas_lti_sync_enqueue_postgres_contract.rs"
 
-[[test]]
-name = "canvas_management_http_behavior"
-path = "tests/canvas_management_http_behavior.rs"
 
 [[test]]
 name = "canvas_management_postgres_contract"
@@ -243,9 +219,6 @@ path = "tests/canvas_management_postgres_contract.rs"
 name = "canvas_mirror_postgres_contract"
 path = "tests/canvas_mirror_postgres_contract.rs"
 
-[[test]]
-name = "canvas_oauth_behavior"
-path = "tests/canvas_oauth_behavior.rs"
 
 [[test]]
 name = "canvas_oauth_postgres_contract"

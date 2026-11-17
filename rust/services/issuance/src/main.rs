@@ -8,77 +8,11 @@ use marty_issuance_service::{
     application_template_postgres::PostgresApplicationTemplateRepository,
     application_template_service::{ApplicationTemplateService, SystemApplicationTemplateClock},
     canvas_award_candidate_approval::{
-        CanvasApplicationApprovalService, CanvasAwardCandidateApprovalService,
-        SecureCanvasAwardApprovalSeedGenerator,
+        CanvasApplicationApprovalService, SecureCanvasAwardApprovalSeedGenerator,
     },
     canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
-    canvas_award_candidate_postgres::PostgresCanvasAwardCandidateRepository,
-    canvas_award_candidate_service::{
-        CanvasAwardCandidateMaterializerConfig, CanvasAwardCandidateMaterializerService,
-        UuidCanvasEvidenceFactIdGenerator,
-    },
-    canvas_catalog::HttpCanvasCatalogProvider,
-    canvas_credentials_publication::CanvasCredentialsPublicationService,
-    canvas_credentials_status::CanvasCredentialsStatusService,
-    canvas_credentials_validation::{
-        CanvasCredentialsValidationService, HttpCanvasCredentialsValidationTransport,
-    },
-    canvas_event_status::CanvasEventStatusService,
-    canvas_event_status_postgres::PostgresCanvasEventStatusRepository,
     canvas_issuance_guard::CanvasGuardConfig,
-    canvas_legacy_ingest::{
-        CanvasLegacyIngestConfig, CanvasLegacyIngestService, UuidCanvasLegacyIdGenerator,
-    },
-    canvas_legacy_ingest_postgres::PostgresCanvasLegacyIngestRepository,
-    canvas_lti_bootstrap::{
-        CanvasLtiBootstrapService, SecureCanvasLtiBootstrapApplicationGenerator,
-    },
-    canvas_lti_deep_linking::{
-        CanvasLtiDeepLinkingService, SecureCanvasLtiDeepLinkingNonceGenerator,
-    },
-    canvas_lti_deep_linking_postgres::PostgresCanvasLtiDeepLinkingRepository,
-    canvas_lti_evidence::{CanvasLtiEvidenceService, CanvasLtiEvidenceSyncService},
-    canvas_lti_evidence_postgres::PostgresCanvasLtiEvidenceRepository,
-    canvas_lti_experience::{
-        CanvasLtiExperienceExchangeService, CanvasLtiExperienceSessionService,
-        SecureCanvasLtiExperienceSessionGenerator,
-    },
-    canvas_lti_launch::{
-        CanvasLtiExperienceService, CanvasLtiLaunchPorts, CanvasLtiLaunchService,
-        SecureCanvasLtiExperienceCodeGenerator, SystemCanvasLtiClock,
-    },
-    canvas_lti_login::CanvasLtiLoginService,
-    canvas_lti_postgres::{
-        CanvasLtiJwksRefreshConfig, MartyCanvasLtiAgsServiceUrlValidator,
-        PostgresCanvasLtiJwksRefresher, PostgresCanvasLtiLoginRepository,
-    },
-    canvas_lti_sync_enqueue::{
-        PostgresCanvasLtiBootstrapSyncEnqueuer, UuidCanvasSyncEnqueueIdGenerator,
-    },
-    canvas_lti_tool_signing::{
-        HttpCanvasLtiToolIdentityResolver, HttpCanvasLtiToolSignatureProvider,
-        IssuerDidCanvasLtiToolJwtSigner,
-    },
-    canvas_management_domain::CanvasOriginPolicy,
-    canvas_management_http::CanvasPlatformManagementHttpService,
-    canvas_management_postgres::PostgresCanvasManagementRepository,
-    canvas_management_service::CanvasPlatformManagementService,
-    canvas_mirror_automation::spawn_canvas_mirror_automation,
-    canvas_mirror_http::CanvasMirrorHttpService,
-    canvas_mirror_postgres::PostgresCanvasMirrorRepository,
-    canvas_mirror_provider::TransportCanvasMirrorAlertWebhook,
-    canvas_mirror_service::CanvasMirrorService,
-    canvas_oauth::{CanvasOAuthService, CanvasOAuthServiceConfig},
-    canvas_oauth_http::HttpCanvasOAuthProvider,
-    canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    canvas_operations::CanvasOperationsService,
-    canvas_provider_http::{
-        CanvasHttpClientPolicy, CanvasOriginPolicy as CanvasProviderOriginPolicy,
-    },
-    canvas_readiness_runtime::{
-        CanvasReadinessRuntime, HttpCanvasReadinessDocumentProvider,
-        LiveCanvasReadinessChallengeProvider, PostgresCanvasReadinessStateProvider,
-    },
+    canvas_lti_launch::SystemCanvasLtiClock,
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -96,8 +30,7 @@ use marty_issuance_service::{
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
-        router_with_all_services, CanvasLtiExperienceSessionServices, CanvasLtiServices,
-        CanvasServices, IssuanceCoreServices, IssuanceReadServices, IssuanceServices,
+        router_with_all_services, IssuanceCoreServices, IssuanceReadServices, IssuanceServices,
     },
     initiation::{
         InitiationPorts, InitiationService, SecureInitiationSeedGenerator, SystemInitiationClock,
@@ -113,7 +46,6 @@ use marty_issuance_service::{
     initiation_didcomm_http::InitiationDidcommHttpService,
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
-    integration_secret_kms::KmsIntegrationSecretCipher,
     internal_application_approval::{
         CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
         OrdinaryInternalApplicationApprover,
@@ -349,125 +281,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         nonce_repository.clone(),
         Arc::new(SecureProofNonceGenerator),
     );
-    let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
-    let integration_secret_cipher = KmsIntegrationSecretCipher::from_environment(
-        config
-            .integration_secret_api_key
-            .as_deref()
-            .expect("from_env requires integration-secret authentication"),
-    )?;
-    let mut integration_secret_connection = pool.acquire().await?;
-    integration_secret_cipher
-        .verify_storage(&mut integration_secret_connection)
-        .await?;
-    drop(integration_secret_connection);
-    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
-        pool.clone(),
-        integration_secret_cipher,
-    ));
-    let canvas_credentials_validator = Arc::new(CanvasCredentialsValidationService::new(
-        config.canvas_credentials_validation.clone(),
-        integration_secret_vault.clone(),
-        Arc::new(
-            HttpCanvasCredentialsValidationTransport::with_operation_timeout(
-                CanvasProviderOriginPolicy {
-                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                    allow_private_networks: config.canvas_allow_private_base_urls,
-                    allow_http_localhost: false,
-                },
-                config.canvas_credentials_validation_timeout,
-            ),
-        ),
-    ));
-    let canvas_oauth = CanvasOAuthService::new(
-        Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
-        integration_secret_vault.clone(),
-        Arc::new(HttpCanvasOAuthProvider::new_with_policy(
-            std::time::Duration::from_secs(15),
-            config.canvas_private_origin_allowlist.clone(),
-            config.canvas_allow_private_base_urls,
-            config.canvas_allow_http_localhost_base_urls,
-        )),
-        config.issuance_api_key.as_deref(),
-        CanvasOAuthServiceConfig {
-            issuer_base_url: config.issuer_base_url.clone(),
-            completion_base_url: config.canvas_oauth_completion_redirect_url.clone(),
-            portable_enabled: config.canvas_portable_enabled,
-            pilot_organizations: config.canvas_pilot_organizations.clone(),
-            allow_private_networks: config.canvas_allow_private_base_urls,
-            allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-        },
-    )?;
-    let canvas_lti_jwks_refresh_config = CanvasLtiJwksRefreshConfig {
-        timeout: config.dependency_timeout,
-        ttl: config.canvas_lti_jwks_ttl,
-        self_managed_origins: config.canvas_self_managed_origins.clone(),
-        allow_private_networks: config.canvas_allow_private_base_urls,
-        allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-    };
-    let canvas_management = CanvasPlatformManagementService::new(
-        Arc::new(PostgresCanvasManagementRepository::new(pool.clone())),
-        config.issuance_api_key.as_deref(),
-        CanvasOriginPolicy {
-            allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-            private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-            self_managed_origin_allowlist: config.canvas_self_managed_origins.clone(),
-        },
-        &config.issuer_base_url,
-        canvas_lti_jwks_refresh_config.clone(),
-    )
-    .with_canvas_credentials_origins(config.canvas_credentials_api_origins.clone())
-    .with_activation_policy(
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-        config.canvas_readiness_max_age,
-    )
-    .with_integration_secret_repository(integration_secret_vault.clone())
-    .with_canvas_credentials_validator(canvas_credentials_validator);
-    let canvas_lti_login = CanvasLtiLoginService::new(
-        canvas_lti_repository.clone(),
-        &config.issuer_base_url,
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-        config.canvas_lti_state_ttl,
-        config.canvas_self_managed_origins.clone(),
-    )?;
     let canvas_lti_clock = Arc::new(SystemCanvasLtiClock);
-    let canvas_lti_service_url_validator = Arc::new(MartyCanvasLtiAgsServiceUrlValidator::new(
-        config.canvas_private_origin_allowlist.clone(),
-    ));
-    let canvas_lti_launch = CanvasLtiLaunchService::new(
-        canvas_lti_login.clone(),
-        CanvasLtiLaunchPorts {
-            state_repository: canvas_lti_repository.clone(),
-            context_repository: canvas_lti_repository.clone(),
-            jwks_refresher: Arc::new(PostgresCanvasLtiJwksRefresher::new(
-                pool.clone(),
-                canvas_lti_jwks_refresh_config,
-            )),
-            identity_repository: canvas_lti_repository.clone(),
-            ags_repository: canvas_lti_repository.clone(),
-            ags_url_validator: canvas_lti_service_url_validator.clone(),
-            capability_repository: canvas_lti_repository.clone(),
-            clock: canvas_lti_clock.clone(),
-        },
-    );
-    let canvas_lti_experience = CanvasLtiExperienceService::new(
-        canvas_lti_launch.clone(),
-        canvas_lti_repository.clone(),
-        Arc::new(SecureCanvasLtiExperienceCodeGenerator),
-        canvas_lti_clock.clone(),
-        config.canvas_lti_experience_code_ttl,
-        &config.canvas_lti_experience_base_url,
-    )?;
-    let canvas_lti_experience_exchange = CanvasLtiExperienceExchangeService::new(
-        canvas_lti_repository.clone(),
-        Arc::new(SecureCanvasLtiExperienceSessionGenerator),
-        canvas_lti_clock.clone(),
-        config.canvas_lti_experience_session_ttl,
-    )?;
-    let canvas_lti_experience_session =
-        CanvasLtiExperienceSessionService::new(canvas_lti_repository.clone());
     let issuer_resolver = Arc::new(HttpIssuerContextResolver::new(
         config.signing_keys_internal_url.clone(),
         config.signing_keys_internal_api_key.as_deref(),
@@ -481,13 +295,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let canvas_approval_repository =
         Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone()));
-    let canvas_award_approver = Arc::new(CanvasAwardCandidateApprovalService::new(
-        canvas_approval_repository.clone(),
-        issuer_resolver.clone(),
-        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
-        canvas_lti_clock.clone(),
-        canvas_guard_config.clone(),
-    ));
     let canvas_application_approval = CanvasApplicationApprovalService::new(
         canvas_approval_repository,
         issuer_resolver.clone(),
@@ -495,122 +302,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         canvas_lti_clock.clone(),
         canvas_guard_config.clone(),
     );
-    let canvas_legacy_ingest = CanvasLegacyIngestService::new(
-        Arc::new(PostgresCanvasLegacyIngestRepository::new(pool.clone())),
-        issuer_resolver.clone(),
-        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
-        Arc::new(UuidCanvasLegacyIdGenerator),
-        canvas_lti_clock.clone(),
-        CanvasLegacyIngestConfig {
-            enabled: config.canvas_legacy_event_ingest_enabled,
-            shared_secret: config.canvas_credentials_shared_secret.clone(),
-            shared_secret_file: config.canvas_credentials_shared_secret_file.clone(),
-            signature_tolerance_seconds: config.canvas_credentials_signature_tolerance_seconds,
-        },
-    );
-    let canvas_award_materializer = Arc::new(CanvasAwardCandidateMaterializerService::new(
-        Arc::new(PostgresCanvasAwardCandidateRepository::new(pool.clone())),
-        canvas_award_approver,
-        Arc::new(UuidCanvasEvidenceFactIdGenerator),
-        canvas_lti_clock.clone(),
-        CanvasAwardCandidateMaterializerConfig {
-            enabled: config.canvas_portable_enabled,
-            pilot_organizations: config.canvas_pilot_organizations.clone(),
-            evidence_max_age: config.canvas_evidence_max_age,
-        },
-    ));
-    let canvas_lti_sync_enqueuer = Arc::new(PostgresCanvasLtiBootstrapSyncEnqueuer::new(
-        pool.clone(),
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-        Arc::new(UuidCanvasSyncEnqueueIdGenerator),
-    ));
-    let canvas_lti_bootstrap = CanvasLtiBootstrapService::new(
-        canvas_lti_experience_session.clone(),
-        canvas_lti_repository.clone(),
-        canvas_award_materializer,
-        canvas_lti_sync_enqueuer.clone(),
-        Arc::new(SecureCanvasLtiBootstrapApplicationGenerator),
-        canvas_lti_clock.clone(),
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-    );
-    let canvas_lti_tool_signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
-        config.canvas_lti_tool_signing_organization_id.clone(),
-        config.canvas_lti_tool_issuer_did.clone(),
-        config.signing_keys_internal_api_key.is_some(),
-        Arc::new(HttpCanvasLtiToolIdentityResolver::new(
-            config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
-            config.dependency_timeout,
-        )?),
-        Arc::new(HttpCanvasLtiToolSignatureProvider::new_with_grant(
-            config.signing_keys_internal_url.clone(),
-            config.issuer_sign_key.as_deref(),
-            config.dependency_timeout,
-            managed_grant_minter(SigningOrigin::IssuanceCanvas)?,
-        )?),
-    ));
-    let canvas_readiness = Arc::new(CanvasReadinessRuntime::new(
-        Arc::new(PostgresCanvasReadinessStateProvider::new(
-            pool.clone(),
-            Duration::from_secs(120),
-        )),
-        Arc::new(HttpCanvasReadinessDocumentProvider::new(
-            &config.credential_template_service_url,
-            config.revocation_profile_service_url.clone(),
-            config.internal_service_token.as_deref(),
-            config.dependency_timeout,
-        )?),
-        Arc::new(LiveCanvasReadinessChallengeProvider::new_with_grant(
-            canvas_lti_tool_signer.clone(),
-            config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
-            config.issuer_sign_key.as_deref(),
-            config.dependency_timeout,
-            managed_grant_minter(SigningOrigin::IssuanceReadiness)?,
-        )?),
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-        config.canvas_self_managed_origins.clone(),
-        config.canvas_evidence_max_age,
-    ));
-    let canvas_management = CanvasPlatformManagementHttpService::with_catalog_options(
-        canvas_management.with_readiness_input_provider(canvas_readiness),
-        Arc::new(canvas_oauth.clone()),
-        Arc::new(HttpCanvasCatalogProvider::new(
-            Duration::from_secs(10),
-            config.canvas_private_origin_allowlist.clone(),
-            config.canvas_allow_private_base_urls,
-            config.canvas_allow_http_localhost_base_urls,
-        )),
-        config.canvas_local_admin_token.clone(),
-    )
-    .with_application_approval(canvas_application_approval.clone())
-    .with_event_status(CanvasEventStatusService::new(
-        config.issuance_api_key.as_deref(),
-        Arc::new(PostgresCanvasEventStatusRepository::new(pool.clone())),
-    ));
-    let canvas_lti_deep_linking = CanvasLtiDeepLinkingService::new(
-        canvas_lti_experience_session.clone(),
-        Arc::new(PostgresCanvasLtiDeepLinkingRepository::new(pool.clone())),
-        canvas_lti_service_url_validator,
-        canvas_lti_tool_signer.clone(),
-        canvas_lti_clock.clone(),
-        Arc::new(SecureCanvasLtiDeepLinkingNonceGenerator),
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-        config.canvas_lti_deep_linking_issuer.clone(),
-        &config.issuer_base_url,
-    );
-    let canvas_lti_evidence = CanvasLtiEvidenceService::new(
-        canvas_lti_experience_session.clone(),
-        Arc::new(PostgresCanvasLtiEvidenceRepository::new(pool.clone())),
-        config.canvas_portable_enabled,
-        config.canvas_pilot_organizations.clone(),
-    );
-    let canvas_lti_evidence_sync =
-        CanvasLtiEvidenceSyncService::new(canvas_lti_evidence.clone(), canvas_lti_sync_enqueuer);
     let credential_repository = Arc::new(PostgresCredentialRepository::new(
         pool.clone(),
         token_hmac_key,
@@ -805,52 +496,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.issuer_base_url,
     );
     let lifecycle_events = CredentialLifecycleEventBus::default();
-    let canvas_status = Arc::new(CanvasCredentialsStatusService::from_runtime(
-        &config,
-        integration_secret_vault.clone(),
-    ));
-    let canvas_publication = Arc::new(CanvasCredentialsPublicationService::from_runtime(
-        &config,
-        integration_secret_vault.clone(),
-    ));
-    let mut canvas_mirror = CanvasMirrorService::new(
-        Arc::new(PostgresCanvasMirrorRepository::new(pool.clone())),
-        config.issuer_base_url.clone(),
-        config.canvas_mirror_alert_thresholds,
-    )
-    .with_publication_provider(canvas_publication)
-    .with_status_provider(canvas_status.clone());
-    if let Some(url) = config.canvas_mirror_alert_webhook_url.clone() {
-        canvas_mirror =
-            canvas_mirror.with_alert_webhook(Arc::new(TransportCanvasMirrorAlertWebhook::new(
-                CanvasHttpClientPolicy {
-                    timeout: config.canvas_mirror_alert_webhook_timeout,
-                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                    allow_private_networks: config.canvas_allow_private_base_urls,
-                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-                },
-                url,
-            )));
-    }
-    let canvas_mirror_http =
-        CanvasMirrorHttpService::new(canvas_mirror.clone(), config.issuance_api_key.as_deref());
     let credential_management = CredentialManagementService::new(
-        Arc::new(
-            PostgresCredentialManagementRepository::new(pool.clone())
-                .with_canvas_lifecycle(canvas_status),
-        ),
+        Arc::new(PostgresCredentialManagementRepository::new(pool.clone())),
         Arc::new(credential_lifecycle.status_publisher()),
         Arc::new(lifecycle_events.clone()),
     );
     // All three consumers share the same lifecycle policy, repository, status
     // publisher and event bus. Gateway adoption of operations remains separate.
-    let canvas_operations =
-        CanvasOperationsService::new(pool.clone(), config.issuance_api_key.as_deref())
-            .with_job_operations(
-                config.canvas_portable_enabled,
-                config.canvas_pilot_organizations.clone(),
-            )
-            .with_review_operations(Some(Arc::new(credential_management.clone())));
     let credential_management_http = CredentialManagementHttpService::new(
         credential_management.clone(),
         config.issuance_api_key.as_deref(),
@@ -929,27 +581,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .with_renewal(renewal),
             credential_management_http,
             application_templates,
-            CanvasServices::new(
-                canvas_oauth,
-                canvas_management,
-                canvas_legacy_ingest,
-                CanvasLtiServices::new(
-                    canvas_lti_login,
-                    canvas_lti_launch,
-                    canvas_lti_experience,
-                    canvas_lti_experience_exchange,
-                    CanvasLtiExperienceSessionServices::new(
-                        canvas_lti_experience_session,
-                        canvas_lti_bootstrap,
-                        canvas_lti_deep_linking,
-                        canvas_lti_evidence,
-                        canvas_lti_evidence_sync,
-                    ),
-                    canvas_lti_tool_signer,
-                ),
-            )
-            .with_operations(canvas_operations)
-            .with_mirror(canvas_mirror_http),
             TokenRateLimiter::from_python_config(config.token_rate_limit, config.token_rate_window),
             oid4vci_authorization,
         )
@@ -1041,10 +672,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     runtime.activate()?;
-    let canvas_mirror_worker = spawn_canvas_mirror_automation(
-        Arc::new(canvas_mirror),
-        config.canvas_mirror_automation.clone(),
-    );
     if grpc_enabled {
         health_reporter
             .set_serving::<IssuanceServiceServer<CredentialManagementGrpcService>>()
@@ -1100,9 +727,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     if !already_draining {
         runtime.drain()?;
-    }
-    if let Some(worker) = canvas_mirror_worker {
-        worker.shutdown().await;
     }
     runtime.stop()?;
     result?;
