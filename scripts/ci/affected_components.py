@@ -16,7 +16,7 @@ FLAGS = (
     "openbao", "rollback_test_only", "didcomm_release_test_only", "k8s_policy_test_only",
     "release", "verification", "security",
 )
-FULL_MATRIX = ["canvas", "contracts", "selfhost"]
+FULL_MATRIX = ["contracts", "flow", "selfhost"]
 JOB_FLAGS = {
     "changes": None, "release-preflight": None, "lint": None,
     "test-website": "website", "fast-feedback": "ui", "test-ui": "ui",
@@ -120,7 +120,7 @@ def validate_flags(flags, matrix, event):
     if not isinstance(matrix, list) or not all(isinstance(v, str) for v in matrix):
         raise ValueError("invalid Rust matrix")
     if flags["rust"] and not flags["rust_runtime"]:
-        if event != "pull_request" or matrix not in [["contracts"], ["worker"], ["flow"], ["selfhost"], ["renewal-unit"]]:
+        if event != "pull_request" or matrix not in [["contracts"], ["flow"], ["selfhost"], ["renewal-unit"]]:
             raise ValueError("invalid scoped Rust matrix")
     elif matrix != FULL_MATRIX:
         raise ValueError("full Rust matrix required")

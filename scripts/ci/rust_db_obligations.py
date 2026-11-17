@@ -74,7 +74,7 @@ LIBRARY_UNIT_IGNORED_OWNERS = {
             "beta_batch_http_never_creates_a_missing_batch_row_through_single_submit",
         )
     },
-    "outbound_http::tests::native_socket_case": "scripts/run_canvas_timeout_consumer_oracle.py",
+    "outbound_http::tests::native_socket_case": "scripts/run_outbound_http_timeout_oracle.py",
     "internal_application_diagnostics::tests::actual_tracing_event_child": (
         "internal_application_diagnostics::tests::actual_tracing_event_fields_are_stable_in_isolated_process"
     ),

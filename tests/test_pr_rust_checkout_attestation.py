@@ -53,7 +53,7 @@ def source(tmp_path: Path):
     env = {
         "GITHUB_EVENT_NAME": "pull_request",
         "GITHUB_JOB": "test-rust-services",
-        "MARTY_RUST_ATTESTATION_LANE": "canvas",
+        "MARTY_RUST_ATTESTATION_LANE": "flow",
         "GITHUB_WORKFLOW": "CI",
         "GITHUB_REPOSITORY": "ElevenID/marty-ui",
         "GITHUB_REPOSITORY_ID": "123",
@@ -76,7 +76,7 @@ def source(tmp_path: Path):
     return repo, env, event
 
 
-@pytest.mark.parametrize("lane", ["canvas", "contracts"])
+@pytest.mark.parametrize("lane", ["flow", "contracts"])
 def test_records_actual_merge_checkout_and_workflow_blob(source, lane: str) -> None:
     repo, env, event = source
     env["MARTY_RUST_ATTESTATION_LANE"] = lane
@@ -256,7 +256,7 @@ def test_workflow_preserves_full_merge_group_and_required_gate() -> None:
     assert record["if"] == upload["if"]
     assert "github.event_name == 'pull_request'" in record["if"]
     assert "success()" in record["if"]
-    assert "matrix.lane == 'canvas'" in record["if"]
+    assert "matrix.lane == 'flow'" in record["if"]
     assert "matrix.lane == 'contracts'" in record["if"]
     assert rust_steps.index(record) > next(
         i
