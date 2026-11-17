@@ -155,7 +155,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     fn frozen() -> Value {
-        serde_json::from_str(include_str!("../../../../contracts/canvas-utf7-codec.json")).unwrap()
+        serde_json::from_str(include_str!("../../../../contracts/http-utf7-codec.json")).unwrap()
     }
 
     fn observation(result: Result<PythonText, DecodeError>) -> Value {
@@ -189,7 +189,7 @@ mod tests {
             }
         }
         let boundary: Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-utf7-boundary-oracle.json"
+            "../../../../contracts/http-utf7-boundary-oracle.json"
         ))
         .unwrap();
         for case in boundary["cases"].as_array().unwrap() {

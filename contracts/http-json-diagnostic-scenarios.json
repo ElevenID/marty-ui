@@ -1,0 +1,517 @@
+{
+  "schema": "marty.canvas-review-input-scenarios/v1",
+  "shared_seed": "canvas-issued-review-scenarios.json",
+  "seed": [
+    "UPDATE issuance_service.canvas_evidence_sync_targets SET enabled=false WHERE id='target-review'",
+    "INSERT INTO issuance_service.canvas_evidence_sync_jobs (id,organization_id,target_id,status,attempt_count,max_attempts,available_at,result,created_at,updated_at,last_error_code,last_error_summary) VALUES ('job-dead','org-review','target-review','dead_letter',8,8,now(),'{\"facts_changed\":1,\"no_change\":false,\"provider_payload\":{\"token\":\"synthetic-private\"},\"roster_remaining\":2}',now(),now(),'synthetic_failure','Bearer synthetic-private-token')",
+    "INSERT INTO issuance_service.canvas_award_candidates (id,organization_id,platform_id,binding_id,candidate_key,canvas_user_id,lti_subject,state,observed_at,created_at,updated_at) VALUES ('candidate-ops','org-review','platform-review','binding-review','numeric-user:7','7','subject-private','pending_claim',now(),now(),now())"
+  ],
+  "snapshot_sql": "SELECT jsonb_build_object('jobs',(SELECT jsonb_agg(jsonb_build_object('id',id,'target_id',target_id,'status',status,'attempt_count',attempt_count,'max_attempts',max_attempts) ORDER BY id) FROM issuance_service.canvas_evidence_sync_jobs),'targets',(SELECT jsonb_agg(jsonb_build_object('id',id,'enabled',enabled) ORDER BY id) FROM issuance_service.canvas_evidence_sync_targets),'reviews',(SELECT jsonb_agg(jsonb_build_object('id',id,'status',status,'action',resolution_action,'actor',resolved_by,'claim_active',resolution_claim_token IS NOT NULL,'recovery_pending',resolution_recovery_pending) ORDER BY id) FROM issuance_service.evidence_policy_reviews),'resolved_events',(SELECT count(*) FROM issuance_service.issuance_events WHERE event_type='evidence_policy_review_resolved'))",
+  "cases": [
+    {
+      "name": "empty",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "",
+      "expected_status": 422
+    },
+    {
+      "name": "whitespace",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": " \r\n\t",
+      "expected_status": 422
+    },
+    {
+      "name": "unfinished_object",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{",
+      "expected_status": 422
+    },
+    {
+      "name": "unfinished_value",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":",
+      "expected_status": 422
+    },
+    {
+      "name": "trailing_comma",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\",}",
+      "expected_status": 422
+    },
+    {
+      "name": "trailing_data",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"} false",
+      "expected_status": 422
+    },
+    {
+      "name": "unterminated_string",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss}",
+      "expected_status": 422
+    },
+    {
+      "name": "invalid_escape",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dis\\qmiss\"}",
+      "expected_status": 422
+    },
+    {
+      "name": "null",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": null,
+      "expected_status": 422
+    },
+    {
+      "name": "array",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": [],
+      "expected_status": 422
+    },
+    {
+      "name": "string",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": "dismiss",
+      "expected_status": 422
+    },
+    {
+      "name": "number",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": 7,
+      "expected_status": 422
+    },
+    {
+      "name": "boolean",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": false,
+      "expected_status": 422
+    },
+    {
+      "name": "missing_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {},
+      "expected_status": 422
+    },
+    {
+      "name": "null_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": null
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "numeric_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": 1
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "case_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "Dismiss"
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "padded_action",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": " dismiss "
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "numeric_note",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": 7
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "array_note",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": []
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "combined_errors",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "bad",
+        "note": 7
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "valid_dismiss",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss"
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "null_note",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": null
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "empty_note",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": ""
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "unknown_fields",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "future": {
+          "allowed": true
+        }
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "json_type",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "application/json",
+      "expected_status": 200
+    },
+    {
+      "name": "json_charset",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "application/json; charset=utf-8",
+      "expected_status": 200
+    },
+    {
+      "name": "vendor_json",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "application/vnd.elevenid+json",
+      "expected_status": 200
+    },
+    {
+      "name": "upper_json",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "Application/JSON",
+      "expected_status": 200
+    },
+    {
+      "name": "plain",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "text/plain",
+      "expected_status": 422
+    },
+    {
+      "name": "octets",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "application/octet-stream",
+      "expected_status": 422
+    },
+    {
+      "name": "form",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": "application/x-www-form-urlencoded",
+      "expected_status": 422
+    },
+    {
+      "name": "missing_type",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{\"action\":\"dismiss\"}",
+      "content_type": null,
+      "expected_status": 200
+    },
+    {
+      "name": "malformed_missing_key",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{",
+      "omit_headers": [
+        "X-API-Key"
+      ],
+      "expected_status": 422
+    },
+    {
+      "name": "malformed_wrong_key",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "raw_body": "{",
+      "headers": {
+        "X-API-Key": "wrong"
+      },
+      "expected_status": 422
+    },
+    {
+      "name": "invalid_fields_missing_key",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "bad"
+      },
+      "omit_headers": [
+        "X-API-Key"
+      ],
+      "expected_status": 401
+    },
+    {
+      "name": "invalid_fields_missing_org",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "bad"
+      },
+      "omit_headers": [
+        "X-Organization-ID"
+      ],
+      "expected_status": 422
+    },
+    {
+      "name": "valid_missing_org",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss"
+      },
+      "omit_headers": [
+        "X-Organization-ID"
+      ],
+      "expected_status": 400
+    },
+    {
+      "name": "valid_foreign_org",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss"
+      },
+      "headers": {
+        "X-Organization-ID": "foreign"
+      },
+      "expected_status": 404
+    },
+    {
+      "name": "actor_priority",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": "  checked  "
+      },
+      "headers": {
+        "X-Authenticated-User-ID": "trusted",
+        "X-User-ID": "fallback",
+        "X-API-Key-ID": "api"
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "actor_empty",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": "  checked  "
+      },
+      "headers": {
+        "X-Authenticated-User-ID": "",
+        "X-User-ID": "fallback",
+        "X-API-Key-ID": "api"
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "actor_whitespace",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": "  checked  "
+      },
+      "headers": {
+        "X-Authenticated-User-ID": "  ",
+        "X-User-ID": "fallback",
+        "X-API-Key-ID": "api"
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "actor_api",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss",
+        "note": "  checked  "
+      },
+      "headers": {
+        "X-API-Key-ID": "api"
+      },
+      "expected_status": 200
+    },
+    {
+      "name": "note_2000",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss"
+      },
+      "note_length": 2000,
+      "expected_status": 200
+    },
+    {
+      "name": "note_2001",
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/review-input/resolve",
+      "prepare_review": "review-input",
+      "expected_lifecycle_calls": 0,
+      "body": {
+        "action": "dismiss"
+      },
+      "note_length": 2001,
+      "expected_status": 422
+    }
+  ]
+}

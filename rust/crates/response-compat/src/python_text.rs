@@ -120,7 +120,7 @@ mod tests {
     #[test]
     fn frozen_python_text_preserves_excerpt_and_scalar_conversion_boundaries() {
         let frozen: Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-utf7-boundary-oracle.json"
+            "../../../../contracts/http-utf7-boundary-oracle.json"
         ))
         .unwrap();
         let cases = frozen["cases"].as_array().unwrap();

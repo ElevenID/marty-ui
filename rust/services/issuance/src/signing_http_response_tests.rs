@@ -184,7 +184,7 @@ fn operation(name: &str) -> SigningOperation {
 #[tokio::test]
 async fn six_frozen_operations_cross_real_http_before_shared_classification() {
     let reference: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-privacy-reference.json"
+        "../../../../contracts/signing-error-privacy-reference.json"
     ))
     .unwrap();
     let peer = Peer::new(Reply::json(503, b"{}".as_slice())).await;

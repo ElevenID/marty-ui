@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn preserves_all_frozen_timeout_scalars_without_startup_restrictions() {
         let cases: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-provider-configuration-scenarios.json"
+            "../../../../contracts/http-timeout-scalar-scenarios.json"
         ))
         .unwrap();
         for case in cases["timeouts"].as_array().unwrap() {

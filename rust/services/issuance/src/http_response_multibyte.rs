@@ -13,63 +13,63 @@ const VALID: u32 = 1 << 31;
 pub(super) const SOURCES: &[(&str, &str)] = &[
     (
         "big5",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/big5.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/big5.json"),
     ),
     (
         "big5hkscs",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/big5hkscs.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/big5hkscs.json"),
     ),
     (
         "cp932",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/cp932.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/cp932.json"),
     ),
     (
         "cp949",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/cp949.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/cp949.json"),
     ),
     (
         "cp950",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/cp950.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/cp950.json"),
     ),
     (
         "gb2312",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/gb2312.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/gb2312.json"),
     ),
     (
         "gbk",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/gbk.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/gbk.json"),
     ),
     (
         "johab",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/johab.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/johab.json"),
     ),
     (
         "shift_jis",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jis.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/shift_jis.json"),
     ),
     (
         "shift_jis_2004",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jis_2004.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/shift_jis_2004.json"),
     ),
     (
         "shift_jisx0213",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/shift_jisx0213.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/shift_jisx0213.json"),
     ),
     (
         "euc_jp",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jp.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/euc_jp.json"),
     ),
     (
         "euc_jis_2004",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jis_2004.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/euc_jis_2004.json"),
     ),
     (
         "euc_jisx0213",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/euc_jisx0213.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/euc_jisx0213.json"),
     ),
     (
         "hz",
-        include_str!("../../../../contracts/canvas-multibyte-codecs/hz.json"),
+        include_str!("../../../../contracts/http-multibyte-codecs/hz.json"),
     ),
 ];
 

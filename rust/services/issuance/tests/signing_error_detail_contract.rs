@@ -27,7 +27,7 @@ enum TextFailure {
 fn reference() -> &'static Value {
     static REFERENCE: OnceLock<Value> = OnceLock::new();
     REFERENCE.get_or_init(|| {
-        let raw = include_str!("../../../../contracts/canvas-worker-privacy-reference.json");
+        let raw = include_str!("../../../../contracts/signing-error-privacy-reference.json");
         assert_eq!(
             format!("{:x}", Sha256::digest(raw.replace("\r\n", "\n").as_bytes())),
             "2bcffee4bfd78152e1a6eb611442391a228fa034cce1266818ded532f8f35c05"

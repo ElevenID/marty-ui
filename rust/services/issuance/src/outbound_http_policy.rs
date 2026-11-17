@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn provider_retry_after_preserves_frozen_oversized_day_clamp() {
         let scenarios: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+            "../../../../contracts/http-retry-after-scenarios.json"
         ))
         .unwrap();
         let case = scenarios["cases"]
@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn shared_retry_after_retains_frozen_worker_vectors() {
         let contract: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/issuance-canvas-sync-worker.json"
+            "../../../../contracts/http-retry-after-reference.json"
         ))
         .unwrap();
         for case in contract["executable_fixtures"]["retry_after"]

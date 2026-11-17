@@ -1,6 +1,6 @@
 //! Published EUC-KR pairs and eight-byte Hangul make-up sequences.
 
-const SOURCE: &str = include_str!("../../../../contracts/canvas-euc-kr-codec.json");
+const SOURCE: &str = include_str!("../../../../contracts/http-euc-kr-codec.json");
 
 #[derive(serde::Deserialize)]
 struct Frozen {

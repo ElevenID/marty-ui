@@ -1,0 +1,2279 @@
+{
+  "boundary": "actual ASGI/auth/service/PostgreSQL; controlled external suspend/revoke ports",
+  "claim_constraint": "CHECK ((((resolution_claim_token IS NULL) AND (resolution_claim_action IS NULL) AND (resolution_claimed_at IS NULL)) OR (((status)::text = 'open'::text) AND (resolution_claim_token IS NOT NULL) AND ((resolution_claim_action)::text = ANY ((ARRAY['dismiss'::character varying, 'suspend'::character varying, 'revoke'::character varying, 'evidence_recovered'::character varying])::text[])) AND (resolution_claimed_at IS NOT NULL))))",
+  "normalization": "generated UUID identity aliases; validated ISO timestamp presence, not exact wall-clock values",
+  "observations": [
+    {
+      "body": {
+        "detail": [
+          {
+            "input": null,
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "type": "missing",
+            "url": "https://errors.pydantic.dev/2.11/v/missing"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "empty",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting value"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              4
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "whitespace",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "unfinished_object",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting value"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              10
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "unfinished_value",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              20
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "trailing_comma",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Extra data"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              21
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "trailing_data",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Unterminated string starting at"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              10
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "unterminated_string",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Invalid \\escape"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              14
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "invalid_escape",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": null,
+            "loc": [
+              "body"
+            ],
+            "msg": "Field required",
+            "type": "missing",
+            "url": "https://errors.pydantic.dev/2.11/v/missing"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "null",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": [],
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "array",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "dismiss",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "string",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": 7,
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "number",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": false,
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "boolean",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": {},
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Field required",
+            "type": "missing",
+            "url": "https://errors.pydantic.dev/2.11/v/missing"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "missing_action",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": null,
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "null_action",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": 1,
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "numeric_action",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": "Dismiss",
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "case_action",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": " dismiss ",
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "padded_action",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": 7,
+            "loc": [
+              "body",
+              "note"
+            ],
+            "msg": "Input should be a valid string",
+            "type": "string_type",
+            "url": "https://errors.pydantic.dev/2.11/v/string_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "numeric_note",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": [],
+            "loc": [
+              "body",
+              "note"
+            ],
+            "msg": "Input should be a valid string",
+            "type": "string_type",
+            "url": "https://errors.pydantic.dev/2.11/v/string_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "array_note",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": "bad",
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          },
+          {
+            "input": 7,
+            "loc": [
+              "body",
+              "note"
+            ],
+            "msg": "Input should be a valid string",
+            "type": "string_type",
+            "url": "https://errors.pydantic.dev/2.11/v/string_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "combined_errors",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 0,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "valid_dismiss",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 1,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "null_note",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 2,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "empty_note",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 3,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "unknown_fields",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 4,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "json_type",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 5,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "json_charset",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 6,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "vendor_json",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 7,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "upper_json",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 8,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "{\"action\":\"dismiss\"}",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "plain",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 8,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "{\"action\":\"dismiss\"}",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "octets",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 8,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "input": "{\"action\":\"dismiss\"}",
+            "loc": [
+              "body"
+            ],
+            "msg": "Input should be a valid dictionary or object to extract fields from",
+            "type": "model_attributes_type",
+            "url": "https://errors.pydantic.dev/2.11/v/model_attributes_type"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "form",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 8,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": null,
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "missing_type",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "malformed_missing_key",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "error": "Expecting property name enclosed in double quotes"
+            },
+            "input": {},
+            "loc": [
+              "body",
+              1
+            ],
+            "msg": "JSON decode error",
+            "type": "json_invalid"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "malformed_wrong_key",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "X-API-Key header is missing"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "invalid_fields_missing_key",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 401
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "expected": "'dismiss', 'suspend' or 'revoke'"
+            },
+            "input": "bad",
+            "loc": [
+              "body",
+              "action"
+            ],
+            "msg": "Input should be 'dismiss', 'suspend' or 'revoke'",
+            "type": "literal_error",
+            "url": "https://errors.pydantic.dev/2.11/v/literal_error"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "invalid_fields_missing_org",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    },
+    {
+      "body": {
+        "detail": "X-Organization-ID is required for Canvas management"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "valid_missing_org",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 400
+    },
+    {
+      "body": {
+        "detail": {
+          "code": "canvas_review_not_found",
+          "message": "Canvas evidence correction review not found"
+        }
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "valid_foreign_org",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 9,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 404
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": "checked",
+        "resolved_at": "$timestamp",
+        "resolved_by": "trusted",
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "actor_priority",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 10,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": "trusted",
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": "checked",
+        "resolved_at": "$timestamp",
+        "resolved_by": "fallback",
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "actor_empty",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 11,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": "fallback",
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": "checked",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "actor_whitespace",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 12,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": "checked",
+        "resolved_at": "$timestamp",
+        "resolved_by": "api",
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "actor_api",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 13,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": "api",
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "application_id": "application-review",
+        "binding_id": "binding-review",
+        "created_at": "$timestamp",
+        "credential_id": "credential-review",
+        "current_decision": {
+          "allowed": false
+        },
+        "id": "review-input",
+        "organization_id": "org-review",
+        "prior_decision": {
+          "allowed": true
+        },
+        "resolution_action": "dismiss",
+        "resolution_notes": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+        "resolved_at": "$timestamp",
+        "resolved_by": null,
+        "status": "dismissed",
+        "triggering_fact_id": null,
+        "updated_at": "$timestamp"
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "note_2000",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 14,
+        "reviews": [
+          {
+            "action": "dismiss",
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "dismissed"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 200
+    },
+    {
+      "body": {
+        "detail": [
+          {
+            "ctx": {
+              "max_length": 2000
+            },
+            "input": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
+            "loc": [
+              "body",
+              "note"
+            ],
+            "msg": "String should have at most 2000 characters",
+            "type": "string_too_long",
+            "url": "https://errors.pydantic.dev/2.11/v/string_too_long"
+          }
+        ]
+      },
+      "content_type": "application/json",
+      "lifecycle_calls": [],
+      "name": "note_2001",
+      "snapshot": {
+        "jobs": [
+          {
+            "attempt_count": 8,
+            "id": "job-dead",
+            "max_attempts": 8,
+            "status": "dead_letter",
+            "target_id": "target-review"
+          }
+        ],
+        "resolved_events": 14,
+        "reviews": [
+          {
+            "action": null,
+            "actor": null,
+            "claim_active": false,
+            "id": "review-input",
+            "recovery_pending": false,
+            "status": "open"
+          }
+        ],
+        "targets": [
+          {
+            "enabled": false,
+            "id": "target-review"
+          }
+        ]
+      },
+      "status": 422
+    }
+  ],
+  "operations_sha256": "49ed07755bc9a2c4daee61242c8d14334dfe343eebd8b99ef30f88ae5f7e0d83",
+  "repository_sha256": "34ba42bd10227e0040c99378254c3652c388bab3131aadfdba2e0fe92cf89ccb",
+  "sync_jobs_sha256": "e3cc45ef4b40cf9f80ad46699768e7d584bde53e75d29f36ab783780fa03e5f9",
+  "sync_service_sha256": "4d5a5eb9a9ffed3d87d857f3e3fcc61740616c8f492fa75818871d0bd738c592"
+}

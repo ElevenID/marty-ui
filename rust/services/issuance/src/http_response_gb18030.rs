@@ -1,7 +1,7 @@
 //! Published CPython GB18030 mappings with its complete-input error consumption.
 //! Four-byte ranges avoid enumerating the large pending-input state space.
 
-const SOURCE: &str = include_str!("../../../../contracts/canvas-gb18030-codec.json");
+const SOURCE: &str = include_str!("../../../../contracts/http-gb18030-codec.json");
 const POINTER_COUNT: u32 = 126 * 10 * 126 * 10;
 
 #[derive(serde::Deserialize)]

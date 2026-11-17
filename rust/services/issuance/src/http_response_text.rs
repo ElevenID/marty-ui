@@ -82,7 +82,7 @@ fn response_codecs() -> &'static ResponseCodecs {
             aliases: BTreeMap<String, String>,
         }
         let frozen: Frozen = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-single-byte-codecs.json"
+            "../../../../contracts/http-single-byte-codecs.json"
         ))
         .expect("embedded published codec data must be valid");
         assert_eq!(frozen.schema, "marty.canvas-single-byte-codecs/v1");
@@ -108,7 +108,7 @@ fn response_codecs() -> &'static ResponseCodecs {
             aliases: BTreeMap<String, UnicodeEncoding>,
         }
         let unicode: Unicode = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-unicode-text-oracle.json"
+            "../../../../contracts/http-unicode-text-oracle.json"
         ))
         .expect("embedded published Unicode codec data must be valid");
         assert_eq!(unicode.schema, "marty.canvas-unicode-text/v1");
@@ -118,7 +118,7 @@ fn response_codecs() -> &'static ResponseCodecs {
             registry_aliases: BTreeMap<String, String>,
         }
         let headers: Headers = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-charset-headers-oracle.json"
+            "../../../../contracts/http-charset-headers-oracle.json"
         ))
         .expect("embedded published registry aliases must be valid");
         assert_eq!(headers.schema, "marty.canvas-charset-headers/v1");
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn unicode_text_and_excerpt_match_published_decoder_corpus() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-unicode-text-oracle.json"
+            "../../../../contracts/http-unicode-text-oracle.json"
         ))
         .unwrap();
         assert_eq!(frozen["cases"].as_array().unwrap().len(), 372);
@@ -386,7 +386,7 @@ mod tests {
     #[test]
     fn gb18030_response_cases_match_published_codec() {
         let frozen = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-gb18030-codec.json"
+            "../../../../contracts/http-gb18030-codec.json"
         ))
         .unwrap();
         assert_published_codec_cases(&frozen);
@@ -412,10 +412,9 @@ mod tests {
 
     #[test]
     fn euc_kr_response_cases_match_published_codec() {
-        let frozen = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-euc-kr-codec.json"
-        ))
-        .unwrap();
+        let frozen =
+            serde_json::from_str(include_str!("../../../../contracts/http-euc-kr-codec.json"))
+                .unwrap();
         assert_published_codec_cases(&frozen);
     }
 
@@ -429,7 +428,7 @@ mod tests {
     #[test]
     fn charset_headers_match_published_parameter_text_and_json_behavior() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-charset-headers-oracle.json"
+            "../../../../contracts/http-charset-headers-oracle.json"
         ))
         .unwrap();
         assert_eq!(frozen["cases"].as_array().unwrap().len(), 177);
@@ -471,7 +470,7 @@ mod tests {
     #[test]
     fn utf7_encoded_labels_match_published_parameter_and_consumer_behavior() {
         let frozen: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../contracts/canvas-utf7-codec.json"))
+            serde_json::from_str(include_str!("../../../../contracts/http-utf7-codec.json"))
                 .unwrap();
         assert_eq!(frozen["headers"].as_array().unwrap().len(), 201);
         for case in frozen["headers"].as_array().unwrap() {
@@ -482,7 +481,7 @@ mod tests {
     #[test]
     fn continuation_ordinal_limits_match_published_parameter_and_consumer_behavior() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-charset-ordinal-oracle.json"
+            "../../../../contracts/http-charset-ordinal-oracle.json"
         ))
         .unwrap();
         assert_eq!(frozen["int_max_str_digits"], 4300);
@@ -505,7 +504,7 @@ mod tests {
     #[test]
     fn every_published_single_byte_alias_preserves_all_byte_values() {
         let frozen: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../contracts/canvas-single-byte-codecs.json"
+            "../../../../contracts/http-single-byte-codecs.json"
         ))
         .unwrap();
         let bytes = (0..=255).collect::<Vec<u8>>();
@@ -564,20 +563,20 @@ mod tests {
                 Some("synthetic; note=\"x; charset=ascii\"; CHARSET=\"ISO 8859-1\"; charset=ascii")
             )
             .unwrap(),
-            "é"
+            "Ã©"
         );
         let bom = b"\xef\xbb\xbfcaf\xc3\xa9";
         assert_eq!(
             response_text(bom, Some("text/plain; charset=utf-8-sig")).unwrap(),
-            "café"
+            "cafÃ©"
         );
         assert_eq!(
             response_text(bom, Some("text/plain; charset=utf-8")).unwrap(),
-            "\u{feff}café"
+            "\u{feff}cafÃ©"
         );
         assert_eq!(
             response_text(bom, Some("text/plain; charset=ascii")).unwrap(),
-            "���caf��"
+            "ï¿½ï¿½ï¿½cafï¿½ï¿½"
         );
     }
 }

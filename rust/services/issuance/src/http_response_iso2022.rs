@@ -5,31 +5,31 @@ use std::{collections::BTreeMap, sync::OnceLock};
 pub(super) const SOURCES: &[(&str, &str)] = &[
     (
         "iso2022_kr",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_kr.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_kr.json"),
     ),
     (
         "iso2022_jp",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp.json"),
     ),
     (
         "iso2022_jp_1",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_1.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp_1.json"),
     ),
     (
         "iso2022_jp_2",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_2.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp_2.json"),
     ),
     (
         "iso2022_jp_2004",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_2004.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp_2004.json"),
     ),
     (
         "iso2022_jp_3",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_3.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp_3.json"),
     ),
     (
         "iso2022_jp_ext",
-        include_str!("../../../../contracts/canvas-iso2022-codecs/iso2022_jp_ext.json"),
+        include_str!("../../../../contracts/http-iso2022-codecs/iso2022_jp_ext.json"),
     ),
 ];
 
