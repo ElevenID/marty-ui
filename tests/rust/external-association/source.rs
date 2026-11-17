@@ -1,0 +1,268 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Explicit disposable fixture only. No deployed role or public HTTP claim.
+use crate::external_association::{
+    inspect_source, mutate_source, AssociationError, ChangeSource, ChangeSourceExpiry,
+    SourceInspection, SourceRequest, SourceScope,
+};
+use sqlx::postgres::PgPoolOptions;
+use std::time::Duration;
+use uuid::Uuid;
+
+#[tokio::test]
+async fn restricted_login_source_adapter_preserves_replay_and_live_revocation() {
+    assert_eq!(
+        std::env::var("EXTERNAL_ASSOCIATION_SOURCE_TEST").as_deref(),
+        Ok("synthetic-local-only")
+    );
+    let port: u16 = std::env::var("EXTERNAL_ASSOCIATION_SOURCE_PORT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let organization = std::env::var("EXTERNAL_ASSOCIATION_SOURCE_ORG")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let grant = std::env::var("EXTERNAL_ASSOCIATION_SOURCE_GRANT")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let expires_at_ms = std::env::var("EXTERNAL_ASSOCIATION_SOURCE_EXPIRY")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let pool = PgPoolOptions::new()
+        .max_connections(8)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect(&format!(
+            "postgresql://association_runtime:synthetic-association-only@127.0.0.1:{port}/postgres"
+        ))
+        .await
+        .unwrap();
+    let role: String = sqlx::query_scalar("SELECT current_user::text")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "association_runtime");
+    let scope = SourceScope {
+        organization,
+        grant,
+        actor: "admin-one",
+    };
+    let initial = inspect_source(&pool, scope, None).await.unwrap();
+    assert!(
+        matches!(initial, SourceInspection::Current { record } if record.revision==4 && !record.current && !record.active)
+    );
+    let operation_id = Uuid::new_v4();
+    let mut races = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        races.spawn(async move {
+            mutate_source(
+                &pool,
+                scope,
+                &SourceRequest::ChangeExpiry(ChangeSourceExpiry {
+                    operation_id,
+                    expected_revision: 4,
+                    expires_at_ms,
+                }),
+            )
+            .await
+            .unwrap()
+        });
+    }
+    let first = races.join_next().await.unwrap().unwrap();
+    while let Some(value) = races.join_next().await {
+        assert_eq!(value.unwrap(), first);
+    }
+    assert_eq!(first.revision, 5);
+    assert!(!first.active);
+    assert_eq!(
+        inspect_source(&pool, scope, Some(operation_id))
+            .await
+            .unwrap(),
+        SourceInspection::Receipt { receipt: first }
+    );
+    assert_eq!(
+        inspect_source(
+            &pool,
+            SourceScope {
+                actor: "learner-one",
+                ..scope
+            },
+            Some(operation_id)
+        )
+        .await,
+        Err(AssociationError::NotAuthorized)
+    );
+    let approve_operation = Uuid::new_v4();
+    let approval = mutate_source(
+        &pool,
+        scope,
+        &SourceRequest::Approve(ChangeSource {
+            operation_id: approve_operation,
+            expected_revision: 5,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(approval.active);
+    assert!(
+        matches!(inspect_source(&pool, scope, None).await.unwrap(), SourceInspection::Current { record } if record.revision==6 && record.current)
+    );
+    let revoked = mutate_source(
+        &pool,
+        scope,
+        &SourceRequest::Revoke(ChangeSource {
+            operation_id: Uuid::new_v4(),
+            expected_revision: 6,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(revoked.revision, 7);
+    assert!(!revoked.active);
+    assert_eq!(
+        mutate_source(
+            &pool,
+            scope,
+            &SourceRequest::Approve(ChangeSource {
+                operation_id: approve_operation,
+                expected_revision: 5,
+            })
+        )
+        .await
+        .unwrap(),
+        approval
+    );
+    assert_eq!(
+        inspect_source(&pool, scope, Some(approve_operation))
+            .await
+            .unwrap(),
+        SourceInspection::Receipt { receipt: approval }
+    );
+    assert!(
+        matches!(inspect_source(&pool, scope, None).await.unwrap(), SourceInspection::Current { record } if record.revision==7 && !record.current)
+    );
+    assert!(
+        sqlx::query("UPDATE organization_service.api_keys SET enabled=false")
+            .execute(&pool)
+            .await
+            .is_err()
+    );
+    use crate::external_association::{
+        consent, create_challenge, ChallengeConsent, ConsentAction, CreateChallenge, LearnerScope,
+        ProducerScope,
+    };
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use sha2::{Digest, Sha256};
+    let producer = ProducerScope {
+        organization,
+        api_key_id: std::env::var("EXTERNAL_ASSOCIATION_SOURCE_KEY")
+            .unwrap()
+            .parse()
+            .unwrap(),
+    };
+    mutate_source(
+        &pool,
+        scope,
+        &SourceRequest::Approve(ChangeSource {
+            operation_id: Uuid::new_v4(),
+            expected_revision: 7,
+        }),
+    )
+    .await
+    .unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let challenge_request = CreateChallenge {
+        operation_id: Uuid::new_v4(),
+        challenge_id: Uuid::new_v4(),
+        source_grant_id: grant,
+        expected_source_revision: 8,
+        binding_id: "binding-rust".into(),
+        expected_binding_revision: 1,
+        provider_reference: "d".repeat(64),
+        provider_revision: 1,
+        code_hash: format!("{:x}", Sha256::digest([7_u8; 32])),
+        expires_at_ms: now + 120_000,
+    };
+    let mut challenges = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let request = challenge_request.clone();
+        challenges.spawn(async move { create_challenge(&pool, producer, &request).await.unwrap() });
+    }
+    let created = challenges.join_next().await.unwrap().unwrap();
+    while let Some(result) = challenges.join_next().await {
+        assert_eq!(result.unwrap(), created);
+    }
+    assert_eq!(created.phase, "pending");
+    let learner = LearnerScope {
+        organization,
+        user_id: "learner-one",
+        challenge_id: created.challenge_id,
+    };
+    let consent_request = ChallengeConsent {
+        operation_id: Uuid::new_v4(),
+        expected_revision: 1,
+        code: URL_SAFE_NO_PAD.encode([7_u8; 32]),
+    };
+    assert_eq!(
+        consent(
+            &pool,
+            LearnerScope {
+                user_id: "admin-one",
+                ..learner
+            },
+            ConsentAction::Confirm,
+            &consent_request
+        )
+        .await,
+        Err(AssociationError::NotAuthorized)
+    );
+    let mut consents = tokio::task::JoinSet::new();
+    for _ in 0..8 {
+        let pool = pool.clone();
+        let request = consent_request.clone();
+        consents.spawn(async move {
+            consent(&pool, learner, ConsentAction::Confirm, &request)
+                .await
+                .unwrap()
+        });
+    }
+    let confirmed = consents.join_next().await.unwrap().unwrap();
+    while let Some(result) = consents.join_next().await {
+        assert_eq!(result.unwrap(), confirmed);
+    }
+    assert_eq!(confirmed.phase, "confirmed");
+    let new_operation = ChallengeConsent {
+        operation_id: Uuid::new_v4(),
+        ..consent_request.clone()
+    };
+    assert_eq!(
+        consent(&pool, learner, ConsentAction::Confirm, &new_operation).await,
+        Err(AssociationError::NotAuthorized)
+    );
+    mutate_source(
+        &pool,
+        scope,
+        &SourceRequest::Revoke(ChangeSource {
+            operation_id: Uuid::new_v4(),
+            expected_revision: 8,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        consent(&pool, learner, ConsentAction::Confirm, &consent_request)
+            .await
+            .unwrap(),
+        confirmed
+    );
+    assert!(
+        matches!(inspect_source(&pool, scope, None).await.unwrap(), SourceInspection::Current { record } if !record.current && !record.active && record.revision==9)
+    );
+    pool.close().await;
+}
