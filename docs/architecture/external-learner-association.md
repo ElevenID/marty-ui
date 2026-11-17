@@ -253,3 +253,8 @@ provider mirror callback. Revocation recovery republishes canonical status.
 TODO (connector owner): implement any mirror status propagation in the connector
 using supported public Gateway contracts. It must not become a prerequisite
 for canonical revocation or restore the platform-to-provider callback.
+
+The canonical credential-management repository contract and its PostgreSQL
+implementation contain no provider synchronization method or provider
+injection option. Provider delivery errors belong to the remaining provider
+adapter, pending its removal; they are not repository capabilities.

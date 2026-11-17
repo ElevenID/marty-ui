@@ -11,8 +11,8 @@ use axum::{
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     credential_management::{
-        CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialLifecycleAuditRecord,
-        CredentialLifecycleEvent, CredentialLifecycleEventSink, CredentialManagementPortError,
+        CredentialLifecycleAction, CredentialLifecycleAuditRecord, CredentialLifecycleEvent,
+        CredentialLifecycleEventSink, CredentialManagementPortError,
         CredentialManagementRepository, CredentialManagementService, CredentialStatusPublisher,
         ManagedCredential, ManagedCredentialStatus,
     },
@@ -159,15 +159,6 @@ impl CredentialManagementRepository for UnusedLifecycleRepository {
         _audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
         Err(CredentialManagementPortError("unused".to_owned()))
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        _credential: &ManagedCredential,
-        _action: CredentialLifecycleAction,
-        _reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        Err(CredentialManagementPortError("unused".to_owned()).into())
     }
 }
 
@@ -708,20 +699,6 @@ impl CredentialManagementRepository for RevocationLifecycleRepository {
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
         self.order.lock().unwrap().push("credential:persist");
         Ok(credential.clone())
-    }
-
-    async fn synchronize_canvas(
-        &self,
-        _credential: &ManagedCredential,
-        _action: CredentialLifecycleAction,
-        reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError> {
-        self.order.lock().unwrap().push("canvas:sync");
-        self.reasons
-            .lock()
-            .unwrap()
-            .push(format!("canvas:{}", reason.unwrap_or("<none>")));
-        Ok(())
     }
 }
 

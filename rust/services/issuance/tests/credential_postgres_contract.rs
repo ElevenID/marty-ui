@@ -315,7 +315,7 @@ fn token_digest(key: &[u8], token: &str) -> String {
 }
 
 #[tokio::test]
-async fn credential_management_repository_is_concurrency_safe_and_canvas_durable() {
+async fn credential_management_repository_is_concurrency_safe_and_audited() {
     let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
         return;
     };
@@ -508,46 +508,10 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
             .is_err(),
         "a stale lifecycle writer must not overwrite the canonical status"
     );
-    repository
-        .synchronize_canvas(
-            &credential,
-            CredentialLifecycleAction::Suspend,
-            Some("manual review"),
-        )
-        .await
-        .expect("durable Canvas lifecycle request");
-    let metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(metadata["status_sync_state"], "pending");
-    assert_eq!(metadata["last_status_sync_action"], "suspend");
-    assert_eq!(metadata["requested_credential_status"], "suspended");
-    assert_eq!(metadata["requested_status_sync_reason"], "manual review");
-    assert!(repository
-        .synchronize_canvas(
-            &credential,
-            CredentialLifecycleAction::Suspend,
-            Some("-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----"),
-        )
-        .await
-        .is_err());
-    let retained_metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(retained_metadata, metadata);
-
     let mut credential = credential;
     credential.status = ManagedCredentialStatus::Active;
     credential.status_updated_at = Utc::now();
-    let credential = repository
+    let _credential = repository
         .persist(
             &credential,
             ManagedCredentialStatus::Suspended,
@@ -559,20 +523,6 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
         )
         .await
         .expect("reinstate projection persistence");
-    repository
-        .synchronize_canvas(&credential, CredentialLifecycleAction::Reinstate, None)
-        .await
-        .expect("nullable Canvas lifecycle reason");
-    let metadata: serde_json::Value = sqlx::query_scalar(
-        "SELECT metadata FROM issuance_service.credential_delivery_records
-         WHERE id = 'delivery-managed'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(metadata["requested_credential_status"], "active");
-    assert!(metadata["requested_status_sync_reason"].is_null());
-
     let events: Vec<(String, serde_json::Value)> = sqlx::query_as(
         "SELECT event_type, metadata FROM issuance_service.issuance_events
          WHERE transaction_id = 'transaction-managed' ORDER BY created_at, id",

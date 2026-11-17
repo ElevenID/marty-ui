@@ -955,19 +955,6 @@ mod tests {
             *stored = Some(credential.clone());
             Ok(credential.clone())
         }
-
-        async fn synchronize_canvas(
-            &self,
-            _credential: &ManagedCredential,
-            action: CredentialLifecycleAction,
-            _reason: Option<&str>,
-        ) -> Result<(), crate::credential_management::CanvasLifecycleSyncError> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .push(format!("canvas:{}", action.as_str()));
-            Ok(())
-        }
     }
 
     #[async_trait]

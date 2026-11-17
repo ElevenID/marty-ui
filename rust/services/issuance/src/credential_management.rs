@@ -130,14 +130,6 @@ pub struct CredentialLifecycleEvent {
 pub struct CredentialManagementPortError(pub String);
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum CanvasLifecycleSyncError {
-    #[error(transparent)]
-    Port(#[from] CredentialManagementPortError),
-    #[error("Canvas delivery response cannot be encoded for persistence")]
-    TextEncoding,
-}
-
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CredentialManagementError {
     #[error("Credential not found")]
     NotFound,
@@ -202,16 +194,6 @@ pub trait CredentialManagementRepository: Send + Sync {
         expected_status: ManagedCredentialStatus,
         audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError>;
-
-    /// Synchronize Canvas mirrors after local persistence. External failures
-    /// are successful outcomes only after this port durably records retry
-    /// metadata; an error means that durable retry recording itself failed.
-    async fn synchronize_canvas(
-        &self,
-        credential: &ManagedCredential,
-        action: CredentialLifecycleAction,
-        reason: Option<&str>,
-    ) -> Result<(), CanvasLifecycleSyncError>;
 }
 
 #[async_trait]
@@ -605,7 +587,6 @@ mod tests {
         credential: Arc<Mutex<Option<ManagedCredential>>>,
         calls: Arc<Mutex<Vec<String>>>,
         publication_failure: Arc<Mutex<Option<String>>>,
-        canvas_failure: Arc<Mutex<Option<String>>>,
         persist_failure: Arc<Mutex<Option<String>>>,
         persist_race_reason: Arc<Mutex<Option<String>>>,
         events: Arc<Mutex<Vec<CredentialLifecycleEvent>>>,
@@ -639,7 +620,6 @@ mod tests {
                 }))),
                 calls: Arc::new(Mutex::new(Vec::new())),
                 publication_failure: Arc::new(Mutex::new(None)),
-                canvas_failure: Arc::new(Mutex::new(None)),
                 persist_failure: Arc::new(Mutex::new(None)),
                 persist_race_reason: Arc::new(Mutex::new(None)),
                 events: Arc::new(Mutex::new(Vec::new())),
@@ -727,23 +707,6 @@ mod tests {
             }
             *stored = Some(credential.clone());
             Ok(credential.clone())
-        }
-
-        async fn synchronize_canvas(
-            &self,
-            _credential: &ManagedCredential,
-            action: CredentialLifecycleAction,
-            _reason: Option<&str>,
-        ) -> Result<(), CanvasLifecycleSyncError> {
-            self.calls
-                .lock()
-                .expect("calls")
-                .push(format!("canvas:{}", action.as_str()));
-            if let Some(error) = self.canvas_failure.lock().expect("canvas failure").clone() {
-                Err(CredentialManagementPortError(error).into())
-            } else {
-                Ok(())
-            }
         }
     }
 
@@ -1094,8 +1057,6 @@ mod tests {
     #[tokio::test]
     async fn canonical_status_transition_does_not_invoke_retired_provider_sync() {
         let harness = Harness::new(ManagedCredentialStatus::Active);
-        *harness.canvas_failure.lock().expect("provider failure") =
-            Some("retired provider is unavailable".to_owned());
         let status = harness
             .service()
             .transition(

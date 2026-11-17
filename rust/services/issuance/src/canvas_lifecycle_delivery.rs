@@ -10,14 +10,21 @@ use std::sync::Arc;
 use crate::{
     canvas_binding_domain::CANVAS_FEATURE_FLAGS,
     credential_management::{
-        CanvasLifecycleSyncError, CredentialLifecycleAction, CredentialManagementPortError,
-        ManagedCredential,
+        CredentialLifecycleAction, CredentialManagementPortError, ManagedCredential,
     },
     lossless_json::{LosslessJson, LosslessObject},
     owned_json_value::OwnedJsonValue,
     python_text::PythonText,
     python_value::{python_string, python_truthy, strip},
 };
+
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
+pub enum CanvasLifecycleSyncError {
+    #[error(transparent)]
+    Port(#[from] CredentialManagementPortError),
+    #[error("Canvas delivery response cannot be encoded for persistence")]
+    TextEncoding,
+}
 
 #[async_trait]
 pub trait CanvasLifecycleStatusProvider: Send + Sync {
