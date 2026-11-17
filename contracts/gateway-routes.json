@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 467,
+  "route_count": 463,
   "routes": [
     {
       "include_in_schema": true,
@@ -140,31 +140,7 @@
     {
       "include_in_schema": true,
       "method": "GET",
-      "path": "/.well-known/vct/credentials/canvas-interoperability-foundations-badge",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "GET",
       "path": "/.well-known/vct/credentials/marty-verified-member-badge",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge/criteria",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "GET",
-      "path": "/credentials/canvas-interoperability-foundations-badge/image.svg",
       "status_code": 200
     },
     {
