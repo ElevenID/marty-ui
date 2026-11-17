@@ -76,9 +76,6 @@ vi.mock('../../components/pages/JoinOrganizationPage', () => ({
   default: () => <div data-testid="join-organization">Join organization</div>,
 }));
 
-vi.mock('../../components/pages/CanvasLtiExperiencePage', () => ({
-  default: () => <div data-testid="canvas-lti-experience">Canvas LTI experience</div>,
-}));
 
 vi.mock('../../components/BrowserRedirect', () => ({
   default: ({ to, preserveSearch }: { to: string; preserveSearch?: boolean }) => (
@@ -187,7 +184,7 @@ describe('PublicRoutes', () => {
     });
   });
 
-  it('renders Canvas LTI as an auth entry page outside the marketing layout', () => {
+  it('treats the retired LMS launch URL as an unsupported public route', () => {
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
       isAdministrator: false,
@@ -203,8 +200,8 @@ describe('PublicRoutes', () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByTestId('canvas-lti-experience')).toBeInTheDocument();
-    expect(screen.queryByTestId('public-layout')).not.toBeInTheDocument();
+    expect(screen.getByTestId('public-root')).toBeInTheDocument();
+    expect(screen.queryByTestId('browser-redirect')).not.toBeInTheDocument();
   });
 
   it('falls through for unsupported public routes instead of redirecting', () => {

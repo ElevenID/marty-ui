@@ -119,9 +119,8 @@ export const ADMIN_VENDOR_NAV = [
     label: 'Connect',
     path: '/console/org/connect',
     icon: IntegrationInstructionsIcon,
-    description: 'Canvas, API Keys, Webhooks, Delivery Destinations',
+    description: 'API Keys, Webhooks, Delivery Destinations',
     children: [
-      { id: 'canvas-integrations', label: 'Canvas', path: '/console/org/deploy/canvas' },
       { id: 'api-keys', label: 'API Keys', path: '/console/org/api-keys', requiredPermission: { resource: 'api-key', action: 'view' } },
       { id: 'webhooks', label: 'Webhooks', path: '/console/org/webhooks', requiredPermission: { resource: 'webhook', action: 'view' } },
       { id: 'delivery-destinations', label: 'Delivery Destinations', path: '/console/org/connect/delivery-destinations', requiredPermission: { resource: 'wallet', action: 'view' } },
