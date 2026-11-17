@@ -113,8 +113,6 @@ apps:
         limits:
           cpu: 500m
           memory: 512Mi
-canvasWorker:
-  enabled: true
 persistence:
   storageClass: ''
   postgresSize: 10Gi
@@ -165,7 +163,6 @@ ui:
     limits:
       cpu: 250m
       memory: 128Mi
-  canvasFrameAncestors: '''self'''
 migrations:
   enabled: true
   activeDeadlineSeconds: 1800

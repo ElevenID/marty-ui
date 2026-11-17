@@ -231,17 +231,6 @@
         }
       }
     },
-    "canvasWorker": {
-      "type": "object",
-      "required": [
-        "enabled"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      }
-    },
     "redis": {
       "type": "object",
       "required": [
@@ -420,7 +409,16 @@
             }
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "canvasFrameAncestors"
+            ]
+          }
+        }
+      ]
     },
     "migrations": {
       "type": "object",
@@ -743,5 +741,14 @@
         }
       ]
     }
-  }
+  },
+  "allOf": [
+    {
+      "not": {
+        "required": [
+          "canvasWorker"
+        ]
+      }
+    }
+  ]
 }

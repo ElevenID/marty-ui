@@ -61,13 +61,11 @@ mod tests {
             "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN",
             "FLOW_SIGN_GRANT_MINT_TOKEN",
             "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN",
-            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN",
-            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN",
             "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN",
             "SIGNING_KEYS_GRANT_VERIFY_TOKEN",
         ]);
-        assert_eq!(specs.len(), 13);
-        assert_eq!(runtime.len(), 11);
+        assert_eq!(specs.len(), 11);
+        assert_eq!(runtime.len(), 9);
         assert_eq!(
             runtime
                 .iter()
@@ -81,7 +79,7 @@ mod tests {
                 .map(|spec| spec.file.as_str())
                 .collect::<BTreeSet<_>>()
                 .len(),
-            13
+            11
         );
         assert_eq!(
             runtime
@@ -89,7 +87,7 @@ mod tests {
                 .map(|spec| spec.replacement_role.as_deref().unwrap())
                 .collect::<BTreeSet<_>>()
                 .len(),
-            11
+            9
         );
         for spec in &specs {
             assert_eq!(spec.file, spec.input.to_ascii_lowercase());

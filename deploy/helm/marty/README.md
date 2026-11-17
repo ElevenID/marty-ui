@@ -302,15 +302,11 @@ Kubernetes Secrets contract.
 public endpoints, SMTP usernames, KMS key names/versions and mounted file paths.
 The packaged private-key list is checked against the source secret catalogs.
 
-Set `canvasWorker.enabled: false` as a YAML boolean to omit the Canvas sync
-worker when the installation does not use that integration. The chart rejects
-quoted strings such as `'false'` instead of treating them as enabled. This
-switch does not disable the application APIs or other installation workloads.
-
-The generated ConfigMap also sets the Canvas worker's `ISSUER_BASE_URL` to the
-installation origin and `CANVAS_OAUTH_COMPLETION_REDIRECT_URL` to that origin
-plus `/console/org/deploy/canvas`, preserving a configured HTTPS port. Explicit
-values for these keys in `config` take precedence over the generated defaults.
+External connectors are deployed independently and use the public Common Gateway.
+This chart does not deploy provider workers, hold provider credentials or bypass
+Core-owned identity and application authority through direct database access.
+Unsupported workflows stay disabled with owned TODOs until their public contracts
+are implemented. See the [schema boundary](../../../docs/architecture/issuance-schema-boundary.md).
 
 ## Direct issuance and persistence acceptance
 
@@ -417,9 +413,7 @@ private management port `9000`; readiness checks the imported realm's OIDC
 discovery document on `8080`. Internal peers keep the existing KMS-backed TLS
 and scoped-token authentication. NetworkPolicies restrict private workloads
 to the namespace and UI ingress to the configured controller namespace. Egress
-is available for supported external integrations. The Canvas worker has no
-HTTP health endpoint; Kubernetes observes its process exit, as in the existing
-runtime. Set `canvasWorker.enabled=false` if that integration is not selected.
+is available for supported external integrations.
 
 ## Inspect and qualify
 

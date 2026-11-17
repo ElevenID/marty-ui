@@ -23,8 +23,8 @@ Required files:
 - `marty_api_client_secret`
 - `issuance_api_key`
 - `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
-- `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, Issuance, and Canvas sync worker; distinct random value, at least 32 characters)
-- `signing_keys_integration_secret_key` (distinct transport credential shared by native Issuance, its Canvas worker, and Signing Keys)
+- `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, and Issuance; distinct random value, at least 32 characters)
+- `signing_keys_integration_secret_key` (distinct transport credential shared by native Issuance and Signing Keys)
 - `grpc_service_token`
 - `device_registration_gateway_key` (distinct random value, at least 32 characters)
 - `device_registration_signing_keys_key` (a different random value, at least 32 characters)
@@ -75,8 +75,6 @@ Required files:
 - `sign_grant_mint_gateway_service_token`
 - `sign_grant_mint_gateway_issuer_did_token`
 - `sign_grant_mint_issuance_credential_token`
-- `sign_grant_mint_issuance_canvas_token`
-- `sign_grant_mint_issuance_readiness_token`
 - `sign_grant_mint_issuance_passport_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
@@ -104,7 +102,7 @@ The Signing Keys TLS certificate must chain to `workload_identity_ca_cert` and
 contain the `signing-keys` DNS name. Its key terminates the private
 integration-secret transport and is distinct from every non-exportable KMS
 application key. Rotate it with the CA/trust file and restart Signing Keys,
-native Issuance, and the Canvas worker together so cached TLS clients adopt
+and native Issuance together so cached TLS clients adopt
 the new trust root.
 
 `didcomm_issuance_openbao_token` is a separate token with only the `didcomm-issuance` policy and no default policy. Native Issuance uses it to read public sender versions and request complete authcrypt envelopes; key creation and rotation remain operator operations. The self-host OpenBao bootstrap mints it after mounting the DIDComm plugin. An external operator must provide the equivalent policy and token.
@@ -119,8 +117,6 @@ events that can create credential offers; do not reuse `grpc_service_token`.
 
 Optional files may be left empty when the related integration is disabled:
 
-- `canvas_credentials_shared_secret`
-- `canvas_credentials_api_token`
 - `passport_tenant_api_keys`
 - `personalization_bureau_api_key`
 - `cloudflare_beta_tunnel_token`
@@ -129,19 +125,6 @@ Optional files may be left empty when the related integration is disabled:
 - `google_analytics_measurement_id`
 - `google_site_verification`
 - `smtp_password`
-
-`canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
-
-Organization administrators configure institution-specific Canvas Credentials API
-tokens through the Canvas integration wizard. Issuance retains those tokens in
-purpose-bound envelopes encrypted by the remote KMS through signing-keys. For
-the separately selected global mirror worker, `canvas_credentials_api_token`
-supplies the supported `CANVAS_CREDENTIALS_API_TOKEN_FILE` input and is mounted
-only by Issuance and native Issuance. Leave it empty and its file setting blank
-when that global integration is disabled. It is distinct from the shared callback
-credential and does not replace organization-managed tokens.
-
-The standalone read-only Canvas Credentials contract checker can still read `CANVAS_CREDENTIALS_API_TOKEN` or `CANVAS_CREDENTIALS_API_TOKEN_FILE` from an operator shell for one-off vendor sandbox validation.
 
 `cloudflare_tunnel_token` is required only for the explicitly selected Cloudflare integration; the core installer and direct hosting do not need it. The signed installer copies a separately supplied private token into its owned secret generation.
 

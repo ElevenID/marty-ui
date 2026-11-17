@@ -697,8 +697,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False,
         )
         grant_origins = (
             "gateway-service", "gateway-issuer-did", "flow-wallet",
-            "issuance-credential", "issuance-canvas",
-            "issuance-readiness", "issuance-passport",
+            "issuance-credential",
+             "issuance-passport",
         )
         grant_mint_tokens = {
             origin: issue([f"sign-grant-mint-{origin}"])

@@ -90,12 +90,6 @@ services:
       SERVICE_NAME: issuance_native
 
   # The worker inherits its native secret-loader launch from the self-host base.
-  canvas-sync-worker:
-    <<: *selfhost-service-image
-    build: *selfhost-build-reset
-    environment:
-      SERVICE_NAME: canvas_sync_worker
-
   applicant:
     <<: *selfhost-service-image
     build: *selfhost-build-reset

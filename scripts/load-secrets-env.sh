@@ -135,7 +135,6 @@ load_secret_env() {
     load_secret_var VERIFICATION_GOVERNANCE_JSON
     load_secret_var GRPC_SERVICE_TOKEN
     load_secret_var FLOW_WEBHOOK_SECRET
-    load_secret_var CANVAS_CREDENTIALS_SHARED_SECRET
     if [ "${PRESERVE_BAO_TOKEN_FILE:-}" != "1" ]; then
         load_secret_var BAO_TOKEN
     fi

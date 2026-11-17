@@ -340,8 +340,6 @@ EXPECTED_ORDINARY_POLICIES = {
     "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN": ["sign-grant-mint-gateway-issuer-did"],
     "FLOW_SIGN_GRANT_MINT_TOKEN": ["sign-grant-mint-flow-wallet"],
     "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN": ["sign-grant-mint-issuance-credential"],
-    "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN": ["sign-grant-mint-issuance-canvas"],
-    "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN": ["sign-grant-mint-issuance-readiness"],
     "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN": ["sign-grant-mint-issuance-passport"],
     "SIGNING_KEYS_GRANT_VERIFY_TOKEN": ["sign-grant-verify"],
 }
@@ -942,7 +940,7 @@ def test_lifecycle_receipt_binds_actual_producers_and_ordinary_token_requests(bo
         "schema", "namespaceUid", "producerNonce", "workloadProject", "ordinaryTokens",
     }
     requests = lifecycle["ordinaryTokens"]
-    assert len(requests) == 13
+    assert len(requests) == 11
     assert {entry["input"] for entry in requests} == set(EXPECTED_ORDINARY_POLICIES)
     for entry in requests:
         name = entry["input"]
@@ -1335,7 +1333,7 @@ def test_application_authority_enrollment_has_persisted_binding_and_exact_privat
     assert request["transportPod"] == pod and request["transportDeadlineSeconds"] == 1200
     current = {path.removeprefix("/tmp/application-current/"): value
                for (name, path), value in flow.uploads.items() if path.startswith("/tmp/application-current/")}
-    assert set(current) == set(bootstrap.TOKEN_FILES.values()) and len(current) == 13
+    assert set(current) == set(bootstrap.TOKEN_FILES.values()) and len(current) == 11
     assert all(value == (state / "credentials" / name).read_bytes() for name, value in current.items())
     identity = state / "application-identity"
     assert {path.name for path in identity.iterdir()} == bootstrap.APPLICATION_IDENTITY_FILES
