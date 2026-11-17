@@ -65,3 +65,15 @@ Static dependency/network checks complement deployment isolation; they do not
 prove it. Retain API-key, tenant, ownership, permission, signing and audit tests.
 Local checks drive development, with required protected checks, reviews and
 merge queues retained for integration.
+
+
+## Demo catalog ownership
+
+The current platform portfolio and next unbound draft contain generic Gateway
+journeys. Provider-specific demos belong to the independent connector. Archived
+public manifests and assets remain unchanged, and the August edition is checked
+against its hash-pinned original portfolio. The UI validates those archives before
+projecting platform-owned scenarios; retired provider routes are unavailable in
+both fetched and prerendered pages. A next-edition draft does not update VERSION,
+the public release index, qualification evidence or publication state. The draft
+generator refuses to overwrite a different existing edition.

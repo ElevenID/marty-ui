@@ -9,6 +9,7 @@ import compiledWalletSchema from '../generated/demoWalletSchema.generated.json';
 import {
   DemoManifestError,
   compareStackVersions,
+  findDemoScenario,
   loadDemoIndex,
   loadDemoManifest,
   validateDemoIndex,
@@ -333,4 +334,30 @@ describe('demoManifestService', () => {
       expect(() => validateDemoManifest(candidate)).toThrow(DemoManifestError);
     },
   );
+});
+
+
+describe('retired connector demo boundary', () => {
+  it('validates archived evidence but excludes its provider route from fetched platform data', async () => {
+    const archived = JSON.parse(readFileSync('public/demos/manifests/2026.08.0.json', 'utf8'));
+    const original = JSON.stringify(archived);
+    expect(validateDemoManifest(archived)).toBe(archived);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(original, { status: 200 }));
+    const current = await loadDemoManifest('2026.08.0');
+    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => item.slug !== 'canvas-learning-achievement'));
+    expect(findDemoScenario(current, 'canvas-learning-achievement')).toBeNull();
+    expect(findDemoScenario(archived, 'canvas-learning-achievement')).toBeNull();
+    expect(JSON.stringify(archived)).toBe(original);
+  });
+
+  it('applies the same retirement to prerendered platform pages', async () => {
+    Object.defineProperty(window, '__ELEVENID_PRERENDER__', {
+      configurable: true, value: { demoManifests: true },
+    });
+    const archived = JSON.parse(readFileSync('public/demos/manifests/2026.08.0.json', 'utf8'));
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No network in prerender'));
+    const current = await loadDemoManifest('2026.08.0');
+    expect(current.scenarios).toEqual(archived.scenarios.filter((item) => item.slug !== 'canvas-learning-achievement'));
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
 });

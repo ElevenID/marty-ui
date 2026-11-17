@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -61,6 +62,13 @@ HISTORICAL_2026_07_SCENARIOS = {
 }
 PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
 PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
+# The archived edition must retain its original behavioral contract, independently
+# of current platform retirement. Preserve and hash-pin the original bytes.
+HISTORICAL_2026_08_PATH = PORTFOLIO_PATH.parents[2] / "contracts/demo-portfolio-2026-08-reference.json"
+_historical_portfolio_bytes = HISTORICAL_2026_08_PATH.read_bytes().replace(b"\r\n", b"\n")
+if hashlib.sha256(_historical_portfolio_bytes).hexdigest() != "871b892b1e8ea949b6d41c3ddba3335dd97429c1a1b4b7c22ba0985944baecfb":
+    raise ValueError("Historical demo portfolio reference changed")
+HISTORICAL_2026_08_PORTFOLIO = json.loads(_historical_portfolio_bytes)
 MANIFEST_SCHEMA_PATH = PORTFOLIO_PATH.parent.parent / "schemas" / "stack-demo-manifest.schema.json"
 WALLET_SCHEMA = json.loads(MANIFEST_SCHEMA_PATH.read_text(encoding="utf-8"))["$defs"]["scenario"]["properties"]["wallets"]["items"]
 PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
@@ -271,10 +279,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
                 manifest["mip_version"] == candidate["required_mip_version"],
                 f"{slug}: candidate requires MIP {candidate['required_mip_version']}",
             )
+    historical = manifest["stack_version"].startswith("2026.07.") or manifest["stack_version"] == "2026.08.0"
+    portfolio = HISTORICAL_2026_08_PORTFOLIO if manifest["stack_version"] == "2026.08.0" else PORTFOLIO
+    if not historical:
+        require(all(scenario.get("slug") != "canvas-learning-achievement"
+                    and scenario.get("demo_id") != "D-07"
+                    and "lti-1.3" not in scenario.get("protocols", []) for scenario in scenarios),
+                "retired connector scenario cannot be promoted in the current platform catalog")
     required_scenarios = (
         HISTORICAL_2026_07_SCENARIOS
         if manifest["stack_version"].startswith("2026.07.")
-        else PORTFOLIO_SCENARIOS | PRESERVED_LEGACY_SCENARIOS
+        else {scenario["slug"] for scenario in portfolio["scenarios"]} | PRESERVED_LEGACY_SCENARIOS
     )
     require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
     if not manifest["stack_version"].startswith("2026.07."):
@@ -284,7 +299,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
             for slug, candidate in CANDIDATE_SCENARIOS.items()
             if slug in scenario_by_slug
         ]
-        for contract in PORTFOLIO["scenarios"] + present_candidates:
+        for contract in portfolio["scenarios"] + present_candidates:
             scenario = scenario_by_slug[contract["slug"]]
             require(scenario.get("demo_id") == contract["demo_id"], f"{contract['slug']}: demo ID differs from the portfolio contract")
             plan = scenario.get("recording_plan", {})
