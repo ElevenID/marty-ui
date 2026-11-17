@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -32,6 +32,9 @@ TAG_HANDOFF_CONTRACT = "marty.create-only-annotated-tag/v1"
 TAG_RESULT_SCHEMA = "marty.release-tag-handoff-result/v2"
 TAG_ADMISSION_SCHEMA = "marty.release-tag-admission/v2"
 DISPATCH_SCHEMA = "marty.release-tag-dispatch/v1"
+OPERATOR_VISIBILITY_SECONDS = 60.0
+OPERATOR_VISIBILITY_INTERVAL = 5.0
+OPERATOR_VISIBILITY_OBSERVATIONS = 13
 REF_CREATION_SCOPE = "absent_tag_only"
 MAIN_CHECK_SCOPE = "before_after_observation"
 REF_CREATION_TRANSPORT = "github-rest-create-ref/v1"
@@ -380,6 +383,13 @@ def candidate_run(github: GitHub, run_id: int, workflow: str, source: str, *, re
     require(workflow == OPERATOR_WORKFLOW
             and positive(run_id), "Candidate executor identity is invalid")
     raw = github.json(f"repos/{REPOSITORY}/actions/runs/{run_id}")
+    return _candidate_run_identity(github, raw, run_id, workflow, source, repository=repository)
+
+
+def _candidate_run_identity(github: GitHub, raw: object, run_id: int, workflow: str,
+                            source: str, *, repository: Path = ROOT) -> dict:
+    """Apply the same identity policy to metadata read from the exact run URL."""
+    require(workflow == OPERATOR_WORKFLOW and positive(run_id), "Candidate executor identity is invalid")
     require(isinstance(raw, dict) and isinstance(raw.get("head_sha"), str)
             and SHA.fullmatch(raw["head_sha"]) is not None, "Candidate executor source is unavailable")
     # Retain the ordinary repository/workflow/event/main-ref/first-attempt
@@ -663,7 +673,8 @@ def wait_for_dispatch_step(github: GitHub, request: dict, *,
 
 def dispatch_operator_once(github: GitHub, request: dict, request_sha: str,
                            checkpoint: dict, receipt_path: Path, *,
-                           now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> int:
+                           now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                           sleep: Callable[[float], None] = time.sleep) -> int:
     """Journal one workflow POST, then authenticate only its returned run ID.
 
     The 2026-03-10 dispatch API returns HTTP 200 with the exact run and URLs.
@@ -722,19 +733,67 @@ def dispatch_operator_once(github: GitHub, request: dict, request_sha: str,
                 "Tag operator dispatch returned foreign run URLs; do not retry")
         receipt.update(outcome="dispatch_confirmed", operator_run_id=operator_run)
         persist()
-        run = candidate_run(github, operator_run, OPERATOR_WORKFLOW, request["source_sha"])
-        require(timestamp(request["created_at"]) <= timestamp(run["created_at"]) <= deadline,
-                "Dispatched tag operator is outside the original checkpoint window")
-        require((run.get("status") in {"queued", "in_progress", "waiting", "pending"}
-                 and run.get("conclusion") is None)
-                or (run.get("status") == "completed" and run.get("conclusion") == "success"),
-                "Dispatched tag operator has already failed or has an unknown status")
-        candidate_main(github, request["source_sha"], request["source_sha"])
-        require(now() < deadline, "Tag dispatch exceeded the original checkpoint deadline")
-        receipt["run_identity_verified"] = True
-        receipt["operator_source_sha"] = run["head_sha"]
-        persist()
-    return operator_run
+        visibility_deadline = min(deadline, now() + timedelta(seconds=OPERATOR_VISIBILITY_SECONDS))
+        visibility = {"not_after": visibility_deadline.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                      "status": "waiting", "http_statuses": [], "operation": "deadline"}
+        receipt["initial_visibility"] = visibility
+        original_deadline = github.deadline
+        github.deadline = visibility_deadline
+        try:
+            for observation in range(OPERATOR_VISIBILITY_OBSERVATIONS):
+                visibility["operation"] = "deadline"
+                persist()
+                require(now() < visibility_deadline, "Original tag operator visibility deadline expired")
+                visibility["operation"] = "protected_main"
+                persist()
+                candidate_main(github, request["source_sha"], request["source_sha"])
+                visibility["operation"] = "original_run_read"
+                persist()
+                status, raw = github.response(f"repos/{REPOSITORY}/actions/runs/{operator_run}")
+                require(type(status) is int and 100 <= status <= 599, "Invalid run visibility HTTP status")
+                visibility["http_statuses"].append(status)
+                persist()
+                if status == 404:
+                    visibility["operation"] = "absence_validation"
+                    persist()
+                    missing = decode(raw)
+                    require(isinstance(missing, dict) and missing.get("message") == "Not Found",
+                            "GitHub absence response is malformed")
+                    delay = min(OPERATOR_VISIBILITY_INTERVAL, (visibility_deadline - now()).total_seconds())
+                    require(observation + 1 < OPERATOR_VISIBILITY_OBSERVATIONS and delay > 0,
+                            "Original tag operator did not become visible")
+                    sleep(delay)
+                    continue
+                require(status == 200, f"GitHub read failed with HTTP {status}")
+                visibility["operation"] = "run_identity"
+                persist()
+                run = _candidate_run_identity(github, decode(raw), operator_run, OPERATOR_WORKFLOW,
+                                              request["source_sha"])
+                visibility["operation"] = "run_window"
+                persist()
+                require(timestamp(request["created_at"]) <= timestamp(run["created_at"]) <= deadline,
+                        "Dispatched tag operator is outside the original checkpoint window")
+                visibility["operation"] = "run_status"
+                persist()
+                require((run.get("status") in {"queued", "in_progress", "waiting", "pending"}
+                         and run.get("conclusion") is None)
+                        or (run.get("status") == "completed" and run.get("conclusion") == "success"),
+                        "Dispatched tag operator has already failed or has an unknown status")
+                visibility["operation"] = "protected_main"
+                persist()
+                candidate_main(github, request["source_sha"], request["source_sha"])
+                require(now() < visibility_deadline, "Original tag operator visibility deadline expired")
+                receipt["run_identity_verified"] = True
+                receipt["operator_source_sha"] = run["head_sha"]
+                visibility.update(status="visible", operation="complete")
+                persist()
+                return operator_run
+        except BaseException:
+            visibility["status"] = "refused"
+            persist()
+            raise
+        finally:
+            github.deadline = original_deadline
 
 
 def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_digest: str,
@@ -773,7 +832,8 @@ def wait_for_operator(checkpoint_directory: Path, artifact_id: int, artifact_dig
             and annotated_tag(github, release_intent_tag(request["tag"])) is None,
             "Tag dispatch refuses an existing release or ownership coordinate")
     operator_run = dispatch_operator_once(github, request, request_sha, artifact,
-                                          dispatch_receipt or output.with_suffix(".dispatch.json"), now=now)
+                                          dispatch_receipt or output.with_suffix(".dispatch.json"), now=now,
+                                          sleep=sleep)
     with tempfile.TemporaryDirectory(prefix="marty-tag-result-") as temporary:
         directory = Path(temporary)
         while True:
