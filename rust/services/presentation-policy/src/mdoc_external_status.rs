@@ -378,7 +378,7 @@ mod tests {
             &bytes,
             &transcript,
             &[],
-            &[certificate.clone()],
+            std::slice::from_ref(&certificate),
             false,
             None,
         )
