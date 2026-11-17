@@ -898,7 +898,7 @@ jobs:
             # this package-scoped compile has no database, image or service fixture.
             cargo test --locked -p marty-issuance-service --lib --no-run \
               --timings --message-format=json > "$artifacts"
-            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+            python3 ../scripts/ci/verify-platform-test-artifacts.py \
               --renewal-unit-only "$artifacts" target
           elif [[ "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
             # Exact test-source owners compile in the same pinned Bookworm
@@ -958,10 +958,10 @@ jobs:
                 esac
               ' > "$artifacts"
             if [[ "${{ matrix.lane }}" == flow ]]; then
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              python3 ../scripts/ci/verify-platform-test-artifacts.py \
                 --flow-only "$artifacts" target
             elif [[ "${{ matrix.lane }}" == selfhost ]]; then
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              python3 ../scripts/ci/verify-platform-test-artifacts.py \
                 --selfhost-only "$artifacts" target
             else
               exit 2

@@ -391,3 +391,9 @@ than inherited from the retired Canvas lane. Renewal diagnostics remain.
 Canvas/worker lane selection, provider compile branch and worker database
 dispatch are retired. Mixed artifact/inventory/database orchestration scripts
 still require reconciliation before this branch is ready for integration.
+
+Platform artifact verification is owned by
+`scripts/ci/verify-platform-test-artifacts.py`. Its flow, self-host and renewal
+scopes verify the exact package/target/profile and executable location without
+requiring removed Canvas targets. Worker inventory checks are retired from
+this verifier. Mixed database obligation inventories remain pending cleanup.
