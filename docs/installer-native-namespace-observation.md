@@ -46,9 +46,24 @@ cargo test --locked --offline --manifest-path rust/Cargo.toml \
 ```
 
 That is kernel process/namespace qualification, not a Docker or installer run.
+The separate `installer_namespace_census` primitive observes the fixed native
+23/24-entry profile through held descriptors, including Unix-socket metadata
+without opening or connecting to the socket. It refuses unknown/missing top
+entries, symlinks, hardlinks, FIFOs and cross-mount traversal, bounds the walk
+and private response, and rebinds every path/directory after traversal. Its raw
+namespace identities and lexicographic entries are separate from purge types.
+The walk itself does not assert that the root's mount is read-only or that
+ownership is authenticated; those belong to the protocol/controller.
+
+An equivalent mount ownership view must also be proven independently. A
+user-namespace UID/GID projection does not undo an unknown per-mount ID map.
+Read-only status, equal device/inode identities and a matching bind-source
+string alone do not establish that equivalence. Unavailable mapping evidence
+must result in incomplete observation, not inferred host ownership.
+
 The private listener/nonce protocol, independent container/receipt binder,
-bounded native 23/24-entry tree walks and distinct metadata-only socket kind
-still need integration. Neither this primitive nor a matching census can
+and bounded native walks/socket observations still need integration. Neither
+these primitives nor a matching census can
 replace stopped-writer custody, authenticated ownership evidence, explicit
 consent, durable intent or separate deletion authorization. Real rootless
 mapped-private-tree and isolated installer qualification remain required.

@@ -809,6 +809,8 @@ pub(crate) mod installer_complete_purge_plan;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_creation_receipt_validation;
 #[cfg(target_os = "linux")]
+pub(crate) mod installer_namespace_census;
+#[cfg(target_os = "linux")]
 pub(crate) mod installer_namespace_projection;
 #[cfg(target_os = "linux")]
 pub(crate) mod installer_purge_coordinator;

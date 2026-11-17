@@ -350,6 +350,8 @@ impl ConnectedPeer {
     /// Normalize one bounded census owner set between fresh matching snapshots.
     /// The operator assertion must come from the independent receipt/Engine
     /// owner. This function does not authenticate that assertion or the census.
+    /// The caller must also verify the metadata's mount ownership view: this
+    /// user-namespace projection does not undo a per-mount ID mapping.
     pub(crate) fn project_rootless_owners(
         &self,
         expected: &ProjectionObservation,
