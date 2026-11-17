@@ -362,3 +362,11 @@ longer build/copy Canvas worker or sandbox binaries; the service entrypoint no
 longer starts the Canvas worker. Connector acceptance/demo tooling belongs in
 the independent repository. Remaining CI/deployment references must be retired
 before integrating the complete split; mandatory platform checks stay enabled.
+
+Manual Canvas OSS image publishing, OSS portability and hosted Canvas
+qualification workflows and their deployment catalogs are retired from Marty.
+Canvas sandbox/OSS/localhost bridge container sources and the sandbox
+Dependabot entry are removed. The shared platform CI workflow remains enabled;
+its mixed historical Canvas lanes still require reconciliation before the
+complete split is ready for integration. Connector qualification is deferred
+work owned by the independent repository.
