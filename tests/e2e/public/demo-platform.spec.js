@@ -149,6 +149,17 @@ test('every release scenario has a canonical detail page and valid poster', asyn
     const manifest = await loadDemoManifest(page.request, release);
     for (const scenario of manifest.scenarios) {
       await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
+      // Archived manifests retain provenance; retired connector scenarios have
+      // no current platform detail page or media player.
+      const retired = ['D-07', 'D-08'].includes(scenario.demo_id)
+        || ['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario.slug);
+      if (retired) {
+        await expect(page.getByText(/This scenario is not part of ElevenID LLC/)).toBeVisible();
+        await expect(page.getByTestId('demo-video-player')).toHaveCount(0);
+        await expect(page.locator('iframe')).toHaveCount(0);
+        await assertStablePage(page, telemetry);
+        continue;
+      }
       await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
       await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `https://elevenidllc.com/demos/${manifest.stack_version}/${scenario.slug}`);
       await assertStablePage(page, telemetry);

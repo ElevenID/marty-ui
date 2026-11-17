@@ -252,7 +252,7 @@ def assert_report(report, mode):
     if report.get("caught"):
         raise AssertionError("Pure beta image-plan generation failed")
     names = report["services"]
-    if len(names) != 19 or len(set(names)) != 19 or not EXTERNAL.issubset(names):
+    if len(names) != 18 or len(set(names)) != 18 or not EXTERNAL.issubset(names):
         raise AssertionError("Review changed application image inventory")
     expected = []
     for name in names:
@@ -388,9 +388,9 @@ def run(compose_command=None, powershell=None):
             assert_report(report, mode)
             names = report["services"]
             if (
-                len(names) != 19
-                or len(set(names)) != 19
-                or len(set(names) - EXTERNAL) != 19
+                len(names) != 18
+                or len(set(names)) != 18
+                or len(set(names) - EXTERNAL) != 18
             ):
                 raise AssertionError("Review changed application image inventory")
             overlay = directory / f"{mode}-images.yml"
@@ -445,7 +445,7 @@ def run(compose_command=None, powershell=None):
     if checked != 5:
         raise AssertionError("Incomplete generated beta image merge matrix")
     print(
-        "Generated beta image gate: 3 tracked-source full-model merges and 2 synthetic image-binding merges; 19 application services per model; config only"
+        "Generated beta image gate: 3 tracked-source full-model merges and 2 synthetic image-binding merges; 18 application services per model; config only"
     )
     return checked
 

@@ -63,7 +63,7 @@ def test_timeout_fixture_allowances_do_not_authorize_service_crypto(tmp_path: Pa
     manifest = json.loads(
         (REPO_ROOT / "docs" / "rust-migration-ownership.json").read_text(encoding="utf-8")
     )
-    fixture_path = "scripts/run_canvas_timeout_consumer_oracle.py"
+    fixture_path = "scripts/run_outbound_http_timeout_oracle.py"
     allowances = [
         entry for entry in manifest["guardrails"]["approved_imports"]
         if entry["path"] == fixture_path

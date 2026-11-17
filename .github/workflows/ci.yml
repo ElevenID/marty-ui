@@ -3246,7 +3246,7 @@ jobs:
           # The aggregate matrix result alone cannot prove all required lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
-            'true:true:["contracts","flow","selfhost"]'|'true:false:["contracts"]'|'false:false:["contracts","flow","selfhost"]') ;;
+            'true:true:["contracts","flow","selfhost"]'|'false:false:["contracts","flow","selfhost"]') ;;
             'true:false:["contracts"]'|'true:false:["flow"]'|'true:false:["selfhost"]'|'true:false:["renewal-unit"]')
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;

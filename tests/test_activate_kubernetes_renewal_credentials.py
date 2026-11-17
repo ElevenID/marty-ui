@@ -700,7 +700,6 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
             scopes=["openid", "$(SERVICE_NAME)"])
     values["release"] = {"runtimeSourceSha": "1" * 40, "chartSourceSha": "2" * 40,
         "tag": "v1.2.3-nightly.20261108.123", "buildRunId": 123, "buildRunAttempt": 1}
-    values["canvasWorker"] = {"enabled": True}
     documents = chart.render(tmp_path, values)
     publication = {"catalog": json.loads((ROOT / "deploy-config/catalog/kubernetes-secrets.json").read_bytes())}
     contract = activation.activation_contract(publication)
@@ -738,7 +737,7 @@ def test_real_chart_matches_closed_renewal_consumer_graph_and_completed_jobs(tmp
     # token graph for either login provider without a second inventory.
     application_graph = application.preflight_resources({"kind": "List", "items": [
         item for item in actual if item["kind"] != "ConfigMap"]}, "isolated-install", values["images"], values["release"])
-    assert set(application_graph["deployments"]) == application.REQUIRED | {"canvas-sync-worker"}
+    assert set(application_graph["deployments"]) == application.REQUIRED
 
 
 @pytest.mark.parametrize("value", [
