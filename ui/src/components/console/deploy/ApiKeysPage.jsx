@@ -130,12 +130,12 @@ const API_KEY_SCOPES = [
   {
     id: 'integrations:read',
     label: 'Read integrations',
-    description: 'Read Canvas platforms, bindings, readiness, synchronization jobs, and reviews.',
+    description: 'Read platform integration resources.',
   },
   {
     id: 'integrations:write',
     label: 'Manage integrations',
-    description: 'Configure, authorize, activate, retry, and archive Canvas integrations.',
+    description: 'Manage platform integration resources and delivery destinations.',
   },
   {
     id: 'evidence:submit',

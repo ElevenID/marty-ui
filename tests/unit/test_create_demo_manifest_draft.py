@@ -124,7 +124,6 @@ def test_passport_simulator_draft_matches_recorder_evidence_boundary() -> None:
 
 
 def test_current_draft_retires_provider_demo_without_rewriting_archives():
-    from pathlib import Path
     from scripts import create_demo_manifest_draft as generator
     from scripts.validate_demo_manifests import load_manifests
     manifest = generator.build_manifest()
