@@ -12,7 +12,7 @@ Use each generic public contract's declared permission and DTO. Missing generic 
 
 ## Migration evidence and availability
 
-The route matrix in `contracts/canvas-integration-gateway-boundary.json` and the [administration migration inventory](canvas-administration-api-migration.md) describe the original Marty API baseline. They are historical evidence, not the current supported API or proof that a connector workflow is enabled. The removal candidate retires the provider routes and their authentication exceptions. A compatibility client referencing them requires explicit retirement or disabling in the connector.
+The route matrix in [frozen pre-removal route inventory](https://github.com/ElevenID/marty-ui/blob/2fb4db3b40a77caf71a09c8c1a8057780711ae7a/contracts/canvas-integration-gateway-boundary.json) and the [administration migration inventory](canvas-administration-api-migration.md) describe the original Marty API baseline. They are historical evidence, not the current supported API or proof that a connector workflow is enabled. The removal candidate retires the provider routes and their authentication exceptions. A compatibility client referencing them requires explicit retirement or disabling in the connector.
 
 The supported boundary is defined by current generic Gateway routing, request schemas, authorization mappings and tests. A disabled connector workflow needs no substitute production adapter to complete source retirement. Production deployment and cutover remain separate work.
 

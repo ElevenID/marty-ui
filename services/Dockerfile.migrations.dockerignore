@@ -14,13 +14,7 @@
 !scripts/run-migrations-with-secrets.sh
 
 # Oracle inventories are CI inputs, not migration-image inputs.
-contracts/canvas-worker-oracle-producers.json
-contracts/canvas-worker-oracle-script-imports.json
-contracts/canvas-*-current-inputs.json
-contracts/canvas-worker-tier-obligations.json
-contracts/canvas-worker-package-migration.json
 contracts/python-value-fast-obligations.json
-contracts/canvas-renewal-profile-obligations.json
 
 rust/**/target
 rust/acceptance/support/base_runtime_redis.rs
@@ -33,11 +27,6 @@ rust/**/.env*
 rust/**/%SystemDrive%/
 
 # Exact test-only leaves stay out of production Rust build contexts.
-rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
-rust/services/issuance/src/canvas_sync_provider_http_tests.rs
-rust/services/issuance/src/canvas_sync_processor_tests.rs
-rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
-rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs
 rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs
 rust/services/issuance/src/passport_http_reconciliation_tests.rs
 rust/services/issuance/src/python_format_tests.rs
@@ -46,36 +35,6 @@ rust/services/issuance/src/signing_http_response_tests.rs
 rust/services/issuance/src/token_rate_limit_http_tests.rs
 rust/crates/oid4vp-contract/tests/contract_vectors.rs
 rust/crates/oid4vp-contract/tests/transport_metadata.rs
-rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs
-rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs
-rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs
-rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs
-rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_canvas.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_container.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_didcomm.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_gateway.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_ordinary.rs
-rust/crates/canvas-acceptance/tests/support/base_runtime_redis.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_fresh_initiation.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_gateway_replay.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_renewal_canvas.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs
-rust/crates/canvas-acceptance/tests/support/didcomm_unkeyed_grpc_initiation.rs
-rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs
-rust/crates/canvas-acceptance/tests/support/remote_didcomm_sender.rs
-rust/crates/canvas-acceptance/tests/support/remote_tls_peer.rs
-rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs
-rust/crates/canvas-acceptance/tests/support/renewal_binding_postgres.rs
-rust/crates/canvas-acceptance/tests/support/renewal_canvas_binding.rs
-rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs
-rust/crates/canvas-acceptance/tests/support/renewal_gateway_replay.rs
-rust/crates/canvas-acceptance/tests/support/renewal_main_replay.rs
-rust/crates/canvas-acceptance/tests/support/renewal_startup_snapshot.rs
-rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs
-rust/crates/canvas-acceptance/tests/support/resolved_runtime.rs
-rust/crates/canvas-acceptance/tests/support/runtime_failure_diagnostics.rs
 rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs
 rust/crates/flow-acceptance/tests/public_demo_signing_live_kms.rs
 rust/crates/flow-acceptance/tests/support/public_demo_browser.rs

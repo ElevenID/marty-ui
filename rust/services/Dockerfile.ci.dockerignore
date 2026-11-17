@@ -6,13 +6,7 @@
 !proto/**
 !contracts/
 !contracts/**
-contracts/canvas-worker-oracle-producers.json
-contracts/canvas-worker-oracle-script-imports.json
-contracts/canvas-*-current-inputs.json
-contracts/canvas-worker-tier-obligations.json
-contracts/canvas-worker-package-migration.json
 contracts/python-value-fast-obligations.json
-contracts/canvas-renewal-profile-obligations.json
 !services/
 !services/entrypoint.sh
 !scripts/
@@ -31,11 +25,6 @@ rust/**/.git
 rust/**/*.log
 rust/**/.env*
 # Exact #[cfg(test)] source leaves are checked from the checkout, not release images.
-rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
-rust/services/issuance/src/canvas_sync_provider_http_tests.rs
-rust/services/issuance/src/canvas_sync_processor_tests.rs
-rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
-rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs
 rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs
 rust/services/issuance/src/passport_http_reconciliation_tests.rs
 rust/services/issuance/src/python_format_tests.rs
