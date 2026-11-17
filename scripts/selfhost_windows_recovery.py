@@ -415,7 +415,7 @@ def expired_operation(args, selection_file):
     phase=args.expired_current
     selection.require(bool(args.logical_project)==(phase=='stage'))
     selection.require(bool(args.attempt_directory)==(phase!='inspect'))
-    selection.require(bool(args.source_journal)==(phase in ('select','finalize')))
+    selection.require(bool(args.source_journal)==(phase in ('select','retire-helpers','finalize')))
     selection.require(phase!='inspect' or args.operator_successor_file is None)
     with ExitStack() as held:
         option=None
@@ -428,6 +428,12 @@ def expired_operation(args, selection_file):
         if phase=='reconcile-stage':
             from selfhost_windows_recovery_leaf_caps import reconcile
             return reconcile(selection_file,output,operator_successor=option)
+        if phase=='retire-unused-stage':
+            from selfhost_windows_recovery_leaf_caps import retire_unused_stage
+            return retire_unused_stage(selection_file,output,operator_successor=option)
+        if phase=='retire-helpers':
+            from selfhost_windows_recovery_leaf_caps import retire_selected_helpers
+            return retire_selected_helpers(selection_file,Path(args.source_journal),output,operator_successor=option)
         if phase=='publish':return staging.publish_recovery_candidate(selection_file,output,operator_successor=option)
         if phase=='activate':
             from selfhost_windows_recovery_activation import activate_recovery_candidate
@@ -447,7 +453,8 @@ def main(argv=None):
     parser.add_argument('--wait-for-engine',action='store_true')
     parser.add_argument('--renew-once',action='store_true')
     parser.add_argument('--logical-project')
-    parser.add_argument('--expired-current',choices=('inspect','stage','reconcile-stage','publish','activate','select','finalize'))
+    parser.add_argument('--expired-current',choices=('inspect','stage','reconcile-stage','retire-unused-stage',
+                                                   'publish','activate','select','retire-helpers','finalize'))
     parser.add_argument('--attempt-directory')
     parser.add_argument('--source-journal')
     parser.add_argument('--operator-successor-file')
