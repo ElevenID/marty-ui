@@ -116,45 +116,33 @@ D05_MEMBERSHIP_LATEST = BuildProfile(
 )
 
 
-OFFICIAL_ALL_SERVICES = BuildProfile(
-    "oid4vc-all-services",
-    "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f",
-    tuple((name, name) for name in (
-        "marty-applicant", "marty-auth", "marty-canvas-sandbox",
-        "marty-canvas-sync-worker", "marty-compliance-profile",
-        "marty-credential-template", "marty-deployment-profile",
-        "marty-device-registration", "marty-event-stream", "marty-flow",
-        "marty-gateway", "marty-issuance-service", "marty-keyless-grpc-bridge",
-        "marty-notification", "marty-oidf-keyless-edge", "marty-organization",
-        "marty-passport-acceptance-api-key", "marty-passport-beta-bureau",
-        "marty-passport-callback-signer", "marty-passport-callback-signer-supported",
-        "marty-passport-keyless-edge", "marty-passport-provider-ingress",
-        "marty-passport-tls-bootstrap", "marty-presentation-policy",
-        "marty-revocation-profile", "marty-signing-keys", "marty-trust-profile",
-        "marty-verification-service", "marty-verifier-positive-gate",
-    )),
-    (),
-    "marty-oid4vc-all-services-",
-    "oid4vc-local-native",
-    volumes=("ui-canvas-cargo", "marty-oid4vc-native-d2de-target-20261028"),
-    cargo_profile="release",
-)
+# TODO (platform build owner): a new all-service profile must use current
+# provider-neutral source and a fresh closed manifest. Do not revive old IDs.
+RETIRED_BUILD_PROFILES = frozenset({"oid4vc-all-services", "oid4vc-latest-maintenance-all-services"})
 
 
-LATEST_ALL_SERVICES = BuildProfile(
-    "oid4vc-latest-maintenance-all-services",
-    "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34",
-    OFFICIAL_ALL_SERVICES.roles,
-    (),
-    "marty-native-latest-maintenance-",
-    "native-latest-maintenance",
-    volumes=OFFICIAL_ALL_SERVICES.volumes,
-    cargo_profile="release",
-)
+def legacy_profile_reference(name):
+    """Read historical receipt metadata; this never registers a build profile."""
+    import hashlib
+    import json
+    from pathlib import Path
+    if name not in RETIRED_BUILD_PROFILES:
+        raise ValueError("UNKNOWN_LEGACY_BUILD_REFERENCE")
+    path = Path(__file__).resolve().parents[1] / "contracts/scoped-full-build-legacy-reference.json"
+    raw = path.read_bytes().replace(b"\r\n", b"\n")
+    if hashlib.sha256(raw).hexdigest() != "c181b530debdf5714c3bf909f6f2227cf1d85bf68235412886d70cb8433d5063":
+        raise ValueError("LEGACY_BUILD_REFERENCE_CHANGED")
+    values = json.loads(raw)["profiles"][name]
+    values["roles"] = tuple(tuple(row) for row in values["roles"])
+    values["packages"] = tuple(values["packages"])
+    values["volumes"] = tuple(values["volumes"])
+    return BuildProfile(**values)
 
 
 def reviewed_profile(name):
-    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, D05_MEMBERSHIP_LATEST, OFFICIAL_ALL_SERVICES, LATEST_ALL_SERVICES):
+    if name in RETIRED_BUILD_PROFILES:
+        raise ValueError("RETIRED_BUILD_PROFILE_USE_CURRENT_PLATFORM_BUILD")
+    for profile in (SIGNING_CAS, SIGNING_CAS_NO_TRANSFORM, CURRENT_ISSUER_READY, CURRENT_ISSUER_POLICY_SIGNING, CURRENT_ISSUER_POLICY_SIGNING_COMPACT, D12_PASSPORT_CURRENT, ISSUANCE_OFFER_FORMAT, D05_MEMBERSHIP_CURRENT, D05_MEMBERSHIP_LATEST):
         if name == profile.name:
             return profile
     raise ValueError("UNKNOWN_REVIEWED_BUILD_PROFILE")

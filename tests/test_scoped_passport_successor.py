@@ -16,7 +16,7 @@ from scoped_native_runtime import selected_sources
 def fixture():
     prepared = dict(buildProfile="oid4vc-all-services", uiRevision=successor.SOURCE,
                     coreRevision=successor.CORE, runId="synthetic-control-only",
-                    roleBinaries=dict(successor.OFFICIAL_ALL_SERVICES.roles))
+                    roleBinaries=dict(successor.legacy_profile_reference("oid4vc-all-services").roles))
     receipt = prepared | dict(state="PASSED", exitCode=0, oomKilled=False,
         canonicalAllServices=True, source=successor.SOURCE,
         preparationSha256=successor.PREPARED_SHA256, imagesBuilt=False,

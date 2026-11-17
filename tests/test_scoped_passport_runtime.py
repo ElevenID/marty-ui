@@ -73,7 +73,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(current.ui_revision, "449ab93ca80d147622ae61283f7d8084f7c62884")
         self.assertEqual(current.core_revision, "11655e38c2dbf69bfa5bc3c873f80c5fad628723")
         self.assertEqual(dict(current.roles), shared.ROLE_BINARIES)
-        self.assertNotEqual(current.ui_revision, profiles.OFFICIAL_ALL_SERVICES.ui_revision)
+        self.assertNotEqual(current.ui_revision, "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f")
         scope = build.build_scope(current.name)
         self.assertEqual(scope["coreRevision"], current.core_revision)
         self.assertEqual(scope["roles"], dict(current.roles))
@@ -90,8 +90,8 @@ class ScopeTests(unittest.TestCase):
                 "roleBinaries": dict(current.roles), "releaseQualified": False,
                 "recordingQualified": False}
         shared.selected_sources(plan, plan["rolloutProfile"])
-        for key, value in (("uiRevision", profiles.OFFICIAL_ALL_SERVICES.ui_revision),
-                           ("coreRevision", profiles.OFFICIAL_ALL_SERVICES.core_revision)):
+        for key, value in (("uiRevision", "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"),
+                           ("coreRevision", "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac")):
             changed = dict(plan, **{key: value})
             with self.assertRaises(ValueError):
                 shared.selected_sources(changed, changed["rolloutProfile"])
@@ -106,7 +106,7 @@ class ScopeTests(unittest.TestCase):
                            requiredHostPid=row["hostPid"], requiredEffectiveUid=row["effectiveUid"],
                            requiredBinaryMounts=row["binaryMounts"])
         overlay.validate_runtime_after(before, after, binaries, [], "d12-passport-current-functional")
-        for field, value in (("source", profiles.OFFICIAL_ALL_SERVICES.ui_revision),
+        for field, value in (("source", "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"),
                              ("coreSource", shared.CORE_REVISION), ("kind", "native"),
                              ("requiredContainerId", "a" * 64)):
             changed = copy.deepcopy(after)

@@ -23,6 +23,7 @@ CARGO_ARGV = ["cargo", "build", "--locked", "--offline", "--message-format=json"
 REVIEWED_BUILD_HELPER_SHA256 = "60f061cc55f6c254ce4b883caa71cf02bdefdded6b581cc004da87fadbce8356"
 VOLUMES = ("ui-canvas-cargo", "d05-rust-target-20261026")
 OFFICIAL_PROFILE = "oid4vc-all-services"
+# Historical receipt IDs only; neither selects a current executable build.
 LATEST_OFFICIAL_PROFILE = "oid4vc-latest-maintenance-all-services"
 CURRENT_ISSUER_READY_PROFILE = "current-issuer-ready-two-role"
 CURRENT_ISSUER_POLICY_PROFILE = "current-issuer-policy-signing-only"
@@ -90,6 +91,7 @@ def verify_export(repository, revision, directory, inventory_ref, git):
 
 
 def verify_official_inputs(freeze, seed, source_script, scope, build_tool=None):
+    """Read-only validation of archived receipts, not current build admission."""
     require(freeze["productRevision"] == scope["uiRevision"]
             and freeze["coreRevision"] == CORE_REVISION
             and freeze["imagesBuilt"] is False and freeze["releaseQualified"] is False,
@@ -101,8 +103,8 @@ def verify_official_inputs(freeze, seed, source_script, scope, build_tool=None):
         tool_names = set(re.findall(r"--bin (marty-[a-z0-9-]+)", build_tool))
         require(tool_names == names and len(tool_names) == 29,
                 "BUILD_TOOL_BINARY_SET_CHANGED")
-    from scoped_native_profiles import LATEST_ALL_SERVICES
-    if scope["uiRevision"] == LATEST_ALL_SERVICES.ui_revision:
+    # Read-only historical receipt validation; never a current build selection.
+    if scope["uiRevision"] == "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34":
         from seed_local_official_native_target import validate_cache_reuse
         validate_cache_reuse(seed)
         require(seed["targetVolume"] == scope["volumes"][1], "LATEST_RELEASE_CACHE_CHANGED")
@@ -276,81 +278,8 @@ def focused_rust_test_receipt(output, prefix, name, expected_passes):
 
 
 def render_official_recipe(profile=OFFICIAL_PROFILE):
-    """Compile the frozen canonical 29-bin release set with KMS-only Core proof."""
-    require(profile in OFFICIAL_PROFILES, "CLOSED_ALL29_RECIPE_REQUIRED")
-    names = tuple(build_scope(profile)["roles"].values())
-    return """#!/bin/sh
-set -eu
-export CARGO_HOME=/cargo CARGO_TARGET_DIR=/target CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=1 CARGO_NET_OFFLINE=true
-finish() { status=$?; printf '%s\\n' "$status" > /out/exit-code; }
-trap finish EXIT
-rustc -vV > /out/rustc-version.txt
-cargo -vV > /out/cargo-version.txt
-grep -Fx 'release: 1.95.0' /out/rustc-version.txt
-grep -Fx 'host: x86_64-unknown-linux-gnu' /out/rustc-version.txt
-mkdir -p /build/ui
-cp -a /src/ui/. /build/ui/
-cd /build/ui
-cp rust/Cargo.lock /out/original-cargo-lock.toml
-python3 scripts/localize_marty_core_dependencies.py rust/Cargo.toml .github/feature-regression/rust-probe/Cargo.toml --core-root /build/core > /out/localizer.log
-cargo metadata --offline --format-version 1 --manifest-path rust/Cargo.toml > /out/localized-metadata.json
-cp rust/Cargo.lock /out/localized-cargo-lock.toml
-python3 /build/lock_guard.py /out/original-cargo-lock.toml /out/localized-cargo-lock.toml > /out/localized-lock-proof.json
-cargo metadata --offline --locked --format-version 1 --manifest-path rust/Cargo.toml > /out/locked-localized-metadata.json
-python3 - <<'BOUNDARY'
-import json,pathlib,subprocess,sys
-sys.path.insert(0,'scripts/ci')
-import check_marty_core_kms_boundary as guard
-m=json.loads(pathlib.Path('/out/localized-metadata.json').read_text())
-nodes={n['id']:n for n in m['resolve']['nodes']}
-core=[p for p in m['packages'] if p['name'] in guard.CORE_CRATES]
-assert {p['name'] for p in core}==guard.CORE_CRATES
-assert not any('github.com/ElevenID/marty-core' in (p.get('source') or '') for p in m['packages'])
-for p in core:
- assert p['source'] is None and pathlib.Path(p['manifest_path']).resolve().is_relative_to(pathlib.Path('/build/core'))
- features=set(nodes[p['id']]['features']);assert not features&guard.FORBIDDEN_FEATURES
- if p['name'] in guard.KMS_ONLY_CRATES:assert 'kms-only' in features
-services=pathlib.Path('/build/ui/rust/services')
-packages=sorted(p['name'] for p in m['packages'] if pathlib.Path(p['manifest_path']).resolve().is_relative_to(services))
-assert packages
-command=['cargo','tree','--offline','--locked','--manifest-path','rust/Cargo.toml','-e','features,no-dev']
-for name in packages:command.extend(['-p',name])
-tree=subprocess.run(command,check=True,capture_output=True,text=True).stdout
-pathlib.Path('/out/production-feature-tree.txt').write_text(tree)
-guard.check_production_crypto_tree(tree)
-rows=[{'name':p['name'],'manifest':p['manifest_path'],'features':sorted(nodes[p['id']]['features'])} for p in core]
-pathlib.Path('/out/core-feature-resolution.json').write_text(json.dumps(rows,indent=2)+'\\n')
-BOUNDARY
-cd rust
-sh /build/tool.sh default --offline -j1 --message-format=json > /out/compiler-artifacts.jsonl 2> /out/compiler.log
-python3 - <<'ARTIFACTS'
-import json,pathlib,sys
-sys.path.insert(0,'/build/ui/scripts/ci')
-import check_marty_core_kms_boundary as guard
-m=json.loads(pathlib.Path('/out/localized-metadata.json').read_text())
-core={p['id']:p for p in m['packages'] if p['name'] in guard.CORE_CRATES}
-expected=set(""" + repr(names) + """)
-core_rows=[];services=[]
-for line in pathlib.Path('/out/compiler-artifacts.jsonl').read_text().splitlines():
- x=json.loads(line)
- if x.get('reason')!='compiler-artifact':continue
- if x['package_id'] in core:
-  p=core[x['package_id']];features=set(x['features']);assert not features&guard.FORBIDDEN_FEATURES
-  if p['name'] in guard.KMS_ONLY_CRATES:assert 'kms-only' in features
-  core_rows.append({'name':p['name'],'manifest':p['manifest_path'],'features':sorted(features),'fresh':x['fresh'],'filenames':x['filenames']})
- if x.get('executable') in {'/target/release/'+name for name in expected}:services.append(x)
-assert 'marty-oid4vci' in {p['name'] for p in core_rows}
-assert len(services)==len(expected)==29 and {pathlib.Path(s['executable']).name for s in services}==expected
-pathlib.Path('/out/core-compiler-artifacts.json').write_text(json.dumps(core_rows,indent=2)+'\\n')
-pathlib.Path('/out/service-compiler-artifacts.json').write_text(json.dumps(services,indent=2)+'\\n')
-ARTIFACTS
-for binary in """ + " ".join(names) + """; do
- install -m 0755 /target/release/$binary /out/$binary
- sha256sum /out/$binary > /out/$binary.sha256
- readelf -h -d /out/$binary > /out/$binary.elf.txt
- ldd /out/$binary > /out/$binary.libraries.txt
-done
-"""
+    """The old provider-cohort recipe is intentionally unavailable."""
+    raise ValueError("RETIRED_BUILD_PROFILE_USE_CURRENT_PLATFORM_BUILD")
 
 def current_issuer_limits(profile):
     require(profile in CURRENT_ISSUER_READY_PROFILES, "CURRENT_ISSUER_PROFILE_REQUIRED")
@@ -595,7 +524,7 @@ def build_journal(plan, private, profile=None):
             build_scope(profile)
         return LocalBuildJournal(private)
     require(profile in ("d02-signing-cas", "d02-signing-cas-no-transform", *CURRENT_ISSUER_READY_PROFILES,
-                        "d12-passport-current-three-role", *D05_MEMBERSHIP_PROFILES, *OFFICIAL_PROFILES),
+                        "d12-passport-current-three-role", *D05_MEMBERSHIP_PROFILES),
             "LINUX_JOURNAL_REVIEWED_PROFILE_REQUIRED")
     from scoped_linux_journal import LinuxBuildJournal
     return LinuxBuildJournal(private, plan["runId"], plan["journalBackend"])
@@ -699,6 +628,7 @@ def selected_resource_volumes(helper, volumes):
 
 
 def start(prepared_ref, helper, git, profile=None):
+    build_scope(profile)
     plan = json.loads(read_ref(prepared_ref).read_bytes())
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")
@@ -851,6 +781,7 @@ def start(prepared_ref, helper, git, profile=None):
     return state
 
 def finish(prepared_ref, helper, git, profile=None):
+    build_scope(profile)
     plan = json.loads(read_ref(prepared_ref).read_bytes())
     preparation_sha = prepared_ref["sha256"]
     require(plan.get("executionOperatorSha256") == sha(Path(__file__)), "BUILD_OPERATOR_CHANGED")

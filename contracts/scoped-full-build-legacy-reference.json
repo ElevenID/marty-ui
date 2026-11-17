@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "source_revision": "16f7f673b8350f359059ff0e14b0d33be5936be5",
+  "source_blob": "d253190727d2fad8c86e32a4afd26f3bd7cc2288",
+  "disposition": "Read-only historical evidence; these profiles cannot select a current build.",
+  "profiles": {
+    "oid4vc-all-services": {
+      "name": "oid4vc-all-services",
+      "ui_revision": "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f",
+      "roles": [
+        [
+          "marty-applicant",
+          "marty-applicant"
+        ],
+        [
+          "marty-auth",
+          "marty-auth"
+        ],
+        [
+          "marty-canvas-sandbox",
+          "marty-canvas-sandbox"
+        ],
+        [
+          "marty-canvas-sync-worker",
+          "marty-canvas-sync-worker"
+        ],
+        [
+          "marty-compliance-profile",
+          "marty-compliance-profile"
+        ],
+        [
+          "marty-credential-template",
+          "marty-credential-template"
+        ],
+        [
+          "marty-deployment-profile",
+          "marty-deployment-profile"
+        ],
+        [
+          "marty-device-registration",
+          "marty-device-registration"
+        ],
+        [
+          "marty-event-stream",
+          "marty-event-stream"
+        ],
+        [
+          "marty-flow",
+          "marty-flow"
+        ],
+        [
+          "marty-gateway",
+          "marty-gateway"
+        ],
+        [
+          "marty-issuance-service",
+          "marty-issuance-service"
+        ],
+        [
+          "marty-keyless-grpc-bridge",
+          "marty-keyless-grpc-bridge"
+        ],
+        [
+          "marty-notification",
+          "marty-notification"
+        ],
+        [
+          "marty-oidf-keyless-edge",
+          "marty-oidf-keyless-edge"
+        ],
+        [
+          "marty-organization",
+          "marty-organization"
+        ],
+        [
+          "marty-passport-acceptance-api-key",
+          "marty-passport-acceptance-api-key"
+        ],
+        [
+          "marty-passport-beta-bureau",
+          "marty-passport-beta-bureau"
+        ],
+        [
+          "marty-passport-callback-signer",
+          "marty-passport-callback-signer"
+        ],
+        [
+          "marty-passport-callback-signer-supported",
+          "marty-passport-callback-signer-supported"
+        ],
+        [
+          "marty-passport-keyless-edge",
+          "marty-passport-keyless-edge"
+        ],
+        [
+          "marty-passport-provider-ingress",
+          "marty-passport-provider-ingress"
+        ],
+        [
+          "marty-passport-tls-bootstrap",
+          "marty-passport-tls-bootstrap"
+        ],
+        [
+          "marty-presentation-policy",
+          "marty-presentation-policy"
+        ],
+        [
+          "marty-revocation-profile",
+          "marty-revocation-profile"
+        ],
+        [
+          "marty-signing-keys",
+          "marty-signing-keys"
+        ],
+        [
+          "marty-trust-profile",
+          "marty-trust-profile"
+        ],
+        [
+          "marty-verification-service",
+          "marty-verification-service"
+        ],
+        [
+          "marty-verifier-positive-gate",
+          "marty-verifier-positive-gate"
+        ]
+      ],
+      "packages": [],
+      "container_prefix": "marty-oid4vc-all-services-",
+      "owner": "oid4vc-local-native",
+      "core_revision": "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac",
+      "volumes": [
+        "ui-canvas-cargo",
+        "marty-oid4vc-native-d2de-target-20261028"
+      ],
+      "cargo_profile": "release"
+    },
+    "oid4vc-latest-maintenance-all-services": {
+      "name": "oid4vc-latest-maintenance-all-services",
+      "ui_revision": "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34",
+      "roles": [
+        [
+          "marty-applicant",
+          "marty-applicant"
+        ],
+        [
+          "marty-auth",
+          "marty-auth"
+        ],
+        [
+          "marty-canvas-sandbox",
+          "marty-canvas-sandbox"
+        ],
+        [
+          "marty-canvas-sync-worker",
+          "marty-canvas-sync-worker"
+        ],
+        [
+          "marty-compliance-profile",
+          "marty-compliance-profile"
+        ],
+        [
+          "marty-credential-template",
+          "marty-credential-template"
+        ],
+        [
+          "marty-deployment-profile",
+          "marty-deployment-profile"
+        ],
+        [
+          "marty-device-registration",
+          "marty-device-registration"
+        ],
+        [
+          "marty-event-stream",
+          "marty-event-stream"
+        ],
+        [
+          "marty-flow",
+          "marty-flow"
+        ],
+        [
+          "marty-gateway",
+          "marty-gateway"
+        ],
+        [
+          "marty-issuance-service",
+          "marty-issuance-service"
+        ],
+        [
+          "marty-keyless-grpc-bridge",
+          "marty-keyless-grpc-bridge"
+        ],
+        [
+          "marty-notification",
+          "marty-notification"
+        ],
+        [
+          "marty-oidf-keyless-edge",
+          "marty-oidf-keyless-edge"
+        ],
+        [
+          "marty-organization",
+          "marty-organization"
+        ],
+        [
+          "marty-passport-acceptance-api-key",
+          "marty-passport-acceptance-api-key"
+        ],
+        [
+          "marty-passport-beta-bureau",
+          "marty-passport-beta-bureau"
+        ],
+        [
+          "marty-passport-callback-signer",
+          "marty-passport-callback-signer"
+        ],
+        [
+          "marty-passport-callback-signer-supported",
+          "marty-passport-callback-signer-supported"
+        ],
+        [
+          "marty-passport-keyless-edge",
+          "marty-passport-keyless-edge"
+        ],
+        [
+          "marty-passport-provider-ingress",
+          "marty-passport-provider-ingress"
+        ],
+        [
+          "marty-passport-tls-bootstrap",
+          "marty-passport-tls-bootstrap"
+        ],
+        [
+          "marty-presentation-policy",
+          "marty-presentation-policy"
+        ],
+        [
+          "marty-revocation-profile",
+          "marty-revocation-profile"
+        ],
+        [
+          "marty-signing-keys",
+          "marty-signing-keys"
+        ],
+        [
+          "marty-trust-profile",
+          "marty-trust-profile"
+        ],
+        [
+          "marty-verification-service",
+          "marty-verification-service"
+        ],
+        [
+          "marty-verifier-positive-gate",
+          "marty-verifier-positive-gate"
+        ]
+      ],
+      "packages": [],
+      "container_prefix": "marty-native-latest-maintenance-",
+      "owner": "native-latest-maintenance",
+      "core_revision": "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac",
+      "volumes": [
+        "ui-canvas-cargo",
+        "marty-oid4vc-native-d2de-target-20261028"
+      ],
+      "cargo_profile": "release"
+    }
+  }
+}

@@ -90,3 +90,16 @@ TODO (platform maintenance owner): prepare fresh, complete runtime observations
 and orphan-workload absence evidence before a separately qualified rollout.
 Local source tests and previews do not authorize stopping, starting or migrating
 a running deployment. This operational qualification remains outside the split.
+
+
+The two frozen full-service build profiles are retired, along with their
+executable recipe. Their original manifests are hash-pinned read-only evidence
+in `contracts/scoped-full-build-legacy-reference.json`. The current source
+preparer, launcher and shared builder reject those IDs before export, journal
+construction or compiler dispatch. Recover existing historical jobs through
+their preserved source-bound operator; this change neither stops them nor
+deletes their receipts, refs, source exports or caches.
+
+TODO (platform build owner): provide a fresh current-source all-service profile
+if one is needed. The current provider-neutral CI image recipe remains the
+active image build path. A replacement historical build is not a split gate.

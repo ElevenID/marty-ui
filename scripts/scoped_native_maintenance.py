@@ -1,17 +1,17 @@
-"""Closed latest-main four-role selection; executes no build or deployment.
+"""Read-only four-role selection from historical build receipts.
 
 The original d2de/three-role preparation remains a separate closed contract.
 Latest input SHA is supplied by the reviewed one-run preparation, and MUST also
 match the receipt actually read from its original durable build journal.
 """
 import json
-from scoped_native_profiles import LATEST_ALL_SERVICES
+from scoped_native_profiles import legacy_profile_reference
 from scoped_native_runtime import read_ref, require
 import scoped_passport_successor as passport
 
 PROFILE = "native-devtest-passport-four-role"
-SOURCE = LATEST_ALL_SERVICES.ui_revision
-CORE = LATEST_ALL_SERVICES.core_revision
+SOURCE = "852dbb5cc0cca79cfe0bbbed5cb8fb94cda0ad34"
+CORE = "4320b5fa1c6f41231ee0aa2bc57d8008549f67ac"
 ROLE_BINARIES = {"applicant": "marty-applicant", **passport.ROLE_BINARIES}
 BASE_PROFILE_SHA256 = passport.BASE_PROFILE_SHA256
 BASE_BINDING_SHA256 = passport.BASE_BINDING_SHA256
@@ -19,7 +19,7 @@ FREEZE_SHA256 = "075a9bafaf27bd31acfe8372c3172e04cf584120882018ff327e71044b69a5c
 
 
 def terminal_build(receipt, prepared, prepared_sha):
-    return passport._terminal_build(receipt, prepared, prepared_sha, LATEST_ALL_SERVICES, None)
+    return passport._terminal_build(receipt, prepared, prepared_sha, legacy_profile_reference("oid4vc-latest-maintenance-all-services"), None)
 
 
 def select_canonical_binaries(prepared_ref, receipt_ref, journal):
@@ -31,7 +31,7 @@ def select_canonical_binaries(prepared_ref, receipt_ref, journal):
             and freeze.get("imagesBuilt") is False and freeze.get("releaseQualified") is False,
             "EXACT_LATEST_SOURCE_FREEZE_REQUIRED")
     return passport._select_canonical_binaries(prepared_ref, receipt_ref, journal,
-        LATEST_ALL_SERVICES, ROLE_BINARIES, PROFILE, None)
+        legacy_profile_reference("oid4vc-latest-maintenance-all-services"), ROLE_BINARIES, PROFILE, None)
 
 
 def validate_compatibility(selection, plan_ref, result_ref):

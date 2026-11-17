@@ -13,14 +13,17 @@ from scoped_native_runtime import selected_sources
 
 
 def test_closed_latest_all29_scope_preserves_historical_recipe_and_cache():
-    old, new = profiles.OFFICIAL_ALL_SERVICES, profiles.LATEST_ALL_SERVICES
+    old, new = profiles.legacy_profile_reference(build.OFFICIAL_PROFILE), profiles.legacy_profile_reference(build.LATEST_OFFICIAL_PROFILE)
     assert old.ui_revision == "d2debf0fde2a0c826f8925aca648c9d3dabfbc9f"
     assert old.roles == new.roles and len(new.roles) == 29
     assert new.ui_revision == latest.SOURCE and new.core_revision == latest.CORE
     assert old.volumes == new.volumes and old.cargo_profile == new.cargo_profile == "release"
-    assert build.render_recipe(old.name) == build.render_recipe(new.name)
+    for name in (old.name, new.name):
+        with pytest.raises(ValueError, match="RETIRED_BUILD_PROFILE"):
+            build.render_recipe(name)
     assert build.LATEST_FREEZE_SHA256 == latest.FREEZE_SHA256
-    assert set(build.build_scope(new.name)["roles"]) == set(dict(new.roles))
+    with pytest.raises(ValueError, match="RETIRED_BUILD_PROFILE"):
+        build.build_scope(new.name)
     with pytest.raises(ValueError):
         build.build_scope(latest.PROFILE)
     plan = dict(rolloutProfile=latest.PROFILE, uiRevision=latest.SOURCE,
@@ -33,14 +36,14 @@ def test_closed_latest_all29_scope_preserves_historical_recipe_and_cache():
 
 
 def test_latest_terminal_requires_exact_all29_and_same_source_run():
-    prepared = dict(buildProfile=profiles.LATEST_ALL_SERVICES.name, uiRevision=latest.SOURCE,
-        coreRevision=latest.CORE, runId="synthetic-only", roleBinaries=dict(profiles.LATEST_ALL_SERVICES.roles))
+    prepared = dict(buildProfile=profiles.legacy_profile_reference(build.LATEST_OFFICIAL_PROFILE).name, uiRevision=latest.SOURCE,
+        coreRevision=latest.CORE, runId="synthetic-only", roleBinaries=dict(profiles.legacy_profile_reference(build.LATEST_OFFICIAL_PROFILE).roles))
     receipt = prepared | dict(state="PASSED", exitCode=0, oomKilled=False, canonicalAllServices=True,
         source=latest.SOURCE, preparationSha256="a" * 64, imagesBuilt=False, releaseQualified=False,
         recordingQualified=False, binaries={binary: {} for binary in prepared["roleBinaries"]})
     latest.terminal_build(receipt, prepared, "a" * 64)
     for change in (dict(state="BUILD_RUNNING"), dict(exitCode=False), dict(oomKilled=True),
-                   dict(source=profiles.OFFICIAL_ALL_SERVICES.ui_revision), dict(runId="foreign"),
+                   dict(source=profiles.legacy_profile_reference(build.OFFICIAL_PROFILE).ui_revision), dict(runId="foreign"),
                    dict(binaries={binary: {} for binary in latest.ROLE_BINARIES.values()})):
         with pytest.raises(ValueError):
             latest.terminal_build(receipt | change, prepared, "a" * 64)

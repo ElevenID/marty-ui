@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind a frozen native source export to the shared bounded build/journal path."""
+"""Audit historical build exports; retired profiles cannot launch a new build."""
 from __future__ import annotations
 
 import argparse
@@ -84,9 +84,9 @@ def require_official_journal(journal: dict) -> None:
 def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
             journal_path: Path, run_id: str, engine_id: str) -> None:
     packet = source_export(packet_path, packet_sha)
-    seed = read_exact(seed_path, seed_sha)
     profile = packet["buildProfile"]
     scope = build.build_scope(profile)
+    seed = read_exact(seed_path, seed_sha)
     freeze = read_exact(Path(packet["freeze"]["path"]), packet["freeze"]["sha256"])
     source_script = Path(packet["sources"]["ui"]["directory"]) / "scripts/build-rust-service-binaries.sh"
     build.verify_official_inputs(freeze, seed, source_script.read_text(), scope,
@@ -121,6 +121,7 @@ def prepare(packet_path: Path, packet_sha: str, seed_path: Path, seed_sha: str,
 
 def execute(mode: str, packet_path: Path, packet_sha: str, prepared_sha: str) -> None:
     packet = source_export(packet_path, packet_sha)
+    build.build_scope(packet["buildProfile"])
     prepared = packet_path.parent / "prepared-build.json"
     plan = read_exact(prepared, prepared_sha)
     profile = packet["buildProfile"]
