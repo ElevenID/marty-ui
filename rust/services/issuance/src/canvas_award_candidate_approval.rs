@@ -1,8 +1,17 @@
+pub(crate) use crate::application_issuance::{
+    approval_issuer_error, attach_issuer_context, first_text, issuer_diagnostic_category,
+    required_kms_issuer_context, resolve_and_attach_required_issuer,
+};
+pub use crate::application_issuance::{
+    ApprovalSeed as CanvasAwardApprovalSeed,
+    ApprovalSeedGenerator as CanvasAwardApprovalSeedGenerator,
+    SecureApprovalSeedGenerator as SecureCanvasAwardApprovalSeedGenerator,
+};
+#[cfg(test)]
+use crate::credential::CredentialIssuanceError;
 use std::{fmt, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use rand::RngCore;
 use serde_json::{Map, Value};
 use thiserror::Error;
 
@@ -20,8 +29,8 @@ use crate::{
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     canvas_lti_launch::CanvasLtiClock,
     credential::{
-        remote_credential_format, CredentialIssuanceError, CredentialTransaction,
-        CredentialTransactionStatus, IssuerContext, IssuerContextResolver,
+        remote_credential_format, CredentialTransaction, CredentialTransactionStatus,
+        IssuerContext, IssuerContextResolver,
     },
     internal_application_diagnostics::{
         warn_application_failure, InternalApplicationDiagnosticCategory,
@@ -55,22 +64,6 @@ impl fmt::Debug for CanvasAwardApprovalSnapshot {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct CanvasAwardApprovalSeed {
-    pub transaction_id: String,
-    pub pre_authorized_code: String,
-}
-
-impl fmt::Debug for CanvasAwardApprovalSeed {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("CanvasAwardApprovalSeed")
-            .field("transaction_id", &self.transaction_id)
-            .field("pre_authorized_code", &REDACTED)
-            .finish()
-    }
-}
-
 #[async_trait]
 pub trait CanvasAwardApprovalRepository: Send + Sync {
     async fn load_approval_snapshot(
@@ -87,10 +80,6 @@ pub trait CanvasAwardApprovalRepository: Send + Sync {
         plan: &CanvasAwardCandidateMaterializationPlan,
         snapshot: &CanvasAwardApprovalSnapshot,
     ) -> Result<(), CanvasAwardCandidateApprovalError>;
-}
-
-pub trait CanvasAwardApprovalSeedGenerator: Send + Sync {
-    fn generate(&self) -> CanvasAwardApprovalSeed;
 }
 
 #[derive(Clone, PartialEq)]
@@ -185,20 +174,6 @@ pub trait CanvasApplicationApprovalRepository: Send + Sync {
         review_notes: Option<&str>,
         reviewed_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<String, CanvasApplicationApprovalError>;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SecureCanvasAwardApprovalSeedGenerator;
-
-impl CanvasAwardApprovalSeedGenerator for SecureCanvasAwardApprovalSeedGenerator {
-    fn generate(&self) -> CanvasAwardApprovalSeed {
-        let mut capability = [0_u8; 32];
-        rand::rng().fill_bytes(&mut capability);
-        CanvasAwardApprovalSeed {
-            transaction_id: uuid::Uuid::new_v4().to_string(),
-            pre_authorized_code: URL_SAFE_NO_PAD.encode(capability),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -909,30 +884,6 @@ pub(crate) async fn resolve_and_attach_canvas_issuer(
     Ok(())
 }
 
-pub(crate) async fn resolve_and_attach_required_issuer(
-    issuer_resolver: &dyn IssuerContextResolver,
-    transaction: &mut CredentialTransaction,
-) -> Result<(), CanvasAwardCandidateApprovalError> {
-    let remote_format = remote_credential_format(&transaction.credential_payload_format)
-        .map_err(|_| CanvasAwardCandidateApprovalError::ReadinessDrift)?;
-    let issuer = issuer_resolver
-        .resolve(transaction, &remote_format, true)
-        .await
-        .map_err(approval_issuer_error)?;
-    if !required_kms_issuer_context(&issuer) {
-        return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
-    }
-    attach_issuer_context(transaction, &issuer);
-    if transaction.issuer_profile_id.as_deref() != Some(issuer.issuer_profile_id.as_str())
-        || transaction.issuer_did.as_deref() != Some(issuer.issuer_did.as_str())
-        || transaction.issuer_algorithm.as_deref() != Some(issuer.algorithm.as_str())
-        || transaction.signing_service_id.as_deref() != Some(issuer.signing_service_id.as_str())
-    {
-        return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
-    }
-    Ok(())
-}
-
 fn classify_manual_guard_error(
     code: &'static str,
 ) -> (
@@ -956,19 +907,6 @@ fn classify_manual_guard_error(
             CanvasApplicationApprovalError::NotReady,
             InternalApplicationDiagnosticCategory::NotReady,
         ),
-    }
-}
-
-pub(crate) const fn issuer_diagnostic_category(
-    error: &CanvasAwardCandidateApprovalError,
-) -> InternalApplicationDiagnosticCategory {
-    match error {
-        CanvasAwardCandidateApprovalError::Unavailable => {
-            InternalApplicationDiagnosticCategory::DependencyUnavailable
-        }
-        CanvasAwardCandidateApprovalError::ReadinessDrift => {
-            InternalApplicationDiagnosticCategory::IssuerContextInvalid
-        }
     }
 }
 
@@ -1008,74 +946,6 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
             })
         && issuer.public_jwk.as_ref().is_some_and(Value::is_object)
         && !trimmed_json_text(signing_key_reference).is_empty()
-}
-
-fn required_kms_issuer_context(issuer: &IssuerContext) -> bool {
-    let raw = issuer.raw_context.as_object();
-    let profile = raw
-        .and_then(|value| value.get("issuer_profile"))
-        .and_then(Value::as_object);
-    let signing_key_reference = raw
-        .and_then(|value| value.get("signing_key_reference"))
-        .or_else(|| profile.and_then(|value| value.get("signing_key_reference")));
-    let profile_id = first_text(&[
-        raw.and_then(|value| value.get("issuer_profile_id")),
-        profile.and_then(|value| value.get("id")),
-    ]);
-    let issuer_did = first_text(&[
-        raw.and_then(|value| value.get("issuer_did")),
-        profile.and_then(|value| value.get("issuer_did")),
-    ]);
-    let algorithm = first_text(&[
-        raw.and_then(|value| value.get("algorithm")),
-        profile.and_then(|value| value.get("algorithm")),
-    ]);
-    let signing_service_id = first_text(&[
-        raw.and_then(|value| value.get("signing_service_id")),
-        profile.and_then(|value| value.get("signing_service_id")),
-    ]);
-    let verification_method = first_text(&[
-        raw.and_then(|value| value.get("verification_method_id")),
-        profile.and_then(|value| value.get("verification_method_id")),
-    ]);
-    profile.is_none_or(|profile| {
-        trimmed_json_text(profile.get("status")).eq_ignore_ascii_case("active")
-    }) && profile_id == issuer.issuer_profile_id
-        && issuer_did == issuer.issuer_did
-        && algorithm == issuer.algorithm
-        && signing_service_id == issuer.signing_service_id
-        && issuer.verification_method_id.as_deref() == Some(verification_method.as_str())
-        && !trimmed_json_text(signing_key_reference).is_empty()
-}
-
-fn first_text(values: &[Option<&Value>]) -> String {
-    values
-        .iter()
-        .map(|value| trimmed_json_text(*value))
-        .find(|value| !value.is_empty())
-        .unwrap_or_default()
-}
-
-fn attach_issuer_context(transaction: &mut CredentialTransaction, issuer: &IssuerContext) {
-    transaction.issuer_profile_id = Some(issuer.issuer_profile_id.clone());
-    transaction.issuer_mode = "org_managed".to_owned();
-    transaction.issuer_did = Some(issuer.issuer_did.clone());
-    transaction.issuer_algorithm = Some(issuer.algorithm.clone());
-    transaction.signing_service_id = Some(issuer.signing_service_id.clone());
-}
-
-fn approval_issuer_error(error: CredentialIssuanceError) -> CanvasAwardCandidateApprovalError {
-    match error {
-        CredentialIssuanceError::SigningResponse(cause) if cause.is_signing() => {
-            CanvasAwardCandidateApprovalError::Unavailable
-        }
-        CredentialIssuanceError::RepositoryUnavailable
-        | CredentialIssuanceError::SigningUnavailable(_)
-        | CredentialIssuanceError::LifecycleUnavailable(_) => {
-            CanvasAwardCandidateApprovalError::Unavailable
-        }
-        _ => CanvasAwardCandidateApprovalError::ReadinessDrift,
-    }
 }
 
 #[cfg(test)]

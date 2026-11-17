@@ -14,13 +14,13 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    application_issuance::{resolve_and_attach_required_issuer, ApprovalSeedGenerator},
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
         canvas_claim_time, plan_legacy_canvas_approval_transaction,
         plan_projected_canvas_transaction, project_approval_binding,
-        resolve_and_attach_canvas_issuer, resolve_and_attach_required_issuer,
-        reuse_projected_canvas_approval_transaction, CanvasApplicationApprovalSnapshot,
-        CanvasAwardApprovalSeedGenerator,
+        resolve_and_attach_canvas_issuer, reuse_projected_canvas_approval_transaction,
+        CanvasApplicationApprovalSnapshot,
     },
     canvas_event_status::CanvasEventReceipt,
     canvas_issuance_guard::{
@@ -141,7 +141,7 @@ pub trait InternalApplicationReconciliationPreparer: Send + Sync {
 #[derive(Clone)]
 pub struct CanvasEvidenceReconciliationPreparer {
     issuer_resolver: Arc<dyn IssuerContextResolver>,
-    seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
+    seeds: Arc<dyn ApprovalSeedGenerator>,
     guard_config: CanvasGuardConfig,
 }
 
@@ -158,7 +158,7 @@ impl CanvasEvidenceReconciliationPreparer {
     #[must_use]
     pub fn new(
         issuer_resolver: Arc<dyn IssuerContextResolver>,
-        seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
+        seeds: Arc<dyn ApprovalSeedGenerator>,
         guard_config: CanvasGuardConfig,
     ) -> Self {
         Self {

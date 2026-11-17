@@ -4,15 +4,13 @@ use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
+    application_issuance::{SecureApprovalSeedGenerator, SystemApplicationClock},
     application_template_catalog::runtime_catalog,
     application_template_postgres::PostgresApplicationTemplateRepository,
     application_template_service::{ApplicationTemplateService, SystemApplicationTemplateClock},
-    canvas_award_candidate_approval::{
-        CanvasApplicationApprovalService, SecureCanvasAwardApprovalSeedGenerator,
-    },
+    canvas_award_candidate_approval::CanvasApplicationApprovalService,
     canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
     canvas_issuance_guard::CanvasGuardConfig,
-    canvas_lti_launch::SystemCanvasLtiClock,
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
     credential_builder::HttpCredentialBuilder,
@@ -281,7 +279,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         nonce_repository.clone(),
         Arc::new(SecureProofNonceGenerator),
     );
-    let canvas_lti_clock = Arc::new(SystemCanvasLtiClock);
+    let application_clock = Arc::new(SystemApplicationClock);
     let issuer_resolver = Arc::new(HttpIssuerContextResolver::new(
         config.signing_keys_internal_url.clone(),
         config.signing_keys_internal_api_key.as_deref(),
@@ -298,8 +296,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let canvas_application_approval = CanvasApplicationApprovalService::new(
         canvas_approval_repository,
         issuer_resolver.clone(),
-        Arc::new(SecureCanvasAwardApprovalSeedGenerator),
-        canvas_lti_clock.clone(),
+        Arc::new(SecureApprovalSeedGenerator),
+        application_clock.clone(),
         canvas_guard_config.clone(),
     );
     let credential_repository = Arc::new(PostgresCredentialRepository::new(
@@ -392,8 +390,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             internal_application_repository.clone(),
             initiation_control_plane.clone(),
             issuer_resolver.clone(),
-            Arc::new(SecureCanvasAwardApprovalSeedGenerator),
-            canvas_lti_clock.clone(),
+            Arc::new(SecureApprovalSeedGenerator),
+            application_clock.clone(),
             config.issuer_base_url.clone(),
             // Python accepts arbitrary-width integer settings and reports an
             // unusable expiry at request time. Preserve deferred failure for
@@ -419,9 +417,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         InternalApplicationOfferProjector::new(
             config.issuer_base_url.clone(),
             initiation_control_plane.clone(),
-            canvas_lti_clock.clone(),
+            application_clock.clone(),
         )?,
-        canvas_lti_clock.clone(),
+        application_clock.clone(),
     ));
     let internal_application_evidence =
         Arc::new(DefaultInternalApplicationEvidenceCoordinator::new(
@@ -432,7 +430,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         internal_application_repository.clone(),
         Arc::new(CanvasEvidenceReconciliationPreparer::new(
             issuer_resolver.clone(),
-            Arc::new(SecureCanvasAwardApprovalSeedGenerator),
+            Arc::new(SecureApprovalSeedGenerator),
             canvas_guard_config,
         )),
     ));

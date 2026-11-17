@@ -5,6 +5,7 @@
 //! checks, KMS issuer resolution, transaction preparation, and atomic
 //! application/transaction reservation.
 
+use crate::application_issuance::{issuer_diagnostic_category, resolve_and_attach_required_issuer};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,13 +13,11 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use serde_json::Value;
 
 use crate::{
+    application_issuance::{ApplicationClock, ApprovalSeedGenerator},
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
-        issuer_diagnostic_category, resolve_and_attach_required_issuer,
         CanvasApplicationApprovalError, CanvasApplicationApprovalService,
-        CanvasAwardApprovalSeedGenerator,
     },
-    canvas_lti_launch::CanvasLtiClock,
     credential::{CredentialTransaction, CredentialTransactionStatus, IssuerContextResolver},
     internal_application_diagnostics::{
         warn_application_failure, InternalApplicationDiagnosticStage,
@@ -272,8 +271,8 @@ pub struct OrdinaryInternalApplicationApprover {
     repository: Arc<dyn InternalApplicationApprovalRepository>,
     dependencies: Arc<dyn InternalApplicationApprovalDependencies>,
     issuer_resolver: Arc<dyn IssuerContextResolver>,
-    seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
-    clock: Arc<dyn CanvasLtiClock>,
+    seeds: Arc<dyn ApprovalSeedGenerator>,
+    clock: Arc<dyn ApplicationClock>,
     issuer_base_url: Arc<str>,
     offer_ttl_minutes: i64,
 }
@@ -294,8 +293,8 @@ impl OrdinaryInternalApplicationApprover {
         repository: Arc<dyn InternalApplicationApprovalRepository>,
         dependencies: Arc<dyn InternalApplicationApprovalDependencies>,
         issuer_resolver: Arc<dyn IssuerContextResolver>,
-        seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
-        clock: Arc<dyn CanvasLtiClock>,
+        seeds: Arc<dyn ApprovalSeedGenerator>,
+        clock: Arc<dyn ApplicationClock>,
         issuer_base_url: impl Into<Arc<str>>,
         offer_ttl_minutes: i64,
     ) -> Self {
@@ -560,8 +559,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        application_issuance::ApprovalSeed,
         application_template_domain::ApplicationTemplateStatus,
-        canvas_award_candidate_approval::CanvasAwardApprovalSeed,
         credential::{CredentialIssuanceError, IssuerContext},
         internal_application_domain::ApplicationStatus,
     };
@@ -728,9 +727,9 @@ mod tests {
 
     struct Seeds;
 
-    impl CanvasAwardApprovalSeedGenerator for Seeds {
-        fn generate(&self) -> CanvasAwardApprovalSeed {
-            CanvasAwardApprovalSeed {
+    impl ApprovalSeedGenerator for Seeds {
+        fn generate(&self) -> ApprovalSeed {
+            ApprovalSeed {
                 transaction_id: "transaction-1".into(),
                 pre_authorized_code: "pre-authorized-code".into(),
             }
@@ -739,7 +738,7 @@ mod tests {
 
     struct Clock(DateTime<Utc>);
 
-    impl CanvasLtiClock for Clock {
+    impl ApplicationClock for Clock {
         fn now(&self) -> DateTime<Utc> {
             self.0
         }

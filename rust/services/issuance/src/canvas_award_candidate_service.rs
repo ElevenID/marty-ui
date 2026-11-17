@@ -40,13 +40,7 @@ pub enum CanvasAwardCandidateRepositoryError {
     Unavailable,
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
-pub enum CanvasAwardCandidateApprovalError {
-    #[error("Canvas award approval readiness changed")]
-    ReadinessDrift,
-    #[error("Canvas award approval is temporarily unavailable")]
-    Unavailable,
-}
+pub use crate::application_issuance::ApplicationApprovalError as CanvasAwardCandidateApprovalError;
 
 #[async_trait]
 pub trait CanvasAwardCandidateRepository: Send + Sync {

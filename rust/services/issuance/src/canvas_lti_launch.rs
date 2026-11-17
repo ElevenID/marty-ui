@@ -393,18 +393,9 @@ impl CanvasLtiCapabilitySnapshotService {
     }
 }
 
-pub trait CanvasLtiClock: Send + Sync {
-    fn now(&self) -> DateTime<Utc>;
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct SystemCanvasLtiClock;
-
-impl CanvasLtiClock for SystemCanvasLtiClock {
-    fn now(&self) -> DateTime<Utc> {
-        Utc::now()
-    }
-}
+pub use crate::application_issuance::{
+    ApplicationClock as CanvasLtiClock, SystemApplicationClock as SystemCanvasLtiClock,
+};
 
 pub struct CanvasLtiLaunchPorts {
     pub state_repository: Arc<dyn CanvasLtiLaunchStateRepository>,

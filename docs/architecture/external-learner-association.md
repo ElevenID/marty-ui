@@ -210,6 +210,12 @@ observation and association APIs remain platform capabilities; canonical
 identity, ownership, authorization and credential authority remain Core-owned.
 The connector must not call private services or access Core databases.
 
+The platform-owned `application_issuance` module supplies application clocks,
+cryptographic approval seeds, and required issuer-context validation. Generic
+approval and offer code consumes these primitives directly. Temporary exports
+in the remaining provider adapters preserve type identity during removal; they
+are not an integration API and must disappear with those adapters.
+
 Marty no longer exposes Canvas deployment feature switches or a
 `canvas_feature_flags` response. Canvas routes, Auth finalization and dedicated
 UI flows are being retired from the platform; this source cleanup does not

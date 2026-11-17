@@ -574,13 +574,7 @@ fn object<'a>(
     value.as_object().ok_or(code)
 }
 
-pub(crate) fn trimmed_json_text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(value)) => value.trim().to_owned(),
-        Some(Value::Null) | None => String::new(),
-        Some(value) => value.to_string().trim_matches('"').trim().to_owned(),
-    }
-}
+pub(crate) use crate::application_issuance::trimmed_json_text;
 
 fn optional_text(value: Option<&Value>) -> Option<String> {
     let value = trimmed_json_text(value);

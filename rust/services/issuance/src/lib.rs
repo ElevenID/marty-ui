@@ -12,6 +12,7 @@ mod python_format;
 mod python_json_diagnostic;
 pub(crate) use marty_response_compat::python_value;
 
+pub mod application_issuance;
 pub mod application_ownership;
 pub mod application_ownership_http;
 pub mod application_ownership_schema;

@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 
 use crate::{
+    application_issuance::ApplicationClock,
     application_template_domain::ApplicationTemplateRecord,
-    canvas_lti_launch::CanvasLtiClock,
     credential::{credential_configuration_id_for_format, CredentialTransaction},
     initiation::{hash_idempotency_key, hash_idempotency_request},
     initiation_response::python_quote,
@@ -122,7 +122,7 @@ pub trait InternalApplicationOfferCoordinator: Send + Sync {
 pub struct InternalApplicationOfferProjector {
     issuer_base_url: Arc<str>,
     wallets: Arc<dyn InternalApplicationWalletCatalog>,
-    clock: Arc<dyn CanvasLtiClock>,
+    clock: Arc<dyn ApplicationClock>,
 }
 
 impl std::fmt::Debug for InternalApplicationOfferProjector {
@@ -138,7 +138,7 @@ impl InternalApplicationOfferProjector {
     pub fn new(
         issuer_base_url: impl Into<Arc<str>>,
         wallets: Arc<dyn InternalApplicationWalletCatalog>,
-        clock: Arc<dyn CanvasLtiClock>,
+        clock: Arc<dyn ApplicationClock>,
     ) -> Result<Self, InternalApplicationOfferProjectionError> {
         let issuer_base_url = issuer_base_url.into();
         let issuer_base_url = issuer_base_url.trim().trim_end_matches('/');
@@ -267,7 +267,7 @@ pub struct NativeInternalApplicationOfferCoordinator {
     repository: Arc<dyn InternalApplicationOfferRepository>,
     preparer: Arc<dyn InternalApplicationTransactionPreparer>,
     projector: InternalApplicationOfferProjector,
-    clock: Arc<dyn CanvasLtiClock>,
+    clock: Arc<dyn ApplicationClock>,
 }
 
 impl std::fmt::Debug for NativeInternalApplicationOfferCoordinator {
@@ -284,7 +284,7 @@ impl NativeInternalApplicationOfferCoordinator {
         repository: Arc<dyn InternalApplicationOfferRepository>,
         preparer: Arc<dyn InternalApplicationTransactionPreparer>,
         projector: InternalApplicationOfferProjector,
-        clock: Arc<dyn CanvasLtiClock>,
+        clock: Arc<dyn ApplicationClock>,
     ) -> Self {
         Self {
             repository,
@@ -525,11 +525,11 @@ mod tests {
         );
     }
     use crate::{
+        application_issuance::{ApprovalSeed, ApprovalSeedGenerator},
         application_template_domain::ApplicationTemplateStatus,
         canvas_award_candidate_approval::{
             CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
             CanvasApplicationApprovalService, CanvasApplicationApprovalSnapshot,
-            CanvasAwardApprovalSeed, CanvasAwardApprovalSeedGenerator,
         },
         canvas_issuance_guard::CanvasGuardConfig,
         credential::{
@@ -552,7 +552,7 @@ mod tests {
 
     struct Clock(DateTime<Utc>);
 
-    impl CanvasLtiClock for Clock {
+    impl ApplicationClock for Clock {
         fn now(&self) -> DateTime<Utc> {
             self.0
         }
@@ -683,9 +683,9 @@ mod tests {
 
     struct CanvasSeeds;
 
-    impl CanvasAwardApprovalSeedGenerator for CanvasSeeds {
-        fn generate(&self) -> CanvasAwardApprovalSeed {
-            CanvasAwardApprovalSeed {
+    impl ApprovalSeedGenerator for CanvasSeeds {
+        fn generate(&self) -> ApprovalSeed {
+            ApprovalSeed {
                 transaction_id: "canvas-transaction-1".into(),
                 pre_authorized_code: "private-pre-authorized-code".into(),
             }
