@@ -174,3 +174,13 @@ profile through the old producer API. Their frozen preimage is the historical
 reference, rather than current source interpreting an old executable profile.
 TODO (platform maintenance owner): qualify a fresh provider-neutral maintenance
 generation separately. Existing jobs retain their original recovery owner.
+
+The old signed-image generation and observer CLI are retired before argument,
+receipt or Docker access. Current profile admission rejects the old selector even
+when mixed, inherited or falsy. Its original source-bound receipts and immutable
+source remain historical; the old 22-role generation is never filtered or relabeled
+as a current platform receipt. Original implementation: UI commit
+`bdfa57e6187d3f32071c55b20e15fe4894136a42`,
+`tests/scripts/nightly-functional-runtime.js` (Git blob `032ee9269796d3a810bcec9b95586ec7a7ad8a7b`).
+TODO (platform runtime owner): qualify a fresh platform signed-image profile and
+observer separately; this cleanup does not require or enable that replacement.

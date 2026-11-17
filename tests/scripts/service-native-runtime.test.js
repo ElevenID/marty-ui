@@ -38,11 +38,11 @@ test('retired provider overlays refuse before receipt readers or live operations
 test('mixed resource profiles cannot hide retired selectors at shared or direct entry points',()=>{
  const runtime=require('./functional-debug-runtime'),resource=require('./beta-resource-runtime');
  const never=()=>assert.fail('retired selector reached a reader');
- for(const field of ['resourceRecreation','resourceRestart'])for(const selector of ['issuanceFenceNativeOverlay','nativeMaintenance'])for(const retired of [null,false,{}]){
+ for(const field of ['resourceRecreation','resourceRestart'])for(const selector of ['issuanceFenceNativeOverlay','nativeMaintenance','signedImageDeployment'])for(const retired of [null,false,{}]){
   const profile={schema:'marty.functional-mixed-runtime/v2',[field]:{},[selector]:retired};
+  assert.throws(()=>runtime.produceSignedImageObservation(profile,{readDocker:never}),/RETIRED_SIGNED_IMAGE_GENERATION/);
   for(const run of [()=>runtime.expectedRuntime(profile),()=>runtime.verifyFunctionalRuntime(profile,{readDocker:never}),
     ()=>runtime.verifyResourceAncillary(profile,never),()=>runtime.resourceRecreationSuccessor({},profile),
-    ()=>runtime.produceSignedImageObservation(profile,{readDocker:never}),
     ()=>resource.authority(profile,{boundJson:never}),()=>resource.restartAuthority(profile,{boundJson:never})])assert.throws(run,/RETIRED_PROVIDER_RUNTIME_PROFILE/);
  }
  for(const field of ['resourceRecreation','resourceRestart'])assert.throws(()=>runtime.expectedRuntime({schema:'marty.functional-mixed-runtime/v2',[field]:{},nativeOverlay:{profile:'canvas-issuer-scoped-jobs'}}),/RETIRED_PROVIDER_RUNTIME_PROFILE/);
