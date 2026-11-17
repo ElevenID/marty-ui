@@ -805,15 +805,11 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
                     && existing.status == CredentialTransactionStatus::Pending
                     && now <= existing.expires_at
                 {
-                    let refreshed = refresh_pending_application_offer(
-                        &mut *database,
-                        existing,
-                        prepared,
-                        false,
-                    )
-                    .await
-                    .map_err(|_| InternalApplicationOfferError::Unavailable)?
-                    .ok_or(InternalApplicationOfferError::ConcurrentChange)?;
+                    let refreshed =
+                        refresh_pending_application_offer(&mut *database, existing, prepared)
+                            .await
+                            .map_err(|_| InternalApplicationOfferError::Unavailable)?
+                            .ok_or(InternalApplicationOfferError::ConcurrentChange)?;
                     database
                         .commit()
                         .await

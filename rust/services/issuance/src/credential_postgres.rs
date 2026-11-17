@@ -138,21 +138,6 @@ const REFRESH_PENDING_APPLICATION_OFFER: &str = concat!(
      RETURNING ",
     transaction_columns!()
 );
-const REFRESH_PENDING_CANVAS_APPLICATION_OFFER: &str = concat!(
-    "UPDATE issuance_service.issuance_transactions
-     SET delivery_mode = $3, revocation_profile_id = $4,
-         issuer_profile_id = $5, issuer_mode = $6, issuer_did_override = $7,
-         issuer_algorithm = $8, signing_service_id = $9,
-         credential_template_id = $10, claims = $11,
-         credential_type = $12, credential_payload_format = $13,
-         wallet_configs = $14, selective_disclosure_claims = $15,
-         zk_predicate_claims = $16, validity_days = $17, renewable = $18,
-         renewal_window_days = $19
-     WHERE id = $1 AND organization_id = $2 AND application_id = $20
-       AND status = 'pending'
-     RETURNING ",
-    transaction_columns!()
-);
 // The same fresh-clock gate protects a new signing claim and recovery after a
 // concurrent winner. The caller already holds the transaction and linked session
 // rows, so neither expiry nor token collisions may be checked only before a wait.
@@ -357,7 +342,6 @@ pub(crate) async fn refresh_pending_application_offer<'executor, E>(
     executor: E,
     current: &CredentialTransaction,
     prepared: &CredentialTransaction,
-    refresh_canvas_context: bool,
 ) -> Result<Option<CredentialTransaction>, CredentialIssuanceError>
 where
     E: Executor<'executor, Database = Postgres>,
@@ -368,45 +352,17 @@ where
     let Some(application_id) = current.application_id.as_deref() else {
         return Ok(None);
     };
-    let query = if refresh_canvas_context {
-        let validity_days = i32::try_from(prepared.validity_days)
-            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
-        let renewal_window_days = i32::try_from(prepared.renewal_window_days)
-            .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
-        sqlx::query(REFRESH_PENDING_CANVAS_APPLICATION_OFFER)
-            .bind(&current.id)
-            .bind(&current.organization_id)
-            .bind(&prepared.delivery_mode)
-            .bind(&prepared.revocation_profile_id)
-            .bind(&prepared.issuer_profile_id)
-            .bind(&prepared.issuer_mode)
-            .bind(&prepared.issuer_did)
-            .bind(&prepared.issuer_algorithm)
-            .bind(&prepared.signing_service_id)
-            .bind(&prepared.credential_template_id)
-            .bind(Value::Object(prepared.claims.clone()))
-            .bind(&prepared.credential_type)
-            .bind(&prepared.credential_payload_format)
-            .bind(Value::Array(prepared.wallet_configs.clone()))
-            .bind(json!(prepared.selective_disclosure_claims))
-            .bind(json!(prepared.zk_predicate_claims))
-            .bind(validity_days)
-            .bind(prepared.renewable)
-            .bind(renewal_window_days)
-            .bind(application_id)
-    } else {
-        sqlx::query(REFRESH_PENDING_APPLICATION_OFFER)
-            .bind(&current.id)
-            .bind(&current.organization_id)
-            .bind(&prepared.delivery_mode)
-            .bind(&prepared.revocation_profile_id)
-            .bind(&prepared.issuer_profile_id)
-            .bind(&prepared.issuer_mode)
-            .bind(&prepared.issuer_did)
-            .bind(&prepared.issuer_algorithm)
-            .bind(&prepared.signing_service_id)
-            .bind(application_id)
-    };
+    let query = sqlx::query(REFRESH_PENDING_APPLICATION_OFFER)
+        .bind(&current.id)
+        .bind(&current.organization_id)
+        .bind(&prepared.delivery_mode)
+        .bind(&prepared.revocation_profile_id)
+        .bind(&prepared.issuer_profile_id)
+        .bind(&prepared.issuer_mode)
+        .bind(&prepared.issuer_did)
+        .bind(&prepared.issuer_algorithm)
+        .bind(&prepared.signing_service_id)
+        .bind(application_id);
     query
         .fetch_optional(executor)
         .await

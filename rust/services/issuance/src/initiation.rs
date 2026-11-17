@@ -777,7 +777,7 @@ pub fn normalize_delivery_mode(value: &str) -> Result<String, InitiationError> {
     } else {
         normalized
     };
-    if !matches!(normalized, "wallet_only" | "wallet_plus_canvas_mirror") {
+    if normalized != "wallet_only" {
         return Err(InitiationError::InvalidDeliveryMode(normalized.to_owned()));
     }
     Ok(normalized.to_owned())
@@ -876,9 +876,7 @@ pub enum InitiationError {
     IdempotencyWhitespace,
     #[error("idempotency key must contain 1-128 ASCII letters, digits, '.', '_', ':', or '-'")]
     InvalidIdempotencyKey,
-    #[error(
-        "Invalid delivery_mode '{0}'. Must be one of ['wallet_only', 'wallet_plus_canvas_mirror']"
-    )]
+    #[error("Invalid delivery_mode '{0}'. Must be 'wallet_only'")]
     InvalidDeliveryMode(String),
     #[error("issuance request could not be canonicalized")]
     Canonicalization,
@@ -1088,7 +1086,7 @@ mod tests {
             "subject_did": "did:key:z6MkHolder",
             "issuer_did": "did:web:issuer.example",
             "authorized_client_id": "client-1",
-            "delivery_mode": "wallet_plus_canvas_mirror",
+            "delivery_mode": "wallet_only",
             "claims": {"profile": {"level": 2}, "roles": ["student", "member"]}
         }))
         .expect("valid initiation request")
@@ -1364,7 +1362,16 @@ mod tests {
             "../../../../contracts/issuance-initiation.json"
         ))
         .expect("valid initiation contract");
-        let vector = &contract["idempotency"]["vector"];
+        let retired: InitiationRequest =
+            serde_json::from_value(contract["idempotency"]["vector"]["request"].clone()).unwrap();
+        assert!(matches!(
+            retired.normalized_delivery_mode(),
+            Err(InitiationError::InvalidDeliveryMode(_))
+        ));
+        let vector: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/issuance-initiation-wallet-vector.json"
+        ))
+        .unwrap();
         let request: InitiationRequest =
             serde_json::from_value(vector["request"].clone()).expect("valid vector request");
         let binding = idempotency_binding(vector["key"].as_str(), &request)
@@ -1502,6 +1509,7 @@ mod tests {
             Err(InitiationError::InvalidIdempotencyKey)
         );
         assert_eq!(normalize_delivery_mode("  ").unwrap(), "wallet_only");
+        assert!(normalize_delivery_mode("wallet_plus_canvas_mirror").is_err());
         assert_eq!(
             normalize_delivery_mode("direct-kms"),
             Err(InitiationError::InvalidDeliveryMode(

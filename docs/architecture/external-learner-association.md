@@ -432,3 +432,9 @@ Shared owned-cleanup support is now under `rust/acceptance/support`, and
 self-host acceptance imports it without depending on the removed Canvas crate.
 Execution-contract tests are being reconciled to the platform runners and
 rosters; remaining failing source-graph expectations must pass before merge.
+
+Public initiation accepts `wallet_only`; the retired mirror delivery mode is
+rejected before reservation. Historical mirror idempotency evidence remains
+unchanged and is tested as rejected input. A separately calculated wallet-only
+vector covers current canonical hashing. Pending application offer refresh no
+longer contains a provider-specific template/claim overwrite branch.
