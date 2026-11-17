@@ -914,10 +914,6 @@ impl UpstreamClient for SuccessfulUpstream {
             assert_eq!(body["organization_id"], "org-1");
             assert!(body.get("universal_resolver_url").is_none());
         }
-        if request.path == "/v1/integrations/canvas/lti/jwks" {
-            assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
-            assert_eq!(request.header("x-api-key"), None);
-        }
         if request.path == "/internal/applications/app-1/evidence-summary" {
             assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
             assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
@@ -3121,11 +3117,11 @@ async fn internal_passport_handoff_keeps_public_api_key_organizations_isolated()
 
 fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> Request {
     let mut request = Request::builder()
-        .method(if public { "GET" } else { "POST" })
+        .method("POST")
         .uri(if public {
-            "/v1/integrations/canvas/lti/jwks"
+            "/v1/issuance/nonce"
         } else {
-            "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve?organization_id=org-1"
+            "/v1/issued-credentials/credential-1/revoke?organization_id=org-1"
         })
         .header("content-type", "application/json")
         .header("x-user-id", "forged-user")
@@ -3134,7 +3130,7 @@ fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> R
         .body(if public {
             Body::empty()
         } else {
-            Body::from(r#"{"action":"dismiss","organization_id":"org-1"}"#)
+            Body::from(r#"{"reason":"affiliationChanged"}"#)
         })
         .expect("synthetic gateway request");
     for (name, value) in [
@@ -3165,15 +3161,6 @@ fn forged_actor_request(authentication: Option<(&str, &str)>, public: bool) -> R
 
 #[tokio::test]
 async fn gateway_trusted_actor_session_and_api_key_replace_client_aliases() {
-    // This asserts the real router/proxy boundary, not a persisted SQL actor.
-    let frozen: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/issuance-canvas-operations.json"
-    ))
-    .unwrap();
-    assert_eq!(
-        frozen["behavior"]["actor_priority"],
-        json!(["X-Authenticated-User-ID", "X-User-ID", "X-API-Key-ID"])
-    );
     for (authentication, expected_user, expected_key) in [
         (("cookie", "sessionId=actor-session"), "actor-session", None),
         (
@@ -3192,10 +3179,7 @@ async fn gateway_trusted_actor_session_and_api_key_replace_client_aliases() {
         assert_eq!(calls.len(), 1);
         let (service, forwarded) = &calls[0];
         assert_eq!(service, issuance_native::NATIVE_SERVICE);
-        assert_eq!(
-            forwarded.path,
-            "/v1/integrations/canvas/evidence-policy-reviews/review-1/resolve"
-        );
+        assert_eq!(forwarded.path, "/v1/issued-credentials/credential-1/revoke");
         assert_eq!(forwarded.method, HttpMethod::Post);
         assert_eq!(forwarded.header("x-authenticated-user-id"), None);
         assert_eq!(forwarded.header("x-user-id"), Some(expected_user));
@@ -3236,131 +3220,6 @@ async fn internal_service_routes_are_never_publicly_proxied() {
             recorder.0.lock().unwrap().is_empty(),
             "{path} must stop before privileged upstream credential injection"
         );
-    }
-}
-
-#[tokio::test]
-async fn canvas_review_recovery_authenticates_and_authorizes_before_upstream_access() {
-    let path = "/v1/integrations/canvas/evidence-policy-reviews/review-1/reconcile-revocation";
-    for (authentication, expected) in [
-        (None, StatusCode::UNAUTHORIZED),
-        (
-            Some(("x-api-key", "actor-key-no-scope")),
-            StatusCode::FORBIDDEN,
-        ),
-        (
-            Some(("cookie", "sessionId=actor-denied")),
-            StatusCode::FORBIDDEN,
-        ),
-        (Some(("x-api-key", "actor-key")), StatusCode::OK),
-        (Some(("cookie", "sessionId=actor-session")), StatusCode::OK),
-    ] {
-        let (router, recorder) = actor_test_router();
-        let mut builder = Request::builder()
-            .method("POST")
-            .uri(path)
-            .header("x-user-id", "forged-user")
-            .header("x-authenticated-user-id", "forged-user")
-            .header("x-organization-id", "org-attacker")
-            .header("content-type", "application/json");
-        if let Some((name, value)) = authentication {
-            builder = builder.header(name, value);
-        }
-        let response = router
-            .oneshot(builder.body(Body::from(r#"{"action":"revoke"}"#)).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected, "{authentication:?}");
-        let calls = recorder.0.lock().unwrap();
-        if expected == StatusCode::OK {
-            assert_eq!(calls.len(), 1);
-            let (service, request) = &calls[0];
-            assert_eq!(service, issuance_native::NATIVE_SERVICE);
-            assert_eq!(request.header("x-organization-id"), Some("org-1"));
-            assert_ne!(request.header("x-user-id"), Some("forged-user"));
-            assert_ne!(
-                request.header("x-authenticated-user-id"),
-                Some("forged-user")
-            );
-        } else {
-            assert!(
-                calls.is_empty(),
-                "denial must precede privileged upstream credential injection"
-            );
-        }
-    }
-}
-
-#[tokio::test]
-async fn canvas_public_batches_replace_every_client_tenant_shape_or_fail_closed() {
-    let paths = [
-        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
-        "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
-        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
-    ];
-    for path in paths {
-        for (header, authentication) in [
-            ("cookie", "sessionId=actor-session"),
-            ("x-api-key", "actor-key"),
-        ] {
-            for query in [
-                "",
-                "?organization_id=org-attacker",
-                "?organization_id=org-attacker&organization_id=org-other&limit=7",
-            ] {
-                let (router, recorder) = actor_test_router();
-                let response = router
-                    .oneshot(
-                        Request::builder()
-                            .method("POST")
-                            .uri(format!("{path}{query}"))
-                            .header(header, authentication)
-                            .body(Body::empty())
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(response.status(), StatusCode::OK, "{path}{query}");
-                let calls = recorder.0.lock().unwrap();
-                assert_eq!(calls.len(), 1, "{path}{query}");
-                let (service, forwarded) = &calls[0];
-                assert_eq!(service, issuance_native::NATIVE_SERVICE);
-                assert_eq!(forwarded.path, path);
-                assert_eq!(
-                    forwarded.query.get("organization_id"),
-                    Some(&vec!["org-1".to_owned()]),
-                    "{path}{query}"
-                );
-                assert_eq!(
-                    forwarded.query.get("limit").map(Vec::as_slice),
-                    query
-                        .contains("limit=7")
-                        .then_some(["7".to_owned()].as_slice())
-                );
-            }
-        }
-
-        let (router, recorder) = actor_test_router();
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("{path}?organization_id=org-attacker"))
-                    .header("cookie", "sessionId=actor-no-organization")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&body).unwrap(),
-            json!({"detail":"Trusted organization context is required"})
-        );
-        assert!(recorder.0.lock().unwrap().is_empty());
     }
 }
 
@@ -5418,17 +5277,6 @@ async fn proxy_enforces_service_credentials_and_special_rewrites() {
         .expect("response");
     assert_eq!(token.status(), StatusCode::OK);
 
-    let jwks = runtime_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/integrations/canvas/lti/jwks")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(jwks.status(), StatusCode::OK);
-
     let evidence = runtime_router()
         .oneshot(
             Request::builder()
@@ -5468,28 +5316,6 @@ async fn proxy_enforces_service_credentials_and_special_rewrites() {
         .await
         .expect("response");
     assert_eq!(lifecycle.status(), StatusCode::OK);
-
-    let retired = runtime_router()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/integrations/canvas/lti/experience-sessions/state-1")
-                .header("cookie", "sessionId=valid")
-                .body(Body::empty())
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(retired.status(), StatusCode::GONE);
-    let retired: Value = serde_json::from_slice(
-        &to_bytes(retired.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-            .await
-            .expect("body"),
-    )
-    .expect("json");
-    assert_eq!(
-        retired["detail"],
-        "State-addressed Canvas sessions are no longer supported"
-    );
 }
 
 #[tokio::test]
@@ -7984,4 +7810,32 @@ async fn public_verification_keeps_anonymous_request_limits_and_ignores_capabili
         calls[1].1.header("x-verification-session"),
         Some("capability-1")
     );
+}
+
+#[tokio::test]
+async fn retired_provider_routes_never_reach_upstream() {
+    for path in [
+        "/v1/integrations/canvas/lti/jwks",
+        "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+        "/v1/integrations/canvas/platforms",
+        "/v1/integrations/canvas/evidence-events",
+        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+        "/v1/issuance/organizations/org-1/canvas-mirror-health",
+    ] {
+        for method in ["GET", "POST"] {
+            for authenticated in [false, true] {
+                let (router, recorder) = actor_test_router();
+                let mut request = Request::builder().method(method).uri(path);
+                if authenticated {
+                    request = request.header("x-api-key", "actor-key");
+                }
+                let response = router
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+                assert!(recorder.0.lock().unwrap().is_empty(), "{method} {path}");
+            }
+        }
+    }
 }

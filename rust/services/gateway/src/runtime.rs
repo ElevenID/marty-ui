@@ -73,8 +73,7 @@ use crate::{
         OrganizationMembershipProvider, RequiredPermission, TenantAuthorizationFailure,
     },
     contract::{
-        mdoc_crl_operator_path, requires_issuance_service_auth, retired_canvas_state_route,
-        route_ownership, GatewayContract,
+        mdoc_crl_operator_path, requires_issuance_service_auth, route_ownership, GatewayContract,
     },
     credential_metadata, credential_template_contract, deployment_contract, did_web,
     didcomm_contract,
@@ -979,18 +978,9 @@ async fn tenant_authorization_middleware(
         request.extensions_mut().insert(passport_auth);
         return next.run(request).await;
     }
-    // These public batch routes are tenant-scoped operations even though the
-    // underlying worker API retains its frozen optional/global scope. Never
-    // let an omitted, forged, or duplicate client query select the tenant used
-    // for authorization; the authenticated organization is authoritative.
-    let query_organization_id =
-        (!issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), parts.uri.path()))
-            .then(|| {
-                query_pairs(parts.uri.query())
-                    .remove("organization_id")
-                    .and_then(|values| values.into_iter().next())
-            })
-            .flatten();
+    let query_organization_id = query_pairs(parts.uri.query())
+        .remove("organization_id")
+        .and_then(|values| values.into_iter().next());
     let resolved = match resolve_organization(
         &OrganizationResolutionInput {
             method: parts.method.as_str().into(),
@@ -1371,12 +1361,6 @@ async fn proxy_handler(
     if request.uri().path() == "/v1/notifications/events/push" {
         return sse_events_handler(state, request).await;
     }
-    if retired_canvas_state_route(request.uri().path()) {
-        return detail_response(
-            410,
-            "State-addressed Canvas sessions are no longer supported",
-        );
-    }
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         return issuance_create_handler(state, request).await;
     }
@@ -1502,15 +1486,6 @@ async fn proxy_handler(
         && issuance_native::is_passport_public_http(method, &public_path);
     if native_passport_public && passport_auth.is_none() {
         return detail_response(403, "Passport tenant authorization is required");
-    }
-    if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path)
-        && identity
-            .organization_id
-            .as_deref()
-            .map(str::trim)
-            .is_none_or(|value| value.is_empty())
-    {
-        return detail_response(403, "Trusted organization context is required");
     }
     let upstream_path =
         match compatibility_upstream_path(&public_path, api_key_organization_id.as_deref()) {
@@ -1686,15 +1661,6 @@ async fn proxy_handler(
                 .headers
                 .insert("x-api-key-id".into(), api_key_id.clone());
         }
-    }
-    if issuance_native::is_canvas_mirror_public_batch(parts.method.as_str(), &public_path) {
-        overrides.trusted_query.insert(
-            "organization_id".into(),
-            vec![identity
-                .organization_id
-                .clone()
-                .expect("Canvas public batch tenant was required above")],
-        );
     }
     overrides.body = canonical_body;
     if is_public_service_sign_path(&public_path)
@@ -2210,7 +2176,6 @@ async fn applicant_evidence_summary_handler(
             "policy_source": Value::Null,
             "policy_set_id": Value::Null,
             "issuance_transaction_id": Value::Null,
-            "canvas": Value::Null,
             "available_api_checks": []
         })),
     )
