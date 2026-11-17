@@ -158,6 +158,6 @@ def main():
             subprocess.run([sys.executable,str(ROOT/'scripts/run_application_ownership_contract.py'),'--compile-only'],env=environment,check=True,stderr=subprocess.STDOUT)
         print('Actual PostgreSQL ownership propose/learner-confirm/revoke, original8-way receipts, wrong actor/tenant/revision, changed subject/expiry, exact permission, postimage rollback and restricted role PASS')
     finally:
-        subprocess.run(['docker','rm','--force',name],check=True,stdout=subprocess.DEVNULL)
+        subprocess.run(['docker','rm','--force','--volumes',name],check=True,stdout=subprocess.DEVNULL)
 
 if __name__=='__main__':main()

@@ -171,8 +171,9 @@ identity. The page explains that disconnect affects every application, removes
 stale displayed authority after uncertain replies and retains only a recovery
 pointer. The native Node contract at
 `ui/scripts/association-unlink.contract.mjs` exercises these transport/storage
-properties; mounted UI and browser qualification for the unlink controls remains
-required.
+properties. The Chromium fixture also exercises explicit global unlink,
+uncertain replies and reload recovery. Full Gateway/Core browser composition
+remains required.
 
 Run `ui/scripts/association-consent-browser.mjs` with the absolute path to the
 existing pinned Playwright 1.59.1 module and, optionally, an existing absolute

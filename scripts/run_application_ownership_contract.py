@@ -76,7 +76,7 @@ def main():
         target.mkdir(parents=True,exist_ok=True)
         environment.update(CARGO_TARGET_DIR=str(target),RUSTFLAGS='-D warnings')
         if gateway_contract:
-            environment.update(CARGO_TARGET_DIR=str(Path.home()/'.cache/codex-application-ownership/native-target'),CARGO_BUILD_JOBS='2')
+            environment.update(CARGO_TARGET_DIR=str(Path.home()/'.cache/codex-application-ownership/native-target'),CARGO_BUILD_JOBS='2',CARGO_INCREMENTAL='0')
             environment.pop('RUSTFLAGS',None)
         metadata=subprocess.run(['cargo','metadata','--offline','--format-version','1'],cwd=directory,env=environment,text=True,capture_output=True)
         if metadata.returncode:

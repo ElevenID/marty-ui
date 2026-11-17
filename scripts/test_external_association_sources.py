@@ -394,5 +394,7 @@ def main():
      EXTERNAL_ASSOCIATION_GATEWAY_KEY_REVISION=str(keyrev(gateway_key)))
    subprocess.run([sys.executable,str(ROOT/'scripts/run_application_ownership_contract.py'),'--compile-only'],env=env,check=True,stderr=subprocess.STDOUT)
  finally:
-  subprocess.run(['docker','rm','--force',name],check=True,stdout=subprocess.DEVNULL)
+  # This container owns only disposable anonymous PGDATA. Remove that volume
+  # with the fixture so repeated local qualification cannot accumulate databases.
+  subprocess.run(['docker','rm','--force','--volumes',name],check=True,stdout=subprocess.DEVNULL)
 if __name__=='__main__':main()
