@@ -12,14 +12,19 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+import sys
 
 ROOT=Path(__file__).resolve().parents[1]
 
 def main():
+    if not sys.argv[1:]:
+        subprocess.run([sys.executable,str(ROOT/'scripts/test_application_ownership.py'),'--rust-contract'],check=True,stderr=subprocess.STDOUT)
+        return
+    assert sys.argv[1:]==['--compile-only'] and os.environ.get('APPLICATION_OWNERSHIP_CONTRACT_TEST')=='synthetic-local-only'
     workspace=tomllib.loads((ROOT/'rust/Cargo.toml').read_text())
     service=tomllib.loads((ROOT/'rust/services/issuance/Cargo.toml').read_text())
     declarations=[]
-    for name in ['serde','serde_json','sqlx','uuid']:
+    for name in ['serde','serde_json','sqlx','uuid','axum','tokio','subtle','tower']:
         value=workspace['workspace']['dependencies'][name]
         value={'version':value} if isinstance(value,str) else dict(value)
         assert not set(value)-{'version','features','default-features','package'}
@@ -34,7 +39,14 @@ def main():
         (directory/'Cargo.toml').write_text('[package]\nname="application-ownership-contract"\nversion="0.0.0"\nedition="2021"\npublish=false\n[workspace]\n[lib]\npath="lib.rs"\n[dependencies]\n'+'\n'.join(declarations)+'\n')
         shutil.copyfile(ROOT/'rust/Cargo.lock',directory/'Cargo.lock')
         module=ROOT/'rust/services/issuance/src/application_ownership.rs'
-        (directory/'lib.rs').write_text('#[path='+json.dumps(str(module))+']\npub mod application_ownership;\n')
+        modules={'application_ownership':module,
+            'application_ownership_schema':ROOT/'rust/services/issuance/src/application_ownership_schema.rs',
+            'application_ownership_startup':ROOT/'rust/services/issuance/src/application_ownership_startup.rs',
+            'application_ownership_http':ROOT/'rust/services/issuance/src/application_ownership_http.rs',
+            'gateway_ownership_guard':ROOT/'rust/services/gateway/src/external_observation.rs'}
+        composition=ROOT/'tests/rust/application-ownership/composition.rs'
+        (directory/'lib.rs').write_text(''.join('#[path='+json.dumps(str(path))+']\npub mod '+name+';\n' for name,path in modules.items())
+            +'#[cfg(test)]\n#[path='+json.dumps(str(composition))+']\nmod ownership_composition;\n')
         environment=os.environ.copy()
         target=Path.home()/'.cache/codex-application-ownership/rust-target'
         target.mkdir(parents=True,exist_ok=True)

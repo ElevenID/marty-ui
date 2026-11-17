@@ -146,7 +146,42 @@ BEGIN
  RETURN answer;
 END;
 $$;
+-- Session actor only. A historical receipt and a fresh current-state read have
+-- deliberately different shapes; receipts cannot be mistaken for authority.
+CREATE FUNCTION issuance_service.read_application_ownership(org uuid,app text,actor text,requested_operation uuid)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog AS $$
+DECLARE saved issuance_service.application_ownerships; original issuance_service.application_ownership_operations;
+ canonical record; administrator boolean;
+BEGIN
+ IF org IS NULL OR org='00000000-0000-0000-0000-000000000000' OR app IS NULL OR app !~ '^[A-Za-z0-9_-]{1,128}$'
+  OR actor IS NULL OR actor !~ '^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$'
+  OR requested_operation='00000000-0000-0000-0000-000000000000' THEN RETURN NULL; END IF;
+ IF NOT EXISTS(SELECT 1 FROM issuance_service.external_observation_lock_organization(org) WHERE status='active') THEN RETURN NULL; END IF;
+ IF requested_operation IS NOT NULL THEN
+  SELECT * INTO original FROM issuance_service.application_ownership_operations WHERE operation_id=requested_operation
+   AND organization_id=org AND application_id=app AND actor_id=actor;
+  IF NOT FOUND OR (original.action<>'confirm' AND NOT EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor))) THEN RETURN NULL; END IF;
+  RETURN jsonb_build_object('kind','receipt','receipt',original.receipt);
+ END IF;
+ administrator:=EXISTS(SELECT 1 FROM issuance_service.application_ownership_lock_administrator(org,actor));
+ SELECT * INTO canonical FROM issuance_service.external_observation_lock_application(app,org::text);
+ IF NOT FOUND THEN RETURN NULL; END IF;
+ SELECT * INTO saved FROM issuance_service.application_ownerships WHERE organization_id=org AND application_id=app FOR SHARE;
+ IF NOT FOUND THEN
+  IF administrator THEN RETURN jsonb_build_object('kind','current','record',NULL); END IF;
+  RETURN NULL;
+ END IF;
+ IF NOT administrator AND saved.user_id<>actor THEN RETURN NULL; END IF;
+ RETURN jsonb_build_object('kind','current','record',jsonb_build_object('application_id',app,'user_id',saved.user_id,
+  'revision',saved.revision,'status',saved.status,'application_revision',(extract(epoch FROM canonical.updated_at)*1000000)::bigint,
+  'proposal_application_revision',saved.application_revision,
+  'current',COALESCE(saved.status='confirmed' AND saved.subject_id=canonical.applicant_identifier
+   AND saved.application_revision=(extract(epoch FROM canonical.updated_at)*1000000)::bigint
+   AND canonical.status IN ('pending','under_review') AND canonical.expires_at>clock_timestamp(),false)));
+END;
+$$;
 REVOKE ALL ON TABLE issuance_service.application_ownerships,issuance_service.application_ownership_operations FROM PUBLIC;
 REVOKE ALL ON FUNCTION issuance_service.guard_application_ownership(),issuance_service.keep_application_ownership_operation(),
  issuance_service.application_ownership_lock_administrator(uuid,text),
- issuance_service.mutate_application_ownership(uuid,text,text,uuid,text,bigint,bigint,text) FROM PUBLIC;
+ issuance_service.mutate_application_ownership(uuid,text,text,uuid,text,bigint,bigint,text),
+ issuance_service.read_application_ownership(uuid,text,text,uuid) FROM PUBLIC;

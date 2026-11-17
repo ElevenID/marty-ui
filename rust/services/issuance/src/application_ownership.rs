@@ -58,6 +58,77 @@ pub struct OwnershipReceipt {
     pub status: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CurrentOwnership {
+    pub application_id: String,
+    pub user_id: String,
+    pub revision: i64,
+    pub status: String,
+    pub application_revision: i64,
+    pub proposal_application_revision: i64,
+    pub current: bool,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum OwnershipRead {
+    Current { record: Option<CurrentOwnership> },
+    Receipt { receipt: OwnershipReceipt },
+}
+
+/// Fresh relationship status and immutable operation receipts are separate
+/// results. The caller must never authorize from an old confirmation receipt.
+pub async fn read(
+    pool: &PgPool,
+    org: Uuid,
+    app: &str,
+    actor: &str,
+    operation: Option<Uuid>,
+) -> Result<OwnershipRead, OwnershipError> {
+    if org.is_nil() || !identifier(app) || !user(actor) || operation.is_some_and(|id| id.is_nil()) {
+        return Err(OwnershipError::InvalidRequest);
+    }
+    let value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT issuance_service.read_application_ownership($1,$2,$3,$4)")
+            .bind(org)
+            .bind(app)
+            .bind(actor)
+            .bind(operation)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| OwnershipError::Unavailable)?;
+    let result: OwnershipRead = serde_json::from_value(value.ok_or(OwnershipError::NotAuthorized)?)
+        .map_err(|_| OwnershipError::Unavailable)?;
+    match &result {
+        OwnershipRead::Receipt { receipt }
+            if operation == Some(receipt.operation_id)
+                && receipt.application_id == app
+                && version(receipt.revision)
+                && matches!(
+                    (receipt.action.as_str(), receipt.status.as_str()),
+                    ("propose", "proposed") | ("confirm", "confirmed") | ("revoke", "revoked")
+                ) => {}
+        OwnershipRead::Current { record } if operation.is_none() => {
+            if let Some(record) = record {
+                if record.application_id != app
+                    || !user(&record.user_id)
+                    || !version(record.revision)
+                    || !version(record.application_revision)
+                    || !version(record.proposal_application_revision)
+                    || !matches!(record.status.as_str(), "proposed" | "confirmed" | "revoked")
+                    || (record.current
+                        && (record.status != "confirmed"
+                            || record.application_revision != record.proposal_application_revision))
+                {
+                    return Err(OwnershipError::Unavailable);
+                }
+            }
+        }
+        _ => return Err(OwnershipError::Unavailable),
+    }
+    Ok(result)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OwnershipError {
     InvalidRequest,

@@ -680,6 +680,12 @@ async fn observation_middleware(
 ) -> Response {
     let producer = request.uri().path() == crate::external_observation::PATH;
     let admin = crate::external_observation::is_admin_namespace(request.uri().path());
+    let ownership = request.uri().path().split('/').nth(4) == Some("application-ownerships");
+    let ownership_admin = ownership
+        && matches!(
+            request.uri().path().rsplit('/').next(),
+            Some("propose" | "revoke")
+        );
     if !producer && !admin {
         return next.run(request).await;
     }
@@ -712,14 +718,17 @@ async fn observation_middleware(
     match result {
         Ok(mut request) => {
             let mut trusted = base_trusted_identity(&identity);
-            trusted.required_permission = Some(
-                if producer {
-                    "evidence:submit"
-                } else {
-                    "external-observation:manage"
-                }
-                .into(),
-            );
+            trusted.required_permission = if producer {
+                Some("evidence:submit".into())
+            } else if ownership_admin {
+                Some("application:manage-ownership".into())
+            } else if ownership {
+                // Core verifies the session user's proposed/current relationship.
+                // Learner confirmation is never an administrative permission.
+                None
+            } else {
+                Some("external-observation:manage".into())
+            };
             request.extensions_mut().insert(trusted);
             next.run(request).await
         }

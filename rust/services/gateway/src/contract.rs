@@ -239,6 +239,24 @@ impl GatewayContract {
             })?;
         }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            table.add(RouteConfig {
+                name: format!("application-ownership:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         for path in MDOC_CERTIFICATE_PATHS {
             table.add(RouteConfig {
                 name: format!("signing-keys-native:{path}"),
@@ -654,6 +672,13 @@ impl GatewayContract {
             paths.insert(
                 path.into(),
                 json!({"post":crate::external_observation::admin_read_operation(kind)}),
+            );
+        }
+        for path in crate::external_observation::OWNERSHIP_PATHS {
+            let action = path.rsplit('/').next().expect("static ownership action");
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::ownership_operation(action)}),
             );
         }
         json!({

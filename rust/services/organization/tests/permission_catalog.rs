@@ -9,9 +9,10 @@ use marty_organization::{
 fn shared_permission_catalog_is_unique_and_complete() {
     let catalog = permission_catalog().expect("shared permission catalog must parse");
     let keys: BTreeSet<_> = catalog.iter().map(|permission| permission.key()).collect();
-    assert_eq!(catalog.len(), 110);
+    assert_eq!(catalog.len(), 111);
     assert_eq!(keys.len(), catalog.len());
     assert!(keys.contains("external-observation:manage"));
+    assert!(keys.contains("application:manage-ownership"));
     assert!(keys.contains("wallet:view"));
     assert!(keys.contains("issuance:revoke"));
     assert!(keys.contains("verification:execute"));
@@ -52,6 +53,16 @@ fn system_role_templates_preserve_intended_entitlements() {
         .find(|role| role.name == "owner")
         .expect("owner template must exist");
     assert_eq!(owner.permission_keys.len(), catalog.len());
+    for template in &templates {
+        assert_eq!(
+            template
+                .permission_keys
+                .contains("application:manage-ownership"),
+            matches!(template.name, "owner" | "admin"),
+            "unexpected ownership authority for {}",
+            template.name
+        );
+    }
     assert!(owner
         .permission_keys
         .contains("passport-certificate:issue-csca"));

@@ -348,6 +348,11 @@
     },
     {
       "resource": "application",
+      "action": "manage-ownership",
+      "description": "Propose and revoke canonical application ownership; the intended user must separately confirm"
+    },
+    {
+      "resource": "application",
       "action": "review",
       "description": "Review applications, checks, and reviewer locks"
     },

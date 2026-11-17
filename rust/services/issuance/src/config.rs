@@ -238,6 +238,7 @@ pub struct IssuanceServiceConfig {
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub external_observations_enabled: bool,
+    pub application_ownership_enabled: bool,
     pub external_observation_database_url: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
@@ -338,6 +339,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "external_observations_enabled",
                 &self.external_observations_enabled,
+            )
+            .field(
+                "application_ownership_enabled",
+                &self.application_ownership_enabled,
             )
             .field(
                 "external_observation_database_configured",
@@ -1067,6 +1072,14 @@ impl IssuanceServiceConfig {
             };
         let external_observations_enabled =
             environment_flag(&values, "MARTY_EXTERNAL_OBSERVATIONS_ENABLED");
+        let application_ownership_enabled =
+            environment_flag(&values, "MARTY_APPLICATION_OWNERSHIP_ENABLED");
+        if application_ownership_enabled && issuance_api_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "Ownership Gateway service credential is required",
+            ));
+        }
         let external_observation_database_url = values
             .get("ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL")
             .map(|value| validate_observation_database_url(value))
@@ -1095,6 +1108,7 @@ impl IssuanceServiceConfig {
             token_hmac_key,
             issuance_api_key,
             external_observations_enabled,
+            application_ownership_enabled,
             external_observation_database_url,
             passport_tenant_keys,
             passport_native,
@@ -3388,4 +3402,27 @@ fn observation_ingress_requires_explicit_activation_configuration() {
         let error = validate_observation_database_url(invalid).unwrap_err();
         assert!(!format!("{error:?}").contains("synthetic-secret"));
     }
+}
+#[test]
+fn application_ownership_requires_explicit_activation_and_service_authentication() {
+    assert!(
+        !IssuanceServiceConfig::from_values(Vec::<(String, String)>::new())
+            .unwrap()
+            .application_ownership_enabled
+    );
+    assert!(IssuanceServiceConfig::from_values(vec![(
+        "MARTY_APPLICATION_OWNERSHIP_ENABLED".into(),
+        "true".into()
+    )])
+    .is_err());
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("MARTY_APPLICATION_OWNERSHIP_ENABLED".into(), "true".into()),
+        (
+            "ISSUANCE_API_KEY".into(),
+            "synthetic-ownership-service-key-000000000001".into(),
+        ),
+    ])
+    .unwrap();
+    assert!(config.application_ownership_enabled);
+    assert!(!config.external_observations_enabled);
 }

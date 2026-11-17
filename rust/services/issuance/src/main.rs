@@ -284,6 +284,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await
         .map_err(std::io::Error::other)?;
+    let ownership = marty_issuance_service::application_ownership_startup::prepare_router(
+        &pool,
+        config.application_ownership_enabled,
+        config.issuance_api_key.as_deref(),
+    )
+    .await
+    .map_err(std::io::Error::other)?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),
@@ -952,6 +959,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let app = if let Some(observations) = observations {
         app.merge(observations)
+    } else {
+        app
+    };
+    let app = if let Some(ownership) = ownership {
+        app.merge(ownership)
     } else {
         app
     };
