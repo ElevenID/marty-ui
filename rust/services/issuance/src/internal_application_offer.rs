@@ -419,6 +419,9 @@ impl InternalApplicationOfferCoordinator for NativeInternalApplicationOfferCoord
         application: &ApplicationRecord,
         local_template: Option<&ApplicationTemplateRecord>,
     ) -> Result<IssuanceOfferResponse, InternalApplicationOfferError> {
+        if crate::internal_application_approval::unsupported_integration_context(application) {
+            return Err(InternalApplicationApprovalError::UnsupportedIntegrationContext.into());
+        }
         let transaction_id = application
             .issuance_transaction_id
             .as_deref()
@@ -440,6 +443,9 @@ fn offer_preparation_error(
     error: InternalApplicationApprovalError,
 ) -> InternalApplicationOfferError {
     match error {
+        InternalApplicationApprovalError::UnsupportedIntegrationContext => {
+            InternalApplicationApprovalError::UnsupportedIntegrationContext.into()
+        }
         InternalApplicationApprovalError::CanvasNotReady => {
             InternalApplicationApprovalError::CanvasOfferNotReady.into()
         }
@@ -507,7 +513,6 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Mutex,
         },
-        time::Duration as StdDuration,
     };
 
     use chrono::{DateTime, Duration, TimeZone, Utc};
@@ -525,19 +530,8 @@ mod tests {
         );
     }
     use crate::{
-        application_issuance::{ApprovalSeed, ApprovalSeedGenerator},
         application_template_domain::ApplicationTemplateStatus,
-        canvas_award_candidate_approval::{
-            CanvasApplicationApprovalError, CanvasApplicationApprovalRepository,
-            CanvasApplicationApprovalService, CanvasApplicationApprovalSnapshot,
-        },
-        canvas_issuance_guard::CanvasGuardConfig,
-        credential::{
-            CredentialIssuanceError, CredentialTransactionStatus, IssuerContext,
-            IssuerContextResolver,
-        },
-        internal_application_approval::CompositeInternalApplicationTransactionPreparer,
-        internal_application_domain::ApplicationStatus,
+        credential::CredentialTransactionStatus, internal_application_domain::ApplicationStatus,
     };
 
     struct Catalog(Vec<RegisteredOfferWallet>);
@@ -633,117 +627,6 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct StaleCanvasRepository {
-        loads: AtomicUsize,
-        reservations: AtomicUsize,
-    }
-
-    #[async_trait]
-    impl CanvasApplicationApprovalRepository for StaleCanvasRepository {
-        async fn load_application_approval_snapshot(
-            &self,
-            organization_id: &str,
-            application_id: &str,
-        ) -> Result<Option<CanvasApplicationApprovalSnapshot>, CanvasApplicationApprovalError>
-        {
-            assert_eq!(organization_id, "org-123");
-            assert_eq!(application_id, "application-1");
-            self.loads.fetch_add(1, Ordering::SeqCst);
-            Ok(Some(stale_canvas_snapshot()))
-        }
-
-        async fn reserve_application_issuance(
-            &self,
-            transaction: &CredentialTransaction,
-            _snapshot: &CanvasApplicationApprovalSnapshot,
-            _reviewer_id: &str,
-            _review_notes: Option<&str>,
-            _reviewed_at: DateTime<Utc>,
-        ) -> Result<String, CanvasApplicationApprovalError> {
-            self.reservations.fetch_add(1, Ordering::SeqCst);
-            Ok(transaction.id.clone())
-        }
-    }
-
-    struct NeverIssuer(AtomicUsize);
-
-    #[async_trait]
-    impl IssuerContextResolver for NeverIssuer {
-        async fn resolve(
-            &self,
-            _transaction: &CredentialTransaction,
-            _credential_format: &str,
-            _force: bool,
-        ) -> Result<IssuerContext, CredentialIssuanceError> {
-            self.0.fetch_add(1, Ordering::SeqCst);
-            Err(CredentialIssuanceError::RepositoryUnavailable)
-        }
-    }
-
-    struct CanvasSeeds;
-
-    impl ApprovalSeedGenerator for CanvasSeeds {
-        fn generate(&self) -> ApprovalSeed {
-            ApprovalSeed {
-                transaction_id: "canvas-transaction-1".into(),
-                pre_authorized_code: "private-pre-authorized-code".into(),
-            }
-        }
-    }
-
-    fn object(value: Value) -> Map<String, Value> {
-        value.as_object().expect("object fixture").clone()
-    }
-
-    fn stale_canvas_snapshot() -> CanvasApplicationApprovalSnapshot {
-        CanvasApplicationApprovalSnapshot {
-            policy_set: None,
-            evidence_facts: Vec::new(),
-            application: object(json!({
-                "id": "application-1",
-                "organization_id": "org-123",
-                "application_template_id": "application-template-1",
-                "applicant_identifier": "canvas_lti:learner-1",
-                "form_data": {"achievement": "Portable Canvas"},
-                "integration_context": {"canvas": {
-                    "source": "canvas_lti_bootstrap",
-                    "canvas_platform_id": "platform-1",
-                    "canvas_program_binding_id": "binding-1",
-                    "canvas_account_id": "account-1",
-                    "application_template_id": "application-template-1",
-                    "credential_template_id": "credential-template-1",
-                    "lti_subject": "opaque-learner-1"
-                }},
-                "status": "approved"
-            })),
-            application_template: Map::new(),
-            platform: object(json!({
-                "id": "platform-1",
-                "organization_id": "org-123",
-                "canvas_account_id": "account-1",
-                "registration_status": "verified",
-                "enabled": true,
-                "archived_at": null
-            })),
-            binding: object(json!({
-                "id": "binding-1",
-                "organization_id": "org-123",
-                "platform_id": "platform-1",
-                "application_template_id": "application-template-1",
-                "credential_template_id": "credential-template-1",
-                "enabled": true,
-                "config_version": 4,
-                "validated_config_version": 4,
-                "readiness_validated_at": "2026-09-20T11:00:00Z",
-                "activated_at": "2026-09-20T10:59:00Z",
-                "archived_at": null,
-                "credential_template_snapshot": {"id": "credential-template-1"}
-            })),
-            existing_transaction: None,
-        }
-    }
-
     fn transaction(now: DateTime<Utc>) -> CredentialTransaction {
         CredentialTransaction {
             jwt_vc_profile: None,
@@ -836,65 +719,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_canvas_stale_readiness_maps_without_reserving_an_offer() {
-        let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
-        let repository = Arc::new(OfferRepository::default());
-        let canvas_repository = Arc::new(StaleCanvasRepository::default());
-        let issuer = Arc::new(NeverIssuer(AtomicUsize::new(0)));
-        let canvas_service = Arc::new(CanvasApplicationApprovalService::new(
-            canvas_repository.clone(),
-            issuer.clone(),
-            Arc::new(CanvasSeeds),
-            Arc::new(Clock(now)),
-            CanvasGuardConfig {
-                enabled: true,
-                pilot_organizations: BTreeSet::from(["org-123".to_owned()]),
-                evidence_max_age: StdDuration::from_secs(900),
-                readiness_max_age: StdDuration::from_secs(900),
-            },
-        ));
-        let ordinary = Arc::new(Preparer {
-            calls: AtomicUsize::new(0),
-            now,
-        });
-        let coordinator = NativeInternalApplicationOfferCoordinator::new(
-            repository.clone(),
-            Arc::new(CompositeInternalApplicationTransactionPreparer::new(
-                ordinary.clone(),
-                canvas_service,
-            )),
-            InternalApplicationOfferProjector::new(
-                "https://issuer.example",
-                Arc::new(Catalog(Vec::new())),
-                Arc::new(Clock(now)),
-            )
-            .unwrap(),
-            Arc::new(Clock(now)),
-        );
-        let mut application = application(now);
-        application.integration_context = object(json!({"canvas": {
-            "source": "canvas_lti_bootstrap",
-            "canvas_platform_id": "platform-1",
-            "canvas_program_binding_id": "binding-1"
-        }}));
-
-        assert_eq!(
-            coordinator
-                .generate(&application, Some(&application_template(now)))
-                .await,
-            Err(InternalApplicationOfferError::Approval(
-                InternalApplicationApprovalError::CanvasOfferNotReady
-            ))
-        );
-        assert_eq!(canvas_repository.loads.load(Ordering::SeqCst), 1);
-        assert_eq!(canvas_repository.reservations.load(Ordering::SeqCst), 0);
-        assert_eq!(issuer.0.load(Ordering::SeqCst), 0);
-        assert_eq!(ordinary.calls.load(Ordering::SeqCst), 0);
-        assert!(repository.proposed.lock().unwrap().is_empty());
-        assert!(repository.events.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
     async fn concurrent_generation_reuses_one_hashed_reservation_and_records_each_request() {
         let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
         let repository = Arc::new(OfferRepository::default());
@@ -953,6 +777,54 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["offer_generated", "offer_generated"]
         );
+    }
+
+    #[tokio::test]
+    async fn retained_offer_does_not_expose_capabilities_for_unsupported_context() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
+        let repository = Arc::new(OfferRepository::default());
+        *repository.transaction.lock().unwrap() = Some(transaction(now));
+        let coordinator = NativeInternalApplicationOfferCoordinator::new(
+            repository.clone(),
+            Arc::new(Preparer {
+                calls: AtomicUsize::new(0),
+                now,
+            }),
+            InternalApplicationOfferProjector::new(
+                "https://issuer.example",
+                Arc::new(Catalog(Vec::new())),
+                Arc::new(Clock(now)),
+            )
+            .unwrap(),
+            Arc::new(Clock(now)),
+        );
+        let mut application = application(now);
+        application.issuance_transaction_id = Some("transaction-1".into());
+
+        application
+            .integration_context
+            .insert("canvas".into(), json!({"eligible": true}));
+        for status in [
+            CredentialTransactionStatus::Pending,
+            CredentialTransactionStatus::Issued,
+        ] {
+            repository
+                .transaction
+                .lock()
+                .unwrap()
+                .as_mut()
+                .unwrap()
+                .status = status;
+            assert!(matches!(
+                coordinator
+                    .get(&application, Some(&application_template(now)))
+                    .await,
+                Err(InternalApplicationOfferError::Approval(
+                    InternalApplicationApprovalError::UnsupportedIntegrationContext
+                ))
+            ));
+        }
+        assert!(repository.events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

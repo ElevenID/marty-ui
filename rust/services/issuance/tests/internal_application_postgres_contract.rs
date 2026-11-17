@@ -699,107 +699,55 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .iter()
         .any(|event| event.event_type == "offer_viewed"));
 
-    let mut canvas_offer = application_fixture(&application, "application-canvas-offer");
-    canvas_offer.status = ApplicationStatus::Approved;
-    canvas_offer.integration_context = Map::from_iter([(
-        "canvas".to_owned(),
-        json!({"source":"Canvas LTI", "canvas_platform_id":"platform-1"}),
-    )]);
+    // A stale caller snapshot cannot bypass the current stored integration boundary.
+    sqlx::query("UPDATE issuance_service.applications SET integration_context=$1 WHERE id=$2")
+        .bind(json!({"retired_provider": {"eligible": true}}))
+        .bind(&offer_application.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(repository
+        .get_offer_transaction(&refreshed.id, &offer_application.organization_id)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(repository
+        .reserve_or_refresh_offer(
+            &offer_current,
+            &refresh,
+            observed_at + Duration::minutes(10)
+        )
+        .await
+        .unwrap()
+        .is_none());
+    sqlx::query("UPDATE issuance_service.applications SET integration_context=$1 WHERE id=$2")
+        .bind(json!(offer_current.integration_context))
+        .bind(&offer_application.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut unsupported_offer = application_fixture(&application, "application-unsupported-offer");
+    unsupported_offer.status = ApplicationStatus::Approved;
+    unsupported_offer.integration_context =
+        Map::from_iter([("retired_provider".to_owned(), json!({"eligible": true}))]);
     repository
-        .insert_application(&canvas_offer)
+        .insert_application(&unsupported_offer)
         .await
-        .expect("Canvas offer fixture must insert");
-    let mut canvas_initial =
-        approval_transaction("transaction-canvas-offer", &canvas_offer, observed_at);
-    canvas_initial.claims = Map::from_iter([
-        ("name".to_owned(), json!("Learner")),
-        ("_vct".to_owned(), json!("https://credentials.example/old")),
-    ]);
-    canvas_initial.idempotency_key_hash = Some("1".repeat(64));
-    canvas_initial.idempotency_request_hash = Some("2".repeat(64));
-    let canvas_reserved = repository
-        .reserve_or_refresh_offer(
-            &canvas_offer,
-            &canvas_initial,
-            observed_at + Duration::minutes(9),
-        )
-        .await
-        .expect("Canvas offer reservation")
-        .expect("Canvas offer transaction");
-    let canvas_current = repository
-        .get_application(&canvas_offer.id)
+        .unwrap();
+    let mut unsupported_transaction = approval_transaction(
+        "transaction-unsupported-offer",
+        &unsupported_offer,
+        observed_at,
+    );
+    unsupported_transaction.idempotency_key_hash = Some("1".repeat(64));
+    unsupported_transaction.idempotency_request_hash = Some("2".repeat(64));
+    assert!(repository
+        .reserve_or_refresh_offer(&unsupported_offer, &unsupported_transaction, observed_at,)
         .await
         .unwrap()
-        .unwrap();
-    let mut canvas_refresh = canvas_initial.clone();
-    canvas_refresh.id = "unused-canvas-refresh".to_owned();
-    canvas_refresh.credential_template_id = "credential-template-canvas-new".to_owned();
-    canvas_refresh.claims = Map::from_iter([
-        ("name".to_owned(), json!("must-not-overwrite")),
-        ("_vct".to_owned(), json!("https://credentials.example/new")),
-    ]);
-    canvas_refresh.credential_type = Some("CanvasCredential".to_owned());
-    canvas_refresh.wallet_configs = vec![json!({"wallet_id":"wallet-canvas"})];
-    canvas_refresh.selective_disclosure_claims = vec!["email".to_owned()];
-    canvas_refresh.zk_predicate_claims = vec!["age".to_owned()];
-    canvas_refresh.validity_days = 730;
-    canvas_refresh.renewable = true;
-    canvas_refresh.renewal_window_days = 60;
-    canvas_refresh.issuer_did = Some("did:web:issuer.example:canvas".to_owned());
-    let canvas_refreshed = repository
-        .reserve_or_refresh_offer(
-            &canvas_current,
-            &canvas_refresh,
-            observed_at + Duration::minutes(10),
-        )
-        .await
-        .expect("Canvas offer refresh")
-        .expect("refreshed Canvas transaction");
-    assert_eq!(canvas_refreshed.id, canvas_reserved.id);
-    assert_eq!(
-        canvas_refreshed.credential_template_id,
-        "credential-template-canvas-new"
-    );
-    assert_eq!(
-        canvas_refreshed.credential_type.as_deref(),
-        Some("CanvasCredential")
-    );
-    assert_eq!(
-        canvas_refreshed.wallet_configs,
-        vec![json!({"wallet_id":"wallet-canvas"})]
-    );
-    assert_eq!(canvas_refreshed.validity_days, 730);
-    assert!(canvas_refreshed.renewable);
-    assert_eq!(canvas_refreshed.claims.get("name"), Some(&json!("Learner")));
-    assert_eq!(
-        canvas_refreshed.claims.get("_vct"),
-        Some(&json!("https://credentials.example/new"))
-    );
-    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules=$1 WHERE id=$2")
-        .bind(json!([{"claim_name":"name","source":"SYSTEM","source_config":{"system_field":"constant","value":"Current mapped learner"}}]))
-        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
-    canvas_refresh
-        .claims
-        .insert("name".into(), json!("Current mapped learner"));
-    let mapped_offer = repository
-        .reserve_or_refresh_offer(
-            &canvas_current,
-            &canvas_refresh,
-            observed_at + Duration::minutes(11),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(mapped_offer.claims, canvas_refresh.claims);
-    assert_eq!(mapped_offer.id, canvas_reserved.id);
-    assert_eq!(
-        mapped_offer.pre_authorized_code,
-        canvas_reserved.pre_authorized_code
-    );
-    assert_eq!(mapped_offer.created_at, canvas_reserved.created_at);
-    assert_eq!(mapped_offer.expires_at, canvas_reserved.expires_at);
-    sqlx::query("UPDATE issuance_service.application_templates SET claim_collection_rules='[]'::json WHERE id=$1")
-        .bind(&canvas_current.application_template_id).execute(&pool).await.unwrap();
+        .is_none());
+    assert_eq!(transaction_count(&pool, &unsupported_offer.id).await, 0);
 
     let mut offer_rollback = application_fixture(&application, "application-offer-rollback");
     offer_rollback.status = ApplicationStatus::Approved;
@@ -1363,6 +1311,7 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
 fn application_fixture(source: &ApplicationRecord, id: &str) -> ApplicationRecord {
     let mut application = source.clone();
     application.id = id.to_owned();
+    application.integration_context.clear();
     application
 }
 

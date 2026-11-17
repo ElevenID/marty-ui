@@ -640,7 +640,8 @@ fn approval_error_response(error: InternalApplicationApprovalError) -> Response 
         | InternalApplicationApprovalError::RevocationProfileInactive => {
             StatusCode::UNPROCESSABLE_ENTITY
         }
-        InternalApplicationApprovalError::CanvasNotReady
+        InternalApplicationApprovalError::UnsupportedIntegrationContext
+        | InternalApplicationApprovalError::CanvasNotReady
         | InternalApplicationApprovalError::CanvasOfferNotReady
         | InternalApplicationApprovalError::ConcurrentChange => StatusCode::CONFLICT,
     };

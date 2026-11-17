@@ -230,3 +230,19 @@ fields therefore require migration before using this version. Add a reviewed
 migration and exercise rollback against a representative database snapshot.
 This migration is deferred production work, not a repository-split completion
 gate. No production data is modified by this source change.
+
+Ordinary application approval and offer preparation no longer dispatch to a
+provider-specific adapter. The service does not wire the retired provider
+reconciler. Generic evidence and observation contracts remain available.
+Only platform delivery hints (`delivery` and `delivery_mode`) are accepted in
+ordinary issuance integration context. Any other context is unsupported and
+must not fall through into ordinary approval or reveal an existing offer.
+Repository operations recheck the current application and transaction binding;
+a stale caller snapshot is insufficient authority.
+
+TODO (application migration owner): classify legacy provider-bound application
+rows and migrate accepted evidence through the public Gateway contracts and
+Core policy, or retire those applications. Do not clear their integration
+context merely to bypass the issuance restriction. Production migration and
+connector reconciliation adapters remain deferred; unsupported paths stay
+disabled while source removal continues.

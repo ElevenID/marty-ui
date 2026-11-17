@@ -18,7 +18,7 @@ use crate::{
         lock_issuance_transaction_by_idempotency, refresh_pending_application_offer,
     },
     internal_application_approval::{
-        canvas_bound_application, InternalApplicationApprovalReader,
+        unsupported_integration_context, InternalApplicationApprovalReader,
         InternalApplicationApprovalRepository,
     },
     internal_application_domain::{
@@ -1108,7 +1108,7 @@ impl InternalApplicationApprovalRepository for PostgresInternalApplicationReposi
         if current.organization_id != application.organization_id
             || current.status != ApplicationStatus::Pending
             || current.updated_at != application.updated_at
-            || canvas_bound_application(&current)
+            || unsupported_integration_context(&current)
         {
             return Ok(None);
         }
@@ -1233,6 +1233,7 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
             if current.organization_id != application.organization_id
                 || current.status != ApplicationStatus::Approved
                 || current.updated_at != application.updated_at
+                || unsupported_integration_context(&current)
             {
                 return Ok(None);
             }
@@ -1255,32 +1256,11 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
                     && existing.status == CredentialTransactionStatus::Pending
                     && now <= existing.expires_at
                 {
-                    let refresh_canvas_context = canvas_bound_application(&current);
-                    let mut refreshed_context = prepared.clone();
-                    if refresh_canvas_context {
-                        let mapped = sqlx::query_scalar::<_, bool>(
-                            "SELECT COALESCE(jsonb_array_length(claim_collection_rules::jsonb), 0) > 0
-                             FROM issuance_service.application_templates
-                             WHERE id = $1 AND organization_id = $2 FOR SHARE",
-                        )
-                        .bind(&current.application_template_id)
-                        .bind(&current.organization_id)
-                        .fetch_optional(&mut *database).await.map_err(offer_repository_error)?
-                        .ok_or(InternalApplicationOfferError::Unavailable)?;
-                        if !mapped {
-                            refreshed_context.claims = existing.claims.clone();
-                            if let Some(vct) = prepared.claims.get("_vct") {
-                                refreshed_context
-                                    .claims
-                                    .insert("_vct".to_owned(), vct.clone());
-                            }
-                        }
-                    }
                     let refreshed = refresh_pending_application_offer(
                         &mut *database,
                         existing,
-                        &refreshed_context,
-                        refresh_canvas_context,
+                        prepared,
+                        false,
                     )
                     .await
                     .map_err(|_| InternalApplicationOfferError::Unavailable)?
@@ -1335,9 +1315,35 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
         transaction_id: &str,
         organization_id: &str,
     ) -> Result<Option<CredentialTransaction>, InternalApplicationOfferError> {
-        issuance_transaction_by_id(&self.pool, transaction_id, organization_id)
+        let Some(transaction) =
+            issuance_transaction_by_id(&self.pool, transaction_id, organization_id)
+                .await
+                .map_err(|_| InternalApplicationOfferError::Unavailable)?
+        else {
+            return Ok(None);
+        };
+        let Some(application_id) = transaction.application_id.as_deref() else {
+            return Ok(None);
+        };
+        let current = sqlx::query(GET)
+            .bind(application_id)
+            .fetch_optional(&self.pool)
             .await
-            .map_err(|_| InternalApplicationOfferError::Unavailable)
+            .map_err(offer_repository_error)?
+            .map(application_row)
+            .transpose()
+            .map_err(|_| InternalApplicationOfferError::Unavailable)?;
+        let Some(current) = current else {
+            return Ok(None);
+        };
+        if current.organization_id != organization_id
+            || current.status != ApplicationStatus::Approved
+            || current.issuance_transaction_id.as_deref() != Some(transaction_id)
+            || unsupported_integration_context(&current)
+        {
+            return Ok(None);
+        }
+        Ok(Some(transaction))
     }
 
     async fn append_offer_event(

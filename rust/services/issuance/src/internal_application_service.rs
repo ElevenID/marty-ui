@@ -45,6 +45,8 @@ pub enum InternalApplicationRepositoryError {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum InternalApplicationApprovalError {
+    #[error("Application integration context is unsupported")]
+    UnsupportedIntegrationContext,
     #[error("Application approval is temporarily unavailable")]
     Unavailable,
     #[error("Credential Template validation is unavailable.")]

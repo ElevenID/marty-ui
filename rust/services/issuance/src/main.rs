@@ -8,8 +8,6 @@ use marty_issuance_service::{
     application_template_catalog::runtime_catalog,
     application_template_postgres::PostgresApplicationTemplateRepository,
     application_template_service::{ApplicationTemplateService, SystemApplicationTemplateClock},
-    canvas_award_candidate_approval::CanvasApplicationApprovalService,
-    canvas_award_candidate_approval_postgres::PostgresCanvasAwardApprovalRepository,
     canvas_issuance_guard::CanvasGuardConfig,
     client_auth::RegisteredClientAuthenticator,
     credential::{CredentialIssuanceService, CredentialPorts, UuidNotificationIdGenerator},
@@ -44,18 +42,12 @@ use marty_issuance_service::{
     initiation_didcomm_http::InitiationDidcommHttpService,
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
-    internal_application_approval::{
-        CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
-        OrdinaryInternalApplicationApprover,
-    },
+    internal_application_approval::OrdinaryInternalApplicationApprover,
     internal_application_evidence::DefaultInternalApplicationEvidenceCoordinator,
     internal_application_offer::{
         InternalApplicationOfferProjector, NativeInternalApplicationOfferCoordinator,
     },
     internal_application_postgres::PostgresInternalApplicationRepository,
-    internal_application_reconciliation::{
-        CanvasEvidenceReconciliationPreparer, DefaultInternalApplicationReconciler,
-    },
     internal_application_service::{
         InternalApplicationService, SystemInternalApplicationClock,
         UuidInternalApplicationIdGenerator,
@@ -291,15 +283,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         evidence_max_age: config.canvas_evidence_max_age,
         readiness_max_age: config.canvas_readiness_max_age,
     };
-    let canvas_approval_repository =
-        Arc::new(PostgresCanvasAwardApprovalRepository::new(pool.clone()));
-    let canvas_application_approval = CanvasApplicationApprovalService::new(
-        canvas_approval_repository,
-        issuer_resolver.clone(),
-        Arc::new(SecureApprovalSeedGenerator),
-        application_clock.clone(),
-        canvas_guard_config.clone(),
-    );
     let credential_repository = Arc::new(PostgresCredentialRepository::new(
         pool.clone(),
         token_hmac_key,
@@ -401,16 +384,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .to_i64()
                 .unwrap_or(i64::MAX),
         ));
-    let internal_application_preparer =
-        Arc::new(CompositeInternalApplicationTransactionPreparer::new(
-            ordinary_internal_application_approver.clone(),
-            Arc::new(canvas_application_approval.clone()),
-        ));
-    let internal_application_approver = Arc::new(CompositeInternalApplicationApprover::new(
-        ordinary_internal_application_approver,
-        Arc::new(canvas_application_approval),
-        internal_application_repository.clone(),
-    ));
+    let internal_application_preparer = ordinary_internal_application_approver.clone();
+    let internal_application_approver = ordinary_internal_application_approver;
     let internal_application_offers = Arc::new(NativeInternalApplicationOfferCoordinator::new(
         internal_application_repository.clone(),
         internal_application_preparer.clone(),
@@ -426,14 +401,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             internal_application_repository.clone(),
             internal_application_preparer,
         ));
-    let internal_application_reconciler = Arc::new(DefaultInternalApplicationReconciler::new(
-        internal_application_repository.clone(),
-        Arc::new(CanvasEvidenceReconciliationPreparer::new(
-            issuer_resolver.clone(),
-            Arc::new(SecureApprovalSeedGenerator),
-            canvas_guard_config,
-        )),
-    ));
     let internal_applications = InternalApplicationService::new(
         internal_application_repository,
         Arc::new(SystemInternalApplicationClock),
@@ -442,8 +409,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .with_approver(internal_application_approver)
     .with_offers(internal_application_offers)
-    .with_evidence(internal_application_evidence)
-    .with_reconciler(internal_application_reconciler);
+    .with_evidence(internal_application_evidence);
     let initiation_clock = Arc::new(SystemInitiationClock);
     let initiation = InitiationService::new(
         InitiationPorts {
