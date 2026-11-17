@@ -423,7 +423,7 @@ impl CredentialVerificationKernel for RustCredentialKernel {
         match context.format {
             DetectedCredentialFormat::W3cVc => verify_vc_jwt(context, false).await,
             DetectedCredentialFormat::W3cVcdmDi => verify_data_integrity(context).await,
-            DetectedCredentialFormat::SdJwt => verify_sd_jwt(context),
+            DetectedCredentialFormat::SdJwt => verify_sd_jwt(context).await,
             DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context).await,
             DetectedCredentialFormat::Mdoc => verify_mdoc(context),
             DetectedCredentialFormat::Unknown => {
@@ -1164,7 +1164,7 @@ fn data_integrity_evidence_for_selected(
     Ok(evidence)
 }
 
-fn verify_sd_jwt(
+async fn verify_sd_jwt(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
@@ -1267,8 +1267,45 @@ fn verify_sd_jwt(
         .get("iat")
         .and_then(Value::as_u64)
         .or_else(|| credential.and_then(issued_at));
+    let (status, external_status_valid_until_epoch_seconds) =
+        crate::external_status::sd_jwt_status(&claims, &issuer_key, &algorithm).await;
+    // Network resolution must not extend either the credential or KB-JWT's
+    // verification window, including the ordinary (non-DCQL) verifier path.
+    let still_valid = if let Some(query) = &context.sd_jwt_dcql {
+        query
+            .verify(
+                &issuer_key,
+                token,
+                &sd_jwt_allowed_algorithms(context)
+                    .map_err(|_| invalid_native("SD-JWT algorithm policy changed"))?,
+            )
+            .is_ok()
+    } else {
+        let policy = marty_oid4vci::formats::sd_jwt::SdJwtVerificationPolicy {
+            expected_issuer: issuer_key.issuer_id.clone(),
+            issuer_algorithm,
+            holder_algorithms: sd_jwt_allowed_algorithms(context)
+                .map_err(|_| invalid_native("SD-JWT algorithm policy changed"))?,
+        };
+        marty_oid4vci::formats::sd_jwt::verify_sd_jwt_with_policy(
+            token,
+            &issuer_key.public_jwk.to_string(),
+            &policy,
+            context.audience.clone(),
+            context.nonce.clone(),
+        )
+        .is_ok()
+    };
+    if !still_valid {
+        return Ok(rejected(
+            "SD-JWT credential or holder proof expired during status resolution",
+        ));
+    }
+
     let bound = context.nonce.is_some() || context.audience.is_some();
     Ok(CredentialVerificationEvidence {
+        status,
+        external_status_valid_until_epoch_seconds,
         verified: true,
         authenticated_sd_jwt_query,
         authenticated_sd_jwt_presentation,
@@ -2472,8 +2509,8 @@ mod tests {
         assert!(authenticate(optional).is_some());
     }
 
-    #[test]
-    fn sd_jwt_authenticates_the_selected_issuer_and_retains_scoped_provenance() {
+    #[tokio::test]
+    async fn sd_jwt_authenticates_the_selected_issuer_and_retains_scoped_provenance() {
         use ed25519_dalek::{Signer, SigningKey};
         let signer = SigningKey::from_bytes(&[27; 32]);
         let issuer = "did:web:issuer.example:Org:Acme";
@@ -2514,7 +2551,7 @@ mod tests {
         bind_key_profile(&mut selected, &context);
         context.resolved_issuer_key = Some(selected.clone());
         context.token = json!(signed(issuer));
-        let evidence = verify_sd_jwt(&context).unwrap();
+        let evidence = verify_sd_jwt(&context).await.unwrap();
         assert!(evidence.verified, "{:?}", evidence.failure_reason);
         let authentication = evidence.authenticated_issuer.unwrap();
         assert_eq!(evidence.issuer_id.as_deref(), Some(issuer));
@@ -2526,7 +2563,7 @@ mod tests {
         // The signature remains valid under the same key. Its authority is
         // unchanged even when a different issuer claim is signed.
         context.token = json!(signed("did:web:another-issuer.example"));
-        let rejected = verify_sd_jwt(&context).unwrap();
+        let rejected = verify_sd_jwt(&context).await.unwrap();
         assert!(!rejected.verified);
         assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
         assert!(rejected.authenticated_issuer.is_none());
@@ -2540,7 +2577,7 @@ mod tests {
                 foreign.provenance.trust_profile_id = Some(Uuid::from_u128(9));
             }
             context.resolved_issuer_key = Some(foreign);
-            let rejected = verify_sd_jwt(&context).unwrap();
+            let rejected = verify_sd_jwt(&context).await.unwrap();
             assert!(!rejected.verified);
             assert!(rejected.authenticated_issuer.is_none());
         }
@@ -2555,7 +2592,7 @@ mod tests {
                 _ => invalid.provenance.content_sha256 = Some("unknown".into()),
             }
             context.resolved_issuer_key = Some(invalid);
-            let rejected = verify_sd_jwt(&context).unwrap();
+            let rejected = verify_sd_jwt(&context).await.unwrap();
             assert!(!rejected.verified, "{malformed}");
             assert!(rejected.claims.is_empty() && rejected.issuer_id.is_none());
             assert!(rejected.authenticated_issuer.is_none());

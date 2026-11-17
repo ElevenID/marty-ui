@@ -190,6 +190,9 @@ pub struct CredentialVerificationEvidence {
     /// Comes only from the signed outer `jti` of a valid VC-JWT.
     pub authenticated_outer_jti: Option<String>,
     pub credential_status_ids: Vec<String>,
+    /// Native status proof expiry; JSON cannot manufacture this authority.
+    #[serde(skip)]
+    pub external_status_valid_until_epoch_seconds: Option<u64>,
     /// Exact types authenticated by the format kernel: SD-JWT vct, mdoc
     /// docType, or W3C type entries. Never taken from the request or policy.
     pub credential_types: Vec<String>,
@@ -778,6 +781,17 @@ impl VerifiedFactsOrchestrator {
         // Include every metadata/policy await in the native proof's validity
         // window; resolution must not extend the credential or holder proof.
         let evaluation_time = (self.clock)();
+        if evidence
+            .external_status_valid_until_epoch_seconds
+            .is_some_and(|until| evaluation_time >= until)
+        {
+            evidence.status.not_revoked = None;
+            evidence.status.credential_status = Some("UNKNOWN".into());
+            evidence
+                .status
+                .warnings
+                .push("External credential status expired during evaluation".into());
+        }
         if let Some(query) = authenticated_sd_jwt_query.as_mut() {
             query.revalidate_at(evaluation_time)?;
         }

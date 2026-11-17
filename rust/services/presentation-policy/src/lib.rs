@@ -4,6 +4,7 @@ pub mod config;
 pub mod control_plane;
 pub mod domain;
 mod evaluation_validity;
+mod external_status;
 pub mod grpc_security;
 pub mod grpc_service;
 pub mod http_service;
