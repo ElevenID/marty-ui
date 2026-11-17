@@ -130,8 +130,13 @@ pub async fn mint(bao: &OpenBaoHttp, context: &Value) -> Result<String> {
         "auth/token/create"
     };
     let result = async {
+        let body = if renew {
+            marty_selfhost_identity::renewal_leaf::request(&name)
+        } else {
+            json!({"policies":[name],"no_default_policy":true,"ttl":"8h"})
+        };
         let auth = request(bao, Method::POST, endpoint,
-            Some(&json!({"policies":[name],"no_default_policy":true,"ttl":"8h"})), Some(operator)).await?;
+            Some(&body), Some(operator)).await?;
         let token = auth["auth"]["client_token"].as_str().ok_or(REFUSAL)?;
         if token.len() < 20 || token == operator || auth["auth"]["lease_duration"].as_u64().ok_or(REFUSAL)? < MIN_TTL {
             return Err(REFUSAL);
@@ -140,7 +145,8 @@ pub async fn mint(bao: &OpenBaoHttp, context: &Value) -> Result<String> {
             let lookup = request(bao, Method::POST, "auth/token/lookup", Some(&json!({"token":token})), Some(operator)).await?;
             let data = &lookup["data"];
             if data["policies"] != json!([name]) || !(MIN_TTL..=MAX_TTL).contains(&data["ttl"].as_u64().ok_or(REFUSAL)?)
-                || data["orphan"] != true || data["path"] != endpoint { return Err(REFUSAL); }
+                || data["orphan"] != true || data["path"] != endpoint
+                || !marty_selfhost_identity::renewal_leaf::bounded_metadata(data) { return Err(REFUSAL); }
         }
         if let Some(path) = &scope.key_path {
             let read = request(bao, Method::GET, path, None, Some(token)).await?;

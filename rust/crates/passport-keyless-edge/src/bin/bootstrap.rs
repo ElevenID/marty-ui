@@ -615,6 +615,8 @@ async fn provision(
         };
         let token_request = if repair.is_some() {
             json!({"policies":[policy_name], "no_default_policy":true, "ttl":ttl, "explicit_max_ttl":ttl, "renewable":false})
+        } else if profile == Profile::SelfhostRenew {
+            marty_selfhost_identity::renewal_leaf::request(&policy_name)
         } else {
             json!({"policies":[policy_name], "no_default_policy":true, "ttl":ttl})
         };
@@ -658,6 +660,11 @@ async fn provision(
                 || !(3600..=28800).contains(&remaining)
                 || data(&lookup, "orphan")?.as_bool() != Some(true)
                 || value(&lookup, "path")? != "auth/token/create/selfhost-renew-leaf"
+                || !marty_selfhost_identity::renewal_leaf::bounded_metadata(
+                    lookup
+                        .get("data")
+                        .ok_or("renewed TLS token metadata is absent")?,
+                )
             {
                 return Err("renewed TLS token has unexpected authority or lifetime".into());
             }
