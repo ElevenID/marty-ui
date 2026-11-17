@@ -91,8 +91,8 @@ export function normalizeCapabilities(rawCapabilities) {
 export function deriveCapabilities(rawUser, organizations = []) {
   const roles = rawUser?.roles || [];
   const fromApi = normalizeCapabilities(rawUser?.capabilities);
-  const isCanvasLearnerOnly = isCanvasLtiLearnerOnly(rawUser);
-  const hasOrganizations = !isCanvasLearnerOnly && getConsoleEligibleOrganizations(organizations).length > 0;
+  const isApplicantOnly = hasApplicantOnlyCapabilities(rawUser);
+  const hasOrganizations = !isApplicantOnly && getConsoleEligibleOrganizations(organizations).length > 0;
   const hasAdminRole = roles.includes('admin') || roles.includes('administrator');
   const hasOrgRole = roles.some((role) => ['vendor', 'org_admin', 'organization-admin'].includes(role));
   const roleDerivedCapabilities = {
@@ -105,9 +105,9 @@ export function deriveCapabilities(rawUser, organizations = []) {
   return {
     apply: fromApi.apply !== undefined ? Boolean(fromApi.apply) : true,
     ...fromApi,
-    'org:view': !isCanvasLearnerOnly && (Boolean(fromApi['org:view']) || roleDerivedCapabilities['org:view']),
-    'org:manage': !isCanvasLearnerOnly && (Boolean(fromApi['org:manage']) || roleDerivedCapabilities['org:manage']),
-    'org:issue': !isCanvasLearnerOnly && (Boolean(fromApi['org:issue']) || roleDerivedCapabilities['org:issue']),
+    'org:view': !isApplicantOnly && (Boolean(fromApi['org:view']) || roleDerivedCapabilities['org:view']),
+    'org:manage': !isApplicantOnly && (Boolean(fromApi['org:manage']) || roleDerivedCapabilities['org:manage']),
+    'org:issue': !isApplicantOnly && (Boolean(fromApi['org:issue']) || roleDerivedCapabilities['org:issue']),
     'admin:platform': Boolean(fromApi['admin:platform']) || roleDerivedCapabilities['admin:platform'],
   };
 }
@@ -175,9 +175,9 @@ function rawUserHasOrgAuthority(rawUser) {
   return roles.some((role) => ORG_CONSOLE_ROLES.has(role)) || ['administrator', 'vendor'].includes(rawUser?.user_type);
 }
 
-function isCanvasLtiLearnerOnly(rawUser) {
-  const roles = rawUser?.roles || [];
-  return roles.includes('canvas_lti_learner') && !rawUserHasOrgAuthority(rawUser);
+function hasApplicantOnlyCapabilities(rawUser) {
+  return normalizeCapabilities(rawUser?.capabilities)['org:view'] === false
+    && !rawUserHasOrgAuthority(rawUser);
 }
 
 function applicantOnlyMembership() {
@@ -280,7 +280,7 @@ function mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations = []) {
  */
 export function resolveUserOrganizations(rawUser, fetchedOrganizations) {
   const organizations = mergeFetchedAndClaimOrganizations(rawUser, fetchedOrganizations);
-  return isCanvasLtiLearnerOnly(rawUser)
+  return hasApplicantOnlyCapabilities(rawUser)
     ? restrictOrganizationsToApplicantAccess(organizations)
     : organizations;
 }

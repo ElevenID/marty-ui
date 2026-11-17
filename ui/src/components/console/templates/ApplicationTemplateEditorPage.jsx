@@ -43,7 +43,7 @@ const SYSTEM_CLAIM_SOURCES = [
   'applicant.user_id', 'applicant.email', 'applicant.given_name', 'applicant.family_name',
   'application.id', 'application.reference_number', 'application.organization_id',
   'current.date', 'current.datetime', 'validity.expiry_date',
-  'template.name', 'template.description', 'canvas.course_name', 'constant',
+  'template.name', 'template.description', 'constant',
 ];
 
 function normalizeFieldType(value) {
@@ -562,7 +562,7 @@ function ApplicationTemplateEditorContent({ organizationId, templateId, advanced
                           <Typography variant="body2">Use a verified evidence fact. Specify a requirement ID, a fact type, or both; exactly one fact must match.</Typography>
                           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                             <TextField label="Evidence requirement ID" value={rule.source_config?.requirement_id || ''} onChange={(event) => updateEvidenceSource(index, 'requirement_id', event.target.value)} sx={{ flex: 1 }} />
-                            <TextField label="Evidence fact type" placeholder="canvas.quiz_score" value={rule.source_config?.fact_type || ''} onChange={(event) => updateEvidenceSource(index, 'fact_type', event.target.value)} sx={{ flex: 1 }} />
+                            <TextField label="Evidence fact type" placeholder="assessment.score" value={rule.source_config?.fact_type || ''} onChange={(event) => updateEvidenceSource(index, 'fact_type', event.target.value)} sx={{ flex: 1 }} />
                             <FormControl sx={{ minWidth: 180 }}>
                               <InputLabel id={`application-claim-evidence-format-${index}-label`}>Evidence format</InputLabel>
                               <Select id={`application-claim-evidence-format-${index}`} labelId={`application-claim-evidence-format-${index}-label`} label="Evidence format" value={rule.source_config?.format || ''} onChange={(event) => updateEvidenceSource(index, 'format', event.target.value)}>

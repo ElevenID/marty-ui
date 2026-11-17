@@ -323,10 +323,11 @@ describe('authSession helpers', () => {
     })).toBe(true)
   })
 
-  it('keeps Canvas LTI learners in applicant-only access even when they have an issuer org for catalog scope', () => {
+  it('keeps explicitly restricted accounts in applicant-only access despite organization claims', () => {
     const rawUser = {
-      user_id: 'canvas-learner-1',
-      roles: ['applicant', 'canvas_lti_learner'],
+      user_id: 'applicant-1',
+      roles: ['applicant'],
+      capabilities: { 'org:view': false },
       organization_id: 'marty-org',
       organization_name: 'Marty',
     }

@@ -443,7 +443,7 @@ describe('ConsoleContext session and request lifetime', () => {
     expect(updatePreferences).not.toHaveBeenCalled();
   });
 
-  it('clears organization state when the same principal becomes a Canvas-only learner', async () => {
+  it('clears organization state when the same principal loses organization-view capability', async () => {
     vi.mocked(getPreferences).mockResolvedValue({ last_view_mode: 'org', last_active_org_id: oldOrg.id });
     vi.mocked(getMyOrganizations).mockResolvedValue([oldOrg]);
     const { rerender } = renderWithRouter(<App auth={oldAuth} />, { initialEntries: ['/console/org'] });
@@ -451,7 +451,7 @@ describe('ConsoleContext session and request lifetime', () => {
     const prior = currentConsole;
 
     rerender(<App auth={{ ...oldAuth, user: {
-      ...oldAuth.user, roles: ['canvas_lti_learner'], capabilities: { 'org:view': false },
+      ...oldAuth.user, roles: ['applicant'], capabilities: { 'org:view': false },
     } }} />);
 
     expect(screen.getByTestId('selected')).toBeEmptyDOMElement();
@@ -590,7 +590,9 @@ describe('ConsoleContext verified organization mutations', () => {
     const stale = () => mutation === 'profile'
       ? prior.reconcileOrganizationProfile(oldOrg.id, { name: 'old-account-name', displayName: 'Old account name' })
       : prior.reconcileMembershipRemoval(oldOrg.id);
-    rerender(<App auth={newAuth} />);
+    // This replacement account is authorized for the returned memberships.
+    // Explicitly applicant-only accounts are covered by the capability-loss test.
+    rerender(<App auth={{ ...newAuth, user: { ...newAuth.user, capabilities: { 'org:view': true } } }} />);
     await waitFor(() => expect(getMyOrganizations).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
     expect(stale).toThrowError('The console session or selection changed.');
