@@ -370,3 +370,10 @@ Dependabot entry are removed. The shared platform CI workflow remains enabled;
 its mixed historical Canvas lanes still require reconciliation before the
 complete split is ready for integration. Connector qualification is deferred
 work owned by the independent repository.
+
+Shared Compose and Oracle Kubernetes manifests no longer deploy the Canvas
+worker or pass Canvas environment settings and grant-token mounts into
+platform services. Dedicated Canvas Compose profiles, obsolete no-Canvas
+overlay and Canvas portability schemas are retired. These are source changes;
+no running workload, secret, volume or database is modified. Remaining
+profile/catalog consumers must be reconciled before final integration.
