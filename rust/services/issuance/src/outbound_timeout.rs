@@ -146,7 +146,7 @@ mod tests {
         ))
         .unwrap();
         for case in cases["timeouts"].as_array().unwrap() {
-            let Ok((_, seconds)) = crate::canvas_credentials_protocol::timeout_values(
+            let Ok((_, seconds)) = crate::outbound_timeout::timeout_values(
                 case["publish"].as_str(),
                 case["status"].as_str(),
             ) else {
@@ -276,4 +276,19 @@ mod tests {
         assert!(task.await.unwrap_err().is_cancelled());
         assert_eq!(drops.load(Ordering::SeqCst), 2);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn timeout_values(
+    publish: Option<&str>,
+    status: Option<&str>,
+) -> Result<(f64, f64), &'static str> {
+    let publish = mmf_config::numeric_config::parse_python_config_float(publish.unwrap_or("20"))
+        .map_err(|_| "OUTBOUND_PUBLISH_TIMEOUT_SECONDS")?;
+    let status = match status {
+        Some(value) => mmf_config::numeric_config::parse_python_config_float(value)
+            .map_err(|_| "OUTBOUND_STATUS_TIMEOUT_SECONDS")?,
+        None => publish,
+    };
+    Ok((publish, status))
 }

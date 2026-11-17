@@ -342,3 +342,10 @@ LTI projection test source are retired. Generic application authority checks
 remain in signing, finalization and renewal. Provider-named shared response
 codecs still require cleanup; they are compatibility utilities, not an
 integration entry point.
+
+Shared signing/transport response decoding now lives in `http_content_decoder`
+and `http_response_*` modules, with provider-independent types. Existing
+lossless text and excerpt behavior remains covered by codec and signing tests.
+Unused Canvas URL-formatting, provider alias/origin helpers and Python-format
+support are removed. Provider-specific timeout configuration no longer exists;
+test timeout vectors exercise the shared outbound timeout owner.

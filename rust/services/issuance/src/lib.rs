@@ -8,7 +8,6 @@
 pub use marty_response_compat::{lossless_json, lossless_json_tree, owned_json_value, python_text};
 mod legacy_json_compat;
 mod python_datetime;
-mod python_format;
 mod python_json_diagnostic;
 pub(crate) use marty_response_compat::python_value;
 
@@ -18,15 +17,14 @@ pub mod application_ownership_http;
 pub mod application_ownership_schema;
 pub mod application_ownership_startup;
 mod canonical_json;
-mod canvas_content_decoder;
-mod canvas_credentials_protocol;
-mod canvas_credentials_urls;
-mod canvas_response_text;
 pub mod didcomm_kms;
 pub mod external_association;
 pub mod external_association_http;
 pub mod external_association_schema;
 pub mod external_association_startup;
+mod http_content_decoder;
+mod http_response_excerpt;
+mod http_response_text;
 mod outbound_http;
 pub mod outbound_http_policy;
 pub mod outbound_timeout;

@@ -4,13 +4,13 @@ use flate2::{Decompress, FlushDecompress, Status};
 
 use crate::outbound_http::OutboundHttpError;
 
-pub(crate) struct CanvasContentDecoder {
+pub(crate) struct HttpContentDecoder {
     inflater: Decompress,
     raw_fallback: bool,
     first_attempt: bool,
 }
 
-impl CanvasContentDecoder {
+impl HttpContentDecoder {
     pub fn from_headers(headers: &http::HeaderMap) -> Vec<Self> {
         let mut decoders = headers
             .get_all(http::header::CONTENT_ENCODING)
@@ -96,10 +96,10 @@ mod tests {
         }
     }
 
-    fn decoder(coding: &str) -> CanvasContentDecoder {
+    fn decoder(coding: &str) -> HttpContentDecoder {
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::CONTENT_ENCODING, coding.parse().unwrap());
-        CanvasContentDecoder::from_headers(&headers).pop().unwrap()
+        HttpContentDecoder::from_headers(&headers).pop().unwrap()
     }
 
     #[test]

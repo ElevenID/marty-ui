@@ -4,18 +4,18 @@
 use crate::python_text::PythonText;
 use std::{collections::BTreeMap, sync::OnceLock};
 
-#[path = "canvas_response_charset.rs"]
+#[path = "http_response_charset.rs"]
 mod charset;
 use charset::charset_parameter;
-#[path = "canvas_response_iso2022.rs"]
+#[path = "http_response_iso2022.rs"]
 mod iso2022;
-#[path = "canvas_response_multibyte.rs"]
+#[path = "http_response_multibyte.rs"]
 mod multibyte;
-#[path = "canvas_response_utf7.rs"]
+#[path = "http_response_utf7.rs"]
 mod utf7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum CanvasResponseTextError {
+pub enum HttpResponseTextError {
     #[error("UTF-16 stream does not start with BOM")]
     Utf16MissingBom,
     #[error("UTF-32 stream does not start with BOM")]
@@ -34,7 +34,7 @@ pub enum CanvasResponseTextError {
     EmbeddedNullEncoding,
 }
 
-impl CanvasResponseTextError {
+impl HttpResponseTextError {
     pub const fn diagnostic_class(self) -> &'static str {
         match self {
             Self::ContinuationOrdinalLimit { .. } | Self::EmbeddedNullEncoding => "ValueError",
@@ -134,7 +134,7 @@ fn response_codecs() -> &'static ResponseCodecs {
 pub(crate) fn response_text(
     bytes: &[u8],
     content_type: Option<&str>,
-) -> Result<PythonText, CanvasResponseTextError> {
+) -> Result<PythonText, HttpResponseTextError> {
     // HTTPX does not select a text decoder for an empty response body.
     if bytes.is_empty() {
         return Ok(PythonText::default());
@@ -184,7 +184,7 @@ pub(crate) fn response_text(
 fn unicode_text(
     mut bytes: &[u8],
     encoding: UnicodeEncoding,
-) -> Result<String, CanvasResponseTextError> {
+) -> Result<String, HttpResponseTextError> {
     use UnicodeEncoding::*;
     let (width, mut little, generic) = match encoding {
         Utf16 => (2, true, true),
@@ -206,9 +206,9 @@ fn unicode_text(
             false
         } else {
             return Err(if width == 2 {
-                CanvasResponseTextError::Utf16MissingBom
+                HttpResponseTextError::Utf16MissingBom
             } else {
-                CanvasResponseTextError::Utf32MissingBom
+                HttpResponseTextError::Utf32MissingBom
             });
         };
         bytes = &bytes[width..];
@@ -280,9 +280,9 @@ pub(crate) fn unicode_units(
     Some(text)
 }
 
-fn checked_encoding(value: &str) -> Result<String, CanvasResponseTextError> {
+fn checked_encoding(value: &str) -> Result<String, HttpResponseTextError> {
     if value.contains('\0') {
-        return Err(CanvasResponseTextError::EmbeddedNullEncoding);
+        return Err(HttpResponseTextError::EmbeddedNullEncoding);
     }
     Ok(resolve_encoding(value))
 }
@@ -323,13 +323,13 @@ mod tests {
     fn response_text(
         bytes: &[u8],
         content_type: Option<&str>,
-    ) -> Result<String, CanvasResponseTextError> {
+    ) -> Result<String, HttpResponseTextError> {
         super::response_text(bytes, content_type)
             .map(|text| text.into_scalar().expect("existing corpus text is scalar"))
     }
 
     fn observation<T: serde::Serialize>(
-        result: Result<T, CanvasResponseTextError>,
+        result: Result<T, HttpResponseTextError>,
     ) -> serde_json::Value {
         match result {
             Ok(value) => serde_json::json!({"value":value}),
@@ -362,7 +362,7 @@ mod tests {
                         case["name"]
                     );
                     assert_eq!(
-                        observation(crate::canvas_credentials_protocol::response_excerpt(
+                        observation(crate::http_response_excerpt::response_excerpt(
                             &bytes,
                             Some(&content_type)
                         )),
@@ -458,7 +458,7 @@ mod tests {
             case["name"]
         );
         assert_eq!(
-            observation(crate::canvas_credentials_protocol::response_excerpt(
+            observation(crate::http_response_excerpt::response_excerpt(
                 &body,
                 content_type
             )),

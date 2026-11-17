@@ -664,7 +664,7 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
 
 #[test]
 fn each_existing_text_error_retains_its_python_exception_category() {
-    use CanvasResponseTextError::*;
+    use HttpResponseTextError::*;
     for (error, class, name) in [
         (
             InternalCodec,

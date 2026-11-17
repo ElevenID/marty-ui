@@ -1,6 +1,6 @@
 //! Published Content-Type parameter semantics, including RFC2231 continuations.
 use super::{
-    checked_encoding, response_codecs, unicode_units, CanvasResponseTextError, UnicodeEncoding,
+    checked_encoding, response_codecs, unicode_units, HttpResponseTextError, UnicodeEncoding,
 };
 use crate::python_text::PythonText;
 use crate::python_value::strip;
@@ -56,7 +56,7 @@ fn parameters(mut remaining: &str) -> Vec<(String, String)> {
 
 type Continuation<'a> = (&'a str, Option<String>, bool);
 
-fn continuation(name: &str) -> Result<Option<Continuation<'_>>, CanvasResponseTextError> {
+fn continuation(name: &str) -> Result<Option<Continuation<'_>>, HttpResponseTextError> {
     let Some((base, suffix)) = name.split_once('*') else {
         return Ok(None);
     };
@@ -73,7 +73,7 @@ fn continuation(name: &str) -> Result<Option<Continuation<'_>>, CanvasResponseTe
     // The immutable published interpreter limits decimal conversions before
     // removing leading zeroes. Keep arbitrary-size ordering below that limit.
     if digits.len() > 4300 {
-        return Err(CanvasResponseTextError::ContinuationOrdinalLimit {
+        return Err(HttpResponseTextError::ContinuationOrdinalLimit {
             digits: digits.len(),
         });
     }
@@ -120,10 +120,7 @@ fn label_bytes(value: &str) -> Vec<u8> {
     bytes
 }
 
-fn decode_label(
-    value: &str,
-    encoding: &str,
-) -> Result<Option<PythonText>, CanvasResponseTextError> {
+fn decode_label(value: &str, encoding: &str) -> Result<Option<PythonText>, HttpResponseTextError> {
     let name = checked_encoding(encoding)?;
     if name == "utf_7" {
         return Ok(super::utf7::decode(&label_bytes(value), true).ok());
@@ -190,7 +187,7 @@ fn decode_basic_label(value: &str, name: String) -> Option<String> {
 
 pub(super) fn charset_parameter(
     content_type: &str,
-) -> Result<Option<String>, CanvasResponseTextError> {
+) -> Result<Option<String>, HttpResponseTextError> {
     let mut normal = Vec::new();
     let mut groups: Vec<(String, Vec<Segment>)> = Vec::new();
     for (index, (name, raw)) in parameters(content_type).into_iter().enumerate() {
@@ -222,9 +219,9 @@ pub(super) fn charset_parameter(
             .find(|segment| segment.number.is_some() != numbered)
         {
             return Err(if other.number.is_some() {
-                CanvasResponseTextError::NumberedAfterBareContinuation
+                HttpResponseTextError::NumberedAfterBareContinuation
             } else {
-                CanvasResponseTextError::BareAfterNumberedContinuation
+                HttpResponseTextError::BareAfterNumberedContinuation
             });
         }
         segments.sort_by(|a, b| {

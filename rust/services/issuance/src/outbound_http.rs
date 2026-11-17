@@ -23,17 +23,17 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use url::Url;
 
 use crate::{
-    canvas_content_decoder::CanvasContentDecoder,
+    http_content_decoder::HttpContentDecoder,
     outbound_http_policy::{resolve_outbound_origin, OutboundOriginPolicy},
     outbound_timeout::{OutboundNetworkBudget, OutboundNetworkPhase, OutboundNetworkTimeout},
 };
 
 #[cfg(test)]
-#[path = "canvas_operation_http_prepared_tests.rs"]
+#[path = "outbound_http_prepared_tests.rs"]
 mod prepared_tests;
 
 #[cfg(test)]
-#[path = "canvas_operation_socket_test_io.rs"]
+#[path = "outbound_socket_test_io.rs"]
 pub(crate) mod socket_test_io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -52,7 +52,7 @@ pub enum OutboundHttpError {
     Decoding,
     #[cfg(test)]
     #[error(transparent)]
-    Text(#[from] crate::canvas_response_text::CanvasResponseTextError),
+    Text(#[from] crate::http_response_text::HttpResponseTextError),
     #[error("Provider {0:?} operation timed out")]
     Timeout(OutboundNetworkPhase),
 }
@@ -208,7 +208,7 @@ impl Stream for ResponseStream {
 pub(crate) struct CanvasOperationResponse {
     pub response: reqwest::Response,
     phase: Arc<AtomicU8>,
-    decoders: Vec<CanvasContentDecoder>,
+    decoders: Vec<HttpContentDecoder>,
     finished: bool,
 }
 impl CanvasOperationResponse {
@@ -265,7 +265,7 @@ impl CanvasOperationResponse {
     #[cfg(test)]
     pub async fn text(self) -> Result<crate::python_text::PythonText, OutboundHttpError> {
         let content_type = self.content_type();
-        Ok(crate::canvas_response_text::response_text(
+        Ok(crate::http_response_text::response_text(
             &self.bytes().await?,
             content_type.as_deref(),
         )?)
@@ -423,7 +423,7 @@ impl OutboundHttpClient {
             .await
             .map_err(|_| failed(&phase, OutboundHttpError::Request))?;
         let (parts, body) = response.into_parts();
-        let decoders = CanvasContentDecoder::from_headers(&parts.headers);
+        let decoders = HttpContentDecoder::from_headers(&parts.headers);
         let stream = ResponseStream {
             stream: Box::pin(body.into_data_stream()),
             _driver: driver,
@@ -682,11 +682,9 @@ mod tests {
                 | "text_utf7_label_null_codec"
                 | "text_utf7_label_null_codec_json"
         ));
-        let (_, seconds) = crate::canvas_credentials_protocol::timeout_values(
-            None,
-            Some(case["seconds"].as_str().unwrap()),
-        )
-        .unwrap();
+        let (_, seconds) =
+            crate::outbound_timeout::timeout_values(None, Some(case["seconds"].as_str().unwrap()))
+                .unwrap();
         let policy = OutboundOriginPolicy {
             private_origin_allowlist: vec![origin.clone()],
             allow_private_networks: false,
@@ -729,7 +727,7 @@ mod tests {
                 Value::Null
             } else if case["projection"] == "excerpt" {
                 let content_type = response.content_type();
-                json!(crate::canvas_credentials_protocol::response_excerpt(
+                json!(crate::http_response_excerpt::response_excerpt(
                     &response.bytes().await?,
                     content_type.as_deref()
                 )?)

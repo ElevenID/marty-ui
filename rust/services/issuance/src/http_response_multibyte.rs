@@ -3,9 +3,9 @@
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::{collections::BTreeMap, io::Read, sync::OnceLock};
 
-#[path = "canvas_response_euc_kr.rs"]
+#[path = "http_response_euc_kr.rs"]
 mod euc_kr;
-#[path = "canvas_response_gb18030.rs"]
+#[path = "http_response_gb18030.rs"]
 mod gb18030;
 
 const VALID: u32 = 1 << 31;

@@ -1,5 +1,5 @@
 //! One stateful decoder for the seven independently captured ISO-2022 variants.
-use super::{multibyte::decompress, CanvasResponseTextError};
+use super::{multibyte::decompress, HttpResponseTextError};
 use std::{collections::BTreeMap, sync::OnceLock};
 
 pub(super) const SOURCES: &[(&str, &str)] = &[
@@ -194,7 +194,7 @@ impl Codec {
         &self,
         mut bytes: &[u8],
         strict: bool,
-    ) -> Result<Option<String>, CanvasResponseTextError> {
+    ) -> Result<Option<String>, HttpResponseTextError> {
         let mut output = String::new();
         let mut state = State {
             groups: [b'B'; 3],
@@ -222,7 +222,7 @@ impl Codec {
                             }
                             Err(Some(length)) => length,
                             Err(None) if !strict && bytes.len() > 8 => {
-                                return Err(CanvasResponseTextError::PendingBufferOverflow)
+                                return Err(HttpResponseTextError::PendingBufferOverflow)
                             }
                             Err(None) => bytes.len(),
                         }
@@ -237,7 +237,7 @@ impl Codec {
                                     continue;
                                 }
                                 G2Value::Internal => {
-                                    return Err(CanvasResponseTextError::InternalCodec)
+                                    return Err(HttpResponseTextError::InternalCodec)
                                 }
                                 G2Value::Invalid => 3,
                             }
