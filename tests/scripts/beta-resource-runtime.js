@@ -30,6 +30,7 @@ function mountDigest(row){
  return sha({schema:'marty.beta-resource-mounts/v2',mounts:rows});
 }
 function authority(profile,{boundJson,expectedRuntime,receiptDigests}){
+ require('./functional-debug-runtime').rejectRetiredRuntimeProfile(profile);
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');
  assert.equal(profile.scope,'FUNCTIONAL_ONLY');
  assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);
@@ -192,6 +193,7 @@ function restartBaseline(a){
  return rows.sort((x,y)=>x.role.localeCompare(y.role));
 }
 function restartAuthority(profile,context){
+ require('./functional-debug-runtime').rejectRetiredRuntimeProfile(profile);
  assert.deepEqual(Object.keys(profile).sort(),['schema','scope','releaseQualified','recordingQualified','baseProfile','resourceRestart'].sort(),'RESOURCE_RESTART_PROFILE_SCHEMA');
  assert.equal(profile.schema,'marty.functional-mixed-runtime/v2');assert.equal(profile.scope,'FUNCTIONAL_ONLY');
  assert.equal(profile.releaseQualified,false);assert.equal(profile.recordingQualified,false);

@@ -160,3 +160,15 @@ def test_legacy_connector_service_cannot_hide_outside_observed_cohort(tmp_path, 
     models["elevenid-beta"]["services"][role] = {}
     with pytest.raises(ValueError, match="RETIRED_CONNECTOR_RUNTIME_ROLE"):
         maintenance.preview(plan, before, models)
+
+
+def test_javascript_observer_uses_the_exact_python_current_cohort():
+    import subprocess
+
+    module = Path(__file__).resolve().parents[1] / "tests/scripts/d12-current-native-runtime.js"
+    result = subprocess.run(["node", "-e",
+        "process.stdout.write(JSON.stringify(require(process.argv[1]).CURRENT_RUNTIME_ROLES))", str(module)],
+        capture_output=True, text=True, check=True, timeout=15)
+    roles = json.loads(result.stdout)
+    assert len(roles) == len(set(roles)) == 21
+    assert set(roles) == D12_CURRENT_RUNTIME_ROLES

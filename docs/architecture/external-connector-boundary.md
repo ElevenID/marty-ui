@@ -149,3 +149,17 @@ maintenance generation remains a separate TODO, outside the split.
 The [pre-retirement source](https://github.com/ElevenID/marty-ui/tree/32c30274abdebf657378653aa71821cf023113df/scripts)
 preserves the old scoped operators for their original source-bound jobs. This
 reference is historical evidence and does not authorize a new operation.
+
+
+The JavaScript current D12/D05 observer admits the same exact 21-role set as
+its Python execution owner. Old, unknown, missing and duplicate roles fail
+before Docker reads. Created-container IDs, start acknowledgments, process
+lineage, selected mounts, UID and healthy-state constraints remain mandatory.
+Provider issuer and bootstrap-fence overlays are retired from shared runtime
+selection and exports; generic service and issuance policies keep their checks.
+Existing source/hash-bound callers require fresh approval for changed observers.
+Local observer tests do not qualify or dispatch a rollout.
+
+Retired selector fields are rejected before shared profile dispatch and at each
+predecessor layer, including mixed and falsy declarations. Read-only authority
+consumers cannot use a retired wrapper to reach a generic admission path.
