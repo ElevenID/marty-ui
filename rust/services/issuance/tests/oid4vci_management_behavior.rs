@@ -677,7 +677,6 @@ impl Oid4vciManagementRepository for RevocationManagementRepository {
 
 struct RevocationLifecycleRepository {
     order: Arc<Mutex<Vec<&'static str>>>,
-    reasons: Arc<Mutex<Vec<String>>>,
     credential: ManagedCredential,
 }
 
@@ -774,7 +773,6 @@ fn revocation_app_with_credential(
     let lifecycle = CredentialManagementService::new(
         Arc::new(RevocationLifecycleRepository {
             order: order.clone(),
-            reasons: reasons.clone(),
             credential: ManagedCredential {
                 id: "credential-a".to_owned(),
                 transaction_id: "tx-a".to_owned(),

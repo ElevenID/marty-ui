@@ -4,7 +4,7 @@ use hmac::{Hmac, Mac};
 use marty_issuance_service::credential::{
     CredentialAccessTokenGrant, CredentialIssuanceError, CredentialLifecycle, CredentialRepository,
     CredentialSigningAuthorization, CredentialTransaction, CredentialTransactionStatus,
-    IssuedCredential, IssuerContext,
+    IssuedCredential,
 };
 use marty_issuance_service::credential_lifecycle::PostgresCredentialLifecycle;
 use marty_issuance_service::credential_management::{
@@ -35,7 +35,7 @@ use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
 use sqlx::{postgres::PgPoolOptions, Row};
-use std::{collections::BTreeSet, time::Duration as StdDuration};
+use std::time::Duration as StdDuration;
 use url::Url;
 use uuid::Uuid;
 

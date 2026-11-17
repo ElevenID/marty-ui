@@ -209,6 +209,7 @@ pub(crate) struct OutboundHttpResponse {
     finished: bool,
 }
 impl OutboundHttpResponse {
+    #[cfg(test)]
     pub fn content_type(&self) -> Option<String> {
         let values = self
             .response

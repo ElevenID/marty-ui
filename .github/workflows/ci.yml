@@ -2704,7 +2704,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Authorize private fork access
-        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
@@ -2790,7 +2790,7 @@ jobs:
         with:
           toolchain: 1.95.0
       - name: Fetch locked private fork dependencies
-        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        if: vars.PRIVATE_FORKS_ENABLED == 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         shell: bash
         working-directory: ${{ github.workspace }}
         env:

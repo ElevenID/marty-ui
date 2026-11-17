@@ -35,6 +35,7 @@ pub enum HttpResponseTextError {
 }
 
 impl HttpResponseTextError {
+    #[cfg(test)]
     pub const fn diagnostic_class(self) -> &'static str {
         match self {
             Self::ContinuationOrdinalLimit { .. } | Self::EmbeddedNullEncoding => "ValueError",

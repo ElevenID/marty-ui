@@ -1212,16 +1212,6 @@ fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> 
     optional_trimmed(values.get(name).cloned())
 }
 
-pub(crate) fn is_loopback_http_url(value: &url::Url) -> bool {
-    value.scheme() == "http"
-        && match value.host() {
-            Some(url::Host::Domain(host)) => host == "localhost",
-            Some(url::Host::Ipv4(address)) => address.is_loopback(),
-            Some(url::Host::Ipv6(address)) => address.is_loopback(),
-            None => false,
-        }
-}
-
 fn validate_database_url(value: &str) -> Result<String, MmfError> {
     let normalized = value.replacen("postgresql+asyncpg://", "postgresql://", 1);
     let parsed = url::Url::parse(&normalized).map_err(|error| {

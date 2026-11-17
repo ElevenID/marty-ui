@@ -725,6 +725,22 @@ fn lifecycle_error(message: impl Into<String>) -> CredentialIssuanceError {
     CredentialIssuanceError::LifecycleUnavailable(message.into())
 }
 
+fn application_issuance_context_matches(
+    application: &serde_json::Value,
+    transaction: &CredentialTransaction,
+) -> bool {
+    application["organization_id"].as_str() == Some(transaction.organization_id.as_str())
+        && application["status"].as_str() == Some("approved")
+        && application["issuance_transaction_id"].as_str() == Some(transaction.id.as_str())
+        && application["integration_context"]
+            .as_object()
+            .is_some_and(|context| {
+                context
+                    .keys()
+                    .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
+            })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc};
@@ -1039,20 +1055,4 @@ mod tests {
             );
         }
     }
-}
-
-fn application_issuance_context_matches(
-    application: &serde_json::Value,
-    transaction: &CredentialTransaction,
-) -> bool {
-    application["organization_id"].as_str() == Some(transaction.organization_id.as_str())
-        && application["status"].as_str() == Some("approved")
-        && application["issuance_transaction_id"].as_str() == Some(transaction.id.as_str())
-        && application["integration_context"]
-            .as_object()
-            .is_some_and(|context| {
-                context
-                    .keys()
-                    .all(|key| matches!(key.as_str(), "delivery" | "delivery_mode"))
-            })
 }

@@ -2287,7 +2287,6 @@ fn repository_error(cause: sqlx::Error) -> CredentialIssuanceError {
 #[cfg(test)]
 mod tests {
     use super::{authorization_transaction_id, renewal_source_id};
-    use serde_json::json;
 
     #[test]
     fn renewal_lineage_treats_only_absent_or_blank_links_as_absent() {

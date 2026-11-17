@@ -18,4 +18,4 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: ElevenID/.github/.github/actions/open-source-audit@4859b18c276945938d2724612be5e43155f7b915
+      - uses: ElevenID/.github/.github/actions/open-source-audit@8a8d39f2209fd8442a2810fecf1acf6c370b896d

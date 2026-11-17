@@ -260,3 +260,10 @@ dependencies cannot enable that provider client through feature unification.
 Core retains its separately owned generic launch-verification API; connector
 protocols remain outside the platform. Existing immutable source pins are not
 rewritten as part of this feature selection.
+
+Compatibility projections without a retained runtime caller compile only in tests.
+Unused provider-era loopback, signing-context and reconciliation helpers are
+removed. This keeps historical neutral conformance checks without exposing a
+new runtime adapter or reviving a connector pathway. The shared source-reader
+policy admits only the exact reviewed provider-neutral image recipes/contexts;
+credential-reader implementation and trust conditions remain enforced.

@@ -208,9 +208,9 @@ pub(crate) async fn success_json<T: DeserializeOwned>(
     response.json().await.map_err(|error| {
         let prefix = match operation {
             SigningOperation::Sign => "DID-mediated signer returned invalid JSON",
-            SigningOperation::Context | SigningOperation::Resolve => {
-                "DID issuer context returned invalid JSON"
-            }
+            SigningOperation::Context => "DID issuer context returned invalid JSON",
+            #[cfg(test)]
+            SigningOperation::Resolve => "DID issuer context returned invalid JSON",
         };
         SigningResponseFailure::new(
             operation,

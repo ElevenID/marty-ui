@@ -40,10 +40,15 @@ pub(crate) enum InternalApplicationDiagnosticCategory {
     DependencyUnavailable,
     InvalidResponse,
     InvalidConfiguration,
+    #[cfg(test)]
     NotFound,
+    #[cfg(test)]
     RolloutDisabled,
+    #[cfg(test)]
     InvalidStatus,
+    #[cfg(test)]
     NotReady,
+    #[cfg(test)]
     TransactionPlanUnavailable,
     IssuerContextInvalid,
 }
@@ -54,10 +59,15 @@ impl InternalApplicationDiagnosticCategory {
             Self::DependencyUnavailable => "dependency_unavailable",
             Self::InvalidResponse => "invalid_response",
             Self::InvalidConfiguration => "invalid_configuration",
+            #[cfg(test)]
             Self::NotFound => "not_found",
+            #[cfg(test)]
             Self::RolloutDisabled => "rollout_disabled",
+            #[cfg(test)]
             Self::InvalidStatus => "invalid_status",
+            #[cfg(test)]
             Self::NotReady => "not_ready",
+            #[cfg(test)]
             Self::TransactionPlanUnavailable => "transaction_plan_unavailable",
             Self::IssuerContextInvalid => "issuer_context_invalid",
         }

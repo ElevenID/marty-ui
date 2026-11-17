@@ -229,8 +229,6 @@ impl InternalApplicationService {
         self
     }
 
-    #[must_use]
-
     pub async fn create(
         &self,
         api_key: Option<&str>,
@@ -771,10 +769,6 @@ fn required_organization(value: Option<&str>) -> Result<&str, TransactionReadErr
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or(TransactionReadError::TrustedOrganizationRequired)
-}
-
-fn reconciliation_limit(limit: i64) -> usize {
-    limit.clamp(1, 1000) as usize
 }
 
 #[cfg(test)]

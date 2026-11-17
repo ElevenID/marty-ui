@@ -23,6 +23,7 @@ pub mod external_association_http;
 pub mod external_association_schema;
 pub mod external_association_startup;
 mod http_content_decoder;
+#[cfg(test)]
 mod http_response_excerpt;
 mod http_response_text;
 mod outbound_http;

@@ -131,6 +131,21 @@ impl OutboundNetworkTimeout {
 }
 
 #[cfg(test)]
+pub(crate) fn timeout_values(
+    publish: Option<&str>,
+    status: Option<&str>,
+) -> Result<(f64, f64), &'static str> {
+    let publish = mmf_config::numeric_config::parse_python_config_float(publish.unwrap_or("20"))
+        .map_err(|_| "OUTBOUND_PUBLISH_TIMEOUT_SECONDS")?;
+    let status = match status {
+        Some(value) => mmf_config::numeric_config::parse_python_config_float(value)
+            .map_err(|_| "OUTBOUND_STATUS_TIMEOUT_SECONDS")?,
+        None => publish,
+    };
+    Ok((publish, status))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{
@@ -276,19 +291,4 @@ mod tests {
         assert!(task.await.unwrap_err().is_cancelled());
         assert_eq!(drops.load(Ordering::SeqCst), 2);
     }
-}
-
-#[cfg(test)]
-pub(crate) fn timeout_values(
-    publish: Option<&str>,
-    status: Option<&str>,
-) -> Result<(f64, f64), &'static str> {
-    let publish = mmf_config::numeric_config::parse_python_config_float(publish.unwrap_or("20"))
-        .map_err(|_| "OUTBOUND_PUBLISH_TIMEOUT_SECONDS")?;
-    let status = match status {
-        Some(value) => mmf_config::numeric_config::parse_python_config_float(value)
-            .map_err(|_| "OUTBOUND_STATUS_TIMEOUT_SECONDS")?,
-        None => publish,
-    };
-    Ok((publish, status))
 }

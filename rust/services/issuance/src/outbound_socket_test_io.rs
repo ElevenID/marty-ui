@@ -69,3 +69,37 @@ pub(crate) async fn read_schedule(
         () = write => read.await,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn completed_reads_renew_the_inactivity_budget_without_a_total_deadline() {
+        let observation = read_schedule(
+            OutboundNetworkTimeout::from_seconds(0.3),
+            &[
+                Duration::ZERO,
+                Duration::from_millis(200),
+                Duration::from_millis(400),
+            ],
+        )
+        .await;
+        assert_eq!(observation.result.unwrap(), [1, 2, 3]);
+        assert!(observation.elapsed >= Duration::from_millis(400));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_read_fails_with_the_read_phase_and_drops_owned_io() {
+        let observation = read_schedule(
+            OutboundNetworkTimeout::from_seconds(0.1),
+            &[Duration::ZERO, Duration::from_millis(500)],
+        )
+        .await;
+        assert_eq!(
+            observation.result.unwrap_err(),
+            OutboundHttpError::Timeout(crate::outbound_timeout::OutboundNetworkPhase::Read)
+        );
+        assert!(observation.elapsed >= Duration::from_millis(100));
+    }
+}
