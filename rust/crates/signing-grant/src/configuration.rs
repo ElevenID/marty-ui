@@ -38,8 +38,6 @@ struct AwsOriginKeys {
     #[serde(default)]
     flow_demo_holder: Option<String>,
     issuance_credential: String,
-    issuance_canvas: String,
-    issuance_readiness: String,
     issuance_passport: String,
 }
 
@@ -93,8 +91,6 @@ impl AwsGrantConfiguration {
             SigningOrigin::FlowWalletRequest => &self.keys.flow_wallet_request,
             SigningOrigin::FlowDemoHolder => self.keys.flow_demo_holder.as_deref().unwrap_or(""),
             SigningOrigin::IssuanceCredential => &self.keys.issuance_credential,
-            SigningOrigin::IssuanceCanvas => &self.keys.issuance_canvas,
-            SigningOrigin::IssuanceReadiness => &self.keys.issuance_readiness,
             SigningOrigin::IssuancePassport => &self.keys.issuance_passport,
         }
     }

@@ -46,7 +46,7 @@ pub fn contains_private_key_map(values: &Map<String, Value>) -> bool {
 }
 
 fn contains_private_key_inner(value: &Value, decoded_depth: usize) -> bool {
-    // Walk parsed JSON iteratively: Canvas credentials can legitimately have
+    // Walk parsed JSON iteratively: Credential responses can legitimately have
     // thousands of array levels. Only repeated string decoding needs a cap.
     if decoded_depth > 16 {
         return true;
@@ -112,7 +112,7 @@ fn is_private_field_name(name: &str) -> bool {
     .any(|part| normalized.contains(part))
 }
 
-/// Scan JSON text with the depth-safe parser used by Canvas response handling.
+/// Scan JSON text with the depth-safe parser used by service response handling.
 /// `None` means the text is not valid JSON.
 #[must_use]
 pub fn contains_private_key_json(raw: &str) -> Option<bool> {

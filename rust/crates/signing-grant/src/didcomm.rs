@@ -312,7 +312,7 @@ mod tests {
             );
         }
         let mut foreign = claims.clone();
-        foreign.origin = SigningOrigin::IssuanceCanvas;
+        foreign.origin = SigningOrigin::IssuancePassport;
         assert_eq!(
             bound_input(&foreign, &binding, 101),
             Err(GrantError::Malformed)

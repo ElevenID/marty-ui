@@ -1,7 +1,7 @@
 //! Shared protocol primitives, without conflating validation and delivery policy.
 use crate::http_response_text::{response_text, HttpResponseTextError};
 use crate::lossless_json::{LosslessJson, LosslessObject};
-pub(crate) use marty_response_compat::canvas_response_json as response_json;
+pub(crate) use marty_response_compat::response_json;
 
 pub(crate) const MAX_EXCERPT_CHARS: usize = 1_000;
 
