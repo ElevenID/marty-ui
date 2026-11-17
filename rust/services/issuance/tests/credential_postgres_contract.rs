@@ -1025,22 +1025,16 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
             .as_deref(),
         Some(credential_id)
     );
-    let drift = sqlx::query(
-        "SELECT target_type, schedule_seconds, metadata
-         FROM issuance_service.canvas_evidence_sync_targets
-         WHERE organization_id = 'org-a' AND logical_key = 'application:application-a'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
     assert_eq!(
-        drift.try_get::<String, _>("target_type").unwrap(),
-        "issued_drift"
-    );
-    assert_eq!(drift.try_get::<i32, _>("schedule_seconds").unwrap(), 21_600);
-    assert_eq!(
-        drift.try_get::<serde_json::Value, _>("metadata").unwrap()["claimed_credential_id"],
-        credential_id
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_evidence_sync_targets
+             WHERE organization_id = 'org-a' AND logical_key = 'application:application-a'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0,
+        "platform issuance must not schedule provider drift work"
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -1060,25 +1054,15 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries.len(), 1);
     assert_eq!(
         deliveries[0]
-            .try_get::<String, _>("delivery_target")
-            .unwrap(),
-        "canvas_credentials"
-    );
-    assert_eq!(
-        deliveries[0].try_get::<String, _>("status").unwrap(),
-        "pending"
-    );
-    assert_eq!(
-        deliveries[1]
             .try_get::<String, _>("delivery_target")
             .unwrap(),
         "wallet"
     );
     assert_eq!(
-        deliveries[1].try_get::<String, _>("status").unwrap(),
+        deliveries[0].try_get::<String, _>("status").unwrap(),
         "delivered"
     );
     let source = sqlx::query(
