@@ -427,3 +427,8 @@ branches in execution evidence are retired. Flow and self-host evidence use
 their own lane ownership. Mixed execution-contract tests and historical source
 input inventories are not yet reconciled; their current failures remain an
 integration blocker and must not be treated as passing qualification.
+
+Shared owned-cleanup support is now under `rust/acceptance/support`, and
+self-host acceptance imports it without depending on the removed Canvas crate.
+Execution-contract tests are being reconciled to the platform runners and
+rosters; remaining failing source-graph expectations must pass before merge.

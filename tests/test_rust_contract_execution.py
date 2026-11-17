@@ -21,7 +21,7 @@ INVENTORY_SPEC = importlib.util.spec_from_file_location(
 INVENTORY = importlib.util.module_from_spec(INVENTORY_SPEC)
 INVENTORY_SPEC.loader.exec_module(INVENTORY)
 RUNNER = ROOT / "scripts/ci/run-rust-db-contracts.sh"
-CANVAS_RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
+SELFHOST_RUNNER = ROOT / "scripts/ci/run-selfhost-acceptance-contracts.sh"
 GIT_BASH = Path("C:/Program Files/Git/bin/bash.exe")
 if os.name == "nt":
     BASH = str(GIT_BASH) if GIT_BASH.is_file() else None
@@ -33,7 +33,6 @@ else:
     "step_name,guarded_calls",
     [
         ("Verify feature-regression observer isolation", 1),
-        ("Test native Canvas AGS/NRPS over real HTTPS", 1),
         ("Test native passport Gateway signed webhook on PostgreSQL", 1),
         ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
         ("Exercise OIDF keyless HTTPS edge against disposable OpenBao", 1),
@@ -255,15 +254,8 @@ def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster()
 def test_db_inventory_covers_every_current_dispatch_and_owned_runtime_input() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     names = re.findall(r"^\s*run_timed ([a-z0-9_]+) ", source, re.MULTILINE)
-    assert len(names) == len(set(names)) == 19
-    canvas = [
-        path.stem
-        for path in (ROOT / "rust/services/issuance/tests").glob(
-            "canvas_*_postgres_contract.rs"
-        )
-    ] + ["proof_nonce_postgres_contract"]
-    assert len(canvas) == 11
-    for name in [*names, *canvas]:
+    assert len(names) == len(set(names)) == 20
+    for name in names:
         package, target, inputs = INVENTORY.obligation(name)
         assert INVENTORY.libtest_harness(package, target)["harness"] == "libtest"
         assert package.startswith("marty-")
@@ -304,75 +296,24 @@ def test_db_inventory_never_probes_custom_or_unregistered_harnesses(
         INVENTORY.libtest_harness("marty-signing-keys", "custom")
 
 
-def test_renewal_unit_required_roster_remains_in_the_two_owned_sources() -> None:
-    source = ROOT / "rust/services/issuance/src"
-    retry = (source / "canvas_sync_worker_retry_tests.rs").read_text(encoding="utf-8")
-    renewal = (source / "canvas_sync_worker_renewal_tests.rs").read_text(
-        encoding="utf-8"
-    )
-    direct = set(
-        re.findall(
-            r"#\[(?:tokio::)?test(?:\([^]]*\))?\]\s*(?:async )?fn\s+(\w+)",
-            retry,
-        )
-    )
-    primary = renewal.split("primary_cases! {", 1)[1].split("\n}", 1)[0]
-    generated = set(re.findall(r"^\s*(\w+):\s*\"", primary, re.MULTILINE))
-    secondary = set(
-        re.findall(r"#\[tokio::test\([^]]*\)\]\s*async fn\s+(\w+)", renewal)
-    )
-    assert len(direct) >= 4 and len(generated) == 15 and len(secondary) >= 4
-    expected = {INVENTORY.RENEWAL_UNIT_PREFIX + name for name in direct} | {
-        INVENTORY.RENEWAL_UNIT_PREFIX + "renewal_tests::" + name
-        for name in generated | secondary
-    }
-    assert INVENTORY.RENEWAL_UNIT_CASES <= expected
-    assert len(INVENTORY.RENEWAL_UNIT_CASES) == 23
-    package, target, inputs = INVENTORY.obligation("renewal_unit")
-    assert (package, target, inputs) == (
-        "marty-issuance-service",
-        "marty_issuance_service",
-        [],
-    )
-    assert INVENTORY.libtest_harness(package, target)["harness"] == "libtest"
 
 
-def test_renewal_unit_selection_rejects_missing_substituted_ignored_or_extra_cases() -> (
-    None
-):
-    args = [INVENTORY.RENEWAL_UNIT_PREFIX, "--test-threads=4"]
-    selected = set(INVENTORY.RENEWAL_UNIT_CASES)
-    INVENTORY.verify_renewal_unit_roster(args, selected, set())
-    cases = sorted(selected)
-    for invalid in (
-        selected - {cases[0]},
-        (selected - {cases[0]}) | {"foreign::same_count_substitution"},
-        selected | {"foreign::extra_case"},
-    ):
-        with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
-            INVENTORY.verify_renewal_unit_roster(args, invalid, set())
-    with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
-        INVENTORY.verify_renewal_unit_roster(args, selected, {cases[0]})
-    with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
-        INVENTORY.verify_renewal_unit_roster(["--test-threads=4"], selected, set())
 
 
 def test_library_unit_selection_allows_new_ordinary_cases_but_not_unowned_ignored() -> (
     None
 ):
-    expected = set(INVENTORY.RENEWAL_UNIT_CASES) | {"new_module::new_ordinary_case"}
+    expected = set(INVENTORY.LIBRARY_UNIT_REQUIRED_CASES) | {"new_module::new_ordinary_case"}
     ignored = set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
     INVENTORY.verify_library_unit_roster(["--test-threads=4"], expected, ignored)
-    assert len(ignored) == 14
-    assert INVENTORY.obligation("issuance_library_unit") == INVENTORY.obligation(
-        "renewal_unit"
-    )
+    assert len(ignored) == 11
+    assert INVENTORY.obligation("issuance_library_unit")[:2] == ("marty-issuance-service", "marty_issuance_service")
     for arguments, selected, excluded in (
-        ([INVENTORY.RENEWAL_UNIT_PREFIX, "--test-threads=4"], expected, ignored),
+        (["retired_worker_prefix", "--test-threads=4"], expected, ignored),
         (["--ignored", "--test-threads=4"], expected, ignored),
         (
             ["--test-threads=4"],
-            expected - {next(iter(INVENTORY.RENEWAL_UNIT_CASES))},
+            expected - {next(iter(INVENTORY.LIBRARY_UNIT_REQUIRED_CASES))},
             ignored,
         ),
         (["--test-threads=4"], expected, ignored - {next(iter(ignored))}),
@@ -395,7 +336,6 @@ def test_library_unit_ignored_inventory_matches_actual_fixture_and_child_sources
     ignored = set()
     for filename, prefix in (
         ("credential_builder.rs", "credential_builder::tests::"),
-        ("canvas_readiness_runtime.rs", "canvas_readiness_runtime::tests::"),
         (
             "internal_application_diagnostics.rs",
             "internal_application_diagnostics::tests::",
@@ -404,7 +344,7 @@ def test_library_unit_ignored_inventory_matches_actual_fixture_and_child_sources
             "passport_http_reconciliation_tests.rs",
             "passport_http::reconciliation_tests::",
         ),
-        ("canvas_operation_http.rs", "canvas_operation_http::tests::"),
+        ("outbound_http.rs", "outbound_http::tests::"),
     ):
         source = (roots / filename).read_text(encoding="utf-8")
         ignored.update(
@@ -425,7 +365,7 @@ def test_whole_library_recorder_accounts_all_discovered_outcomes(
     capsys,
     child_status,
 ) -> None:
-    selected = set(INVENTORY.RENEWAL_UNIT_CASES) | {"new_module::new_ordinary_case"}
+    selected = set(INVENTORY.LIBRARY_UNIT_REQUIRED_CASES) | {"new_module::new_ordinary_case"}
     ignored = set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
@@ -482,7 +422,7 @@ def test_whole_library_rejects_unknown_ignored_owner_before_execution(
         INVENTORY,
         "expected_cases",
         lambda *args, **kwargs: (
-            set(INVENTORY.RENEWAL_UNIT_CASES),
+            set(INVENTORY.LIBRARY_UNIT_REQUIRED_CASES),
             set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS) | {"unowned::ignored_case"},
         ),
     )
@@ -499,58 +439,8 @@ def test_whole_library_rejects_unknown_ignored_owner_before_execution(
     )
 
 
-def test_renewal_unit_artifact_requires_same_run_library_test_profile(
-    tmp_path, monkeypatch
-) -> None:
-    executable = tmp_path / "marty_issuance_service-harness"
-    executable.write_bytes(b"bounded synthetic harness")
-    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-    record = {
-        "reason": "compiler-artifact",
-        "package_id": "path+file:///checkout#marty-issuance-service@0.1.0",
-        "target": {"kind": ["lib"], "name": "marty_issuance_service"},
-        "profile": {"test": True},
-        "executable": str(executable),
-    }
-    artifacts = tmp_path / "rust-test-artifacts.json"
-    for invalid in (
-        [],
-        [{**record, "profile": {"test": False}}],
-        [{**record, "target": {"kind": ["bin"], "name": record["target"]["name"]}}],
-        [{**record, "package_id": "path+file:///checkout#foreign@0.1.0"}],
-        [record, record],
-        [record, {**record, "executable": str(tmp_path / "other-harness")}],
-    ):
-        artifacts.write_text("".join(json.dumps(row) + "\n" for row in invalid))
-        with pytest.raises(ValueError):
-            INVENTORY.artifact_identity(
-                executable,
-                "marty-issuance-service",
-                "marty_issuance_service",
-                library_test=True,
-            )
-    artifacts.write_text(json.dumps(record) + "\n")
-    assert (
-        INVENTORY.artifact_identity(
-            executable,
-            "marty-issuance-service",
-            "marty_issuance_service",
-            library_test=True,
-        )["binding"]
-        == "same_path"
-    )
 
 
-def test_renewal_unit_evidence_is_separate_from_database_claims(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-    evidence = {"schema": "marty.rust-unit-obligation/v1", "status": "ok"}
-    INVENTORY.emit(evidence)
-    output = tmp_path / "rust-build-evidence" / INVENTORY.UNIT_EVIDENCE_NAME
-    assert json.loads(output.read_text()) == evidence
-    assert INVENTORY.UNIT_PREFIX in capsys.readouterr().out
-    assert not (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).exists()
 
 
 def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None:
@@ -610,7 +500,6 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
         "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem",
         "rust/services/gateway/src/config.rs",
         "rust/services/issuance/src/config.rs",
-        "rust/services/issuance/src/canvas_credentials_publication.rs",
     }
     assert all(
         entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in subgraph
@@ -947,7 +836,7 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     assert "child-inherited-stdout" in output
     assert "private-runtime-value" not in json.dumps(record)
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
-    assert INVENTORY.run_contract("flow_acceptance", command, "canvas") != 0
+    assert INVENTORY.run_contract("flow_acceptance", command, "flow-pr") != 0
     assert "missing_published_schema_gate" in capsys.readouterr().out
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
     assert INVENTORY.run_contract("flow_acceptance", command, "contracts") != 0
@@ -961,12 +850,12 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
         "--nocapture",
         "--test-threads=4",
     ]
-    assert INVENTORY.run_contract("flow_acceptance", failing, "canvas") != 0
+    assert INVENTORY.run_contract("flow_acceptance", failing, "flow-pr") != 0
     assert '"failed":1' in capsys.readouterr().out
     monkeypatch.delenv("MARTY_LIBTEST_FORCE_FAILURE")
     monkeypatch.setattr(INVENTORY, "artifact_identity", original_artifact_identity)
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-    assert INVENTORY.run_contract("flow_acceptance", command, "canvas") != 0
+    assert INVENTORY.run_contract("flow_acceptance", command, "flow-pr") != 0
     assert "inventory_io_or_metadata_error" in capsys.readouterr().out
 
 
@@ -1007,7 +896,7 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
                 "--nocapture",
                 "--test-threads=4",
             ],
-            "canvas",
+            "flow-pr",
         )
         == 0
     )
@@ -1043,17 +932,11 @@ def test_selfhost_inventory_binds_exact_owner_and_direct_inputs() -> None:
     assert all(item["consumer"] == package for item in inputs)
     sources = INVENTORY.selfhost_source_inputs("selfhost")
     assert {entry["path"] for entry in sources} == {
-        "contracts/canvas-worker-consumer-range-oracle.json",
+        "contracts/selfhost-runtime-images.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
-        "scripts/ci/run-db-contract-groups.py",
-        "scripts/ci/run-published-canvas-contracts.sh",
+        "scripts/ci/run-selfhost-acceptance-contracts.sh",
     }
-    assert all(
-        entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in sources
-    )
-    assert "scripts/ci/run-db-contract-groups.py" not in {
-        entry["path"] for entry in INVENTORY.selfhost_source_inputs("canvas")
-    }
+    assert all(entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in sources)
 
 
 def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
@@ -1137,8 +1020,8 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
         assert "selected" not in refusal
         assert "observed_cases" not in refusal
         assert "test result:" not in rejected
-    assert INVENTORY.run_contract("selfhost_acceptance", command, "canvas") == 0
-    assert '"gate":"test-rust-services/canvas"' in capsys.readouterr().out
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "canvas") != 0
+    assert '"reason":"invalid_dispatch_owner"' in capsys.readouterr().out
     packager.write_bytes(b"mutated owned test packager")
     assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") == 0
     assert (
@@ -1176,30 +1059,14 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     assert "missing_published_schema_gate" in capsys.readouterr().out
 
 
-def test_selfhost_runner_keeps_roster_preflight_and_both_evidence_call_sites() -> None:
-    source = CANVAS_RUNNER.read_text(encoding="utf-8")
-    dedicated = source.split('if [[ "$mode" == selfhost-only ]]; then', 1)[1].split(
-        "\nfi", 1
-    )[0]
-    assert (
-        dedicated.count('require_selfhost_tests "$("$selfhost_executable" --list)"')
-        == 1
-    )
-    assert dedicated.index("require_selfhost_tests") < dedicated.index(
-        "pull_published_postgres"
-    )
-    assert dedicated.index("pull_published_postgres") < dedicated.index(
-        "--name selfhost_acceptance --owner selfhost --"
-    )
-    assert dedicated.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
-    assert dedicated.count("17 passed; 0 failed; 0 ignored;") == 1
-    assert source.count("--name selfhost_acceptance --owner canvas --") == 1
-    assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 2
-    assert source.index('require_selfhost_tests "$selfhost_tests"') < source.index(
-        "--name selfhost_acceptance --owner canvas --"
-    )
-    assert 'if [[ -n "$selfhost_pid" ]]; then kill "$selfhost_pid"' in source
-    assert 'if [[ -n "$selfhost_pid" ]]; then wait "$selfhost_pid"' in source
+def test_selfhost_runner_keeps_roster_preflight_and_evidence_call_site() -> None:
+    source = SELFHOST_RUNNER.read_text(encoding="utf-8")
+    assert source.count('require_selfhost_tests "$("$selfhost_executable" --list)"') == 1
+    assert source.index('require_selfhost_tests "$(') < source.index('docker pull')
+    assert source.index('docker pull') < source.index('--name selfhost_acceptance --owner selfhost --')
+    assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
+    assert "17 passed; 0 failed; 0 ignored;" in source
+
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are the CI owner")
@@ -1451,130 +1318,16 @@ def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
         assert "test happy ... ok" not in run.stdout
 
 
-@pytest.mark.parametrize(
-    ("qualification", "expected_mode"),
-    [("0", "routine"), ("1", "full")],
-)
-def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selection(
-    real_obligation_harness, monkeypatch, capsys, qualification, expected_mode
-) -> None:
-    executable = str(real_obligation_harness)
-    arguments = ["--skip", "fixture_case", "--nocapture", "--test-threads=1"]
-    assert INVENTORY.expected_cases(
-        executable, arguments, allow_skip=True, allow_nocapture=True
-    ) == ({"happy", "happy_extra"}, set())
-    with pytest.raises(ValueError, match="unsupported_selection_argument"):
-        INVENTORY.expected_cases(executable, arguments, allow_nocapture=True)
-    for invalid in (["--skip"], ["--skip", "../foreign"]):
-        with pytest.raises(ValueError):
-            INVENTORY.selection(invalid, allow_skip=True)
-    monkeypatch.delenv("RUNNER_TEMP", raising=False)
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
-    monkeypatch.delenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", raising=False)
-    monkeypatch.delenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", raising=False)
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
-    monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
-    assert INVENTORY.run_contract(
-        "canvas_worker_acceptance", [executable, *arguments], owner="canvas"
-    ) == 0
-    records = [
-        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith(INVENTORY.CANVAS_PREFIX)
-    ]
-    assert len(records) == 1
-    assert records[0]["schema"] == "marty.rust-canvas-obligation/v1"
-    assert records[0]["selected"] == records[0]["executed"] == [
-        "happy",
-        "happy_extra",
-    ]
-    assert records[0]["ignored"] == []
-    assert records[0]["gate"] == "test-rust-services/canvas"
-    assert records[0]["canvas_qualification_mode"] == expected_mode
-    assert set(records[0]["worker_tiers"].values()) == {None}
 
 
-def test_canvas_obligation_declares_kms_and_tier_names_without_values() -> None:
-    composition = INVENTORY.obligation("canvas_composition_acceptance")[2]
-    worker = INVENTORY.obligation("canvas_worker_acceptance")[2]
-    composition_inputs = {item["name"]: item for item in composition}
-    worker_inputs = {item["name"]: item for item in worker}
-    assert {
-        "MARTY_CANVAS_OPENBAO_URL",
-        "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
-        "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
-    } <= composition_inputs.keys()
-    assert {
-        "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER",
-        "MARTY_CANVAS_WORKER_VALIDATION_TIER",
-    } <= worker_inputs.keys()
-    for item in (*composition, *worker):
-        assert set(item) == {
-            "name",
-            "consumer",
-            "owner",
-            "provisioner",
-            "requirement",
-        }
-        assert item["owner"] == "scripts/ci/run-published-canvas-contracts.sh"
 
 
-def test_canvas_published_images_bind_exact_digest_and_selected_registry(
-    monkeypatch,
-) -> None:
-    pins = json.loads(
-        (ROOT / "contracts/canvas-worker-consumer-range-oracle.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    postgres = pins["observed_postgres_image"]
-    probe = pins["observed_image"]
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    for selected, expected in (
-        (postgres, "canonical"),
-        (f"mirror.gcr.io/library/{postgres}", "digest_preserving_mirror"),
-    ):
-        monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", selected)
-        evidence = INVENTORY.canvas_published_image_inputs()
-        assert evidence["postgres_reference"] == postgres
-        assert evidence["probe_reference"] == probe
-        assert evidence["postgres_selection"] == expected
-        assert evidence["pin_source_sha256"] == INVENTORY.digest(
-            ROOT / evidence["pin_source"]
-        )
-        assert evidence["source_closure"] == "incomplete"
 
 
-def test_canvas_published_image_selection_fails_closed_without_leaking_value(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    for selected in ("", "postgres:latest", "private-token@sha256:" + "0" * 64):
-        monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", selected)
-        with pytest.raises(ValueError, match="canvas_published_postgres_selection_drift") as error:
-            INVENTORY.canvas_published_image_inputs()
-        if selected:
-            assert selected not in str(error.value)
 
 
-def test_canvas_published_image_pin_changes_require_review(tmp_path, monkeypatch) -> None:
-    source = ROOT / "contracts/canvas-worker-consumer-range-oracle.json"
-    destination = tmp_path / "contracts/canvas-worker-consumer-range-oracle.json"
-    destination.parent.mkdir()
-    pins = json.loads(source.read_text(encoding="utf-8"))
-    pins["observed_postgres_image"] = "postgres:latest"
-    destination.write_text(json.dumps(pins), encoding="utf-8")
-    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
-    with pytest.raises(ValueError, match="canvas_published_image_pin_drift"):
-        INVENTORY.canvas_published_image_inputs()
 
 
-def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
-    with pytest.raises(ValueError, match="canvas_published_image_pin_drift"):
-        INVENTORY.canvas_published_image_inputs()
 
 
 @pytest.mark.parametrize(
@@ -1586,15 +1339,7 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
         ),
         (
             "selfhost_acceptance",
-            "rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs",
-        ),
-        (
-            "canvas_composition_acceptance",
-            "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
-        ),
-        (
-            "canvas_worker_acceptance",
-            "contracts/canvas-worker-body-timeout-oracle.json",
+            "rust/acceptance/support/owned_cleanup.rs",
         ),
     ),
 )
@@ -1626,106 +1371,29 @@ def test_acceptance_rust_first_hop_inputs_record_exact_source_hashes(name, fixtu
 def test_acceptance_rust_first_hop_inputs_reject_unrecognized_import(
     tmp_path, monkeypatch, source_content
 ) -> None:
-    source_path = INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES["canvas_worker_acceptance"]
+    source_path = INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES["selfhost_acceptance"]
     source = tmp_path / source_path
     source.parent.mkdir(parents=True)
     source.write_text(source_content, encoding="utf-8")
     manifest = source.parent.parent / "Cargo.toml"
     manifest.write_text(
-        '[package]\nname = "marty-canvas-worker-acceptance"\n'
+        '[package]\nname = "marty-selfhost-acceptance"\n'
         '[[test]]\nname = "canvas_published_worker_contract"\n'
         'path = "tests/canvas_published_worker_contract.rs"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
     with pytest.raises(ValueError, match="acceptance_rust_source_input_drift") as error:
-        INVENTORY.acceptance_rust_first_hop_inputs("canvas_worker_acceptance")
+        INVENTORY.acceptance_rust_first_hop_inputs("selfhost_acceptance")
     assert "private-" not in str(error.value)
 
 
-def test_canvas_composition_inventory_never_records_the_kms_token(
-    real_obligation_harness, monkeypatch, capsys
-) -> None:
-    monkeypatch.delenv("RUNNER_TEMP", raising=False)
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
-    monkeypatch.setenv("MARTY_ISSUANCE_TEST_BINARY", "synthetic-issuance")
-    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_URL", "https://127.0.0.1:1")
-    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_ROOT_TOKEN", "private-kms-token")
-    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_CA_CERT_FILE", "synthetic-ca")
-    assert INVENTORY.run_contract(
-        "canvas_composition_acceptance",
-        [str(real_obligation_harness), "happy", "--exact", "--test-threads=1"],
-        owner="canvas",
-    ) == 0
-    output = capsys.readouterr().out
-    assert "private-kms-token" not in output
-    record = next(
-        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
-        for line in output.splitlines()
-        if line.startswith(INVENTORY.CANVAS_PREFIX)
-    )
-    assert record["selected"] == record["executed"] == ["happy"]
-    assert record["runtime_fixture_owner"].endswith("canvas_published_database.rs")
-    assert record["transitive_source_closure"] == "incomplete"
-    assert record["observed_first_hop_rust_source_inputs"] == (
-        INVENTORY.acceptance_rust_first_hop_inputs("canvas_composition_acceptance")
-    )
 
 
-def test_canvas_obligation_files_are_separate_for_parallel_targets(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
-    for name in INVENTORY.CANVAS_EVIDENCE_NAMES:
-        INVENTORY.emit(
-            {"name": name, "schema": "marty.rust-canvas-obligation/v1", "status": "ok"}
-        )
-    assert capsys.readouterr().out.count(INVENTORY.CANVAS_PREFIX) == 2
-    for name, filename in INVENTORY.CANVAS_EVIDENCE_NAMES.items():
-        path = tmp_path / "rust-build-evidence" / filename
-        assert json.loads(path.read_text(encoding="utf-8"))["name"] == name
 
 
-def test_canvas_inventory_rejects_unreviewed_tier_before_harness_execution(
-    real_obligation_harness, monkeypatch, capsys
-) -> None:
-    monkeypatch.delenv("RUNNER_TEMP", raising=False)
-    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
-    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
-    monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
-    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "0")
-    monkeypatch.setenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", "unreviewed")
-    monkeypatch.setenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", "routine")
-    assert INVENTORY.run_contract(
-        "canvas_worker_acceptance",
-        [str(real_obligation_harness), "happy", "--exact", "--test-threads=1"],
-        owner="canvas",
-    ) == 1
-    output = capsys.readouterr().out
-    assert "test happy ... ok" not in output
-    record = next(
-        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
-        for line in output.splitlines()
-        if line.startswith(INVENTORY.CANVAS_PREFIX)
-    )
-    assert record["status"] == "failed"
-    assert record["reason"] == "invalid_canvas_worker_tier"
 
 
-def test_canvas_runner_routes_all_worker_and_composition_bodies_through_inventory() -> None:
-    source = CANVAS_RUNNER.read_text(encoding="utf-8")
-    assert source.count("--name canvas_worker_acceptance --owner canvas") == 9
-    assert source.count("--name canvas_composition_acceptance --owner canvas") == 3
-    for line in source.splitlines():
-        if (
-            ("$worker_executable" in line or "$composition_executable" in line)
-            and "--nocapture" in line
-        ):
-            assert 'python3 "$obligation_runner" --name canvas_' in line
 
 
 @pytest.mark.parametrize(
@@ -2064,27 +1732,6 @@ def test_compiler_depfile_rejects_unproved_or_foreign_inputs(
     assert "private-source" not in str(error.value)
 
 
-def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:
-    workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    )
-    steps = workflow["jobs"]["test-rust-services"]["steps"]
-    [step] = [
-        entry
-        for entry in steps
-        if entry.get("name") == "Prepare database contract executables"
-    ]
-    assert "source ../scripts/ci/rust_contract_execution.sh" in step["run"]
-    assert "resolve_issuance_canvas_contracts >/dev/null" in step["run"]
-    runner = RUNNER.read_text(encoding="utf-8")
-    assert 'if [[ -n "${RUNNER_TEMP:-}" ]]; then' in runner
-    canvas_block = runner.split('if [[ -n "${RUNNER_TEMP:-}" ]]; then', 1)[1]
-    assert (
-        'canvas_contract_paths="$(resolve_issuance_canvas_contracts)"' in canvas_block
-    )
-    assert canvas_block.index("resolve_issuance_canvas_contracts") < canvas_block.index(
-        "find target/debug/deps"
-    )
 
 
 def test_database_contract_preparation_uses_package_scoped_artifacts() -> None:
@@ -2194,81 +1841,8 @@ def test_recorded_contract_resolver_rejects_ambiguous_and_foreign_artifacts(
     assert resolve([dict(selected_record, executable="/missing")]).returncode != 0
 
 
-@pytest.mark.skipif(
-    BASH is None or shutil.which("jq") is None,
-    reason="Bash and jq are required to exercise the Cargo artifact resolver",
-)
-def test_canvas_database_contracts_resolve_only_this_runs_artifacts(
-    tmp_path: Path,
-) -> None:
-    names = sorted(
-        path.stem
-        for path in (ROOT / "rust/services/issuance/tests").glob(
-            "canvas_*_postgres_contract.rs"
-        )
-    ) + ["proof_nonce_postgres_contract"]
-    assert len(names) == 11
-    records = []
-    paths = []
-    for name in names:
-        executable = tmp_path / name
-        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        executable.chmod(0o755)
-        paths.append(str(executable))
-        records.append(
-            {
-                "reason": "compiler-artifact",
-                "package_id": "path+file:///test#marty-issuance-service@0.1.0",
-                "target": {"name": name, "kind": ["test"]},
-                "executable": str(executable),
-            }
-        )
-    unrelated = dict(records[0], package_id="path+file:///test#other@0.1.0")
-    artifacts = tmp_path / "rust-test-artifacts.json"
-    env = {**os.environ, "RUNNER_TEMP": str(tmp_path)}
-
-    def resolve(entries: list[dict]) -> subprocess.CompletedProcess[str]:
-        artifacts.write_text(
-            "".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8"
-        )
-        return subprocess.run(
-            [
-                BASH,
-                "-c",
-                "set -euo pipefail; source scripts/ci/rust_contract_execution.sh; "
-                "resolve_issuance_canvas_contracts",
-            ],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    valid = resolve([*records, unrelated])
-    assert valid.returncode == 0, valid.stderr
-    assert valid.stdout.splitlines() == sorted(paths)
-    assert resolve(records[:-1]).returncode != 0
-    duplicate = dict(records[0], executable=str(tmp_path / names[1]))
-    assert resolve([*records, duplicate]).returncode != 0
-    assert (
-        resolve(
-            [*records[:1], dict(records[1], executable="/missing"), *records[2:]]
-        ).returncode
-        != 0
-    )
 
 
-def test_canvas_serial_runner_uses_positive_execution_guard() -> None:
-    source = CANVAS_RUNNER.read_text(encoding="utf-8")
-    assert (
-        'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
-    )
-    assert (
-        'if [[ "$phase" == canvas_serial ]]; then\n    run_timed_rust_test "$phase" "$name" "$@"'
-        in source
-    )
-    assert source.count("timed canvas_serial ") == 9
 
 
 @pytest.mark.skipif(BASH is None, reason="Bash unavailable")

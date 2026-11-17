@@ -967,7 +967,6 @@ def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
         "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem",
         "rust/services/gateway/src/config.rs",
         "rust/services/issuance/src/config.rs",
-        "rust/services/issuance/src/canvas_credentials_publication.rs",
     )
     literals = {
         "scripts/render_flow_native_runtime_fixture.py": (
@@ -978,7 +977,6 @@ def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
             compose[0],
             compose[1],
             sources[2],
-            sources[4],
         ),
         "scripts/test_selfhost_native_owner_compose.py": (
             compose[4],
@@ -1006,12 +1004,10 @@ def selfhost_source_inputs(owner: str) -> list[dict[str, str]]:
     # Direct runner/pin inputs only. The caller separately validates the local
     # image ID; this is not retained image provenance or a full source graph.
     paths = [
-        "contracts/canvas-worker-consumer-range-oracle.json",
+        "contracts/selfhost-runtime-images.json",
         "scripts/ci/pull-pinned-dockerhub-image.sh",
         SELFHOST_OWNER,
     ]
-    if owner == "selfhost":
-        paths.append("scripts/ci/run-db-contract-groups.py")
     return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
 
 

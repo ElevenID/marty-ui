@@ -10,7 +10,7 @@ mod bounded_fixture_command;
 )]
 #[path = "../../../services/issuance/tests/support/canvas_published_database.rs"]
 mod canvas_published_database;
-#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]
+#[path = "../../../acceptance/support/owned_cleanup.rs"]
 mod owned_cleanup;
 #[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
 mod remote_integration_secret;
