@@ -311,7 +311,7 @@ def test_canvas_native_oracle_preserves_unicode_line_separators(
     child = SimpleNamespace(
         returncode=0,
         stderr="",
-        stdout="CANVAS_TIMEOUT_NATIVE="
+        stdout="OUTBOUND_TIMEOUT_NATIVE="
         + json.dumps(observation, ensure_ascii=False)
         + "\n",
     )
@@ -382,16 +382,16 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
 
     def child(*_args, env, **_kwargs):
         assert _args[0][1:4] == [
-            "canvas_operation_http::tests::native_socket_case",
+            "outbound_http::tests::native_socket_case",
             "--exact",
             "--ignored",
         ]
-        name = json.loads(env["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"])["name"]
+        name = json.loads(env["MARTY_OUTBOUND_TIMEOUT_NATIVE_CASE"])["name"]
         seen.append(name)
         return SimpleNamespace(
             returncode=0,
             stderr="",
-            stdout="CANVAS_TIMEOUT_NATIVE=" + json.dumps(by_name[name]) + "\n",
+            stdout="OUTBOUND_TIMEOUT_NATIVE=" + json.dumps(by_name[name]) + "\n",
         )
 
     namespace = {
@@ -877,7 +877,7 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
         ("contracts/canvas-json-depth-scenarios.json", "true"),
         ("scripts/run_canvas_json_depth_oracle.py", "true"),
         ("rust/services/issuance/migrations/20260101.sql", "true"),
-        ("rust/services/issuance/src/canvas_operation_http.rs", "false"),
+        ("rust/services/issuance/src/outbound_http.rs", "false"),
     ):
         selected = _classify_changed_paths(
             [path], tmp_path, event="merge_group", include_shadow=True
@@ -894,7 +894,7 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
     mixed = _classify_changed_paths(
         [
             "contracts/canvas-json-depth-scenarios.json",
-            "rust/services/issuance/src/canvas_operation_http.rs",
+            "rust/services/issuance/src/outbound_http.rs",
         ],
         tmp_path,
         combined=True,
@@ -2266,7 +2266,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Exercise managed Policy evidence through Flow PostgreSQL commit",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
-        "Test native Canvas operation timeout TLS parity",
+        "Test native outbound HTTP timeout TLS parity",
     }
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
@@ -4400,13 +4400,13 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
-def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
+def test_native_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     _, document = _workflow(CI_PATH)
     steps = document["jobs"]["test-rust-services"]["steps"]
     gate = next(
         step
         for step in steps
-        if step.get("name") == "Test native Canvas operation timeout TLS parity"
+        if step.get("name") == "Test native outbound HTTP timeout TLS parity"
     )
     assert gate["if"] == "matrix.lane == 'contracts'"
     assert not gate.get("continue-on-error", False)
@@ -4423,27 +4423,27 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert 'elif [[ "${{ matrix.lane }}" == contracts ]]; then' in compile_step
     assert "cargo test --locked --workspace --no-run" in compile_step
     assert (
-        "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
+        "grep -Fx 'outbound_http::tests::native_socket_case: test'"
         in gate["run"]
     )
     assert "--native-executable" in gate["run"]
-    assert '--qualification "$MARTY_CANVAS_FULL_QUALIFICATION"' in gate["run"]
+    assert "--qualification 1" in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
-    source = (ROOT / "rust/services/issuance/src/canvas_operation_http.rs").read_text(
+    source = (ROOT / "rust/services/issuance/src/outbound_http.rs").read_text(
         encoding="utf-8"
     )
     assert (
         '#[tokio::test]\n    #[ignore = "requires the owned loopback TLS '
         'and historical socket fixture"]\n    async fn native_socket_case()'
     ) in source
-    assert 'let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")' not in source
-    assert '.unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"))' in source
-    assert '.expect("owned native Canvas socket case")' not in source
+    assert 'let Ok(raw) = std::env::var("MARTY_OUTBOUND_TIMEOUT_NATIVE_CASE")' not in source
+    assert '.unwrap_or_else(|_| panic!("owned native outbound socket case is absent"))' in source
+    assert '.expect("owned native outbound socket case")' not in source
     runner = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
         encoding="utf-8"
     )
-    assert '"canvas_operation_http::tests::native_socket_case",\n                    "--exact",\n                    "--ignored",' in runner
+    assert '"outbound_http::tests::native_socket_case",\n                    "--exact",\n                    "--ignored",' in runner
 
 
 GATEWAY_REGISTRATIONS = [

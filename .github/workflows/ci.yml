@@ -1689,15 +1689,15 @@ jobs:
           done
           run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
             --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
-      - name: Test native Canvas operation timeout TLS parity
+      - name: Test native outbound HTTP timeout TLS parity
         # Contracts already compiles this exact Issuance library harness.
         # Keep the owned TLS/socket parity gate mandatory without rebuilding
-        # the otherwise unexecuted harness in the Canvas acceptance lane.
+        # an additional test harness or provider acceptance lane.
         if: matrix.lane == 'contracts'
         working-directory: rust
         run: |
-          python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"
-          "$RUNNER_TEMP/canvas-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
+          python3 -m venv "$RUNNER_TEMP/outbound-operation-tls"
+          "$RUNNER_TEMP/outbound-operation-tls/bin/pip" install --disable-pip-version-check httpx==0.26.0 cryptography==44.0.3
           mapfile -t executables < <(jq -r '
             select(.reason == "compiler-artifact")
             | select(.package_id | contains("marty-issuance-service"))
@@ -1707,8 +1707,8 @@ jobs:
             | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
-          "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
-          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification "$MARTY_CANVAS_FULL_QUALIFICATION"
+          "${executables[0]}" --list | grep -Fx 'outbound_http::tests::native_socket_case: test'
+          "$RUNNER_TEMP/outbound-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification 1
       - name: Report compiler cache effectiveness
         if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash

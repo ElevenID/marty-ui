@@ -15,10 +15,6 @@ const CORRELATION_DOMAIN: &[u8] = b"marty:internal-application-diagnostic:v1:";
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InternalApplicationDiagnosticStage {
     ExternalEvidenceTransport,
-    CanvasApprovalReadiness,
-    CanvasApprovalIssuerContext,
-    CanvasOfferReadiness,
-    CanvasOfferIssuerContext,
     OrdinaryIssuerContext,
     WalletCatalogTemplate,
     WalletCatalogConfiguration,
@@ -30,10 +26,6 @@ impl InternalApplicationDiagnosticStage {
     const fn as_str(self) -> &'static str {
         match self {
             Self::ExternalEvidenceTransport => "external_evidence_transport",
-            Self::CanvasApprovalReadiness => "canvas_approval_readiness",
-            Self::CanvasApprovalIssuerContext => "canvas_approval_issuer_context",
-            Self::CanvasOfferReadiness => "canvas_offer_readiness",
-            Self::CanvasOfferIssuerContext => "canvas_offer_issuer_context",
             Self::OrdinaryIssuerContext => "ordinary_issuer_context",
             Self::WalletCatalogTemplate => "wallet_catalog_template",
             Self::WalletCatalogConfiguration => "wallet_catalog_configuration",
@@ -425,19 +417,19 @@ mod tests {
             warn_external_evidence_failure(application, check);
             for (stage, category) in [
                 (
-                    InternalApplicationDiagnosticStage::CanvasApprovalReadiness,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::RolloutDisabled,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasApprovalIssuerContext,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::DependencyUnavailable,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasOfferReadiness,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::InvalidStatus,
                 ),
                 (
-                    InternalApplicationDiagnosticStage::CanvasOfferIssuerContext,
+                    InternalApplicationDiagnosticStage::OrdinaryIssuerContext,
                     InternalApplicationDiagnosticCategory::IssuerContextInvalid,
                 ),
                 (
@@ -481,11 +473,11 @@ mod tests {
             .expect("diagnostic stages")
             .iter()
             .map(|stage| stage.as_str().expect("stage").to_owned())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         let actual_stages = events
             .iter()
             .map(|diagnostic| diagnostic_field(diagnostic, "stage").to_owned())
-            .collect::<Vec<_>>();
+            .collect::<BTreeSet<_>>();
         assert_eq!(actual_stages, expected_stages);
         assert_eq!(
             events

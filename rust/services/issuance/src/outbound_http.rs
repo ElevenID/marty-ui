@@ -97,7 +97,7 @@ impl OperationSocket {
             .compare_exchange(0, phase, Ordering::Relaxed, Ordering::Relaxed);
         io::Error::new(
             io::ErrorKind::TimedOut,
-            "Canvas provider operation timed out",
+            "Outbound HTTP operation timed out",
         )
     }
 
@@ -205,13 +205,13 @@ impl Stream for ResponseStream {
     }
 }
 
-pub(crate) struct CanvasOperationResponse {
+pub(crate) struct OutboundHttpResponse {
     pub response: reqwest::Response,
     phase: Arc<AtomicU8>,
     decoders: Vec<HttpContentDecoder>,
     finished: bool,
 }
-impl CanvasOperationResponse {
+impl OutboundHttpResponse {
     pub fn content_type(&self) -> Option<String> {
         let values = self
             .response
@@ -326,7 +326,7 @@ impl OutboundHttpClient {
         url: Url,
         headers: http::HeaderMap,
         body: Vec<u8>,
-    ) -> Result<CanvasOperationResponse, OutboundHttpError> {
+    ) -> Result<OutboundHttpResponse, OutboundHttpError> {
         if !url.username().is_empty() || url.password().is_some() {
             return Err(OutboundHttpError::Origin);
         }
@@ -429,7 +429,7 @@ impl OutboundHttpClient {
             _driver: driver,
         };
         let response = http::Response::from_parts(parts, reqwest::Body::wrap_stream(stream));
-        Ok(CanvasOperationResponse {
+        Ok(OutboundHttpResponse {
             response: reqwest::Response::from(response),
             phase,
             decoders,
@@ -582,10 +582,10 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires the owned loopback TLS and historical socket fixture"]
     async fn native_socket_case() {
-        let raw = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")
-            .unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"));
+        let raw = std::env::var("MARTY_OUTBOUND_TIMEOUT_NATIVE_CASE")
+            .unwrap_or_else(|_| panic!("owned native outbound socket case is absent"));
         let case: Value = serde_json::from_str(&raw).unwrap();
-        let origin = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN").unwrap();
+        let origin = std::env::var("MARTY_OUTBOUND_TIMEOUT_NATIVE_ORIGIN").unwrap();
         assert!(origin.starts_with("https://127.0.0.1:"));
         let path = case["response"].as_str().unwrap();
         assert!(matches!(
@@ -693,7 +693,7 @@ mod tests {
         let mut client =
             OutboundHttpClient::new(policy, OutboundNetworkTimeout::from_seconds(seconds));
         if case["trusted"] != false {
-            let cert = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CERT").unwrap();
+            let cert = std::env::var("MARTY_OUTBOUND_TIMEOUT_NATIVE_CERT").unwrap();
             assert_eq!(
                 std::path::Path::new(&cert).file_name().unwrap(),
                 "synthetic.pem"
@@ -754,6 +754,6 @@ mod tests {
             }}),
         };
         result["name"] = case["name"].clone();
-        println!("\nCANVAS_TIMEOUT_NATIVE={result}");
+        println!("\nOUTBOUND_TIMEOUT_NATIVE={result}");
     }
 }

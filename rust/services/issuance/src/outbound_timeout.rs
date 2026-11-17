@@ -36,7 +36,7 @@ pub enum OutboundNetworkPhase {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error("Canvas network {phase:?} operation timed out")]
+#[error("Outbound network {phase:?} operation timed out")]
 pub struct OutboundNetworkTimeoutError {
     pub phase: OutboundNetworkPhase,
 }

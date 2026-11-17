@@ -67,11 +67,11 @@ impl std::fmt::Debug for OutboundHttpClientPolicy {
 }
 
 pub async fn client_for_outbound_origin(
-    canvas_base_url: &str,
+    base_url: &str,
     policy: &OutboundHttpClientPolicy,
 ) -> Result<(Client, Url), ()> {
     let (origin, pinned) =
-        resolve_outbound_origin(canvas_base_url, &OutboundOriginPolicy::from(policy)).await?;
+        resolve_outbound_origin(base_url, &OutboundOriginPolicy::from(policy)).await?;
     let host = origin.host_str().ok_or(())?;
     let client = Client::builder()
         .timeout(policy.timeout)
@@ -86,10 +86,10 @@ pub async fn client_for_outbound_origin(
 /// One origin/DNS policy owner for both existing total-deadline clients and the
 /// operation-deadline candidate. This function does not apply request timeouts.
 pub(crate) async fn resolve_outbound_origin(
-    canvas_base_url: &str,
+    base_url: &str,
     policy: &OutboundOriginPolicy,
 ) -> Result<(Url, SocketAddr), ()> {
-    let origin = validate_canvas_origin(canvas_base_url, policy)?;
+    let origin = validate_outbound_origin(base_url, policy)?;
     let host = origin.host_str().ok_or(())?;
     // The pure validator permits HTTP only for explicitly enabled localhost.
     let http_localhost = origin.scheme() == "http";
@@ -122,11 +122,11 @@ pub(crate) async fn resolve_outbound_origin(
 
 /// Validate the persisted root before deriving a request URL. DNS/pinning stays
 /// with the transport owner, so operation clients resolve only once per request.
-pub(crate) fn validate_canvas_origin(
-    canvas_base_url: &str,
+pub(crate) fn validate_outbound_origin(
+    base_url: &str,
     policy: &OutboundOriginPolicy,
 ) -> Result<Url, ()> {
-    let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
+    let origin = Url::parse(base_url).map_err(|_| ())?;
     let host = origin.host_str().ok_or(())?;
     let http_localhost = origin.scheme() == "http"
         && policy.allow_http_localhost
@@ -167,21 +167,21 @@ fn normalized_origin(url: &Url) -> Option<String> {
 }
 
 #[must_use]
-pub fn canvas_retry_after_seconds(response: &Response) -> Option<u64> {
-    canvas_retry_after_header_seconds(response.headers(), Utc::now())
+pub fn retry_after_seconds(response: &Response) -> Option<u64> {
+    retry_after_header_seconds(response.headers(), Utc::now())
 }
 
-pub(crate) fn canvas_retry_after_header_seconds(
+pub(crate) fn retry_after_header_seconds(
     headers: &reqwest::header::HeaderMap,
     now: DateTime<Utc>,
 ) -> Option<u64> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
-    parse_canvas_retry_after(raw, now)
+    parse_retry_after(raw, now)
 }
 
 /// Shared provider/worker deadline parsing. Apply the published domain bounds
 /// before machine conversion; a valid oversized integer is not a missing header.
-pub(crate) fn parse_canvas_retry_after(value: &str, now: DateTime<Utc>) -> Option<u64> {
+pub(crate) fn parse_retry_after(value: &str, now: DateTime<Utc>) -> Option<u64> {
     let normalized = value.trim();
     if let Ok(seconds) = normalized.parse::<PythonConfigInteger>() {
         return seconds
@@ -228,7 +228,7 @@ pub(crate) fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// Preserve the legacy Canvas guard's fail-closed IPv6 classification.
+/// Preserve the existing public-origin guard's fail-closed IPv6 classification.
 ///
 /// Rust does not yet expose a stable `Ipv6Addr::is_global`, so keep the
 /// relevant special-purpose ranges explicit. The exceptions inside
@@ -298,7 +298,7 @@ mod tests {
             .unwrap()
             .into();
         assert_eq!(
-            canvas_retry_after_seconds(&response),
+            retry_after_seconds(&response),
             case["delay_bounds"][0].as_u64()
         );
     }
@@ -319,7 +319,7 @@ mod tests {
                 .parse::<DateTime<Utc>>()
                 .unwrap();
             assert_eq!(
-                parse_canvas_retry_after(case["value"].as_str().unwrap(), now),
+                parse_retry_after(case["value"].as_str().unwrap(), now),
                 case["seconds"].as_u64()
             );
         }
@@ -344,16 +344,16 @@ mod tests {
             ("1.5".into(), None),
             ("NaN".into(), None),
         ] {
-            assert_eq!(parse_canvas_retry_after(&raw, now), expected);
+            assert_eq!(parse_retry_after(&raw, now), expected);
             let response: Response = http::Response::builder()
                 .status(429)
                 .header(reqwest::header::RETRY_AFTER, raw)
                 .body("")
                 .unwrap()
                 .into();
-            assert_eq!(canvas_retry_after_seconds(&response), expected);
+            assert_eq!(retry_after_seconds(&response), expected);
         }
-        assert_eq!(parse_canvas_retry_after("١٢", now), Some(12));
+        assert_eq!(parse_retry_after("١٢", now), Some(12));
     }
 
     #[test]
@@ -363,7 +363,7 @@ mod tests {
             .body("")
             .unwrap()
             .into();
-        assert_eq!(canvas_retry_after_seconds(&response), None);
+        assert_eq!(retry_after_seconds(&response), None);
         let response: Response = http::Response::builder()
             .status(429)
             .header(
@@ -373,7 +373,7 @@ mod tests {
             .body("")
             .unwrap()
             .into();
-        assert_eq!(canvas_retry_after_seconds(&response), None);
+        assert_eq!(retry_after_seconds(&response), None);
     }
 
     #[test]
@@ -477,16 +477,16 @@ mod tests {
 
     #[test]
     fn private_allowlist_normalization_is_exact_and_ignores_invalid_entries() {
-        let origin = Url::parse("https://Canvas.Internal.Example.:443/").unwrap();
+        let origin = Url::parse("https://Service.Internal.Example.:443/").unwrap();
         assert_eq!(
             normalized_origin(&origin).as_deref(),
-            Some("https://canvas.internal.example")
+            Some("https://service.internal.example")
         );
         assert!(
             normalized_origin(&Url::parse("https://user:secret@example.test").unwrap()).is_none()
         );
         assert!(
-            normalized_origin(&Url::parse("http://canvas.internal.example").unwrap()).is_none()
+            normalized_origin(&Url::parse("http://service.internal.example").unwrap()).is_none()
         );
     }
 }

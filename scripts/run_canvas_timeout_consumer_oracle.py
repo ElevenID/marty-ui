@@ -833,13 +833,13 @@ def run_native(executable, qualification="1"):
     with loopback_tls() as (origin, _, cert):
         for case, _ in selected:
             environment = dict(os.environ)
-            environment["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"] = json.dumps(case)
-            environment["MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN"] = origin
-            environment["MARTY_CANVAS_TIMEOUT_NATIVE_CERT"] = str(cert)
+            environment["MARTY_OUTBOUND_TIMEOUT_NATIVE_CASE"] = json.dumps(case)
+            environment["MARTY_OUTBOUND_TIMEOUT_NATIVE_ORIGIN"] = origin
+            environment["MARTY_OUTBOUND_TIMEOUT_NATIVE_CERT"] = str(cert)
             child = subprocess.run(
                 [
                     str(executable),
-                    "canvas_operation_http::tests::native_socket_case",
+                    "outbound_http::tests::native_socket_case",
                     "--exact",
                     "--ignored",
                     "--nocapture",
@@ -855,10 +855,10 @@ def run_native(executable, qualification="1"):
                 f"Native fixture child failed: {child.stdout} {child.stderr}"
             )
             lines = [
-                line.removeprefix("CANVAS_TIMEOUT_NATIVE=")
+                line.removeprefix("OUTBOUND_TIMEOUT_NATIVE=")
                 # Unicode NEL/LS/PS are valid inside JSON strings, not records.
                 for line in child.stdout.split("\n")
-                if line.startswith("CANVAS_TIMEOUT_NATIVE=")
+                if line.startswith("OUTBOUND_TIMEOUT_NATIVE=")
             ]
             assert len(lines) == 1, "native child must emit exactly one observation"
             observations.append(json.loads(lines[0]))

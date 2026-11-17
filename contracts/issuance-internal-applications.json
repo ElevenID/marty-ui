@@ -100,10 +100,6 @@
     "fields": ["event", "stage", "category", "application_correlation_sha256", "check_correlation_sha256", "resource_correlation_sha256"],
     "stages": [
       "external_evidence_transport",
-      "canvas_approval_readiness",
-      "canvas_approval_issuer_context",
-      "canvas_offer_readiness",
-      "canvas_offer_issuer_context",
       "ordinary_issuer_context",
       "wallet_catalog_template",
       "wallet_catalog_configuration",
