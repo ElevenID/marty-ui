@@ -166,4 +166,3 @@ def beta_release_source_files():
         files.append(entry[1])
     assert files and files[0] == DEVELOPMENT_BASE and "docker-compose.beta.yml" in files
     return files
-

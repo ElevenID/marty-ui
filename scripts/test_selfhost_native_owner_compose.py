@@ -114,13 +114,13 @@ def rendered_additions(templates, values):
 # Observation ingress and application ownership remain disabled in unqualified profiles.
 UNFORWARDED = set(
     """
-APP_ENV  
+APP_ENV
 
- 
- 
- 
- 
- 
+
+
+
+
+
  CORS_ALLOWED_ORIGINS DIDCOMM_DID_WEB_INTERNAL_BASE_URL
 DIDCOMM_UNIVERSAL_RESOLVER_URL INTEGRATION_SECRET_MASTER_KEY_ENV ISSUER_DISPLAY_NAME
 MARTY_RELEASE_VERSION MARTY_UI_SHA TOKEN_RATE_LIMIT TOKEN_RATE_WINDOW
