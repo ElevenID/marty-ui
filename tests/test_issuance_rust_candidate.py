@@ -13,44 +13,22 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_canvas_postgres_contracts_are_required_in_ci() -> None:
+def test_platform_postgres_contracts_remain_required_after_provider_retirement() -> None:
     contract_dir = ROOT / "rust" / "services" / "issuance" / "tests"
-    canvas_contracts = {
-        path.stem for path in contract_dir.glob("canvas_*_postgres_contract.rs")
-    }
-    assert canvas_contracts == {
-        "canvas_award_candidate_postgres_contract",
-        "canvas_event_status_postgres_contract",
-        "canvas_lti_deep_linking_postgres_contract",
-        "canvas_lti_evidence_postgres_contract",
-        "canvas_lti_login_postgres_contract",
-        "canvas_lti_sync_enqueue_postgres_contract",
-        "canvas_management_postgres_contract",
-        "canvas_mirror_postgres_contract",
-        "canvas_oauth_postgres_contract",
-        "canvas_sync_worker_postgres_contract",
-    }
+    assert not list(contract_dir.glob("canvas_*_postgres_contract.rs"))
     assert (contract_dir / "proof_nonce_postgres_contract.rs").is_file()
-
-    workflow = text(".github/workflows/ci.yml")
-    assert (
-        "export MARTY_ISSUANCE_POSTGRES_CONTRACT_URL="
-        "postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test"
-        in text("scripts/ci/run-rust-db-contracts.sh")
-    )
-    assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
-    runner = text("scripts/ci/run-rust-db-contracts.sh")
-    resolver = text("scripts/ci/rust_contract_execution.sh")
-    assert "resolve_issuance_canvas_contracts" in workflow
-    assert "resolve_issuance_canvas_contracts" in runner
-    assert 'startswith("canvas_")' in resolver
-    assert 'endswith("_postgres_contract")' in resolver
-    assert "canvas_*_postgres_contract-*" in runner  # local no-artifact fallback
-    assert "Expected eleven issuance PostgreSQL contracts" in resolver
-    assert "ten Canvas plus proof nonce" in resolver
+    assert (contract_dir / "internal_application_postgres_contract.rs").is_file()
     manifest = text("rust/services/issuance/Cargo.toml")
-    assert 'name = "canvas_mirror_postgres_contract"' in manifest
-    assert 'path = "tests/canvas_mirror_postgres_contract.rs"' in manifest
+    assert 'name = "proof_nonce_postgres_contract"' in manifest
+    assert 'name = "internal_application_postgres_contract"' in manifest
+    assert 'name = "canvas_' not in manifest
+    runner = text("scripts/ci/run-rust-db-contracts.sh")
+    assert "resolve_contract_executable proof_nonce_postgres_contract" in runner
+    assert "resolve_contract_executable internal_application_postgres_contract" in runner
+    assert "Expected one proof nonce PostgreSQL contract executable" in runner
+    assert "resolve_issuance_canvas_contracts" not in runner
+    assert "python3 ../scripts/ci/run-db-contract-groups.py" in text(".github/workflows/ci.yml")
+
 
 
 def test_internal_application_postgres_contract_is_required_in_ci() -> None:
@@ -1188,7 +1166,8 @@ def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() 
     assert internal_lifecycle.isdisjoint(public)
     assert public_record_adapters <= public
     assert public_record_adapters <= native
-    assert canvas_mirror_publish in native
+    assert canvas_mirror_publish not in native
+    assert canvas_mirror_publish not in public
     assert independently_owned.isdisjoint(native)
     assert (
         "POST",
