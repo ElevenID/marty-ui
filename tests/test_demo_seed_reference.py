@@ -1,10 +1,9 @@
-"""The live demo seed commands must work without the retired Python package."""
+"""Preserve historical demo seed provenance and enforce current seed retirement."""
 
 from __future__ import annotations
 
 import json
 import hashlib
-import os
 import subprocess
 from pathlib import Path
 
@@ -60,31 +59,18 @@ def test_provenance_uses_canonical_git_blob_bytes() -> None:
             assert hashlib.sha256(blob).hexdigest() == expected
 
 
-def test_canvas_seed_make_target_uses_packaged_rust_runner() -> None:
+def test_retired_provider_seed_has_no_current_make_target_or_runner() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    target = makefile.split("canvas-real-seed:", 1)[1].split("canvas-real-bootstrap:", 1)[0]
-    assert 'bash scripts/run-canvas-real-seed.sh "$(BETA_ENV_FILE)"' in target
-    assert "seed_canvas_real.py" not in target
+    for target in ("canvas-real-seed:", "canvas-real-bootstrap:"):
+        assert target not in makefile
+    assert not (ROOT / "scripts/run-canvas-real-seed.sh").exists()
+    assert not (ROOT / "scripts/seed_canvas_real.py").exists()
 
 
-def test_canvas_seed_runner_forwards_shell_flags_and_uses_internal_services() -> None:
-    git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
-    bash = str(git_bash) if os.name == "nt" and git_bash.exists() else "bash"
-    command = (
-        "docker() { :; }; "
-        "source scripts/run-canvas-real-seed.sh .env.example"
-    )
-    result = subprocess.run(
-        [bash, "-x", "-c", command],
-        cwd=ROOT,
-        env={**os.environ, "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED": "true", "MARTY_API_KEY": "test-key"},
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    trace = result.stderr
-    assert "--env CANVAS_DEMO_EVIDENCE_EVENT_ENABLED" in trace
-    assert "--env MARTY_API_KEY" in trace
-    assert "--env SIGNING_KEYS_INTERNAL_BASE_URL=http://signing-keys:8017/internal/signing-keys" in trace
-    assert "--env SIGNING_KEYS_HOLDER_PROOF_BASE_URL=http://signing-keys:8017/internal/signing-keys" in trace
-    assert "db-migrate /usr/local/bin/marty-canvas-demo-seed --env-file /dev/null" in trace
+def test_migration_image_keeps_generic_seeds_without_the_retired_binary() -> None:
+    source = (ROOT / "services/Dockerfile.migrations").read_text(encoding="utf-8")
+    assert "marty-canvas-demo-seed" not in source
+    for retained in ("marty-demo-vendor-seed", "marty-migration-bootstrap", "marty-notification"):
+        assert f"--bin {retained}" in source
+        assert f"/usr/local/bin/{retained}" in source
+    assert not (ROOT / "rust/crates/canvas-demo-seed").exists()

@@ -265,7 +265,7 @@ fn initializer_policies(source: &str) -> Result<BTreeMap<String, String>> {
         .flat_map(|spec| spec.policies.iter())
         .filter_map(|policy| policy.strip_prefix("sign-grant-mint-").map(str::to_owned))
         .collect::<BTreeSet<_>>();
-    if origins.len() != 7
+    if origins.len() != 5
         || origins.iter().copied().collect::<BTreeSet<_>>()
             != expected_origins.iter().map(String::as_str).collect()
     {
@@ -1373,6 +1373,37 @@ async fn verify_candidate_with(
     attempt.map_err(|_| RECOVERY)
 }
 
+#[cfg(test)]
+mod current_policy_tests {
+    use super::*;
+
+    #[test]
+    fn current_initializer_policies_match_only_the_retained_runtime_scopes() {
+        let policies = compiled_initializer_policies().unwrap();
+        let expected = runtime_specs()
+            .into_iter()
+            .flat_map(|spec| spec.policies)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(policies.len(), 10);
+        assert_eq!(policies.keys().cloned().collect::<BTreeSet<_>>(), expected);
+        assert!(!policies
+            .keys()
+            .any(|name| name.contains("canvas") || name.contains("readiness")));
+        assert!(policy()
+            .unwrap()
+            .contains("auth/token/create/selfhost-application-leaf-"));
+    }
+
+    #[test]
+    fn retired_or_extra_mint_origins_cannot_reenter_operator_authority() {
+        for origin in ["issuance-canvas", "issuance-readiness", "unknown-origin"] {
+            let source =
+                INITIALIZER.replace("grant_origins='", &format!("grant_origins='{origin} "));
+            assert!(initializer_policies(&source).is_err(), "{origin}");
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -1484,7 +1515,7 @@ mod tests {
                             .unwrap();
                     }
                 }
-                assert_eq!(crate::generation::check_application(&current).unwrap(), 53);
+                assert_eq!(crate::generation::check_application(&current).unwrap(), 51);
             }
             if enrolled {
                 write_private(&identity.join(ROLE_FILE), ROLE_ID, 1024).unwrap();
@@ -2173,7 +2204,7 @@ mod tests {
         assert_eq!(crate::generation::entries(&f.identity).unwrap().len(), 3);
         assert_eq!(current_tokens(&f.current, true).unwrap(), before);
         let state = api.state.lock().unwrap();
-        assert_eq!(state.leaves.len(), 11);
+        assert_eq!(state.leaves.len(), 9);
         assert_eq!(state.logins, 1);
         assert_eq!(state.revokes, 1);
         assert_eq!(state.mints, 0);

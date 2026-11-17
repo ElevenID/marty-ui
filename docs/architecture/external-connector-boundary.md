@@ -267,3 +267,26 @@ removed. This keeps historical neutral conformance checks without exposing a
 new runtime adapter or reviving a connector pathway. The shared source-reader
 policy admits only the exact reviewed provider-neutral image recipes/contexts;
 credential-reader implementation and trust conditions remain enforced.
+
+
+Applicant startup no longer maps provider or learner-protocol metadata into
+integration context. Automatic legacy upgrades accept only reviewed generic
+system/delivery fields and explicit form_data. Unknown metadata/context requires
+an explicit data-owner review and fails before payload/file writes; it is not
+silently relabeled as a form field. Existing current-format stores are not rewritten.
+The old migration vector remains unchanged as a historical refusal case, with a
+separate provider-neutral vector for the retained upgrade path.
+
+TODO (platform data owner): review legacy Applicant field schemas and retained
+historical contexts before any separately authorized upgrade. This source split
+neither migrates tenant stores nor grants old context identity or approval authority.
+
+
+The platform initializer and renewal authority share five retained signing-grant
+origins. Removed provider/readiness origins cannot reenter operator policy. The
+current application-generation contract has 51 required inputs, nine runtime
+replacements and 32 token inputs; private identity, uncertainty and replay guards
+remain. Old inventories are not implicitly upgraded. The migration image no longer
+builds or copies the retired provider seed. Historical seed/catalog observations
+remain read-only; the current system delivery catalog contains two platform wallets. Custom
+destinations keep their generic tenant/admin authorization.
