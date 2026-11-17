@@ -48,7 +48,7 @@ def test_d11_stack_declares_the_public_partner_origin_and_service() -> None:
     services = json.loads(_text("deploy-config/catalog/services.json"))
     secrets = json.loads(_text("deploy-config/catalog/secrets.json"))
 
-    assert stack["parent_stack"] == "tunnel-beta-experiments"
+    assert stack["parent_stack"] == "tunnel-beta-dev"
     assert "docker-compose.profile.northstar-admissions.yml" in stack["compose_files"]
     assert "admissions-test.elevenidllc.com" in stack["domains"]
     assert "external_demo" in stack["required_service_groups"]

@@ -40,10 +40,10 @@ General expectations:
 | `production` | no | no | no | no | no | yes |
 | `selfhost-production` | no | no | no | no | no | yes |
 
-`experiments` is the preferred lane for beta-only feature demos that should not
-bleed into production or self-hosted upgrade paths. The Canvas LMS/LTI demo for
-`beta.elevenidllc.com` uses this lane and the `tunnel-beta-experiments` stack.
-The older `beta` profile remains for compatibility with resettable beta data.
+`experiments` is an isolated platform test profile. Connector-owned databases,
+migrations and external-provider bootstrap belong to the connector deployment;
+they do not join platform migration lanes. Keep persistent upgrades separate
+from resettable fixtures.
 
 ## Lane rules
 

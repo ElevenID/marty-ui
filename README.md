@@ -142,6 +142,10 @@ TLS signer; Issuance consumes its public CA. Workload TLS
 private-key files are unsupported. The beta deployment validates these inputs
 with `scripts/ensure-beta-workload-identity.ps1`.
 
+The [external connector boundary](docs/architecture/external-connector-boundary.md)
+defines the public Common Gateway as the sole integration point and keeps
+canonical identity, ownership, approval and signing in Core.
+
 ## Runtime inputs
 
 - **[marty-microservices-framework](https://github.com/ElevenID/marty-microservices-framework)**

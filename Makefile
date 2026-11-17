@@ -1,37 +1,26 @@
 # Marty UI Development Environment
 # =================================
 
-.PHONY: help dev up down restart logs clean status shell test infra infra-tunnel setup-local run-api run-api-tunnel run-ui \
-	services-up services-up-tunnel services-down services-logs services-build services-restart services-migrate \
-	services-migrate-profile services-migrate-dev services-migrate-beta services-migrate-experiments services-migrate-test services-migrate-production \
-	seed-demo-vendor-fixtures dev-db-reset beta-db-reset beta-experiments-db-reset test-db-reset \
-	tunnel-start tunnel-stop tunnel-restart tunnel-status tunnel-logs tunnel-nginx-logs \
-	tunnel-refresh-upstreams \
-	tunnel-auth-restart tunnel-keycloak-restart tunnel-full-restart tunnel-use-prod tunnel-use-dev \
-	beta-config beta-up beta-down beta-restart beta-status beta-logs beta-clean beta-public-ui beta-public-ui-dev \
+.PHONY: help dev up down restart logs \
+	clean status shell test infra infra-tunnel \
+	setup-local run-api run-api-tunnel run-ui services-up services-up-tunnel \
+	services-down services-logs services-build services-restart services-migrate services-migrate-profile \
+	services-migrate-dev services-migrate-beta services-migrate-experiments services-migrate-test services-migrate-production seed-demo-vendor-fixtures \
+	dev-db-reset beta-db-reset test-db-reset tunnel-start tunnel-stop tunnel-restart \
+	tunnel-status tunnel-logs tunnel-nginx-logs tunnel-refresh-upstreams tunnel-auth-restart tunnel-keycloak-restart \
+	tunnel-full-restart tunnel-use-prod tunnel-use-dev beta-config beta-up beta-down \
+	beta-restart beta-status beta-logs beta-clean beta-public-ui beta-public-ui-dev \
 	beta-public-ui-ghcr beta-public-ui-check beta-tunnel-start beta-tunnel-stop beta-tunnel-restart beta-tunnel-status \
-	beta-tunnel-logs beta-tunnel-nginx-logs beta-tunnel-refresh-upstreams beta-tunnel-auth-restart \
-	beta-tunnel-keycloak-restart beta-tunnel-full-restart beta-tunnel-use-prod beta-tunnel-use-dev beta-dev-ui-tunnel \
-	beta-env-init beta-experiments-plan beta-experiments-config beta-experiments-up beta-experiments-down \
-	beta-experiments-logs beta-canvas-experiments-bootstrap \
-	beta-check \
-	setup-keycloak \
-	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart \
-	public-ui public-ui-dev public-ui-ghcr public-ui-check check prod-ui-docker prod-ui-docker-rebuild prod-ui-docker-stop \
-	obs-up obs-down \
-	wallet-up wallet-down \
-	canvas-sandbox-up canvas-sandbox-down canvas-sandbox-build canvas-sandbox-logs canvas-sandbox-status \
-	canvas-real-up canvas-real-down canvas-real-logs canvas-real-status canvas-real-seed canvas-real-bootstrap \
-	proto-gen grpc-health \
-	package-selfhost-bundle \
-	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
-	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
-	selfhost-prod-config selfhost-prod-check selfhost-prod-up \
-	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
-	selfhost-prod-cloudflare-up selfhost-prod-cloudflare-stop \
-	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
-	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
-	deploy-prod
+	beta-tunnel-logs beta-tunnel-nginx-logs beta-tunnel-refresh-upstreams beta-tunnel-auth-restart beta-tunnel-keycloak-restart beta-tunnel-full-restart \
+	beta-tunnel-use-prod beta-tunnel-use-dev beta-dev-ui-tunnel beta-env-init beta-check setup-keycloak \
+	dev-ui-tunnel prod-ui-tunnel prod-ui-tunnel-kill tunnel-prod-static tunnel-prod-restart public-ui \
+	public-ui-dev public-ui-ghcr public-ui-check check prod-ui-docker prod-ui-docker-rebuild \
+	prod-ui-docker-stop obs-up obs-down wallet-up wallet-down proto-gen \
+	grpc-health package-selfhost-bundle selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
+	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls selfhost-prod-config selfhost-prod-check selfhost-prod-up \
+	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs selfhost-prod-cloudflare-up selfhost-prod-cloudflare-stop \
+	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs deploy-catalog-validate deploy-stack-plan \
+	selfhost-prod-plan selfhost-prod-beta-tunnel-plan deploy-prod
 
 # Colors
 BLUE := \033[0;34m
@@ -61,9 +50,6 @@ TUNNEL_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.
 GHCR_TUNNEL_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.ghcr.yml -f docker-compose.profile.tunnel.yml
 OBS_COMPOSE := $(COMPOSE) --env-file $(BETA_ENV_FILE) -f docker-compose.base.yml -f docker-compose.profile.dev.yml -f docker-compose.profile.obs.yml
 WALTID_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.waltid.yml
-CANVAS_SANDBOX_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-sandbox.yml
-CANVAS_REAL_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml
-CANVAS_EXPERIMENTS_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml -f docker-compose.profile.canvas-sandbox.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 SELFHOST_ENV_FILE ?= .env.selfhost.production.local
@@ -115,30 +101,6 @@ beta-env-init: ## Initialize the dedicated beta env file from .env when missing
 		echo "$(RED)âŒ Error: .env not found; copy deploy-config/env/tunnel-beta/.env.template to .env.tunnel.beta.local first$(NC)"; \
 		exit 1; \
 	fi
-
-beta-experiments-plan: ## Render the beta Canvas experiments deployment plan
-	@sh scripts/marty-deploy.sh plan tunnel-beta-experiments
-
-beta-experiments-config: ## Validate beta experiments compose files
-	@echo "$(BLUE)Validating beta experiments compose files...$(NC)"
-	@$(CANVAS_EXPERIMENTS_COMPOSE) config >/dev/null
-	@echo "$(GREEN)Beta experiments compose is valid$(NC)"
-
-beta-experiments-up: ## Start the beta experiments stack with real Canvas enabled
-	@echo "$(BLUE)Starting beta experiments stack...$(NC)"
-	@MARTY_MIGRATION_PROFILE=experiments $(CANVAS_EXPERIMENTS_COMPOSE) up -d --build
-	@echo "$(GREEN)Beta experiments stack started$(NC)"
-
-beta-experiments-down: ## Stop the beta experiments stack
-	@echo "$(BLUE)Stopping beta experiments stack...$(NC)"
-	@$(CANVAS_EXPERIMENTS_COMPOSE) down
-	@echo "$(GREEN)Beta experiments stack stopped$(NC)"
-
-beta-experiments-logs: ## Follow beta experiments logs
-	@$(CANVAS_EXPERIMENTS_COMPOSE) logs -f
-
-beta-canvas-experiments-bootstrap: beta-experiments-up canvas-real-seed ## Start beta experiments and seed Canvas platform/binding
-	@echo "$(GREEN)Beta Canvas experiments bootstrap complete$(NC)"
 
 beta-up: up ## Start the beta development stack
 
@@ -407,14 +369,6 @@ beta-db-reset: ## Drop beta/dev state volumes, rebuild infra, skip historical de
 	@$(MAKE) --no-print-directory seed-demo-vendor-fixtures MARTY_MIGRATION_PROFILE=beta
 	@echo "$(GREEN)✓ Beta database reset complete$(NC)"
 
-beta-experiments-db-reset: ## Reset beta using the experiments migration profile and explicit demo fixtures
-	@echo "$(BLUE)Resetting beta experiments database and seed state...$(NC)"
-	@$(MAKE) --no-print-directory clean
-	@$(MAKE) --no-print-directory infra
-	@MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1 $(MAKE) --no-print-directory services-migrate-experiments
-	@$(MAKE) --no-print-directory seed-demo-vendor-fixtures MARTY_MIGRATION_PROFILE=experiments
-	@echo "$(GREEN)✓ Beta experiments database reset complete$(NC)"
-
 test-db-reset: ## Drop local state volumes, rebuild infra, and apply test-profile migrations
 	@echo "$(BLUE)Resetting test database and seed state...$(NC)"
 	@$(MAKE) --no-print-directory clean
@@ -648,99 +602,6 @@ wallet-down: ## Stop walt.id wallet stack
 	@echo "$(BLUE)Stopping walt.id wallet stack...$(NC)"
 	@$(WALTID_COMPOSE) stop $(WALTID_SERVICES)
 	@echo "$(GREEN)✓ Walt.id wallet stopped$(NC)"
-
-canvas-sandbox-up: ## Start Canvas Credentials Test Sandbox (requires tunnel profile)
-	@echo "$(BLUE)Starting Canvas Credentials Test Sandbox...$(NC)"
-	@$(CANVAS_SANDBOX_COMPOSE) up -d --build canvas-sandbox
-	@echo "$(GREEN)✓ Canvas sandbox started$(NC)"
-	@echo "  Internal:   http://canvas-sandbox:8017"
-	@echo "  Tunnel:     https://canvas-sandbox.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
-	@echo ""
-	@echo "  Connector config:"
-	@echo "    canvas_base_url:     https://canvas-sandbox.$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2)"
-	@echo "    lti_client_id:       any-client-id"
-	@echo "    lti_deployment_id:   test-deployment-sandbox"
-
-canvas-sandbox-down: ## Stop Canvas sandbox
-	@echo "$(BLUE)Stopping Canvas sandbox...$(NC)"
-	@$(CANVAS_SANDBOX_COMPOSE) stop canvas-sandbox
-	@$(CANVAS_SANDBOX_COMPOSE) rm -f canvas-sandbox
-	@echo "$(GREEN)✓ Canvas sandbox stopped$(NC)"
-
-canvas-sandbox-build: ## Rebuild the Canvas sandbox image
-	@echo "$(BLUE)Rebuilding Canvas sandbox image...$(NC)"
-	@$(CANVAS_SANDBOX_COMPOSE) build --no-cache canvas-sandbox
-	@echo "$(GREEN)✓ Canvas sandbox image rebuilt$(NC)"
-
-canvas-sandbox-logs: ## Follow Canvas sandbox logs
-	@docker logs -f marty-canvas-sandbox
-
-canvas-sandbox-status: ## Show Canvas sandbox status and platform setup guide
-	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
-	@echo "$(BLUE)  Canvas Sandbox Status$(NC)"
-	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
-	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-sandbox)' || echo "$(YELLOW)  Canvas sandbox not running$(NC)"
-	@echo ""
-	@echo "$(GREEN)To configure a Canvas platform against the sandbox:$(NC)"
-	@echo ""
-	@echo "  1. Start the sandbox:  make canvas-sandbox-up"
-	@echo "  2. Create a Canvas platform via API or UI admin panel:"
-	@echo ""
-	@echo "     POST /v1/integrations/canvas/platforms"
-	@echo "     {"
-	@echo '       "organization_id": "<example-org-id>",'
-	@echo '       "canvas_account_id": "sandbox-account-1",'
-	@echo '       "canvas_base_url": "http://canvas-sandbox:8017",'
-	@echo '       "lti_client_id": "any-client-id",'
-	@echo '       "lti_deployment_id": "test-deployment-sandbox"'
-	@echo "     }"
-	@echo ""
-	@echo "  3. Run sandbox probe:"
-	@echo "     POST /v1/integrations/canvas/platforms/{platform_id}/sandbox-probe"
-	@echo ""
-	@echo "  4. Initiate LTI login:"
-	@echo "     POST /v1/integrations/canvas/lti/platforms/{platform_id}/login"
-	@echo "     { \"login_hint\": \"user@example.edu\", \"target_link_uri\": \"https://tool.example.edu/launch\" }"
-	@echo ""
-
-canvas-real-up: ## Start real Canvas LMS test environment
-	@echo "$(BLUE)Starting real Canvas LMS test environment...$(NC)"
-	@$(CANVAS_REAL_COMPOSE) up -d canvas-real
-	@echo "$(GREEN)✓ Real Canvas started$(NC)"
-	@echo "  Local:  http://localhost:$${CANVAS_REAL_HOST_PORT:-8088}"
-	@CANVAS_HOST=$$(grep '^CANVAS_REAL_PUBLIC_HOST=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
-	DOMAIN=$$(grep '^PUBLIC_DOMAIN=' "$(BETA_ENV_FILE)" 2>/dev/null | cut -d'=' -f2); \
-	CANVAS_HOST=$${CANVAS_HOST:-canvas-test.$$DOMAIN}; \
-	echo "  Tunnel: https://$$CANVAS_HOST"
-	@echo "  Note: first startup can take several minutes."
-
-canvas-real-down: ## Stop real Canvas LMS test environment
-	@echo "$(BLUE)Stopping real Canvas LMS...$(NC)"
-	@$(CANVAS_REAL_COMPOSE) stop canvas-real
-	@$(CANVAS_REAL_COMPOSE) rm -f canvas-real
-	@echo "$(GREEN)✓ Real Canvas stopped$(NC)"
-
-canvas-real-logs: ## Follow real Canvas LMS logs
-	@docker logs -f marty-canvas-real
-
-canvas-real-status: ## Show real Canvas LMS status
-	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
-	@echo "$(BLUE)  Real Canvas LMS Status$(NC)"
-	@echo "$(BLUE)━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$(NC)"
-	@docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep -E '(^NAMES|canvas-real)' || echo "$(YELLOW)  Canvas-real not running$(NC)"
-	@echo ""
-	@echo "$(GREEN)Platform setup tip:$(NC)"
-	@echo "  Use a real Canvas base URL for production-like flows."
-	@echo "  For beta experiments this profile exposes Canvas at http://canvas-real and CANVAS_REAL_PUBLIC_HOST."
-	@echo ""
-
-canvas-real-seed: ## Seed ElevenID Canvas platform/binding (and optional Canvas test course/user)
-	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID platform/binding...$(NC)"
-	@bash scripts/run-canvas-real-seed.sh "$(BETA_ENV_FILE)"
-	@echo "$(GREEN)✓ Canvas seed completed$(NC)"
-
-canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the Rust seed
-	@echo "$(GREEN)✓ Canvas real bootstrap complete$(NC)"
 
 deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)
 	@echo "$(BLUE)Fetching production secrets from OCI Vault...$(NC)"

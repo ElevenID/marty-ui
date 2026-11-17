@@ -38,12 +38,9 @@ rollouts return nonzero and must be investigated before retrying.
 
 - selfhost-production uses elevenidllc.com values.
 - tunnel-beta uses beta.elevenidllc.com values.
-- tunnel-beta-experiments adds resettable beta-only experiment services such as
-  Canvas LMS at canvas-test.elevenidllc.com and a beta-safe Canvas Credentials
-  mirror receiver at canvas-sandbox.elevenidllc.com.
-- tunnel-beta-d11 extends that resettable stack with the separately branded
-  Northstar Admissions partner at admissions-test.elevenidllc.com. It requires
-  a run-scoped secret file created only through the public gateway.
+- tunnel-beta-d11 extends the generic beta development stack with the separately
+  branded Northstar Admissions partner. It requires a run-scoped secret file
+  created only through the public Gateway.
 - Do not reuse one env file across both targets.
 - Do not put a separate beta/staging hostname in selfhost production `UI_ADDITIONAL_BASE_URLS`; that makes the secondary hostname use the production Keycloak issuer.
 - Keep secrets in external secret directories, not in this repo.
@@ -53,7 +50,6 @@ rollouts return nonzero and must be investigated before retrying.
 
 - Beta tunnel runtime env: .env.tunnel.beta.local
 - Beta tunnel make targets: beta-up, beta-public-ui, beta-tunnel-start, beta-check
-- Beta experiments make targets: beta-experiments-up, beta-canvas-experiments-bootstrap
 - Selfhost production runtime env: .env.selfhost.production.local
 - Selfhost production make targets: selfhost-prod-up, selfhost-prod-check, selfhost-prod-logs
 - Selfhost production compose: docker-compose.selfhost.prod.yml
@@ -66,16 +62,14 @@ rollouts return nonzero and must be investigated before retrying.
 
 The catalog files are the canonical source for deployment metadata that is shared by Make targets, bundle packaging, checks, and future Kubernetes/image release flows.
 
-Portable Canvas acceptance uses `catalog/canvas-oss.lock.json` for the exact
-upstream source/image pin and `catalog/canvas-oss-portability.json` for the
-fixed OSS/hosted/outside-gate coverage contract. See
-`docs/CANVAS_OSS_PORTABILITY_PIPELINE.md` for the local runner and beta binding.
+External providers own their deployment, storage and credentials. See the
+[external connector boundary](../docs/architecture/external-connector-boundary.md).
+Provider profiles and seed/bootstrap targets are outside the platform catalog.
 
 Useful commands:
 
 - `sh scripts/marty-deploy.sh validate`
 - `sh scripts/marty-deploy.sh plan selfhost-production`
-- `sh scripts/marty-deploy.sh plan tunnel-beta-experiments` for the beta Canvas experiments stack
 - `sh scripts/marty-deploy.sh plan tunnel-beta-d11` for the D-11 external admissions recording stack
 - `sh scripts/marty-deploy.sh plan selfhost-beta-tunnel` only when beta intentionally routes into the same self-host production stack
 - `sh scripts/marty-deploy.sh plan kubernetes-production`
