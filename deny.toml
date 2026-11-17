@@ -6,6 +6,10 @@ all-features = true
 unmaintained = "workspace"
 unsound = "all"
 ignore = [
+    # Temporary maintenance-only exception, enforced until 2026-12-01 UTC by
+    # scripts/ci/check-advisory-exception-expiry.py. See the migration record in
+    # docs/dependency-maintenance-exceptions.md; no vulnerability is waived.
+    { id = "RUSTSEC-2026-0543", reason = "temporary chrono maintenance exception until 2026-12-01 UTC; tracked dependency migration; no patched upstream version" },
     # RSA verification is required for passport, certificate, and legacy
     # credential profiles. RustCrypto has not published a fixed release, and
     # Marty does not use this crate for remotely timed private-key operations.
