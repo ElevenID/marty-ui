@@ -16,7 +16,6 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
-    inputs:
   schedule:
     - cron: '17 4 * * 0'
 

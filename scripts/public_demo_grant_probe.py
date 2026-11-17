@@ -20,8 +20,6 @@ ORIGINS = (
     "gateway-issuer-did",
     "flow-wallet",
     "issuance-credential",
-    "issuance-canvas",
-    "issuance-readiness",
     "issuance-passport",
     "flow-demo-holder",
 )

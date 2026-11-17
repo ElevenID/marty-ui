@@ -847,6 +847,10 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         {"prod-write": {"image": "alpine@sha256:" + "e" * 64,
                         "command": "curl https://prod.example/write"}}),
      "unexpected or missing service"),
+    (lambda model, root: model["services"].update({"canvas-sync-worker": {}}),
+     "unexpected or missing service"),
+    (lambda model, root: model["services"].update({"canvas_sync_worker": {}}),
+     "unexpected or missing service"),
     (lambda model, root: model.update(configs={
         "prod": {"file": "/etc/marty-selfhost-prod/secret"}}), "config"),
     (lambda model, root: model["services"]["gateway"].update(
