@@ -223,7 +223,12 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
     job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
         "test-release-contracts"
     ]
-    assert job["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == "ubuntu-24.04"
+    setup_python = next(
+        step for step in job["steps"]
+        if step.get("uses", "").startswith("actions/setup-python@")
+    )
+    assert setup_python["with"]["python-version"] == "3.12.10"
     steps = {step.get("name"): step for step in job["steps"]}
     installation = steps["Install released test dependencies"]["run"]
     command = next(
@@ -1092,7 +1097,7 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 9
+    assert verified[-1] == b"" and len(verified) == 11
     contract_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert contract_tests == [
         "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
@@ -1101,6 +1106,8 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/tls_openbao_keyless.rs",
+        "rust/crates/service-acceptance/tests/support/holder_issuer_authority.rs",
+        "rust/crates/service-acceptance/tests/support/holder_native_receipt.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
     ]
@@ -5271,6 +5278,7 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
 
     python_warmer = warm["jobs"]["python"]
     assert python_warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert python_warmer["runs-on"] == "ubuntu-24.04"
     python_versions = python_warmer["strategy"]["matrix"]["python-version"]
     assert python_versions == ["3.12", "3.12.10"]
     for job_name in python_jobs:
@@ -5877,9 +5885,14 @@ def test_service_dev_dependencies_only_allow_registered_composition_edges() -> (
         ("marty-issuance-service", "marty-signing-keys"),
         ("marty-issuance-service", "marty-credential-template"),
         ("marty-presentation-policy", "marty-flow"),
+        ("marty-flow", "marty-presentation-policy"),
     }, (
         "Only registered DIDComm, explicit-profile and managed-evidence fixtures may add service test edges: "
         f"{sorted(edges)}"
+    )
+    _assert_service_fixture_dependency(
+        documents[rust / "services/flow/Cargo.toml"], workspace_dependencies,
+        "marty-presentation-policy", "../presentation-policy",
     )
     issuance = documents[rust / "services/issuance/Cargo.toml"]
     _assert_signing_keys_fixture_dependency(

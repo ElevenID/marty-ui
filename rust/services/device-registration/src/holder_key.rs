@@ -13,7 +13,7 @@ pub use marty_holder_key_reference::new_reference;
 
 const INVALID: &str = "managed holder key metadata is invalid";
 
-#[derive(Clone)]
+#[derive(Clone, serde::Deserialize)]
 pub struct HolderKeyRecord {
     pub id: String,
     pub registration_id: String,

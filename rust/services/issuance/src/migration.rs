@@ -59,6 +59,14 @@ const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
         "0013_explicit_jwt_vc_profile",
         include_str!("../migrations/0013_explicit_jwt_vc_profile.sql"),
     ),
+    (
+        crate::external_observation_schema::JOURNAL_VERSION,
+        crate::external_observation_schema::MIGRATION_SQL,
+    ),
+    (
+        crate::external_observation_schema::VERSION,
+        crate::external_observation_schema::LOCK_MIGRATION_SQL,
+    ),
 ];
 const BASE_TABLES: &[&str] = &[
     "application_templates",
@@ -208,6 +216,7 @@ pub async fn migrate_owned_schema(pool: &PgPool, organization_id: Uuid) -> Resul
     }
     validate_base_tables(&mut transaction).await?;
     validate_jwt_vc_profile_connection(&mut transaction).await?;
+    crate::external_observation_schema::validate(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
     validate_passport_connection(&mut transaction, PassportValidation::Migration).await?;
     transaction.commit().await
@@ -247,6 +256,7 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     }
     validate_base_tables(&mut transaction).await?;
     validate_jwt_vc_profile_connection(&mut transaction).await?;
+    crate::external_observation_schema::validate(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
     validate_passport_connection(&mut transaction, PassportValidation::Application).await?;
     transaction.commit().await

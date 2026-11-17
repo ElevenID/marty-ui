@@ -114,6 +114,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?);
     let scheduler_repository = Arc::clone(&repository);
     let state = TrustProfileHttpState {
+        flow_owner: config
+            .flow_owner
+            .as_ref()
+            .map(|owner| {
+                marty_trust_profile::managed_flow_verifier::transport::FlowOwnerClient::new(
+                    &owner.producer_id,
+                    &owner.origin,
+                    config.service_token.as_deref().unwrap_or_default(),
+                    owner.ca_bundle.as_deref(),
+                )
+                .map(Arc::new)
+            })
+            .transpose()?,
         application,
         repository,
         service_authenticator,

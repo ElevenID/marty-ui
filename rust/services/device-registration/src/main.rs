@@ -14,6 +14,7 @@ use marty_device_registration::{
     pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
     wallet_issuer_trust::WalletIssuerTrustClient,
+    wallet_verifier_trust::WalletVerifierTrustClient,
     DeviceRepository, DeviceService,
 };
 use marty_service_runtime::shutdown_signal_best_effort as shutdown;
@@ -133,14 +134,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
-    let wallet_issuer_trust = match token.as_ref() {
-        Some(token) => Some(Arc::new(WalletIssuerTrustClient::new(
-            &env_value("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004"),
-            token.clone(),
-        )?)),
+    let wallet_issuer_trust = match env::var("WALLET_ISSUER_TRUST_OWNER_URL").ok() {
+        Some(origin) => {
+            let ca = env::var("WALLET_ISSUER_TRUST_OWNER_CA")
+                .ok()
+                .map(fs::read)
+                .transpose()?;
+            Some(Arc::new(WalletIssuerTrustClient::new(
+                &origin,
+                token
+                    .as_deref()
+                    .ok_or("issuer owner workload token is required")?,
+                ca.as_deref(),
+            )?))
+        }
         None => None,
     };
     let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
+    let wallet_verifier_trust = match env::var("WALLET_VERIFIER_TRUST_OWNER_URL").ok() {
+        Some(origin) => {
+            let ca = env::var("WALLET_VERIFIER_TRUST_OWNER_CA")
+                .ok()
+                .map(fs::read)
+                .transpose()?;
+            Some(Arc::new(WalletVerifierTrustClient::new(
+                &origin,
+                token
+                    .as_deref()
+                    .ok_or("verifier owner workload token is required")?,
+                ca.as_deref(),
+            )?))
+        }
+        None => None,
+    };
     let holder_credential_rotator = Arc::new(HolderCredentialRotator::new(
         pool.clone(),
         memberships.clone(),
@@ -189,6 +215,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             memberships,
             pairing_tickets,
             wallet_issuer_trust,
+            wallet_verifier_trust,
             pairing_confirmations: Some(pairing_confirmations),
             pairing_enrollment,
             holder_signer,

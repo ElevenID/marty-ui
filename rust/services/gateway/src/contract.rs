@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 466;
+pub const EXPECTED_ROUTE_COUNT: usize = 467;
 const MDOC_CERTIFICATE_PATHS: [&str; 2] = [
     "/v1/signing-keys/issuer-identities/mdoc-iaca-self-signed-certificate",
     "/v1/signing-keys/issuer-identities/mdoc-dsc-certificate",
@@ -186,6 +186,58 @@ impl GatewayContract {
                 }]),
             })?;
         }
+        table.add(RouteConfig {
+            name: "external-observation:submit".into(),
+            pattern: crate::external_observation::PATH.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "issuance".into(),
+            methods: BTreeSet::from([HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 30_000,
+            retries: 0,
+            auth_required: true,
+            authentication_type: AuthenticationType::Jwt,
+            priority: route_priority(crate::external_observation::PATH),
+            tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+        })?;
+        for path in [
+            crate::external_observation::ADMIN_PATH,
+            crate::external_observation::APPROVE_PATH,
+            crate::external_observation::ROTATE_PATH,
+            crate::external_observation::CREATE_PATH,
+            crate::external_observation::EXPIRY_PATH,
+            crate::external_observation::BINDINGS_PATH,
+            crate::external_observation::BINDING_CREATE_PATH,
+            crate::external_observation::BINDING_ACTIVATE_PATH,
+            crate::external_observation::BINDING_DEACTIVATE_PATH,
+            crate::external_observation::BINDING_REPLACE_PATH,
+            crate::external_observation::GRANT_READ_PATH,
+            crate::external_observation::GRANT_AUDIT_PATH,
+            crate::external_observation::BINDING_READ_PATH,
+            crate::external_observation::BINDING_AUDIT_PATH,
+            crate::external_observation::RECEIPT_READ_PATH,
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            table.add(RouteConfig {
+                name: format!("external-observation:manage:{path}"),
+                pattern: path.into(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
         for path in MDOC_CERTIFICATE_PATHS {
             table.add(RouteConfig {
@@ -244,6 +296,28 @@ impl GatewayContract {
             priority: route_priority("/v1/flows/physical-start-intents"),
             tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
         })?;
+        for &(method, path) in crate::public_verification::ROUTES {
+            table.add(RouteConfig {
+                name: format!("flow-public:{}:{path}", method_name(method)),
+                pattern: path.into(),
+                match_type: if path.contains('{') {
+                    RouteMatchType::Template
+                } else {
+                    RouteMatchType::Exact
+                },
+                upstream_service: "flows".into(),
+                methods: BTreeSet::from([method]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 10_000,
+                retries: 0,
+                auth_required: false,
+                authentication_type: AuthenticationType::None,
+                priority: route_priority(path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         Ok(table)
     }
 
@@ -488,6 +562,100 @@ impl GatewayContract {
             );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
+        paths.insert(
+            crate::external_observation::PATH.into(),
+            json!({
+                "post": crate::external_observation::openapi_operation()
+            }),
+        );
+        for (path,operation_id,summary) in [
+            (crate::external_observation::ADMIN_PATH,"revoke_external_observation_producer","Revoke a canonical external observation producer grant"),
+            (crate::external_observation::APPROVE_PATH,"approve_external_observation_producer","Approve the current canonical external observation producer grant revision"),
+            (crate::external_observation::ROTATE_PATH,"rotate_external_observation_producer_key","Replace the canonical producer key and deactivate its grant pending fresh approval"),
+            (crate::external_observation::CREATE_PATH,"create_external_observation_producer","Create an inactive external observation producer grant"),
+            (crate::external_observation::EXPIRY_PATH,"change_external_observation_producer_expiry","Change producer grant expiry and require fresh approval"),
+            (crate::external_observation::BINDINGS_PATH,"replace_external_observation_producer_bindings","Replace canonical producer binding membership and require fresh approval"),
+        ] {
+            let mut properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
+            let mut required=vec!["expected_revision"];
+            if path==crate::external_observation::ROTATE_PATH {
+                properties.as_object_mut().expect("static schema object").insert("new_api_key_id".into(),json!({"type":"string","format":"uuid"}));
+                required.push("new_api_key_id");
+            }
+            if path==crate::external_observation::CREATE_PATH {
+                properties=json!({"api_key_id":{"type":"string","format":"uuid"},
+                  "source_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},
+                  "expires_at_ms":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}});
+                required=vec!["api_key_id","source_id","expires_at_ms"];
+            } else if path==crate::external_observation::EXPIRY_PATH {
+                properties.as_object_mut().expect("static schema object").insert("expires_at_ms".into(),json!({"type":"integer","minimum":1,"maximum":9007199254740991_u64}));
+                required.push("expires_at_ms");
+            }
+            if path==crate::external_observation::BINDINGS_PATH {
+                properties=json!({"expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64},
+                  "bindings":{"type":"array","maxItems":32,"items":{"type":"object","additionalProperties":false,
+                    "required":["binding_id","expected_revision"],"properties":{
+                      "binding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-]+$"},
+                      "expected_revision":{"type":"integer","minimum":1,"maximum":9007199254740991_u64}}}}});
+                required=vec!["expected_revision","bindings"];
+            }
+            paths.insert(path.into(),json!({"post":{
+                "operationId":operation_id,"tags":["evidence"],"summary":summary,
+                "description":"Authenticated session and explicit allowed Origin required. Tenant must match active session. Core locks current membership and exact external-observation:manage permission. Mutation and audit commit together with expected_revision fencing. API keys cannot administer grants. Creation is inactive with no approval or binding membership; the path grant UUID is caller-selected for reconciliation and reuse conflicts. Expiry changes require expected_revision and clear approval, leaving the grant inactive. Membership replacement accepts only current same-tenant/source binding IDs at exact revisions, including an empty set, and clears grant approval. It never changes binding definitions or applications. Expiry must be future at commit. Rotation deactivates the grant; only a fresh approval for the replacement canonical key can reactivate it. No secret is accepted or returned. These actions never verify evidence or authorize issuance. A 503 uncertain outcome requires reconciliation; writes are never automatically retried.",
+                "security":[{"sessionCookie":[]}],
+                "parameters":[
+                    {"name":"organization_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"grant_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},
+                    {"name":"Origin","in":"header","required":true,"schema":{"type":"string"}}],
+                "requestBody":{"required":true,"content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"required":required,"properties":properties}}}},
+                "responses":{"200":{"description":"Committed revision and audit_id; no-store"},
+                    "400":{"description":"Invalid or ambiguous request"},"401":{"description":"Session required"},
+                    "403":{"description":"Tenant, Origin, canonical permission or replacement key denied"},"409":{"description":"Revision, state or transaction conflict"},
+                    "413":{"description":"Request exceeds 4096 bytes"},"503":{"description":"Unavailable or uncertain commit; reconcile"}}
+            }}));
+        }
+        for (path, action) in [
+            (crate::external_observation::BINDING_CREATE_PATH, "create"),
+            (
+                crate::external_observation::BINDING_ACTIVATE_PATH,
+                "activate",
+            ),
+            (
+                crate::external_observation::BINDING_DEACTIVATE_PATH,
+                "deactivate",
+            ),
+            (
+                crate::external_observation::BINDING_REPLACE_PATH,
+                "replace-definition",
+            ),
+        ] {
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::binding_admin_operation(action)}),
+            );
+        }
+        for path in [
+            crate::external_observation::MATERIALIZE_PATH,
+            crate::external_observation::MATERIALIZATION_READ_PATH,
+        ] {
+            paths.insert(path.into(),json!({"post":crate::external_observation::materialization_operation(path==crate::external_observation::MATERIALIZATION_READ_PATH)}));
+        }
+        for (path, kind) in [
+            (crate::external_observation::GRANT_READ_PATH, "grant"),
+            (crate::external_observation::GRANT_AUDIT_PATH, "grant_audit"),
+            (crate::external_observation::BINDING_READ_PATH, "binding"),
+            (
+                crate::external_observation::BINDING_AUDIT_PATH,
+                "binding_audit",
+            ),
+            (crate::external_observation::RECEIPT_READ_PATH, "receipt"),
+        ] {
+            paths.insert(
+                path.into(),
+                json!({"post":crate::external_observation::admin_read_operation(kind)}),
+            );
+        }
         json!({
             "openapi": "3.1.0",
             "info": {
@@ -611,6 +779,11 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 }
 
 fn special_service(path: &str) -> Option<&'static str> {
+    if path == crate::external_observation::PATH
+        || crate::external_observation::is_admin_namespace(path)
+    {
+        return Some("issuance");
+    }
     if STATUS_PUBLIC.is_match(path) {
         return Some("revocation-profiles");
     }
@@ -812,7 +985,8 @@ pub(crate) fn mdoc_crl_operator_path(path: &str) -> bool {
 }
 
 fn public_route(path: &str) -> bool {
-    public_mdoc_crl_path(path)
+    crate::public_verification::is_public_path(path)
+        || public_mdoc_crl_path(path)
         || path == "/openapi.json"
         || path == "/v1/protocol-support"
         || path == "/docs"
@@ -830,6 +1004,7 @@ fn public_route(path: &str) -> bool {
         || path == "/v1/devices/holder-signatures"
         || path == "/v1/devices/holder-credential-rotations"
         || path == "/v1/devices/wallet-issuer-keys"
+        || path == "/v1/devices/wallet-verifier-authority"
         || path == "/v1/organizations/invitations/validate"
         || path == "/v1/organizations/join/code/validate"
         || path == "/v1/passport/webhooks/personalization"
@@ -973,7 +1148,7 @@ mod tests {
             &["trust:write".into()]
         )
         .is_ok());
-        assert!(route_for(&table, HttpMethod::Get, path).is_err());
+        assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
     }
 
     #[test]
@@ -1140,8 +1315,10 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 18
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1161,6 +1338,39 @@ mod tests {
             .upstream_service,
             "organizations"
         );
+    }
+
+    #[test]
+    fn public_verification_routes_are_narrow_and_do_not_open_flow_management() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let id = "54cfd66e-b7ed-8926-9f8b-18e63fa83797";
+        for &(method, template) in crate::public_verification::ROUTES {
+            let path = template.replace("{session_id}", id);
+            let selected = route_for(&table, method, &path).unwrap();
+            assert_eq!(selected.route.upstream_service, "flows");
+            assert!(!selected.route.auth_required);
+            assert_eq!(selected.route.retries, 0);
+            assert!(!route_ownership(&path).requires_authentication);
+            assert!(crate::authorization::skips_tenant_authorization(&path));
+        }
+        for path in [
+            "/v1/flows/definitions",
+            "/v1/flows/instances",
+            "/v1/flows/instances/flow-1/result",
+            "/v1/flows/public/verification/sessions/54cfd66e-b7ed-8926-9f8b-18e63fa83797/result",
+        ] {
+            assert!(route_ownership(path).requires_authentication, "{path}");
+            assert!(
+                !crate::authorization::skips_tenant_authorization(path),
+                "{path}"
+            );
+        }
+        assert!(route_for(
+            &table,
+            HttpMethod::Delete,
+            "/v1/flows/public/verification/catalog"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1221,7 +1431,33 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
+                + 18
         );
+        for operation in [
+            "submit_external_observation",
+            "revoke_external_observation_producer",
+            "approve_external_observation_producer",
+            "rotate_external_observation_producer_key",
+            "create_external_observation_producer",
+            "change_external_observation_producer_expiry",
+            "replace_external_observation_producer_bindings",
+            "create_external_observation_binding",
+            "activate_external_observation_binding",
+            "deactivate_external_observation_binding",
+            "replace_external_observation_binding_definition",
+            "inspect_external_observation_producer",
+            "read_external_observation_producer_audit",
+            "inspect_external_observation_binding",
+            "read_external_observation_binding_audit",
+            "inspect_external_observation_receipt",
+            "materialize_external_observation_receipt",
+            "inspect_external_observation_materialization",
+        ] {
+            assert!(
+                identifiers.contains(operation),
+                "missing operation: {operation}"
+            );
+        }
         assert_eq!(
             document["paths"]["/v1/notifications/unread/count"]["get"]["operationId"],
             "get_v1_notifications_unread_count"
@@ -1418,8 +1654,10 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 18
         );
         assert_eq!(
             contract
@@ -1430,8 +1668,10 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 18
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1440,8 +1680,10 @@ mod tests {
             EXPECTED_ROUTE_COUNT
                 + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
                 + PHYSICAL_START_EXTENSION_ROUTE_COUNT
+                + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
+                + 18
                 + 16
         );
         assert_eq!(
@@ -1713,7 +1955,7 @@ mod tests {
                 assert!(matched.route.auth_required);
                 assert_eq!(matched.route.authentication_type, AuthenticationType::Jwt);
                 assert!(matched.route.rewrite_path.is_none());
-                assert!(route_for(&table, HttpMethod::Get, path).is_err());
+                assert_eq!(matched.route.methods, BTreeSet::from([HttpMethod::Post]));
                 assert!(route_for(&table, HttpMethod::Post, &format!("{path}/other")).is_err());
             }
         }
@@ -1819,5 +2061,102 @@ mod tests {
             route_ownership("/v1/devices/challenge").service,
             "device-registration"
         );
+    }
+}
+
+#[cfg(test)]
+mod observation_admin_contract_tests {
+    use super::*;
+    #[test]
+    fn administrator_revocation_is_public_gateway_to_issuance_with_no_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        let path="/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-producers/30000000-0000-4000-8000-000000000001/revoke";
+        for action in [
+            "revoke",
+            "approve",
+            "rotate-api-key",
+            "create",
+            "change-expiry",
+            "replace-bindings",
+        ] {
+            let path = path.replace("/revoke", &format!("/{action}"));
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod binding_admin_route_contract_tests {
+    use super::*;
+    #[test]
+    fn binding_administration_uses_issuance_service_auth_without_retries() {
+        let contract = GatewayContract::load().unwrap();
+        let table = contract.route_table().unwrap();
+        for action in ["create", "activate", "deactivate", "replace-definition"] {
+            let path=format!("/v1/organizations/20000000-0000-4000-8000-000000000001/external-observation-bindings/binding-one/{action}");
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod admin_read_route_tests {
+    use super::*;
+    #[test]
+    fn snapshots_are_authenticated_post_queries_to_issuance_with_no_retry() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        for tail in [
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/inspect",
+            "external-observation-producers/30000000-0000-4000-8000-000000000001/audit",
+            "external-observation-bindings/binding-one/inspect",
+            "external-observation-bindings/binding-one/audit",
+            "external-observation-receipts/observation-one/inspect",
+            "external-observation-receipts/observation-one/materialize",
+            "external-observation-receipts/observation-one/materialization",
+        ] {
+            let path = format!("/v1/organizations/20000000-0000-4000-8000-000000000001/{tail}");
+            let route = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route.route.upstream_service, "issuance");
+            assert_eq!(route.route.retries, 0);
+            assert!(route.route.auth_required);
+            assert!(requires_issuance_service_auth(&path));
+            assert_eq!(route.route.methods, BTreeSet::from([HttpMethod::Post]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod observation_administrator_openapi_security_tests {
+    use super::*;
+    #[test]
+    fn every_observation_administrator_operation_uses_defined_session_only_security() {
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        let mut count = 0;
+        for (path, item) in document["paths"].as_object().unwrap() {
+            if !crate::external_observation::is_admin_namespace(path) {
+                continue;
+            }
+            count += 1;
+            let operation = &item["post"];
+            assert_eq!(operation["security"], json!([{"sessionCookie":[]}]));
+            assert!(document["components"]["securitySchemes"]["sessionCookie"].is_object());
+            assert!(operation["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|p| p["name"] == "Origin" && p["in"] == "header" && p["required"] == true));
+        }
+        assert_eq!(count, 17);
     }
 }

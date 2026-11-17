@@ -2,6 +2,11 @@
   "schema_version": 1,
   "permissions": [
     {
+      "resource": "external-observation",
+      "action": "manage",
+      "description": "Manage canonical external observation producer grants and bindings"
+    },
+    {
       "resource": "trust-profile",
       "action": "view",
       "description": "View trust profiles"

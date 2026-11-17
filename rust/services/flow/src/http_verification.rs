@@ -1,6 +1,6 @@
 use crate::http_read::FlowRequestState;
 use axum::{
-    extract::{Form, Path, Query},
+    extract::{Form, Path, Query, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -30,8 +30,22 @@ const DC_API_PROTOCOL: &str = "openid4vp-v1-signed";
 const DC_API_RESPONSE_MODE: &str = "dc_api.jwt";
 const NONCE_TTL_SECONDS: u64 = 900;
 
+/// Only the workload request owner is exposed on the optional managed HTTPS
+/// listener. It does not expose public Flow administration or callback routes.
+pub fn flow_wallet_authority_router(state: FlowHttpState) -> Router {
+    wallet_verifier_owner_routes().with_state(state)
+}
+
+fn wallet_verifier_owner_routes() -> Router<FlowHttpState> {
+    Router::new().route(
+        "/internal/v1/wallet-verifier-requests/{instance_id}",
+        post(wallet_verifier_request_owner),
+    )
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FlowHttpVerificationOptions {
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub callback_destinations: WebhookDestinationRegistry,
     pub callback_secret: Option<String>,
     pub request_object: RequestObjectOptions,
@@ -47,6 +61,7 @@ pub struct FlowHttpVerificationOptions {
 impl Default for FlowHttpVerificationOptions {
     fn default() -> Self {
         Self {
+            public_verification: None,
             callback_destinations: WebhookDestinationRegistry::default(),
             callback_secret: None,
             request_object: RequestObjectOptions::default(),
@@ -65,6 +80,7 @@ impl FlowHttpVerificationOptions {
     #[must_use]
     pub fn from_config(config: &crate::FlowServiceConfig) -> Self {
         Self {
+            public_verification: config.public_verification.clone(),
             callback_destinations: config.callback_destinations.clone(),
             callback_secret: config.webhook_secret.clone(),
             request_object: config.request_object_options(),
@@ -85,6 +101,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
         .route("/v1/flows/siop", post(start_siop))
         .route("/v1/flows/siop/submit", post(submit_siop))
         .route("/oid4vp/did.json", get(oid4vp_did_document))
+        .merge(wallet_verifier_owner_routes())
         .route(
             "/v1/flows/instances/{instance_id}/request",
             get(get_request_object).post(post_request_object),
@@ -120,17 +137,34 @@ async fn oid4vp_did_document(
             Some("ES256"),
         )
         .await?;
+    identity.validate_binding(
+        &options.default_organization_id,
+        &options.default_issuer_did,
+        "oid4vp_request_signing",
+        "oauth-authz-req+jwt",
+        Some("ES256"),
+    )?;
+    let public_jwk = json!(identity.public_jwk);
+    if marty_key_material_policy::contains_private_key(&public_jwk)
+        || marty_oid4vp_contract::trust_authority::issuer_public_key_algorithm(&public_jwk).ok()
+            != Some("ES256")
+    {
+        return Err(crate::FlowProviderError::InvalidResponse {
+            provider: "signing_identity",
+            message: "DID publication requires a valid public ES256 key".into(),
+        }
+        .into());
+    }
+    // Publish the DID JSON representation advertised below. JSON-LD contexts
+    // require a different representation and must not be silently ignored by
+    // wallets resolving this authentication method.
     let document = json!({
-        "@context": [
-            "https://www.w3.org/ns/did/v1",
-            "https://w3id.org/security/suites/jws-2020/v1"
-        ],
         "id": identity.issuer_did,
         "verificationMethod": [{
             "id": identity.verification_method_id,
             "type": "JsonWebKey2020",
             "controller": identity.issuer_did,
-            "publicKeyJwk": identity.public_jwk
+            "publicKeyJwk": public_jwk
         }],
         "authentication": [identity.verification_method_id],
         "assertionMethod": [identity.verification_method_id]
@@ -291,6 +325,7 @@ async fn retrieve_request_object(
     wallet_nonce: Option<String>,
 ) -> Result<Response, FlowHttpError> {
     let current = required_instance(state, instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&current)?;
     let expected_status = current.status;
     let expected_updated_at = current.updated_at;
     let now = Utc::now().max(expected_updated_at + Duration::microseconds(1));
@@ -301,6 +336,11 @@ async fn retrieve_request_object(
         compatibility: parse_compatibility(query.compat.as_deref())?,
         wallet_nonce,
     };
+    if crate::has_wallet_verifier_request(&current) {
+        require_canonical_wallet_retrieval(&options)?;
+        let projection = commit_wallet_verifier_request(state, current).await?;
+        return request_object_response(projection.compact_request_jws().to_owned());
+    }
     match prepare_verification_request(
         &state.providers,
         current,
@@ -324,6 +364,81 @@ async fn retrieve_request_object(
             ))
         }
     }
+}
+
+fn wallet_request_unavailable() -> FlowHttpError {
+    FlowHttpError::new(
+        StatusCode::CONFLICT,
+        "wallet_verifier_request_unavailable",
+        "Canonical wallet verification request is unavailable",
+    )
+}
+
+fn require_canonical_wallet_retrieval(
+    options: &VerificationRequestRetrievalOptions,
+) -> Result<(), FlowHttpError> {
+    if options.method != VerificationRequestMethod::Get
+        || options.transport != VerificationRequestTransport::RequestUri
+        || options.compatibility != RequestObjectCompatibility::Standard
+        || options.wallet_nonce.is_some()
+    {
+        return Err(wallet_request_unavailable());
+    }
+    Ok(())
+}
+
+async fn wallet_verifier_request_owner(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(instance_id): Path<String>,
+) -> Result<Response, FlowHttpError> {
+    // Unlike the optional API-key extractor, this boundary always requires an
+    // authenticated workload, even when no gateway principal headers exist.
+    crate::http_read::authenticate_gateway_service(&state, &headers)?;
+    let current = required_instance(&state, &instance_id).await?;
+    let projection = commit_wallet_verifier_request(&state, current).await?;
+    let mut response = Json(projection).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+        .headers_mut()
+        .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+async fn commit_wallet_verifier_request(
+    state: &FlowHttpState,
+    current: crate::FlowInstanceRecord,
+) -> Result<crate::WalletVerifierRequestProjection, FlowHttpError> {
+    let expected_status = current.status;
+    let expected_updated_at = current.updated_at;
+    let organization_id = current.organization_id.clone();
+    let mut prepared = crate::prepare_wallet_verifier_request(
+        &state.providers,
+        current,
+        &organization_id,
+        &state.public_base_url,
+        &state.verification.request_object,
+        Utc::now(),
+    )
+    .await
+    .map_err(|_| wallet_request_unavailable())?;
+    // Perform CAS on cached reads too. A cancellation, tenant/policy change or
+    // competing request writer during signing/key resolution must win over this
+    // stale snapshot. Never expose a newly signed but uncommitted request.
+    prepared.instance.updated_at = Utc::now().max(expected_updated_at + Duration::microseconds(1));
+    commit_request_snapshot(
+        state,
+        &prepared.instance,
+        expected_status,
+        expected_updated_at,
+    )
+    .await?;
+    if !prepared.projection.is_current(Utc::now()) {
+        return Err(wallet_request_unavailable());
+    }
+    Ok(prepared.projection)
 }
 
 async fn commit_request_snapshot(
@@ -394,6 +509,7 @@ async fn submit_direct_post(
     Form(form): Form<DirectPostForm>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     let expected_instance = instance.clone();
     let (input, instance) = direct_post_input(&state, instance, form).await?;
     let input = match input {
@@ -602,6 +718,7 @@ async fn submit_dc_api(
         ));
     }
     let mut instance = required_instance(&state, &instance_id).await?;
+    crate::public_verification_session::require_wallet_session(&instance)?;
     // Origin observations below belong to the replacement record, not to the
     // persisted preimage used by finalization's compare-and-swap.
     let expected_instance = instance.clone();
@@ -681,7 +798,7 @@ async fn submit_dc_api(
     )))
 }
 
-async fn evaluate_submission(
+pub(crate) async fn evaluate_submission(
     state: &FlowHttpState,
     instance: crate::FlowInstanceRecord,
     input: VerificationSubmissionInput,
@@ -1032,10 +1149,34 @@ impl From<FlowVerificationStartError> for FlowHttpError {
     }
 }
 
+impl From<crate::DefinedVerificationError> for FlowHttpError {
+    fn from(error: crate::DefinedVerificationError) -> Self {
+        match error {
+            crate::DefinedVerificationError::Start(error) => error.into(),
+            crate::DefinedVerificationError::ConfigurationChanged => Self::new(
+                StatusCode::CONFLICT,
+                "verification_configuration_changed",
+                "Verification requirements changed; start a new session",
+            ),
+            crate::DefinedVerificationError::InvalidSnapshot => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Stored verification configuration is invalid",
+            ),
+            _ => Self::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "verification_definition_unavailable",
+                "The configured verification flow is unavailable",
+            ),
+        }
+    }
+}
+
 impl From<FlowVerificationRequestError> for FlowHttpError {
     fn from(error: FlowVerificationRequestError) -> Self {
         match error {
             FlowVerificationRequestError::Provider(error) => error.into(),
+            FlowVerificationRequestError::Definition(error) => error.into(),
             FlowVerificationRequestError::RestartRequired => Self::new(
                 StatusCode::CONFLICT,
                 "verification_restart_required",
@@ -1065,6 +1206,7 @@ impl From<FlowVerificationSubmissionError> for FlowHttpError {
     fn from(error: FlowVerificationSubmissionError) -> Self {
         match error {
             FlowVerificationSubmissionError::Provider(error) => error.into(),
+            FlowVerificationSubmissionError::Definition(error) => error.into(),
             FlowVerificationSubmissionError::RestartRequired
             | FlowVerificationSubmissionError::PolicyRevisionMismatch => Self::new(
                 StatusCode::CONFLICT,
@@ -1120,6 +1262,32 @@ impl From<FlowSiopSubmissionError> for FlowHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_wallet_request_cannot_switch_transport_or_accept_wallet_nonce() {
+        let standard = VerificationRequestRetrievalOptions::default();
+        assert!(require_canonical_wallet_retrieval(&standard).is_ok());
+        for changed in [
+            VerificationRequestRetrievalOptions {
+                method: VerificationRequestMethod::Post,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                transport: VerificationRequestTransport::DigitalCredentialsApi,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                compatibility: RequestObjectCompatibility::Lissi,
+                ..standard.clone()
+            },
+            VerificationRequestRetrievalOptions {
+                wallet_nonce: Some(String::new()),
+                ..standard.clone()
+            },
+        ] {
+            assert!(require_canonical_wallet_retrieval(&changed).is_err());
+        }
+    }
 
     #[test]
     fn wallet_decline_shape_rejects_mixed_success_and_unknown_errors() {
@@ -1235,5 +1403,43 @@ mod tests {
         assert_eq!(response["request_uri"], response["siop_uri"]);
         assert!(response.get("flow_definition_id").is_none());
         assert!(response.get("status").is_none());
+    }
+}
+
+#[cfg(test)]
+mod definition_admission_error_tests {
+    use super::*;
+    #[tokio::test]
+    async fn definition_admission_failures_preserve_restart_and_dependency_semantics() {
+        let changed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::ConfigurationChanged,
+        )
+        .into();
+        let response = changed.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"], "verification_configuration_changed");
+        let unavailable: FlowHttpError =
+            FlowVerificationSubmissionError::Definition(crate::DefinedVerificationError::Start(
+                FlowVerificationStartError::Provider(crate::FlowProviderError::Unavailable {
+                    provider: "presentation_policy_admission",
+                }),
+            ))
+            .into();
+        assert_eq!(
+            unavailable.into_response().status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let malformed: FlowHttpError = FlowVerificationRequestError::Definition(
+            crate::DefinedVerificationError::InvalidSnapshot,
+        )
+        .into();
+        assert_eq!(
+            malformed.into_response().status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }

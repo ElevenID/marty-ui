@@ -77,6 +77,7 @@ impl Fixture {
                 organization_id: "org-one".into(),
                 subject_id: "urn:synthetic:learner-one".into(),
                 revision: 9,
+                expires_at_ms: NOW + 60_000,
                 accepts_observations: true,
             },
             input: Observation {
@@ -489,4 +490,11 @@ fn snapshots_are_not_mutated_and_claim_maps_are_detached() {
     plan.resource_scope.clear();
     assert_eq!(f.input.claims.len(), 2);
     assert_eq!(f.binding.resource_scope.len(), 1);
+}
+
+#[test]
+fn application_expiry_is_checked_against_the_final_decision_clock() {
+    let mut f = Fixture::new();
+    f.application.expires_at_ms = NOW - 1;
+    assert_eq!(f.fresh().err(), Some(Denial::ApplicationClosed));
 }

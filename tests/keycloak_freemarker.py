@@ -1,6 +1,7 @@
 """Acquire the immutable FreeMarker dependency for real Keycloak theme tests."""
 from __future__ import annotations
 
+from functools import lru_cache
 import hashlib
 import os
 from pathlib import Path
@@ -8,11 +9,13 @@ import time
 import urllib.error
 import urllib.request
 
-# Same FreeMarker artifact used by Keycloak 26.8.0. Both hosts are official
-# Maven Central TLS endpoints; an alternate host does not change the artifact.
+# Same FreeMarker artifact used by Keycloak 26.8.0. Use the two Maven Central
+# endpoints, then its public GCS mirror, without changing the artifact identity.
+# Mirror endpoint: https://storage-download.googleapis.com/maven-central/index.html
 JAR_URL = "https://repo.maven.apache.org/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
 JAR_FALLBACK_URL = "https://repo1.maven.org/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
-JAR_ATTEMPTS = (JAR_URL, JAR_FALLBACK_URL, JAR_URL)
+JAR_MIRROR_URL = "https://maven-central.storage-download.googleapis.com/maven2/org/freemarker/freemarker/2.3.35/freemarker-2.3.35.jar"
+JAR_ATTEMPTS = (JAR_URL, JAR_FALLBACK_URL, JAR_MIRROR_URL)
 JAR_SHA256 = "0fac87dddd78f1223139e8ef88e819c7f483c0a3835cdf5982ad5e4576d1d896"
 MAX_JAR_BYTES = 4 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 30
@@ -46,6 +49,12 @@ def load_freemarker_jar(*override_names: str) -> bytes:
         with Path(supplied).open("rb") as source:
             return _verify(source.read(MAX_JAR_BYTES + 1))
 
+    return _download_freemarker_jar()
+
+
+@lru_cache(maxsize=1)
+def _download_freemarker_jar() -> bytes:
+    """Share only successfully verified immutable bytes within this worker."""
     opener = urllib.request.build_opener(NoRedirect())
     for attempt, url in enumerate(JAR_ATTEMPTS):
         try:

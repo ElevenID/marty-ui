@@ -137,6 +137,11 @@ const API_KEY_SCOPES = [
     label: 'Manage integrations',
     description: 'Configure, authorize, activate, retry, and archive Canvas integrations.',
   },
+  {
+    id: 'evidence:submit',
+    label: 'Submit external evidence',
+    description: 'Submit unsigned, source-bound observations for core validation. Does not approve applications or issue credentials.',
+  },
 ];
 
 const CALLBACK_TAG_PATTERN = /\[api-key:([^\]]+)\]/i;

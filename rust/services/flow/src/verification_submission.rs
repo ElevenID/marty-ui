@@ -74,6 +74,8 @@ pub enum FlowVerificationSubmissionError {
     Record(#[from] FlowRecordError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_STATE")]
     InvalidState,
+    #[error(transparent)]
+    Definition(#[from] crate::DefinedVerificationError),
     #[error("FLOW.VERIFICATION_SUBMISSION_INVALID_CONTEXT: {0}")]
     InvalidContext(&'static str),
     #[error("FLOW.VERIFICATION_RESTART_REQUIRED: start a new verification request")]
@@ -281,6 +283,8 @@ pub async fn prepare_verification_submission(
         return Err(FlowVerificationSubmissionError::InvalidState);
     }
     let expected_instance = instance.clone();
+    let expected_policy_digest =
+        crate::defined_verification::validate_defined_submission(providers, &instance).await?;
     let context = instance
         .context
         .as_object()
@@ -318,6 +322,13 @@ pub async fn prepare_verification_submission(
         presentation_submission.as_ref(),
         &raw_vp_token,
     )?;
+    if context.contains_key(crate::public_verification_session::PUBLIC_SESSION)
+        && oid4vp_transport.query_kind != QueryKind::Dcql
+    {
+        return Err(FlowVerificationSubmissionError::InvalidContext(
+            "public_presentation_request",
+        ));
+    }
     let associated = oid4vp_transport
         .associate_response()
         .map_err(|_| FlowVerificationSubmissionError::InvalidPresentationSubmission)?;
@@ -329,6 +340,12 @@ pub async fn prepare_verification_submission(
         raw_vp_token.clone()
     };
     let mut evaluation_context = BTreeMap::new();
+    if expected_policy_digest
+        .as_deref()
+        .is_some_and(|digest| digest != frozen.policy_revision.content_digest)
+    {
+        return Err(crate::DefinedVerificationError::ConfigurationChanged.into());
+    }
     if context
         .get("oid4vp_verifier_context")
         .and_then(Value::as_bool)
@@ -574,6 +591,7 @@ pub async fn prepare_verification_submission(
         "warnings": warnings,
         "submission_digest": submission_digest
     }));
+    crate::record_defined_verification_progress(&mut instance, true, now)?;
     if let Some(timestamp) = evaluation.evaluation_timestamp.as_deref() {
         let timestamp = crate::verification_receipt::canonical_policy_timestamp(timestamp)
             .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;

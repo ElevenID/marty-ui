@@ -7,12 +7,22 @@ import {
 
 const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
-export async function issueRemotePairingTicket({ organizationId, trustProfileId }) {
+export async function issueRemotePairingTicket({ organizationId, trustProfileId, verifierTrustProfileId }) {
   if (!organizationId) throw new Error('Select an organization before pairing');
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trustProfileId || '')) {
     throw new Error('Select a Trust Profile before pairing');
   }
-  return post('/v1/devices/pairing-tickets', { organization_id: organizationId, trust_profile_id: trustProfileId });
+  if (verifierTrustProfileId !== undefined && (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(verifierTrustProfileId)
+    || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(verifierTrustProfileId)
+    || verifierTrustProfileId.toLowerCase() === trustProfileId.toLowerCase()
+  )) {
+    throw new Error('Select a distinct verifier Trust Profile before pairing');
+  }
+  return post('/v1/devices/pairing-tickets', {
+    organization_id: organizationId, trust_profile_id: trustProfileId,
+    ...(verifierTrustProfileId ? { verifier_trust_profile_id: verifierTrustProfileId.toLowerCase() } : {}),
+  });
 }
 
 export async function loadRemotePairingStatus({ pairingId }) {

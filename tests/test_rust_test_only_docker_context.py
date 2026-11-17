@@ -120,7 +120,7 @@ CANVAS_COMPOSITION_TEST_FILES = (
     "support/runtime_failure_diagnostics.rs",
 )
 FLOW_TEST_ROOT = "rust/crates/flow-acceptance/tests/"
-FLOW_TEST_FILES = (
+FLOW_PUBLISHED_TEST_FILES = (
     "flow_published_schema_contract.rs",
     "support/didcomm_flow_grpc_admission.rs",
     "support/flow_admission.rs",
@@ -130,6 +130,13 @@ FLOW_TEST_FILES = (
     "support/flow_public_startup_peers.rs",
     "support/flow_rendered_selection.rs",
 )
+FLOW_DEMO_TEST_FILES = (
+    "public_demo_signing_live_kms.rs",
+    "support/public_demo_browser.rs",
+    "support/public_demo_canonical.rs",
+    "support/public_demo_gateway.rs",
+)
+FLOW_TEST_FILES = tuple(sorted((*FLOW_PUBLISHED_TEST_FILES, *FLOW_DEMO_TEST_FILES)))
 FLOW_SUPPORT_OWNERS = {
     "didcomm_flow_grpc_admission.rs": "support/flow_admission.rs",
     "flow_admission.rs": "flow_published_schema_contract.rs",
@@ -138,6 +145,9 @@ FLOW_SUPPORT_OWNERS = {
     "flow_public_startup.rs": "support/flow_native_consumer.rs",
     "flow_public_startup_peers.rs": "support/flow_public_startup.rs",
     "flow_rendered_selection.rs": "support/flow_native_consumer.rs",
+    "public_demo_browser.rs": "public_demo_signing_live_kms.rs",
+    "public_demo_canonical.rs": "public_demo_signing_live_kms.rs",
+    "public_demo_gateway.rs": "public_demo_signing_live_kms.rs",
 }
 SELFHOST_TEST_ROOT = "rust/crates/selfhost-acceptance/tests/"
 SELFHOST_TEST_FILES = (
@@ -154,6 +164,11 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "passport_managed_kms_chain",
     "tls_openbao_keyless",
 )
+SERVICE_ACCEPTANCE_SUPPORT_OWNERS = {
+    "support/holder_issuer_authority.rs": "holder_remote_live_kms.rs",
+    "support/holder_native_receipt.rs": "holder_remote_live_kms.rs",
+}
+SERVICE_ACCEPTANCE_FILES = tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS) + tuple(SERVICE_ACCEPTANCE_SUPPORT_OWNERS)
 SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"
 SIGNING_CSCA_TEST_FILES = (
     "csca_lifecycle_behavior.rs",
@@ -647,6 +662,10 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
     assert "build" not in manifest["package"]
     assert manifest["test"] == [
         {
+            "name": "public_demo_signing_live_kms",
+            "path": "tests/public_demo_signing_live_kms.rs",
+        },
+        {
             "name": "flow_published_schema_contract",
             "path": "tests/flow_published_schema_contract.rs",
         }
@@ -806,8 +825,8 @@ def test_verified_selfhost_test_paths_require_six_context_proof() -> None:
 
 def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
     paths = [
-        SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs"
-        for name in SERVICE_ACCEPTANCE_TARGETS
+        SERVICE_ACCEPTANCE_TEST_ROOT + name
+        for name in SERVICE_ACCEPTANCE_FILES
     ]
     assert _tracked_paths(ROOT, SERVICE_ACCEPTANCE_TEST_ROOT) == sorted(paths)
     for path in paths:
@@ -823,9 +842,18 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
         {"name": name, "path": f"tests/{name}.rs"}
         for name in SERVICE_ACCEPTANCE_TARGETS
     ]
-    assert not _ownership_sources(
-        ROOT, tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS)
-    ), "Review a Rust source include of a service-acceptance target"
+    roots = tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS)
+    consumers = _ownership_sources(ROOT, roots + tuple(Path(name).name for name in SERVICE_ACCEPTANCE_SUPPORT_OWNERS))
+    assert not {path for path, source in consumers.items() if any(name in source for name in roots)}, (
+        "Review a Rust source include of a service-acceptance target"
+    )
+    for support, owner in SERVICE_ACCEPTANCE_SUPPORT_OWNERS.items():
+        basename = Path(support).name
+        references = {path: source for path, source in consumers.items() if basename in source}
+        expected = SERVICE_ACCEPTANCE_TEST_ROOT + owner
+        assert set(references) == {expected}, "Review a Rust source include of service-acceptance support"
+        declaration = f'#[path = "{support}"]\nmod {Path(support).stem};'
+        assert references[expected].count(declaration) == 1
     assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
     for dockerfile in DOCKER_CONTEXTS:
         recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
@@ -849,6 +877,7 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
             assert not _is_ignored(path, lines)
     root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
+    assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
 def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context() -> (
@@ -928,8 +957,8 @@ def test_signing_csca_target_proof_rejects_production_consumer(monkeypatch) -> N
 
 def _select_contract_test_sources(changed: bytes) -> bool:
     owned = {
-        (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8")
-        for name in SERVICE_ACCEPTANCE_TARGETS
+        (SERVICE_ACCEPTANCE_TEST_ROOT + name).encode("utf-8")
+        for name in SERVICE_ACCEPTANCE_FILES
     } | {
         (SIGNING_CSCA_TEST_ROOT + name).encode("utf-8")
         for name in SIGNING_CSCA_TEST_FILES
@@ -952,6 +981,7 @@ def test_contract_test_selector_accepts_only_proved_sources() -> None:
     storage = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[1]).encode()
     for changed, accepted in (
         (service + b"\0", True),
+        ((SERVICE_ACCEPTANCE_TEST_ROOT + "support/holder_native_receipt.rs").encode() + b"\0", True),
         (signing + b"\0", True),
         (signing + b"\0" + storage + b"\0", True),
         (service + b"\0" + signing + b"\0", True),
@@ -961,6 +991,7 @@ def test_contract_test_selector_accepts_only_proved_sources() -> None:
         (signing + b"\0" + signing + b"\0", False),
         (signing + b"\0docs/other.md\0", False),
         (b"rust/services/signing-keys/tests/unreviewed.rs\0", False),
+        ((SERVICE_ACCEPTANCE_TEST_ROOT + "support/unreviewed.rs").encode() + b"\0", False),
     ):
         result = subprocess.run(
             [sys.executable, __file__, "--select-contract-tests"],
@@ -1004,6 +1035,35 @@ def test_service_acceptance_context_proof_rejects_non_test_consumer(
         lambda *_args: {"rust/services/issuance/src/lib.rs": "include!"},
     )
     with pytest.raises(AssertionError, match="Rust source include"):
+        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+
+
+def test_service_acceptance_support_proof_rejects_runtime_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = _ownership_sources
+
+    def with_runtime_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+        return {**original(root, names), "rust/services/issuance/src/lib.rs":
+                'include!("holder_native_receipt.rs");'}
+
+    monkeypatch.setattr(sys.modules[__name__], "_ownership_sources", with_runtime_consumer)
+    with pytest.raises(AssertionError, match="Rust source include"):
+        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+
+
+def test_service_acceptance_support_proof_rejects_reincluded_helper(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    target = SERVICE_ACCEPTANCE_TEST_ROOT + "support/holder_native_receipt.rs"
+
+    def reinclude(path: Path, *args, **kwargs) -> str:
+        source = original(path, *args, **kwargs)
+        return source + "\n!" + target + "\n" if path == ROOT / ".dockerignore" else source
+
+    monkeypatch.setattr(Path, "read_text", reinclude)
+    with pytest.raises(AssertionError, match="Docker COPY includes"):
         test_service_acceptance_targets_stay_out_of_release_rust_contexts()
 
 
@@ -1348,6 +1408,14 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
     assert "new/Dockerfile" not in DOCKER_CONTEXTS
 
 
+def test_remote_demo_sources_cannot_select_the_published_flow_shortcut() -> None:
+    for name in FLOW_DEMO_TEST_FILES:
+        changed = (FLOW_TEST_ROOT + name).encode("utf-8") + b"\0"
+        assert _select_acceptance_test_lane(changed) is None
+        published = (FLOW_TEST_ROOT + FLOW_PUBLISHED_TEST_FILES[0]).encode("utf-8")
+        assert _select_acceptance_test_lane(published + b"\0" + changed) is None
+
+
 def _select_acceptance_test_lane(changed: bytes) -> str | None:
     """Accept only a nonempty exact-file diff owned by one proven test lane."""
     if not changed.endswith(b"\0") or not changed[:-1]:
@@ -1368,7 +1436,7 @@ def _select_acceptance_test_lane(changed: bytes) -> str | None:
         (
             "flow",
             FLOW_TEST_ROOT,
-            FLOW_TEST_FILES,
+            FLOW_PUBLISHED_TEST_FILES,
             (test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts,),
         ),
         (
@@ -1430,9 +1498,9 @@ if __name__ == "__main__":
     elif sys.argv == [sys.argv[0], "--emit-verified-contract-tests"]:
         test_service_acceptance_targets_stay_out_of_release_rust_contexts()
         test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
-        for name in SERVICE_ACCEPTANCE_TARGETS:
+        for name in SERVICE_ACCEPTANCE_FILES:
             sys.stdout.buffer.write(
-                (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
+                (SERVICE_ACCEPTANCE_TEST_ROOT + name).encode("utf-8") + b"\0"
             )
         for name in SIGNING_CSCA_TEST_FILES:
             sys.stdout.buffer.write(
@@ -1446,7 +1514,7 @@ if __name__ == "__main__":
         # An exact-file PR may omit runtime/image work only after this whole
         # source, sole-consumer, and Docker-context proof succeeds.
         test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
-        for name in FLOW_TEST_FILES:
+        for name in FLOW_PUBLISHED_TEST_FILES:
             sys.stdout.buffer.write((FLOW_TEST_ROOT + name).encode("utf-8") + b"\0")
     elif sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
         # The classifier consumes this only after proving exact tracked test

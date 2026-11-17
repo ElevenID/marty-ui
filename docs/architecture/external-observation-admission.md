@@ -21,13 +21,16 @@ subject, fact type, exact resource scope, permitted claim names/types/ranges and
 freshness. The caller cannot supply verification status, policy permission,
 issuer selection, application approval, or subject/tenant overrides.
 
-The proposed purpose-specific `evidence:submit` scope is required by this
-kernel. It is NOT yet in the API-key provisioning catalog. Existing
-`integrations:write`, `applications:approve`, signing permissions, `*` and
-`evidence:*` do not implicitly authorize submission through this new boundary.
-An active, unexpired administrator-approved producer grant must also bind the
-exact authenticated key ID, organization, source and binding ID. Rotation to a
-new key ID requires explicit delegation. Do not silently broaden an old key.
+The purpose-specific `evidence:submit` scope is required by this kernel and
+is now present in the API-key provisioning catalog and organization console.
+It is restricted to organization-scoped keys. Existing `integrations:write`,
+`applications:approve`, signing permissions, `admin:full`, `*` and
+`evidence:*` do not implicitly authorize submission through this boundary.
+The Gateway API-key policy requires the exact dedicated scope before the
+admission kernel is called. An active, unexpired administrator-approved
+producer grant must also bind the exact authenticated key ID, organization,
+source and binding ID. Rotation to a new key ID requires explicit delegation.
+Do not silently broaden an old key.
 
 Authentication proves who attested, not that the claim is true. Accepted
 observations must remain distinguishable from internally verified evidence.

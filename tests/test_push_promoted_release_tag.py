@@ -14,6 +14,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
+import pytest
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from scripts import push_promoted_release_tag as operator
@@ -52,8 +55,79 @@ def jobs_fixture() -> list[dict]:
     ] + [{"number": len(before) + 1, "name": handoff.WAIT_STEP, "status": "in_progress", "conclusion": None},
          {"number": len(before) + 2, "name": "Publish the qualified GitHub release and exact assets",
           "status": "pending", "conclusion": None}])
-    jobs[-1].update(status="queued", conclusion=None)
+    jobs[-1].update(status="completed", conclusion="skipped")
     return jobs
+
+
+def workflow_publisher_jobs(publication_contract: str, addon_selected: bool) -> tuple[list[dict], list[dict]]:
+    """Synthetic API states at the real workflow's wait; never release evidence."""
+    workflow = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+    steps = workflow["jobs"]["publish-manifest"]["steps"]
+    waits = [index for index, step in enumerate(steps) if step.get("name") == handoff.WAIT_STEP]
+    assert len(waits) == 1
+    wait = waits[0]
+    conditions = {
+        "inputs.publish_cloudflare_addon": addon_selected,
+        "inputs.publication_contract == 'v1'": publication_contract == "v1",
+        "inputs.publication_contract == 'v2'": publication_contract == "v2",
+    }
+    records = []
+    for index, step in enumerate(steps):
+        record = {"number": index + 1,
+                  "name": step.get("name", "Run " + step.get("uses", step.get("id", "shell")))}
+        if index < wait:
+            condition = step.get("if")
+            # Unknown preceding conditions must not silently become successes.
+            assert condition is None or condition in conditions, condition
+            selected = condition is None or conditions[condition]
+            record.update(status="completed", conclusion="success" if selected else "skipped")
+        elif index == wait:
+            record.update(status="in_progress", conclusion=None)
+        else:
+            # Conditions on future steps have not been reached at the tag wait.
+            record.update(status="pending", conclusion=None)
+        records.append(record)
+    jobs = jobs_fixture()
+    next(job for job in jobs if job["name"] == "publish-manifest")["steps"] = records
+    optional = next(job for job in jobs if job["name"] == "publish-cloudflare-addon")
+    optional["conclusion"] = "success" if addon_selected else "skipped"
+    return jobs, steps
+
+
+@pytest.mark.parametrize("publication_contract,addon_selected", [("v2", False), ("v1", False), ("v1", True)])
+def test_actual_workflow_publisher_steps_admit_supported_tag_wait(publication_contract, addon_selected):
+    jobs, steps = workflow_publisher_jobs(publication_contract, addon_selected)
+    operator.validate_waiting_jobs(jobs, 123, SOURCE)
+    # Selected v1 still needs the original artifact before its existing verifier.
+    downloads = [index for index, step in enumerate(steps)
+                 if step.get("with", {}).get("name") ==
+                 "cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}"]
+    consumers = [index for index, step in enumerate(steps)
+                 if "scripts/publish_hosting_addon.py --phase verify-prepared" in step.get("run", "")]
+    assert len(downloads) == len(consumers) == 1
+    assert downloads[0] < consumers[0]
+    assert steps[downloads[0]]["if"] == "inputs.publish_cloudflare_addon"
+    assert steps[consumers[0]]["if"] == "inputs.publication_contract == 'v1'"
+
+
+@pytest.mark.parametrize("fault", ["nonmandatory-skipped", "nonmandatory-failed", "mandatory-skipped", "future-executed"])
+def test_actual_workflow_steps_preserve_strict_tag_wait_guards(fault):
+    jobs, _ = workflow_publisher_jobs("v2", False)
+    publisher = next(job for job in jobs if job["name"] == "publish-manifest")
+    steps = publisher["steps"]
+    wait = next(step["number"] for step in steps if step["name"] == handoff.WAIT_STEP)
+    if fault == "future-executed":
+        target = next(step for step in steps if step["number"] > wait)
+        target.update(status="completed", conclusion="success")
+        error = "A later publication step already executed"
+    else:
+        mandatory = fault == "mandatory-skipped"
+        target = next(step for step in steps if step["number"] < wait
+                      and (step["name"] in operator.MANDATORY_PUBLISH_STEPS) is mandatory)
+        target["conclusion"] = "failure" if fault == "nonmandatory-failed" else "skipped"
+        error = "Publication signing or checkpoint preparation has not succeeded"
+    with pytest.raises(handoff.HandoffError, match=error):
+        operator.validate_waiting_jobs(jobs, 123, SOURCE)
 
 
 def observed_preflight_fixture() -> tuple[list[dict], dict, dict]:
@@ -86,10 +160,12 @@ class OperatorStateTests(unittest.TestCase):
     def test_actual_matrix_and_reusable_job_names_admit_only_completed_prerequisites(self) -> None:
         operator.validate_waiting_jobs(jobs_fixture(), 123, SOURCE)
 
-    def test_optional_downstream_can_be_skipped_or_waiting_but_cannot_already_run(self) -> None:
+    def test_optional_preparation_must_succeed_or_be_unselected_before_tag_wait(self) -> None:
         for status, conclusion, accepted in (
-            ("completed", "skipped", True), ("waiting", None, True),
+            ("completed", "skipped", True), ("completed", "success", True),
+            ("waiting", None, False), ("queued", None, False), ("pending", None, False),
             ("in_progress", None, False), ("completed", "failure", False),
+            ("completed", "cancelled", False),
         ):
             with self.subTest(status=status, conclusion=conclusion):
                 jobs = jobs_fixture()
@@ -99,6 +175,17 @@ class OperatorStateTests(unittest.TestCase):
                 else:
                     with self.assertRaises(handoff.HandoffError):
                         operator.validate_waiting_jobs(jobs, 123, SOURCE)
+
+    def test_optional_preparation_must_have_one_unambiguous_job(self) -> None:
+        for mutation in ("missing", "duplicate"):
+            with self.subTest(mutation=mutation):
+                jobs = jobs_fixture()
+                if mutation == "missing":
+                    jobs.pop()
+                else:
+                    jobs.append({**jobs[-1], "id": 999})
+                with self.assertRaises(handoff.HandoffError):
+                    operator.validate_waiting_jobs(jobs, 123, SOURCE)
 
     def test_missing_failed_skipped_foreign_and_later_prerequisites_refuse(self) -> None:
         for mutation in ("missing_lane", "failed", "skipped", "attempt", "source", "future_step", "skipped_crypto"):

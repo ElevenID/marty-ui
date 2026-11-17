@@ -1109,8 +1109,30 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
     {
         return Err(TrustProfileApplicationError::Invalid("allowed_algorithms"));
     }
+    let mut registered_clients = BTreeSet::new();
     for source in &profile.trust_sources {
         validate_trust_source(source)?;
+        if source.source_type == crate::TrustSourceType::RegisteredVerifier {
+            crate::registered_verifier::validate_profile_policy(profile)?;
+            let registration = crate::registered_verifier::registration(source)?;
+            if !registered_clients.insert(registration.client_id) {
+                return Err(TrustProfileApplicationError::Invalid(
+                    "registered_verifier_duplicate_client",
+                ));
+            }
+        }
+        if source.source_type == crate::TrustSourceType::ManagedFlowVerifier {
+            crate::registered_verifier::validate_profile_policy(profile)?;
+            let registration = crate::managed_flow_verifier::registration(source)?;
+            if !registered_clients.insert(format!(
+                "decentralized_identifier:{}",
+                registration.verifier_did
+            )) {
+                return Err(TrustProfileApplicationError::Invalid(
+                    "managed_flow_verifier_duplicate_client",
+                ));
+            }
+        }
         if source.purposes.as_ref().is_some_and(|purposes| {
             purposes.iter().any(|purpose| {
                 profile.trust_purposes.as_ref().map_or(
@@ -1128,6 +1150,12 @@ fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicatio
 }
 
 fn validate_trust_source(source: &TrustSource) -> Result<(), TrustProfileApplicationError> {
+    if source.source_type == crate::TrustSourceType::ManagedFlowVerifier {
+        return crate::managed_flow_verifier::registration(source).map(|_| ());
+    }
+    if source.source_type == crate::TrustSourceType::RegisteredVerifier {
+        return crate::registered_verifier::registration(source).map(|_| ());
+    }
     if source.purposes.as_ref().is_some_and(|purposes| {
         purposes.is_empty()
             || purposes.iter().copied().collect::<BTreeSet<_>>().len() != purposes.len()
@@ -1328,6 +1356,8 @@ fn validate_relationship(
     reject_private_custody_metadata(&relationship.metadata)?;
     marty_oid4vp_contract::trust_authority::credential_authorizations(&relationship.metadata)
         .map_err(|_| TrustProfileApplicationError::Invalid("credential_authorizations"))?;
+    crate::wallet_issuer_authority::authorizations(&relationship.metadata)
+        .map_err(|_| TrustProfileApplicationError::Invalid("wallet_issuance_authorizations"))?;
     Ok(())
 }
 

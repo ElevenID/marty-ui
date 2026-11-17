@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 marty-service-contracts = { path = "../../crates/service-contracts" }
-marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity"] }
+marty-service-runtime = { path = "../../crates/service-runtime", features = ["workload-identity", "https"] }
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
@@ -23,7 +23,7 @@ marty-didcomm.workspace = true
 marty-iso18013 = { workspace = true, features = ["verifier"] }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-jwt-vc-issuance = { path = "../../crates/jwt-vc-issuance" }
-marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "sd_jwt"] }
+marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "sd_jwt", "wallet"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
@@ -59,6 +59,10 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Registered cross-owner fixture exercises the actual policy kernel/evaluator;
+# this dependency must remain absent from production and build dependencies.
+marty-presentation-policy = { path = "../presentation-policy" }
+p256 = { workspace = true, features = ["ecdsa"] }
 marty-signing-grant-test-support = { path = "../../crates/signing-grant-test-support" }
 http.workspace = true
 tower.workspace = true

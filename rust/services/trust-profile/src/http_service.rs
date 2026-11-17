@@ -42,6 +42,7 @@ pub trait TrustRegistrySynchronizer: Send + Sync {
 
 #[derive(Clone)]
 pub struct TrustProfileHttpState {
+    pub flow_owner: Option<Arc<crate::managed_flow_verifier::transport::FlowOwnerClient>>,
     pub application: Arc<TrustProfileApplication>,
     pub repository: Arc<dyn TrustProfileRepository>,
     pub service_authenticator: Arc<ServiceTokenAuthenticator>,
@@ -56,6 +57,22 @@ pub fn trust_credential_authority_router(state: TrustProfileHttpState) -> Router
 
 fn credential_authority_routes() -> Router<TrustProfileHttpState> {
     Router::new()
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-authority",
+            get(wallet_issuer_authority),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-managed-verifier-authority",
+            get(wallet_managed_verifier_authority),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-authority",
+            get(wallet_verifier_authority),
+        )
+        .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-verifier-profile-admission",
+            get(wallet_verifier_profile_admission),
+        )
         .route(
             "/internal/v1/trust-profiles/{profile_id}/credential-authority-snapshot",
             post(credential_authority_snapshot),
@@ -173,7 +190,15 @@ struct RegistrySyncConfigInput {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TrustSourceInput {
+    #[serde(default, deserialize_with = "present_optional")]
+    id: Option<Option<Uuid>>,
     source_type: String,
+    #[serde(default, deserialize_with = "present_optional")]
+    enabled: Option<Option<bool>>,
+    #[serde(default, deserialize_with = "present_optional")]
+    registered_verifier: Option<Option<crate::registered_verifier::RegisteredVerifier>>,
+    #[serde(default, deserialize_with = "present_optional")]
+    managed_flow_verifier: Option<Option<crate::managed_flow_verifier::ManagedFlowVerifier>>,
     url: Option<String>,
     certificate_pem: Option<String>,
     issuer_did: Option<String>,
@@ -183,6 +208,15 @@ struct TrustSourceInput {
     purposes: Option<Vec<TrustPurpose>>,
     description: Option<String>,
     registry_sync: Option<RegistrySyncConfigInput>,
+}
+
+// Preserve explicit null so these controls remain rejected on legacy sources.
+fn present_optional<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1173,7 +1207,9 @@ fn credential_authority_service(
     state: &TrustProfileHttpState,
     headers: &HeaderMap,
 ) -> Result<(), TrustProfileHttpError> {
-    if !state.service_authenticator.is_configured() {
+    if !state.service_authenticator.is_configured()
+        || headers.get_all("x-service-token").iter().count() != 1
+    {
         return Err(unauthorized(
             "TRUST_PROFILE.SERVICE_AUTHENTICATION_REQUIRED",
         ));
@@ -1261,6 +1297,200 @@ async fn internal_profile(
     Ok(Json(strip_nulls(response)))
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletVerifierAuthorityQuery {
+    organization_id: String,
+    client_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletVerifierProfileQuery {
+    organization_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManagedWalletVerifierQuery {
+    organization_id: String,
+    client_id: String,
+    request_uri: String,
+}
+
+async fn wallet_managed_verifier_authority(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<ManagedWalletVerifierQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    let (source_id, registration) = crate::managed_flow_verifier::select(
+        &profile,
+        &query.organization_id,
+        &query.client_id,
+        Utc::now(),
+    )
+    .map_err(application_error)?;
+    let instance =
+        crate::managed_flow_verifier::instance_for_locator(&registration, &query.request_uri)
+            .map_err(application_error)?;
+    let request = state
+        .flow_owner
+        .as_ref()
+        .ok_or_else(|| unavailable("Managed Flow owner is not configured"))?
+        .fetch(&registration.producer_id, &instance)
+        .await
+        .map_err(application_error)?;
+    // Repeat user authorization and reread owner state after the remote await.
+    // A suspended profile, changed pin or lost membership must defeat this read.
+    let current = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    let selected = crate::managed_flow_verifier::select(
+        &current,
+        &query.organization_id,
+        &query.client_id,
+        Utc::now(),
+    )
+    .map_err(application_error)?;
+    if selected != (source_id, registration) {
+        return Err(conflict(
+            "Managed Flow producer changed during request lookup",
+        ));
+    }
+    let snapshot = crate::managed_flow_verifier::project(
+        &current,
+        &query.organization_id,
+        &query.client_id,
+        &query.request_uri,
+        request,
+        Utc::now(),
+    )
+    .map_err(application_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(snapshot),
+    )
+        .into_response())
+}
+
+async fn wallet_verifier_profile_for_caller(
+    state: &TrustProfileHttpState,
+    headers: &HeaderMap,
+    profile_id: &str,
+    require_user: bool,
+) -> Result<TrustProfile, TrustProfileHttpError> {
+    credential_authority_service(state, headers)?;
+    let id = uuid(profile_id, "profile_id")?;
+    let permitted_organization = if require_user || header(headers, "x-user-id").is_some() {
+        let user = trusted_user(state, headers)?;
+        Some(
+            state
+                .application
+                .profile(&user, id)
+                .await
+                .map_err(application_error)?
+                .organization_id,
+        )
+    } else {
+        None
+    };
+    // Read after the permission await; do not project a profile captured before
+    // a potentially slow authorization call.
+    let current = state
+        .repository
+        .profile_by_id(id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    if permitted_organization.is_some_and(|organization| organization != current.organization_id) {
+        return Err(forbidden("Trust Profile authorization changed"));
+    }
+    Ok(current)
+}
+
+async fn wallet_verifier_profile_admission(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierProfileQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    let now = Utc::now();
+    let mut selected = None;
+    for source in profile.trust_sources.iter().filter(|source| {
+        matches!(
+            source.source_type,
+            TrustSourceType::RegisteredVerifier | TrustSourceType::ManagedFlowVerifier
+        )
+    }) {
+        if source.source_type == TrustSourceType::ManagedFlowVerifier {
+            let registration =
+                crate::managed_flow_verifier::registration(source).map_err(application_error)?;
+            if source.enabled && registration.valid_from <= now && registration.valid_until > now {
+                selected = Some(format!(
+                    "decentralized_identifier:{}",
+                    registration.verifier_did
+                ));
+            }
+            continue;
+        }
+        let registration =
+            crate::registered_verifier::registration(source).map_err(application_error)?;
+        if source.enabled && registration.valid_from <= now && registration.valid_until > now {
+            selected = Some(registration.client_id);
+        }
+    }
+    let client =
+        selected.ok_or_else(|| unprocessable("No active verifier registration is available"))?;
+    if client.starts_with("decentralized_identifier:") {
+        let (_, registration) =
+            crate::managed_flow_verifier::select(&profile, &query.organization_id, &client, now)
+                .map_err(application_error)?;
+        return Ok(([(axum::http::header::CACHE_CONTROL,"no-store")], Json(json!({
+            "contract":"marty.wallet/verifier-profile-admission/v1",
+            "organization_id":profile.organization_id,"trust_profile_id":profile.id,
+            "observed_at":now,"expires_at":(now + chrono::Duration::seconds(60)).min(registration.valid_until),
+        }))).into_response());
+    }
+    let snapshot = crate::registered_verifier::project_wallet_verifier_authority(
+        &profile,
+        &query.organization_id,
+        &client,
+        now,
+    )
+    .map_err(application_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "contract":"marty.wallet/verifier-profile-admission/v1",
+            "organization_id":snapshot.organization_id,"trust_profile_id":snapshot.trust_profile_id,
+            "observed_at":snapshot.observed_at,"expires_at":snapshot.expires_at,
+        })),
+    )
+        .into_response())
+}
+
+async fn wallet_verifier_authority(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierAuthorityQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, false).await?;
+    let snapshot = crate::registered_verifier::project_wallet_verifier_authority(
+        &profile,
+        &query.organization_id,
+        &query.client_id,
+        Utc::now(),
+    )
+    .map_err(application_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(snapshot),
+    )
+        .into_response())
+}
+
 async fn wallet_issuer_keys(
     State(state): State<TrustProfileHttpState>,
     headers: HeaderMap,
@@ -1273,6 +1503,46 @@ async fn wallet_issuer_keys(
         axum::http::HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+async fn wallet_issuer_authority(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+    Query(query): Query<WalletVerifierProfileQuery>,
+) -> Result<Response, TrustProfileHttpError> {
+    let profile = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    if profile.organization_id != query.organization_id {
+        return Err(forbidden("Wallet issuer organization does not match"));
+    }
+    let observed = state
+        .repository
+        .wallet_issuer_authority_snapshot(&query.organization_id, profile.id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    // Repeat user/PDP authorization after the owner read, then compare the full
+    // canonical revision/basis. Do not grant from the legacy generic key list.
+    let current = wallet_verifier_profile_for_caller(&state, &headers, &profile_id, true).await?;
+    if current.organization_id != query.organization_id {
+        return Err(forbidden("Wallet issuer authorization changed"));
+    }
+    let fresh = state
+        .repository
+        .wallet_issuer_authority_snapshot(&query.organization_id, current.id)
+        .await
+        .map_err(repository_error)?
+        .ok_or_else(|| not_found("Trust Profile not found"))?;
+    if observed != fresh {
+        return Err(conflict("Wallet issuer authority changed during lookup"));
+    }
+    let projection = crate::wallet_issuer_authority::project(&fresh, Utc::now())
+        .map_err(credential_authority_error)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(projection),
+    )
+        .into_response())
 }
 
 fn project_wallet_issuer_keys(
@@ -1466,6 +1736,11 @@ async fn issuer_owner(
 fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpError> {
     crate::reject_private_custody_metadata(&Value::Object(profile.system_issuer_overrides.clone()))
         .map_err(|_| unavailable("Trust Profile contains private custody metadata"))?;
+    let sources = profile
+        .trust_sources
+        .iter()
+        .map(public_trust_source)
+        .collect::<Result<Vec<_>, _>>()?;
     let mut methods = Vec::new();
     if profile.revocation_policy.check_crl {
         methods.push("CRL");
@@ -1489,7 +1764,7 @@ fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpErr
         "profile_type": profile.profile_type,
         "compliance_status": profile.compliance_status,
         "trust_purposes": profile.trust_purposes,
-        "trust_sources": profile.trust_sources.iter().map(public_trust_source).collect::<Vec<_>>(),
+        "trust_sources": sources,
         "allowed_algorithms": profile.validation_rules.allowed_algorithms,
         "revocation_policy": {
             "check_mode": profile.revocation_policy.check_mode,
@@ -1520,8 +1795,25 @@ fn profile_response(profile: &TrustProfile) -> Result<Value, TrustProfileHttpErr
     })))
 }
 
-fn public_trust_source(source: &TrustSource) -> Value {
-    strip_nulls(json!({
+fn public_trust_source(source: &TrustSource) -> Result<Value, TrustProfileHttpError> {
+    if source.source_type == TrustSourceType::ManagedFlowVerifier {
+        let registration =
+            crate::managed_flow_verifier::registration(source).map_err(application_error)?;
+        return Ok(strip_nulls(
+            json!({"id":source.id,"source_type":source.source_type,
+            "enabled":source.enabled,"purposes":source.purposes,"description":source.description,
+            "managed_flow_verifier":registration}),
+        ));
+    }
+    if source.source_type == TrustSourceType::RegisteredVerifier {
+        let registration =
+            crate::registered_verifier::registration(source).map_err(application_error)?;
+        return Ok(strip_nulls(json!({
+            "id":source.id,"source_type":source.source_type,"enabled":source.enabled,
+            "purposes":source.purposes,"description":source.description,"registered_verifier":registration,
+        })));
+    }
+    Ok(strip_nulls(json!({
         "source_type": source.source_type,
         "url": source.url,
         "certificate_pem": source.certificate_pem,
@@ -1533,7 +1825,7 @@ fn public_trust_source(source: &TrustSource) -> Value {
         "description": source.description,
         "pinned_certificates": source.pinned_certificates,
         "registry_sync": source.registry_sync,
-    }))
+    })))
 }
 
 fn registry_entry_response(entry: &TrustRegistryEntry) -> Value {
@@ -1614,7 +1906,38 @@ fn valid_verification_keys(value: &Value) -> Result<(), TrustProfileHttpError> {
 
 fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttpError> {
     let source_type = source_type(&input.source_type)?;
+    let registered = source_type == TrustSourceType::RegisteredVerifier;
+    let managed = source_type == TrustSourceType::ManagedFlowVerifier;
+    let verifier = registered || managed;
+    if (!verifier && (input.id.is_some() || input.enabled.is_some()))
+        || (!registered && input.registered_verifier.is_some())
+        || (!managed && input.managed_flow_verifier.is_some())
+    {
+        return Err(unprocessable(
+            "Verifier controls require their explicit verifier source type",
+        ));
+    }
+    if verifier
+        && (input.id.as_ref().is_some_and(Option::is_none)
+            || input.enabled.as_ref().is_some_and(Option::is_none)
+            || input
+                .registered_verifier
+                .as_ref()
+                .is_some_and(Option::is_none)
+            || input
+                .managed_flow_verifier
+                .as_ref()
+                .is_some_and(Option::is_none))
+    {
+        return Err(unprocessable("Registered verifier controls cannot be null"));
+    }
     let mut extensions = Map::new();
+    if let Some(registration) = input.registered_verifier.flatten() {
+        extensions.insert("registered_verifier".into(), json!(registration));
+    }
+    if let Some(registration) = input.managed_flow_verifier.flatten() {
+        extensions.insert("managed_flow_verifier".into(), json!(registration));
+    }
     if input.organization_id.is_some()
         || input.verification_method_ids.is_some()
         || input.did_resolution.is_some()
@@ -1652,7 +1975,7 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         .and_then(|value| u16::try_from(value).ok())
         .unwrap_or(24);
     Ok(TrustSource {
-        id: Uuid::new_v4(),
+        id: input.id.flatten().unwrap_or_else(Uuid::new_v4),
         name: input
             .description
             .clone()
@@ -1666,8 +1989,12 @@ fn trust_source(input: TrustSourceInput) -> Result<TrustSource, TrustProfileHttp
         purposes: input.purposes,
         description: input.description,
         pinned_certificates: vec![],
-        refresh_interval_hours,
-        enabled: true,
+        refresh_interval_hours: if verifier { 0 } else { refresh_interval_hours },
+        enabled: if verifier {
+            input.enabled.flatten().unwrap_or(false)
+        } else {
+            true
+        },
         registry_sync,
         registry_sync_token: None,
         registry_sequence: 0,
@@ -1683,6 +2010,8 @@ fn source_type(value: &str) -> Result<TrustSourceType, TrustProfileHttpError> {
         "allowlist" | "pinned_issuer" => Ok(TrustSourceType::PinnedIssuer),
         "pinned_root" | "root_ca" => Ok(TrustSourceType::RootCa),
         "pkd" | "pkd_url" => Ok(TrustSourceType::PkdUrl),
+        "registered_verifier" => Ok(TrustSourceType::RegisteredVerifier),
+        "managed_flow_verifier" => Ok(TrustSourceType::ManagedFlowVerifier),
         _ => Err(unprocessable("source_type is invalid")),
     }
 }

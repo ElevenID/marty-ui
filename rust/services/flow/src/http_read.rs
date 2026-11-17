@@ -79,17 +79,28 @@ impl FromRequestParts<FlowHttpState> for FlowRequestState {
     }
 }
 
-fn authenticate_gateway_service(
+pub(crate) fn authenticate_gateway_service(
     state: &FlowHttpState,
     headers: &HeaderMap,
 ) -> Result<(), FlowHttpError> {
-    let authenticator = state.service_authenticator.as_ref().ok_or_else(|| {
-        FlowHttpError::new(
+    if headers.get_all("x-service-token").iter().count() != 1 {
+        return Err(FlowHttpError::new(
             StatusCode::UNAUTHORIZED,
             "service_authentication_required",
             "Gateway service authentication required",
-        )
-    })?;
+        ));
+    }
+    let authenticator = state
+        .service_authenticator
+        .as_ref()
+        .filter(|authenticator| authenticator.is_configured())
+        .ok_or_else(|| {
+            FlowHttpError::new(
+                StatusCode::UNAUTHORIZED,
+                "service_authentication_required",
+                "Gateway service authentication required",
+            )
+        })?;
     authenticator
         .authenticate(
             headers
@@ -170,6 +181,7 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         )
         .merge(flow_application_routes())
         .merge(flow_verification_routes())
+        .merge(crate::http_public_verification::flow_public_verification_routes())
         .with_state(state)
 }
 

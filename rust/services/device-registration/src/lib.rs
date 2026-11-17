@@ -18,6 +18,7 @@ pub mod postgres;
 pub mod repository;
 pub mod service;
 pub mod wallet_issuer_trust;
+pub mod wallet_verifier_trust;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");

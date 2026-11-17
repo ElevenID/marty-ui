@@ -32,6 +32,8 @@ impl Environment {
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct FlowServiceConfig {
+    pub managed_authority_https: Option<marty_service_runtime::https::ManagedAuthorityHttpsConfig>,
+    pub public_verification: Option<crate::PublicVerificationOptions>,
     pub environment: Environment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -66,6 +68,7 @@ pub struct FlowServiceConfig {
     pub issuer_sign_key: Option<String>,
     pub sign_grant_bao_addr: Option<String>,
     pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub demo_holder_sign_grant_mint_token_file: Option<PathBuf>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -108,6 +111,13 @@ impl fmt::Debug for FlowServiceConfig {
             .field("environment", &self.environment)
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
+            .field(
+                "managed_authority_https_address",
+                &self
+                    .managed_authority_https
+                    .as_ref()
+                    .map(|config| config.address),
+            )
             .field("public_base_url", &self.public_base_url)
             .field("oid4vp_issuer_did", &self.oid4vp_issuer_did)
             .field("marty_organization_id", &self.marty_organization_id)
@@ -173,6 +183,10 @@ impl fmt::Debug for FlowServiceConfig {
             .field(
                 "sign_grant_mint_token_file",
                 &self.sign_grant_mint_token_file,
+            )
+            .field(
+                "demo_holder_sign_grant_mint_token_configured",
+                &self.demo_holder_sign_grant_mint_token_file.is_some(),
             )
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
@@ -250,6 +264,21 @@ impl FlowServiceConfig {
     ) -> Result<Self, FlowConfigError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
         let environment = parse_environment(value(&values, "ENVIRONMENT").unwrap_or("production"))?;
+        let public_verification = value(&values, "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE")
+            .map(|path| {
+                let name = "FLOW_PUBLIC_VERIFICATION_CONFIG_FILE";
+                let size = fs::metadata(path)
+                    .map_err(|_| FlowConfigError::File { name })?
+                    .len();
+                if size > 65_536 {
+                    return Err(invalid(name));
+                }
+                let contents =
+                    fs::read_to_string(path).map_err(|_| FlowConfigError::File { name })?;
+                crate::PublicVerificationOptions::from_json(&contents, !environment.is_deployed())
+                    .map_err(|_| invalid(name))
+            })
+            .transpose()?;
         let http_addr = listener_address(
             &values,
             "FLOW_HTTP_ADDR",
@@ -566,7 +595,19 @@ impl FlowServiceConfig {
             return Err(invalid("GRPC_INSECURE_ALLOWED"));
         }
 
+        let managed_authority_https =
+            marty_service_runtime::https::ManagedAuthorityHttpsConfig::from_values(|name| {
+                values.get(name).map(String::as_str)
+            })
+            .map_err(|_| invalid("MANAGED_AUTHORITY_HTTPS_ADDR"))?;
+        if let Some(https) = &managed_authority_https {
+            if https.address == http_addr || https.address == grpc_addr || service_token.is_none() {
+                return Err(invalid("MANAGED_AUTHORITY_HTTPS_ADDR"));
+            }
+        }
         Ok(Self {
+            managed_authority_https,
+            public_verification,
             environment,
             http_addr,
             grpc_addr,
@@ -601,6 +642,11 @@ impl FlowServiceConfig {
             issuer_sign_key,
             sign_grant_bao_addr,
             sign_grant_mint_token_file,
+            demo_holder_sign_grant_mint_token_file: value(
+                &values,
+                "FLOW_DEMO_HOLDER_SIGN_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
             issuance_url,
             issuance_native_url,
             issuance_api_key,

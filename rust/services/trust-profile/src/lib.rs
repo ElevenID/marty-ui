@@ -6,15 +6,18 @@ pub mod credential_authority;
 pub mod domain;
 pub mod http_service;
 pub mod issuer_keys;
+pub mod managed_flow_verifier;
 pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
+pub mod registered_verifier;
 pub mod registry_scheduler;
 pub mod registry_sync;
 pub mod repository;
 pub mod runtime;
 pub mod surface;
+pub mod wallet_issuer_authority;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");

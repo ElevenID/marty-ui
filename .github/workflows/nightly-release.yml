@@ -10,7 +10,7 @@ on:
         required: true
         type: string
       publish_cloudflare_addon:
-        description: Publish the optional signed Cloudflare connector after the core release
+        description: Include the optional signed Cloudflare connector in the immutable release
         required: false
         type: boolean
         default: false
@@ -553,7 +553,11 @@ jobs:
           retention-days: 30
 
   publish:
-    needs: [admit, sign-release]
+    needs: [admit, sign-release, publish-cloudflare-addon]
+    if: >-
+      ${{ !cancelled() && needs.admit.result == 'success' && needs.sign-release.result == 'success' &&
+          ((inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'success') ||
+           (!inputs.publish_cloudflare_addon && needs.publish-cloudflare-addon.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     environment: stack-release
     permissions:
@@ -572,6 +576,11 @@ jobs:
         with:
           name: nightly-publication-assets-${{ github.run_id }}
           path: ${{ runner.temp }}/publish
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: inputs.publish_cloudflare_addon
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532
       - name: Prepare the installer-pinned provenance verifier
         shell: bash
@@ -592,14 +601,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.admit.outputs.tag }}
+          CLOUDFLARE_ADDON_SELECTED: ${{ inputs.publish_cloudflare_addon }}
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
           chmod 700 "$RUNNER_TEMP/publish"
+          optional_assets=()
+          case "$CLOUDFLARE_ADDON_SELECTED" in
+            true)
+              chmod 700 "$RUNNER_TEMP/cloudflare-addon"
+              optional_assets=(--cloudflare-addon-assets "$RUNNER_TEMP/cloudflare-addon")
+              ;;
+            false) test ! -e "$RUNNER_TEMP/cloudflare-addon" ;;
+            *) exit 1 ;;
+          esac
           python scripts/publish_nightly_release.py --phase publish --assets "$RUNNER_TEMP/publish" \
             --source "$GITHUB_WORKSPACE" --tag "$TAG" --run-id "$GITHUB_RUN_ID" \
-            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh" "${optional_assets[@]}"
       - name: Record required installer release qualification
         env:
           TAG: ${{ needs.admit.outputs.tag }}
@@ -615,15 +634,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-cloudflare-addon:
-    # An explicit optional producer. Core publication never depends on this job.
+    # Prepare the explicitly selected closure before immutable publication.
     if: ${{ inputs.publish_cloudflare_addon }}
-    needs: [admit, publish]
+    needs: [admit]
     env:
       TAG: ${{ needs.admit.outputs.tag }}
     runs-on: ubuntu-24.04
     environment: stack-release
     permissions:
-      contents: write
+      contents: read
       packages: write
       id-token: write
       attestations: write
@@ -735,7 +754,7 @@ jobs:
           printf '%s  %s\n' 62ccf747115ddc61237efffdde66a3c8f70ba249433dc64f70801089b59c59c8 "$verifier/gh.tar.gz" | sha256sum --check --strict
           tar -xzf "$verifier/gh.tar.gz" --no-same-owner --no-same-permissions -C "$verifier" gh_2.103.2_linux_amd64/bin/gh
           chmod 700 "$verifier/gh_2.103.2_linux_amd64/bin/gh"
-      - name: Export evidence and publish optional immutable assets
+      - name: Export evidence for the selected immutable publication
         env:
           GH_TOKEN: ${{ github.token }}
           PROVENANCE_BUNDLE: ${{ steps.addon_provenance.outputs.bundle-path }}
@@ -745,6 +764,9 @@ jobs:
           python scripts/publish_hosting_addon.py --phase export-provenance \
             --assets "$RUNNER_TEMP/cloudflare-addon" --provenance-bundle "$PROVENANCE_BUNDLE" \
             --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
-          python scripts/publish_hosting_addon.py --phase publish \
-            --assets "$RUNNER_TEMP/cloudflare-addon" \
-            --gh "$RUNNER_TEMP/installer-gh/gh_2.103.2_linux_amd64/bin/gh"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: cloudflare-addon-publication-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cloudflare-addon/
+          if-no-files-found: error
+          retention-days: 30

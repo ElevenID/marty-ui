@@ -94,6 +94,8 @@ pub struct ApplicationSnapshot {
     pub organization_id: String,
     pub subject_id: String,
     pub revision: u64,
+    /// Canonical application expiry, checked against the journal transaction's database clock.
+    pub expires_at_ms: u64,
     /// Set by the lifecycle owner. Issued/rejected/withdrawn applications are
     /// not eligible until a separate correction workflow is explicitly wired.
     pub accepts_observations: bool,
@@ -165,7 +167,7 @@ pub enum Denial {
     OutOfOrder,
 }
 
-fn id(value: &str) -> bool {
+pub(crate) fn id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -173,7 +175,7 @@ fn id(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
 }
 
-fn label(value: &str) -> bool {
+pub(crate) fn label(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -181,7 +183,7 @@ fn label(value: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_.:-".contains(&c))
 }
 
-fn text(value: &str, max: usize) -> bool {
+pub(crate) fn text(value: &str, max: usize) -> bool {
     !value.is_empty() && value.len() <= max && !value.chars().any(char::is_control)
 }
 
@@ -214,7 +216,7 @@ fn claim_name(value: &str) -> bool {
         )
 }
 
-fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
+pub(crate) fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
     !rules.is_empty()
         && rules.len() <= 32
         && rules.iter().all(|(name, rule)| {
@@ -229,7 +231,7 @@ fn valid_rules(rules: &BTreeMap<String, ClaimRule>) -> bool {
         })
 }
 
-fn valid_claims(input: &Observation, binding: &EvidenceBinding) -> bool {
+pub(crate) fn valid_claims(input: &Observation, binding: &EvidenceBinding) -> bool {
     if input.claims.is_empty() || input.claims.len() > 32 {
         return false;
     }
@@ -321,6 +323,7 @@ pub fn plan_admission(
         || !positive(grant.revision)
         || !positive(binding.revision)
         || !positive(application.revision)
+        || !positive(application.expires_at_ms)
         || !positive(principal.expires_at_ms)
         || !positive(grant.expires_at_ms)
         || !(1..=MAX_AGE_MS).contains(&binding.max_age_ms)
@@ -359,7 +362,7 @@ pub fn plan_admission(
     if current_sequence > MAX_SAFE_INTEGER {
         return Err(Denial::InvalidAuthority);
     }
-    if !application.accepts_observations {
+    if !application.accepts_observations || application.expires_at_ms <= now_ms {
         return Err(Denial::ApplicationClosed);
     }
     if input.observed_at_ms > now_ms.saturating_add(binding.max_clock_skew_ms) {

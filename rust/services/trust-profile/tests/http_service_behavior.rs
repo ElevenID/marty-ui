@@ -19,6 +19,322 @@ use uuid::Uuid;
 #[derive(Debug)]
 struct AllowControlPlane;
 
+#[tokio::test]
+async fn managed_flow_sources_round_trip_disabled_and_require_distinct_owner_scope() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let token = "s".repeat(32);
+    let state = TrustProfileHttpState {
+        flow_owner: None,
+        application: Arc::new(TrustProfileApplication::new(
+            repository.clone(),
+            Arc::new(AllowControlPlane),
+        )),
+        repository: repository.clone(),
+        service_authenticator: Arc::new(
+            ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+        ),
+        internal_api_key: None,
+        registry_synchronizer: Arc::new(EchoSynchronizer),
+    };
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let source = json!({"source_type":"MANAGED_FLOW_VERIFIER","purposes":["PRESENTATION_VERIFIER"],
+        "managed_flow_verifier":{"producer_id":"flow-primary","public_base_url":"https://verifier.example",
+            "verifier_did":"did:web:verifier.example","request_key_id":"did:web:verifier.example#key-1",
+            "public_jwk":fixture["registered_verifier"]["public_jwk"],"valid_from":now-Duration::minutes(1),"valid_until":now+Duration::hours(1)}});
+    let create = |source: Value| {
+        Request::post("/v1/trust-profiles")
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"organization_id":"org-1","name":"Managed Flow verifier",
+            "compliance_status":"COMPLIANT","trust_purposes":["PRESENTATION_VERIFIER"],
+            "allowed_algorithms":["ES256"],"trust_sources":[source]})
+                .to_string(),
+            ))
+            .unwrap()
+    };
+    let response = trust_profile_router(state.clone())
+        .oneshot(create(source.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let created = body(response).await;
+    assert_eq!(created["status"], "draft");
+    assert_eq!(created["trust_sources"][0]["enabled"], false);
+    assert_eq!(
+        created["trust_sources"][0]["managed_flow_verifier"],
+        source["managed_flow_verifier"]
+    );
+    assert!(created["trust_sources"][0]
+        .get("registered_verifier")
+        .is_none());
+    let mut selected = repository
+        .profile_by_id(Uuid::parse_str(created["id"].as_str().unwrap()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    selected.status = TrustProfileStatus::Active;
+    selected.trust_sources[0].enabled = true;
+    repository.save_profile(&selected, None).await.unwrap();
+    let prefix = format!("/internal/v1/trust-profiles/{}", selected.id);
+    let app = marty_trust_profile::trust_credential_authority_router(state.clone());
+    for (suffix,status) in [
+        ("/wallet-verifier-profile-admission?organization_id=org-1",200),
+        ("/wallet-verifier-authority?organization_id=org-1&client_id=registered-client",422),
+        ("/wallet-managed-verifier-authority?organization_id=other&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://verifier.example/v1/flows/instances/11111111-2222-4333-8444-555555555555/request",422),
+        ("/wallet-managed-verifier-authority?organization_id=org-1&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://attacker.example/request",422),
+        ("/wallet-managed-verifier-authority?organization_id=org-1&client_id=decentralized_identifier:did:web:verifier.example&request_uri=https://verifier.example/v1/flows/instances/11111111-2222-4333-8444-555555555555/request",503),
+    ] {
+        let response=app.clone().oneshot(Request::get(format!("{prefix}{suffix}"))
+            .header("x-service-token",&token).header("x-user-id","user-1").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status().as_u16(),status,"{suffix}");
+    }
+    for field in ["id", "enabled", "managed_flow_verifier"] {
+        let mut bad = source.clone();
+        bad[field] = Value::Null;
+        assert_eq!(
+            trust_profile_router(state.clone())
+                .oneshot(create(bad))
+                .await
+                .unwrap()
+                .status(),
+            422
+        );
+    }
+    let mut bad = source;
+    bad["registered_verifier"] = fixture["registered_verifier"].clone();
+    assert_eq!(
+        trust_profile_router(state)
+            .oneshot(create(bad))
+            .await
+            .unwrap()
+            .status(),
+        422
+    );
+}
+
+#[tokio::test]
+async fn registered_verifier_projection_requires_configured_workload_auth_and_tenant_scope() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let now = chrono::DateTime::from_timestamp(Utc::now().timestamp(), 0).unwrap();
+    let mut selected = profile("Registered verifier");
+    selected.status = TrustProfileStatus::Active;
+    selected.compliance_status = ComplianceStatus::Compliant;
+    selected.trust_purposes = Some(vec![TrustPurpose::PresentationVerifier]);
+    selected.supported_formats.clear();
+    let mut value: Value =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    value["enabled"] = json!(true);
+    value["registered_verifier"]["valid_from"] = json!(now - Duration::minutes(1));
+    value["registered_verifier"]["valid_until"] = json!(now + Duration::hours(1));
+    selected.trust_sources = vec![serde_json::from_value(value).unwrap()];
+    repository.save_profile(&selected, None).await.unwrap();
+    let token = "s".repeat(32);
+    let path=format!("/internal/v1/trust-profiles/{}/wallet-verifier-authority?organization_id=org-1&client_id=registered-client",selected.id);
+    for configured in [false, true] {
+        let state = TrustProfileHttpState {
+            flow_owner: None,
+            application: Arc::new(TrustProfileApplication::new(
+                repository.clone(),
+                Arc::new(AllowControlPlane),
+            )),
+            repository: repository.clone(),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(configured.then(|| token.clone()), configured)
+                    .unwrap(),
+            ),
+            internal_api_key: Some(Arc::from("legacy-api-key")),
+            registry_synchronizer: Arc::new(EchoSynchronizer),
+        };
+        let app = marty_trust_profile::trust_credential_authority_router(state.clone());
+        for (credential, uri, expected) in [
+            (None, path.clone(), 401),
+            (Some("wrong"), path.clone(), 401),
+            (Some(token.as_str()), path.clone(), 200),
+            (
+                Some(token.as_str()),
+                path.replace("org-1", "other-org"),
+                422,
+            ),
+            (
+                Some(token.as_str()),
+                path.replace("registered-client", "unknown-client"),
+                422,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .uri(uri)
+                .header("x-api-key", "legacy-api-key");
+            if let Some(credential) = credential {
+                request = request.header("x-service-token", credential);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status().as_u16(),
+                if configured { expected } else { 401 }
+            );
+            if response.status().is_success() {
+                assert_eq!(response.headers()["cache-control"], "no-store");
+                let snapshot = body(response).await;
+                assert_eq!(snapshot["contract"], "marty.wallet/verifier-authority/v1");
+                assert_eq!(snapshot["organization_id"], "org-1");
+                assert_eq!(
+                    snapshot["authority"]["key_purpose"],
+                    "oid4vp_request_signing"
+                );
+                assert!(snapshot.get("issuer_relationships").is_none());
+            }
+        }
+        if configured {
+            let admission_path=format!("/internal/v1/trust-profiles/{}/wallet-verifier-profile-admission?organization_id=org-1",selected.id);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&admission_path)
+                        .header("x-service-token", &token)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 401);
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(&admission_path)
+                        .header("x-service-token", &token)
+                        .header("x-user-id", "user-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            assert_eq!(response.headers()["cache-control"], "no-store");
+            let admission = body(response).await;
+            assert_eq!(
+                admission["contract"],
+                "marty.wallet/verifier-profile-admission/v1"
+            );
+            assert_eq!(admission["trust_profile_id"], selected.id.to_string());
+            let rejecting =
+                marty_trust_profile::trust_credential_authority_router(TrustProfileHttpState {
+                    flow_owner: None,
+                    application: Arc::new(TrustProfileApplication::new(
+                        repository.clone(),
+                        Arc::new(RejectKeyMembership),
+                    )),
+                    ..state.clone()
+                });
+            for uri in [admission_path.clone(), path.clone()] {
+                let response = rejecting
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(uri)
+                            .header("x-service-token", &token)
+                            .header("x-user-id", "user-1")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status().as_u16(), 403);
+            }
+            for suffix in [
+                "&client_id=registered-client",
+                "&request_uri=https://attacker.example",
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(format!("{path}{suffix}"))
+                            .header("x-service-token", &token)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status().as_u16(), 400);
+            }
+            let response = trust_profile_router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/trust-profiles/{}", selected.id))
+                        .header("x-service-token", &token)
+                        .header("x-user-id", "user-1")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let projected = body(response).await;
+            assert_eq!(
+                projected["trust_sources"][0]["registered_verifier"]["request_key_id"],
+                "request-1"
+            );
+            let response=trust_profile_router(state).oneshot(Request::builder().method("POST")
+                .uri("/v1/trust-profiles").header("x-service-token",&token).header("x-user-id","user-1")
+                .header("content-type","application/json").body(Body::from(json!({
+                    "organization_id":"org-1","name":"Registered round trip","compliance_status":"COMPLIANT",
+                    "trust_purposes":["PRESENTATION_VERIFIER"],"trust_sources":projected["trust_sources"],
+                    "allowed_algorithms":["ES256"]
+                }).to_string())).unwrap()).await.unwrap();
+            assert_eq!(response.status().as_u16(), 200);
+            let created = body(response).await;
+            assert_eq!(created["status"], "draft");
+            for field in ["id", "enabled", "registered_verifier"] {
+                let mut source = json!({"source_type":"ROOT_CA","certificate_pem":"-----BEGIN CERTIFICATE-----\nfixture"});
+                source[field] = Value::Null;
+                let response=trust_profile_router(TrustProfileHttpState{
+                    flow_owner: None,
+                    application:Arc::new(TrustProfileApplication::new(repository.clone(),Arc::new(AllowControlPlane))),
+                    repository:repository.clone(),service_authenticator:Arc::new(ServiceTokenAuthenticator::new(Some(token.clone()),true).unwrap()),
+                    internal_api_key:None,registry_synchronizer:Arc::new(EchoSynchronizer),
+                }).oneshot(Request::builder().method("POST").uri("/v1/trust-profiles")
+                    .header("x-service-token",&token).header("x-user-id","user-1").header("content-type","application/json")
+                    .body(Body::from(json!({"organization_id":"org-1","name":"Legacy null guard","trust_sources":[source]}).to_string())).unwrap()).await.unwrap();
+                assert_eq!(
+                    response.status().as_u16(),
+                    422,
+                    "accepted legacy null {field}"
+                );
+            }
+            assert_eq!(
+                created["trust_sources"][0]["id"],
+                selected.trust_sources[0].id.to_string()
+            );
+            assert_eq!(
+                created["trust_sources"][0]["registered_verifier"]["request_key_id"],
+                "request-1"
+            );
+        }
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&path)
+                    .header("x-service-token", &token)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 405);
+    }
+}
+
 struct RejectKeyMembership;
 
 #[async_trait]
@@ -50,6 +366,7 @@ async fn delegated_profile_read_authenticates_actor_without_human_membership() {
             Arc::new(RejectKeyMembership),
         ));
         let app = trust_profile_router(TrustProfileHttpState {
+            flow_owner: None,
             application,
             repository: repository.clone(),
             service_authenticator: Arc::new(
@@ -155,6 +472,7 @@ fn service_with_repository(repository: Arc<MemoryTrustProfileRepository>) -> axu
         Arc::new(AllowControlPlane),
     ));
     trust_profile_router(TrustProfileHttpState {
+        flow_owner: None,
         application,
         repository,
         service_authenticator: Arc::new(ServiceTokenAuthenticator::new(None, false).unwrap()),
@@ -689,6 +1007,320 @@ async fn wallet_issuer_key_projection_requires_active_trust_and_filters_denied_i
 }
 
 #[tokio::test]
+async fn wallet_issuer_v2_uses_canonical_grants_revision_and_policy_controls() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let now = Utc::now();
+    let mut selected = profile("Canonical wallet issuer");
+    selected.status = TrustProfileStatus::Active;
+    selected.compliance_status = ComplianceStatus::Compliant;
+    selected.trust_purposes = Some(vec![TrustPurpose::CredentialIssuer]);
+    selected.supported_formats = vec!["SD_JWT_VC".into()];
+    // The bounded wallet profile does not implement external revocation modes.
+    selected.revocation_policy.check_ocsp = false;
+    selected.revocation_policy.check_crl = false;
+    selected.revocation_policy.check_status_list = false;
+    repository.save_profile(&selected, None).await.unwrap();
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/registered-verifier-source.json")).unwrap();
+    let mut key = fixture["registered_verifier"]["public_jwk"].clone();
+    key["use"] = json!("sig");
+    key["kid"] = json!("issuer-key");
+    let mut issuer = IssuerEntity {
+        id: Uuid::new_v4(),
+        organization_id: Some("org-1".into()),
+        issuer_id: "did:web:issuer.example".into(),
+        issuer_type: IssuerEntityType::Organization,
+        display_name: "Issuer".into(),
+        description: None,
+        is_system_issuer: false,
+        compliance_status: IssuerEntityComplianceStatus::Compliant,
+        accreditation_body: None,
+        accreditations: vec![],
+        accreditation_date: None,
+        valid_from: now - Duration::seconds(10),
+        valid_until: Some(now + Duration::seconds(45)),
+        trust_anchor_id: None,
+        metadata: json!({"verification_keys":[key]}),
+        revoked_at: None,
+        revocation_reason: None,
+        revoked_by: None,
+        created_at: now,
+        updated_at: now,
+    };
+    repository.save_issuer_entity(&issuer).await.unwrap();
+    let mut relationship = TrustProfileIssuer {
+        id: Uuid::new_v4(),
+        trust_profile_id: selected.id,
+        issuer_id: issuer.id,
+        trust_level: 100,
+        relationship_status: TrustRelationshipStatus::Trusted,
+        cascade_revocation_policy: CascadeRevocationPolicy::NotifyOnly,
+        metadata: json!({"marty_credential_authorizations_v1":[{"format":"SD_JWT_VC","vct":"https://credentials.example/identity"}]}),
+        created_at: now,
+        updated_at: now,
+    };
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let token = "s".repeat(32);
+    let app = trust_profile_router(TrustProfileHttpState {
+        flow_owner: None,
+        application: Arc::new(TrustProfileApplication::new(
+            repository.clone(),
+            Arc::new(AllowControlPlane),
+        )),
+        repository: repository.clone(),
+        service_authenticator: Arc::new(
+            ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+        ),
+        internal_api_key: None,
+        registry_synchronizer: Arc::new(EchoSynchronizer),
+    });
+    let uri = format!(
+        "/internal/v1/trust-profiles/{}/wallet-issuer-authority?organization_id=org-1",
+        selected.id
+    );
+    let get = || {
+        Request::get(&uri)
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let response = app.clone().oneshot(get()).await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let first = body(response).await;
+    assert_eq!(first["contract"], "marty.wallet/issuer-authority/v2");
+    assert_eq!(first["require_not_before"], true);
+    assert_eq!(first["revision"]["id"], selected.id.to_string());
+    assert_eq!(
+        first["issuer_keys"][0]["credential_authorizations"],
+        relationship.metadata["marty_credential_authorizations_v1"]
+    );
+    assert_eq!(first["expires_at"], json!(issuer.valid_until.unwrap()));
+    let snapshot = repository
+        .wallet_issuer_authority_snapshot("org-1", selected.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first["revision"],
+        serde_json::to_value(&snapshot.revision).unwrap()
+    );
+    let canonical_before = repository
+        .credential_authority_snapshot("org-1", selected.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let service_grant = json!({"credential_issuer":"https://issuance-service.example/tenant",
+        "credential_configuration_id":"identity-configuration","format":"dc+sd-jwt","vct":"https://credentials.example/identity",
+        "authorization_server":null,"token_endpoint":null});
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"] =
+        json!([service_grant.clone()]);
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let bound = body(app.clone().oneshot(get()).await.unwrap()).await;
+    assert_ne!(bound["revision"], first["revision"]);
+    assert_eq!(bound["issuer_keys"][0]["issuer"], "did:web:issuer.example");
+    assert_eq!(
+        bound["issuer_keys"][0]["issuance_authorizations"],
+        json!([service_grant])
+    );
+    assert_eq!(
+        repository
+            .credential_authority_snapshot("org-1", selected.id)
+            .await
+            .unwrap()
+            .unwrap(),
+        canonical_before
+    );
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]["vct"] =
+        json!("urn:ungranted:credential");
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let ungranted = body(app.clone().oneshot(get()).await.unwrap()).await;
+    assert_ne!(ungranted["revision"], bound["revision"]);
+    assert_eq!(
+        ungranted["issuer_keys"][0]["issuance_authorizations"],
+        json!([])
+    );
+    relationship.metadata["marty_wallet_issuance_authorizations_v1"][0]["vct"] =
+        json!("https://credentials.example/identity");
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let mut invalid_metadata = relationship.metadata.clone();
+    invalid_metadata["marty_wallet_issuance_authorizations_v1"][0]["credential_issuer"] =
+        json!("https://issuer.example/*");
+    let rejected = app
+        .clone()
+        .oneshot(
+            Request::patch(format!(
+                "/v1/trust-profiles/{}/issuers/{}",
+                selected.id, relationship.id
+            ))
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"metadata":invalid_metadata}).to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), 422);
+    assert_eq!(
+        repository.profile_issuers(selected.id).await.unwrap()[0].metadata,
+        relationship.metadata
+    );
+    let accepted = app
+        .clone()
+        .oneshot(
+            Request::patch(format!(
+                "/v1/trust-profiles/{}/issuers/{}",
+                selected.id, relationship.id
+            ))
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"metadata":relationship.metadata}).to_string(),
+            ))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), 200);
+    // No implicit grant follows from a trusted issuer or known public key.
+    relationship.metadata = json!({});
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    assert_eq!(app.clone().oneshot(get()).await.unwrap().status(), 503);
+    relationship.metadata = json!({"marty_credential_authorizations_v1":[{"format":"SD_JWT_VC","vct":"https://credentials.example/other"}]});
+    repository.save_profile_issuer(&relationship).await.unwrap();
+    let changed = body(app.clone().oneshot(get()).await.unwrap()).await;
+    assert_ne!(changed["revision"], first["revision"]);
+    assert_eq!(
+        changed["issuer_keys"][0]["credential_authorizations"][0]["vct"],
+        "https://credentials.example/other"
+    );
+    for mode in [
+        "external-status",
+        "unsupported-extension",
+        "wrong-purpose",
+        "key-usage",
+        "issuer-revoked",
+    ] {
+        let mut denied = selected.clone();
+        let mut denied_issuer = issuer.clone();
+        match mode {
+            "external-status" => denied.revocation_policy.check_status_list = true,
+            "unsupported-extension" => {
+                denied
+                    .validation_rules
+                    .extensions
+                    .insert("unknown".into(), json!(true));
+            }
+            "wrong-purpose" => {
+                denied.trust_purposes = Some(vec![TrustPurpose::PresentationVerifier])
+            }
+            "key-usage" => {
+                denied_issuer.metadata["verification_keys"][0]["use"] = json!("enc");
+            }
+            _ => denied_issuer.revoked_at = Some(now),
+        }
+        repository.save_profile(&denied, None).await.unwrap();
+        repository.save_issuer_entity(&denied_issuer).await.unwrap();
+        let response = app.clone().oneshot(get()).await.unwrap();
+        assert!(matches!(response.status().as_u16(), 422 | 503), "{mode}");
+        assert!(body(response).await.get("issuer_keys").is_none(), "{mode}");
+    }
+    issuer.revoked_at = None;
+    repository.save_issuer_entity(&issuer).await.unwrap();
+    repository.save_profile(&selected, None).await.unwrap();
+    for request in [
+        Request::get(&uri)
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap(),
+        Request::get(&uri)
+            .header("x-service-token", &token)
+            .body(Body::empty())
+            .unwrap(),
+        Request::get(uri.replace("org-1", "other-org"))
+            .header("x-service-token", &token)
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap(),
+    ] {
+        assert!(matches!(
+            app.clone()
+                .oneshot(request)
+                .await
+                .unwrap()
+                .status()
+                .as_u16(),
+            401 | 403
+        ));
+    }
+    struct ChangeDuringAuthorization {
+        repository: Arc<MemoryTrustProfileRepository>,
+        selected: TrustProfile,
+        calls: std::sync::atomic::AtomicUsize,
+        deny_membership: bool,
+    }
+    #[async_trait]
+    impl TrustProfileControlPlane for ChangeDuringAuthorization {
+        async fn require_permission(
+            &self,
+            user: &str,
+            organization: &str,
+            resource: &'static str,
+            action: &'static str,
+        ) -> Result<(), TrustAuthorizationError> {
+            use std::sync::atomic::Ordering;
+            assert_eq!(
+                (user, organization, resource, action),
+                ("user-1", "org-1", "trust-profile", "view")
+            );
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                if self.deny_membership {
+                    return Err(TrustAuthorizationError::MembershipRequired);
+                }
+                let mut changed = self.selected.clone();
+                changed.time_policy.max_clock_skew_seconds += 1;
+                self.repository.save_profile(&changed, None).await.unwrap();
+            }
+            Ok(())
+        }
+    }
+    for deny_membership in [true, false] {
+        repository.save_profile(&selected, None).await.unwrap();
+        let control = Arc::new(ChangeDuringAuthorization {
+            repository: repository.clone(),
+            selected: selected.clone(),
+            calls: Default::default(),
+            deny_membership,
+        });
+        let raced = trust_profile_router(TrustProfileHttpState {
+            flow_owner: None,
+            application: Arc::new(TrustProfileApplication::new(
+                repository.clone(),
+                control.clone(),
+            )),
+            repository: repository.clone(),
+            service_authenticator: Arc::new(
+                ServiceTokenAuthenticator::new(Some(token.clone()), true).unwrap(),
+            ),
+            internal_api_key: None,
+            registry_synchronizer: Arc::new(EchoSynchronizer),
+        })
+        .oneshot(get())
+        .await
+        .unwrap();
+        assert_eq!(control.calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            raced.status().as_u16(),
+            if deny_membership { 403 } else { 409 }
+        );
+        assert!(body(raced).await.get("issuer_keys").is_none());
+    }
+}
+
+#[tokio::test]
 async fn internal_decisions_reject_cross_tenant_and_private_key_relationships() {
     let repository = Arc::new(MemoryTrustProfileRepository::default());
     let cross_tenant = profile("Cross tenant");
@@ -1042,6 +1674,7 @@ async fn delegated_lifecycle_requires_service_identity_scope_and_profile_tenant_
                     Arc::new(RejectKeyMembership),
                 ));
                 let app = trust_profile_router(TrustProfileHttpState {
+                    flow_owner: None,
                     application,
                     repository: repository.clone(),
                     service_authenticator: Arc::new(
@@ -1385,6 +2018,7 @@ mod credential_authority_tests {
             Arc::new(AllowControlPlane),
         ));
         TrustProfileHttpState {
+            flow_owner: None,
             application,
             repository,
             service_authenticator: Arc::new(

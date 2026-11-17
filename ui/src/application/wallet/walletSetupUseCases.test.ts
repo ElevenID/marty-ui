@@ -1,11 +1,40 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   getOrCreateWalletDeviceId,
+  issueRemotePairingTicket,
   registerWalletPushNotifications,
 } from './walletSetupUseCases';
 
+const { mockPost } = vi.hoisted(() => ({ mockPost: vi.fn() }));
+vi.mock('../../services/api', () => ({ get: vi.fn(), post: mockPost, getErrorMessage: vi.fn() }));
+
 describe('walletSetupUseCases', () => {
+  beforeEach(() => { mockPost.mockReset(); });
+
+  it('sends only the browser-selected distinct verifier profile alongside issuer scope', async () => {
+    const issuer = '11111111-2222-4333-8444-555555555555';
+    const verifier = 'AAAAAAAA-2222-4333-8444-555555555555';
+    mockPost.mockResolvedValue({ pairing_id: 'synthetic' });
+    await issueRemotePairingTicket({ organizationId: 'org-a', trustProfileId: issuer, verifierTrustProfileId: verifier });
+    expect(mockPost).toHaveBeenLastCalledWith('/v1/devices/pairing-tickets', {
+      organization_id: 'org-a', trust_profile_id: issuer,
+      verifier_trust_profile_id: verifier.toLowerCase(),
+    });
+    await issueRemotePairingTicket({ organizationId: 'org-a', trustProfileId: issuer });
+    expect(mockPost).toHaveBeenLastCalledWith('/v1/devices/pairing-tickets', {
+      organization_id: 'org-a', trust_profile_id: issuer,
+    });
+  });
+
+  it('refuses malformed, nil or issuer-equivalent verifier references before transport', async () => {
+    const issuer = 'aaaaaaaa-2222-4333-8444-555555555555';
+    for (const verifier of ['', 'not-a-profile', '00000000-0000-0000-0000-000000000000', issuer.toUpperCase()]) {
+      await expect(issueRemotePairingTicket({ organizationId: 'org-a', trustProfileId: issuer,
+        verifierTrustProfileId: verifier })).rejects.toThrow('distinct verifier Trust Profile');
+    }
+    expect(mockPost).not.toHaveBeenCalled();
+  });
   it('gets or creates a stable wallet device id in storage', () => {
     const storage = {
       getItem: vi.fn().mockReturnValue(null),

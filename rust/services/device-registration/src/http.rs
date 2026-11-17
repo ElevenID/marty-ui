@@ -21,6 +21,7 @@ use crate::{
     pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
     pairing_ticket::PairingTicketRepository,
     wallet_issuer_trust::WalletIssuerTrustClient,
+    wallet_verifier_trust::WalletVerifierTrustClient,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
 };
 
@@ -30,6 +31,7 @@ pub struct HttpState {
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub pairing_tickets: Arc<dyn PairingTicketRepository>,
     pub wallet_issuer_trust: Option<Arc<WalletIssuerTrustClient>>,
+    pub wallet_verifier_trust: Option<Arc<WalletVerifierTrustClient>>,
     pub pairing_confirmations: Option<Arc<PostgresPairingConfirmations>>,
     pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
     pub holder_signer: Option<Arc<HolderSigner>>,
@@ -67,6 +69,10 @@ pub fn router(state: HttpState) -> Router {
             axum::routing::post(rotate_holder_credential),
         )
         .route("/v1/devices/wallet-issuer-keys", get(wallet_issuer_keys))
+        .route(
+            "/v1/devices/wallet-verifier-authority",
+            get(wallet_verifier_authority),
+        )
         .route(
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
@@ -141,6 +147,7 @@ struct ListQuery {
 struct PairingTicketRequest {
     organization_id: String,
     trust_profile_id: String,
+    verifier_trust_profile_id: Option<String>,
 }
 
 async fn issue_pairing_ticket(
@@ -160,17 +167,49 @@ async fn issue_pairing_ticket(
     if uuid::Uuid::parse_str(&body.trust_profile_id).is_err() {
         return Err(DeviceError::BadRequest("trust_profile_id is required".into()).into());
     }
+    if let Some(verifier_profile) = body.verifier_trust_profile_id.as_deref() {
+        let verifier_id = uuid::Uuid::parse_str(verifier_profile)
+            .map_err(|_| DeviceError::BadRequest("verifier_trust_profile_id is invalid".into()))?;
+        if verifier_id.is_nil()
+            || verifier_id.to_string() != verifier_profile
+            || Some(verifier_id) == uuid::Uuid::parse_str(&body.trust_profile_id).ok()
+        {
+            return Err(DeviceError::BadRequest(
+                "a distinct verifier trust profile is required".into(),
+            )
+            .into());
+        }
+    }
     let trust = state
         .wallet_issuer_trust
         .as_ref()
         .ok_or(DeviceError::AuthorizationUnavailable)?;
-    trust.fetch(&body.trust_profile_id, organization_id).await?;
+    trust
+        .fetch(&body.trust_profile_id, organization_id, &user_id)
+        .await?;
+    if let Some(verifier_profile) = body.verifier_trust_profile_id.as_deref() {
+        state
+            .wallet_verifier_trust
+            .as_ref()
+            .ok_or(DeviceError::AuthorizationUnavailable)?
+            .admit(verifier_profile, organization_id, &user_id)
+            .await?;
+    }
+    state
+        .memberships
+        .require_active(&user_id, organization_id)
+        .await?;
     let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
         DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
     })?;
     let ticket = state
         .pairing_tickets
-        .issue(&user_id, organization_id, &body.trust_profile_id)
+        .issue_with_verifier_profile(
+            &user_id,
+            organization_id,
+            &body.trust_profile_id,
+            body.verifier_trust_profile_id.as_deref(),
+        )
         .await?;
     confirmations.record_issued(&ticket.scope).await?;
     let mut response = Json(json!({
@@ -293,6 +332,108 @@ async fn rotate_holder_credential(
     Ok(response)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WalletVerifierQuery {
+    client_id: String,
+    request_uri: Option<String>,
+}
+
+async fn wallet_verifier_authority(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<WalletVerifierQuery>,
+) -> Result<Response, ApiError> {
+    let bearer = bearer(&headers)?;
+    let confirmations = state
+        .pairing_confirmations
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    let trust = state
+        .wallet_verifier_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    if let Some(locator) = query.request_uri.as_deref() {
+        let scope = confirmations.governance_for_bearer(bearer).await?;
+        state
+            .memberships
+            .require_active(&scope.user_id, &scope.organization_id)
+            .await?;
+        let snapshot = trust
+            .fetch_managed(
+                scope
+                    .verifier_trust_profile_id
+                    .as_deref()
+                    .ok_or(DeviceError::AuthorizationUnavailable)?,
+                &scope.organization_id,
+                &scope.user_id,
+                &query.client_id,
+                locator,
+            )
+            .await?;
+        state
+            .memberships
+            .require_active(&scope.user_id, &scope.organization_id)
+            .await?;
+        if confirmations.governance_for_bearer(bearer).await? != scope {
+            return Err(DeviceError::Forbidden("wallet governance scope changed".into()).into());
+        }
+        let now = chrono::Utc::now();
+        let expires =
+            serde_json::from_value::<chrono::DateTime<chrono::Utc>>(snapshot["expires_at"].clone())
+                .map_err(|_| DeviceError::AuthorizationUnavailable)?
+                .min(scope.credential_expires_at);
+        if expires <= now {
+            return Err(DeviceError::AuthorizationUnavailable.into());
+        }
+        let envelope = json!({"contract":"marty.wallet/device-verifier-governance/v2","scope":scope,
+            "observed_at":now,"expires_at":expires,"verifier":snapshot});
+        if serde_json::to_vec(&envelope)
+            .map_err(|_| DeviceError::AuthorizationUnavailable)?
+            .len()
+            > 65536
+        {
+            return Err(DeviceError::AuthorizationUnavailable.into());
+        }
+        let mut response = Json(envelope).into_response();
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        return Ok(response);
+    }
+    let profile = confirmations.profile_for_bearer(bearer).await?;
+    let verifier = profile
+        .verifier_trust_profile_id
+        .as_deref()
+        .ok_or_else(|| DeviceError::Forbidden("no verifier trust profile was paired".into()))?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
+        .await?;
+    let snapshot = trust
+        .fetch(
+            verifier,
+            &profile.organization_id,
+            &profile.user_id,
+            &query.client_id,
+        )
+        .await?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
+        .await?;
+    if confirmations.profile_for_bearer(bearer).await? != profile {
+        return Err(DeviceError::Forbidden("wallet verifier authorization changed".into()).into());
+    }
+    let mut response = Json(snapshot).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
 async fn wallet_issuer_keys(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -306,21 +447,46 @@ async fn wallet_issuer_keys(
         .wallet_issuer_trust
         .as_ref()
         .ok_or(DeviceError::AuthorizationUnavailable)?;
-    let profile = confirmations.profile_for_bearer(bearer).await?;
+    let profile = confirmations.issuer_governance_for_bearer(bearer).await?;
     state
         .memberships
         .require_active(&profile.user_id, &profile.organization_id)
         .await?;
     let snapshot = trust
-        .fetch(&profile.trust_profile_id, &profile.organization_id)
+        .fetch(
+            &profile.issuer_trust_profile_id,
+            &profile.organization_id,
+            &profile.user_id,
+        )
+        .await?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
         .await?;
     // Recheck after the remote read so rotation or deactivation during that read fails closed.
-    if confirmations.profile_for_bearer(bearer).await? != profile {
+    if confirmations.issuer_governance_for_bearer(bearer).await? != profile {
         return Err(
             DeviceError::Forbidden("wallet issuer trust authorization changed".into()).into(),
         );
     }
-    let mut response = Json(snapshot).into_response();
+    let now = chrono::Utc::now();
+    let expires =
+        serde_json::from_value::<chrono::DateTime<chrono::Utc>>(snapshot["expires_at"].clone())
+            .map_err(|_| DeviceError::AuthorizationUnavailable)?
+            .min(profile.credential_expires_at);
+    if expires <= now {
+        return Err(DeviceError::AuthorizationUnavailable.into());
+    }
+    let envelope = json!({"contract":"marty.wallet/device-issuer-governance/v2","scope":profile,
+        "observed_at":now,"expires_at":expires,"issuer":snapshot});
+    if serde_json::to_vec(&envelope)
+        .map_err(|_| DeviceError::AuthorizationUnavailable)?
+        .len()
+        > 256 * 1024
+    {
+        return Err(DeviceError::AuthorizationUnavailable.into());
+    }
+    let mut response = Json(envelope).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

@@ -275,6 +275,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             error
         })?;
     }
+    let observations =
+        marty_issuance_service::external_observation_startup::prepare_isolated_observation_router(
+            &pool,
+            config.external_observation_database_url.as_deref(),
+            config.external_observations_enabled,
+            config.issuance_api_key.as_deref(),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),
@@ -941,6 +950,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             services
         }
     });
+    let app = if let Some(observations) = observations {
+        app.merge(observations)
+    } else {
+        app
+    };
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = IssuanceServiceServer::new(grpc_service);
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
