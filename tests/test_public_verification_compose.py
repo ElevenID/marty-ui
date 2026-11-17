@@ -13,7 +13,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "deploy-config/compose/public-verification/compose.openbao.yml"
 BASE = ROOT / "docker-compose.selfhost.prod.yml"
-GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+GATE = runpy.run_path(str(ROOT / "scripts/compose_config_model.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
 TOKEN = "sign_grant_mint_flow_demo_holder_token"
 CONFIG_INPUT = "MARTY_PUBLIC_VERIFICATION_CONFIG_PATH"

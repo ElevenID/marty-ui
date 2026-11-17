@@ -109,3 +109,7 @@ rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs
 !.github/scripts/
 !.github/scripts/private-forks.py
 **/.cargo
+
+# Exact platform acceptance wrappers; runtime sources remain included.
+rust/crates/flow-acceptance/tests/support/base_runtime_redis.rs
+rust/crates/flow-acceptance/tests/support/didcomm_gateway_replay.rs

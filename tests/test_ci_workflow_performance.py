@@ -1045,7 +1045,6 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
     assert verified[-1] == b"" and len(verified) == 5
     worker_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert worker_tests == [
-        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
         "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         "rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs",
@@ -3065,8 +3064,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         _classify_changed_paths(
             [
                 "tests/test_canvas_published_preflight.py",
-                "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
-            ],
+                    ],
             tmp_path,
             combined=True,
         )[0]["rust"]
@@ -4888,7 +4886,6 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             expected_condition += " && steps.test_only.outputs.skip != 'true'"
             proof = next(step for step in job["steps"] if step.get("id") == "test_only")
             assert proof["if"] == "steps.scope.outputs.test_only_candidate == 'true'"
-            assert "--emit-verified-worker-tests" in proof["with"]["script"]
             assert "--emit-verified-flow-tests" in proof["with"]["script"]
             assert "--emit-verified-selfhost-tests" in proof["with"]["script"]
             init = next(
@@ -4949,10 +4946,6 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
     service_acceptance = "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
     signing_csca = "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs"
     proofs = {
-        "--emit-verified-worker-tests": {
-            "status": 0,
-            "stdout": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs\0",
-        },
         "--emit-verified-flow-tests": {
             "status": 0,
             "stdout": "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs\0",
@@ -5031,7 +5024,6 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
         {"filename": selfhost, "status": "modified"},
     ])["skip"] == "true"
     for path in [
-        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
         "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
     ]:
         assert classify([{"filename": path, "status": "modified"}])["skip"] == "true"

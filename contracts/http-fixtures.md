@@ -22,12 +22,12 @@ Both record the exact parent Git blob and selected JSON field. Selected values,
 order and case counts are unchanged; unrelated provider configuration and worker
 behavior are not part of the projected fixtures.
 
-Historical provider oracle scripts still have their original inputs during the
-remaining test-artifact retirement. Platform Rust modules use these neutral
-paths. The obsolete provider capture example and provider-only Rust fixtures are
-removed; their source remains available in Git history. The retained generic
-platform database fixture is `platform_test_database.rs` and invokes current
-schema owners directly.
+Provider-specific oracle scripts and their old Rust capture fixtures are removed.
+Original frozen inputs remain historical evidence during the remaining contract
+inventory cleanup. Generic offline capture utilities use `http_*_codec_oracle.py`;
+JSON structural/value observers have independent neutral modules and tests.
+Platform Rust modules consume neutral fixture paths. The generic database fixture
+`platform_test_database.rs` invokes current schema owners directly.
 
 Canvas protocol and administration belong in the independent connector, whose
 only platform integration point is the public Common Gateway. Production connector

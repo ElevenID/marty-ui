@@ -171,3 +171,7 @@ rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
 # CSCA test targets run from the checkout, not images.
 rust/services/signing-keys/tests/csca_lifecycle_behavior.rs
 rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs
+
+# Exact platform acceptance wrappers; runtime sources remain included.
+rust/crates/flow-acceptance/tests/support/base_runtime_redis.rs
+rust/crates/flow-acceptance/tests/support/didcomm_gateway_replay.rs

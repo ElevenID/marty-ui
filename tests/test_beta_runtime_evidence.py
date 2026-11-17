@@ -8,8 +8,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import complete_local_beta_startup as startup
-from scripts.check_canvas_oss_portability import ContractError, validate_runtime_binding
-from tests.test_check_canvas_oss_portability import runtime_binding_fixture
+from scripts.beta_runtime_binding import ContractError, validate_runtime_binding
+from tests.test_beta_runtime_binding import runtime_binding_fixture
 
 
 def current(role, image, source_id, release, index):
@@ -29,7 +29,7 @@ def test_shared_writer_satisfies_actual_portability_validator(tmp_path):
     manifest["compose_project"] = "elevenid-beta"
     manifest["images"] = [startup.record(role, current(role, image, source_id,
         context["release_version"], index)) for index, role in enumerate(
-            ("gateway", "issuance", "canvas-sync-worker"), 1)]
+            ("gateway", "issuance"), 1)]
     context["service_image_digests"] = {row["service"]: image for row in manifest["images"]}
     manifest["services_marker"]["image_digests"] = context["service_image_digests"]
     context_path.write_text(json.dumps(context))

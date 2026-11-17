@@ -65,15 +65,8 @@ _without_rust_comments = import_module(
 
 ISSUANCE_SRC = "rust/services/issuance/src/"
 TEST_LEAVES = {
-    "canvas_operation_http_prepared_tests.rs": "canvas_operation_http.rs",
-    "canvas_sync_provider_http_tests.rs": "canvas_sync_provider_http.rs",
-    "canvas_sync_processor_tests.rs": "canvas_sync_processor.rs",
-    "canvas_sync_worker_retry_tests.rs": "canvas_sync_worker.rs",
-    "canvas_sync_worker_renewal_tests.rs": "canvas_sync_worker_retry_tests.rs",
     "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs": "initiation_didcomm.rs",
     "passport_http_reconciliation_tests.rs": "passport_http.rs",
-    "python_format_tests.rs": "python_format.rs",
-    "signing_http_projection_tests.rs": "http.rs",
     "signing_http_response_tests.rs": "signing_http_response.rs",
     "token_rate_limit_http_tests.rs": "http.rs",
 }
@@ -83,46 +76,12 @@ OID4VP_TEST_TARGETS = (
 )
 OID4VP_TEST_ROOT = "rust/crates/oid4vp-contract/tests/"
 OID4VP_CORPUS = "contracts/oid4vp-authenticated-contract-v1.json"
-WORKER_TEST_ROOT = "rust/crates/canvas-worker-acceptance/tests/"
-WORKER_TEST_FILES = (
-    "canvas_published_worker_contract.rs",
-    "support/canvas_rest_requalification.rs",
-    "support/canvas_startup_attestation.rs",
-    "support/canvas_worker_roster_metadata.rs",
-)
-CANVAS_COMPOSITION_TEST_ROOT = "rust/crates/canvas-acceptance/tests/"
-CANVAS_COMPOSITION_TEST_FILES = (
-    "canvas_published_schema_contract.rs",
-    "support/base_runtime_canvas.rs",
-    "support/base_runtime_container.rs",
-    "support/base_runtime_didcomm.rs",
-    "support/base_runtime_gateway.rs",
-    "support/base_runtime_ordinary.rs",
-    "support/base_runtime_redis.rs",
-    "support/didcomm_composed_delivery.rs",
-    "support/didcomm_fresh_initiation.rs",
-    "support/didcomm_gateway_replay.rs",
-    "support/didcomm_renewal_canvas.rs",
-    "support/didcomm_renewal_composed.rs",
-    "support/didcomm_unkeyed_grpc_initiation.rs",
-    "support/owned_cleanup.rs",
-    "support/remote_didcomm_sender.rs",
-    "support/remote_tls_peer.rs",
-    "support/rendered_base_process.rs",
-    "support/renewal_binding_postgres.rs",
-    "support/renewal_canvas_binding.rs",
-    "support/renewal_fresh_main.rs",
-    "support/renewal_gateway_replay.rs",
-    "support/renewal_main_replay.rs",
-    "support/renewal_startup_snapshot.rs",
-    "support/resolved_kubernetes_runtime.rs",
-    "support/resolved_runtime.rs",
-    "support/runtime_failure_diagnostics.rs",
-)
 FLOW_TEST_ROOT = "rust/crates/flow-acceptance/tests/"
 FLOW_PUBLISHED_TEST_FILES = (
     "flow_published_schema_contract.rs",
+    "support/base_runtime_redis.rs",
     "support/didcomm_flow_grpc_admission.rs",
+    "support/didcomm_gateway_replay.rs",
     "support/flow_admission.rs",
     "support/flow_legacy_physical_http.rs",
     "support/flow_native_consumer.rs",
@@ -138,6 +97,8 @@ FLOW_DEMO_TEST_FILES = (
 )
 FLOW_TEST_FILES = tuple(sorted((*FLOW_PUBLISHED_TEST_FILES, *FLOW_DEMO_TEST_FILES)))
 FLOW_SUPPORT_OWNERS = {
+    "base_runtime_redis.rs": "flow_published_schema_contract.rs",
+    "didcomm_gateway_replay.rs": "flow_published_schema_contract.rs",
     "didcomm_flow_grpc_admission.rs": "support/flow_admission.rs",
     "flow_admission.rs": "flow_published_schema_contract.rs",
     "flow_legacy_physical_http.rs": "support/flow_native_consumer.rs",
@@ -178,7 +139,6 @@ DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
     "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
-    "docker/canvas-sandbox/Dockerfile": ".dockerignore",
     "rust/services/event-stream/Dockerfile": ".dockerignore",
     "rust/services/revocation-profile/Dockerfile": ".dockerignore",
     "rust/services/signing-keys/Dockerfile": ".dockerignore",
@@ -187,9 +147,7 @@ PRODUCTION_INPUTS = (
     "rust/Cargo.toml",
     "rust/Cargo.lock",
     "rust/services/issuance/Cargo.toml",
-    "rust/services/issuance/src/canvas_sync_worker.rs",
     "rust/services/issuance/src/initiation_didcomm.rs",
-    "rust/services/issuance/src/canvas_sync_processor_contract.md",
     "rust/services/issuance/src/http.rs",
     "rust/services/issuance/src/signing_http_response.rs",
     "proto/v1/issuance_service.proto",
@@ -496,150 +454,12 @@ def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None
     assert not _is_ignored(OID4VP_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
-def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
-    assert _tracked_paths(ROOT, WORKER_TEST_ROOT) == [
-        WORKER_TEST_ROOT + name for name in WORKER_TEST_FILES
-    ]
-    for name in WORKER_TEST_FILES:
-        path = WORKER_TEST_ROOT + name
-        source = ROOT / path
-        assert source.is_file() and not source.is_symlink(), (
-            f"Worker test must be a regular checkout file: {path}"
-        )
-        assert _tracked_regular_mode(ROOT, path), (
-            f"Worker test must have a regular Git index mode: {path}"
-        )
-    manifest = tomllib.loads(
-        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert manifest["package"]["autotests"] is False
-    assert "build" not in manifest["package"]
-    assert manifest["test"] == [
-        {
-            "name": "canvas_published_worker_contract",
-            "path": "tests/canvas_published_worker_contract.rs",
-        }
-    ]
-    target = (ROOT / (WORKER_TEST_ROOT + WORKER_TEST_FILES[0])).read_text(
-        encoding="utf-8"
-    )
-    for name in WORKER_TEST_FILES[1:]:
-        assert target.count(f'#[path = "{name}"]') == 1
-    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
-    for ignore_path in set(DOCKER_CONTEXTS.values()):
-        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
-        for name in WORKER_TEST_FILES:
-            path = WORKER_TEST_ROOT + name
-            assert _is_ignored(path, lines), (
-                f"Docker COPY includes {ignore_path}: {path}"
-            )
-            if ignore_path == ".dockerignore":
-                assert lines.count(path) == 1
-        assert not _is_ignored(
-            "rust/services/issuance/src/canvas_sync_worker.rs", lines
-        )
-    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
-def test_canvas_composition_test_tree_stays_out_of_release_rust_contexts() -> None:
-    paths = [
-        CANVAS_COMPOSITION_TEST_ROOT + name for name in CANVAS_COMPOSITION_TEST_FILES
-    ]
-    assert _tracked_paths(ROOT, CANVAS_COMPOSITION_TEST_ROOT) == paths
-    for path in paths:
-        assert (ROOT / path).is_file() and not (ROOT / path).is_symlink()
-        assert _tracked_regular_mode(ROOT, path)
-    manifest = tomllib.loads(
-        (ROOT / "rust/crates/canvas-acceptance/Cargo.toml").read_text(encoding="utf-8")
-    )
-    assert manifest["package"]["name"] == "marty-canvas-acceptance"
-    assert manifest["package"]["autotests"] is False
-    assert "build" not in manifest["package"]
-    assert manifest["test"] == [
-        {
-            "name": "canvas_published_schema_contract",
-            "path": "tests/canvas_published_schema_contract.rs",
-        }
-    ]
-    consumers = _ownership_sources(
-        ROOT, tuple(Path(name).name for name in CANVAS_COMPOSITION_TEST_FILES)
-    )
-    # Other acceptance targets may reference a shared test-only support leaf.
-    # A production source consumer must still force a context review.
-    assert all("/tests/" in path for path in consumers), (
-        f"Review a Canvas composition test source consumer: {sorted(consumers)}"
-    )
-    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
-    for dockerfile in DOCKER_CONTEXTS:
-        recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
-        assert "--cfg test" not in recipe
-        assert "--all-targets" not in recipe
-        assert "cargo test" not in recipe
-    build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "cargo build --locked --release" in build_script
-    assert "--cfg test" not in build_script and "--all-targets" not in build_script
-    for ignore_path in set(DOCKER_CONTEXTS.values()):
-        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
-        for path in paths:
-            assert _is_ignored(path, lines), (
-                f"Docker COPY includes {ignore_path}: {path}"
-            )
-            if ignore_path in {
-                ".dockerignore",
-                "services/Dockerfile.migrations.dockerignore",
-            }:
-                assert lines.count(path) == 1
-        for production_path in PRODUCTION_INPUTS:
-            assert not _is_ignored(production_path, lines)
-    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
-    assert not _is_ignored(
-        CANVAS_COMPOSITION_TEST_ROOT + "support/unreviewed.rs", root_lines
-    )
 
 
-def test_canvas_composition_context_proof_rejects_reincluded_test(monkeypatch) -> None:
-    import pytest
-
-    original = Path.read_text
-    target = CANVAS_COMPOSITION_TEST_ROOT + CANVAS_COMPOSITION_TEST_FILES[0]
-    for ignore_path in set(DOCKER_CONTEXTS.values()):
-
-        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
-            source = original(path, *args, **kwargs)
-            if path == ROOT / ignore_path:
-                return source + "\n!" + target + "\n"
-            return source
-
-        with monkeypatch.context() as patch:
-            patch.setattr(Path, "read_text", with_reincluded_test)
-            with pytest.raises(AssertionError, match="Docker COPY includes"):
-                test_canvas_composition_test_tree_stays_out_of_release_rust_contexts()
 
 
-def test_canvas_composition_context_proof_rejects_runtime_consumer(monkeypatch) -> None:
-    import pytest
-
-    original = _ownership_sources
-
-    def with_runtime_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
-        result = original(root, names)
-        if "canvas_published_schema_contract.rs" in names:
-            return {
-                **result,
-                "rust/services/issuance/src/lib.rs": 'include!("canvas_published_schema_contract.rs")',
-            }
-        return result
-
-    monkeypatch.setattr(
-        sys.modules[__name__], "_ownership_sources", with_runtime_consumer
-    )
-    with pytest.raises(AssertionError, match="Canvas composition test source consumer"):
-        test_canvas_composition_test_tree_stays_out_of_release_rust_contexts()
 
 
 def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
@@ -678,7 +498,16 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
             capture_output=True,
             text=True,
         ).stdout.splitlines()
-        assert references == [FLOW_TEST_ROOT + owner], (
+        expected_references = [FLOW_TEST_ROOT + owner]
+        if name in {"base_runtime_redis.rs", "didcomm_gateway_replay.rs"}:
+            # The wrapper also names the independently shared acceptance source.
+            # Bind that exact include; do not silently filter arbitrary consumers.
+            wrapper = FLOW_TEST_ROOT + "support/" + name
+            clean = _without_rust_comments((ROOT / wrapper).read_text(encoding="utf-8"))
+            assert clean.count(name) == 1
+            assert f'include!("../../../../acceptance/support/{name}");' in clean
+            expected_references.append(wrapper)
+        assert references == sorted(expected_references), (
             f"Flow support gained another Rust consumer: {name}: {references}"
         )
     assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
@@ -1106,102 +935,14 @@ def test_flow_context_proof_rejects_non_test_consumer(monkeypatch) -> None:
         test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
 
 
-def test_worker_roster_support_has_one_test_target_consumer() -> None:
-    name = "canvas_worker_roster_metadata.rs"
-    assert not (ROOT / "rust/services/issuance/tests/support" / name).exists()
-    references = subprocess.run(
-        ["git", "grep", "-l", "-F", name, "--", "*.rs"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    assert references == [WORKER_TEST_ROOT + WORKER_TEST_FILES[0]]
 
 
-def test_worker_roster_support_rejects_another_rust_consumer(monkeypatch) -> None:
-    import pytest
-
-    original = subprocess.run
-
-    def with_extra_consumer(command, *args, **kwargs):
-        result = original(command, *args, **kwargs)
-        if command[:3] == ["git", "grep", "-l"]:
-            return subprocess.CompletedProcess(
-                command,
-                result.returncode,
-                stdout=result.stdout + "rust/services/issuance/src/lib.rs\n",
-                stderr=result.stderr,
-            )
-        return result
-
-    monkeypatch.setattr(subprocess, "run", with_extra_consumer)
-    with pytest.raises(AssertionError):
-        test_worker_roster_support_has_one_test_target_consumer()
 
 
-def test_verified_worker_test_paths_require_six_context_proof() -> None:
-    result = subprocess.run(
-        [sys.executable, __file__, "--emit-verified-worker-tests"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-    )
-    assert result.stderr == b""
-    assert (
-        result.stdout
-        == b"\0".join(
-            (WORKER_TEST_ROOT + name).encode("utf-8") for name in WORKER_TEST_FILES
-        )
-        + b"\0"
-    )
 
 
-def test_worker_context_proof_rejects_reincluded_worker_test(
-    monkeypatch,
-) -> None:
-    import pytest
-
-    original = Path.read_text
-    for ignore_path in set(DOCKER_CONTEXTS.values()):
-
-        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
-            source = original(path, *args, **kwargs)
-            if path == ROOT / ignore_path:
-                return source + "\n!" + WORKER_TEST_ROOT + WORKER_TEST_FILES[0] + "\n"
-            return source
-
-        with monkeypatch.context() as patch:
-            patch.setattr(Path, "read_text", with_reincluded_test)
-            with pytest.raises(AssertionError, match="Docker COPY includes"):
-                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
 
 
-def test_worker_context_proof_rejects_symlink_or_gitlink(monkeypatch) -> None:
-    import pytest
-
-    original_is_symlink = Path.is_symlink
-    original_mode = _tracked_regular_mode
-    for name in WORKER_TEST_FILES:
-        suspect = WORKER_TEST_ROOT + name
-
-        def synthetic_symlink(path: Path) -> bool:
-            return path == ROOT / suspect or original_is_symlink(path)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(Path, "is_symlink", synthetic_symlink)
-            with pytest.raises(AssertionError, match="regular checkout file"):
-                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
-
-        def synthetic_gitlink(root: Path, path: str) -> bool:
-            return path != suspect and original_mode(root, path)
-
-        with monkeypatch.context() as patch:
-            patch.setattr(
-                sys.modules[__name__], "_tracked_regular_mode", synthetic_gitlink
-            )
-            with pytest.raises(AssertionError, match="regular Git index mode"):
-                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
 
 
 def test_oid4vp_verified_path_proof_rejects_new_rust_consumer(
@@ -1275,8 +1016,8 @@ def test_ownership_snapshot_reads_and_lexes_shared_source_once(monkeypatch) -> N
 def test_snapshot_owner_proof_rejects_additional_and_non_test_consumers() -> None:
     import pytest
 
-    name = "canvas_sync_worker_retry_tests.rs"
-    owner = "canvas_sync_worker.rs"
+    name = "token_rate_limit_http_tests.rs"
+    owner = "http.rs"
     path = ISSUANCE_SRC + owner
     valid = f'#[cfg(test)]\n#[path = "{name}"]\nmod retry_handoff_tests;'
     _assert_test_only_owner(ROOT, name, owner, {path: valid})
@@ -1296,8 +1037,8 @@ def test_issuance_leaf_owner_rejects_symlink_or_gitlink(monkeypatch) -> None:
     original_is_symlink = Path.is_symlink
     original_mode = _tracked_regular_mode
     for leaf in (
-        "canvas_sync_worker_retry_tests.rs",
-        "canvas_sync_worker_renewal_tests.rs",
+        "token_rate_limit_http_tests.rs",
+        "signing_http_response_tests.rs",
     ):
         path = ISSUANCE_SRC + leaf
 
@@ -1320,42 +1061,10 @@ def test_issuance_leaf_owner_rejects_symlink_or_gitlink(monkeypatch) -> None:
                 _assert_test_only_owner(ROOT, leaf, TEST_LEAVES[leaf])
 
 
-def test_paused_handler_registration_matches_frozen_renewal_matrix() -> None:
-    import json
-
-    source = (ROOT / ISSUANCE_SRC / "canvas_sync_worker_renewal_tests.rs").read_text(
-        encoding="utf-8"
-    )
-    fixture = json.loads(
-        (ROOT / "contracts/canvas-worker-renewal-job-outcomes.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    registry = source.split("primary_cases! {", 1)[1].split("}", 1)[0]
-    registered = re.findall(r'\w+: "([^"]+)", "([^"]+)";', registry)
-    expected = {
-        (stage, outcome["name"])
-        for stage in fixture["renewal_failures"]
-        for outcome in fixture["processor_outcomes"]
-    }
-    assert len(registered) == len(set(registered)) == 15
-    assert set(registered) == expected
-    assert fixture["cutover_authorized"] is False
-    assert "#[ignore" not in source
-    assert "worker.process_job(job).await" in source
-    assert "worker.run_cycle().await" in source
-    assert "await_with_lease_renewal(" not in source
-    for name in (
-        "lease_error_survives_failed_completion",
-        "target_error_survives_failed_retry_persistence",
-        "process_error_survives_failed_deadline_persistence",
-        "actual_cycle_does_not_count_persisted_success_after_renewal_error",
-    ):
-        assert f"#[tokio::test(start_paused = true)]\nasync fn {name}()" in source
 
 
 def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None:
-    name = "canvas_sync_worker_retry_tests.rs"
+    name = "token_rate_limit_http_tests.rs"
     valid = f'#[cfg(test)]\n#[path = "{name}"]\nmod retry_handoff_tests;'
     assert len(_active_owner_spans(valid, name)) == 1
     for source in (
@@ -1388,9 +1097,9 @@ def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None
 
 
 def test_dockerignore_guard_rejects_reincluded_leaf_and_excluded_runtime() -> None:
-    leaf = ISSUANCE_SRC + "canvas_sync_worker_retry_tests.rs"
+    leaf = ISSUANCE_SRC + "token_rate_limit_http_tests.rs"
     assert not _is_ignored(leaf, [leaf, "!" + leaf])
-    assert _is_ignored(ISSUANCE_SRC + "canvas_sync_worker.rs", ["rust/**"])
+    assert _is_ignored(ISSUANCE_SRC + "http.rs", ["rust/**"])
     assert _is_ignored(leaf, ["**", "!rust/**", leaf])
     nested = (
         ISSUANCE_SRC + "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs"
@@ -1425,15 +1134,6 @@ def _select_acceptance_test_lane(changed: bytes) -> str | None:
         return None
     cohorts = (
         (
-            "worker",
-            WORKER_TEST_ROOT,
-            WORKER_TEST_FILES,
-            (
-                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts,
-                test_worker_roster_support_has_one_test_target_consumer,
-            ),
-        ),
-        (
             "flow",
             FLOW_TEST_ROOT,
             FLOW_PUBLISHED_TEST_FILES,
@@ -1458,22 +1158,20 @@ def _select_acceptance_test_lane(changed: bytes) -> str | None:
 
 
 def test_acceptance_lane_selector_rejects_unowned_and_malformed_diffs() -> None:
-    worker = (WORKER_TEST_ROOT + WORKER_TEST_FILES[0]).encode()
     flow = (FLOW_TEST_ROOT + FLOW_TEST_FILES[0]).encode()
     selfhost = (SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0]).encode()
     for changed, expected in (
-        (worker + b"\0", "worker"),
         (flow + b"\0", "flow"),
         (selfhost + b"\0", "selfhost"),
         (b"", None),
         (b"\0", None),
-        (worker, None),
-        (worker + b"\0\0", None),
-        (worker + b"\0" + worker + b"\0", None),
-        (worker + b"\0" + flow + b"\0", None),
+        (flow, None),
+        (flow + b"\0\0", None),
+        (flow + b"\0" + flow + b"\0", None),
+        (flow + b"\0" + flow + b"\0", None),
         (flow + b"\0" + selfhost + b"\0", None),
-        (worker + b"\nother\0", None),
-        (b"rust/crates/canvas-worker-acceptance/tests/unreviewed.rs\0", None),
+        (flow + b"\nother\0", None),
+        (b"rust/crates/retired-acceptance/tests/unreviewed.rs\0", None),
     ):
         result = subprocess.run(
             [sys.executable, __file__, "--select-acceptance-test-lane"],
@@ -1516,13 +1214,6 @@ if __name__ == "__main__":
         test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
         for name in FLOW_PUBLISHED_TEST_FILES:
             sys.stdout.buffer.write((FLOW_TEST_ROOT + name).encode("utf-8") + b"\0")
-    elif sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
-        # The classifier consumes this only after proving exact tracked test
-        # ownership and exclusions in every Rust-copying Docker context.
-        test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
-        test_worker_roster_support_has_one_test_target_consumer()
-        for name in WORKER_TEST_FILES:
-            sys.stdout.buffer.write((WORKER_TEST_ROOT + name).encode("utf-8") + b"\0")
     elif sys.argv == [sys.argv[0], "--emit-verified-leaves"]:
         # CI may narrow only when both exact module and auto-target ownership,
         # corpus and image-context proofs still hold. Release pytest repeats them.
@@ -1535,7 +1226,7 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "Usage: test_rust_test_only_docker_context.py "
-            "--emit-verified-leaves|--emit-verified-worker-tests|"
+            "--emit-verified-leaves|"
             "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
             "|--emit-verified-contract-tests|--select-contract-tests"
             "|--select-acceptance-test-lane"
