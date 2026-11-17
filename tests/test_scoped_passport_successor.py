@@ -106,7 +106,7 @@ def test_python_v2_context_preserves_markers_and_rejects_drift(tmp_path, monkeyp
     from types import SimpleNamespace
     import hashlib
     path = tmp_path / "observation.json"
-    value = dict(schema="marty.canvas-functional-runtime-observation/v2",
+    value = dict(schema="marty.platform-functional-runtime-observation/v1",
                  scope="FUNCTIONAL_ONLY", profileSha256="c" * 64,
                  releaseQualified=False, recordingQualified=False)
     path.write_bytes(json.dumps(value).encode())
@@ -128,3 +128,24 @@ def test_python_v2_context_preserves_markers_and_rejects_drift(tmp_path, monkeyp
     path.write_bytes(path.read_bytes() + b" ")
     with pytest.raises(ValueError):
         audit.local_native_overlay_binding(capture, "b" * 40)
+
+
+def test_retired_provider_receipt_schema_refuses_even_with_matching_ack(tmp_path, monkeypatch):
+    from scripts import beta_passport_functional_audit as audit
+    from types import SimpleNamespace
+    import hashlib
+    path = tmp_path / "old-observation.json"
+    value = dict(schema="marty.canvas-functional-runtime-observation/v2",
+                 scope="FUNCTIONAL_ONLY", profileSha256="c" * 64,
+                 releaseQualified=False, recordingQualified=False)
+    path.write_bytes(json.dumps(value).encode())
+    context = dict(kind="FUNCTIONAL_RUNTIME_V2", profileSha256="c" * 64,
+                   receiptSha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                   scope="FUNCTIONAL_ONLY", releaseQualified=False, recordingQualified=False)
+    monkeypatch.delenv("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT", raising=False)
+    monkeypatch.setenv("DEMO_LOCAL_FUNCTIONAL_RUNTIME_RECEIPT", str(path))
+    monkeypatch.setenv("DEMO_LOCAL_FUNCTIONAL_RUNTIME_SHA256", context["receiptSha256"])
+    monkeypatch.setenv("RECORD_VIDEO", "0")
+    with pytest.raises(ValueError, match="observation differs"):
+        audit.local_native_overlay_binding(SimpleNamespace(native_runtime_binding=None,
+            functional_runtime_binding=context), "b" * 40)

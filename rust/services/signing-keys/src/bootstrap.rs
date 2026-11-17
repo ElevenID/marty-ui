@@ -62,14 +62,6 @@ pub const STANDARD_KEYS: &[KeySpec] = &[
         formats: &["jwt_vc_json"],
     },
     KeySpec {
-        id: "lti-tool-marty-rs256",
-        name: "Marty LTI tool signing key",
-        key_type: "rsa-2048",
-        algorithm: "RS256",
-        purposes: &["lti_tool_signing"],
-        formats: &["lti_tool_jwt"],
-    },
-    KeySpec {
         id: "oid4vp-verifier-marty-es256",
         name: "Marty OID4VP verifier request key",
         key_type: "ecdsa-p256",
@@ -544,14 +536,6 @@ pub const STANDARD_PROFILES: &[ProfileSpec] = &[
         algorithm: "ES256",
     },
     ProfileSpec {
-        id: "ip-marty-canvas-lti-tool",
-        name: "Marty Canvas LTI tool",
-        key: "lti-tool-marty-rs256",
-        purpose: "lti_tool_signing",
-        format: "VC_JWT",
-        algorithm: "RS256",
-    },
-    ProfileSpec {
         id: "ip-marty-mdoc-dsc",
         name: "Marty mDoc document signer",
         key: "cred-dsc-marty-primary",
@@ -678,13 +662,63 @@ mod tests {
     }
 
     fn case(name: &str) -> Value {
-        corpus()["cases"]
+        let mut value = corpus()["cases"]
             .as_array()
             .unwrap()
             .iter()
             .find(|case| case["name"] == name)
             .expect("named case")
-            .clone()
+            .clone();
+        platform_reference_projection(&mut value);
+        value
+    }
+
+    // Frozen pre-split corpus stays unchanged. Only newly seeded platform
+    // defaults omit the retired tool authority; no production migration runs.
+    fn platform_reference_projection(case: &mut Value) {
+        for document in case["state"]["redis"].as_object_mut().unwrap().values_mut() {
+            if let Some(profiles) = document.get_mut("profiles").and_then(Value::as_array_mut) {
+                profiles.retain(|profile| profile["id"] != "ip-marty-canvas-lti-tool");
+            }
+            let retired_method = document
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|did| format!("{did}#lti-tool-marty-rs256"));
+            if let Some(methods) = document
+                .get_mut("verificationMethod")
+                .and_then(Value::as_array_mut)
+            {
+                methods.retain(|method| method["publicKeyJwk"]["kid"] != "lti-tool-marty-rs256");
+            }
+            if let Some(methods) = document
+                .get_mut("assertionMethod")
+                .and_then(Value::as_array_mut)
+            {
+                methods.retain(|method| {
+                    retired_method
+                        .as_deref()
+                        .is_none_or(|retired| method.as_str() != Some(retired))
+                });
+            }
+            if let Some(keys) = document
+                .pointer_mut("/key_reference_purposes/managed-openbao-transit")
+                .and_then(Value::as_object_mut)
+            {
+                keys.remove("lti-tool-marty-rs256");
+            }
+            if let Some(defaults) = document
+                .get_mut("type_defaults")
+                .and_then(Value::as_object_mut)
+            {
+                defaults.remove("lti_tool_signing");
+            }
+            if let Some(defaults) = document
+                .get_mut("format_defaults")
+                .and_then(Value::as_object_mut)
+            {
+                defaults.remove("lti_tool_jwt");
+            }
+        }
     }
 
     fn records(clean: &Value) -> Vec<KeyRecord> {
@@ -823,6 +857,53 @@ mod tests {
                 did
             )
         );
+    }
+
+    #[test]
+    fn retired_tool_defaults_are_not_created_or_implicitly_deleted() {
+        assert!(!STANDARD_KEYS
+            .iter()
+            .any(|spec| spec.id == "lti-tool-marty-rs256"));
+        assert!(!STANDARD_PROFILES
+            .iter()
+            .any(|spec| spec.id == "ip-marty-canvas-lti-tool"));
+        let original = corpus()["cases"][0].clone();
+        assert_eq!(original["name"], "clean_apply");
+        let org = original["input"]["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .unwrap();
+        let did = original["input"]["environment"]["MARTY_ISSUER_DID"]
+            .as_str()
+            .unwrap();
+        let url = original["input"]["environment"]["MARTY_ISSUER_BASE_URL"]
+            .as_str()
+            .unwrap();
+        let legacy_did = original["state"]["redis"][did_key(org, Some(did))].clone();
+        let legacy_profiles = original["state"]["redis"][issuer_profiles_key(org)].clone();
+        let retired = legacy_profiles["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"] == "ip-marty-canvas-lti-tool")
+            .unwrap();
+        let (published, _) =
+            seed_did_and_jwks(Some(legacy_did.clone()), org, did, &records(&original));
+        let method = legacy_did["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|method| method["publicKeyJwk"]["kid"] == "lti-tool-marty-rs256")
+            .unwrap();
+        assert!(published["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .contains(method));
+        assert!(published["assertionMethod"]
+            .as_array()
+            .unwrap()
+            .contains(&method["id"]));
+        let seeded = seed_issuer_profiles(Some(legacy_profiles.clone()), org, did, url, &published);
+        assert!(seeded["profiles"].as_array().unwrap().contains(retired));
     }
 
     #[test]

@@ -213,3 +213,18 @@ network access; the retained generic OID4VCI verifier and demo wallet session
 owners keep their existing cryptographic, receipt and cleanup checks. Existing
 source-pinned operators and private journals require separate owner review;
 neutral names do not migrate or qualify their historical state.
+
+
+Platform issuer bootstrap no longer provisions the connector tool-signing key
+or its provider profile. Retained platform key/profile definitions keep their
+original fields. Existing published methods and stored profiles are preserved;
+bootstrap neither deletes them nor performs a custody migration. Connector tool
+signing belongs to the connector. TODO (deployment and connector owners): review
+any existing legacy tool material and migrate or retire it explicitly, separately
+from this source split.
+
+The passport functional observer consumes the current platform receipt schema
+from the recorder and rejects its old provider schema even with matching hashes.
+Keycloak renewal completion requires the current configurator without the
+retired administrator setting. Source tests do not upgrade old observations or
+qualify an existing deployment.

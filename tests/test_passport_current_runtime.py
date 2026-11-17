@@ -26,7 +26,7 @@ def current(monkeypatch, tmp_path):
     roles = [dict(role=role, source=("b"*40 if role=="gateway" else source), containerId=f"{index:064x}",
         imageId="sha256:"+"a"*64, startedAt="fixed-generation", hostPid=index+1)
         for index,role in enumerate((*audit.ROLES,"ui-prod"),1)]
-    observed = dict(schema="marty.canvas-functional-runtime-observation/v2", scope="FUNCTIONAL_ONLY",
+    observed = dict(schema="marty.platform-functional-runtime-observation/v1", scope="FUNCTIONAL_ONLY",
         releaseQualified=False, recordingQualified=False, profileSha256="a"*64,
         binding=dict(schema="marty.functional-mixed-runtime-binding/v2", scope="FUNCTIONAL_ONLY",
             releaseQualified=False, recordingQualified=False, roles=roles))
