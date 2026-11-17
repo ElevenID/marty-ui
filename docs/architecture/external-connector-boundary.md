@@ -163,3 +163,14 @@ Local observer tests do not qualify or dispatch a rollout.
 Retired selector fields are rejected before shared profile dispatch and at each
 predecessor layer, including mixed and falsy declarations. Read-only authority
 consumers cannot use a retired wrapper to reach a generic admission path.
+
+
+The old native-maintenance generation is unavailable to current runtime admission
+and profile production, including mixed or falsy selectors. Its complete original
+29-binary map remains in the hash-pinned build reference. Historical profile
+inspection and bounded read-only journal/transport auditing return explicitly
+historical reports with `runtimeAdmitted: false`; they cannot return a current
+profile through the old producer API. Their frozen preimage is the historical
+reference, rather than current source interpreting an old executable profile.
+TODO (platform maintenance owner): qualify a fresh provider-neutral maintenance
+generation separately. Existing jobs retain their original recovery owner.

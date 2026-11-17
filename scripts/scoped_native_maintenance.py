@@ -64,9 +64,10 @@ def migration_requirements():
     required = passport.migration_requirements()
     required.update(fencedSqlSha256=operational_sql_sources(),
         catalogSqlSha256="e7972f5d018100c5288dbe4eca0df2dbaa61ce21f8a34991789a3a173ad8110c",
-        outcomeVerifier="tests/scripts/native-maintenance-runtime.js::produceLatestProfile",
+        outcomeVerifier=None, currentRuntimeProfileAvailable=False, migrationApplyAuthority=False,
+        historicalOutcomeAudit="tests/scripts/native-maintenance-runtime.js::auditHistoricalMaintenance",
         operationEvidence="ORIGINAL_JOURNAL_RUST_PSQL_CATALOG_RECEIPTS_NOT_LEGACY_FENCE_DTO",
-        scope="LATEST_NATIVE_MAINTENANCE_PLAN_ONLY",
+        scope="HISTORICAL_NATIVE_MAINTENANCE_EVIDENCE_ONLY",
         flowSchemaToolSourceRevision=SOURCE, flowCliAvailableInSelectedBuild=True,
         separateSourceBoundMigrationToolBuildRequired=False,
         flowExecutionDisposition="USE_SAME_SOURCE_BOUND_SELECTED_FLOW_ELF",

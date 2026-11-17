@@ -114,3 +114,12 @@ def test_latest_contract_binds_initial_fence_and_metadata_sources():
     assert required["fencedSqlSha256"] == latest.operational_sql_sources()
     assert required["operationEvidence"] == "ORIGINAL_JOURNAL_RUST_PSQL_CATALOG_RECEIPTS_NOT_LEGACY_FENCE_DTO"
     assert required["applyEnabled"] is False
+
+
+def test_historical_plan_does_not_advertise_current_production_or_apply_authority():
+    requirements = latest.migration_requirements()
+    assert requirements["outcomeVerifier"] is None
+    assert requirements["currentRuntimeProfileAvailable"] is False
+    assert requirements["migrationApplyAuthority"] is False
+    assert requirements["scope"] == "HISTORICAL_NATIVE_MAINTENANCE_EVIDENCE_ONLY"
+    assert requirements["historicalOutcomeAudit"].endswith("::auditHistoricalMaintenance")

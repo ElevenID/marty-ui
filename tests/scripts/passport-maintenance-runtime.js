@@ -60,7 +60,8 @@ function validateGenerations(expected,before,selection,observed){
  });
 }
 
-function observeMaintenanceReadback({baseProfile,beforeBinding,selection:selectionRef},{readDocker,readJournal}={}){
+function observeMaintenanceReadback(){assert.fail('RETIRED_MAINTENANCE_READBACK_GENERATION');}
+function observeHistoricalMaintenanceReadback({baseProfile,beforeBinding,selection:selectionRef},{readDocker,readJournal}={}){
  assert.equal(typeof readDocker,'function','Pinned actual Docker read transport required');
  assert.equal(typeof readJournal,'function','Original frozen canonical journal read transport required');
  assert.equal(baseProfile.sha256,BASE);assert.equal(beforeBinding.sha256,BEFORE);
@@ -91,7 +92,7 @@ function observeMaintenanceReadback({baseProfile,beforeBinding,selection:selecti
  for(const [role,binary]of Object.entries(c.roles))assert.deepEqual(selection.binaries[role],receipt.binaries[binary]);
  const engine=()=>readDocker(['info','--format','{{.ID}}']).trim();
  const id=engine();assert.equal(id,'3dbbbe66-1c98-4e0c-b0a6-f927c05e7341');
- const expected=runtime.expectedRuntime(base);
+ const expected=before.roles; // Exact BASE/BEFORE bindings are historical evidence, not current admission.
  // Enforce exact preimage/source/Core/UID/mount facts even for rows whose prior
  // profile used requiredContainerId instead of a full requiredObservation.
  const frozen=expected.map(row=>{
@@ -103,11 +104,12 @@ function observeMaintenanceReadback({baseProfile,beforeBinding,selection:selecti
  const roles=validateGenerations(frozen,before.roles,selection,observed);
  assert.equal(engine(),id);runtime.boundJson(baseProfile);runtime.boundJson(beforeBinding);runtime.boundJson(selectionRef);
  const again=readJournal(selection.journal,'build-receipt.json');assert.deepEqual(again,reply,'Canonical journal changed during actual22 readback');
- return {schema:selection.profile===LATEST_PROFILE?'marty.native-four-role-maintenance-readback/v1':'marty.passport-maintenance-readback/v1',scope:selection.profile===LATEST_PROFILE?'NATIVE_MAINTENANCE_READBACK_ONLY':'D12_MAINTENANCE_READBACK_ONLY',
+ const readback={schema:selection.profile===LATEST_PROFILE?'marty.native-four-role-maintenance-readback/v1':'marty.passport-maintenance-readback/v1',scope:selection.profile===LATEST_PROFILE?'NATIVE_MAINTENANCE_READBACK_ONLY':'D12_MAINTENANCE_READBACK_ONLY',
   baseProfileSha256:BASE,beforeBindingSha256:BEFORE,selectionSha256:selectionRef.sha256,engineId:id,
   ...(selection.profile===LATEST_PROFILE?{observedRoles:observed}:{}),
   binding:{schema:'marty.functional-mixed-runtime-binding/v2',scope:'FUNCTIONAL_ONLY',mixedSourceStack:true,
    roles,releaseQualified:false,recordingQualified:false},
   profileProduced:false,migrationOutcomeQualified:false,applyAuthority:false,releaseQualified:false,recordingQualified:false};
+ return {schema:'marty.historical-maintenance-readback-audit/v1',historicalOnly:true,runtimeAdmitted:false,readback};
 }
-module.exports={validateGenerations,observeMaintenanceReadback,ROLES,SOURCE,CORE,LATEST_PROFILE,LATEST_SOURCE,LATEST_ROLES,LATEST_BUILD,BASE,BEFORE};
+module.exports={validateGenerations,observeMaintenanceReadback,observeHistoricalMaintenanceReadback,ROLES,SOURCE,CORE,LATEST_PROFILE,LATEST_SOURCE,LATEST_ROLES,LATEST_BUILD,BASE,BEFORE};
