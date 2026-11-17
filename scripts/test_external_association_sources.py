@@ -10,8 +10,8 @@ ORG='10000000-0000-4000-8000-000000000001'
 OTHER='10000000-0000-4000-8000-000000000002'
 def q(value):return 'NULL' if value is None else "'"+str(value).replace("'","''")+"'"
 def main():
- assert sys.argv[1:] in ([],['--rust-contract'])
- rust_contract=sys.argv[1:]==['--rust-contract']
+ options=set(sys.argv[1:]);assert options<={'--rust-contract','--write-catalog'}
+ rust_contract='--rust-contract' in options
  name='external-association-source-'+uuid.uuid4().hex
  network=['--publish','127.0.0.1::5432'] if rust_contract else ['--network','none']
  subprocess.run(['docker','run','--detach','--name',name,*network,'--label','elevenid.owner=codex-external-association',
@@ -39,17 +39,43 @@ def main():
    CREATE TABLE organization_service.api_keys(id uuid PRIMARY KEY,organization_id uuid,scopes text[],scope_type text,
     deployment_profile_id uuid,status text,enabled boolean,expires_at timestamptz,updated_at timestamptz);
    CREATE TABLE issuance_service.applications(id varchar PRIMARY KEY,organization_id text,applicant_identifier text,status text,updated_at timestamptz,expires_at timestamptz);
-   CREATE TABLE issuance_service.external_observation_bindings(id text PRIMARY KEY,organization_id uuid,source_id text,
-    application_id varchar,subject_id text,active boolean,revision bigint,UNIQUE(id,organization_id,source_id));
    CREATE ROLE association_runtime LOGIN PASSWORD 'synthetic-association-only' NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE;
    GRANT USAGE ON SCHEMA issuance_service TO association_runtime;''')
-  locks=(ROOT/'rust/services/issuance/migrations/0015_external_observation_runtime_locks.sql').read_text()
-  for signature in ['external_observation_lock_organization','external_observation_lock_api_keys','external_observation_lock_application']:
-   start=locks.index('CREATE FUNCTION issuance_service.'+signature+'(');end=locks.index('$$;',start)+3
-   sql(locks[start:end])
-  sql('REVOKE EXECUTE ON FUNCTION issuance_service.external_observation_lock_organization(uuid),issuance_service.external_observation_lock_api_keys(uuid,uuid[]),issuance_service.external_observation_lock_application(text,text) FROM PUBLIC;')
+  sql((ROOT/'rust/services/issuance/migrations/0014_external_observation_authority.sql').read_text())
+  def add_binding(identifier,source):
+   sql("INSERT INTO issuance_service.external_observation_bindings(id,organization_id,source_id,application_id,subject_id,provider,fact_type,resource_scope,claim_rules,max_age_ms,max_clock_skew_ms,active,created_by,updated_by) VALUES("+
+    ','.join(map(q,[identifier,ORG,source,'application-one','canonical-subject','synthetic-provider','synthetic-fact']))+",'{}'::jsonb,'{}'::jsonb,900000,0,true,'admin-one','admin-one');")
+  sql((ROOT/'rust/services/issuance/migrations/0015_external_observation_runtime_locks.sql').read_text())
   sql((ROOT/'rust/services/issuance/migrations/0016_application_ownership.sql').read_text())
+  observation_query=(ROOT/'rust/services/issuance/schema/external_observation_catalog_query.sql').read_text()
+  assert json.loads(sql(observation_query))==json.loads((ROOT/'rust/services/issuance/schema/external_observation_catalog.json').read_text()),'pre-association canonical observation catalog differs'
   sql((ROOT/'rust/services/issuance/migrations/0017_external_associations.sql').read_text())
+  extended_observation_path=ROOT/'rust/services/issuance/schema/external_observation_with_association_catalog.json'
+  extended_observation=json.loads(sql(observation_query))
+  if '--write-catalog' in options:extended_observation_path.write_text(json.dumps(extended_observation,indent=2)+'\n')
+  assert extended_observation==json.loads(extended_observation_path.read_text()),'registered association FK extensions differ from protected observation catalog'
+  sql("CREATE TABLE issuance_service.rust_schema_migrations(version text PRIMARY KEY);INSERT INTO issuance_service.rust_schema_migrations VALUES('0017_external_associations');GRANT SELECT ON issuance_service.rust_schema_migrations TO association_runtime;")
+  catalog_query=(ROOT/'rust/services/issuance/schema/external_association_catalog_query.sql').read_text()
+  catalog_path=ROOT/'rust/services/issuance/schema/external_association_catalog.json'
+  actual_catalog=json.loads(sql(catalog_query))
+  if '--write-catalog' in options:catalog_path.write_text(json.dumps(actual_catalog,indent=2)+'\n')
+  expected_catalog=json.loads(catalog_path.read_text())
+  assert actual_catalog==expected_catalog,'association schema differs from protected owner catalog'
+  for drift in [
+   'ALTER TABLE issuance_service.external_association_challenges DISABLE TRIGGER external_association_challenge_revision;',
+   'ALTER TABLE issuance_service.external_association_identities ALTER COLUMN consent_generation DROP NOT NULL;',
+   'ALTER TABLE issuance_service.external_observation_bindings DISABLE TRIGGER external_observation_bindings_revision;',
+   'ALTER TABLE issuance_service.application_ownerships DISABLE TRIGGER application_ownership_revision;',
+   'ALTER FUNCTION issuance_service.external_association_lock_context(uuid,uuid,uuid,bigint,text,bigint) SECURITY INVOKER;',
+   'ALTER FUNCTION issuance_service.external_observation_lock_api_keys(uuid,uuid[]) SECURITY INVOKER;',
+   'ALTER FUNCTION issuance_service.bump_external_observation_revision() SECURITY DEFINER;',
+   'GRANT SELECT ON issuance_service.external_association_operations TO PUBLIC;',
+   'GRANT UPDATE(code_hash) ON issuance_service.external_association_challenges TO PUBLIC;',
+   'CREATE TABLE issuance_service.external_association_unregistered(id text);',
+   "CREATE COLLATION issuance_service.test_case_insensitive(provider=icu,locale='und-u-ks-level2',deterministic=false); ALTER TABLE issuance_service.external_association_challenges ALTER COLUMN user_id TYPE text COLLATE issuance_service.test_case_insensitive;",
+   'CREATE RULE association_suppress AS ON UPDATE TO issuance_service.external_association_sources DO INSTEAD NOTHING;',
+  ]:
+   assert json.loads(sql('BEGIN; '+drift+catalog_query+' ROLLBACK;'))!=expected_catalog,'association catalog accepted '+drift
   member,role,permission,key,foreign_key,other_key=[str(uuid.uuid4()) for _ in range(6)]
   sql(f"""INSERT INTO organization_service.organizations VALUES('{ORG}','active'),('{OTHER}','active');
    INSERT INTO organization_service.members VALUES('{member}','{ORG}','admin-one','active');
@@ -154,7 +180,6 @@ def main():
    INSERT INTO issuance_service.application_ownerships
     SELECT '{ORG}',id,'learner-one',applicant_identifier,(extract(epoch FROM updated_at)*1000000)::bigint,'confirmed',2,'admin-one',clock_timestamp(),clock_timestamp()
     FROM issuance_service.applications WHERE id='application-one';
-   INSERT INTO issuance_service.external_observation_bindings VALUES('binding-one','{ORG}','challenge-source','application-one','canonical-subject',true,1);
    GRANT SELECT,INSERT ON issuance_service.external_association_challenges TO association_runtime;
    GRANT SELECT,INSERT ON issuance_service.external_association_identities,issuance_service.external_association_bindings TO association_runtime;
    GRANT UPDATE(phase,revision,updated_at) ON issuance_service.external_association_challenges TO association_runtime;
@@ -167,6 +192,7 @@ def main():
     issuance_service.close_external_association_challenge(uuid,uuid,uuid,uuid,text,bigint),
     issuance_service.unlink_external_association(uuid,text,uuid,uuid,bigint),
     issuance_service.read_external_association_unlink_receipt(uuid,text,uuid,uuid) TO association_runtime;""")
+  add_binding('binding-one','challenge-source')
   challenge=str(uuid.uuid4());challenge_op=str(uuid.uuid4())
   challenge_expiry=int(sql("SELECT floor(extract(epoch FROM clock_timestamp())*1000)::bigint+120000;"))
   def create_challenge(op=challenge_op,resource=challenge,selected_key=key,source_revision=2,binding_revision=1,proof='a'*64,expiry=challenge_expiry,selected_binding='binding-one'):
@@ -196,9 +222,10 @@ def main():
   assert consent(actor=key) is None,'producer key is not a learner identity'
   assert consent(proof='f'*64) is None
   assert consent(revision=2) is None
-  sql("UPDATE issuance_service.external_observation_bindings SET revision=2;")
-  assert consent() is None,'binding revisions must still match at consent'
-  sql("UPDATE issuance_service.external_observation_bindings SET revision=1;")
+  # An owner-injected binding change advances its actual revision trigger; the
+  # test transaction rolls back instead of forcing a canonical revision backward.
+  drift_probe='SELECT issuance_service.mutate_external_association_consent('+','.join(map(q,[ORG,'learner-one',str(uuid.uuid4()),challenge,'confirm',1,'a'*64,None]))+');'
+  assert sql("BEGIN; UPDATE issuance_service.external_observation_bindings SET active=false WHERE id='binding-one'; SET LOCAL ROLE association_runtime; "+drift_probe+' ROLLBACK;')=='','binding revisions must still match at consent'
   # Audit-time canonical authority changes roll back challenge, identity, edge,
   # audit and the injected change together, rather than returning partial success.
   sql(f"""CREATE FUNCTION issuance_service.test_consent_key_drift() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$BEGIN
@@ -239,7 +266,7 @@ def main():
   assert inspect_challenge(actor=key,actor_type='api_key') is None
   sql(f"UPDATE organization_service.api_keys SET scopes=ARRAY['identity:attest'] WHERE id='{key}';")
   # Confirm another binding of the same canonical identity before unlinking.
-  sql(f"INSERT INTO issuance_service.external_observation_bindings VALUES('binding-two','{ORG}','challenge-source','application-one','canonical-subject',true,1);")
+  add_binding('binding-two','challenge-source')
   second=str(uuid.uuid4());old_pending=str(uuid.uuid4());old_pending_other=str(uuid.uuid4())
   assert create_challenge(op=str(uuid.uuid4()),resource=second,proof='7'*64,selected_binding='binding-two')['phase']=='pending'
   assert consent(resource=second,proof='7'*64)['phase']=='confirmed'
@@ -320,8 +347,31 @@ def main():
   print('Actual restricted-LOGIN PostgreSQL challenge creation: confirmed canonical ownership, exact source/binding revisions, short lifetime,8-way original replay, global proof-hash uniqueness and no automatic identity association PASS')
   print('Actual restricted-LOGIN PostgreSQL consent: intended session user plus original proof,8-way one-use confirmation, atomic identity/binding/audit, audit-time authority rollback, revocation and explicit denial PASS')
   print('Actual restricted-LOGIN current/receipt reads, producer privacy,8-way global unlink and abandonment, explicit fresh-code relink with old-binding non-revival, actual expiry PASS')
+  profile_query=(ROOT/'rust/services/issuance/schema/external_association_role_query.sql').read_text()
+  assert sql(profile_query,True)=='t','intended source LOGIN must qualify'
+  for bad_grant,restore_grant in [
+   ('GRANT UPDATE(actor_id) ON issuance_service.external_association_operations TO association_runtime;',
+    'REVOKE UPDATE(actor_id) ON issuance_service.external_association_operations FROM association_runtime;'),
+   ('CREATE ROLE association_hidden NOLOGIN NOINHERIT;GRANT UPDATE(code_hash) ON issuance_service.external_association_challenges TO association_hidden;GRANT association_hidden TO association_runtime WITH INHERIT FALSE;',
+    'REVOKE association_hidden FROM association_runtime;REVOKE UPDATE(code_hash) ON issuance_service.external_association_challenges FROM association_hidden;DROP ROLE association_hidden;'),
+   ('GRANT pg_write_all_data TO association_runtime;', 'REVOKE pg_write_all_data FROM association_runtime;'),
+   ('GRANT SET ON PARAMETER session_replication_role TO association_runtime;', 'REVOKE SET ON PARAMETER session_replication_role FROM association_runtime;'),
+   ("ALTER ROLE association_runtime SET session_replication_role='replica';", 'ALTER ROLE association_runtime RESET session_replication_role;'),
+   ('GRANT CREATE ON SCHEMA issuance_service TO association_runtime;', 'REVOKE CREATE ON SCHEMA issuance_service FROM association_runtime;'),
+   ('GRANT UPDATE ON organization_service.api_keys TO association_runtime;', 'REVOKE UPDATE ON organization_service.api_keys FROM association_runtime;'),
+   ('GRANT INSERT(organization_id,application_id,user_id,subject_id,application_revision,status,revision,proposed_by,confirmed_at,updated_at) ON issuance_service.application_ownerships TO association_runtime;',
+    'REVOKE INSERT(organization_id,application_id,user_id,subject_id,application_revision,status,revision,proposed_by,confirmed_at,updated_at) ON issuance_service.application_ownerships FROM association_runtime;'),
+   ('CREATE ROLE association_hidden NOLOGIN NOINHERIT;GRANT INSERT(organization_id,application_id,user_id,subject_id,application_revision,status,revision,proposed_by,confirmed_at,updated_at) ON issuance_service.application_ownerships TO association_hidden;GRANT association_hidden TO association_runtime WITH INHERIT FALSE;',
+    'REVOKE association_hidden FROM association_runtime;REVOKE INSERT(organization_id,application_id,user_id,subject_id,application_revision,status,revision,proposed_by,confirmed_at,updated_at) ON issuance_service.application_ownerships FROM association_hidden;DROP ROLE association_hidden;'),
+  ]:
+   sql(bad_grant)
+   try:assert sql(profile_query,True)=='f','unsafe authenticated source profile qualified: '+bad_grant
+   finally:sql(restore_grant)
+   assert sql(profile_query,True)=='t','profile did not recover after owned negative fixture'
+  assert json.loads(sql(catalog_query))==expected_catalog,'source catalog changed after lifecycle tests'
+  print('Protected owner catalog8 canonical relations and helper/guard dependency drift negatives; actual LOGIN role qualification rejects hidden memberships, journal rewrites, canonical UPDATE, predefined roles, schema CREATE, parameter grants and replica mode PASS')
   if rust_contract:
-   sql(f"INSERT INTO issuance_service.external_observation_bindings VALUES('binding-rust','{ORG}','synthetic-source','application-one','canonical-subject',true,1);")
+   add_binding('binding-rust','synthetic-source')
    port=subprocess.check_output(['docker','port',name,'5432/tcp'],text=True).strip()
    assert port.startswith('127.0.0.1:') and '\n' not in port
    env=os.environ.copy();env.update(EXTERNAL_ASSOCIATION_SOURCE_TEST='synthetic-local-only',

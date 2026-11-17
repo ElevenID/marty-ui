@@ -43,6 +43,66 @@ async fn restricted_login_source_adapter_preserves_replay_and_live_revocation() 
         .await
         .unwrap();
     assert_eq!(role, "association_runtime");
+    crate::external_association_startup::verify_storage(&pool)
+        .await
+        .unwrap();
+    let owner = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&format!(
+            "postgresql://postgres:synthetic-only@127.0.0.1:{port}/postgres"
+        ))
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM issuance_service.rust_schema_migrations WHERE version='0017_external_associations'").execute(&owner).await.unwrap();
+    assert!(crate::external_association_startup::verify_storage(&pool)
+        .await
+        .is_err());
+    sqlx::query(
+        "INSERT INTO issuance_service.rust_schema_migrations VALUES('0017_external_associations')",
+    )
+    .execute(&owner)
+    .await
+    .unwrap();
+    sqlx::raw_sql("REVOKE UPDATE(consent_generation) ON issuance_service.external_association_identities FROM association_runtime;").execute(&owner).await.unwrap();
+    assert!(crate::external_association_startup::verify_storage(&pool)
+        .await
+        .is_err());
+    sqlx::raw_sql("GRANT UPDATE(consent_generation) ON issuance_service.external_association_identities TO association_runtime;").execute(&owner).await.unwrap();
+    sqlx::raw_sql("ALTER TABLE issuance_service.external_association_challenges DISABLE TRIGGER external_association_challenge_revision;").execute(&owner).await.unwrap();
+    assert!(crate::external_association_startup::verify_storage(&pool)
+        .await
+        .is_err());
+    sqlx::raw_sql("ALTER TABLE issuance_service.external_association_challenges ENABLE TRIGGER external_association_challenge_revision;").execute(&owner).await.unwrap();
+    sqlx::raw_sql("CREATE ROLE association_shadow LOGIN PASSWORD 'synthetic-shadow-only' SUPERUSER;GRANT association_runtime TO association_shadow;").execute(&owner).await.unwrap();
+    let shadow = PgPoolOptions::new()
+        .max_connections(1)
+        .after_connect(|connection, _| {
+            Box::pin(async move {
+                sqlx::query("SET ROLE association_runtime")
+                    .execute(connection)
+                    .await?;
+                Ok(())
+            })
+        })
+        .connect(&format!(
+            "postgresql://association_shadow:synthetic-shadow-only@127.0.0.1:{port}/postgres"
+        ))
+        .await
+        .unwrap();
+    assert!(crate::external_association_startup::verify_storage(&shadow)
+        .await
+        .is_err());
+    shadow.close().await;
+    sqlx::raw_sql(
+        "REVOKE association_runtime FROM association_shadow;DROP ROLE association_shadow;",
+    )
+    .execute(&owner)
+    .await
+    .unwrap();
+    crate::external_association_startup::verify_storage(&pool)
+        .await
+        .unwrap();
+    owner.close().await;
     let scope = SourceScope {
         organization,
         grant,

@@ -2,9 +2,10 @@
 
 The storage and typed adapters in `0017_external_associations.sql` and
 `external_association.rs` implement independently approved producer sources and
-explicit learner consent. They are development code: migration registration,
-catalog/startup qualification, public Gateway routes and browser/connector
-integration must be completed before activation.
+explicit learner consent. The protected schema owner registers migration 17 and verifies its catalog;
+the read-only startup qualifier checks the actual authenticated LOGIN and all
+reachable roles. Public Gateway routes, activation wiring and browser/connector
+integration remain development work and must be completed before activation.
 
 ## Authority
 
@@ -69,6 +70,23 @@ expiry. Neither operation creates consent. The learner may deny a pending
 challenge even after source revocation. Terminal challenges and immutable
 operation records are retained; retention policy and deployed-role qualification
 remain activation requirements.
+
+## Protected schema and runtime role
+
+The owner command applies migration 17 and verifies the exact catalog on both
+migration and verification. Association, ownership and canonical binding
+relations are pinned, including column collations, guard/helper bodies, indexes,
+constraints, triggers, rules and PUBLIC privileges. The observation validator
+keeps its original catalog for databases at 14/15 and uses an exact extended
+catalog for the incoming binding foreign-key triggers installed by 17.
+
+Runtime installs no DDL or grants. Its authenticated LOGIN must match the current
+role and use `session_replication_role=origin`. Qualification rejects dangerous
+attributes, predefined roles, parameter grants, database/schema creation,
+function/table ownership, canonical table writes (including column INSERT),
+immutable-column/journal updates and destructive table privileges. Reachable
+memberships are checked even when their inheritance flag is false. The explicit
+required function and mutable-column grants must also exist.
 
 ## Local qualification
 

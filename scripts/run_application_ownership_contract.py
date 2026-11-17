@@ -48,6 +48,8 @@ def main():
             'application_ownership_startup':ROOT/'rust/services/issuance/src/application_ownership_startup.rs',
             'application_ownership_http':ROOT/'rust/services/issuance/src/application_ownership_http.rs',
             'external_association':ROOT/'rust/services/issuance/src/external_association.rs',
+            'external_association_schema':ROOT/'rust/services/issuance/src/external_association_schema.rs',
+            'external_association_startup':ROOT/'rust/services/issuance/src/external_association_startup.rs',
             'gateway_ownership_guard':ROOT/'rust/services/gateway/src/external_observation.rs'}
         composition=ROOT/('tests/rust/external-association/source.rs' if source_contract else 'tests/rust/application-ownership/composition.rs')
         (directory/'lib.rs').write_text(''.join('#[path='+json.dumps(str(path))+']\npub mod '+name+';\n' for name,path in modules.items())

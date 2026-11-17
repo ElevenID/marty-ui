@@ -81,6 +81,18 @@ async fn fresh_customer_migration_seeds_only_its_active_catalog_when_configured(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema='issuance_service' AND table_name IN ('application_ownerships','application_ownership_operations')")
         .fetch_one(&pool).await.unwrap();
     assert_eq!(ownership_tables, 2);
+    let association_version_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.rust_schema_migrations WHERE version=$1",
+    )
+    .bind(marty_issuance_service::external_association_schema::VERSION)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(association_version_count, 1);
+    let association_tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables WHERE table_schema='issuance_service' AND table_name LIKE 'external_association_%'",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(association_tables, 5);
     let observation_version_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM issuance_service.rust_schema_migrations WHERE version=$1",
     )
