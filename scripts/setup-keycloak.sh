@@ -36,11 +36,6 @@ MARTY_ORG_ADMIN_EMAIL="$(printf '%s' "${MARTY_ORG_ADMIN_EMAIL:-}" | tr '[:upper:
 MARTY_ORG_ADMIN_PASSWORD="${MARTY_ORG_ADMIN_PASSWORD:-}"
 MARTY_ORG_ADMIN_FIRST_NAME="${MARTY_ORG_ADMIN_FIRST_NAME:-Marty}"
 MARTY_ORG_ADMIN_LAST_NAME="${MARTY_ORG_ADMIN_LAST_NAME:-Administrator}"
-CANVAS_DEMO_ADMIN_ENABLED="${CANVAS_DEMO_ADMIN_ENABLED:-true}"
-CANVAS_DEMO_ADMIN_EMAIL="$(printf '%s' "${CANVAS_DEMO_ADMIN_EMAIL:-canvas.admin@marty.demo}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
-CANVAS_DEMO_ADMIN_PASSWORD="${CANVAS_DEMO_ADMIN_PASSWORD:-CanvasAdmin123!}"
-CANVAS_DEMO_ADMIN_FIRST_NAME="${CANVAS_DEMO_ADMIN_FIRST_NAME:-Canvas}"
-CANVAS_DEMO_ADMIN_LAST_NAME="${CANVAS_DEMO_ADMIN_LAST_NAME:-Demo Admin}"
 DEMO_REVIEWER_EMAIL="$(printf '%s' "${DEMO_REVIEWER_EMAIL:-reviewer@marty.demo}" | tr '[:upper:]' '[:lower:]' | tr -d '\r')"
 DEMO_REVIEWER_PASSWORD="${DEMO_REVIEWER_PASSWORD:-}"
 DEMO_REVIEWER_FIRST_NAME="${DEMO_REVIEWER_FIRST_NAME:-Review}"
@@ -284,7 +279,6 @@ main() {
     configure_marty_ui_redirect_uris
     configure_marty_api_secret
     ensure_marty_org_exists
-    ensure_canvas_demo_admin_user
     ensure_demo_reviewer_user
     ensure_marty_org_admin_user
     ensure_marty_org_admin_role
@@ -435,84 +429,6 @@ organization_names_contain() {
     # Treat the selected display name literally, including JSON quotation.
     printf '%s' "$1" | sed 's/"name"[[:space:]]*:[[:space:]]*/"name":/g' \
         | grep -F -- "\"name\":\"$(json_escape "$2")\"" > /dev/null
-}
-
-ensure_canvas_demo_admin_user() {
-    local enabled
-    enabled="$(normalize_bool "$CANVAS_DEMO_ADMIN_ENABLED" true)"
-    if [ "$enabled" != "true" ]; then
-        log_info "CANVAS_DEMO_ADMIN_ENABLED=false - skipping Canvas demo admin bootstrap"
-        return 0
-    fi
-
-    if [ -z "$CANVAS_DEMO_ADMIN_EMAIL" ]; then
-        log_info "CANVAS_DEMO_ADMIN_EMAIL not set - skipping Canvas demo admin bootstrap"
-        return 0
-    fi
-
-    log_info "Ensuring Canvas demo admin user exists: ${CANVAS_DEMO_ADMIN_EMAIL}"
-
-    local user_id
-    user_id=$(find_user_id_by_email "$CANVAS_DEMO_ADMIN_EMAIL")
-    if [ -z "$user_id" ]; then
-        local payload first_name last_name email
-        payload=$(create_temp_file)
-        email="$(json_escape "$CANVAS_DEMO_ADMIN_EMAIL")"
-        first_name="$(json_escape "$CANVAS_DEMO_ADMIN_FIRST_NAME")"
-        last_name="$(json_escape "$CANVAS_DEMO_ADMIN_LAST_NAME")"
-        cat > "$payload" <<EOF
-{
-    "username": "${email}",
-    "email": "${email}",
-    "emailVerified": true,
-    "enabled": true,
-    "firstName": "${first_name}",
-    "lastName": "${last_name}",
-    "attributes": {
-        "user_type": ["administrator"],
-        "demo_context": ["canvas"],
-        "onboarding_completed": ["true"]
-    }
-}
-
-EOF
-
-        if kcadm_safe create users -r "$REALM" -f "$payload" > /dev/null; then
-            log_success "Created Canvas demo admin user: ${CANVAS_DEMO_ADMIN_EMAIL}"
-        else
-            log_error "Failed to create Canvas demo admin user: ${CANVAS_DEMO_ADMIN_EMAIL}"
-            return 1
-        fi
-        user_id=$(find_user_id_by_email "$CANVAS_DEMO_ADMIN_EMAIL")
-    else
-        log_success "Canvas demo admin user already present: ${CANVAS_DEMO_ADMIN_EMAIL}"
-    fi
-
-    if [ -z "$user_id" ]; then
-        log_error "Canvas demo admin user lookup failed after create: ${CANVAS_DEMO_ADMIN_EMAIL}"
-        return 1
-    fi
-
-    if [ -n "$CANVAS_DEMO_ADMIN_PASSWORD" ]; then
-        local password_payload password_value
-        password_payload=$(create_temp_file)
-        password_value="$(json_escape "$CANVAS_DEMO_ADMIN_PASSWORD")"
-        cat > "$password_payload" <<EOF
-{
-    "type": "password",
-    "value": "${password_value}",
-    "temporary": false
-}
-EOF
-        if kcadm_secret_safe update "users/${user_id}/reset-password" -r "$REALM" -f "$password_payload" -n > /dev/null; then
-            log_success "Canvas demo admin password configured"
-        else
-            log_error "Failed to configure Canvas demo admin password"
-            return 1
-        fi
-    fi
-
-    grant_realm_role_to_user "$user_id" "$CANVAS_DEMO_ADMIN_EMAIL" "administrator"
 }
 
 ensure_demo_reviewer_user() {

@@ -193,7 +193,6 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
         alias_env = owner["environment_mapping"](alias.get("environment", {}))
         alias_env["SERVICE_NAME"] = "issuance_native"
         alias_env["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
-        alias_env["CANVAS_MIRROR_WORKER_ENABLED"] = "false"
         alias["environment"] = alias_env
         migrator = expected["services"].setdefault("issuance-migrations", {})
         migrator["image"] = expected["services"]["issuance"]["image"]
