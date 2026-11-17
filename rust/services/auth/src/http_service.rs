@@ -17,13 +17,12 @@ use tracing::warn;
 use crate::{
     build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
     render_credential_login_error_page, sanitize_redirect_uri, validate_ui_locales,
-    AuthApplication, AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication,
-    CredentialCallbackContext, CredentialCallbackError, CredentialCallbackHeaders,
-    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
-    CredentialLoginErrorPage, CredentialLoginHttpService, CredentialStateError,
-    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand,
-    OidcProviderCapabilities, PasskeyEnrollmentStart, PortError, Session, SessionRepository,
-    UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
+    AuthApplication, AuthApplicationError, CredentialCallbackContext, CredentialCallbackError,
+    CredentialCallbackHeaders, CredentialCallbackResult, CredentialHttpError,
+    CredentialLoginCompletion, CredentialLoginErrorPage, CredentialLoginHttpService,
+    CredentialStateError, CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult,
+    InitiateLoginCommand, OidcProviderCapabilities, PasskeyEnrollmentStart, PortError, Session,
+    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
@@ -31,8 +30,6 @@ pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
     ("GET", "/v1/auth/login"),
     ("GET", "/v1/auth/register"),
     ("POST", "/v1/auth/passkeys/enroll"),
-    ("GET", "/v1/auth/canvas-lti/finalize"),
-    ("POST", "/v1/auth/canvas-lti/finalize"),
     ("GET", "/v1/auth/callback"),
     ("POST", "/v1/auth/logout"),
     ("GET", "/v1/auth/me"),
@@ -205,35 +202,20 @@ impl AuthHttpApplication for AuthApplication {
     }
 }
 
-#[async_trait]
-pub trait CanvasHttpApplication: Send + Sync {
-    async fn finalize(&self, context: &CanvasFinalizeContext) -> Result<Session, PortError>;
-}
-
-#[async_trait]
-impl CanvasHttpApplication for CanvasLtiApplication {
-    async fn finalize(&self, context: &CanvasFinalizeContext) -> Result<Session, PortError> {
-        self.finalize(context, Utc::now()).await
-    }
-}
-
 #[derive(Clone)]
 pub struct AuthHttpState {
     pub application: Arc<dyn AuthHttpApplication>,
-    pub canvas: Arc<dyn CanvasHttpApplication>,
     pub credential_login: Arc<dyn CredentialLoginHttpService>,
     pub sessions: Arc<dyn SessionRepository>,
     pub origins: UiOriginPolicy,
     pub cookie: SessionCookieConfig,
-    pub canvas_session_ttl_seconds: u64,
     pub impersonation_handoff_cookie_name: String,
 }
 
 impl AuthHttpState {
     pub fn validate(&self) -> Result<(), PortError> {
         self.cookie.validate()?;
-        if self.canvas_session_ttl_seconds == 0 || self.impersonation_handoff_cookie_name.is_empty()
-        {
+        if self.impersonation_handoff_cookie_name.is_empty() {
             return Err(PortError::new(
                 "auth_http_configuration_invalid",
                 "Auth HTTP configuration is invalid",
@@ -261,10 +243,6 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
         .route("/v1/auth/login", get(login))
         .route("/v1/auth/register", get(register))
         .route("/v1/auth/passkeys/enroll", post(enroll_passkey))
-        .route(
-            "/v1/auth/canvas-lti/finalize",
-            get(canvas_legacy_finalize).post(canvas_finalize),
-        )
         .route("/v1/auth/callback", get(callback))
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/me", get(me).patch(update_me))
@@ -449,49 +427,6 @@ async fn initiate(
             StatusCode::SERVICE_UNAVAILABLE,
             "Authentication service unavailable",
         ),
-    }
-}
-
-async fn canvas_legacy_finalize() -> Response {
-    detail(
-        StatusCode::GONE,
-        "Canvas LTI state finalization is no longer supported",
-    )
-}
-
-async fn canvas_finalize(State(state): State<AuthHttpState>, headers: HeaderMap) -> Response {
-    let Some(token) = bearer_token(&headers) else {
-        return detail(
-            StatusCode::UNAUTHORIZED,
-            "Canvas LTI session token is required",
-        );
-    };
-    match state
-        .canvas
-        .finalize(&CanvasFinalizeContext {
-            bearer_token: token.into(),
-            ip_address: client_ip(&headers),
-            user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
-        })
-        .await
-    {
-        Ok(session) => {
-            let mut response = Json(json!({
-                "authenticated": true,
-                "expires_in": state.canvas_session_ttl_seconds,
-            }))
-            .into_response();
-            set_session_cookie(&mut response, &state.cookie, &session.session_id);
-            response
-        }
-        Err(error) if error.code == "canvas_lti_session_expired" => detail(
-            StatusCode::UNAUTHORIZED,
-            "Canvas LTI session is invalid or expired",
-        ),
-        Err(error) if error.code == "canvas_lti_session_invalid" => {
-            detail(StatusCode::BAD_REQUEST, &error.message)
-        }
-        Err(_) => detail(StatusCode::BAD_GATEWAY, "Canvas LTI session service failed"),
     }
 }
 
@@ -920,12 +855,6 @@ fn request_ui_base<'a>(policy: &'a UiOriginPolicy, headers: &HeaderMap) -> &'a s
         header_text(headers, "x-forwarded-proto"),
         Some("https"),
     )
-}
-
-fn bearer_token(headers: &HeaderMap) -> Option<&str> {
-    let authorization = header_text(headers, header::AUTHORIZATION)?;
-    let (scheme, token) = authorization.split_once(' ')?;
-    (scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()).then(|| token.trim())
 }
 
 fn client_ip(headers: &HeaderMap) -> Option<String> {

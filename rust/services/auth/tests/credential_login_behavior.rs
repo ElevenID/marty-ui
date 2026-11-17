@@ -168,15 +168,9 @@ async fn deterministic_email_identity_and_did_fallback_match_legacy_behavior() {
 }
 
 #[test]
-fn default_organization_is_not_applied_to_canvas_lti_learners() {
+fn default_organization_is_applied_to_credential_login_users() {
     let mut ordinary = provisioned_user();
     ordinary.organization_id = None;
     let ordinary = apply_credential_login_defaults(ordinary, "marty-org");
     assert_eq!(ordinary.organization_id.as_deref(), Some("marty-org"));
-
-    let mut canvas = provisioned_user();
-    canvas.organization_id = None;
-    canvas.roles.push("canvas_lti_learner".to_owned());
-    let canvas = apply_credential_login_defaults(canvas, "marty-org");
-    assert!(canvas.organization_id.is_none());
 }

@@ -67,7 +67,7 @@ pub fn apply_credential_login_defaults(
     mut user: AuthenticatedUser,
     default_organization_id: &str,
 ) -> AuthenticatedUser {
-    if !user.has_role("canvas_lti_learner") && user.organization_id.is_none() {
+    if user.organization_id.is_none() {
         user.organization_id = Some(default_organization_id.to_owned());
     }
     user

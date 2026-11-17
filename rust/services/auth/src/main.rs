@@ -7,14 +7,13 @@ use marty_auth::{
     auth_rate_limit_middleware, workload_server_tls, AuthApplication, AuthApplicationConfig,
     AuthApplicationPorts, AuthCacheKeySpace, AuthCacheRepository, AuthConnections, AuthDependency,
     AuthGrpcService, AuthHttpState, AuthRateLimiter, AuthRuntime, AuthServiceConfig,
-    CanvasLtiApplication, CredentialAccountResolver, CredentialCallbackApplication,
-    CredentialCallbackConfig, CredentialCallbackPolicy, CredentialIdentityProvisioner,
-    CredentialLoginHttpApplication, CredentialLoginStartConfig, CredentialLoginStateStore,
-    ExchangedTokenValidator, HttpCanvasExperienceSessionProvider, JitProvisioningConfig,
-    JitUserProvisioner, KeycloakAdminAdapter, MmfApplicantProfileProvisioner,
-    MmfApplicantProvisioningStore, MmfAuthOutboxPublisher, PasskeyEmailEnrollment,
-    PkceStateRepository, PostgresAuthRepository, RustCredentialLoginPageRenderer,
-    SessionRepository, UserProvisioner,
+    CredentialAccountResolver, CredentialCallbackApplication, CredentialCallbackConfig,
+    CredentialCallbackPolicy, CredentialIdentityProvisioner, CredentialLoginHttpApplication,
+    CredentialLoginStartConfig, CredentialLoginStateStore, ExchangedTokenValidator,
+    JitProvisioningConfig, JitUserProvisioner, KeycloakAdminAdapter,
+    MmfApplicantProfileProvisioner, MmfApplicantProvisioningStore, MmfAuthOutboxPublisher,
+    PasskeyEmailEnrollment, PkceStateRepository, PostgresAuthRepository,
+    RustCredentialLoginPageRenderer, SessionRepository, UserProvisioner,
 };
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
 use tokio::{net::TcpListener, sync::watch};
@@ -230,17 +229,6 @@ fn assemble_applications(
         },
     ));
 
-    let canvas_provider = Arc::new(HttpCanvasExperienceSessionProvider::new(
-        connections.outbound_http.clone(),
-        &config.issuance_native_service_url,
-    )?);
-    let canvas = Arc::new(CanvasLtiApplication::new(
-        canvas_provider,
-        sessions.clone(),
-        Some(applicant_profile),
-        config.session_ttl_seconds,
-    )?);
-
     let credential_state = Arc::new(CredentialLoginStateStore::new(
         connections.cache.clone(),
         CredentialCallbackPolicy {
@@ -281,12 +269,10 @@ fn assemble_applications(
 
     let http_state = AuthHttpState {
         application: application.clone(),
-        canvas,
         credential_login,
         sessions,
         origins: config.ui_origins.clone(),
         cookie: config.cookie.clone(),
-        canvas_session_ttl_seconds: config.canvas_lti_session_ttl_seconds,
         impersonation_handoff_cookie_name: config.impersonation_handoff_cookie_name.clone(),
     };
     Ok(AuthComponents {

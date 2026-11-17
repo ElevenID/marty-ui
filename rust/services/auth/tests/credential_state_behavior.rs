@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use chrono::{TimeZone as _, Utc};
 use marty_auth::{
-    build_canvas_lti_user, credential_callback_session_id, failure_payload,
-    verify_credential_callback, CallbackClaim, CredentialCallbackHeaders, CredentialCallbackPolicy,
-    CredentialLoginPoll, CredentialLoginStateStore, CredentialStateError,
-    CredentialVerifiedPayload, PendingCredentialLogin, AUTH_CALLBACK_AUDIENCE,
+    credential_callback_session_id, failure_payload, verify_credential_callback, CallbackClaim,
+    CredentialCallbackHeaders, CredentialCallbackPolicy, CredentialLoginPoll,
+    CredentialLoginStateStore, CredentialStateError, CredentialVerifiedPayload,
+    PendingCredentialLogin, AUTH_CALLBACK_AUDIENCE,
 };
 use mmf_data::MemoryCache;
 use mmf_push::{canonical_event_bytes, payload_digest, sign_event, verify_event_signature};
@@ -164,7 +164,7 @@ fn payload() -> CredentialVerifiedPayload {
 }
 
 #[test]
-fn canvas_failure_and_session_id_kernels_match_shared_vectors() {
+fn failure_and_session_id_kernels_match_shared_vectors() {
     let fixture = fixture();
     for case in fixture["session_id_vectors"].as_array().unwrap() {
         assert_eq!(
@@ -175,23 +175,6 @@ fn canvas_failure_and_session_id_kernels_match_shared_vectors() {
             )
             .to_string(),
             case["expected"].as_str().unwrap()
-        );
-    }
-    for case in fixture["canvas_cases"].as_array().unwrap() {
-        let user = build_canvas_lti_user(&case["session"]).expect("Canvas user");
-        let expected = &case["expected"];
-        assert_eq!(user.user_id, expected["user_id"]);
-        assert_eq!(user.email, expected["email"]);
-        assert_eq!(user.username.as_deref(), expected["username"].as_str());
-        assert_eq!(user.given_name.as_deref(), expected["given_name"].as_str());
-        assert_eq!(
-            user.family_name.as_deref(),
-            expected["family_name"].as_str()
-        );
-        assert_eq!(serde_json::to_value(user.roles).unwrap(), expected["roles"]);
-        assert_eq!(
-            user.organization_id.as_deref(),
-            expected["organization_id"].as_str()
         );
     }
     for case in fixture["failure_cases"].as_array().unwrap() {
