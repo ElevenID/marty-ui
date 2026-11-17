@@ -70,7 +70,10 @@ def keycloak_server(tmp_path):
         if path in ("auth/token/create", "auth/token/create/selfhost-renew-leaf"):
             assert method == "POST" and token == OPERATOR
             assert path.endswith("/selfhost-renew-leaf") is state.renew
-            assert body == {"policies": [name], "no_default_policy": True, "ttl": "8h"}
+            expected_body = {"policies": [name], "no_default_policy": True, "ttl": "8h"}
+            if state.renew:
+                expected_body["explicit_max_ttl"] = "8h"
+            assert body == expected_body
             if state.failure in ("create-lost", "create-503"):
                 return (0 if state.failure == "create-lost" else 503), {}
             leaf = {"short-token": "short", "same-token": OPERATOR}.get(state.failure, leaf_value)
@@ -79,6 +82,10 @@ def keycloak_server(tmp_path):
         if path == "auth/token/lookup":
             assert method == "POST" and token == OPERATOR and body == {"token": leaf_value}
             return 200, {"data": {
+                "type": "batch" if state.failure == "lookup-type" else "service",
+                "num_uses": 1 if state.failure == "lookup-uses" else 0,
+                "explicit_max_ttl": 0 if state.failure == "lookup-cap" else 28800,
+                "creation_ttl": 86400 if state.failure == "lookup-created" else 28800,
                 "policies": ["widened"] if state.failure == "lookup-policy" else [name],
                 "ttl": {"lookup-short": 25199, "lookup-long": 28801, "lookup-float": 28800.0,
                         "lookup-bool": True}.get(state.failure, 28800),
@@ -128,7 +135,8 @@ def test_renewal_refuses_before_mint_when_policy_is_not_unique_exact(keycloak_se
 
 @pytest.mark.parametrize("failure", ["create-lost", "create-503", "short-token", "same-token", "auth-short",
                                     "auth-float", "auth-bool", "lookup-policy", "lookup-short", "lookup-long",
-                                    "lookup-float", "lookup-bool", "lookup-orphan", "lookup-path", "sign-failed",
+                                    "lookup-float", "lookup-bool", "lookup-orphan", "lookup-path",
+                                    "lookup-type", "lookup-uses", "lookup-cap", "lookup-created", "sign-failed",
                                     "denial-200", "denial-400", "denial-401", "denial-404", "denial-500"])
 def test_post_mint_faults_require_sanitized_operator_recovery(keycloak_server, failure):
     state = keycloak_server
