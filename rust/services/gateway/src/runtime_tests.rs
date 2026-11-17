@@ -5508,7 +5508,7 @@ async fn deployment_profile_create_preflights_and_projects_in_rust() {
     let body: Value = serde_json::from_slice(&body).expect("deployment response");
     assert_eq!(body["id"], "deployment-1");
     assert!(body.get("api_key").is_none());
-    assert_eq!(body["canvas_feature_flags"], json!({}));
+    assert!(body.get("canvas_feature_flags").is_none());
 }
 
 #[tokio::test]

@@ -201,3 +201,26 @@ are synthetic. It therefore does not qualify deployed identity authentication,
 TLS, a full production database or a browser journey. A complete successful run
 is required before treating this composition as qualified. Its startup checks
 both host/source and build filesystem space before creating the fixture.
+
+## Connector isolation and deferred production work
+
+Canvas-specific behavior belongs in the independent `canvas-integration`
+repository. The public Common Gateway is its sole integration point. Generic
+observation and association APIs remain platform capabilities; canonical
+identity, ownership, authorization and credential authority remain Core-owned.
+The connector must not call private services or access Core databases.
+
+Marty no longer exposes Canvas deployment feature switches or a
+`canvas_feature_flags` response. Canvas routes, Auth finalization and dedicated
+UI flows are being retired from the platform; this source cleanup does not
+qualify a production connector or a production cutover. Incomplete connector
+features must remain disabled until their own acceptance work is complete.
+
+TODO (deployment migration owner, before any production cutover): inventory
+stored deployment profiles and remove retired `enable_canvas_*` fields from
+persisted feature-flag JSON, preserving all generic settings. The request and
+stored-domain schema rejects unknown fields; existing rows containing retired
+fields therefore require migration before using this version. Add a reviewed
+migration and exercise rollback against a representative database snapshot.
+This migration is deferred production work, not a repository-split completion
+gate. No production data is modified by this source change.

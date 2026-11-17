@@ -78,7 +78,7 @@ fn create_request() -> CreateDeploymentProfileRequest {
         "callbacks":{"issuance_complete_url":"https://example.test/issued","max_retries":4},
         "api_auth":{"auth_method":"mtls","mtls_ca_certificate":"certificate"},
         "rate_limits":{"requests_per_minute":42},
-        "feature_flags":{"enable_canvas_lti":true,"custom_flags":{"preview":true}},
+        "feature_flags":{"enable_batch_issuance":true,"custom_flags":{"preview":true}},
         "branding":{"organization_name":"Example","qr_size":512,"qr_logo_url":"https://example.test/logo.png"},
         "environment_config":{"language":"fr-FR","offline_cache_ttl_seconds":7200},
         "enabled_flow_ids":["flow-1","flow-1"], "update_channel":"beta"
@@ -178,8 +178,8 @@ async fn complete_configuration_round_trips_and_protocol_response_stays_minimal(
     assert_eq!(response.credential_template_ids, ["template-1"]);
     assert_eq!(response.environment_config["language"], "fr-FR");
     assert_eq!(response.update_policy["channel"], "beta");
-    assert!(response.canvas_feature_flags["enable_canvas_lti"]);
     let stored = repository.profile(&response.id).await.unwrap().unwrap();
+    assert!(stored.feature_flags.enable_batch_issuance);
     assert_eq!(stored.callbacks.max_retries, 4);
     assert_eq!(
         stored.api_auth.mtls_ca_certificate.as_deref(),
@@ -618,5 +618,25 @@ async fn empty_and_invalid_machine_headers_never_fall_back_to_authorized_humans(
                 );
             }
         }
+    }
+}
+
+#[test]
+fn retired_provider_flags_cannot_enable_platform_features() {
+    for flag in [
+        "enable_canvas_evidence",
+        "enable_canvas_lti",
+        "enable_canvas_mirror_publish",
+        "enable_canvas_mirror_ops",
+        "enable_canvas_deep_linking",
+        "enable_canvas_ags",
+        "enable_canvas_nrps",
+    ] {
+        let mut request = serde_json::to_value(create_request()).unwrap();
+        request["feature_flags"][flag] = json!(true);
+        assert!(
+            serde_json::from_value::<CreateDeploymentProfileRequest>(request).is_err(),
+            "{flag}"
+        );
     }
 }
