@@ -4,8 +4,9 @@ The storage and typed adapters in `0017_external_associations.sql` and
 `external_association.rs` implement independently approved producer sources and
 explicit learner consent. The protected schema owner registers migration 17 and verifies its catalog;
 the read-only startup qualifier checks the actual authenticated LOGIN and all
-reachable roles. Public Gateway routes, activation wiring and browser/connector
-integration remain development work and must be completed before activation.
+reachable roles. The public Gateway and Core HTTP operations are wired behind explicit default-off
+activation. Browser/connector integration, deployed credential qualification and
+the complete public-authentication journey remain development work.
 
 ## Authority
 
@@ -21,6 +22,27 @@ challenges for current, active Core bindings of the same source. Core derives th
 application, subject and learner from the binding and confirmed application
 ownership. The producer supplies an opaque SHA256-shaped account reference;
 that reference, provider claims, email and roles never select the canonical user.
+
+## Public transport and activation
+
+All operations use POST with original JSON bounded to 4096 bytes. Gateway routes
+have zero automatic retries and bypass the generic idempotency response cache.
+The Core HTTP boundary requires the Gateway service credential and derives its
+producer or user context only from the Gateway's replaced identity headers.
+
+| Public namespace | Operations | Authentication |
+| --- | --- | --- |
+| `/v1/organizations/{organization_id}/external-association-sources/{resource_id}` | create, approve, revoke, replace-key, change-expiry, inspect, receipt | Session, matching tenant and allowed Origin; Core checks current `external-association:manage` |
+| `/v1/identity/association-challenges/{resource_id}` | create, inspect, receipt, abandon, expire | Actual organization key with exact `identity:attest` |
+| `/v1/organizations/{organization_id}/external-association-challenges/{resource_id}` | confirm, deny, relink, inspect, receipt | Captured learner session, matching tenant and allowed Origin |
+| `/v1/organizations/{organization_id}/external-associations/{resource_id}` | unlink, receipt | Canonical identity owner session, matching tenant and allowed Origin |
+
+`MARTY_EXTERNAL_ASSOCIATIONS_ENABLED` defaults to false. Enabling requires the
+Gateway service credential and `ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL` for a
+separate Core-owned restricted LOGIN. Startup verifies a different authenticated
+role on the same database/server address/port, then validates its catalog and
+reachable privileges. Existing unqualified Compose and Kubernetes profiles do
+not bind these settings. These credentials never belong to the connector.
 
 ## Challenge and consent
 

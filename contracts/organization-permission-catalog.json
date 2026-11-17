@@ -2,6 +2,16 @@
   "schema_version": 1,
   "permissions": [
     {
+      "resource": "identity",
+      "action": "attest",
+      "description": "Attest an external account for an independently approved source and explicit canonical learner consent"
+    },
+    {
+      "resource": "external-association",
+      "action": "manage",
+      "description": "Manage independently approved external identity-attestation sources"
+    },
+    {
       "resource": "external-observation",
       "action": "manage",
       "description": "Manage canonical external observation producer grants and bindings"

@@ -291,6 +291,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await
     .map_err(std::io::Error::other)?;
+    let associations =
+        marty_issuance_service::external_association_startup::prepare_isolated_router(
+            &pool,
+            config.external_association_database_url.as_deref(),
+            config.external_associations_enabled,
+            config.issuance_api_key.as_deref(),
+        )
+        .await
+        .map_err(std::io::Error::other)?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
         Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),
@@ -964,6 +973,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let app = if let Some(ownership) = ownership {
         app.merge(ownership)
+    } else {
+        app
+    };
+    let app = if let Some(associations) = associations {
+        app.merge(associations)
     } else {
         app
     };

@@ -9,7 +9,7 @@ const view = { id: '3cf8e000-26c5-4d2a-a880-000000000002', resource: 'team', act
 const groups = [{ resource: 'team', permissions: [invite, view] }];
 
 describe('RBAC permission catalog contract', () => {
-  it('retains all 111 native catalog permissions across all 27 resource groups', async () => {
+  it('retains all 113 native catalog permissions across all 29 resource groups', async () => {
     const permissions = permissionCatalog.permissions.map((permission, index) => ({
       ...permission, id: `3cf8e000-26c5-4d2a-a880-${String(index + 1).padStart(12, '0')}`,
     }));
@@ -19,8 +19,10 @@ describe('RBAC permission catalog contract', () => {
     }));
     server.use(http.get('*/v1/organizations/:org/permissions', () => HttpResponse.json(nativeGroups)));
     const result = await listPermissions('org-current');
-    expect(nativeGroups).toHaveLength(27);
-    expect(result).toHaveLength(111);
+    expect(nativeGroups).toHaveLength(29);
+    expect(result).toHaveLength(113);
+    expect(result.filter(permission => permission.resource === 'identity').map(permission => permission.action)).toEqual(['attest']);
+    expect(result.filter(permission => permission.resource === 'external-association').map(permission => permission.action)).toEqual(['manage']);
     expect(result.filter(permission => permission.resource === 'application').map(permission => permission.action))
       .toContain('manage-ownership');
     expect(result).toEqual(nativeGroups.flatMap(group => group.permissions));

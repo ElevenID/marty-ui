@@ -102,6 +102,48 @@ async fn restricted_login_source_adapter_preserves_replay_and_live_revocation() 
     crate::external_association_startup::verify_storage(&pool)
         .await
         .unwrap();
+    let service_key = "synthetic-gateway-service-key-000000000001";
+    assert!(
+        crate::external_association_startup::prepare_isolated_router(&owner, None, false, None)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        crate::external_association_startup::prepare_isolated_router(
+            &owner,
+            None,
+            true,
+            Some(service_key)
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        crate::external_association_startup::prepare_isolated_router(
+            &owner,
+            Some(&format!(
+                "postgresql://postgres:synthetic-only@127.0.0.1:{port}/postgres"
+            )),
+            true,
+            Some(service_key)
+        )
+        .await
+        .is_err()
+    );
+    assert!(crate::external_association_startup::prepare_isolated_router(&owner,Some(&format!("postgresql://association_runtime:synthetic-association-only@127.0.0.1:{port}/template1")),true,Some(service_key)).await.is_err());
+    let isolated = crate::external_association_startup::prepare_isolated_router(
+        &owner,
+        Some(&format!(
+            "postgresql://association_runtime:synthetic-association-only@127.0.0.1:{port}/postgres"
+        )),
+        true,
+        Some(service_key),
+    )
+    .await
+    .unwrap();
+    assert!(isolated.is_some());
+    drop(isolated);
     owner.close().await;
     let scope = SourceScope {
         organization,
@@ -511,5 +553,192 @@ async fn restricted_login_source_adapter_preserves_replay_and_live_revocation() 
     assert!(
         matches!(inspect_source(&pool, scope, None).await.unwrap(), SourceInspection::Current { record } if !record.current && !record.active && record.revision==9)
     );
+    // Actual Core HTTP decoding/authenticated-header boundary over the same
+    // restricted PostgreSQL LOGIN. Public session/key authentication is separate.
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+        Router,
+    };
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+    const SERVICE: &str = "synthetic-gateway-service-key-000000000001";
+    fn http_request(
+        path: &str,
+        org: Uuid,
+        user: Option<&str>,
+        key: Option<Uuid>,
+        value: Value,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(path)
+            .header("content-type", "application/json")
+            .header("x-api-key", SERVICE)
+            .header("x-organization-id", org.to_string());
+        if let Some(user) = user {
+            builder = builder.header("x-user-id", user);
+        }
+        if let Some(key) = key {
+            builder = builder.header("x-api-key-id", key.to_string());
+        }
+        builder
+            .body(Body::from(serde_json::to_vec(&value).unwrap()))
+            .unwrap()
+    }
+    async fn http_response(router: &Router, request: Request<Body>) -> (StatusCode, Value) {
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 16384).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    let router =
+        crate::external_association_http::association_router(pool.clone(), SERVICE.as_bytes())
+            .unwrap();
+    let source_path =
+        format!("/v1/organizations/{organization}/external-association-sources/{grant}");
+    let (status, _) = http_response(
+        &router,
+        http_request(
+            &format!("{source_path}/inspect"),
+            organization,
+            Some("learner-one"),
+            None,
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, approved) = http_response(
+        &router,
+        http_request(
+            &format!("{source_path}/approve"),
+            organization,
+            Some("admin-one"),
+            None,
+            json!({"operation_id":Uuid::new_v4(),"expected_revision":9}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(approved["revision"], 10);
+    let http_challenge = Uuid::new_v4();
+    let http_create_operation = Uuid::new_v4();
+    let producer_path = format!("/v1/identity/association-challenges/{http_challenge}");
+    let learner_path = format!(
+        "/v1/organizations/{organization}/external-association-challenges/{http_challenge}"
+    );
+    let code = URL_SAFE_NO_PAD.encode([10_u8; 32]);
+    let body = json!({"operation_id":http_create_operation,"challenge_id":http_challenge,"source_grant_id":grant,
+        "expected_source_revision":10,"binding_id":"binding-rust","expected_binding_revision":1,
+        "provider_reference":"d".repeat(64),"provider_revision":1,"code_hash":format!("{:x}",Sha256::digest([10_u8;32])),"expires_at_ms":now+120_000});
+    let (status, pending) = http_response(
+        &router,
+        http_request(
+            &format!("{producer_path}/create"),
+            organization,
+            None,
+            Some(producer.api_key_id),
+            body,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pending["phase"], "pending");
+    let (status, redacted) = http_response(
+        &router,
+        http_request(
+            &format!("{producer_path}/inspect"),
+            organization,
+            None,
+            Some(producer.api_key_id),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(redacted["record"]["application_id"].is_null());
+    assert!(redacted["record"]["subject_id"].is_null());
+    let (status, visible) = http_response(
+        &router,
+        http_request(
+            &format!("{learner_path}/inspect"),
+            organization,
+            Some("learner-one"),
+            None,
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(visible["record"]["subject_id"], "canonical-subject");
+    let http_consent_operation = Uuid::new_v4();
+    let body = json!({"operation_id":http_consent_operation,"expected_revision":1,"code":code});
+    let (status, _) = http_response(
+        &router,
+        http_request(
+            &format!("{learner_path}/confirm"),
+            organization,
+            Some("admin-one"),
+            None,
+            body.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, confirmed_http) = http_response(
+        &router,
+        http_request(
+            &format!("{learner_path}/confirm"),
+            organization,
+            Some("learner-one"),
+            None,
+            body.clone(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(confirmed_http["phase"], "confirmed");
+    assert!(!confirmed_http.to_string().contains(&code));
+    let (status, replayed) = http_response(
+        &router,
+        http_request(
+            &format!("{learner_path}/confirm"),
+            organization,
+            Some("learner-one"),
+            None,
+            body,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(replayed, confirmed_http);
+    let (status, recovery) = http_response(
+        &router,
+        http_request(
+            &format!("{learner_path}/receipt"),
+            organization,
+            Some("learner-one"),
+            None,
+            json!({"operation_id":http_consent_operation}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(recovery["kind"], "receipt");
+    assert_eq!(recovery["receipt"], confirmed_http);
+    let (status, _) = http_response(
+        &router,
+        http_request(
+            &format!("{producer_path}/receipt"),
+            organization,
+            None,
+            Some(producer.api_key_id),
+            json!({"operation_id":http_consent_operation}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
     pool.close().await;
 }

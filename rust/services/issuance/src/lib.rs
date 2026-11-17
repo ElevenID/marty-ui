@@ -77,6 +77,7 @@ pub mod canvas_readiness_runtime;
 mod canvas_response_text;
 pub mod didcomm_kms;
 pub mod external_association;
+pub mod external_association_http;
 pub mod external_association_schema;
 pub mod external_association_startup;
 mod signing_error_detail;

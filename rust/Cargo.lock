@@ -4567,6 +4567,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "http 1.5.0",
+ "http-body-util",
  "marty-api-key-policy",
  "marty-credential-template",
  "marty-deployment-profile",

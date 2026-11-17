@@ -651,6 +651,8 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         # Unqualified observation ingress and ownership stay default-off here.
         "MARTY_EXTERNAL_OBSERVATIONS_ENABLED",
         "MARTY_APPLICATION_OWNERSHIP_ENABLED",
+        "MARTY_EXTERNAL_ASSOCIATIONS_ENABLED",
+        "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL",
         "ISSUANCE_EXTERNAL_OBSERVATION_DATABASE_URL",
         "MARTY_ISSUANCE__",
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",

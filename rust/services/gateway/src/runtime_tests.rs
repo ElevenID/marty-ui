@@ -284,6 +284,138 @@ fn body_tenant_is_only_read_for_mutating_json_requests() {
 
 struct RuntimeProvider;
 
+#[tokio::test]
+async fn association_gateway_separates_machine_and_learner_headers_without_body_or_receipt_cache() {
+    let recorder = Arc::new(ActorRecordingUpstream::default());
+    let router = gateway_router(runtime_state_with_upstream(
+        Arc::new(NoOwner),
+        recorder.clone(),
+    ));
+    let producer =
+        "/v1/identity/association-challenges/30000000-0000-4000-8000-000000000001/create";
+    let session="/v1/organizations/20000000-0000-4000-8000-000000000001/external-association-challenges/30000000-0000-4000-8000-000000000001/confirm";
+    let raw = br#"{ "operation_id":"40000000-0000-4000-8000-000000000001" }"#;
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(producer)
+                    .header("x-api-key", "association-key")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-user")
+                    .header("x-user-email", "forged-email")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-api-key-id", "forged-key")
+                    .header("idempotency-key", "original-association-operation")
+                    .body(Body::from(raw.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    {
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for (service, request) in calls.iter() {
+            assert_eq!(service, "issuance");
+            assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            assert_eq!(
+                request.header("x-api-key-id"),
+                Some("10000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(
+                request.header("x-organization-id"),
+                Some("20000000-0000-4000-8000-000000000001")
+            );
+            assert_eq!(request.header("x-user-id"), None);
+            assert_eq!(request.header("x-user-email"), None);
+            assert_eq!(request.body.as_deref(), Some(raw.as_slice()));
+        }
+    }
+    let wrong_scope = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(producer)
+                .header("x-api-key", "observation-key")
+                .header("content-type", "application/json")
+                .header("idempotency-key", "original-association-operation")
+                .body(Body::from(raw.as_slice()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(wrong_scope.status(), StatusCode::FORBIDDEN);
+    assert_eq!(recorder.0.lock().unwrap().len(), 2);
+    let session_on_producer = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(producer)
+                .header("cookie", "sessionId=observation-session")
+                .header("origin", "https://beta.elevenidllc.com")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(session_on_producer.status(), StatusCode::UNAUTHORIZED);
+    let key_on_session = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(session)
+                .header("x-api-key", "association-key")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(key_on_session.status(), StatusCode::UNAUTHORIZED);
+    for (path,origin) in [(session,None),(session,Some("https://untrusted.example")),
+        ("/v1/organizations/11111111-1111-1111-1111-111111111111/external-association-challenges/30000000-0000-4000-8000-000000000001/confirm",Some("https://beta.elevenidllc.com"))] {
+        let mut builder=Request::builder().method("POST").uri(path).header("cookie","sessionId=observation-session").header("content-type","application/json");
+        if let Some(origin)=origin {builder=builder.header("origin",origin);}
+        let response=router.clone().oneshot(builder.body(Body::from("{}")).unwrap()).await.unwrap();
+        assert!(!response.status().is_success());assert_eq!(recorder.0.lock().unwrap().len(),2);
+    }
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(session)
+                    .header("cookie", "sessionId=observation-session")
+                    .header("origin", "https://beta.elevenidllc.com")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged")
+                    .header("x-api-key-id", "forged")
+                    .header("idempotency-key", "original-learner-operation")
+                    .body(Body::from(raw.as_slice()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let calls = recorder.0.lock().unwrap();
+    assert_eq!(calls.len(), 4);
+    for (_, request) in &calls[2..] {
+        assert_eq!(request.header("x-user-id"), Some("user-1"));
+        assert_eq!(request.header("x-api-key-id"), None);
+        assert_eq!(request.body.as_deref(), Some(raw.as_slice()));
+    }
+}
+
 #[async_trait]
 impl GatewayIdentityProvider for RuntimeProvider {
     async fn validate_session(
@@ -307,11 +439,13 @@ impl GatewayIdentityProvider for RuntimeProvider {
 
     async fn validate_api_key(&self, key: &str) -> Result<Option<ApiKeyIdentity>, SecurityError> {
         Ok(match key {
-            "observation-key" | "observation-admin" => Some(ApiKeyIdentity {
+            "observation-key" | "observation-admin" | "association-key" => Some(ApiKeyIdentity {
                 api_key_id: "10000000-0000-4000-8000-000000000001".into(),
                 organization_id: Some("20000000-0000-4000-8000-000000000001".into()),
                 key_prefix: None,
-                scopes: vec![if key == "observation-key" {
+                scopes: vec![if key == "association-key" {
+                    "identity:attest"
+                } else if key == "observation-key" {
                     "evidence:submit"
                 } else {
                     "admin:full"

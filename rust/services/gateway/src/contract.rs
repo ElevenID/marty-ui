@@ -239,6 +239,24 @@ impl GatewayContract {
             })?;
         }
         issuance_native::add_public_native_extensions(&mut table, passport_native)?;
+        for (path, _) in crate::external_association::paths() {
+            table.add(RouteConfig {
+                name: format!("external-association:{path}"),
+                pattern: path.clone(),
+                match_type: RouteMatchType::Template,
+                upstream_service: "issuance".into(),
+                methods: BTreeSet::from([HttpMethod::Post]),
+                host: None,
+                required_headers: BTreeMap::new(),
+                rewrite_path: None,
+                timeout_ms: 30_000,
+                retries: 0,
+                auth_required: true,
+                authentication_type: AuthenticationType::Jwt,
+                priority: route_priority(&path),
+                tags: BTreeSet::from(["native-extension".into(), "proxied".into()]),
+            })?;
+        }
         for path in crate::external_observation::OWNERSHIP_PATHS {
             table.add(RouteConfig {
                 name: format!("application-ownership:{path}"),
@@ -681,6 +699,12 @@ impl GatewayContract {
                 json!({"post":crate::external_observation::ownership_operation(action)}),
             );
         }
+        for (path, access) in crate::external_association::paths() {
+            paths.insert(
+                path.clone(),
+                json!({"post":crate::external_association::operation(&path,access)}),
+            );
+        }
         json!({
             "openapi": "3.1.0",
             "info": {
@@ -805,6 +829,7 @@ pub fn route_ownership(path: &str) -> RouteOwnership {
 
 fn special_service(path: &str) -> Option<&'static str> {
     if path == crate::external_observation::PATH
+        || crate::external_association::is_namespace(path)
         || crate::external_observation::is_admin_namespace(path)
     {
         return Some("issuance");
@@ -836,6 +861,27 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+#[cfg(test)]
+mod association_route_contract_tests {
+    use super::*;
+    #[test]
+    fn every_association_route_preserves_core_service_auth_and_zero_retries() {
+        let table = GatewayContract::load().unwrap().route_table().unwrap();
+        let paths = crate::external_association::paths();
+        assert_eq!(paths.len(), 19);
+        for (template, _) in paths {
+            let path = template
+                .replace("{organization_id}", "20000000-0000-4000-8000-000000000001")
+                .replace("{resource_id}", "30000000-0000-4000-8000-000000000001");
+            let found = route_for(&table, HttpMethod::Post, &path).unwrap();
+            assert_eq!(route_ownership(&path).service, "issuance");
+            assert!(requires_issuance_service_auth(&path));
+            assert!(found.route.auth_required);
+            assert_eq!(found.route.retries, 0);
+            assert_eq!(found.route.upstream_service, "issuance");
+        }
+    }
+}
 const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
     "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
 
@@ -1343,7 +1389,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 23
+                + 42
         );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
@@ -1456,7 +1502,7 @@ mod tests {
                 .iter()
                 .filter(|route| route.include_in_schema)
                 .count()
-                + 23
+                + 42
         );
         for operation in [
             "submit_external_observation",
@@ -1682,7 +1728,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 23
+                + 42
         );
         assert_eq!(
             contract
@@ -1696,7 +1742,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 23
+                + 42
                 + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
@@ -1708,7 +1754,7 @@ mod tests {
                 + crate::public_verification::ROUTES.len()
                 + MDOC_CERTIFICATE_PATHS.len()
                 + MDOC_CRL_PATHS.len()
-                + 23
+                + 42
                 + 16
         );
         assert_eq!(

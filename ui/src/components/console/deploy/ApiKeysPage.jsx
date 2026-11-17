@@ -142,6 +142,11 @@ const API_KEY_SCOPES = [
     label: 'Submit external evidence',
     description: 'Submit unsigned, source-bound observations for core validation. Does not approve applications or issue credentials.',
   },
+  {
+    id: 'identity:attest',
+    label: 'Attest external accounts',
+    description: 'Organization keys only. Requires an independently approved source and explicit learner consent. Does not submit evidence, approve applications, or issue credentials.',
+  },
 ];
 
 const CALLBACK_TAG_PATTERN = /\[api-key:([^\]]+)\]/i;

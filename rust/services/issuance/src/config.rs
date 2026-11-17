@@ -239,6 +239,8 @@ pub struct IssuanceServiceConfig {
     pub issuance_api_key: Option<String>,
     pub external_observations_enabled: bool,
     pub application_ownership_enabled: bool,
+    pub external_associations_enabled: bool,
+    pub external_association_database_url: Option<String>,
     pub external_observation_database_url: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
     pub passport_native: PassportNativeConfig,
@@ -343,6 +345,14 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "application_ownership_enabled",
                 &self.application_ownership_enabled,
+            )
+            .field(
+                "external_associations_enabled",
+                &self.external_associations_enabled,
+            )
+            .field(
+                "external_association_database_configured",
+                &self.external_association_database_url.is_some(),
             )
             .field(
                 "external_observation_database_configured",
@@ -1074,6 +1084,24 @@ impl IssuanceServiceConfig {
             environment_flag(&values, "MARTY_EXTERNAL_OBSERVATIONS_ENABLED");
         let application_ownership_enabled =
             environment_flag(&values, "MARTY_APPLICATION_OWNERSHIP_ENABLED");
+        let external_associations_enabled =
+            environment_flag(&values, "MARTY_EXTERNAL_ASSOCIATIONS_ENABLED");
+        let external_association_database_url = values
+            .get("ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL")
+            .map(|value| {
+                validate_observation_database_url(value).map_err(|_| {
+                    MmfError::new(
+                        ErrorCode::Configuration,
+                        "Invalid separate Core association database configuration",
+                    )
+                })
+            })
+            .transpose()?;
+        if external_associations_enabled
+            && (issuance_api_key.is_none() || external_association_database_url.is_none())
+        {
+            return Err(MmfError::new(ErrorCode::Configuration,"Association activation requires Gateway service authentication and separate Core database credentials"));
+        }
         if application_ownership_enabled && issuance_api_key.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
@@ -1109,6 +1137,8 @@ impl IssuanceServiceConfig {
             issuance_api_key,
             external_observations_enabled,
             application_ownership_enabled,
+            external_associations_enabled,
+            external_association_database_url,
             external_observation_database_url,
             passport_tenant_keys,
             passport_native,
@@ -3425,4 +3455,42 @@ fn application_ownership_requires_explicit_activation_and_service_authentication
     .unwrap();
     assert!(config.application_ownership_enabled);
     assert!(!config.external_observations_enabled);
+}
+
+#[test]
+fn external_association_activation_requires_isolated_credentials_and_redacts_them() {
+    let default = IssuanceServiceConfig::from_values(Vec::<(String, String)>::new()).unwrap();
+    assert!(!default.external_associations_enabled);
+    for values in [
+        vec![("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into())],
+        vec![
+            ("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into()),
+            (
+                "ISSUANCE_API_KEY".into(),
+                "synthetic-service-key-000000000001".into(),
+            ),
+        ],
+    ] {
+        assert!(IssuanceServiceConfig::from_values(values).is_err());
+    }
+    let config = IssuanceServiceConfig::from_values(vec![
+        ("MARTY_EXTERNAL_ASSOCIATIONS_ENABLED".into(), "true".into()),
+        (
+            "ISSUANCE_API_KEY".into(),
+            "synthetic-service-key-000000000001".into(),
+        ),
+        (
+            "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL".into(),
+            "postgresql://association:synthetic-private-password@127.0.0.1/issuer".into(),
+        ),
+    ])
+    .unwrap();
+    assert!(config.external_associations_enabled);
+    assert!(!format!("{config:?}").contains("synthetic-private-password"));
+    let error = IssuanceServiceConfig::from_values(vec![(
+        "ISSUANCE_EXTERNAL_ASSOCIATION_DATABASE_URL".into(),
+        "invalid:synthetic-private-password".into(),
+    )])
+    .unwrap_err();
+    assert!(!format!("{error:?}").contains("synthetic-private-password"));
 }

@@ -28,7 +28,7 @@ def main():
     workspace=tomllib.loads((ROOT/'rust/Cargo.toml').read_text())
     service=tomllib.loads((ROOT/'rust/services/issuance/Cargo.toml').read_text())
     declarations=[]
-    for name in ['serde','serde_json','sqlx','uuid','axum','tokio','subtle','tower','base64','sha2']:
+    for name in ['serde','serde_json','sqlx','uuid','axum','tokio','subtle','tower','base64','sha2','http-body-util']:
         value=workspace['workspace']['dependencies'][name]
         value={'version':value} if isinstance(value,str) else dict(value)
         assert not set(value)-{'version','features','default-features','package'}
@@ -50,7 +50,9 @@ def main():
             'external_association':ROOT/'rust/services/issuance/src/external_association.rs',
             'external_association_schema':ROOT/'rust/services/issuance/src/external_association_schema.rs',
             'external_association_startup':ROOT/'rust/services/issuance/src/external_association_startup.rs',
+            'external_association_http':ROOT/'rust/services/issuance/src/external_association_http.rs',
             'gateway_ownership_guard':ROOT/'rust/services/gateway/src/external_observation.rs'}
+        modules['gateway_association_guard']=ROOT/'rust/services/gateway/src/external_association.rs'
         composition=ROOT/('tests/rust/external-association/source.rs' if source_contract else 'tests/rust/application-ownership/composition.rs')
         (directory/'lib.rs').write_text(''.join('#[path='+json.dumps(str(path))+']\npub mod '+name+';\n' for name,path in modules.items())
             +'#[cfg(test)]\n#[path='+json.dumps(str(composition))+']\nmod ownership_composition;\n')

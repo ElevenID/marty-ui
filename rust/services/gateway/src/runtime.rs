@@ -678,6 +678,47 @@ async fn observation_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    if crate::external_association::is_namespace(request.uri().path()) {
+        let Some(identity) = request.extensions().get::<GatewayIdentity>().cloned() else {
+            return detail_response(401, "association_authentication_required");
+        };
+        let permission = crate::external_association::required_permission(request.uri().path());
+        let producer = crate::external_association::is_producer_namespace(request.uri().path());
+        let authentication = if identity.source == AuthenticationSource::ApiKey {
+            crate::external_association::Identity::Producer {
+                key_id: identity.api_key_id.as_deref(),
+                organization_id: identity.session_organization_id.as_deref(),
+                scopes: &identity.api_key_scopes,
+            }
+        } else if identity.source == AuthenticationSource::Session && identity.api_key_id.is_none()
+        {
+            let mut origins = request.headers().get_all(header::ORIGIN).iter();
+            let origin = origins.next().and_then(|v| v.to_str().ok());
+            let allowed =
+                origins.next().is_none() && origin.is_some_and(|v| state.cors_origins.contains(v));
+            crate::external_association::Identity::Session {
+                organization_id: identity.session_organization_id.as_deref(),
+                user_id: &identity.user_id,
+                allowed_origin: allowed,
+            }
+        } else {
+            return detail_response(401, "association_authentication_required");
+        };
+        return match crate::external_association::admit(request, authentication).await {
+            Ok(mut request) => {
+                let mut trusted = base_trusted_identity(&identity);
+                trusted.required_permission = permission.map(str::to_owned);
+                if producer {
+                    trusted.user_id = None;
+                    trusted.user_email = None;
+                    trusted.user_domain = None;
+                }
+                request.extensions_mut().insert(trusted);
+                next.run(request).await
+            }
+            Err((status, code)) => detail_response(status.as_u16(), code),
+        };
+    }
     let producer = request.uri().path() == crate::external_observation::PATH;
     let admin = crate::external_observation::is_admin_namespace(request.uri().path());
     let ownership = request.uri().path().split('/').nth(4) == Some("application-ownerships");
@@ -827,6 +868,7 @@ async fn tenant_authorization_middleware(
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
+        || crate::external_association::is_namespace(request.uri().path())
         || crate::external_observation::is_admin_namespace(request.uri().path())
     {
         return next.run(request).await;
@@ -1076,6 +1118,7 @@ async fn idempotency_middleware(
 ) -> Response {
     // Original observation bytes and retries belong to the canonical journal.
     if request.uri().path() == crate::external_observation::PATH
+        || crate::external_association::is_namespace(request.uri().path())
         || crate::external_observation::is_admin_namespace(request.uri().path())
     {
         return next.run(request).await;
