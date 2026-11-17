@@ -397,3 +397,9 @@ Platform artifact verification is owned by
 scopes verify the exact package/target/profile and executable location without
 requiring removed Canvas targets. Worker inventory checks are retired from
 this verifier. Mixed database obligation inventories remain pending cleanup.
+
+The generic database runner no longer requires ten removed Canvas PostgreSQL
+executables. Proof nonce remains an explicit exact-package/target obligation,
+with positive-test-summary execution enforcement. Other platform database
+suite dispatches remain. Provider preflight orchestration and broader
+obligation-source inventories are still pending reconciliation.

@@ -1173,7 +1173,7 @@ jobs:
             echo "Unable to locate the compiled Application Template PostgreSQL contract executable." >&2
             exit 1
           fi
-          resolve_issuance_canvas_contracts >/dev/null
+          resolve_issuance_database_contracts >/dev/null
           trust_profile_executable="$(resolve_recorded_contract_executable marty-trust-profile migration_contract)"
           if [[ -z "$trust_profile_executable" || ! -x "$trust_profile_executable" ]]; then
             echo "Unable to locate the compiled Trust Profile PostgreSQL contract executable." >&2
