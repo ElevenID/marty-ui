@@ -415,7 +415,9 @@ leaves have `explicit_max_ttl=0`. A separately recorded, exclusively created
 `cap-reconciliation.intent.json` then permits one helper to mint replacements
 for those same policies with an explicit eight-hour maximum. No policy, key, CA,
 certificate, account, database, or application setting is replaced. Response
-bytes remain private, and the original unbounded control-volume generation is
+bytes are bounded, saved privately and fsynced before JSON validation. Environment
+proxies are disabled, redirects are refused, and only HTTP 200 from the fixed
+HTTPS origin can succeed. The original unbounded control-volume generation is
 retained as `generation-unbounded-retained`.
 
 The helper rechecks the complete recovery candidate before and after publishing

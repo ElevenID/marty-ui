@@ -401,12 +401,13 @@ def run_cap_helper(config, current, cycle):
 
 
 CAP_WORKER = r"""
-import contextlib,hashlib,json,os,pathlib,stat,subprocess,sys,ssl,urllib.request
+import contextlib,hashlib,http.client,json,os,pathlib,stat,subprocess,sys,ssl,urllib.error,urllib.request
 d=json.load(sys.stdin);os.umask(0o077);root=pathlib.Path(d['root']);binary='/operator/tool'
 assert hashlib.sha256(pathlib.Path(binary).read_bytes()).hexdigest()==d['binary_sha256']
 p=subprocess.run([binary,'--build-identity'],capture_output=True,timeout=20)
 assert p.returncode==0 and p.stdout.decode().strip()==d['source_sha']+':'+d['release_tag']
 assert 3600<=d['minimum_ttl']<=28800
+assert d['bao_addr']=='https://openbao:8200'
 token=pathlib.Path(d['authority']).read_text().strip()
 def call(op,body,network=False):
  args=[binary,'operator',op]+([d['bao_addr'],'/input/ca.crt'] if network else [])
@@ -414,11 +415,27 @@ def call(op,body,network=False):
  assert p.returncode==0
  return json.loads(p.stdout)
 ctx=ssl.create_default_context(cafile='/input/ca.crt')
-def request(path,body):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl):
+  raise urllib.error.HTTPError(req.full_url,code,'OpenBao redirect refused',headers,fp)
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),
+    urllib.request.HTTPSHandler(context=ctx),NoRedirect())
+def request(path,body,custody=None):
+ assert path in ('auth/token/lookup','auth/token/create/selfhost-renew-leaf')
  req=urllib.request.Request(d['bao_addr']+'/v1/'+path,data=json.dumps(body).encode(),
      headers={'X-Vault-Token':token,'Content-Type':'application/json'})
- with urllib.request.urlopen(req,context=ctx,timeout=10) as response:
-  raw=response.read(131073);assert len(raw)<=131072;return raw,json.loads(raw)
+ try:response=opener.open(req,timeout=10)
+ except urllib.error.HTTPError as error:response=error
+ with response:
+  incomplete=False
+  try:raw=response.read(131073)
+  except http.client.IncompleteRead as error:raw=error.partial[:131073];incomplete=True
+  if custody is not None:
+   custody.write(raw);custody.flush();os.fsync(custody.fileno())
+  assert not incomplete and response.status==200 and len(raw)<=131072
+  length=response.headers.get('Content-Length')
+  assert length is None or (length.isascii() and length.isdecimal() and int(length)==len(raw))
+  return raw
 def private(path,raw):
  assert len(raw)<=131072
  fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
@@ -464,7 +481,7 @@ with contextlib.ExitStack() as held:
  previous_tokens=[];policies={}
  for name in names:
   leaf=previous[name].decode().strip();previous_tokens.append(leaf)
-  _,lookup=request('auth/token/lookup',{'token':leaf});meta=lookup['data']
+  lookup=json.loads(request('auth/token/lookup',{'token':leaf}));meta=lookup['data']
   assert meta['explicit_max_ttl']==0 and meta['type']=='service' and meta['num_uses']==0
   assert meta['orphan'] is True and meta['path']=='auth/token/create/selfhost-renew-leaf'
   assert len(meta['policies'])==1 and meta['policies'][0] not in ('default','root')
@@ -480,18 +497,18 @@ with contextlib.ExitStack() as held:
   # uncertain mint is never replayed; the host intent and these files remain.
   response=output/(name+'.response.private.json')
   fd=os.open(response,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-  raw=b''
   try:
-   raw,created=request('auth/token/create/selfhost-renew-leaf',{'policies':[policies[name]],
-       'no_default_policy':True,'ttl':'8h','explicit_max_ttl':'8h'})
+   with os.fdopen(fd,'wb') as custody:
+    raw=request('auth/token/create/selfhost-renew-leaf',{'policies':[policies[name]],
+       'no_default_policy':True,'ttl':'8h','explicit_max_ttl':'8h'},custody=custody)
   finally:
-   with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
    sync(output)
+  created=json.loads(raw)
   leaf=created['auth']['client_token']
   assert isinstance(leaf,str) and len(leaf)>=20 and leaf not in previous_tokens and leaf not in issued
   assert leaf!=token and leaf not in {source[n].decode().strip() for n in names}
   issued.add(leaf)
-  _,lookup=request('auth/token/lookup',{'token':leaf});meta=lookup['data']
+  lookup=json.loads(request('auth/token/lookup',{'token':leaf}));meta=lookup['data']
   assert meta['explicit_max_ttl']==28800 and meta['type']=='service' and meta['num_uses']==0
   assert meta['orphan'] is True and meta['path']=='auth/token/create/selfhost-renew-leaf'
   assert meta['policies']==[policies[name]] and meta.get('identity_policies') in (None,[])
