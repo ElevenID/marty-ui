@@ -59,3 +59,26 @@ it('offers explicit relink only for a current inactive identity and suppresses s
  queue(principal,current(),principal);mount();await screen.findByText(/Reopen the connection/);
  expect(screen.queryByRole('button',{name:'Confirm connection'})).not.toBeInTheDocument();
 });
+it('disconnects only after an explicit click and explains the effect on all applications',async()=>{
+ const identity='30000000-0000-4000-8000-000000000003';
+ queue(principal,current({phase:'confirmed',revision:2,identity:{identity_id:identity,revision:1,active:true}}),principal);
+ const {user}=mount();const disconnect=await screen.findByRole('button',{name:'Disconnect learning account'});
+ expect(screen.getByText(/removes this learning account from every application/)).toBeInTheDocument();
+ expect(fetchMock.mock.calls.filter(c=>String(c[0]).endsWith('/unlink'))).toHaveLength(0);
+ queue(principal);fetchMock.mockImplementationOnce(async()=>{
+  const i=JSON.parse(window.sessionStorage.getItem(`elevenid.association-unlink.v1:${org}:${identity}:1`)!);
+  return response({operation_id:i.operationId,identity_id:identity,action:'unlink',revision:2,active:false});
+ });queue(current({phase:'confirmed',revision:2,current:false,identity:{identity_id:identity,revision:2,active:false}}),principal);
+ await user.click(disconnect);await screen.findByText('This connection is no longer active.');
+ expect(screen.queryByRole('button',{name:'Disconnect learning account'})).not.toBeInTheDocument();
+ expect(fetchMock.mock.calls.filter(c=>String(c[0]).endsWith('/unlink'))).toHaveLength(1);
+});
+it('an uncertain disconnect keeps the original recovery control and never offers another unlink write',async()=>{
+ const identity='30000000-0000-4000-8000-000000000003';
+ queue(principal,current({phase:'confirmed',revision:2,identity:{identity_id:identity,revision:1,active:true}}),principal);
+ const {user}=mount();const disconnect=await screen.findByRole('button',{name:'Disconnect learning account'});
+ queue(principal);fetchMock.mockRejectedValueOnce(new Error('lost unlink reply'));await user.click(disconnect);
+ await screen.findByRole('button',{name:'Check disconnection'});
+ expect(screen.queryByRole('button',{name:'Disconnect learning account'})).not.toBeInTheDocument();
+ expect(fetchMock.mock.calls.filter(c=>String(c[0]).endsWith('/unlink'))).toHaveLength(1);
+});

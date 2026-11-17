@@ -162,6 +162,18 @@ mutation. The fixture builds the actual page/client/helper with Vite and uses
 synthetic same-origin HTTPS authority responses; it does not prove actual
 Gateway authentication or Core persistence.
 
+The browser client also supports explicit global unlink. Its original-operation
+journal is scoped to organization, identity and expected revision, so a later
+explicit unlink after fresh relink cannot reuse an old operation. Recovery can
+start from another challenge for the same identity and actor, but separately
+reads current state. An old unlink receipt does not override a later active
+identity. The page explains that disconnect affects every application, removes
+stale displayed authority after uncertain replies and retains only a recovery
+pointer. The native Node contract at
+`ui/scripts/association-unlink.contract.mjs` exercises these transport/storage
+properties; mounted UI and browser qualification for the unlink controls remains
+required.
+
 Run `ui/scripts/association-consent-browser.mjs` with the absolute path to the
 existing pinned Playwright 1.59.1 module and, optionally, an existing absolute
 Chromium executable. It creates and removes its own loopback HTTPS fixture,
@@ -175,3 +187,16 @@ concurrent original-operation replay, privacy, current versus historical reads,
 canonical revisions, code handling, unlink/relink generations, abandonment,
 expiry and rollback of injected audit-time authority or edge changes. This does
 not qualify deployed roles, public HTTP authentication or a browser journey.
+
+An additional opt-in composed fixture is
+`python3 scripts/test_external_association_sources.py --gateway-contract`.
+It connects production Gateway routing/proxy and `ReqwestUpstream` over loopback
+HTTP to production association handlers and restricted PostgreSQL, with actual
+Auth gRPC and its production Gateway provider. It checks original bytes and
+duplicate/unknown field rejection, producer privacy, consent, lost-reply
+recovery, replay, unlink and revocation. Supporting canonical tables are reduced
+fixtures; API-key and membership-provider answers and validated session inputs
+are synthetic. It therefore does not qualify deployed identity authentication,
+TLS, a full production database or a browser journey. A complete successful run
+is required before treating this composition as qualified. Its startup checks
+both host/source and build filesystem space before creating the fixture.

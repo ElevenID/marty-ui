@@ -3,15 +3,23 @@
 """Disposable real-PG source-grant lifecycle; no public identity/consent claim."""
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-import json,os,subprocess,sys,time,uuid
+import json,os,shutil,subprocess,sys,time,uuid
 ROOT=Path(__file__).resolve().parents[1]
 IMAGE='postgres:16-alpine@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229'
 ORG='10000000-0000-4000-8000-000000000001'
 OTHER='10000000-0000-4000-8000-000000000002'
 def q(value):return 'NULL' if value is None else "'"+str(value).replace("'","''")+"'"
 def main():
- options=set(sys.argv[1:]);assert options<={'--rust-contract','--write-catalog'}
- rust_contract='--rust-contract' in options
+ options=set(sys.argv[1:]);assert options<={'--rust-contract','--write-catalog','--gateway-contract'}
+ gateway_contract='--gateway-contract' in options
+ rust_contract='--rust-contract' in options or gateway_contract
+ if gateway_contract:
+  # Linux VHD free space alone does not report a full Windows host drive.
+  # Check both the source/host mount and build filesystem before any fixture.
+  required=8*1024**3
+  for path in [ROOT,Path.home()]:
+   if shutil.disk_usage(path).free<required:
+    raise RuntimeError('Gateway qualification needs at least 8 GiB free on both source/host and build filesystems; no fixture started')
  name='external-association-source-'+uuid.uuid4().hex
  network=['--publish','127.0.0.1::5432'] if rust_contract else ['--network','none']
  subprocess.run(['docker','run','--detach','--name',name,*network,'--label','elevenid.owner=codex-external-association',
@@ -372,11 +380,18 @@ def main():
   print('Protected owner catalog8 canonical relations and helper/guard dependency drift negatives; actual LOGIN role qualification rejects hidden memberships, journal rewrites, canonical UPDATE, predefined roles, schema CREATE, parameter grants and replica mode PASS')
   if rust_contract:
    add_binding('binding-rust','synthetic-source')
+   gateway_key=str(uuid.uuid4())
+   if gateway_contract:
+    add_binding('gateway-binding','gateway-source')
+    sql(f"INSERT INTO organization_service.api_keys VALUES('{gateway_key}','{ORG}',ARRAY['identity:attest'],'ORGANIZATION',NULL,'active',true,clock_timestamp()+interval '1hour',clock_timestamp());")
    port=subprocess.check_output(['docker','port',name,'5432/tcp'],text=True).strip()
    assert port.startswith('127.0.0.1:') and '\n' not in port
    env=os.environ.copy();env.update(EXTERNAL_ASSOCIATION_SOURCE_TEST='synthetic-local-only',
     EXTERNAL_ASSOCIATION_SOURCE_PORT=port.split(':')[-1],EXTERNAL_ASSOCIATION_SOURCE_ORG=ORG,
     EXTERNAL_ASSOCIATION_SOURCE_GRANT=grant,EXTERNAL_ASSOCIATION_SOURCE_KEY=key,EXTERNAL_ASSOCIATION_SOURCE_EXPIRY=str(future))
+   if gateway_contract:
+    env.update(EXTERNAL_ASSOCIATION_GATEWAY_TEST='synthetic-local-only',EXTERNAL_ASSOCIATION_GATEWAY_KEY=gateway_key,
+     EXTERNAL_ASSOCIATION_GATEWAY_KEY_REVISION=str(keyrev(gateway_key)))
    subprocess.run([sys.executable,str(ROOT/'scripts/run_application_ownership_contract.py'),'--compile-only'],env=env,check=True,stderr=subprocess.STDOUT)
  finally:
   subprocess.run(['docker','rm','--force',name],check=True,stdout=subprocess.DEVNULL)

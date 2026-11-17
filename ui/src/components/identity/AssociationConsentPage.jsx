@@ -18,7 +18,7 @@ export default function AssociationConsentPage() {
   const operation=Promise.resolve().then(()=>{
    if(client.hasRecovery()){clearAssociationConsentCode();return client.recover();}return client.inspect();
   });
-  operation.then(result=>{if(active)setState({loading:false,result,error:null});},
+  operation.then(result=>{if(result.record.phase!=='pending')clearAssociationConsentCode();if(active)setState({loading:false,result,error:null});},
    error=>{if(active)setState({loading:false,result:null,error:error.code??'unavailable'});});
   return ()=>{active=false;};
  },[client]);
@@ -27,18 +27,35 @@ export default function AssociationConsentPage() {
   setState(previous=>({...previous,loading:true,error:null}));
   try {
    const code=readAssociationConsentCode(organizationId,challengeId),r=state.result?.record;
+   const identity=r?.identity,unlinkRevision=identity?.active?identity.revision:identity?.revision-1;
+   const recovery=state.recoveryContext??{identityId:identity?.identity_id,revision:unlinkRevision};
    const result=action==='read'?(client.hasRecovery()?await client.recover():await client.inspect())
+    :action==='unlink'?await client.unlink(identity?.identity_id,unlinkRevision,state.result?.userId)
+    :action==='recover-unlink'?await client.recoverUnlink(recovery.identityId,recovery.revision)
     :await client.act(action,code,r?.revision,action==='relink'?r?.identity?.revision:null,state.result?.userId);
+   if(result.record.phase!=='pending'||action==='unlink'||action==='recover-unlink')clearAssociationConsentCode();
    if(latest.current===client)setState({loading:false,result,error:null});
-  }catch(error){if(latest.current===client)setState({loading:false,result:null,error:error.code??'unavailable'});}
+  }catch(error){
+   const identity=state.result?.record?.identity;
+   const recoveryContext=action==='unlink'&&error.code==='commit_unknown'&&identity
+    ?{identityId:identity.identity_id,revision:identity.revision}
+    :action==='recover-unlink'?state.recoveryContext:null;
+   if(latest.current===client)setState({loading:false,result:null,error:error.code??'unavailable',recoveryContext});
+  }
   finally {
    try{if(client.hasRecovery())clearAssociationConsentCode();}catch{clearAssociationConsentCode();}
+   if(action==='unlink'||action==='recover-unlink')clearAssociationConsentCode();
    if(latest.current===client)inFlight.current=false;
   }
  }
  const r=state.result?.record,code=readAssociationConsentCode(organizationId,challengeId);
  const pending=r?.phase==='pending'&&!r.expired&&r.expires_at_ms>Date.now();
  const canConfirm=pending&&r.current&&!!code,canRelink=pending&&r.can_relink&&!!code;
+ let unlinkRecovery=!!state.recoveryContext,unlinkStorageUnavailable=false;
+ if(client&&r?.identity) {
+  const revision=r.identity.active?r.identity.revision:r.identity.revision-1;
+  try{if(revision>0)unlinkRecovery=client.hasUnlinkRecovery(r.identity.identity_id,revision);}catch{unlinkStorageUnavailable=true;}
+ }
  return <Box component="main" sx={{maxWidth:640,mx:'auto',p:3}}>
   <Stack spacing={2}>
    <Typography variant="h4" component="h1">Connect your learning account</Typography>
@@ -63,7 +80,12 @@ export default function AssociationConsentPage() {
     {canConfirm&&<Button variant="contained" disabled={state.loading} onClick={()=>run('confirm')}>Confirm connection</Button>}
     {canRelink&&<Button variant="contained" disabled={state.loading} onClick={()=>run('relink')}>Reconnect this application</Button>}
     {pending&&!!code&&<Button disabled={state.loading} onClick={()=>run('deny')}>Decline connection</Button>}
+    {r.identity?.active&&<>
+     <Alert severity="warning">Disconnecting removes this learning account from every application. Reconnecting requires a fresh link from your learning tool.</Alert>
+     {!unlinkRecovery&&<Button color="error" disabled={state.loading||unlinkStorageUnavailable} onClick={()=>run('unlink')}>Disconnect learning account</Button>}
+    </>}
    </>}
+   {unlinkRecovery&&<Button disabled={state.loading} onClick={()=>run('recover-unlink')}>Check disconnection</Button>}
    <Button disabled={!client||state.loading} onClick={()=>run('read')}>Check connection</Button>
   </Stack>
  </Box>;

@@ -78,12 +78,29 @@ function receipt(value,i) {
  if(r.operation_id!==i.operationId||r.challenge_id!==i.challengeId||r.action!==i.action||r.revision!==2
   ||r.phase!==(i.action==='deny'?'denied':'confirmed'))fail('invalid_response');return r;
 }
+function unlinkIntent(value,org,identityId,revision) {
+ const i=exact(value,['version','organizationId','challengeId','identityId','userId','operationId','action','expectedRevision']);
+ if(i.version!==1||i.organizationId!==org||!uuid(i.challengeId)||i.identityId!==identityId||i.expectedRevision!==revision
+  ||i.action!=='unlink'||!id(i.userId)||!uuid(i.operationId))fail('invalid_request');return i;
+}
+function unlinkReceipt(value,i) {
+ const r=exact(value,['operation_id','identity_id','action','revision','active']);
+ if(r.operation_id!==i.operationId||r.identity_id!==i.identityId||r.action!=='unlink'||r.revision!==i.expectedRevision+1||r.active!==false)fail('invalid_response');return r;
+}
 export function createAssociationConsentClient(configuration) {
  const {organizationId,challengeId}=exact(configuration,['organizationId','challengeId']);
  if(!uuid(organizationId)||!uuid(challengeId))fail('invalid_request');
  const base=`/v1/organizations/${organizationId}/external-association-challenges/${challengeId}`;
  const journalKey=`elevenid.association-consent.v1:${organizationId}:${challengeId}`;
  const load=()=>{const saved=window.sessionStorage.getItem(journalKey);if(saved!==null&&saved.length>2048)fail('invalid_request');return saved===null?null:intent(parse(saved),organizationId,challengeId);};
+ const unlinkKey=(identityId,revision)=>{
+  if(!uuid(identityId)||!version(revision)||revision>=Number.MAX_SAFE_INTEGER)fail('invalid_request');
+  return `elevenid.association-unlink.v1:${organizationId}:${identityId}:${revision}`;
+ };
+ const loadUnlink=(identityId,revision)=>{
+  const saved=window.sessionStorage.getItem(unlinkKey(identityId,revision));if(saved!==null&&saved.length>2048)fail('invalid_request');
+  return saved===null?null:unlinkIntent(parse(saved),organizationId,identityId,revision);
+ };
  async function within(operation) {
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),15000);
   try{return await operation(controller.signal);}catch(error){if(error instanceof AssociationConsentError)throw error;fail('unavailable');}
@@ -93,8 +110,34 @@ export function createAssociationConsentClient(configuration) {
   const r=record(await request(`${base}/inspect`,{},signal),challengeId);
   if(await actor(signal)!==userId)fail('authentication_required');return Object.freeze({userId,record:r});
  }
+ async function unlinkCurrent(i,signal) {
+  const result=await current(i.userId,signal);
+  if(result.record.identity?.identity_id!==i.identityId)fail('invalid_response');return result;
+ }
  return Object.freeze({
   hasRecovery:()=>load()!==null,
+  hasUnlinkRecovery:(identityId,revision)=>loadUnlink(identityId,revision)!==null,
+  recoverUnlink:(identityId,revision)=>within(async signal=>{
+   const i=loadUnlink(identityId,revision);if(!i)fail('invalid_request');
+   if(await actor(signal)!==i.userId)fail('authentication_required');
+   const envelope=exact(await request(`/v1/organizations/${organizationId}/external-associations/${identityId}/receipt`,
+    {operation_id:i.operationId},signal),['kind','receipt']);
+   if(envelope.kind!=='receipt')fail('invalid_response');const original=unlinkReceipt(envelope.receipt,i);
+   return Object.freeze({receipt:original,...await unlinkCurrent(i,signal)});
+  }),
+  unlink:(identityId,revision,expectedUserId)=>within(async signal=>{
+   const key=unlinkKey(identityId,revision);if(!id(expectedUserId))fail('invalid_request');
+   if(loadUnlink(identityId,revision)!==null)fail('recovery_required');
+   const userId=await actor(signal);if(userId!==expectedUserId)fail('authentication_required');
+   const i=unlinkIntent({version:1,organizationId,challengeId,identityId,userId,operationId:crypto.randomUUID(),action:'unlink',expectedRevision:revision},
+    organizationId,identityId,revision);
+   window.sessionStorage.setItem(key,JSON.stringify(i));if(JSON.stringify(loadUnlink(identityId,revision))!==JSON.stringify(i))fail('unavailable');
+   try {
+    const original=unlinkReceipt(await request(`/v1/organizations/${organizationId}/external-associations/${identityId}/unlink`,
+     {operation_id:i.operationId,expected_revision:revision},signal),i);
+    return Object.freeze({receipt:original,...await unlinkCurrent(i,signal)});
+   }catch{fail('commit_unknown');}
+  }),
   inspect:()=>within(async signal=>current(await actor(signal),signal)),
   recover:()=>within(async signal=>{
    const i=load();if(!i)fail('invalid_request');const userId=await actor(signal);
