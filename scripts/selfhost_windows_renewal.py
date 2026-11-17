@@ -350,7 +350,7 @@ def disjoint_storage(items, project, volumes, witnesses=None, *, retained_ca_rea
         if _project(x) == project:
             continue
         for m in x['Mounts']:
-            if x['Id'] in readers and m.get('Destination') == '/input/ca.crt':
+            if x.get('Id') in readers and m.get('Destination') == '/input/ca.crt':
                 require(m.get('Type') == 'bind' and m.get('RW') is False
                         and windows_mount_path_equal(m['Source'], readers[x['Id']]),
                         'Retained helper public CA mount changed')

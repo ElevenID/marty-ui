@@ -81,7 +81,8 @@ def test_exact_ro_ca_reader_keeps_namespace_witness(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "fault", ["rw", "destination", "source", "id", "other-mount", "other-reader"]
+    "fault",
+    ["rw", "destination", "source", "id", "missing-id", "other-mount", "other-reader"],
 )
 def test_reader_cannot_hide_other_overlap_or_mount_drift(monkeypatch, fault):
     identities(monkeypatch)
@@ -96,6 +97,8 @@ def test_reader_cannot_hide_other_overlap_or_mount_drift(monkeypatch, fault):
         reader["Mounts"][0]["Source"] = "C:/owned/other.crt"
     elif fault == "id":
         reader["Id"] = "c" * 64
+    elif fault == "missing-id":
+        del reader["Id"]
     elif fault == "other-mount":
         reader["Mounts"].append(
             {
