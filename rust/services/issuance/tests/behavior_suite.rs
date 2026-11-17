@@ -5,15 +5,6 @@
 #[path = "canvas_management_contract.rs"]
 mod canvas_management_contract;
 
-#[path = "canvas_sync_worker_behavior.rs"]
-mod canvas_sync_worker_behavior;
-
-#[path = "canvas_sync_worker_configuration_oracle.rs"]
-mod canvas_sync_worker_configuration_oracle;
-
-#[path = "canvas_worker_result_oracle.rs"]
-mod canvas_worker_result_oracle;
-
 #[path = "proof_nonce_behavior.rs"]
 mod proof_nonce_behavior;
 

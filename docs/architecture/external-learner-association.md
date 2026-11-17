@@ -306,3 +306,9 @@ storage, policy evaluation and ordinary approval/offer operations remain.
 TODO (connector owner): implement provider recovery/reconciliation through
 public observation contracts and Core policy; do not restore private
 platform/binding/event-receipt queries in the application service.
+
+Canvas candidate-approval persistence, event-status handling, OAuth HTTP and
+sync-worker scheduling/lease code are also removed from the issuance crate.
+Provider-specific worker replay fixtures are retired with those modules.
+Remaining legacy credential projection and provider helper dependencies are
+tracked removal work; they do not establish a supported connector interface.
