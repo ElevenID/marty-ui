@@ -384,3 +384,10 @@ and full-main provider attestations. Platform CI jobs and retained Rust steps
 remain. Mixed lane selection and compile/database orchestration still need
 reconciliation; this intermediate branch is not ready for protected
 integration until that work and its local checks are complete.
+
+The full Rust CI lane plan is now `contracts`, `flow`, `selfhost`; the merge-group
+aggregate gate requires that exact plan. Flow acceptance is explicit rather
+than inherited from the retired Canvas lane. Renewal diagnostics remain.
+Canvas/worker lane selection, provider compile branch and worker database
+dispatch are retired. Mixed artifact/inventory/database orchestration scripts
+still require reconciliation before this branch is ready for integration.

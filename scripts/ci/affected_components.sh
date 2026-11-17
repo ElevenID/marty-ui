@@ -9,7 +9,7 @@ website_only=false
 python=false
 rust=false
 rust_runtime=false
-rust_matrix='["canvas","contracts","selfhost"]'
+rust_matrix='["contracts","flow","selfhost"]'
 openbao=false
 rollback_test_only=false
 didcomm_release_test_only=false
@@ -386,7 +386,7 @@ if [[ "$rust" == true ]]; then
   if [[ "${worker_test_only:-false}" == true && "$all" == false &&
         "$EVENT_NAME" == pull_request ]]; then
     rust_runtime=false
-    rust_matrix='["worker"]'
+    rust_matrix='["contracts"]'
   elif [[ "${flow_test_only:-false}" == true && "$all" == false &&
           "$EVENT_NAME" == pull_request ]]; then
     rust_runtime=false

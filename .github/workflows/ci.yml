@@ -648,24 +648,24 @@ jobs:
           contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost","renewal-unit"]' ||
+          '["contracts","flow","selfhost","renewal-unit"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","selfhost","renewal-unit"]' ||
+          '["contracts","flow","selfhost","renewal-unit"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost"]' ||
+          '["contracts","flow","selfhost"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker","selfhost"]' ||
+          '["contracts","flow","selfhost"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","selfhost"]' || needs.changes.outputs.rust_matrix) }}
+          '["contracts","flow","selfhost"]' || needs.changes.outputs.rust_matrix) }}
     permissions:
       actions: read
       contents: read
@@ -900,7 +900,7 @@ jobs:
               --timings --message-format=json > "$artifacts"
             python3 ../scripts/ci/verify-canvas-test-artifacts.py \
               --renewal-unit-only "$artifacts" target
-          elif [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
+          elif [[ "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
             # Exact test-source owners compile in the same pinned Bookworm
             # environment as the full Canvas lane. The merge group stays full.
             cargo fetch --locked
@@ -940,13 +940,6 @@ jobs:
               sh -ceu '
                 . ../scripts/ci/bookworm-cache-env.sh
                 case "$MARTY_RUST_ACCEPTANCE_SCOPE" in
-                  worker)
-                    cargo test --locked --offline -p marty-canvas-worker-acceptance \
-                      --test canvas_published_worker_contract --no-run \
-                      --timings --message-format=json
-                    cargo build --locked --offline -p marty-issuance-service \
-                      --bin marty-canvas-sync-worker --message-format=json
-                    ;;
                   flow)
                     cargo test --locked --offline -p marty-flow-acceptance \
                       --test flow_published_schema_contract --no-run \
@@ -971,124 +964,16 @@ jobs:
               python3 ../scripts/ci/verify-canvas-test-artifacts.py \
                 --selfhost-only "$artifacts" target
             else
-              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
-                --worker-only "$artifacts" target
+              exit 2
             fi
           elif [[ "${{ matrix.lane }}" == contracts ]]; then
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
             cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json >> "$artifacts"
           else
-            mkdir -p "$RUNNER_TEMP/rust-build-evidence"
-            host_metrics="$RUNNER_TEMP/rust-build-evidence/bookworm-host-phases.tsv"
-            printf 'phase\telapsed_seconds\texit_code\n' > "$host_metrics"
-            run_host_phase() {
-              local phase="$1" started elapsed exit_code
-              shift
-              started="$(date +%s)"
-              printf 'Bookworm host phase %s started\n' "$phase" >&2
-              if "$@"; then
-                exit_code=0
-              else
-                exit_code="$?"
-              fi
-              elapsed="$(( $(date +%s) - started ))"
-              printf '%s\t%s\t%s\n' "$phase" "$elapsed" "$exit_code" >> "$host_metrics"
-              printf 'Bookworm host phase %s: %ss, exit %s\n' \
-                "$phase" "$elapsed" "$exit_code" >&2
-              return "$exit_code"
-            }
-            # Fetch on the host before closing the builder's network. The
-            # pinned Bookworm compiler writes to the normal host-visible target,
-            # so both host and Bookworm checks consume these exact executables.
-            run_host_phase cargo_fetch cargo fetch --locked
-            mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }' ../services/Dockerfile)
-            [[ ${#builder_images[@]} == 1 ]]
-            bookworm_builder="${builder_images[0]}"
-            [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
-            bookworm_builder="$(run_host_phase builder_pull bash \
-              ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
-            # setup-mold installs this pinned host tool, but docker run does
-            # not inherit it. Bind only the linker executable into Bookworm;
-            # keep its filesystem and compiler network isolated.
-            host_mold="$(command -v mold)"
-            [[ "$(realpath "$host_mold")" == /usr/local/bin/mold ]]
-            mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
-            host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
-            test -d "$host_cargo_home"
-            mkdir -p target
-            [[ ! -L target ]]
-            [[ "$(realpath target)" == "$GITHUB_WORKSPACE/rust/target" ]]
-            [[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]
-            run_host_phase container_compile docker run --rm --network none --read-only \
-              "${bookworm_cache_args[@]}" \
-              --user "$(id -u):$(id -g)" \
-              --env HOME=/tmp \
-              --env "CARGO_HOME=$host_cargo_home" \
-              --env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target" \
-              --env CARGO_INCREMENTAL=0 \
-              --env CARGO_PROFILE_TEST_DEBUG=0 \
-              --env CARGO_PROFILE_DEV_DEBUG=0 \
-              --env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold' \
-              --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
-              --volume "$host_mold:/usr/local/bin/ld.mold:ro" \
-              --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
-              --volume "$host_cargo_home:$host_cargo_home" \
-              --volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw" \
-              --workdir "$GITHUB_WORKSPACE/rust" \
-              "$bookworm_builder" \
-              sh -ceu '
-                . ../scripts/ci/bookworm-cache-env.sh
-                 ld.mold --version | grep -Eq "^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$"
-                 probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"
-                 printf "int main(void){return 0;}\\n" | cc -x c - \
-                   -fuse-ld=mold -o "$probe"
-                 "$probe"
-                 rm -- "$probe"
-                 metrics="$CARGO_TARGET_DIR/bookworm-compile-phases.tsv"
-                 printf "phase\telapsed_seconds\ttarget_bytes\texit_code\n" > "$metrics"
-                 run_cargo_phase() {
-                   phase="$1"
-                   shift
-                   started="$(date +%s)"
-                   printf "Bookworm Cargo phase %s started\n" "$phase" >&2
-                   if "$@"; then
-                     exit_code=0
-                   else
-                     exit_code="$?"
-                   fi
-                   elapsed="$(( $(date +%s) - started ))"
-                   target_bytes="$(du -sb "$CARGO_TARGET_DIR" | cut -f1)"
-                   printf "%s\t%s\t%s\t%s\n" \
-                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >> "$metrics"
-                   printf "Bookworm Cargo phase %s: %ss, %s target bytes, exit %s\n" \
-                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >&2
-                   return "$exit_code"
-                 }
-                # Resolve shared test features once. Acceptance libraries are
-                # empty ownership markers; the Issuance library harness is
-                # executed by the renewal-unit lane, not this Canvas lane.
-                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-flow-acceptance -p marty-selfhost-acceptance -p marty-issuance-service \
-                  --test canvas_published_worker_contract \
-                  --test canvas_published_schema_contract \
-                  --test flow_published_schema_contract \
-                  --test selfhost_public_image_contract \
-                  --test canvas_oauth_behavior --test issuance-behavior \
-                  --no-run --timings --message-format=json
-                # Retain package-specific feature resolution for each binary.
-                 run_cargo_phase issuance_binaries cargo build --locked --offline \
-                  -p marty-issuance-service -p marty-organization -p marty-credential-template \
-                  --bin marty-issuance-service --bin marty-canvas-sync-worker \
-                  --bin marty-organization --bin marty-credential-template \
-                  --message-format=json
-                 run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway \
-                  --message-format=json
-                 run_cargo_phase flow_binary cargo build --locked --offline -p marty-flow --bin marty-flow \
-                  --message-format=json
-              ' > "$artifacts"
-            run_host_phase verify_artifacts python3 ../scripts/ci/verify-canvas-test-artifacts.py \
-              --check-worker-inventory \
-              "$artifacts" target
+            echo "Unsupported Rust CI lane" >&2
+            exit 2
           fi
+
       - name: Capture host compiler cache counters after compile
         if: vars.PRIVATE_FORKS_ENABLED != 'true' && (always())
         shell: bash
@@ -1770,16 +1655,14 @@ jobs:
             export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"
             export BAO_TOKEN=test-only
           fi
-          if [[ "${{ matrix.lane }}" == worker ]]; then
-            python3 ../scripts/ci/run-db-contract-groups.py worker-preflights
-            python3 ../scripts/ci/run-db-contract-groups.py worker-canvas
-          elif [[ "${{ matrix.lane }}" == flow ]]; then
+          if [[ "${{ matrix.lane }}" == flow ]]; then
             bash ../scripts/ci/run-flow-acceptance-contracts.sh
           elif [[ "${{ matrix.lane }}" == selfhost ]]; then
             python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas
           else
-            python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}
+            python3 ../scripts/ci/run-db-contract-groups.py rust-db
           fi
+
       - name: Test beta passport reconciliation and native batch on PostgreSQL
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -3405,15 +3288,15 @@ jobs:
           # The aggregate matrix result alone cannot prove all required lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
-            'true:true:["canvas","contracts","selfhost"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts","selfhost"]') ;;
-            'true:false:["worker"]'|'true:false:["flow"]'|'true:false:["selfhost"]'|'true:false:["renewal-unit"]')
+            'true:true:["contracts","flow","selfhost"]'|'true:false:["contracts"]'|'false:false:["contracts","flow","selfhost"]') ;;
+            'true:false:["contracts"]'|'true:false:["flow"]'|'true:false:["selfhost"]'|'true:false:["renewal-unit"]')
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
           if [[ "${{ github.event_name }}" == merge_group && "$WEBSITE_ONLY" != true ]]; then
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
-               "$RUST_MATRIX" == '["canvas","contracts","selfhost"]' ]]
+               "$RUST_MATRIX" == '["contracts","flow","selfhost"]' ]]
             for result in "${results[@]}"; do
               [[ "$result" == success ]]
             done
