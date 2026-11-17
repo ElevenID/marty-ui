@@ -15,6 +15,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_frozen_cli_bundle_assets_match_the_published_asset_contract():
+    manifest=json.loads((ROOT/'deploy-config/bundles/selfhost.json').read_bytes())
+    corpus=json.loads((ROOT/'contracts/deployment-catalog-cli-behavior.json').read_bytes())
+    cases=[case for case in corpus['cases'] if case['args']==['bundle-assets','selfhost']]
+    assert len(cases)==1
+    assert cases[0]['exit_code']==0 and cases[0]['stderr']==''
+    assert cases[0]['stdout']==''.join('$REPO_ROOT/'+name+'\n' for name in manifest['assets'])
+
+
 def test_bundled_operator_scripts_include_local_import_closure() -> None:
     manifest = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text(
         encoding="utf-8"))
