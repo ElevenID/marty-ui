@@ -120,7 +120,6 @@ pub mod internal_application_evidence;
 pub mod internal_application_http;
 pub mod internal_application_offer;
 pub mod internal_application_postgres;
-pub mod internal_application_reconciliation;
 pub mod internal_application_service;
 pub mod internal_external_evidence;
 pub mod issued_credential_http;

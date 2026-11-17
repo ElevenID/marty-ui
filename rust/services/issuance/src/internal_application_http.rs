@@ -16,12 +16,11 @@ use serde_json::json;
 use crate::{
     internal_application_domain::{
         ApplicationApproval, ApplicationCreate, ApplicationDomainError, ApplicationRejection,
-        ApplicationResponse, EvidenceFactResponse, EvidenceReconciliationRequest,
-        EvidenceSubmission, ExternalEvidenceApiCheckRequest, IssuanceEventResponse,
+        ApplicationResponse, EvidenceFactResponse, EvidenceSubmission,
+        ExternalEvidenceApiCheckRequest, IssuanceEventResponse,
     },
     internal_application_evidence::InternalApplicationEvidenceError,
     internal_application_offer::InternalApplicationOfferError,
-    internal_application_reconciliation::EvidenceReconciliationError,
     internal_application_service::{
         InternalApplicationApprovalError, InternalApplicationRepositoryError,
         InternalApplicationService, InternalApplicationServiceError,
@@ -50,14 +49,6 @@ pub fn router(service: InternalApplicationService) -> Router {
         .route(
             "/internal/applications/{application_id}/evidence-summary",
             get(get_evidence_summary),
-        )
-        .route(
-            "/internal/applications/evidence/reconcile",
-            post(reconcile_application_evidence),
-        )
-        .route(
-            "/internal/applications/evidence/reconciliation-report",
-            get(get_application_evidence_reconciliation_report),
         )
         .route(
             "/internal/applications/{application_id}/evidence/api-checks/{check_id}/run",
@@ -91,12 +82,6 @@ struct ListQuery {
     organization_id: Option<String>,
     status: Option<String>,
     application_template_id: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ReconciliationReportQuery {
-    organization_id: Option<String>,
-    limit: Option<i64>,
 }
 
 async fn create_application(
@@ -247,62 +232,6 @@ async fn get_evidence_summary(
         .await
     {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
-        Err(error) => service_error(error),
-    }
-}
-
-async fn reconcile_application_evidence(
-    State(service): State<InternalApplicationService>,
-    headers: HeaderMap,
-    body: Result<Json<EvidenceReconciliationRequest>, JsonRejection>,
-) -> Response {
-    if let Err(error) = service.preflight_json_request(
-        header(&headers, API_KEY_HEADER),
-        header(&headers, ORGANIZATION_HEADER),
-    ) {
-        return service_error(error);
-    }
-    let Json(request) = match body {
-        Ok(request) => request,
-        Err(error) => return malformed_json(error),
-    };
-    match service
-        .reconcile_evidence(
-            header(&headers, API_KEY_HEADER),
-            header(&headers, ORGANIZATION_HEADER),
-            request,
-        )
-        .await
-    {
-        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
-        Err(error) => service_error(error),
-    }
-}
-
-async fn get_application_evidence_reconciliation_report(
-    State(service): State<InternalApplicationService>,
-    headers: HeaderMap,
-    Query(query): Query<ReconciliationReportQuery>,
-) -> Response {
-    if let Err(error) = service.preflight_json_request(
-        header(&headers, API_KEY_HEADER),
-        header(&headers, ORGANIZATION_HEADER),
-    ) {
-        return service_error(error);
-    }
-    let Some(organization_id) = query.organization_id.as_deref() else {
-        return missing_organization_query();
-    };
-    match service
-        .evidence_reconciliation_report(
-            header(&headers, API_KEY_HEADER),
-            header(&headers, ORGANIZATION_HEADER),
-            organization_id,
-            query.limit.unwrap_or(100),
-        )
-        .await
-    {
-        Ok(result) => (StatusCode::OK, Json(result)).into_response(),
         Err(error) => service_error(error),
     }
 }
@@ -520,9 +449,6 @@ pub(crate) fn service_error(error: InternalApplicationServiceError) -> Response 
         InternalApplicationServiceError::Evidence(error) => {
             return evidence_error_response(error);
         }
-        InternalApplicationServiceError::Reconciliation(error) => {
-            return reconciliation_error_response(error);
-        }
         InternalApplicationServiceError::OfferRequiresApproved(_) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -541,7 +467,6 @@ pub(crate) fn service_error(error: InternalApplicationServiceError) -> Response 
         InternalApplicationServiceError::Approval(_) => unreachable!("handled above"),
         InternalApplicationServiceError::Offer(_) => unreachable!("handled above"),
         InternalApplicationServiceError::Evidence(_) => unreachable!("handled above"),
-        InternalApplicationServiceError::Reconciliation(_) => unreachable!("handled above"),
         InternalApplicationServiceError::OfferRequiresApproved(_) => {
             unreachable!("handled above")
         }
@@ -588,14 +513,6 @@ pub(crate) fn service_error(error: InternalApplicationServiceError) -> Response 
         }
     };
     (status, Json(json!({"detail": detail}))).into_response()
-}
-
-fn reconciliation_error_response(error: EvidenceReconciliationError) -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(json!({"detail": error.to_string()})),
-    )
-        .into_response()
 }
 
 fn evidence_error_response(error: InternalApplicationEvidenceError) -> Response {

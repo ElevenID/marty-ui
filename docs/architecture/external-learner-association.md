@@ -299,3 +299,10 @@ sync-enqueue modules are retired from the platform issuance crate. Canonical
 credential status transition/recovery APIs and generic external evidence
 remain platform capabilities; provider review and synchronization workflows
 belong in the independent connector through the public Gateway.
+
+The retired Canvas evidence reconciliation endpoints and their PostgreSQL
+adapter are removed. Generic application evidence submission, current-fact
+storage, policy evaluation and ordinary approval/offer operations remain.
+TODO (connector owner): implement provider recovery/reconciliation through
+public observation contracts and Core policy; do not restore private
+platform/binding/event-receipt queries in the application service.
