@@ -287,3 +287,9 @@ worker options. Remaining provider adapters cannot assemble themselves from
 platform runtime configuration. Connector operators must configure the
 independent connector repository; legacy platform environment entries should
 be removed during deployment cleanup.
+
+Canvas publication, status synchronization, lifecycle delivery, mirror service
+and legacy-ingest implementations are removed from the issuance crate. Their
+dedicated behavior/replay tests are retired with the implementation. Any
+future connector implementation must use public Gateway contracts rather than
+restoring platform runtime provider adapters.
