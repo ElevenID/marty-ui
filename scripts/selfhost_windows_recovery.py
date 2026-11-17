@@ -425,6 +425,9 @@ def expired_operation(args, selection_file):
         if phase=='inspect':return staging.inspect_failed_current(selection_file)
         output=Path(args.attempt_directory)
         if phase=='stage':return staging.stage_recovery_generation(selection_file,output,args.logical_project,operator_successor=option)
+        if phase=='reconcile-stage':
+            from selfhost_windows_recovery_leaf_caps import reconcile
+            return reconcile(selection_file,output,operator_successor=option)
         if phase=='publish':return staging.publish_recovery_candidate(selection_file,output,operator_successor=option)
         if phase=='activate':
             from selfhost_windows_recovery_activation import activate_recovery_candidate
@@ -444,7 +447,7 @@ def main(argv=None):
     parser.add_argument('--wait-for-engine',action='store_true')
     parser.add_argument('--renew-once',action='store_true')
     parser.add_argument('--logical-project')
-    parser.add_argument('--expired-current',choices=('inspect','stage','publish','activate','select','finalize'))
+    parser.add_argument('--expired-current',choices=('inspect','stage','reconcile-stage','publish','activate','select','finalize'))
     parser.add_argument('--attempt-directory')
     parser.add_argument('--source-journal')
     parser.add_argument('--operator-successor-file')
