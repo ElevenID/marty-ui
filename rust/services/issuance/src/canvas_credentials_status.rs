@@ -20,7 +20,6 @@ use crate::{
         CanvasLifecycleCredential, CanvasLifecycleProviderError, CanvasLifecycleStatusProvider,
     },
     canvas_operator_secret::{CanvasOperatorSecretReader, FileCanvasOperatorSecretReader},
-    canvas_provider_http::CanvasOriginPolicy,
     canvas_response_text::response_text,
     credential_management::CredentialLifecycleAction,
     lossless_json::LosslessObject,
@@ -45,26 +44,6 @@ pub struct CanvasCredentialsStatusService {
 }
 
 impl CanvasCredentialsStatusService {
-    /// Shared runtime assembly, also exercised by the database + HTTP contract.
-    /// Live consumer adoption remains a separate cutover gate.
-    pub fn from_runtime(
-        config: &crate::config::IssuanceServiceConfig,
-        secrets: Arc<dyn CanvasCredentialsSecretResolver>,
-    ) -> Self {
-        Self::new(
-            config.canvas_credentials_status.clone(),
-            secrets,
-            Arc::new(HttpCanvasStatusTransport::with_operation_timeout(
-                CanvasOriginPolicy {
-                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                    allow_private_networks: config.canvas_allow_private_base_urls,
-                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-                },
-                config.canvas_credentials_validation_timeout,
-            )),
-        )
-    }
-
     pub fn new(
         config: CanvasCredentialsStatusConfig,
         secrets: Arc<dyn CanvasCredentialsSecretResolver>,

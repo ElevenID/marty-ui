@@ -683,10 +683,10 @@ mod tests {
                 | "text_utf7_label_null_codec"
                 | "text_utf7_label_null_codec_json"
         ));
-        let config = crate::config::IssuanceServiceConfig::from_values([(
-            "CANVAS_CREDENTIALS_STATUS_SYNC_TIMEOUT_SECONDS".to_owned(),
-            case["seconds"].as_str().unwrap().to_owned(),
-        )])
+        let (_, seconds) = crate::canvas_credentials_protocol::timeout_values(
+            None,
+            Some(case["seconds"].as_str().unwrap()),
+        )
         .unwrap();
         let policy = CanvasOriginPolicy {
             private_origin_allowlist: vec![origin.clone()],
@@ -694,7 +694,7 @@ mod tests {
             allow_http_localhost: false,
         };
         let mut client =
-            CanvasOperationHttpClient::new(policy, config.canvas_credentials_validation_timeout);
+            CanvasOperationHttpClient::new(policy, CanvasNetworkTimeout::from_seconds(seconds));
         if case["trusted"] != false {
             let cert = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CERT").unwrap();
             assert_eq!(

@@ -280,3 +280,10 @@ Missing applications and unsupported legacy integration contexts fail closed.
 Provider rollout switches, platform registrations, bindings and remote
 readiness do not authorize the signing path. Transactions without applications
 retain the platform's existing issuer/proof checks.
+
+Issuance service configuration no longer defines or parses Canvas secrets,
+origin allowlists, timeouts, pilot switches, LTI/OAuth settings or mirror
+worker options. Remaining provider adapters cannot assemble themselves from
+platform runtime configuration. Connector operators must configure the
+independent connector repository; legacy platform environment entries should
+be removed during deployment cleanup.

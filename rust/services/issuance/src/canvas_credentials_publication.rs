@@ -6,14 +6,11 @@ use crate::{
         CanvasCredentialsProviderError, DeliveryConfiguration,
     },
     canvas_credentials_protocol::{quote_identifier, response_excerpt, truncate_text},
-    canvas_credentials_transport::{
-        CanvasCredentialsRequest, CanvasCredentialsTransport, HttpCanvasCredentialsTransport,
-    },
+    canvas_credentials_transport::{CanvasCredentialsRequest, CanvasCredentialsTransport},
     canvas_credentials_urls::assertion_url,
     canvas_credentials_validation::CanvasCredentialsSecretResolver,
     canvas_lti_launch::{CanvasLtiClock, SystemCanvasLtiClock},
     canvas_operator_secret::{CanvasOperatorSecretReader, FileCanvasOperatorSecretReader},
-    canvas_provider_http::CanvasOriginPolicy,
     canvas_response_text::response_text,
     credential::CredentialTransaction,
     lossless_json::{LosslessJson, LosslessObject},
@@ -154,23 +151,7 @@ impl CanvasCredentialsPublicationService {
         self.clock = clock;
         self
     }
-    pub fn from_runtime(
-        config: &crate::config::IssuanceServiceConfig,
-        secrets: Arc<dyn CanvasCredentialsSecretResolver>,
-    ) -> Self {
-        Self::new(
-            config.canvas_credentials_publication.clone(),
-            secrets,
-            Arc::new(HttpCanvasCredentialsTransport::with_operation_timeout(
-                CanvasOriginPolicy {
-                    private_origin_allowlist: config.canvas_private_origin_allowlist.clone(),
-                    allow_private_networks: config.canvas_allow_private_base_urls,
-                    allow_http_localhost: config.canvas_allow_http_localhost_base_urls,
-                },
-                config.canvas_credentials_publish_timeout,
-            )),
-        )
-    }
+
     fn delivery_configuration(&self) -> DeliveryConfiguration<'_> {
         DeliveryConfiguration {
             config: &self.config.delivery,
