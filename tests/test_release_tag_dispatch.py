@@ -68,6 +68,147 @@ class OperatorDispatchTests(unittest.TestCase):
     def dispatch(self, github: handoff.GitHub, path: Path) -> int:
         return handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact, path)
 
+    def visibility_transport(self, replies, *, frozen=False, after_read=None):
+        clock = {"now": self.start, "sleeps": [], "calls": []}
+        pending = iter(replies)
+
+        def sleep(seconds):
+            clock["sleeps"].append(seconds)
+            if not frozen:
+                clock["now"] += timedelta(seconds=seconds)
+
+        def command(arguments, **kwargs):
+            method = arguments[arguments.index("--method") + 1]
+            endpoint = arguments[arguments.index("--method") + 2]
+            clock["calls"].append((method, endpoint))
+            self.assertIn("X-GitHub-Api-Version: 2026-03-10", arguments)
+            if method == "POST":
+                status, body = self.response(endpoint, method=method,
+                                             payload=json.loads(kwargs["input_bytes"]))
+            else:
+                self.assertEqual(endpoint, "repos/ElevenID/marty-ui/actions/runs/789")
+                reply = next(pending, (404, {"message": "Not Found"}))
+                if isinstance(reply, Exception):
+                    raise reply
+                status, body = reply
+                if after_read is not None:
+                    after_read(clock)
+                body = body if isinstance(body, bytes) else handoff.encoded(body)
+            return (0 if status == 200 else 1,
+                    b"HTTP/2.0 " + str(status).encode() + b" Fixture\r\n\r\n" + body)
+
+        return clock, sleep, command
+
+    def test_initial_operator_visibility_repeats_only_exact_original_reads(self) -> None:
+        github = handoff.GitHub(deadline=self.deadline)
+        replies = [(404, {"message": "Not Found", "status": "404"}),
+                   (404, {"message": "Not Found"}), (200, self.run)]
+        clock, sleep, command = self.visibility_transport(replies)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dispatch.json"
+            with mock.patch.object(handoff, "command", side_effect=command):
+                self.assertEqual(handoff.dispatch_operator_once(github, self.request, self.request_sha,
+                    self.artifact, path, now=lambda: clock["now"], sleep=sleep), 789)
+            self.assertEqual([method for method, _ in clock["calls"]], ["POST", "GET", "GET", "GET"])
+            self.assertEqual(clock["sleeps"], [5.0, 5.0])
+            receipt = json.loads(path.read_bytes())
+            self.assertTrue(receipt["run_identity_verified"])
+            self.assertEqual(receipt["initial_visibility"]["http_statuses"], [404, 404, 200])
+            self.assertEqual(receipt["initial_visibility"]["status"], "visible")
+            self.assertEqual(receipt["not_after"], self.request["not_after"])
+            self.assertEqual(github.deadline, self.deadline)
+
+    def test_initial_visibility_refusals_do_not_become_absence_or_another_post(self) -> None:
+        invalid = [(403, {}), (429, {}), (500, {}), (404, {"message": "private-token"}),
+                   (404, None), (200, None), (200, {}), (200, b"private-token"),
+                   (200, b'{"id":789,"id":790}'),
+                   (200, {**self.run, "run_attempt": 2}),
+                   (200, {**self.run, "id": 790}),
+                   (200, {**self.run, "status": "completed", "conclusion": "failure"})]
+        for reply in invalid:
+            with self.subTest(status=reply[0]), tempfile.TemporaryDirectory() as temporary:
+                github = handoff.GitHub(deadline=self.deadline)
+                path = Path(temporary) / "dispatch.json"
+                clock, sleep, command = self.visibility_transport([(404, {"message": "Not Found"}), reply])
+                with mock.patch.object(handoff, "command", side_effect=command), self.assertRaises(handoff.HandoffError):
+                    handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact,
+                        path, now=lambda: clock["now"], sleep=sleep)
+                self.assertEqual([method for method, _ in clock["calls"]], ["POST", "GET", "GET"])
+                receipt = json.loads(path.read_bytes())
+                self.assertFalse(receipt["run_identity_verified"])
+                self.assertEqual(receipt["outcome"], "dispatch_confirmed")
+                self.assertEqual(receipt["initial_visibility"]["status"], "refused")
+                self.assertNotIn("private-token", path.read_text())
+                self.assertEqual(github.deadline, self.deadline)
+                with mock.patch.object(github, "response") as response, self.assertRaises(FileExistsError):
+                    self.dispatch(github, path)
+                response.assert_not_called()
+
+    def test_original_run_transport_failure_preserves_confirmed_intent_without_retry(self) -> None:
+        github = handoff.GitHub(deadline=self.deadline)
+        clock, sleep, command = self.visibility_transport([TimeoutError("private-token")])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dispatch.json"
+            with mock.patch.object(handoff, "command", side_effect=command), self.assertRaises(TimeoutError):
+                handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact,
+                    path, now=lambda: clock["now"], sleep=sleep)
+            self.assertEqual([method for method, _ in clock["calls"]], ["POST", "GET"])
+            self.assertEqual(clock["sleeps"], [])
+            receipt = json.loads(path.read_bytes())
+            self.assertEqual(receipt["operator_run_id"], 789)
+            self.assertEqual(receipt["outcome"], "dispatch_confirmed")
+            self.assertFalse(receipt["run_identity_verified"])
+            self.assertEqual(receipt["initial_visibility"]["operation"], "original_run_read")
+            self.assertNotIn("private-token", path.read_text())
+            self.assertEqual(github.deadline, self.deadline)
+
+    def test_initial_visibility_preserves_shorter_checkpoint_and_bounds_frozen_clock(self) -> None:
+        for frozen in (False, True):
+            with self.subTest(frozen=frozen), tempfile.TemporaryDirectory() as temporary:
+                self.deadline = self.start + timedelta(seconds=3 if not frozen else 900)
+                self.request["not_after"] = self.deadline.strftime("%Y-%m-%dT%H:%M:%SZ")
+                github = handoff.GitHub(deadline=self.deadline)
+                path = Path(temporary) / "dispatch.json"
+                clock, sleep, command = self.visibility_transport([], frozen=frozen)
+                with mock.patch.object(handoff, "command", side_effect=command), self.assertRaises(handoff.HandoffError):
+                    handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact,
+                        path, now=lambda: clock["now"], sleep=sleep)
+                methods = [method for method, _ in clock["calls"]]
+                self.assertEqual(methods.count("POST"), 1)
+                self.assertEqual(methods.count("GET"), 13 if frozen else 1)
+                self.assertEqual(clock["sleeps"], [5.0] * 12 if frozen else [3.0])
+                self.assertEqual(github.deadline, self.deadline)
+                receipt = json.loads(path.read_bytes())
+                self.assertFalse(receipt["run_identity_verified"])
+                self.assertLessEqual(handoff.timestamp(receipt["initial_visibility"]["not_after"]), self.deadline)
+
+    def test_main_rejection_between_visibility_reads_prevents_adoption(self) -> None:
+        github = handoff.GitHub(deadline=self.deadline)
+        clock, sleep, command = self.visibility_transport([(404, {"message": "Not Found"})],
+            after_read=lambda _clock: self.main["commit"].update(sha="9" * 40))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dispatch.json"
+            with mock.patch.object(handoff, "command", side_effect=command), self.assertRaises(handoff.HandoffError):
+                handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact,
+                    path, now=lambda: clock["now"], sleep=sleep)
+            self.assertEqual([method for method, _ in clock["calls"]], ["POST", "GET"])
+            receipt = json.loads(path.read_bytes())
+            self.assertFalse(receipt["run_identity_verified"])
+            self.assertEqual(receipt["initial_visibility"]["operation"], "protected_main")
+
+    def test_initial_visibility_refuses_metadata_that_arrives_after_its_budget(self) -> None:
+        github = handoff.GitHub(deadline=self.deadline)
+        clock, sleep, command = self.visibility_transport([(200, self.run)],
+            after_read=lambda current: current.update(now=current["now"] + timedelta(seconds=61)))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "dispatch.json"
+            with mock.patch.object(handoff, "command", side_effect=command), self.assertRaises(handoff.HandoffError):
+                handoff.dispatch_operator_once(github, self.request, self.request_sha, self.artifact,
+                    path, now=lambda: clock["now"], sleep=sleep)
+            self.assertEqual([method for method, _ in clock["calls"]], ["POST", "GET"])
+            self.assertFalse(json.loads(path.read_bytes())["run_identity_verified"])
+            self.assertEqual(github.deadline, self.deadline)
+
     def test_single_post_uses_current_documented_api_and_authenticates_exact_run(self) -> None:
         github = handoff.GitHub(deadline=self.deadline)
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,7 +385,7 @@ class OperatorDispatchTests(unittest.TestCase):
                         result.assert_not_called()
                         self.assertFalse(output.exists())
                     dispatch.assert_called_once_with(github, self.request, request_sha, self.artifact,
-                                                     dispatch_receipt, now=mock.ANY)
+                                                     dispatch_receipt, now=mock.ANY, sleep=mock.ANY)
 
 
 if __name__ == "__main__":

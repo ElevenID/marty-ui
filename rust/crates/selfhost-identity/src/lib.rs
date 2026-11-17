@@ -2,6 +2,7 @@
 
 pub mod acme_http01;
 pub mod origin;
+pub mod renewal_leaf;
 pub mod tls;
 
 pub struct SelfhostRole {
