@@ -355,3 +355,10 @@ transaction bindings without a Canvas-specific summary field. Retired provider
 readiness and lifecycle mirror errors are removed from platform service and
 HTTP/gRPC error contracts. Reconciliation result/receipt response models are
 removed with the retired reconciliation endpoints.
+
+Marty's Rust workspace no longer includes Canvas acceptance, worker acceptance,
+demo seed or sandbox crates. The native service build and container image no
+longer build/copy Canvas worker or sandbox binaries; the service entrypoint no
+longer starts the Canvas worker. Connector acceptance/demo tooling belongs in
+the independent repository. Remaining CI/deployment references must be retired
+before integrating the complete split; mandatory platform checks stay enabled.

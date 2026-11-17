@@ -112,10 +112,7 @@ if [ "$MODULE_NAME" = "passport_provider_ingress" ]; then
 	exec /usr/local/bin/marty-passport-provider-ingress
 fi
 
-if [ "$MODULE_NAME" = "canvas_sync_worker" ]; then
-	echo "Starting canonical Rust service: $SERVICE_NAME"
-	exec /usr/local/bin/marty-canvas-sync-worker
-fi
+
 
 if [ "$MODULE_NAME" = "deployment_profile" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
