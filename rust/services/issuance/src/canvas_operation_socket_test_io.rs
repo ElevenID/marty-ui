@@ -1,7 +1,7 @@
 //! In-memory I/O for the real operation socket; callers own the paused clock.
 //! This does not model TLS, HTTP framing, a worker, or durable database effects.
 
-use super::{failed, CanvasNetworkTimeout, CanvasOperationHttpError, OperationSocket};
+use super::{failed, OperationSocket, OutboundHttpError, OutboundNetworkTimeout};
 use std::{
     sync::{atomic::AtomicU8, Arc},
     time::Duration,
@@ -12,7 +12,7 @@ use tokio::{
 };
 
 pub(crate) struct ReadObservation {
-    pub result: Result<Vec<u8>, CanvasOperationHttpError>,
+    pub result: Result<Vec<u8>, OutboundHttpError>,
     pub elapsed: Duration,
 }
 
@@ -20,7 +20,7 @@ pub(crate) struct ReadObservation {
 /// read must renew the inactivity budget; the total request duration may exceed
 /// that budget. The writer is an inline owned future, never a detached task.
 pub(crate) async fn read_schedule(
-    timeout: CanvasNetworkTimeout,
+    timeout: OutboundNetworkTimeout,
     offsets: &[Duration],
 ) -> ReadObservation {
     assert!(!offsets.is_empty());
@@ -45,7 +45,7 @@ pub(crate) async fn read_schedule(
             Ok(_) => Ok(bytes),
             Err(error) => {
                 assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-                Err(failed(&phase, CanvasOperationHttpError::Response))
+                Err(failed(&phase, OutboundHttpError::Response))
             }
         };
         ReadObservation {

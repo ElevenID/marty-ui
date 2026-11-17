@@ -1,4 +1,4 @@
-//! Shared bounded HTTP client construction for Canvas provider traffic.
+//! Shared outbound HTTP origin policy and DNS-pinned client construction.
 
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -13,7 +13,7 @@ use url::Url;
 pub(crate) const MAX_RETRY_AFTER_SECONDS: u64 = 86_400;
 
 #[derive(Clone)]
-pub struct CanvasHttpClientPolicy {
+pub struct OutboundHttpClientPolicy {
     pub timeout: Duration,
     pub private_origin_allowlist: Vec<String>,
     pub allow_private_networks: bool,
@@ -21,14 +21,14 @@ pub struct CanvasHttpClientPolicy {
 }
 
 #[derive(Clone, Default)]
-pub struct CanvasOriginPolicy {
+pub struct OutboundOriginPolicy {
     pub private_origin_allowlist: Vec<String>,
     pub allow_private_networks: bool,
     pub allow_http_localhost: bool,
 }
 
-impl From<&CanvasHttpClientPolicy> for CanvasOriginPolicy {
-    fn from(policy: &CanvasHttpClientPolicy) -> Self {
+impl From<&OutboundHttpClientPolicy> for OutboundOriginPolicy {
+    fn from(policy: &OutboundHttpClientPolicy) -> Self {
         Self {
             private_origin_allowlist: policy.private_origin_allowlist.clone(),
             allow_private_networks: policy.allow_private_networks,
@@ -37,10 +37,10 @@ impl From<&CanvasHttpClientPolicy> for CanvasOriginPolicy {
     }
 }
 
-impl std::fmt::Debug for CanvasOriginPolicy {
+impl std::fmt::Debug for OutboundOriginPolicy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("CanvasOriginPolicy")
+            .debug_struct("OutboundOriginPolicy")
             .field(
                 "private_origin_allowlist_count",
                 &self.private_origin_allowlist.len(),
@@ -51,10 +51,10 @@ impl std::fmt::Debug for CanvasOriginPolicy {
     }
 }
 
-impl std::fmt::Debug for CanvasHttpClientPolicy {
+impl std::fmt::Debug for OutboundHttpClientPolicy {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("CanvasHttpClientPolicy")
+            .debug_struct("OutboundHttpClientPolicy")
             .field("timeout", &self.timeout)
             .field(
                 "private_origin_allowlist_count",
@@ -66,12 +66,12 @@ impl std::fmt::Debug for CanvasHttpClientPolicy {
     }
 }
 
-pub async fn client_for_canvas_origin(
+pub async fn client_for_outbound_origin(
     canvas_base_url: &str,
-    policy: &CanvasHttpClientPolicy,
+    policy: &OutboundHttpClientPolicy,
 ) -> Result<(Client, Url), ()> {
     let (origin, pinned) =
-        resolve_canvas_origin(canvas_base_url, &CanvasOriginPolicy::from(policy)).await?;
+        resolve_outbound_origin(canvas_base_url, &OutboundOriginPolicy::from(policy)).await?;
     let host = origin.host_str().ok_or(())?;
     let client = Client::builder()
         .timeout(policy.timeout)
@@ -85,9 +85,9 @@ pub async fn client_for_canvas_origin(
 
 /// One origin/DNS policy owner for both existing total-deadline clients and the
 /// operation-deadline candidate. This function does not apply request timeouts.
-pub(crate) async fn resolve_canvas_origin(
+pub(crate) async fn resolve_outbound_origin(
     canvas_base_url: &str,
-    policy: &CanvasOriginPolicy,
+    policy: &OutboundOriginPolicy,
 ) -> Result<(Url, SocketAddr), ()> {
     let origin = validate_canvas_origin(canvas_base_url, policy)?;
     let host = origin.host_str().ok_or(())?;
@@ -124,7 +124,7 @@ pub(crate) async fn resolve_canvas_origin(
 /// with the transport owner, so operation clients resolve only once per request.
 pub(crate) fn validate_canvas_origin(
     canvas_base_url: &str,
-    policy: &CanvasOriginPolicy,
+    policy: &OutboundOriginPolicy,
 ) -> Result<Url, ()> {
     let origin = Url::parse(canvas_base_url).map_err(|_| ())?;
     let host = origin.host_str().ok_or(())?;
@@ -464,7 +464,7 @@ mod tests {
 
     #[test]
     fn policy_debug_redacts_private_origins() {
-        let policy = CanvasHttpClientPolicy {
+        let policy = OutboundHttpClientPolicy {
             timeout: Duration::from_secs(10),
             private_origin_allowlist: vec!["https://private-sensitive.example".to_owned()],
             allow_private_networks: false,

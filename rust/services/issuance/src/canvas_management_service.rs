@@ -30,7 +30,7 @@ use crate::{
         CanvasProgramBindingRequest, CanvasRequestValidationError, ValidateCanvasRequest,
     },
     canvas_management_domain::{
-        CanvasManagementDomainError, CanvasOriginPolicy, CanvasPlatformRecord,
+        CanvasManagementDomainError, CanvasPlatformRecord, OutboundOriginPolicy,
     },
     canvas_readiness::{
         apply_canvas_readiness_result, canvas_binding_is_ready_for_activation,
@@ -343,7 +343,7 @@ impl CanvasPlatformReadinessResult {
 pub struct CanvasPlatformManagementService {
     repository: Arc<dyn CanvasPlatformManagementRepository>,
     security: ManagementSecurity,
-    origin_policy: CanvasOriginPolicy,
+    origin_policy: OutboundOriginPolicy,
     issuer_base_url: String,
     lti_probe_config: CanvasLtiJwksRefreshConfig,
     lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
@@ -388,7 +388,7 @@ impl CanvasPlatformManagementService {
     pub fn new(
         repository: Arc<dyn CanvasPlatformManagementRepository>,
         management_api_key: Option<&str>,
-        origin_policy: CanvasOriginPolicy,
+        origin_policy: OutboundOriginPolicy,
         issuer_base_url: &str,
         lti_probe_config: CanvasLtiJwksRefreshConfig,
     ) -> Self {
@@ -415,7 +415,7 @@ impl CanvasPlatformManagementService {
     pub fn with_probe_client(
         repository: Arc<dyn CanvasPlatformManagementRepository>,
         management_api_key: Option<&str>,
-        origin_policy: CanvasOriginPolicy,
+        origin_policy: OutboundOriginPolicy,
         issuer_base_url: &str,
         lti_probe_config: CanvasLtiJwksRefreshConfig,
         lti_probe_client: Arc<dyn CanvasLtiProbeClient>,
@@ -2157,7 +2157,7 @@ mod tests {
         CanvasPlatformManagementService::new(
             repository,
             Some("management-secret"),
-            CanvasOriginPolicy::default(),
+            OutboundOriginPolicy::default(),
             "https://issuer.example.edu",
             CanvasLtiJwksRefreshConfig {
                 timeout: std::time::Duration::from_secs(10),

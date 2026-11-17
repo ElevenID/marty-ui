@@ -7,8 +7,8 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-fn local_policy() -> CanvasOriginPolicy {
-    CanvasOriginPolicy {
+fn local_policy() -> OutboundOriginPolicy {
+    OutboundOriginPolicy {
         allow_http_localhost: true,
         ..Default::default()
     }
@@ -62,10 +62,7 @@ async fn no_connection(listener: &TcpListener) {
     );
 }
 
-async fn get(
-    client: &CanvasOperationHttpClient,
-    url: Url,
-) -> Result<Bytes, CanvasOperationHttpError> {
+async fn get(client: &OutboundHttpClient, url: Url) -> Result<Bytes, OutboundHttpError> {
     client
         .send(http::Method::GET, url, request_headers(), Vec::new())
         .await?
@@ -78,8 +75,8 @@ async fn prepared_origin_and_clones_reuse_validated_pin_without_reapplying_lazy_
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://localhost:{}", address.port());
-    let budget = CanvasNetworkTimeout::from_seconds(0.5);
-    let (mut prepared, origin) = CanvasOperationHttpClient::prepare(local_policy(), budget, &base)
+    let budget = OutboundNetworkTimeout::from_seconds(0.5);
+    let (mut prepared, origin) = OutboundHttpClient::prepare(local_policy(), budget, &base)
         .await
         .unwrap();
     assert_eq!(origin, Url::parse(&base).unwrap());
@@ -89,7 +86,7 @@ async fn prepared_origin_and_clones_reuse_validated_pin_without_reapplying_lazy_
 
     // A lazy resolution using this deliberately closed policy would reject the
     // HTTP origin. Prepared sends must retain their already-validated pin.
-    prepared.policy = CanvasOriginPolicy::default();
+    prepared.policy = OutboundOriginPolicy::default();
     let cloned = prepared.clone();
     let first = origin
         .join("/api/v1/courses/42?include%5B%5D=assignment")
@@ -114,11 +111,11 @@ async fn prepared_origin_and_clones_reuse_validated_pin_without_reapplying_lazy_
         assert!(lower.contains("\r\naccept: application/json\r\n"));
         assert!(!lower.contains("wrong-host.invalid"));
     }
-    let lazy = CanvasOperationHttpClient::new(CanvasOriginPolicy::default(), budget);
+    let lazy = OutboundHttpClient::new(OutboundOriginPolicy::default(), budget);
     assert!(lazy.prepared.is_none());
     assert_eq!(
         get(&lazy, origin).await.unwrap_err(),
-        CanvasOperationHttpError::Origin
+        OutboundHttpError::Origin
     );
     no_connection(&listener).await;
 }
@@ -128,9 +125,9 @@ async fn prepared_cross_origin_port_scheme_and_credentials_fail_before_connect()
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let (prepared, origin) = CanvasOperationHttpClient::prepare(
+    let (prepared, origin) = OutboundHttpClient::prepare(
         local_policy(),
-        CanvasNetworkTimeout::from_seconds(0.25),
+        OutboundNetworkTimeout::from_seconds(0.25),
         &base,
     )
     .await
@@ -153,7 +150,7 @@ async fn prepared_cross_origin_port_scheme_and_credentials_fail_before_connect()
             .await
             .unwrap()
             .unwrap_err();
-        assert_eq!(error, CanvasOperationHttpError::Origin);
+        assert_eq!(error, OutboundHttpError::Origin);
         assert_eq!(
             error.to_string(),
             "Provider origin is unavailable or disallowed"
@@ -168,7 +165,7 @@ async fn prepare_rejects_invalid_persisted_roots_and_private_policy_before_conne
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
-    let budget = CanvasNetworkTimeout::from_seconds(0.25);
+    let budget = OutboundNetworkTimeout::from_seconds(0.25);
     for invalid in [
         format!("{base}/api/v1"),
         format!("{base}/?private-query-sentinel=1"),
@@ -181,29 +178,29 @@ async fn prepare_rejects_invalid_persisted_roots_and_private_policy_before_conne
     ] {
         let error = timeout(
             Duration::from_secs(1),
-            CanvasOperationHttpClient::prepare(local_policy(), budget, &invalid),
+            OutboundHttpClient::prepare(local_policy(), budget, &invalid),
         )
         .await
         .unwrap()
         .unwrap_err();
-        assert_eq!(error, CanvasOperationHttpError::Origin);
+        assert_eq!(error, OutboundHttpError::Origin);
         assert!(!error.to_string().contains("sentinel"));
     }
     assert_eq!(
-        CanvasOperationHttpClient::prepare(CanvasOriginPolicy::default(), budget, &base)
+        OutboundHttpClient::prepare(OutboundOriginPolicy::default(), budget, &base)
             .await
             .unwrap_err(),
-        CanvasOperationHttpError::Origin
+        OutboundHttpError::Origin
     );
     assert_eq!(
-        CanvasOperationHttpClient::prepare(
-            CanvasOriginPolicy::default(),
+        OutboundHttpClient::prepare(
+            OutboundOriginPolicy::default(),
             budget,
             &format!("https://{address}")
         )
         .await
         .unwrap_err(),
-        CanvasOperationHttpError::Origin
+        OutboundHttpError::Origin
     );
     no_connection(&listener).await;
 }
@@ -218,7 +215,7 @@ async fn prepared_debug_redacts_the_pin_origin_and_policy_contents() {
         .private_origin_allowlist
         .push("https://private-prepared-policy-sentinel.invalid".into());
     let (client, _) =
-        CanvasOperationHttpClient::prepare(policy, CanvasNetworkTimeout::from_seconds(0.5), &base)
+        OutboundHttpClient::prepare(policy, OutboundNetworkTimeout::from_seconds(0.5), &base)
             .await
             .unwrap();
     let private_address = address.to_string();
@@ -248,8 +245,7 @@ async fn lazy_client_still_resolves_each_independently_allowed_request_origin() 
     let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let one = Url::parse(&format!("http://{}/one", first.local_addr().unwrap())).unwrap();
     let two = Url::parse(&format!("http://{}/two", second.local_addr().unwrap())).unwrap();
-    let client =
-        CanvasOperationHttpClient::new(local_policy(), CanvasNetworkTimeout::from_seconds(0.5));
+    let client = OutboundHttpClient::new(local_policy(), OutboundNetworkTimeout::from_seconds(0.5));
     assert!(client.prepared.is_none());
     let (first_requests, second_requests, ()) = timeout(Duration::from_secs(3), async {
         tokio::join!(serve(&first, 1), serve(&second, 1), async {

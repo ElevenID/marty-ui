@@ -15,13 +15,13 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use url::Url;
 
-use crate::canvas_network_timeout::CanvasNetworkTimeout;
-use crate::canvas_operation_http::CanvasOperationHttpClient;
 use crate::canvas_operator_secret::{
     resolve_canvas_operator_token, CanvasOperatorSecretError, CanvasOperatorSecretReader,
     FileCanvasOperatorSecretReader,
 };
-use crate::canvas_provider_http::{CanvasHttpClientPolicy, CanvasOriginPolicy};
+use crate::outbound_http::OutboundHttpClient;
+use crate::outbound_http_policy::{OutboundHttpClientPolicy, OutboundOriginPolicy};
+use crate::outbound_timeout::OutboundNetworkTimeout;
 use crate::{canvas_credentials_urls, python_text::PythonText};
 
 #[cfg(test)]
@@ -476,7 +476,7 @@ impl CanvasCredentialsValidator for CanvasCredentialsValidationService {
 
 #[derive(Clone)]
 pub struct HttpCanvasCredentialsValidationTransport {
-    client: CanvasOperationHttpClient,
+    client: OutboundHttpClient,
 }
 
 impl std::fmt::Debug for HttpCanvasCredentialsValidationTransport {
@@ -490,17 +490,17 @@ impl std::fmt::Debug for HttpCanvasCredentialsValidationTransport {
 
 impl HttpCanvasCredentialsValidationTransport {
     #[must_use]
-    pub fn new(policy: CanvasHttpClientPolicy) -> Self {
-        let timeout = CanvasNetworkTimeout::from_seconds(policy.timeout.as_secs_f64());
-        Self::with_operation_timeout(CanvasOriginPolicy::from(&policy), timeout)
+    pub fn new(policy: OutboundHttpClientPolicy) -> Self {
+        let timeout = OutboundNetworkTimeout::from_seconds(policy.timeout.as_secs_f64());
+        Self::with_operation_timeout(OutboundOriginPolicy::from(&policy), timeout)
     }
 
     pub fn with_operation_timeout(
-        policy: CanvasOriginPolicy,
-        timeout: CanvasNetworkTimeout,
+        policy: OutboundOriginPolicy,
+        timeout: OutboundNetworkTimeout,
     ) -> Self {
         Self {
-            client: CanvasOperationHttpClient::new(policy, timeout),
+            client: OutboundHttpClient::new(policy, timeout),
         }
     }
 }
@@ -629,11 +629,11 @@ mod tests {
                 socket.write_all(&body).await.unwrap();
             });
             let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
-                CanvasOriginPolicy {
+                OutboundOriginPolicy {
                     allow_http_localhost: true,
                     ..Default::default()
                 },
-                CanvasNetworkTimeout::from_seconds(2.0),
+                OutboundNetworkTimeout::from_seconds(2.0),
             );
             let result = tokio::time::timeout(
                 std::time::Duration::from_secs(5),
@@ -723,11 +723,11 @@ mod tests {
                 }
             });
             let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
-                CanvasOriginPolicy {
+                OutboundOriginPolicy {
                     allow_http_localhost: true,
                     ..Default::default()
                 },
-                CanvasNetworkTimeout::from_seconds(0.2),
+                OutboundNetworkTimeout::from_seconds(0.2),
             );
             let result = tokio::time::timeout(
                 Duration::from_secs(3),
@@ -796,11 +796,11 @@ mod tests {
                 }
             });
             let transport = HttpCanvasCredentialsValidationTransport::with_operation_timeout(
-                CanvasOriginPolicy {
+                OutboundOriginPolicy {
                     allow_http_localhost: true,
                     ..Default::default()
                 },
-                CanvasNetworkTimeout::from_seconds(0.2),
+                OutboundNetworkTimeout::from_seconds(0.2),
             );
             let result = tokio::time::timeout(
                 Duration::from_secs(3),

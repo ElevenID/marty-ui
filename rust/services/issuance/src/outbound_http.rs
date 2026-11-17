@@ -24,8 +24,8 @@ use url::Url;
 
 use crate::{
     canvas_content_decoder::CanvasContentDecoder,
-    canvas_network_timeout::{CanvasNetworkBudget, CanvasNetworkPhase, CanvasNetworkTimeout},
-    canvas_provider_http::{resolve_canvas_origin, CanvasOriginPolicy},
+    outbound_http_policy::{resolve_outbound_origin, OutboundOriginPolicy},
+    outbound_timeout::{OutboundNetworkBudget, OutboundNetworkPhase, OutboundNetworkTimeout},
 };
 
 #[cfg(test)]
@@ -37,7 +37,7 @@ mod prepared_tests;
 pub(crate) mod socket_test_io;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum CanvasOperationHttpError {
+pub enum OutboundHttpError {
     #[error("Provider origin is unavailable or disallowed")]
     Origin,
     #[error("Provider connection unavailable")]
@@ -54,13 +54,13 @@ pub enum CanvasOperationHttpError {
     #[error(transparent)]
     Text(#[from] crate::canvas_response_text::CanvasResponseTextError),
     #[error("Provider {0:?} operation timed out")]
-    Timeout(CanvasNetworkPhase),
+    Timeout(OutboundNetworkPhase),
 }
 
-fn failed(phase: &AtomicU8, fallback: CanvasOperationHttpError) -> CanvasOperationHttpError {
+fn failed(phase: &AtomicU8, fallback: OutboundHttpError) -> OutboundHttpError {
     match phase.load(Ordering::Relaxed) {
-        1 => CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read),
-        2 => CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Write),
+        1 => OutboundHttpError::Timeout(OutboundNetworkPhase::Read),
+        2 => OutboundHttpError::Timeout(OutboundNetworkPhase::Write),
         _ => fallback,
     }
 }
@@ -70,9 +70,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Socket for T {}
 
 struct OperationSocket {
     inner: Box<dyn Socket>,
-    timeout: CanvasNetworkTimeout,
-    read_budget: Option<CanvasNetworkBudget>,
-    write_budget: Option<CanvasNetworkBudget>,
+    timeout: OutboundNetworkTimeout,
+    read_budget: Option<OutboundNetworkBudget>,
+    write_budget: Option<OutboundNetworkBudget>,
     phase: Arc<AtomicU8>,
     header_tail: u32,
     headers_written: bool,
@@ -82,8 +82,8 @@ struct OperationSocket {
 
 impl OperationSocket {
     fn check(
-        budget: &mut Option<CanvasNetworkBudget>,
-        timeout: CanvasNetworkTimeout,
+        budget: &mut Option<OutboundNetworkBudget>,
+        timeout: OutboundNetworkTimeout,
         cx: &mut Context<'_>,
     ) -> bool {
         Pin::new(budget.get_or_insert_with(|| timeout.budget()))
@@ -232,7 +232,7 @@ impl CanvasOperationResponse {
             Some(values.join(", "))
         }
     }
-    pub async fn chunk(&mut self) -> Result<Option<Bytes>, CanvasOperationHttpError> {
+    pub async fn chunk(&mut self) -> Result<Option<Bytes>, OutboundHttpError> {
         if self.finished {
             return Ok(None);
         }
@@ -240,7 +240,7 @@ impl CanvasOperationResponse {
             .response
             .chunk()
             .await
-            .map_err(|_| failed(&self.phase, CanvasOperationHttpError::Response))?;
+            .map_err(|_| failed(&self.phase, OutboundHttpError::Response))?;
         self.finished = chunk.is_none();
         if self.decoders.is_empty() {
             return Ok(chunk);
@@ -255,7 +255,7 @@ impl CanvasOperationResponse {
             Ok(Some(Bytes::from(decoded)))
         }
     }
-    pub async fn bytes(mut self) -> Result<Bytes, CanvasOperationHttpError> {
+    pub async fn bytes(mut self) -> Result<Bytes, OutboundHttpError> {
         let mut bytes = Vec::new();
         while let Some(chunk) = self.chunk().await? {
             bytes.extend_from_slice(&chunk);
@@ -263,7 +263,7 @@ impl CanvasOperationResponse {
         Ok(Bytes::from(bytes))
     }
     #[cfg(test)]
-    pub async fn text(self) -> Result<crate::python_text::PythonText, CanvasOperationHttpError> {
+    pub async fn text(self) -> Result<crate::python_text::PythonText, OutboundHttpError> {
         let content_type = self.content_type();
         Ok(crate::canvas_response_text::response_text(
             &self.bytes().await?,
@@ -285,15 +285,15 @@ impl std::fmt::Debug for PreparedOrigin {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct CanvasOperationHttpClient {
-    policy: CanvasOriginPolicy,
-    timeout: CanvasNetworkTimeout,
+pub(crate) struct OutboundHttpClient {
+    policy: OutboundOriginPolicy,
+    timeout: OutboundNetworkTimeout,
     tls: Option<Arc<rustls::ClientConfig>>,
     prepared: Option<PreparedOrigin>,
 }
 
-impl CanvasOperationHttpClient {
-    pub fn new(policy: CanvasOriginPolicy, timeout: CanvasNetworkTimeout) -> Self {
+impl OutboundHttpClient {
+    pub fn new(policy: OutboundOriginPolicy, timeout: OutboundNetworkTimeout) -> Self {
         Self {
             policy,
             timeout,
@@ -305,13 +305,13 @@ impl CanvasOperationHttpClient {
     /// Resolve a validated persisted root once, before callers construct headers.
     /// The private result cannot be repointed to an unchecked address or origin.
     pub async fn prepare(
-        policy: CanvasOriginPolicy,
-        timeout: CanvasNetworkTimeout,
+        policy: OutboundOriginPolicy,
+        timeout: OutboundNetworkTimeout,
         base: &str,
-    ) -> Result<(Self, Url), CanvasOperationHttpError> {
-        let (origin, address) = resolve_canvas_origin(base, &policy)
+    ) -> Result<(Self, Url), OutboundHttpError> {
+        let (origin, address) = resolve_outbound_origin(base, &policy)
             .await
-            .map_err(|_| CanvasOperationHttpError::Origin)?;
+            .map_err(|_| OutboundHttpError::Origin)?;
         let mut client = Self::new(policy, timeout);
         client.prepared = Some(PreparedOrigin {
             origin: origin.clone(),
@@ -326,31 +326,31 @@ impl CanvasOperationHttpClient {
         url: Url,
         headers: http::HeaderMap,
         body: Vec<u8>,
-    ) -> Result<CanvasOperationResponse, CanvasOperationHttpError> {
+    ) -> Result<CanvasOperationResponse, OutboundHttpError> {
         if !url.username().is_empty() || url.password().is_some() {
-            return Err(CanvasOperationHttpError::Origin);
+            return Err(OutboundHttpError::Origin);
         }
         let (origin, pinned) = if let Some(prepared) = &self.prepared {
             if url.origin() != prepared.origin.origin() {
-                return Err(CanvasOperationHttpError::Origin);
+                return Err(OutboundHttpError::Origin);
             }
             (prepared.origin.clone(), prepared.address)
         } else {
-            resolve_canvas_origin(&url.origin().ascii_serialization(), &self.policy)
+            resolve_outbound_origin(&url.origin().ascii_serialization(), &self.policy)
                 .await
-                .map_err(|_| CanvasOperationHttpError::Origin)?
+                .map_err(|_| OutboundHttpError::Origin)?
         };
         let tcp = self
             .timeout
             .run(
-                CanvasNetworkPhase::Connect,
+                OutboundNetworkPhase::Connect,
                 tokio::net::TcpStream::connect(pinned),
             )
             .await
-            .map_err(|error| CanvasOperationHttpError::Timeout(error.phase))?
-            .map_err(|_| CanvasOperationHttpError::Connect)?;
+            .map_err(|error| OutboundHttpError::Timeout(error.phase))?
+            .map_err(|_| OutboundHttpError::Connect)?;
         tcp.set_nodelay(true)
-            .map_err(|_| CanvasOperationHttpError::Connect)?;
+            .map_err(|_| OutboundHttpError::Connect)?;
         let socket: Box<dyn Socket> = if origin.scheme() == "https" {
             let config = match &self.tls {
                 Some(config) => config.clone(),
@@ -359,28 +359,28 @@ impl CanvasOperationHttpClient {
                         rustls::crypto::aws_lc_rs::default_provider(),
                     ))
                     .with_safe_default_protocol_versions()
-                    .map_err(|_| CanvasOperationHttpError::Tls)?
+                    .map_err(|_| OutboundHttpError::Tls)?
                     .with_platform_verifier()
-                    .map_err(|_| CanvasOperationHttpError::Tls)?
+                    .map_err(|_| OutboundHttpError::Tls)?
                     .with_no_client_auth(),
                 ),
             };
             let name = rustls::pki_types::ServerName::try_from(
                 origin
                     .host_str()
-                    .ok_or(CanvasOperationHttpError::Origin)?
+                    .ok_or(OutboundHttpError::Origin)?
                     .to_owned(),
             )
-            .map_err(|_| CanvasOperationHttpError::Origin)?;
+            .map_err(|_| OutboundHttpError::Origin)?;
             Box::new(
                 self.timeout
                     .run(
-                        CanvasNetworkPhase::Tls,
+                        OutboundNetworkPhase::Tls,
                         tokio_rustls::TlsConnector::from(config).connect(name, tcp),
                     )
                     .await
-                    .map_err(|error| CanvasOperationHttpError::Timeout(error.phase))?
-                    .map_err(|_| CanvasOperationHttpError::Tls)?,
+                    .map_err(|error| OutboundHttpError::Timeout(error.phase))?
+                    .map_err(|_| OutboundHttpError::Tls)?,
             )
         } else {
             Box::new(tcp)
@@ -399,7 +399,7 @@ impl CanvasOperationHttpClient {
         };
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(io))
             .await
-            .map_err(|_| CanvasOperationHttpError::Request)?;
+            .map_err(|_| OutboundHttpError::Request)?;
         let driver = Driver(tokio::spawn(async move {
             let _ = connection.await;
         }));
@@ -407,7 +407,7 @@ impl CanvasOperationHttpClient {
             .method(method)
             .uri(&url[url::Position::BeforePath..url::Position::AfterQuery])
             .body(Full::new(Bytes::from(body)))
-            .map_err(|_| CanvasOperationHttpError::Request)?;
+            .map_err(|_| OutboundHttpError::Request)?;
         *request.headers_mut() = headers;
         request
             .headers_mut()
@@ -416,13 +416,12 @@ impl CanvasOperationHttpClient {
         let authority = &origin[url::Position::BeforeHost..url::Position::AfterPort];
         request.headers_mut().insert(
             http::header::HOST,
-            http::HeaderValue::from_str(authority)
-                .map_err(|_| CanvasOperationHttpError::Request)?,
+            http::HeaderValue::from_str(authority).map_err(|_| OutboundHttpError::Request)?,
         );
         let response = sender
             .send_request(request)
             .await
-            .map_err(|_| failed(&phase, CanvasOperationHttpError::Request))?;
+            .map_err(|_| failed(&phase, OutboundHttpError::Request))?;
         let (parts, body) = response.into_parts();
         let decoders = CanvasContentDecoder::from_headers(&parts.headers);
         let stream = ResponseStream {
@@ -451,7 +450,7 @@ mod tests {
         let (io, _peer) = tokio::io::duplex(64);
         let mut socket = OperationSocket {
             inner: Box::new(io),
-            timeout: CanvasNetworkTimeout::from_seconds(0.01),
+            timeout: OutboundNetworkTimeout::from_seconds(0.01),
             read_budget: None,
             write_budget: None,
             phase: Arc::new(AtomicU8::new(0)),
@@ -488,7 +487,7 @@ mod tests {
         let (io, mut peer) = tokio::io::duplex(128);
         let mut socket = OperationSocket {
             inner: Box::new(io),
-            timeout: CanvasNetworkTimeout::from_seconds(0.05),
+            timeout: OutboundNetworkTimeout::from_seconds(0.05),
             read_budget: None,
             write_budget: None,
             phase: Arc::new(AtomicU8::new(0)),
@@ -514,8 +513,8 @@ mod tests {
         assert_eq!(failure.kind(), io::ErrorKind::TimedOut);
         assert_eq!(socket.phase.load(Ordering::Relaxed), 1);
         assert_eq!(
-            failed(&socket.phase, CanvasOperationHttpError::Response),
-            CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read)
+            failed(&socket.phase, OutboundHttpError::Response),
+            OutboundHttpError::Timeout(OutboundNetworkPhase::Read)
         );
     }
 
@@ -546,12 +545,12 @@ mod tests {
                     .unwrap()
                     .unwrap()
             });
-            let client = CanvasOperationHttpClient::new(
-                CanvasOriginPolicy {
+            let client = OutboundHttpClient::new(
+                OutboundOriginPolicy {
                     allow_http_localhost: true,
                     ..Default::default()
                 },
-                CanvasNetworkTimeout::from_seconds(f64::INFINITY),
+                OutboundNetworkTimeout::from_seconds(f64::INFINITY),
             );
             let task = tokio::spawn(async move {
                 client
@@ -688,13 +687,13 @@ mod tests {
             Some(case["seconds"].as_str().unwrap()),
         )
         .unwrap();
-        let policy = CanvasOriginPolicy {
+        let policy = OutboundOriginPolicy {
             private_origin_allowlist: vec![origin.clone()],
             allow_private_networks: false,
             allow_http_localhost: false,
         };
         let mut client =
-            CanvasOperationHttpClient::new(policy, CanvasNetworkTimeout::from_seconds(seconds));
+            OutboundHttpClient::new(policy, OutboundNetworkTimeout::from_seconds(seconds));
         if case["trusted"] != false {
             let cert = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CERT").unwrap();
             assert_eq!(
@@ -741,18 +740,18 @@ mod tests {
                     .into_scalar()
                     .expect("existing TLS text fixtures are scalar"))
             };
-            Ok::<_, CanvasOperationHttpError>(json!({"status":status, "body":body}))
+            Ok::<_, OutboundHttpError>(json!({"status":status, "body":body}))
         }
         .await;
         let mut result = match result {
             Ok(value) => value,
             Err(error) => json!({"error_class": match error {
-                CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Connect | CanvasNetworkPhase::Tls) => "ConnectTimeout",
-                CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read) => "ReadTimeout",
-                CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Write) => "WriteTimeout",
-                CanvasOperationHttpError::Connect | CanvasOperationHttpError::Tls => "ConnectError",
-                CanvasOperationHttpError::Decoding => "DecodingError",
-                CanvasOperationHttpError::Text(error) => error.diagnostic_class(),
+                OutboundHttpError::Timeout(OutboundNetworkPhase::Connect | OutboundNetworkPhase::Tls) => "ConnectTimeout",
+                OutboundHttpError::Timeout(OutboundNetworkPhase::Read) => "ReadTimeout",
+                OutboundHttpError::Timeout(OutboundNetworkPhase::Write) => "WriteTimeout",
+                OutboundHttpError::Connect | OutboundHttpError::Tls => "ConnectError",
+                OutboundHttpError::Decoding => "DecodingError",
+                OutboundHttpError::Text(error) => error.diagnostic_class(),
                 _ => panic!("unexpected fixture outcome: {error:?}"),
             }}),
         };

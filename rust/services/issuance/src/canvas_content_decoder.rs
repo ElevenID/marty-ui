@@ -2,7 +2,7 @@
 //! The published HTTPX image supports gzip, deflate and identity, not Brotli.
 use flate2::{Decompress, FlushDecompress, Status};
 
-use crate::canvas_operation_http::CanvasOperationHttpError;
+use crate::outbound_http::OutboundHttpError;
 
 pub(crate) struct CanvasContentDecoder {
     inflater: Decompress,
@@ -36,7 +36,7 @@ impl CanvasContentDecoder {
         decoders
     }
 
-    pub fn decode(&mut self, input: &[u8]) -> Result<Vec<u8>, CanvasOperationHttpError> {
+    pub fn decode(&mut self, input: &[u8]) -> Result<Vec<u8>, OutboundHttpError> {
         let first = std::mem::replace(&mut self.first_attempt, false);
         match self.inflate(input) {
             Err(_) if first && self.raw_fallback => {
@@ -49,7 +49,7 @@ impl CanvasContentDecoder {
         }
     }
 
-    fn inflate(&mut self, input: &[u8]) -> Result<Vec<u8>, CanvasOperationHttpError> {
+    fn inflate(&mut self, input: &[u8]) -> Result<Vec<u8>, OutboundHttpError> {
         let mut output = Vec::new();
         let mut offset = 0;
         loop {
@@ -59,7 +59,7 @@ impl CanvasContentDecoder {
             let status = self
                 .inflater
                 .decompress(&input[offset..], &mut buffer, FlushDecompress::None)
-                .map_err(|_| CanvasOperationHttpError::Decoding)?;
+                .map_err(|_| OutboundHttpError::Decoding)?;
             let consumed = (self.inflater.total_in() - before_in) as usize;
             let produced = (self.inflater.total_out() - before_out) as usize;
             offset += consumed;
@@ -131,10 +131,7 @@ mod tests {
         );
         let mut late = decoder("deflate");
         assert!(late.decode(&[]).unwrap().is_empty());
-        assert_eq!(
-            late.decode(&raw).unwrap_err(),
-            CanvasOperationHttpError::Decoding
-        );
+        assert_eq!(late.decode(&raw).unwrap_err(), OutboundHttpError::Decoding);
     }
 
     #[test]
@@ -149,7 +146,7 @@ mod tests {
         damaged[trailer] ^= 1;
         assert_eq!(
             decoder("gzip").decode(&damaged).unwrap_err(),
-            CanvasOperationHttpError::Decoding
+            OutboundHttpError::Decoding
         );
     }
 }

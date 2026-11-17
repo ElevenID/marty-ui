@@ -1,4 +1,4 @@
-//! Lossless Canvas timeout values and scoped per-operation deadlines.
+//! Lossless timeout values and scoped per-operation deadlines.
 //!
 //! The published HTTPX owner accepts every Python float at configuration time.
 //! Preserve that value separately from the clock's representable deadline. Each
@@ -15,19 +15,19 @@ use std::{
 use tokio::time::Instant;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
-pub struct CanvasNetworkTimeout(u64);
+pub struct OutboundNetworkTimeout(u64);
 
-impl std::fmt::Debug for CanvasNetworkTimeout {
+impl std::fmt::Debug for OutboundNetworkTimeout {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_tuple("CanvasNetworkTimeout")
+            .debug_tuple("OutboundNetworkTimeout")
             .field(&self.seconds())
             .finish()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CanvasNetworkPhase {
+pub enum OutboundNetworkPhase {
     Connect,
     Tls,
     Read,
@@ -37,8 +37,8 @@ pub enum CanvasNetworkPhase {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[error("Canvas network {phase:?} operation timed out")]
-pub struct CanvasNetworkTimeoutError {
-    pub phase: CanvasNetworkPhase,
+pub struct OutboundNetworkTimeoutError {
+    pub phase: OutboundNetworkPhase,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,13 +48,13 @@ enum Deadline {
     Unbounded,
 }
 
-pub(crate) enum CanvasNetworkBudget {
+pub(crate) enum OutboundNetworkBudget {
     Immediate,
     Timer(Pin<Box<tokio::time::Sleep>>),
     Unbounded,
 }
 
-impl Future for CanvasNetworkBudget {
+impl Future for OutboundNetworkBudget {
     type Output = ();
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
         match self.get_mut() {
@@ -65,7 +65,7 @@ impl Future for CanvasNetworkBudget {
     }
 }
 
-impl CanvasNetworkTimeout {
+impl OutboundNetworkTimeout {
     /// Store IEEE bits so configuration equality is reflexive even for NaN and
     /// does not erase signed zero. No positivity or finite-range restriction.
     pub fn from_seconds(seconds: f64) -> Self {
@@ -97,12 +97,12 @@ impl CanvasNetworkTimeout {
             .unwrap_or(Deadline::Unbounded)
     }
 
-    pub(crate) fn budget(self) -> CanvasNetworkBudget {
+    pub(crate) fn budget(self) -> OutboundNetworkBudget {
         match self.deadline(Instant::now()) {
-            Deadline::Immediate => CanvasNetworkBudget::Immediate,
-            Deadline::Unbounded => CanvasNetworkBudget::Unbounded,
+            Deadline::Immediate => OutboundNetworkBudget::Immediate,
+            Deadline::Unbounded => OutboundNetworkBudget::Unbounded,
             Deadline::At(deadline) => {
-                CanvasNetworkBudget::Timer(Box::pin(tokio::time::sleep_until(deadline)))
+                OutboundNetworkBudget::Timer(Box::pin(tokio::time::sleep_until(deadline)))
             }
         }
     }
@@ -111,10 +111,10 @@ impl CanvasNetworkTimeout {
     /// operation together; no detached timeout task or operation is spawned.
     pub async fn run<F: Future>(
         self,
-        phase: CanvasNetworkPhase,
+        phase: OutboundNetworkPhase,
         operation: F,
-    ) -> Result<F::Output, CanvasNetworkTimeoutError> {
-        let failure = CanvasNetworkTimeoutError { phase };
+    ) -> Result<F::Output, OutboundNetworkTimeoutError> {
+        let failure = OutboundNetworkTimeoutError { phase };
         match self.deadline(Instant::now()) {
             Deadline::Immediate => Err(failure),
             Deadline::Unbounded => Ok(operation.await),
@@ -152,7 +152,7 @@ mod tests {
             ) else {
                 continue;
             };
-            let timeout = CanvasNetworkTimeout::from_seconds(seconds);
+            let timeout = OutboundNetworkTimeout::from_seconds(seconds);
             assert_eq!(
                 timeout, timeout,
                 "NaN configuration equality must be reflexive"
@@ -160,8 +160,8 @@ mod tests {
             assert_eq!(timeout.seconds().to_bits(), seconds.to_bits());
         }
         assert_ne!(
-            CanvasNetworkTimeout::from_seconds(0.0),
-            CanvasNetworkTimeout::from_seconds(-0.0)
+            OutboundNetworkTimeout::from_seconds(0.0),
+            OutboundNetworkTimeout::from_seconds(-0.0)
         );
     }
 
@@ -169,12 +169,12 @@ mod tests {
     async fn frozen_nonpositive_and_tiny_timeouts_never_poll_connect() {
         for seconds in [0.0, -0.0, -1.0, f64::NEG_INFINITY, 1e-30] {
             let polls = AtomicUsize::new(0);
-            let result = CanvasNetworkTimeout::from_seconds(seconds)
-                .run(CanvasNetworkPhase::Connect, async {
+            let result = OutboundNetworkTimeout::from_seconds(seconds)
+                .run(OutboundNetworkPhase::Connect, async {
                     polls.fetch_add(1, Ordering::SeqCst);
                 })
                 .await;
-            assert_eq!(result.unwrap_err().phase, CanvasNetworkPhase::Connect);
+            assert_eq!(result.unwrap_err().phase, OutboundNetworkPhase::Connect);
             assert_eq!(polls.load(Ordering::SeqCst), 0);
         }
     }
@@ -182,8 +182,8 @@ mod tests {
     #[tokio::test]
     async fn nan_infinite_and_huge_values_allow_delayed_operations() {
         for seconds in [f64::NAN, f64::INFINITY, 1e30, f64::MAX] {
-            let result = CanvasNetworkTimeout::from_seconds(seconds)
-                .run(CanvasNetworkPhase::Read, async {
+            let result = OutboundNetworkTimeout::from_seconds(seconds)
+                .run(OutboundNetworkPhase::Read, async {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                     7
                 })
@@ -194,12 +194,12 @@ mod tests {
 
     #[tokio::test]
     async fn each_successful_operation_gets_a_fresh_budget() {
-        let timeout = CanvasNetworkTimeout::from_seconds(0.1);
+        let timeout = OutboundNetworkTimeout::from_seconds(0.1);
         let started = Instant::now();
         for _ in 0..5 {
             timeout
                 .run(
-                    CanvasNetworkPhase::Read,
+                    OutboundNetworkPhase::Read,
                     tokio::time::sleep(Duration::from_millis(30)),
                 )
                 .await
@@ -207,39 +207,39 @@ mod tests {
         }
         assert!(started.elapsed() > Duration::from_millis(100));
         let failure = timeout
-            .run(CanvasNetworkPhase::Read, std::future::pending::<()>())
+            .run(OutboundNetworkPhase::Read, std::future::pending::<()>())
             .await
             .unwrap_err();
-        assert_eq!(failure.phase, CanvasNetworkPhase::Read);
+        assert_eq!(failure.phase, OutboundNetworkPhase::Read);
     }
 
     #[tokio::test]
     async fn actual_io_read_and_write_waits_have_independent_deadlines() {
-        let timeout = CanvasNetworkTimeout::from_seconds(0.03);
+        let timeout = OutboundNetworkTimeout::from_seconds(0.03);
         let (mut writer, mut reader) = tokio::io::duplex(1);
         // One byte fills the owned stream; a second write must wait for a reader.
         timeout
-            .run(CanvasNetworkPhase::Write, writer.write_all(b"a"))
+            .run(OutboundNetworkPhase::Write, writer.write_all(b"a"))
             .await
             .unwrap()
             .unwrap();
         let failure = timeout
-            .run(CanvasNetworkPhase::Write, writer.write_all(b"b"))
+            .run(OutboundNetworkPhase::Write, writer.write_all(b"b"))
             .await
             .unwrap_err();
-        assert_eq!(failure.phase, CanvasNetworkPhase::Write);
+        assert_eq!(failure.phase, OutboundNetworkPhase::Write);
         let mut byte = [0];
         timeout
-            .run(CanvasNetworkPhase::Read, reader.read_exact(&mut byte))
+            .run(OutboundNetworkPhase::Read, reader.read_exact(&mut byte))
             .await
             .unwrap()
             .unwrap();
         assert_eq!(&byte, b"a");
         let failure = timeout
-            .run(CanvasNetworkPhase::Read, reader.read_exact(&mut byte))
+            .run(OutboundNetworkPhase::Read, reader.read_exact(&mut byte))
             .await
             .unwrap_err();
-        assert_eq!(failure.phase, CanvasNetworkPhase::Read);
+        assert_eq!(failure.phase, OutboundNetworkPhase::Read);
     }
 
     struct PendingOperation(Arc<AtomicUsize>);
@@ -261,15 +261,15 @@ mod tests {
     #[tokio::test]
     async fn deadline_and_caller_cancellation_drop_the_owned_operation() {
         let drops = Arc::new(AtomicUsize::new(0));
-        let timeout = CanvasNetworkTimeout::from_seconds(0.01);
+        let timeout = OutboundNetworkTimeout::from_seconds(0.01);
         assert!(timeout
-            .run(CanvasNetworkPhase::Tls, PendingOperation(drops.clone()))
+            .run(OutboundNetworkPhase::Tls, PendingOperation(drops.clone()))
             .await
             .is_err());
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         let task = tokio::spawn(
-            CanvasNetworkTimeout::from_seconds(f64::INFINITY)
-                .run(CanvasNetworkPhase::Pool, PendingOperation(drops.clone())),
+            OutboundNetworkTimeout::from_seconds(f64::INFINITY)
+                .run(OutboundNetworkPhase::Pool, PendingOperation(drops.clone())),
         );
         tokio::task::yield_now().await;
         task.abort();

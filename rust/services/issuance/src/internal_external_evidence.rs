@@ -18,10 +18,10 @@ use url::Url;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canonical_json::python_canonical_json,
-    canvas_network_timeout::CanvasNetworkTimeout,
-    canvas_operation_http::CanvasOperationHttpClient,
-    canvas_provider_http::{is_private_ip, CanvasOriginPolicy},
     internal_application_domain::{python_datetime, ApplicationRecord, EvidenceFactRecord},
+    outbound_http::OutboundHttpClient,
+    outbound_http_policy::{is_private_ip, OutboundOriginPolicy},
+    outbound_timeout::OutboundNetworkTimeout,
     python_value::{python_string, python_truthy},
 };
 
@@ -90,15 +90,15 @@ impl ExternalEvidenceTransport for SecureExternalEvidenceTransport {
         &self,
         request: ExternalEvidenceHttpRequest,
     ) -> Result<ExternalEvidenceHttpResponse, ExternalEvidenceApiError> {
-        let policy = CanvasOriginPolicy {
+        let policy = OutboundOriginPolicy {
             allow_private_networks: request.allow_private_network,
             allow_http_localhost: request.allow_private_network,
             ..Default::default()
         };
         let origin = request.url.origin().ascii_serialization();
-        let (client, _) = CanvasOperationHttpClient::prepare(
+        let (client, _) = OutboundHttpClient::prepare(
             policy,
-            CanvasNetworkTimeout::from_seconds(request.timeout_seconds),
+            OutboundNetworkTimeout::from_seconds(request.timeout_seconds),
             &origin,
         )
         .await

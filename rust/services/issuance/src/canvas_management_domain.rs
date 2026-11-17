@@ -47,13 +47,13 @@ pub struct ValidatedCanvasOrigin {
 
 /// Operator-owned origin policy. No management request can widen these sets.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct CanvasOriginPolicy {
+pub struct OutboundOriginPolicy {
     pub allow_http_localhost: bool,
     pub private_origin_allowlist: Vec<String>,
     pub self_managed_origin_allowlist: Vec<String>,
 }
 
-impl CanvasOriginPolicy {
+impl OutboundOriginPolicy {
     pub fn resolve(
         &self,
         candidate: &str,
@@ -453,10 +453,10 @@ mod tests {
 
     #[test]
     fn origin_policy_requires_exact_private_allowlist_and_derives_trust() {
-        let policy = CanvasOriginPolicy {
+        let policy = OutboundOriginPolicy {
             private_origin_allowlist: vec!["https://10.1.2.3".to_owned()],
             self_managed_origin_allowlist: vec!["https://10.1.2.3".to_owned()],
-            ..CanvasOriginPolicy::default()
+            ..OutboundOriginPolicy::default()
         };
         assert_eq!(
             policy.resolve("https://10.1.2.4"),
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn origin_policy_rejects_paths_credentials_fragments_and_unapproved_http() {
-        let policy = CanvasOriginPolicy::default();
+        let policy = OutboundOriginPolicy::default();
         for origin in [
             "https://canvas.example/path",
             "https://user:secret@canvas.example",

@@ -312,3 +312,10 @@ sync-worker scheduling/lease code are also removed from the issuance crate.
 Provider-specific worker replay fixtures are retired with those modules.
 Remaining legacy credential projection and provider helper dependencies are
 tracked removal work; they do not establish a supported connector interface.
+
+Generic external evidence owns outbound transport through platform modules
+`outbound_http_policy`, `outbound_http` and `outbound_timeout`. These modules
+provide origin validation, DNS pinning, verified TLS and per-operation
+budgets. They do not own provider configuration, application policy or
+credential authority. Remaining provider adapters consume these same
+platform primitives while their removal proceeds.

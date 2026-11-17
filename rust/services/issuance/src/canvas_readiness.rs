@@ -907,7 +907,7 @@ mod tests {
             CanvasDeliveryMode, CanvasEvidencePassRuleInput, CanvasEvidenceScopeInput,
             CanvasPlatformRequest, CanvasProgramBindingRequest,
         },
-        canvas_management_domain::CanvasOriginPolicy,
+        canvas_management_domain::OutboundOriginPolicy,
     };
 
     fn now(second: u32) -> DateTime<Utc> {
@@ -919,7 +919,7 @@ mod tests {
         CanvasProgramBindingRecord,
         CanvasApplicationTemplateProjection,
     ) {
-        let origin = CanvasOriginPolicy::default()
+        let origin = OutboundOriginPolicy::default()
             .resolve("https://canvas.example.edu")
             .unwrap();
         let mut platform = CanvasPlatformRecord::new_draft(
