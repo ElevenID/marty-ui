@@ -446,9 +446,6 @@ fn offer_preparation_error(
         InternalApplicationApprovalError::UnsupportedIntegrationContext => {
             InternalApplicationApprovalError::UnsupportedIntegrationContext.into()
         }
-        InternalApplicationApprovalError::CanvasNotReady => {
-            InternalApplicationApprovalError::CanvasOfferNotReady.into()
-        }
         InternalApplicationApprovalError::Unavailable => {
             InternalApplicationApprovalError::Unavailable.into()
         }
@@ -475,9 +472,6 @@ fn offer_preparation_error(
         }
         InternalApplicationApprovalError::IssuerContextUnavailable => {
             InternalApplicationApprovalError::IssuerContextUnavailable.into()
-        }
-        InternalApplicationApprovalError::CanvasOfferNotReady => {
-            InternalApplicationApprovalError::CanvasOfferNotReady.into()
         }
         InternalApplicationApprovalError::ConcurrentChange => {
             InternalApplicationApprovalError::ConcurrentChange.into()
@@ -520,15 +514,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn canvas_offer_readiness_uses_issuance_specific_public_error() {
-        assert_eq!(
-            offer_preparation_error(InternalApplicationApprovalError::CanvasNotReady),
-            InternalApplicationOfferError::Approval(
-                InternalApplicationApprovalError::CanvasOfferNotReady
-            )
-        );
-    }
     use crate::{
         application_template_domain::ApplicationTemplateStatus,
         credential::CredentialTransactionStatus, internal_application_domain::ApplicationStatus,

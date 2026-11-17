@@ -151,10 +151,6 @@ pub enum CredentialManagementError {
     RepositoryUnavailable(String),
     #[error("Revocation service unavailable: {0}")]
     PublicationUnavailable(String),
-    #[error("Canvas lifecycle retry could not be recorded: {0}")]
-    CanvasRetryUnavailable(String),
-    #[error("Canvas delivery response cannot be encoded for persistence")]
-    CanvasTextEncoding,
 }
 
 #[async_trait]

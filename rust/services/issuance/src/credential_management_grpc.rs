@@ -821,9 +821,9 @@ fn lifecycle_status(error: CredentialManagementError) -> Status {
         | CredentialManagementError::CannotReinstateRevoked
         | CredentialManagementError::NotSuspended => Status::failed_precondition(error.to_string()),
         CredentialManagementError::RepositoryUnavailable(_)
-        | CredentialManagementError::PublicationUnavailable(_)
-        | CredentialManagementError::CanvasRetryUnavailable(_)
-        | CredentialManagementError::CanvasTextEncoding => Status::internal(error.to_string()),
+        | CredentialManagementError::PublicationUnavailable(_) => {
+            Status::internal(error.to_string())
+        }
     }
 }
 

@@ -349,3 +349,9 @@ lossless text and excerpt behavior remains covered by codec and signing tests.
 Unused Canvas URL-formatting, provider alias/origin helpers and Python-format
 support are removed. Provider-specific timeout configuration no longer exists;
 test timeout vectors exercise the shared outbound timeout owner.
+
+Application evidence summaries expose generic facts, policy decisions and
+transaction bindings without a Canvas-specific summary field. Retired provider
+readiness and lifecycle mirror errors are removed from platform service and
+HTTP/gRPC error contracts. Reconciliation result/receipt response models are
+removed with the retired reconciliation endpoints.

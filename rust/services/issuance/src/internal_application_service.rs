@@ -62,10 +62,6 @@ pub enum InternalApplicationApprovalError {
     RevocationProfileInactive,
     #[error("Issuer signing context is unavailable.")]
     IssuerContextUnavailable,
-    #[error("Canvas application is not ready for approval")]
-    CanvasNotReady,
-    #[error("Canvas application is not ready for issuance")]
-    CanvasOfferNotReady,
     #[error("Application lifecycle changed during approval")]
     ConcurrentChange,
 }
@@ -392,7 +388,6 @@ impl InternalApplicationService {
         let policy_set_id = policy_decision
             .as_ref()
             .and_then(|policy| string_member(policy, "policy_set_id"));
-        let canvas = object_member(&application.integration_context, "canvas");
         Ok(ApplicationEvidenceSummaryResponse {
             application_id: application.id,
             organization_id: application.organization_id,
@@ -402,7 +397,6 @@ impl InternalApplicationService {
             policy_source,
             policy_set_id,
             issuance_transaction_id: application.issuance_transaction_id,
-            canvas,
             available_api_checks: template
                 .as_ref()
                 .map(available_external_api_checks)

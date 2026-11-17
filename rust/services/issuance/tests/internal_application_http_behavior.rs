@@ -1037,7 +1037,7 @@ async fn evidence_and_event_reads_match_the_frozen_typed_projections() {
     assert_eq!(summary["evidence_facts"], facts);
     assert_eq!(summary["policy_source"], "contract");
     assert_eq!(summary["policy_set_id"], "policy-1");
-    assert_eq!(summary["canvas"], json!({"course_id": "course-1"}));
+    assert!(summary.get("canvas").is_none());
     assert_eq!(summary["available_api_checks"][0]["check_id"], "check-1");
     assert_eq!(summary["available_api_checks"][0]["api_method"], "GET");
     assert!(summary.to_string().find("secret-token").is_none());
@@ -1181,11 +1181,6 @@ async fn approval_boundary_preserves_server_identity_validation_and_dependency_e
             InternalApplicationApprovalError::IssuerContextUnavailable,
             StatusCode::SERVICE_UNAVAILABLE,
             "Issuer signing context is unavailable.",
-        ),
-        (
-            InternalApplicationApprovalError::CanvasNotReady,
-            StatusCode::CONFLICT,
-            "Canvas application is not ready for approval",
         ),
         (
             InternalApplicationApprovalError::ConcurrentChange,
@@ -1542,30 +1537,6 @@ async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_t
         response,
         json!({"detail": "No issuance offer available for this application"})
     );
-
-    let canvas_not_ready = service_with_offers(
-        repository.clone(),
-        Err(InternalApplicationOfferError::Approval(
-            InternalApplicationApprovalError::CanvasOfferNotReady,
-        )),
-        Ok(offer_response()),
-    );
-    let (status, response) = request(
-        &canvas_not_ready,
-        Method::POST,
-        "/internal/applications/application-approved/issuance-offer",
-        None,
-        Some("secret"),
-        Some("org-123"),
-    )
-    .await;
-    let contract: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/issuance-internal-applications.json"
-    ))
-    .expect("internal Application contract");
-    let expected = &contract["lifecycle"]["canvas_offer_outcomes"]["stale_readiness"];
-    assert_eq!(status.as_u16(), expected["status"].as_u64().unwrap() as u16);
-    assert_eq!(response, json!({"detail": expected["detail"]}));
 
     let missing = service_with_offers(
         repository,
