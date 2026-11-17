@@ -49,7 +49,7 @@ FLOW_OWNERS = {
     "canvas": "scripts/ci/run-published-canvas-contracts.sh",
 }
 FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/canvas_published_database.rs"
-SELFHOST_OWNER = "scripts/ci/run-published-canvas-contracts.sh"
+SELFHOST_OWNER = "scripts/ci/run-selfhost-acceptance-contracts.sh"
 SELFHOST_FIXTURE_OWNER = (
     "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
 )

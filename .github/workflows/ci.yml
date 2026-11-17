@@ -1658,7 +1658,7 @@ jobs:
           if [[ "${{ matrix.lane }}" == flow ]]; then
             bash ../scripts/ci/run-flow-acceptance-contracts.sh
           elif [[ "${{ matrix.lane }}" == selfhost ]]; then
-            python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas
+            bash ../scripts/ci/run-selfhost-acceptance-contracts.sh
           else
             python3 ../scripts/ci/run-db-contract-groups.py rust-db
           fi

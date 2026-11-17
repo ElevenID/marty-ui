@@ -403,3 +403,10 @@ executables. Proof nonce remains an explicit exact-package/target obligation,
 with positive-test-summary execution enforcement. Other platform database
 suite dispatches remain. Provider preflight orchestration and broader
 obligation-source inventories are still pending reconciliation.
+
+Self-host acceptance runs through `run-selfhost-acceptance-contracts.sh`, with
+its own pinned runtime-image contract. It preserves the exact seventeen-case
+inventory, image identity/revision checks and execution obligation recording
+without dispatching the published Canvas runner. The shared schema fixture's
+legacy PostgreSQL environment variable remains a documented extraction TODO.
+No live container qualification is implied by runner-source validation.

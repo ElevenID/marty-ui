@@ -1,0 +1,5 @@
+{
+  "schema": "marty.selfhost-runtime-images/v1",
+  "postgres": "postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+  "schema_probe": "ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+}
