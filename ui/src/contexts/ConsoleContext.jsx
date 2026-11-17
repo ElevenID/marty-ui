@@ -160,7 +160,7 @@ function mergePreferredFallbackMembership(fetchedMemberships, fallbackMembership
 export function ConsoleProvider({ children }) {
   const { user, isAuthenticated, isLoading: authLoading } = useContext(AuthContext);
   const principalId = user?.user_id || user?.sub || user?.id || null;
-  const applicantOnly = user?.capabilities?.['org:view'] === false;
+  const applicantOnly = user?.organization_access_restricted === true;
   // An anonymous auth check has no account state to clear. Keep public resources
   // mounted while it settles; known identities still reset across auth loading.
   const sessionLoading = Boolean(principalId || isAuthenticated) && authLoading;
@@ -228,8 +228,8 @@ function ConsoleSessionProvider({ children }) {
     [user?.organizations]
   );
   const isApplicantOnlyUser = useMemo(
-    () => user?.capabilities?.['org:view'] === false,
-    [user?.capabilities]
+    () => user?.organization_access_restricted === true,
+    [user?.organization_access_restricted]
   );
   const isOrgBootstrapRequired = useMemo(
     () => !isApplicantOnlyUser && userNeedsOrgBootstrap(user, fallbackMemberships),

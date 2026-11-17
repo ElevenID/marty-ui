@@ -348,6 +348,17 @@ describe('authSession helpers', () => {
     )
   })
 
+  it('distinguishes computed absence of memberships from an explicit restriction', () => {
+    const user = createEnrichedUser({ user_id: 'new-user', roles: ['applicant'] }, [], null);
+    expect(user.capabilities['org:view']).toBe(false);
+    expect(user.organization_access_restricted).toBe(false);
+    const organization = { id: 'new-org', membership: { is_owner: true } };
+    expect(updateUserActiveOrganization(user, 'new-org', organization).capabilities['org:view']).toBe(true);
+    const restricted = createEnrichedUser({ user_id: 'restricted', capabilities: { 'org:view': false } }, [], null);
+    expect(restricted.organization_access_restricted).toBe(true);
+    expect(updateUserActiveOrganization(restricted, 'new-org', organization).capabilities['org:view']).toBe(false);
+  });
+
   it('updates active organization in auth state', () => {
     const previousUser = {
       organization_id: null,

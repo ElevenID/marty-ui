@@ -1,3 +1,4 @@
+import { createEnrichedUser } from '../application/session/authSession';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Suspense } from 'react';
 import { Route, Routes, useLocation, useNavigate } from 'react-router';
@@ -263,7 +264,7 @@ const oldAuth = {
   isAuthenticated: true, isLoading: false, hasCapability: () => true,
 };
 const newAuth = {
-  user: { user_id: 'account-b', roles: ['applicant'], capabilities: { 'org:view': false }, organizations: [] },
+  user: createEnrichedUser({ user_id: 'account-b', roles: ['applicant'] }, [], null),
   isAuthenticated: true, isLoading: false, hasCapability: () => false,
 };
 let oldSetter: null | ((id: string, memberships: any[]) => Promise<void>);
@@ -451,7 +452,7 @@ describe('ConsoleContext session and request lifetime', () => {
     const prior = currentConsole;
 
     rerender(<App auth={{ ...oldAuth, user: {
-      ...oldAuth.user, roles: ['applicant'], capabilities: { 'org:view': false },
+      ...oldAuth.user, roles: ['applicant'], capabilities: { 'org:view': false }, organization_access_restricted: true,
     } }} />);
 
     expect(screen.getByTestId('selected')).toBeEmptyDOMElement();
@@ -590,9 +591,8 @@ describe('ConsoleContext verified organization mutations', () => {
     const stale = () => mutation === 'profile'
       ? prior.reconcileOrganizationProfile(oldOrg.id, { name: 'old-account-name', displayName: 'Old account name' })
       : prior.reconcileMembershipRemoval(oldOrg.id);
-    // This replacement account is authorized for the returned memberships.
-    // Explicitly applicant-only accounts are covered by the capability-loss test.
-    rerender(<App auth={{ ...newAuth, user: { ...newAuth.user, capabilities: { 'org:view': true } } }} />);
+    // Computed no-membership access must allow recovery from fresh canonical memberships.
+    rerender(<App auth={newAuth} />);
     await waitFor(() => expect(getMyOrganizations).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(screen.getByTestId('selected')).toHaveTextContent(oldOrg.id));
     expect(stale).toThrowError('The console session or selection changed.');

@@ -373,6 +373,8 @@ export function createEnrichedUser(rawUser, fetchedOrganizations, storedOrgId) {
     default_organization_name: getOrganizationDisplayName(defaultApplicantOrganization),
     organizations,
     capabilities: deriveCapabilities(rawUser, organizations),
+    // Keep raw authority provenance separate from computed current membership access.
+    organization_access_restricted: hasApplicantOnlyCapabilities(rawUser),
   };
 }
 
@@ -415,7 +417,8 @@ export function updateUserActiveOrganization(previousUser, orgId, selectedOrgani
 
   const nextCapabilities = { ...(previousUser.capabilities || {}) };
   if (orgId) {
-    nextCapabilities['org:view'] = Boolean(selected && membershipHasOrgConsoleAccess(selected));
+    nextCapabilities['org:view'] = previousUser.organization_access_restricted !== true
+      && Boolean(selected && membershipHasOrgConsoleAccess(selected));
   }
 
   const nextOrganizationId = resolvedOrganization?.id || null;
